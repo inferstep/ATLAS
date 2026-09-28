@@ -4,7 +4,8 @@ After onboarding a model, both lens halves (C(x) + G(x)) and the ASA
 steering vector exist together — publishing them is one action, not two.
 This command uploads the lens artifacts and the ASA vector to their HF
 repos and opens a SINGLE registry PR whose entry carries both
-`lens_status="supported"` and `asa_status="supported"`.
+`lens_status="supported"` and `asa_status="unverified"` (a vector is
+promoted to "supported" by hand, citing an A/B result).
 
 The per-component commands stay available for the independent cases
 (`atlas lens publish` / `atlas asa publish`, or the --lens-only /

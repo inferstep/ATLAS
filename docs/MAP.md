@@ -15,8 +15,8 @@ the documentation lives. For component internals see
 | `tui/` | Bubbletea terminal client — the canonical chat front-end, consumes proxy SSE streams | — |
 | `extensions/` | IDE clients over the proxy HTTP API; `extensions/vscode/` is the VS Code extension (chat sidebar, permission flow, diff review) | [extensions/vscode/README.md](../extensions/vscode/README.md) |
 | `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config); `atlas/bench/` is the benchmark harness | [atlas/bench/README.md](../atlas/bench/README.md) |
-| `v3-service/` | Python HTTP service for the V3 generation pipeline (`stages/` holds the pipeline stage modules, `graph/` the ATLAS_CALL_GRAPH layer) and the tree-sitter structural tooling | — |
-| `geometric-lens/` | Scoring (C(x)/G(x)), the pattern cache, ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
+| `v3-service/` | Python HTTP service for the V3 generation pipeline (`stages/` holds the pipeline stage modules, `graph/` the call-graph layer) and the tree-sitter structural tooling | — |
+| `geometric-lens/` | Scoring (C(x)/G(x)), ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
 | `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
 | `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
 | `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
@@ -50,11 +50,14 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [RELEASE.md](RELEASE.md) | Release contract: capability status, service contracts, and verification levels |
 | [PLAN_MODE.md](PLAN_MODE.md) | Plan mode: per-turn pre-flight planning and adherence constants |
 | [PROTOCOL.md](PROTOCOL.md) | Typed event envelope contract shared by proxy, v3-service, and clients |
+| [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) | Versioned evidence envelope between v3-service and the proxy, and the delivery rule |
+| [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) | Typed obligations, evidence provenance, candidate staging, and the observe-only authorization and feasibility decisions |
+| [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) | The one rule that decides which V3 candidate lands, the proposal-versus-authorization split, hard vetoes, and what the terminal tells the user about delivered bytes |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and solutions |
 | [SOURCES.md](SOURCES.md) | Research papers bucketed by status relative to the current release |
 | [STORY.md](STORY.md) | Project background |
 | [MAP.md](MAP.md) | This file |
-| [adr/](adr/) | Architecture Decision Records (trust model, per-model bundles, SQLite state store, …) |
+| [adr/](adr/) | Architecture Decision Records (trust model, per-model bundles, the retired SQLite state store, harness mechanisms, …) |
 | [schemas/](schemas/) | Machine-readable contracts: proxy OpenAPI spec, SSE envelope and error-envelope JSON Schemas |
 | [lang/](lang/) | Translated documentation (zh-CN, ja, ko) |
 | [reports/](reports/) | Ablation studies and call-graph design notes; [reports/archive/](reports/archive/) holds historical status trackers |

@@ -63,7 +63,7 @@ Follow [SETUP.md](SETUP.md) (Linux) or [SETUP_MACOS.md](SETUP_MACOS.md)
 (Apple Silicon). For most Linux + GPU machines it is one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 ## First launch
@@ -103,20 +103,15 @@ What you'll see:
   before anything lands on disk (the T2 path).
 - **Permission prompts** appear before destructive steps (shell commands,
   deletions) in the default mode — `y` allows once, `a` allows for the
-  session, `n` denies. Modes are documented in
+  session, `n` denies. Each deletion is asked about on its own; `a` never
+  covers later ones. Modes are documented in
   [CLI.md § Permission modes](CLI.md#permission-modes).
 
 Afterwards: review with `/diff` (or `git diff`), run your tests, and commit
 if happy. `/undo` soft-resets the last commit the agent made; `Ctrl+C`
 cancels a turn mid-flight.
 
-## Teach it your codebase
-
-When a pass finishes, rate it: `/good` banks the files as positive training
-samples, `/bad` as negatives, and `/review` + `/deny <path>` lets you split
-the verdict per file. Once enough samples accumulate, the TUI shows a
-retrain banner — `atlas lens retrain` then re-fits the quality scorer to
-your code and standards. Details in [CLI.md](CLI.md).
+## Bring your own model
 
 Running a model that isn't in the registry? `atlas onboard` walks the
 bring-your-own-GGUF flow ([CLI.md](CLI.md)).

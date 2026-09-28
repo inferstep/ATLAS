@@ -17,6 +17,16 @@ tooling), planning.py (/v3/plan), and pipeline.py (the orchestrator).
 """
 
 import json
+import uuid
+import threading
+import socket
+import select
+
+# Watcher poll interval, included in every measured cancellation latency.
+WATCH_POLL_SEC = 0.25
+
+# The proxy forwards this; absence is normal for direct callers.
+REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
 import os
 import sys
 from pathlib import Path
@@ -26,17 +36,20 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.stdout.reconfigure(line_buffering=True)
 
 import adapters
+import contract
+import scoring
 from pipeline import V3PipelineService, _build_problem_from_request
 from planning import generate_plan
 from symbols import (structural_edit, structural_score, build_project_symbols,
                      symbol_index, cyclomatic_complexity, embedded_script_check,
+                     embedded_region_outline, orphaned_new_symbols,
                      _symbol_index_for_python_source, _STRUCTURAL_EDIT_AVAILABLE,
                      _EMBEDDED_SCRIPT_AVAILABLE)
 # The handler does not call these; tests exercise them through `import main`.
 # __all__ below states that so linters stop reading them as dead imports —
 # deleting any of them breaks the suite, which is the failure this guards.
 from pipeline import _candidate_by_index, _make_self_test
-from planning import _score_plan
+from planning import _score_plan, _existing_workspace_files
 from scoring import (verify_build_command, smoke_compile_check,
                      score_candidate_per_step, _project_relative_path)
 from symbols import _ast_selector_to_query
@@ -44,6 +57,7 @@ from symbols import _ast_selector_to_query
 __all__ = [
     # Re-exported for tests that reach them via `import main`.
     "_candidate_by_index", "_make_self_test", "_score_plan",
+    "_existing_workspace_files",
     "verify_build_command", "smoke_compile_check", "score_candidate_per_step",
     "_project_relative_path", "_ast_selector_to_query",
     "_symbol_index_for_python_source", "_STRUCTURAL_EDIT_AVAILABLE",
@@ -51,6 +65,7 @@ __all__ = [
     # The service surface itself.
     "structural_edit", "structural_score", "build_project_symbols",
     "symbol_index", "cyclomatic_complexity", "embedded_script_check",
+    "embedded_region_outline", "orphaned_new_symbols",
     "generate_plan", "V3PipelineService", "_build_problem_from_request",
 ]
 
@@ -61,6 +76,130 @@ PORT = int(os.environ.get("ATLAS_V3_PORT", "8070"))
 
 pipeline = V3PipelineService()
 
+
+def _service_log(msg):
+    """The one emitter for the watcher lifecycle.
+
+    This service's log path is print() through _PrivateValueStream, which
+    applies the private-value filter and stamps the current request and
+    invocation ids into each record. logging.getLogger() is NOT that path:
+    no handler is installed on the root logger, so an info record would be
+    dropped by lastResort and a cancellation would stop being visible at all.
+    Naming the emitter is what removes the bare print from the lifecycle; the
+    stream stays the one the rest of the service uses, so the record shape is
+    unchanged.
+    """
+    print(msg, flush=True)
+
+
+def _watch_parent_for(handler, label):
+    """Request-scoped cancellation plus an EOF watcher on the parent socket.
+
+    Shared by every production handler that runs inference. A handler that
+    forgets this leaves its generations uncancellable -- exactly the defect
+    this exists to prevent -- so a structural test asserts each one calls it.
+
+    MSG_PEEK is deliberate: the watcher must never consume a byte the handler
+    still needs, and it starts only after the request body has been read.
+    """
+    scope = adapters.CancelScope(invocation_id=str(uuid.uuid4()))
+    # Bind it for logging on the handler thread: every record this invocation
+    # emits now names the invocation, so a log line joins to a relay call
+    # without time-window inference.
+    from structured_log import bind_identity, current_identity
+    from structured_log import set_invocation_id as _set_inv
+    _set_inv(scope.invocation_id)
+    # Captured HERE, on the owning thread, and handed to the watcher.
+    #
+    # A threading.Thread inherits no ContextVar, so the watcher used to run
+    # with both ids empty: of 159,533 records the sealed Stage-A acquisition
+    # produced, the only two that could not be attributed were this watcher
+    # reporting the cancellations it had just performed.
+    #
+    # Explicitly, not through copy_context(): the watcher can outlive the
+    # context it was started from, and a copied context would keep answering
+    # with an identity whose request is already gone.
+    identity = current_identity()
+    stop_watch = threading.Event()
+
+    def _watch():
+        bind_identity(*identity)
+        sock = handler.connection
+        while not stop_watch.is_set():
+            try:
+                r, _, _ = select.select([sock], [], [], WATCH_POLL_SEC)
+            except (OSError, ValueError):
+                break
+            if not r:
+                continue
+            try:
+                if sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b"":
+                    closed = scope.cancel()
+                    _service_log(f"[{label}] parent disconnected; cancelled "
+                                 f"{closed} in-flight generation(s)")
+                    return
+            except BlockingIOError:
+                continue
+            except (OSError, ValueError):
+                scope.cancel()
+                return
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
+    return scope, stop_watch, t
+
+
+def _release_scope(scope, stop_watch, watcher, label):
+    """Idempotent teardown: stop the watcher, close anything still open."""
+    from structured_log import bind_identity
+    stop_watch.set()
+    leaked = scope.cancel()
+    if leaked:
+        _service_log(f"[{label}] closed {leaked} connection(s) still open "
+                     f"at handler exit")
+    watcher.join(timeout=2)
+    # Last statement of the request's lifecycle: drop the identity so it
+    # cannot be answered by whatever runs on this thread next. Absent has to
+    # stay absent -- a borrowed id is worse than none, because it reads as
+    # evidence.
+    bind_identity("", "")
+
+
+# Progress stages whose `detail` IS model output rather than a description of
+# it. Logging those verbatim puts candidate source into operational records --
+# and because the stdout wrapper emits one record per line, a multi-line token
+# becomes several records, each carrying source. Measured: 84 such records in
+# one 63-cell rehearsal, after the first-delta sample had already been fixed.
+#
+# The SSE payload the proxy receives is unchanged. Only the local debug line is
+# reduced to metadata.
+_CONTENT_BEARING_STAGES = frozenset({"token", "v3_token", "reasoning"})
+
+
+def _safe_progress_detail(stage, detail):
+    """What may be logged for a progress event: never model output.
+
+    Fail closed twice over -- a named content stage is always reduced, and so
+    is any detail that spans lines, since a description of progress does not.
+    """
+    text = detail if isinstance(detail, str) else str(detail)
+    if stage in _CONTENT_BEARING_STAGES or "\n" in text:
+        return f"<{len(text)} chars>"
+    return text[:80]
+
+
+
+def _positive_budget_ms(value):
+    """The caller's cap in ms, or None when absent or unusable.
+
+    A bool is not a number here, and a non-positive or non-finite value is
+    not a cap: the run then keeps its ATLAS_V3_TIMEOUT behaviour.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
+        return None
+    return float(value)
 
 class V3Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
@@ -97,12 +236,12 @@ class V3Handler(BaseHTTPRequestHandler):
             self._handle_symbol_index()
         elif self.path == "/internal/outline":
             self._handle_outline()
-        elif self.path == "/internal/pycheck":
-            self._handle_pycheck()
         elif self.path == "/internal/structural_check":
             self._handle_structural_check()
         elif self.path == "/internal/embedded_script_check":
             self._handle_embedded_script_check()
+        elif self.path == "/internal/orphaned_symbols":
+            self._handle_orphaned_symbols()
         elif self.path == "/health":
             self._json_response(200, {"status": "ok"})
         else:
@@ -123,18 +262,32 @@ class V3Handler(BaseHTTPRequestHandler):
 
         Request format (V3GenerateRequest):
             file_path: str          — target file path
-            baseline_code: str      — model's initial content (candidate #0)
+            baseline_code: str      — incumbent_baseline: the caller's own
+                                      content. It becomes prose in the problem
+                                      statement and is NOT a V3 candidate; pool
+                                      index 0 is the phase-zero probe candidate
             project_context: dict   — other files in project {path: content}
             framework: str          — detected framework
             build_command: str      — build verification command
             constraints: list[str]  — extracted requirements
             tier: int               — 2 or 3
             working_dir: str        — project root
+            budget_ms: int          — optional; the wall-clock cap the
+                                      caller applies to this call. The run
+                                      plans against it instead of
+                                      ATLAS_V3_TIMEOUT when it is positive
 
         Response format (V3GenerateResponse):
             code: str               — winning candidate
-            passed: bool            — whether it passed verification
-            phase_solved: str       — which phase solved it
+            passed: bool            — whether a candidate is returned: it passed
+                                      V3's own check (which may be a compile or
+                                      an input-less run), or, when none did, it
+                                      was picked by agreement; phase_solved says
+                                      which. Not proof the task is done; the
+                                      evidence envelope says what was shown.
+            phase_solved: str       — how it was chosen: probe, phase1, pr_cot,
+                                      refinement or budget after a check it
+                                      passed, consensus by agreement alone
             candidates_tested: int
             winning_score: float
             total_tokens: int
@@ -153,8 +306,10 @@ class V3Handler(BaseHTTPRequestHandler):
         framework = body.get("framework", "")
         build_command = body.get("build_command", "")
         constraints = body.get("constraints", [])
+        user_message = body.get("user_message", "")
         tier = body.get("tier", 2)
         working_dir = body.get("working_dir", "")
+        budget_ms = _positive_budget_ms(body.get("budget_ms"))
 
         if not file_path and not baseline_code:
             self._json_response(400, {"error": "file_path or baseline_code required"})
@@ -163,7 +318,7 @@ class V3Handler(BaseHTTPRequestHandler):
         # Build problem description from the adapter request
         problem = _build_problem_from_request(
             file_path, baseline_code, project_context,
-            framework, build_command, constraints,
+            framework, build_command, constraints, user_message,
         )
 
         # Build file context for the pipeline
@@ -190,7 +345,8 @@ class V3Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
                 # Also log for debugging
-                print(f"  [SSE] {stage}: {detail[:80]}", flush=True)
+                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
             except (BrokenPipeError, ConnectionResetError):
                 # Client gone — flag it so pipeline.run aborts at the
                 # next phase boundary instead of grinding on.
@@ -198,9 +354,17 @@ class V3Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"  [SSE ERROR] {e}", flush=True)
 
+        scope, stop_watch, watcher = _watch_parent_for(self, "generate")
+        # Trace identity is a JOIN KEY, never authority: it may be missing, it
+        # may repeat, and the invocation id is what makes a pool unique.
+        trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
+
         # Run V3 pipeline with streaming progress
         try:
             result = pipeline.run(
+                cancel_scope=scope,
+                trace_request_id=trace_id,
+                v3_invocation_id=scope.invocation_id,
                 problem=problem,
                 task_id=f"gen-{Path(file_path).stem}",
                 progress_callback=emit_progress,
@@ -208,10 +372,28 @@ class V3Handler(BaseHTTPRequestHandler):
                 file_path=file_path,  # PC-048: language-aware smoke check
                 build_command=build_command,
                 working_dir=working_dir or "/workspace",
+                # The incumbent's exact request bytes, before
+                # _build_problem_from_request wrapped them in prose. Read
+                # only by the diagnostic capture.
+                baseline_code=baseline_code,
+                budget_ms=budget_ms,
             )
-        except adapters.ClientDisconnected as e:
+        except (adapters.ClientDisconnected, adapters.Cancelled) as e:
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
+        except scoring.LensUnavailable as e:
+            # The lens is required: the run stops, and the caller is told why
+            # in the result it is waiting for. No code is sent, not even the
+            # baseline, so nothing can read this as a finished generation.
+            print(f"[generate] stopped: the lens cannot score ({e.reason})", flush=True)
+            self._write_result({
+                "code": "", "passed": False, "phase_solved": "lens_unavailable",
+                "candidates_tested": 0, "winning_score": 0.0,
+                "lens_unavailable": e.reason,
+            })
+            return
+        finally:
+            _release_scope(scope, stop_watch, watcher, "generate")
 
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
@@ -219,10 +401,19 @@ class V3Handler(BaseHTTPRequestHandler):
             result["code"] = baseline_code
             result["phase_solved"] = "baseline"
 
-        # After baseline substitution, not before — the pattern cache must
-        # see the solution that is actually returned (it saw solution=""
-        # on baseline-only results when this fired earlier).
-        adapters._post_pattern_outcome(problem, result)
+        # Structured evidence, serialised by evidence_wire. No policy is
+        # decided here: this handler neither ranks, nor closes, nor infers a
+        # strength -- it asks the serialiser for an envelope and writes it.
+        # A record that cannot be serialised is sent as no evidence at all
+        # rather than as a malformed envelope; the reason travels beside it so
+        # the gap is visible instead of silent.
+        evidence_envelope, evidence_unavailable = None, ""
+        try:
+            evidence_envelope = adapters.evidence_envelope(
+                result, delivered_code=result.get("code", ""))
+        except contract.ContractError as e:
+            evidence_unavailable = str(e)
+            print(f"[generate] evidence not serialisable: {e}", flush=True)
 
         # Send final result
         response = {
@@ -234,8 +425,16 @@ class V3Handler(BaseHTTPRequestHandler):
             "total_tokens": result.get("total_tokens", 0),
             "total_time_ms": result.get("total_time_ms", 0.0),
             "verification_evidence": result.get("verification_evidence", []),
+            # Nested, versioned, and absent rather than empty when nothing was
+            # measured. A consumer that does not know the field ignores it.
+            "evidence": evidence_envelope,
+            "evidence_unavailable_reason": evidence_unavailable,
         }
 
+        self._write_result(response)
+
+    def _write_result(self, response: dict) -> None:
+        """The terminal `event: result` frame and the stream's end."""
         final = json.dumps(response)
         try:
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
@@ -257,6 +456,11 @@ class V3Handler(BaseHTTPRequestHandler):
             user_message: str       — the prompt the user typed
             working_dir: str        — proxy's container working dir
             project_context: dict   — files the agent has read so far
+            existing_files: list    — every path already in the workspace.
+                                      This service has no /workspace mount, so
+                                      it cannot look; without the list the
+                                      planner proposes creating files that are
+                                      already there.
             tier: int               — 2 or 3
             n_candidates: int       — optional; default 3
 
@@ -301,20 +505,27 @@ class V3Handler(BaseHTTPRequestHandler):
             try:
                 self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.flush()
-                print(f"  [SSE plan] {stage}: {detail[:80]}", flush=True)
+                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
             except BrokenPipeError:
                 # best-effort: swallow on failure (caller continues)
                 pass
             except Exception as e:
                 print(f"  [SSE plan ERROR] {e}", flush=True)
 
+        scope, stop_watch, watcher = _watch_parent_for(self, "plan")
+        trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
         try:
             plan = generate_plan(
                 user_message=user_message,
                 working_dir=working_dir,
                 project_context=project_context,
+                existing_files=body.get("existing_files") or [],
                 n_candidates=n_candidates,
                 progress_callback=emit_progress,
+                cancel_scope=scope,
+                request_identity=adapters.RequestIdentity(
+                    request_id=trace_id, invocation_id=scope.invocation_id),
             )
         except Exception as e:
             print(f"  [plan ERROR] {e}", flush=True)
@@ -325,8 +536,11 @@ class V3Handler(BaseHTTPRequestHandler):
                 "rationale": f"planner failed: {e}",
                 "reasons": [str(e)],
             }
+        finally:
+            _release_scope(scope, stop_watch, watcher, "plan")
 
         final = json.dumps(plan)
+
         try:
             self.wfile.write(f"event: result\ndata: {final}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
@@ -414,14 +628,13 @@ class V3Handler(BaseHTTPRequestHandler):
         n_skipped = len(result.get("skipped", []))
         n_files = len(file_map)
 
-        # Phase 3 (#39 point 4): when the call graph is enabled, attach each
-        # matched symbol's graph neighborhood (callers / callees / impact) so
-        # the proxy can inject structurally related code instead of name-matched
-        # snippets alone. Additive: the "matched"/"skipped" shape is unchanged,
-        # so flag-off callers see exactly today's response.
+        # Phase 3 (#39 point 4): attach each matched symbol's graph
+        # neighborhood (callers / callees / impact) so the proxy can inject
+        # structurally related code instead of name-matched snippets alone.
+        # Additive: the "matched"/"skipped" shape is unchanged.
         try:
-            from graph import call_graph_enabled, symbol_neighborhood, build_graph
-            if call_graph_enabled() and result.get("matched"):
+            from graph import symbol_neighborhood, build_graph
+            if result.get("matched"):
                 # Build the project graph ONCE, then neighborhood each matched
                 # symbol against it (not once per symbol).
                 g = build_graph(file_map)
@@ -441,34 +654,6 @@ class V3Handler(BaseHTTPRequestHandler):
             flush=True,
         )
         self._json_response(200, result)
-
-    def _handle_pycheck(self):
-        """POST /internal/pycheck — does this Python source parse?
-
-        Request:  {"path": "app.py", "source": "<file text>"}
-        Response: {"ok": bool, "error": "...", "line": N}
-
-        Used by the proxy's edit_file path to refuse writing a .py file the
-        edit would break — the same gate structural_edit applies post-splice. Pure
-        compile() check, no execution.
-        """
-        content_len = int(self.headers.get("Content-Length", 0))
-        try:
-            body = json.loads(self.rfile.read(content_len) or b"{}")
-        except json.JSONDecodeError as e:
-            self._json_response(400, {"ok": False, "error": f"invalid JSON body: {e}"})
-            return
-        path = body.get("path", "") or "<edit>"
-        source = body.get("source", "") or ""
-        try:
-            compile(source, path, "exec")
-            self._json_response(200, {"ok": True})
-        except SyntaxError as e:
-            snippet = (e.text or "").strip()
-            msg = f"SyntaxError at line {e.lineno}: {e.msg}"
-            if snippet:
-                msg += f" (offending line: {snippet})"
-            self._json_response(200, {"ok": False, "error": msg, "line": e.lineno or 0})
 
     def _handle_structural_check(self):
         """POST /internal/structural_check — does every direct-identifier call
@@ -518,16 +703,21 @@ class V3Handler(BaseHTTPRequestHandler):
         """POST /internal/embedded_script_check — does the JavaScript/CSS
         EMBEDDED in this file parse?
 
-        Request:  {"path": "app.py", "source": "<file text>"}
+        Request:  {"path": "app.py", "source": "<file text>",
+                   "previous": "<pre-edit file text, optional>"}
         Response: {"ok": bool, "findings": [{line, column, kind, where,
                                             message, hint, text}]}
 
-        Covers what /internal/pycheck and the sandbox's /syntax-check are both
+        Covers what the sandbox's /syntax-check is
         blind to: a `<script>` block inside an .html/.jinja file, and — the
         2026-08-01 dogfooding case — inside a Python string literal handed to
         render_template_string. A stray `)` in that JavaScript leaves the
         Python compiling, the server starting and `curl /` returning 200 while
         the page is dead in the browser.
+
+        With `previous` it also reports a render loop the edit stopped driving
+        — a function a repeating timer used to call that now fires once and
+        never re-arms. Same blind spot, one level up: that code parses.
 
         `ok: false` means the check couldn't run (tree-sitter-javascript
         missing, non-UTF-8 source) and the caller fails open. An unsupported
@@ -543,12 +733,48 @@ class V3Handler(BaseHTTPRequestHandler):
             return
         path = body.get("path", "") or ""
         source = body.get("source", "") or ""
-        result = embedded_script_check(path, source)
+        previous = body.get("previous", "") or ""
+        result = embedded_script_check(path, source, previous)
         if result.get("findings"):
             first = result["findings"][0]
             print(f"  [embedded_script] {path} line {first['line']}: "
                   f"{first['kind']} {first['message']}", flush=True)
         self._json_response(200, result)
+
+    def _handle_orphaned_symbols(self):
+        """POST /internal/orphaned_symbols — top-level functions this edit
+        ADDED that nothing in the file references.
+
+        Request:  {"path": "todo.py", "previous": "<pre-run>", "source": "<now>"}
+        Response: {"orphans": [{"name": "done_task", "line": 38}]}
+
+        The mirror of /internal/structural_check: that reports a call with no
+        definition, this reports a definition with no callers. Adding a
+        function and never wiring it up is how "add a feature" fails —
+        observed on "add a done command": the function was written correctly,
+        the argv dispatcher was never touched, and `todo.py done 1` exited 0
+        while doing nothing.
+
+        `.py` only. Private (`_`-prefixed) and `test_`-prefixed names are
+        skipped, and any mention of the name outside its own `def` line counts
+        as a reference, so the check errs toward silence.
+        """
+        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(content_len) or b"{}")
+        except json.JSONDecodeError as e:
+            self._json_response(400, {"orphans": [], "error": f"invalid JSON body: {e}"})
+            return
+        path = body.get("path", "") or ""
+        if not path.endswith(".py"):
+            self._json_response(200, {"orphans": []})
+            return
+        orphans = orphaned_new_symbols(body.get("previous", "") or "",
+                                       body.get("source", "") or "")
+        if orphans:
+            print(f"  [orphaned_symbols] {path}: "
+                  f"{', '.join(o['name'] for o in orphans)}", flush=True)
+        self._json_response(200, {"orphans": orphans})
 
     def _handle_outline(self):
         """POST /internal/outline — list a file's top-level functions/classes.
@@ -562,16 +788,15 @@ class V3Handler(BaseHTTPRequestHandler):
         the model can then read just the one function's line range instead of
         the whole file. .py only here; the proxy regex-falls-back for the rest.
 
-        When ATLAS_CALL_GRAPH is on, each symbol also carries its intra-file
-        call-graph neighborhood (`calls` / `called_by`). The outline is the
+        Each symbol also carries its intra-file call-graph neighborhood
+        (`calls` / `called_by`). The outline is the
         artifact the model inspects right before it decides WHICH symbol to
         edit, so this is where structural context earns its keep: it lets the
         model follow `total_value -> item_subtotal` to a callee-rooted bug
         instead of editing the function where the symptom merely surfaces
         (issue #39). Scoped to this one file — no project-wide scan — so it's
         cheap and never misses the file in a large repo. Additive: the
-        symbols/supported shape is unchanged, so flag-off callers see exactly
-        today's response.
+        symbols/supported shape is unchanged.
         """
         content_len = int(self.headers.get("Content-Length", 0))
         try:
@@ -594,24 +819,32 @@ class V3Handler(BaseHTTPRequestHandler):
                     "end_line": src[:eb].count(b"\n") + 1,
                 })
 
-        # Call-graph neighborhood (issue #39, flag-gated). Build the single-file
-        # graph once and attach callers/callees to each symbol the model can see.
+        # Regions holding another language. The host grammar cannot see into a
+        # string literal, so without this the outline of a Flask app whose UI
+        # is one template reports `function:index` and nothing else — and the
+        # model goes looking for `function:draw`.
+        embedded = embedded_region_outline(path, source)
+
+        # Call-graph neighborhood (issue #39). Build the single-file graph
+        # once and attach callers/callees to each symbol the model can see.
         if symbols:
             try:
-                from graph import call_graph_enabled, symbol_neighborhood, build_graph
-                if call_graph_enabled():
-                    file_map = {path: source}
-                    g = build_graph(file_map)
-                    for s in symbols:
-                        nb = symbol_neighborhood(file_map, s["name"], graph=g)
-                        if nb["callees"]:
-                            s["calls"] = nb["callees"]
-                        if nb["callers"]:
-                            s["called_by"] = nb["callers"]
+                from graph import symbol_neighborhood, build_graph
+                file_map = {path: source}
+                g = build_graph(file_map)
+                for s in symbols:
+                    nb = symbol_neighborhood(file_map, s["name"], graph=g)
+                    if nb["callees"]:
+                        s["calls"] = nb["callees"]
+                    if nb["callers"]:
+                        s["called_by"] = nb["callers"]
             except Exception as cge:  # pragma: no cover - import/extract guard
                 print(f"  [outline] call-graph neighborhood skipped: {cge}", flush=True)
 
-        self._json_response(200, {"symbols": symbols, "supported": supported})
+        out = {"symbols": symbols, "supported": supported}
+        if embedded:
+            out["embedded_regions"] = embedded
+        self._json_response(200, out)
 
     def _handle_cyclomatic_complexity(self):
         """POST /internal/cyclomatic_complexity — McCabe CC for tier classification.
@@ -679,14 +912,16 @@ class _PrivateValueStream:
             # Wrap each non-empty print line as a structured record so v3
             # matches the other services' JSON logs (it logs via print()).
             import json as _json
-            from structured_log import get_request_id as _get_rid
+            from structured_log import current_identity as _identity
             for line in filtered.splitlines():
                 if not line.strip():
                     continue
                 rec = {"service": "v3-service", "level": "info", "msg": line}
-                rid = _get_rid()
+                rid, inv = _identity()
                 if rid:
                     rec["request_id"] = rid
+                if inv:
+                    rec["invocation_id"] = inv
                 self._stream.write(_json.dumps(rec) + "\n")
             return
         self._stream.write(filtered)

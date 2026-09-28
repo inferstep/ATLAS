@@ -241,7 +241,7 @@ class TestExtractCode:
     def test_plain_code_block(self):
         response = "```\ndef foo():\n    return 42\n```"
         code = extract_code_from_response(response)
-        assert code == "def foo():\n    return 42"
+        assert code == "def foo():\n    return 42\n"
 
     def test_raw_code(self):
         response = "def foo():\n    return 42"
@@ -251,7 +251,7 @@ class TestExtractCode:
     def test_with_think_block(self):
         response = "<think>Let me think...</think>\n```python\ndef foo(): pass\n```"
         code = extract_code_from_response(response)
-        assert code == "def foo(): pass"
+        assert code == "def foo(): pass\n"
 
     def test_unclosed_think(self):
         response = "<think>Still thinking\ndef foo(): pass"
@@ -558,6 +558,8 @@ class TestPromptTemplates:
         assert "hash map" in prompt
         assert "Two sum" in prompt
         assert "Do NOT write code" in prompt
+        assert "exact signature" in prompt
+        assert "syntactically valid source file" in prompt
 
     def test_code_prompt_includes_all_context(self):
         prompt = CODE_GENERATION_PROMPT.format(
@@ -568,3 +570,9 @@ class TestPromptTemplates:
         assert "DP approach" in prompt
         assert "O(n)" in prompt
         assert "Max subarray" in prompt
+        assert "exact signature" in prompt
+        assert "mentally compile" in prompt
+        assert "parameter order and kinds (including / and * markers)" in prompt
+        assert "laziness, stopping conditions, ordering" in prompt
+        assert "complete, syntactically valid source file only" in prompt
+        assert "never import that file or requested artifact from itself" in prompt

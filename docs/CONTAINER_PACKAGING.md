@@ -35,24 +35,8 @@ other path (including the application code) is read-only to it.
 |---|---|---|
 | atlas-proxy | *(none in the container fs)* | Reads config from env/mounts; the workspace and secrets are mounts; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
 | v3-service | `/data/telemetry` (the `v3-telemetry` volume), `$HOME` (`/home/appuser`) | Stage telemetry JSONL (fail-soft when the path is unwritable) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
-| geometric-lens | `/data/state` (the `lens-state` volume), `$HOME` (`/home/lens`) | `/data/state` holds the SQLite learned-state store (`geometric_state.db`); `$HOME` holds library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
+| geometric-lens | `$HOME` (`/home/lens`) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
-
-### Existing-deployment note (lens volume)
-
-The `lens-state` and `v3-telemetry` volumes are created with the image's
-ownership (uid 1001) on first use, so
-fresh installs need nothing. A volume that was **already** created by an
-older root-based image stays root-owned and the non-root `lens` account
-cannot write it after upgrading. Fix it once:
-
-```bash
-docker compose run --rm --user root geometric-lens \
-    chown -R lens:lens /data/state
-```
-
-…or recreate the volume if the indexed data is disposable. This is the
-only migration step; no host accounts or permissions change.
 
 ## Dependency version recording
 
@@ -67,7 +51,7 @@ rebuild resolves the same set:
 | `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) |
 
 The proxy's two Alpine packages are pinned in `proxy/Dockerfile`
-(`curl=8.21.0-r0`, `bash=5.3.9-r1`).
+(`curl=8.22.0-r0`, `bash=5.3.9-r1`).
 
 `tests/infrastructure/test_dependency_pinning.py` asserts the pinning
 policy: requirements files carry `==` pins on every entry, inline

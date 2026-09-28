@@ -1,6 +1,6 @@
 # ADR 0005: Lens is optional and calibration-gated
 
-Status: accepted (V3.1.2 calibration work)
+Status: superseded by 0011 (2026-09)
 
 ## Context
 Lens scores are model-relative. Uncalibrated or missing artifacts must

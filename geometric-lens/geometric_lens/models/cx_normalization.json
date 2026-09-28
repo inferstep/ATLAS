@@ -2,5 +2,10 @@
   "midpoint": 10.530888026045105,
   "steepness": 1.5653283518521657,
   "pass_energy_mean": 9.25320082537982,
-  "fail_energy_mean": 11.808575226710392
+  "fail_energy_mean": 11.808575226710392,
+  "length_baseline": {
+    "intercept": -6.965,
+    "log_slope": 2.53,
+    "residual_sd": 1.222
+  }
 }

@@ -67,8 +67,8 @@ package-lock.json
 .DS_Store
 Thumbs.db
 
-# Lens SQLite state from host/dev runs (containers keep it on the
-# lens-state volume; a bare `uvicorn main:app` drops it in the cwd)
+# Lens SQLite state left by host/dev runs of versions that kept a pattern
+# cache; nothing writes it any more
 geometric_state.db
 geometric_state.db-wal
 geometric_state.db-shm
@@ -141,7 +141,7 @@ manifests/
 benchmark/datasets/.cache/
 benchmark/results/
 
-# ----- V3 ablation results: COMMITTED (raw evidence behind 74.6% claim) -----
+# ----- V3 ablation results: COMMITTED (raw traces of the withdrawn V3.0 result, kept for audit) -----
 # v3_ablation_results/ is NOT gitignored — it contains per-task pass/fail data
 # for all ablation conditions (A-F) needed to verify published numbers.
 
@@ -178,8 +178,15 @@ nohup.out
 
 _agenttest/
 
-# Lens training corpus collected from agent use (local, per-machine)
+# Lens training corpus left by versions that collected one from agent use;
+# nothing writes it any more
 lens_training/
+
+# Private diagnostic captures (local, per-machine). The directory itself is
+# tracked so the bind mount has the invoking user's ownership on a fresh
+# checkout; its contents never are.
+diagnostics/*
+!diagnostics/.gitkeep
 .atlas-upgrade/
 geometric-lens/geometric_lens/models/provenance.json
 geometric-lens/geometric_lens/models/provenance.json.sig
@@ -197,3 +204,18 @@ docs/reports/ablation/condition_[a-d]*/summary.json
 .docs-audit-findings.md
 .loop-prompt.md
 .loop-progress.md
+
+# Personal Claude Code / aider-desk plugins and the lockfile pinning them.
+# Not ATLAS toolchain — nothing in the build, test, or deploy path reads
+# these, so a contributor never needs the same set resolved.
+.aider-desk/
+skills-lock.json
+
+# External-eval / red-teaming workbench: measurement tooling only,
+# never part of shipped ATLAS. Promote pieces deliberately or not at all.
+redteam/
+
+# Exploratory fuzz targets (red-team hunt, not shipped test surface).
+proxy/fuzz_redteam_test.go
+proxy/fuzz_redteam2_test.go
+proxy/testdata/fuzz/

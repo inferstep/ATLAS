@@ -553,8 +553,8 @@ def _extract_training_embeddings(samples: List[Dict],
         _safe_print(f"  ({hits} from cache, {len(embeddings) - hits} embedded "
                     f"fresh)")
     out = {"embeddings": embeddings, "labels": labels}
-    # Only attach weights when the samples actually carried them (collected
-    # corpus); bench/`--samples` builds stay uniformly weighted as before.
+    # Only attach weights when the samples actually carried them; unweighted
+    # builds stay uniformly weighted.
     if saw_weight:
         out["weights"] = weights
     return out
@@ -709,65 +709,6 @@ def _load_results_samples(results_dir: str) -> List[Dict]:
     return samples
 
 
-def _collected_corpus_dir() -> str:
-    """Host directory holding the lens-training corpus collected during agent
-    use (per-file accept/deny + pass thumbs → labeled, weighted samples). This
-    is the host side of the proxy's lens-training bind mount. ATLAS_LENS_HOST_DIR
-    overrides; default <atlas_root>/lens_training."""
-    env = os.environ.get("ATLAS_LENS_HOST_DIR")
-    if env:
-        return env
-    return os.path.join(cli_env.atlas_root(), "lens_training")
-
-
-def _sanitize_model_dir(name: str) -> str:
-    """Mirror proxy/lens_samples.go:sanitizeModelName so the CLI finds the
-    subdir the proxy wrote to."""
-    if not name:
-        return "default"
-    out = []
-    for ch in name:
-        out.append("_" if ch in "/\\: " else ch)
-    return "".join(out)
-
-
-def _load_collected_samples(model_name: Optional[str]) -> List[Dict]:
-    """Load the collected corpus for a model as [{text, label, weight}].
-
-    Resolves <corpus>/<sanitized-model>/samples.jsonl. When that subdir is
-    absent but exactly one model subdir exists, uses it (so the user doesn't
-    have to name the model when there's only one). Returns [] if nothing found.
-    """
-    root = _collected_corpus_dir()
-    if not os.path.isdir(root):
-        return []
-    sub = _sanitize_model_dir(model_name or os.environ.get("ATLAS_MODEL_NAME", ""))
-    path = os.path.join(root, sub, "samples.jsonl")
-    if not os.path.isfile(path):
-        subdirs = [d for d in os.listdir(root)
-                   if os.path.isfile(os.path.join(root, d, "samples.jsonl"))]
-        if len(subdirs) == 1:
-            path = os.path.join(root, subdirs[0], "samples.jsonl")
-        else:
-            return []
-    samples: List[Dict] = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = jsonlib.loads(line)
-            except jsonlib.JSONDecodeError:
-                continue
-            text = d.get("content") or d.get("text")
-            if not text:
-                continue
-            samples.append({"text": text, "label": int(d.get("label", 0)),
-                            "weight": float(d.get("weight", 1.0))})
-    return samples
-
-
 def _emit_build(args: argparse.Namespace, color: bool) -> int:
     """Train fresh Lens artifacts for the model llama-server has loaded.
 
@@ -822,14 +763,6 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                     _safe_print(f"  Did you mean: --from-results {cand}")
                     break
             return 1
-    elif getattr(args, "from_collected", False):
-        samples = _load_collected_samples(args.model)
-        if not samples:
-            _safe_print(f"  {RED if color else ''}No collected samples found in "
-                        f"{_collected_corpus_dir()} for this model. Rate some "
-                        f"passes (👍/👎 + per-file accept/deny) in the TUI to "
-                        f"build a corpus first.{RESET if color else ''}")
-            return 1
     elif args.samples:
         samples = _load_training_samples(args.samples)
     else:
@@ -871,8 +804,6 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
     if getattr(args, "from_results", None):
         cache_path = os.path.normpath(
             os.path.join(results_dir, os.pardir, "embeddings_cache.jsonl"))
-    elif getattr(args, "from_collected", False):
-        cache_path = os.path.join(_collected_corpus_dir(), "embeddings_cache.jsonl")
     elif args.samples:
         cache_path = args.samples + ".embcache.jsonl"
     else:
@@ -1025,8 +956,29 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                         f"model; refusing to activate these artifacts."
                         f"{RESET if color else ''}")
             return 1
+        # Record the convention these artifacts were actually fitted on.
+        # save_model_identity has always accepted it and nothing passed it,
+        # so shipped artifacts declare no contract — which is why a
+        # server-side pooling or normalization change shifts every score
+        # while health checks stay green. Measured 2026-08-03: served
+        # unit-norm vectors against a cost field fitted on |v|~137 returned
+        # 0.76-0.80 for a clean function, a repetition loop and truncated
+        # junk alike, against a calibrated 9.25/11.81 band.
+        #
+        # Best-effort: a probe failure must not block activation, and an
+        # absent contract is the behaviour we already have.
+        embedding_contract = None
+        try:
+            from geometric_lens.embedding_extractor import (
+                observe_embedding_convention,
+            )
+            embedding_contract = observe_embedding_convention()
+        except Exception as exc:  # noqa: BLE001 — telemetry, not correctness
+            _safe_print(f"  could not observe the embedding convention "
+                        f"({exc}); artifacts will declare none")
         save_model_identity(
-            staging_dir, model_identity, verdict.probe.embedding_dim)
+            staging_dir, model_identity, verdict.probe.embedding_dim,
+            embedding_contract=embedding_contract)
         # Per-bundle provenance manifest (SUPPORT_MATRIX §9.5): every
         # activated bundle is reproducible and auditable — `atlas artifact
         # verify/snapshot/rollback` consume this file. Best-effort: a
@@ -1040,8 +992,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 embedding_dim=verdict.probe.embedding_dim,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 dataset=(getattr(args, "from_results", None)
-                         or ("collected" if getattr(args, "from_collected", False)
-                             else args.samples or "")),
+                         or args.samples or ""),
                 n_samples=len(data["labels"]), n_pass=n_p,
                 n_fail=len(data["labels"]) - n_p,
                 metrics={"best_test_auc": result.get("best_test_auc"),
@@ -1152,7 +1103,7 @@ before publishing.
 ## Registry submission
 
 To get ATLAS users this support automatically via `atlas model list`,
-open a PR against https://github.com/itigges22/ATLAS using the body
+open a PR against https://github.com/inferstep/ATLAS using the body
 `atlas lens publish` produced. PC-059 (#101) tracks the manual-review
 flow; PC-060 (#102) tracks the eventual auto-merge pipeline.
 """
@@ -1383,7 +1334,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     if args.dry_run else
                     f"  {GREEN if color else ''}Upload complete.{RESET if color else ''} "
                     "Paste the body above into a PR at "
-                    "https://github.com/itigges22/ATLAS/compare")
+                    "https://github.com/inferstep/ATLAS/compare")
         return 0
 
     if not publishing.gh_available():
@@ -1393,7 +1344,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
         _safe_print(f"  {GREEN if color else ''}Upload complete.{RESET if color else ''} "
                     "Install `gh` (https://cli.github.com) and re-run "
                     "without --skip-pr to auto-open, or paste the body above "
-                    "into https://github.com/itigges22/ATLAS/compare manually.")
+                    "into https://github.com/inferstep/ATLAS/compare manually.")
         return 0
 
     # The PR is built through the GitHub API (branch + commit + PR) so it
@@ -1500,21 +1451,6 @@ def main(argv: Optional[List[str]] = None) -> int:
              "per-candidate embeddings (telemetry/embeddings.emb)")
     p_build.add_argument("--no-color", action="store_true")
 
-    p_retrain = sub.add_parser("retrain",
-        help="retrain the lens on samples collected from your own agent use "
-             "(per-file accept/deny + pass 👍/👎) — boosts quality on your "
-             "workloads")
-    p_retrain.add_argument("model", nargs="?", default=None,
-        help="registry name or path (default: whatever llama-server has loaded)")
-    p_retrain.add_argument("--epochs", type=int, default=200)
-    p_retrain.add_argument("--lr", type=float, default=1e-3)
-    p_retrain.add_argument("--margin", type=float, default=1.0)
-    p_retrain.add_argument("--artifact-dir", default=None,
-        help="where to save the artifacts (default: registry-resolved path)")
-    p_retrain.add_argument("--dry-run", action="store_true",
-        help="extract embeddings but skip training + save")
-    p_retrain.add_argument("--no-color", action="store_true")
-
     p_pub = sub.add_parser("publish",
         help="upload local artifacts to HF + open registry-PR (PC-059)")
     p_pub.add_argument("model", nargs="?", default=None,
@@ -1546,17 +1482,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.subcommand == "check":
         return _emit_check(args, color)
     if args.subcommand == "build":
-        return _emit_build(args, color)
-    if args.subcommand == "retrain":
-        # Retrain is `build` sourced from the collected corpus. Set the source
-        # flag + the build-only knobs build expects, then reuse its pipeline
-        # (embed → C(x)+G(x) → calibrated thresholds → save). --force is
-        # implied: a retrain always replaces the current artifacts.
-        args.from_collected = True
-        args.from_results = None
-        args.samples = None
-        args.force = True
-        args.no_telemetry = True
         return _emit_build(args, color)
     if args.subcommand == "publish":
         return _emit_publish(args, color)

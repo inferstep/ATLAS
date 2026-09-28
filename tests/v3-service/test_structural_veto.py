@@ -263,3 +263,15 @@ def test_endpoint_project_context_credits_symbol(structural_check_url):
     })
     assert out["ok"] is True
     assert "shared_util" not in out["unresolved"], out
+
+
+def test_html_text_is_misread_as_python_calls():
+    # Why the pipeline gates the veto on language: the Python grammar parses
+    # an HTML template tolerantly and reports `Time (mins)` as a call.
+    html = (
+        "<table><tr><th> Time (mins) </th><th> Distance (km) </th></tr></table>\n"
+        "<style>th { color: rgba(0, 0, 0, 0.5); }</style>\n"
+    )
+    struct = main.structural_score(set(), html)
+    assert struct["ok"]
+    assert struct["n_unresolved"] >= 1, struct

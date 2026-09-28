@@ -3,7 +3,7 @@
 
 # ATLAS アーキテクチャ
 
-ATLAS V3.1.3 のシステムアーキテクチャ。二層構成: 外側のエージェントループがツールコールのオーケストレーションを担い、内側の V3 パイプラインがビルド検証とエネルギーベースの選択を通じて多様なコード候補を生成します。
+ATLAS V3.1.4 のシステムアーキテクチャ。二層構成: 外側のエージェントループがツールコールのオーケストレーションを担い、内側の V3 パイプラインがビルド検証とエネルギーベースの選択を通じて多様なコード候補を生成します。
 
 ---
 
@@ -77,7 +77,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | **atlas-proxy** | 8090 | Go | エージェントループ、ツールコールルーティング、ティア分類、`/v1/agent` SSE、`/events` 型付き SSE、`/cancel`。`/v1/chat/completions` は llama-server へそのままパススルー。 |
 | **atlas-tui** | (クライアント) | Go | Bubbletea TUI; `/events` と `/v1/agent` の SSE ストリームを消費。 |
 | **v3-service** | 8070 | Python | V3 パイプラインの HTTP ラッパー（PlanSearch、DivSampling、PR-CoT など） |
-| **geometric-lens** | 8099 | Python (FastAPI) | 内部 `/internal/*` スコアリングサービス: C(x) エネルギースコアリング、G(x) XGBoost 品質予測、ステップごとのスコアリング、およびパターンキャッシュ（読み書き）。パターンキャッシュ、共起グラフ、タスクキューを支える SQLite ステートストア（`lens-state` ボリューム上の `SQLITE_DB_PATH`）を所有 |
+| **geometric-lens** | 8099 | Python (FastAPI) | 内部 `/internal/*` スコアリングサービス: C(x) エネルギースコアリング、G(x) XGBoost 品質予測、ステップごとのスコアリング |
 | **sandbox** | 30820 (ホスト) / 8020 (コンテナ) | Python (FastAPI) | 分離されたコード実行、コンパイル、リント、テスト実行 |
 
 ---
@@ -91,13 +91,13 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | ファイル | 担当 |
 |---|---|
 | `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
-| `agent.go` | エージェントループ: ターン状態、LLM 呼び出し、プラン生成、パターンコンテキストの注入、スタックループのブレーカー |
-| `tools.go` | 14 個のツール定義と実行系、ティア分類、ツールコール文法 |
+| `agent.go` | エージェントループ: ターン状態、LLM 呼び出し、プラン生成、スタックループのブレーカー |
+| `tools.go` | 16 個のツール定義と実行系、ティア分類、ツールコール文法 |
 | `gates.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ、アセットリント |
 | `detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
 | `context.go` | コンテキストの拡充: シンボルインデックス、プロジェクトスキャン、ワークスペース封じ込め、セッションファイルマニフェスト |
 | `permissions.go` | パーミッションゲート（`/v1/permission`）、トラストモード、ハードブロックされたパターン |
-| `lens.go` | レンズのスコアリング呼び出し、レンズサンプルのバンキング（`/feedback`）、キャリブレーション状態 |
+| `lens.go` | レンズのスコアリング呼び出し、キャリブレーション状態 |
 | `guardrails.go` | ツールごとのステアリングガード（縮約、コマンド/モジュール欠落のステア、doctype 除去） |
 | `events.go` | 型付きエンベロープのブローカー（`/events`）と SSE の配管 |
 | `v3_bridge.go` | v3-service の `/v3/generate` + `/v3/plan` 向け SSE クライアント |
@@ -163,7 +163,7 @@ flowchart LR
 
 ### ツール
 
-`proxy/tools.go` に登録された14個のツール:
+`proxy/tools.go` に登録された16個のツール:
 
 | ツール | 役割 | 読み取り専用 |
 |------|---------|-----------|
@@ -171,6 +171,8 @@ flowchart LR
 | `outline_file` | ファイルのトップレベルの関数/クラスを行範囲付きで一覧表示し、本体は含めない（`.py` は tree-sitter、それ以外はベストエフォートのスキャン）。外科的読み取りのエントリーポイント: まずアウトラインし、次に offset/limit 付きで `read_file` する | はい |
 | `write_file` | 新規ファイルを作成（既存の5行超ファイルでは拒否 — 安全制限を参照） | いいえ |
 | `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
+| `insert_after` | 指定した行番号（`read_file` が表示する行番号）の後ろに新しい行を挿入する。何も既存のものを変えずにコード（分岐、関数、import）を**追加**する場合向け: 再現すべき `old_str` がなく、長いスパンで失敗するのはまさにその工程 | いいえ |
+| `replace_lines` | 行範囲（`start_line`..`end_line`、`read_file` が表示する行番号）を新しい内容で置き換える。コードを再現せずに**変更**する場合向け: アンカーはスパン全体ではなく主張された2行（範囲の先頭行と末尾行、空白は無視）なので、逐語での再現負担は N 行ではなく 2 行になる。1回の呼び出しにつき最大60行 | いいえ |
 | `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。GH #39、v1 では .py/.html/.htm のみ | いいえ |
 | `delete_file` | ファイルまたは空ディレクトリを削除（実行後にループ終了を強制） | いいえ |
 | `move_file` | ワークスペース内でファイルを移動またはリネーム（例: `index.html` → `templates/`）。純粋な移動 — V3/外科的編集のゲートをバイパスし、既存の宛先の上書きは拒否。シェルの `mv`/`cp` が拒否されるため「ファイルを再編成する」ための正規のパス | いいえ |
@@ -272,10 +274,7 @@ flowchart LR
     AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
     PRCOT --> PRPass{"Pass?"}
     PRPass -->|"Yes"| Done
-    PRPass -->|"No"| Refine["Refinement"]
-    Refine --> RefPass{"Pass?"}
-    RefPass -->|"Yes"| Done
-    RefPass -->|"No"| Derive["Derivation"] --> Done
+    PRPass -->|"No"| Refine["Refinement"] --> Done
 
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
@@ -292,7 +291,6 @@ flowchart LR
     style Build fill:#2d5016,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
     style Refine fill:#5c3a1a,color:#fff
-    style Derive fill:#5c3a1a,color:#fff
     style FA fill:#5c3a1a,color:#fff
 ```
 
@@ -304,7 +302,7 @@ flowchart LR
 
 **候補割り当て: CxGx ゲート**（`phase2` / `phase2_allocated` として送出）が、失敗したプローブに何個の候補を与えるかを決めます。プローブの C(x)+G(x) 合成スコア（埋め込み抽出1回、両モデルを使用）が2段階のルールを駆動します: キャリブレーション済みの C(x) 正規化エネルギーが、Budget Forcing と同じ梯子の上でベースティアを選び、G(x) の品質スコアがモデルのキャリブレーション済み severe 境界を下回るときにそのティアを +1、大きく下回る（その 0.75 倍）ときに +2 だけ引き上げます — プローブが C(x) には安く見えるのに G(x) には誤りに見えるケースです。ティアが k を決め（`nothink` 1、`standard` 3、`hard` 5、`extreme` 8）、そこに **k >= 3 のハードなフロア**が掛かります。したがってゲートは、以前ピン留めされていた k=3 に候補を追加することしかできず、減らすことはできません。最悪ケースが従来の挙動になります。どちらの信号もこのモデルのキャリブレーションファイル（`cx_normalization.json`、`gx_thresholds.json`）を必要とします: レンズが欠落・到達不能・未キャリブレーションの場合は `standard` でちょうど k=3 を割り当てるため、未キャリブレーションのバンドルは、そのモデルにとって意味を持たない尺度でルーティングされるのではなく、従来どおりのパイプラインを走らせます。
 
-このフロアが、以前に削除された C(x) のみのアロケータとの違いです: あちらにはフロアがなく、プローブが*ちょうど失敗した*タスクに k=1 を渡してしまい、測定値は +0.0 pp でした。n=175/アームでの4アーム三角測量: ゲートあり 66.9%、固定 k=3 が 64.6%、同じティア構成をタスク間でシャッフルしたものが 61.7%、すべて k=8 が約27%多いトークンで 67.4%。同じ支出でシャッフルアームを 5.1 pp 上回ったことが、計算量だけでなくレンズの信号が情報を担っていると言える根拠です。
+このフロアが、以前に削除された C(x) のみのアロケータとの違いです: あちらにはフロアがなく、プローブが*ちょうど失敗した*タスクに k=1 を渡してしまいました。レンズ駆動の割り当てが固定またはランダムなティア割り当てより優れているかは未測定です。以前の4アーム比較（ゲートあり、固定 k=3、同じティア構成をタスク間でシャッフル、k=8、各アーム n=175）はどちらの根拠にもなりません。この比較は Qwen3.5-9B 上で、このリポジトリにないパッチ済みランナーを使い、ライブのゲートでは適用できないエスカレーション時の思考を有効にし、G(x) ヘッドの学習に使った LiveCodeBench タスクで実行されたもので、そのサンプルサイズでは各アームの差はノイズの範囲内です。
 
 ライブパスとの違い: プロキシの V3 ブリッジは `ATLAS_V3_TIMEOUT`（デフォルト 180s）でパイプライン呼び出しを打ち切ります。これはベンチには存在しなかった上限で、k=8 への無制限なエスカレーションは予算を生成に使い切り、時間内に出せたはずの k=3 の答えではなくタイムアウトのフォールバックを返すことになります。そのためライブのオーケストレータは、残りの実時間とそのタスクで観測された呼び出しごとのレイテンシを渡し、ゲートは予算内で実際に生成できる水準までティアを下げます — エスカレーションがフェーズ3を枯渇させないようリファインメント1回分を確保しつつ、フロアを下回ることはありません。ベンチランナーは予算を渡さず、測定されたとおりに割り当てます。実装は `v3-service/stages/cxgx_gate.py` で、両方のオーケストレータが共有します。
 
@@ -336,11 +334,10 @@ Wait 注入は、より長い推論パスを要求するために「Wait, let me
 - **メタ認知評価**: 観測された失敗カテゴリから導出した補償制約を注入する
 - **PR-CoT**: 4つの視点（logical_consistency、information_completeness、biases、alternative_solutions）×（分析 + 修復）= 約8回の LLM 呼び出し、最大3ラウンド
 - **Refinement Loop**: 失敗分析 → 制約のリファイン → コード生成 → テスト → 学習。2反復、120秒予算、各約5回以上の LLM 呼び出し。コサイン距離フィルタリング（>= 0.15）が仮説の繰り返しを防ぐ
-- **Derivation Chains**: 最大5つのサブ問題に分解し、それぞれをサンドボックスで検証し、最終形を合成する。約7回以上の LLM 呼び出し
 
 ### モジュールマップ
 
-`v3-service/stages/` 内の13個の Python モジュールがパイプラインステージです。`v3-service/pipeline.py` はそのうち11個をオーケストレーションします（10個は直接、`constraint_refinement` はリファインメントループ経由）; `lens_feedback` と `embedding_store` はオフラインのベンチランナー（`atlas/bench/v3_runner.py`）の下でのみ動作します。ベンチランナーはチェックアウトの `v3-service/` を自身のパスに載せるため、両方の呼び出し元が単一のステージ実装を共有します:
+`v3-service/stages/` 内の12個の Python モジュールがパイプラインステージです。`v3-service/pipeline.py` はそのうち11個をオーケストレーションします（10個は直接、`constraint_refinement` はリファインメントループ経由）; `embedding_store` はオフラインのベンチランナー（`atlas/bench/v3_runner.py`）の下でのみ動作します。ベンチランナーはチェックアウトの `v3-service/` を自身のパスに載せるため、両方の呼び出し元が単一のステージ実装を共有します:
 
 ```mermaid
 graph LR
@@ -354,14 +351,12 @@ graph LR
     Main --> RL["RefinementLoop 3E"]
     Main --> STG["SelfTestGen"]
     Main --> LLM["LLMClient"]
-    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
-    Bench --> ES["EmbeddingStore"]
+    Bench["v3_runner.py\n(bench only)"] --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR["ConstraintRefiner 3B"]
     CG -->|"tier table"| BF
     CG -->|"budget helpers"| RL
-    LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
@@ -376,7 +371,6 @@ graph LR
     style RL fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
     style LLM fill:#333,color:#fff
-    style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
@@ -386,7 +380,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-モデルの埋め込みの幾何構造を分析することで、コードを実行せずにその品質を評価するニューラルスコアリングシステム。完全に CPU 上で動作します。サービスの表面は内部専用（`/internal/*`）です: C(x)/G(x) のスコアリング（単発およびステップごと）に加え、以前のセッションで得た教訓をエージェントループへ還流させる[パターンキャッシュ](#パターンキャッシュ)。
+モデルの埋め込みの幾何構造を分析することで、コードを実行せずにその品質を評価するニューラルスコアリングシステム。完全に CPU 上で動作します。サービスの表面は内部専用（`/internal/*`）です: C(x)/G(x) のスコアリング（単発およびステップごと）。
 
 #### なぜ「Geometric Lens」なのか?
 
@@ -412,8 +406,6 @@ graph LR
     V -->|"below artifact severe"| LI["likely_incorrect"]
 
     TR["Training Pipeline\ncontrastive ranking loss"] --> CX
-    EWC["EWC\nFisher information\nprevents catastrophic forgetting"] --> TR
-    RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"] --> TR
 
     MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"] -.-> CORR["Correction Engine\n-α · G⁻¹ · ∇C"]
 
@@ -422,8 +414,6 @@ graph LR
     style GX fill:#2d5016,color:#fff
     style SVC fill:#333,color:#fff
     style TR fill:#1a3a5c,color:#fff
-    style EWC fill:#1a3a5c,color:#fff
-    style RB fill:#1a3a5c,color:#fff
     style MT fill:#555,color:#ccc
     style CORR fill:#555,color:#ccc
 ```
@@ -441,35 +431,9 @@ C(x) の正規化は `sigmoid(steepness × (energy - midpoint))` です。両方
 
 > **注:** モデルの重み（.pt、.pkl ファイル）はリポジトリにコミットされていません — トレーニング中にビルドされ、コンテナイメージに焼き込まれるか、実行時にマウントされます。モデルファイルが存在しない場合、サービスは緩やかにデグレードします: C(x) は中立エネルギーを返し、G(x) は `gx_score: 0.5` と `verdict: "unavailable"` を返します。トレーニングデータと重みは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) で公開しています。
 
-### パターンキャッシュ
-
-セッションをまたぐ記憶: 成功した実行の後に書き込まれたパターンが、以後のエージェントループにコンテキストとして提供されます。
-
-```mermaid
-graph LR
-    subgraph write["Write path (v3-service, post-run)"]
-        PE["Pattern Extractor"] --> PS["Pattern Store\nSQLite"]
-        PS --> COO["Co-occurrence Graph\nHebbian edge weights"]
-    end
-
-    subgraph read["Read path (/internal/patterns/context)"]
-        CLS["Task-type classifier\n(heuristic, on the task text)"] --> PSC["Pattern Scorer\ntype match × Ebbinghaus decay × success"]
-        PSC --> EXP["1-hop expansion\nco_occurrence.get_linked_patterns"]
-        EXP --> OUT["top-k patterns\n→ proxy [system note] injection"]
-    end
-
-    PS --> PSC
-    COO --> EXP
-
-    style write fill:#1a3a5c,color:#fff
-    style read fill:#2d5016,color:#fff
-```
-
-モジュール: `geometric-lens/cache/{pattern_store, pattern_extractor, pattern_scorer, co_occurrence, seed_patterns}.py`。マッチングはパターン種別 + 新しさ + 成功率で行われ、検索インデックスは存在しません。ストアは初回起動時に `seed_patterns` で自身をシードし、提供のたびにそのパターンのアクセス統計を更新します。消費側はプロキシのパターンコンテキスト注入です（§3）。
-
 <a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
 
-> **削除されたサブシステム。** 以前のリリースには、RAG/PageIndex のプロジェクトインデクサ、BM25 のパターンマッチャ、そして Thompson サンプリングによる信頼度ルーターがレンズ内に同梱されていました。これらはプロダクト内のどこからも呼ばれていないレンズのエンドポイント経由でしか到達できず、2026-08 の簡素化キャンペーンで削除されました（CHANGELOG を参照）。上記のパターンキャッシュが、そのスタックから残ったものであり、常時オンの単一リーダーを中心に作り直されています。
+> **削除されたサブシステム。** 以前のリリースには、RAG/PageIndex のプロジェクトインデクサ、BM25 のパターンマッチャ、そして Thompson サンプリングによる信頼度ルーターがレンズ内に同梱されていました。これらはプロダクト内のどこからも呼ばれていないレンズのエンドポイント経由でしか到達できず、2026-08 の簡素化キャンペーンで削除されました（CHANGELOG を参照）。そのスタックの最後に残ったパターンキャッシュも 2026-09 に削除されました。評価実行を含むすべての成功セッションの解答を保存し、以後のすべての実行に「教訓」として注入していたため、テストセットからプロダクトへの経路になっていました。
 
 ---
 

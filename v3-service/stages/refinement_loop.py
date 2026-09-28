@@ -6,7 +6,7 @@ When Phase 1+2 candidates all fail, the loop:
   2. Generates refined constraints (3B)
   3. Generates code from best hypothesis
   4. Tests in sandbox
-  5. Learns from result (success → Pattern Cache, fail → iterate)
+  5. Learns from the result (fail → iterate)
 
 When the loop exhausts its iterations unsolved, the caller (pipeline
 orchestrator / bench runner) moves on to its next repair strategy.
@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import strip_reasoning_leak
+from .llm_client import extract_code_for_problem, strip_reasoning_leak
 
 from .failure_analysis import (
     FailingCandidate,
@@ -318,7 +318,9 @@ class RefinementLoop:
                 code_response, gen_tokens, _ = llm_call(
                     code_prompt, 0.2, 4096, 42 + iteration
                 )
-                code = self._extract_code(code_response)
+                code = extract_code_for_problem(
+                    code_response, problem, fallback="last"
+                )
 
             total_tokens += gen_tokens
 
@@ -392,7 +394,18 @@ class RefinementLoop:
             f"Problem: {problem}\n\n"
             f"Approach: {approach}\n\n"
             f"These constraints MUST be satisfied:\n{constraints_text}\n\n"
-            f"Write clean, correct Python code."
+            f"Treat every explicitly requested public name, exact signature, "
+            f"entry point, and input/output behavior as a hard contract.\n"
+            f"Preserve existing public interfaces unless the problem explicitly "
+            f"requires changing them.\n"
+            f"Copy parameter order and kinds (including / and * markers), defaults, "
+            f"and type annotations exactly.\n"
+            f"Implement behavioral contracts such as laziness, stopping conditions, "
+            f"ordering, and error behavior literally.\n"
+            f"Write one complete, syntactically valid Python source file only; "
+            f"never import that file or requested artifact from itself. Before "
+            f"answering, mentally compile it and verify every requested declaration "
+            f"and contract is implemented."
         )
         system = "You are an expert programmer. Think through the approach carefully, then write correct code."
         return (

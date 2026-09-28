@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -368,55 +374,6 @@ func TestFindActualString(t *testing.T) {
 	})
 }
 
-func TestRecoverTruncatedWriteFile(t *testing.T) {
-	t.Run("recovers path and unescaped content", func(t *testing.T) {
-		partial := `{"type":"tool_call","name":"write_file","args":{"path":"app/main.py","content":"import os\nprint(\"hi\")\n# cut mid-`
-		resp, err := recoverTruncatedWriteFile(partial)
-		if err != nil {
-			t.Fatalf("recovery failed: %v", err)
-		}
-		if resp.Type != "tool_call" || resp.Name != "write_file" {
-			t.Fatalf("recovered envelope %+v", resp)
-		}
-		var input WriteFileInput
-		if err := json.Unmarshal(resp.Args, &input); err != nil {
-			t.Fatalf("recovered args do not parse: %v", err)
-		}
-		if input.Path != "app/main.py" {
-			t.Errorf("path = %q", input.Path)
-		}
-		// JSON escapes must be resolved into real bytes.
-		if !strings.Contains(input.Content, "import os\nprint(\"hi\")") {
-			t.Errorf("content = %q — escapes not resolved", input.Content)
-		}
-	})
-
-	t.Run("trailing incomplete escape is trimmed", func(t *testing.T) {
-		partial := `{"type":"tool_call","name":"write_file","args":{"path":"a.txt","content":"line\n\`
-		resp, err := recoverTruncatedWriteFile(partial)
-		if err != nil {
-			t.Fatalf("recovery failed on trailing backslash: %v", err)
-		}
-		var input WriteFileInput
-		_ = json.Unmarshal(resp.Args, &input)
-		if input.Content != "line\n" {
-			t.Errorf("content = %q, want %q", input.Content, "line\n")
-		}
-	})
-
-	t.Run("missing content field is an error", func(t *testing.T) {
-		if _, err := recoverTruncatedWriteFile(`{"type":"tool_call","name":"write_file","args":{"path":"a.txt"`); err == nil {
-			t.Error("recovered a write_file with no content field")
-		}
-	})
-
-	t.Run("missing path is an error", func(t *testing.T) {
-		if _, err := recoverTruncatedWriteFile(`{"type":"tool_call","name":"write_file","args":{"content":"body only`); err == nil {
-			t.Error("recovered a write_file with no destination path")
-		}
-	})
-}
-
 // Tests for buildResponseFormat — the schema-constrained sampling path
 // (#33). These tests pin the response_format payload shape that goes
 // over the wire to llama-server, so a regression that silently flips
@@ -473,22 +430,6 @@ func TestBuildResponseFormat_UnknownModeDefaultsToStrict(t *testing.T) {
 	}
 	if _, has := m["schema"]; !has {
 		t.Error("unknown mode must default to strict (schema included)")
-	}
-}
-
-func TestDemoBaselineExcludesOrchestrationTool(t *testing.T) {
-	ctx := &AgentContext{
-		BypassV3: true,
-		Messages: []AgentMessage{{Role: "user", Content: "build the project"}},
-	}
-	prompt := buildSystemPrompt(ctx)
-	if strings.Contains(prompt, "plan_tasks") {
-		t.Fatal("prompt advertises the removed plan_tasks tool")
-	}
-	// With no orchestration exclusions, the baseline needs no override
-	// grammar on a plain first step.
-	if _, grammar := buildStepRequest(ctx); grammar != "" {
-		t.Fatalf("baseline unexpectedly received override grammar: %q", grammar)
 	}
 }
 
@@ -1036,6 +977,53 @@ func TestCallGraphFooterMarksItselfAsNotFileContent(t *testing.T) {
 	}
 }
 
+// The call graph is not a switch: a whole-file read of a Python file carries
+// its call edges with no flag set, and a file of another language never does.
+func TestReadFileAttachesTheCallGraphWithoutAFlag(t *testing.T) {
+	t.Setenv("ATLAS_CALL_GRAPH", "")
+	var outlines int
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		outlines++
+		_, _ = w.Write([]byte(`{"supported":true,"symbols":[
+			{"name":"mean","kind":"function","start_line":1,"end_line":2,"calls":["total"]}]}`))
+	}))
+	defer v3.Close()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"stats.py": "def mean(v):\n    return total(v)/len(v)\n",
+		"stats.js": "function mean(v) { return total(v) / v.length; }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.Ctx = context.Background()
+	ctx.V3URL = v3.URL
+	read := func(path string) string {
+		t.Helper()
+		res, err := readFileTool().Execute(json.RawMessage(`{"path":"`+path+`"}`), ctx)
+		if err != nil || res == nil || !res.Success {
+			t.Fatalf("read_file %s failed: %v %+v", path, err, res)
+		}
+		var out ReadFileOutput
+		if err := json.Unmarshal(res.Data, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Content
+	}
+	if got := read("stats.py"); !strings.Contains(got, "## Call graph") {
+		t.Errorf("a Python read carries no call graph: %q", got)
+	}
+	before := outlines
+	if got := read("stats.js"); strings.Contains(got, "## Call graph") {
+		t.Errorf("a JavaScript read carries a call graph: %q", got)
+	}
+	if outlines != before {
+		t.Error("a JavaScript read asked for a call graph")
+	}
+}
+
 // read_file numbers lines "N<tab>content" for reference, and nothing said so.
 // A model reasonably concluded the file itself was tab-delimited: an
 // otherwise correct grid-puzzle solution parsed every line as
@@ -1271,4 +1259,1370 @@ func findTool(t *testing.T, name string) *ToolDef {
 	}
 	t.Fatalf("tool %q is not registered", name)
 	return nil
+}
+
+// replace_lines exists because this model cannot reproduce a 9-13 line anchor
+// verbatim — observed corruptions food.y -> hood.y, scoreElement ->
+// scorerElement, unshift(( . Citing two line numbers removes that burden. The
+// content assertion is what keeps the address honest: a wrong anchor simply
+// fails to match, but a wrong line number splices cleanly and corrupts.
+func TestReplaceLinesReplacesByNumber(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "one\ntwo\nthree\nfour\nfive\n"
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	res, err := tool.Execute(json.RawMessage(`{"path":"a.py","start_line":2,"end_line":4,
+		"expected_first_line":"two","expected_last_line":"four","content":"TWO\nTHREE"}`), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got: %s", res.Error)
+	}
+	got, _ := os.ReadFile(file)
+	if string(got) != "one\nTWO\nTHREE\nfive\n" {
+		t.Errorf("wrong result:\n%q", string(got))
+	}
+}
+
+func TestReplaceLinesRefusesAWrongRange(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "one\ntwo\nthree\nfour\nfive\n"
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	// Off by one: claims line 2 is "one". Without the assertion this applies
+	// cleanly and silently corrupts.
+	res, _ := tool.Execute(json.RawMessage(`{"path":"a.py","start_line":2,"end_line":3,
+		"expected_first_line":"one","expected_last_line":"three","content":"X"}`), ctx)
+	if res.Success {
+		t.Fatal("an off-by-one range must be refused, not applied")
+	}
+	for _, want := range []string{"line 2", "you said", "actually"} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("error missing %q:\n%s", want, res.Error)
+		}
+	}
+	if got, _ := os.ReadFile(file); string(got) != src {
+		t.Error("file was modified despite the refusal")
+	}
+}
+
+func TestReplaceLinesIgnoresIndentationInTheAssertion(t *testing.T) {
+	// The model reproduces the TEXT of one line reliably and its indentation
+	// unreliably. The assertion exists to catch a wrong NUMBER, not whitespace.
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "def f():\n    return 1\n"
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, _ := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":2,"end_line":2,"expected_first_line":"return 1",
+		  "expected_last_line":"return 1","content":"    return 2"}`), ctx)
+	if !res.Success {
+		t.Fatalf("indentation-only difference must not fail the assertion: %s", res.Error)
+	}
+}
+
+func TestReplaceLinesGuardsRangeAndSize(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 100)
+	os.WriteFile(file, []byte(src), 0644)
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+	tool := findTool(t, "replace_lines")
+
+	for _, tc := range []struct{ name, args, want string }{
+		{"past end of file", `{"path":"a.py","start_line":99,"end_line":140,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"inverted range", `{"path":"a.py","start_line":9,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		{"zero start", `{"path":"a.py","start_line":0,"end_line":2,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "invalid"},
+		// A whole JavaScript function inside a template runs 40-50 lines and
+		// has to fit; the cap is there for a rewrite pretending to be an edit.
+		{"span too large", `{"path":"a.py","start_line":1,"end_line":80,"expected_first_line":"x","expected_last_line":"x","content":"y"}`, "too large"},
+		{"missing path", `{"start_line":1,"end_line":2,"content":"y"}`, "path is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tool.Execute(json.RawMessage(tc.args), ctx)
+			if err != nil {
+				return // read-staleness path returns an error, also a refusal
+			}
+			if res.Success {
+				t.Fatalf("expected refusal, got success")
+			}
+			if !strings.Contains(res.Error, tc.want) {
+				t.Errorf("error missing %q:\n%s", tc.want, res.Error)
+			}
+		})
+	}
+}
+
+// The tool the model most needs to reach for got the only empty example.
+// Commit 7f931a4's own message records it reaching for edit_file on a pure-ADD
+// task because nothing pointed at insert_after.
+func TestLineAddressedToolsHaveWorkedExamples(t *testing.T) {
+	for _, name := range []string{"insert_after", "replace_lines"} {
+		ex := generateInputExample(name)
+		if ex == "{}" || ex == "" {
+			t.Errorf("%s renders an empty example in the system prompt", name)
+			continue
+		}
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(ex), &parsed); err != nil {
+			t.Errorf("%s example is not valid JSON: %v\n%s", name, err, ex)
+			continue
+		}
+		if _, ok := parsed["path"]; !ok {
+			t.Errorf("%s example omits path, which is the field it was seen forgetting", name)
+		}
+	}
+	// replace_lines' example must demonstrate the assertion, or the model
+	// learns the address and skips the safety belt.
+	var rl map[string]interface{}
+	json.Unmarshal([]byte(generateInputExample("replace_lines")), &rl)
+	for _, k := range []string{"start_line", "end_line", "expected_first_line", "expected_last_line"} {
+		if _, ok := rl[k]; !ok {
+			t.Errorf("replace_lines example omits %q", k)
+		}
+	}
+}
+
+// A failing insert_after/replace_lines loop must be able to trip the 3-strike
+// path-aware breaker. It could not: extractFailurePath returned "" for both, so
+// three identical failures read as three different paths.
+func TestFailurePathIsExtractedForLineAddressedTools(t *testing.T) {
+	for _, name := range []string{"insert_after", "replace_lines"} {
+		got := extractFailurePath(name, json.RawMessage(`{"path":"app.py","line":3}`))
+		if got != "app.py" {
+			t.Errorf("extractFailurePath(%s) = %q, want \"app.py\" — the breaker needs a non-empty path", name, got)
+		}
+	}
+}
+
+// The steer a model actually reads when a long anchor misses. It used to
+// name only insert_after, which handles ADDING — so a model changing a
+// multi-line region was told "anchor on ONE short line" with no pointer to
+// the tool built for exactly that case. Observed live: two failed 15-line
+// old_str attempts in a row, then the model abandoned the edit.
+func TestLongAnchorFailureNamesTheLineAddressedTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne\nf\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(path, "a\nb\nc\nd\ne\nf\n")
+
+	tool := findTool(t, "edit_file")
+	_, err := tool.Execute(json.RawMessage(
+		`{"path":"app.py","old_str":"nope1\nnope2\nnope3\nnope4\nnope5\nnope6","new_str":"x"}`), ctx)
+	if err == nil {
+		t.Fatal("a six-line anchor that matches nothing must fail")
+	}
+	if !strings.Contains(err.Error(), "replace_lines") {
+		t.Errorf("steer never names replace_lines:\n%s", err)
+	}
+}
+
+// Guidance the model reads before it picks anything. Every tool that edits
+// without an old_str has to be reachable from it, or the model falls back to
+// the two tools the prose repeats.
+func TestToolGuidanceNamesEveryOldStrFreeEditTool(t *testing.T) {
+	guidance := buildSystemPrompt(NewAgentContext(t.TempDir(), Tier2Medium))
+	for _, name := range []string{"replace_lines", "insert_after", "structural_edit"} {
+		if !strings.Contains(guidance, name) {
+			t.Errorf("system prompt never mentions %s — the model cannot choose it", name)
+		}
+	}
+}
+
+// A question about the code is answered from the file, not from a guess. The
+// bullet saying so was once lumped in with greetings, and questions about code
+// were answered without opening anything; when it was deleted, only the
+// whole-prompt hash noticed.
+func TestSystemPromptSaysToReadBeforeAnsweringCodeQuestions(t *testing.T) {
+	prompt := buildSystemPrompt(NewAgentContext(t.TempDir(), Tier2Medium))
+	for _, want := range []string{
+		"Questions about the CODE",
+		"read the file first, then answer",
+		"never answer from a guess about code you have not opened",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("system prompt lost the code-question guidance: missing %q", want)
+		}
+	}
+}
+
+// The over-limit refusal used to say "use structural_edit with function:NAME".
+// For a JavaScript function inside a Flask template that is a dead end — the
+// markup is one string literal to the Python grammar, so no selector reaches
+// it, and structural_edit's own refusal points back here. An observed session
+// burned all three strikes bouncing between the two with the file untouched.
+func TestOverLimitAdviceDoesNotDeadEndOnEmbeddedCode(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 200)
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, err := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":1,"end_line":150,"expected_first_line":"x","expected_last_line":"x","content":"y"}`), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Success {
+		t.Fatal("a 150-line span must still be refused")
+	}
+	for _, want := range []string{
+		"consecutive replace_lines", // the way out that always works
+		"BOTTOM of the file upward", // why the split doesn't invalidate itself
+		"no selector reaches into it",
+	} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("advice missing %q:\n%s", want, res.Error)
+		}
+	}
+}
+
+// A whole JS function inside a template is the unit of work that kept hitting
+// the old cap of 20.
+func TestAWholeEmbeddedFunctionFitsInOneCall(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := strings.Repeat("x\n", 100)
+	if err := os.WriteFile(file, []byte(src), 0644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	res, err := findTool(t, "replace_lines").Execute(json.RawMessage(
+		`{"path":"a.py","start_line":25,"end_line":70,"expected_first_line":"x","expected_last_line":"x","content":"y"}`), ctx)
+	if err != nil {
+		t.Fatalf("a 46-line replacement must be allowed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("a 46-line replacement must be allowed: %s", res.Error)
+	}
+}
+
+// read_file prints "12<tab>" before each line and the model pastes back what
+// it was shown. The rejection for this names the mistake and the alternative
+// tool exactly, and was still ignored: watched on executor_server.py
+// (2026-08-03) the model got it on turn 2 and re-sent the same prefixed block
+// on turn 6. The prefix is this harness's own addition, so it comes off here.
+func TestStripLineNumberPrefixes(t *testing.T) {
+	t.Run("strips read_file's prefix", func(t *testing.T) {
+		got := stripLineNumberPrefixes("12\tconst ctx = canvas.getContext('2d');\n13\treturn ctx;")
+		want := "const ctx = canvas.getContext('2d');\nreturn ctx;"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("leaves unprefixed text alone", func(t *testing.T) {
+		src := "const ctx = canvas.getContext('2d');"
+		if got := stripLineNumberPrefixes(src); got != src {
+			t.Errorf("got %q, want it unchanged", got)
+		}
+	})
+
+	t.Run("a number that is not a prefix survives", func(t *testing.T) {
+		// Tab-separated data, not read_file output: the digits are content.
+		src := "value\t42\n"
+		if got := stripLineNumberPrefixes(src); got != src {
+			t.Errorf("got %q, want it unchanged", got)
+		}
+	})
+}
+
+func TestAllLinesLineNumbered(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"wholesale paste of read_file output", "1\tdef f():\n2\t    return 1\n", true},
+		{"blank lines do not disqualify", "1\tdef f():\n\n3\t    return 1\n", true},
+		{"a block that merely contains one numbered line", "def f():\n2\t    return 1\n", false},
+		{"ordinary replacement text", "def f():\n    return 1\n", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := allLinesLineNumbered(tc.src); got != tc.want {
+				t.Errorf("allLinesLineNumbered(%q) = %v, want %v", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+// The strip is only safe because it is self-validating: the stripped form has
+// to match the file. A stripped old_str that matches nothing must fall through
+// to the existing rejection rather than edit somewhere else.
+func TestStrippedOldStrOnlyCountsWhenItMatchesTheFile(t *testing.T) {
+	file := "func main() {\n\tx := 1\n}\n"
+
+	if got := findActualString(file, stripLineNumberPrefixes("2\t\tx := 1")); got == "" {
+		t.Error("a prefixed copy of a real line should match once stripped")
+	}
+	if got := findActualString(file, stripLineNumberPrefixes("2\t\ty := 2")); got != "" {
+		t.Errorf("a stripped line absent from the file matched %q", got)
+	}
+}
+
+// A replace_lines range goes stale the moment an earlier edit changes the
+// file's length, and the model re-sends the same numbers because nothing
+// looks wrong from its side. Measured across 168 sessions: 23 hit an anchor
+// refusal and 11 of those lost the task, usually to a re-send loop after
+// "line N is not what you expected".
+//
+// The assertions the call already carries say where the block went. This is
+// grok-build's "shifted" anchor case using text ATLAS already receives,
+// rather than hashing every line of read_file output.
+func TestRelocateStaleRange(t *testing.T) {
+	file := []string{
+		"import sys",       // 1
+		"",                 // 2
+		"def helper():",    // 3
+		"    return 1",     // 4
+		"",                 // 5
+		"def main():",      // 6
+		"    x = helper()", // 7
+		"    return x",     // 8
+	}
+	limit := len(file)
+
+	t.Run("a block that moved is found", func(t *testing.T) {
+		// Model thinks main() is at 3-5; two lines were inserted above it.
+		got := relocateStaleRange(file, limit, "def main():", "    return x", 3)
+		if got != 6 {
+			t.Errorf("relocated to %d, want 6", got)
+		}
+	})
+
+	t.Run("an ambiguous anchor is refused", func(t *testing.T) {
+		dup := append([]string{}, file...)
+		dup = append(dup, "def main():", "    x = helper()", "    return x")
+		if got := relocateStaleRange(dup, len(dup), "def main():", "    return x", 3); got != 0 {
+			t.Errorf("relocated an ambiguous block to %d — a wrong-place edit is "+
+				"worse than a refusal", got)
+		}
+	})
+
+	t.Run("a block that changed shape is refused", func(t *testing.T) {
+		// Both anchors present but 3 lines apart, not the 5 claimed.
+		if got := relocateStaleRange(file, limit, "def main():", "    return x", 5); got != 0 {
+			t.Errorf("relocated a reshaped block to %d", got)
+		}
+	})
+
+	t.Run("a missing anchor is refused", func(t *testing.T) {
+		if got := relocateStaleRange(file, limit, "def gone():", "    return x", 3); got != 0 {
+			t.Errorf("relocated on a missing anchor to %d", got)
+		}
+	})
+
+	t.Run("empty assertions do nothing", func(t *testing.T) {
+		if got := relocateStaleRange(file, limit, "", "    return x", 3); got != 0 {
+			t.Errorf("relocated without a first-line assertion to %d", got)
+		}
+	})
+
+	t.Run("indentation drift does not block the match", func(t *testing.T) {
+		// The assertion is whitespace-insensitive elsewhere for the same
+		// reason: the model reproduces text reliably and indentation badly.
+		got := relocateStaleRange(file, limit, "  def main():", "return x", 3)
+		if got != 6 {
+			t.Errorf("relocated to %d, want 6", got)
+		}
+	})
+}
+
+// A background job's outcome is invisible unless the model calls
+// tail_background, so a server that died on startup reads the same as one
+// serving happily: the run continues, the next probe fails for a reason
+// nothing explains, and a session can finish claiming work it never
+// verified. The foreground-server redirect pushes more work down this path.
+func TestFinishedBackgroundNote(t *testing.T) {
+	newCtx := func(jobs map[string]string, body string) (*AgentContext, *int) {
+		hits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits++
+			w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return &AgentContext{SandboxURL: srv.URL, BackgroundJobs: jobs}, &hits
+	}
+
+	t.Run("an exited job is reported once and then forgotten", func(t *testing.T) {
+		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":false}]}`)
+		got := finishedBackgroundNote(ctx)
+		if !strings.Contains(got, "job-1") || !strings.Contains(got, "tail_background") {
+			t.Fatalf("expected a note naming the job and how to read it:\n%s", got)
+		}
+		if _, still := ctx.BackgroundJobs["job-1"]; still {
+			t.Error("a reported job must stop being tracked")
+		}
+		if second := finishedBackgroundNote(ctx); second != "" {
+			t.Errorf("reported twice:\n%s", second)
+		}
+	})
+
+	t.Run("a running job is not reported", func(t *testing.T) {
+		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":true}]}`)
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("a live job was reported as finished:\n%s", got)
+		}
+		if _, still := ctx.BackgroundJobs["job-1"]; !still {
+			t.Error("a live job must stay tracked")
+		}
+	})
+
+	t.Run("another session's jobs are not this run's news", func(t *testing.T) {
+		// The sandbox registry is process-wide and outlives sessions.
+		ctx, _ := newCtx(map[string]string{},
+			`{"jobs":[{"job_id":"other","command":"npm start","running":false}]}`)
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("reported a job this run never started:\n%s", got)
+		}
+	})
+
+	t.Run("no tracked jobs means no request at all", func(t *testing.T) {
+		ctx, hits := newCtx(map[string]string{}, `{"jobs":[]}`)
+		finishedBackgroundNote(ctx)
+		if *hits != 0 {
+			t.Errorf("polled the sandbox with nothing to ask about (%d calls)", *hits)
+		}
+	})
+
+	t.Run("an unreachable sandbox is silent", func(t *testing.T) {
+		ctx := &AgentContext{SandboxURL: "http://127.0.0.1:1",
+			BackgroundJobs: map[string]string{"job-1": "x"}}
+		if got := finishedBackgroundNote(ctx); got != "" {
+			t.Errorf("a failed listing must not interrupt the loop:\n%s", got)
+		}
+	})
+}
+
+// A refusal the model cannot act on is a loop. It copies old_str into
+// new_str precisely because it cannot reproduce a span AND change it, so
+// "they are identical" tells it nothing it can use and it re-sends the same
+// call until the breaker kills the session. Measured on a "build me a snake
+// game" run: refused at turn 11, re-sent at 12 and 13, dead at 757s.
+func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &AgentContext{WorkingDir: dir,
+		FilesRead:     map[string]string{},
+		BodySeen:      map[string]bool{},
+		FileReadTimes: map[string]time.Time{}}
+	for _, tc := range []struct{ name, want string }{
+		{"game.js", "replace_lines"},
+		{"app.py", "structural_edit"},
+		{"page.html", "structural_edit"},
+	} {
+		p := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(p, []byte("const x = 1;\nconst y = 2;\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx.FilesRead[p] = "const x = 1;\nconst y = 2;\n"
+		ctx.BodySeen[tc.name] = true
+		ctx.FileReadTimes[p] = time.Now().Add(time.Minute)
+		in, _ := json.Marshal(EditFileInput{
+			Path: tc.name, OldStr: "const x = 1;", NewStr: "const x = 1;"})
+		_, err := getTool("edit_file").Execute(in, ctx)
+		if err == nil {
+			t.Fatalf("%s: a no-op edit must be refused", tc.name)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, tc.want) {
+			t.Errorf("%s: refusal should name %s, got: %s", tc.name, tc.want, msg)
+		}
+		if !strings.Contains(msg, "not help") {
+			t.Errorf("%s: refusal should say re-sending will not help: %s", tc.name, msg)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The content-edit tools' syntax gate, as structured evidence
+// ---------------------------------------------------------------------------
+//
+// edit_file, insert_after and replace_lines share one healthy->broken policy:
+// evaluate the bytes about to be written once, and consult the original only
+// when those bytes demonstrably fail. What each tool reports about that
+// observation is what these pin -- through the real handlers, with the request
+// counts that prove the evaluation happened once per side.
+
+// editGateStub answers the checker for the three edit tools and counts what it
+// was asked. `badFor` names the content it calls unparseable.
+type editGateStub struct {
+	mu         sync.Mutex
+	syntax     []string
+	structural int
+	embedded   int
+	unexpected []string
+}
+
+func (s *editGateStub) syntaxCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.syntax)
+}
+
+type editGateCase struct {
+	name string
+	// what is on disk before the edit
+	original string
+	// the edit each tool performs, expressed per tool below
+	badFor func(code string) bool
+	// non-200 for content carrying this marker: applicable, but unrunnable
+	unavailableFor string
+	// non-200 for the Nth syntax request (1-based). The baseline check is the
+	// second one, and for an insertion the original's text is a subset of the
+	// edited text, so only the ordinal can separate the two sides.
+	unavailableCall int
+	// no sandbox at all
+	noSandbox bool
+	// structural_check reports this symbol as newly unresolved
+	introduces string
+	// the destination directory is read-only, so the write fails
+	readOnlyDir bool
+	// non-default artifact: relative path plus the per-tool arguments that
+	// edit it. Used for the content types no checker applies to.
+	relPath string
+	argsFor func(tool string) []byte
+
+	wantSuccess    bool
+	wantMutation   MutationStatus
+	wantKind       ValidationKind
+	wantStatus     ValidationStatus
+	wantSyntaxReqs int
+	// bytes expected on disk afterwards: "edited" or "original"
+	wantDisk string
+}
+
+// The three tools' fixtures: the same file, edited the same way, so one table
+// drives all of them.
+const egOriginal = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
+
+func egEdited(tool string) string {
+	switch tool {
+	case "edit_file":
+		return strings.Replace(egOriginal, "raise ValueError('neg')",
+			"raise ValueError('negative')", 1)
+	case "insert_after":
+		return strings.Replace(egOriginal, "import math\n", "import math\nimport sys\n", 1)
+	default: // replace_lines
+		return strings.Replace(egOriginal, "    return math.pi * r * r",
+			"    return math.pi * r ** 2", 1)
+	}
+}
+
+func egArgs(tool string) []byte {
+	var m map[string]interface{}
+	switch tool {
+	case "edit_file":
+		m = map[string]interface{}{"path": "app.py",
+			"old_str": "raise ValueError('neg')", "new_str": "raise ValueError('negative')"}
+	case "insert_after":
+		m = map[string]interface{}{"path": "app.py", "line": 1, "content": "import sys"}
+	default:
+		m = map[string]interface{}{"path": "app.py", "start_line": 7, "end_line": 7,
+			"expected_first_line": "    return math.pi * r * r",
+			"expected_last_line":  "    return math.pi * r * r",
+			"content":             "    return math.pi * r ** 2"}
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string, *editGateStub, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	st := &editGateStub{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"):
+			st.mu.Lock()
+			st.unexpected = append(st.unexpected, r.URL.Path)
+			st.mu.Unlock()
+			http.Error(w, "V3 generation must not run on this route", http.StatusTeapot)
+		case r.URL.Path == "/internal/cyclomatic_complexity":
+			// Below the bar that would route this edit through V3: this table
+			// is about the local gate, not the pipeline.
+			_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
+		case r.URL.Path == "/internal/structural_check":
+			st.mu.Lock()
+			st.structural++
+			st.mu.Unlock()
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			src, _ := body["source"].(string)
+			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+			if c.introduces != "" && strings.Contains(src, c.introduces+"(") {
+				out["unresolved"] = []string{c.introduces}
+			}
+			json.NewEncoder(w).Encode(out)
+		case r.URL.Path == "/internal/embedded_script_check":
+			st.mu.Lock()
+			st.embedded++
+			st.mu.Unlock()
+			_, _ = w.Write([]byte(`{"ok":true,"findings":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			st.mu.Lock()
+			st.syntax = append(st.syntax, in.Code)
+			st.mu.Unlock()
+			st.mu.Lock()
+			nth := len(st.syntax)
+			st.mu.Unlock()
+			if (c.unavailableFor != "" && strings.Contains(in.Code, c.unavailableFor)) ||
+				(c.unavailableCall != 0 && nth == c.unavailableCall) {
+				http.Error(w, "checker unavailable", http.StatusInternalServerError)
+				return
+			}
+			bad := c.badFor != nil && c.badFor(in.Code)
+			out := map[string]interface{}{"valid": !bad}
+			if bad {
+				out["errors"] = []string{"SyntaxError: invalid syntax (line 6)"}
+			}
+			json.NewEncoder(w).Encode(out)
+		default:
+			st.mu.Lock()
+			st.unexpected = append(st.unexpected, r.URL.Path)
+			st.mu.Unlock()
+			http.Error(w, "unexpected endpoint", http.StatusTeapot)
+		}
+	}))
+	defer srv.Close()
+
+	rel := c.relPath
+	if rel == "" {
+		rel = "app.py"
+	}
+	path := filepath.Join(dir, rel)
+	if err := os.WriteFile(path, []byte(c.original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(e string, _ interface{}) { events = append(events, e) }
+	ctx.V3URL = srv.URL
+	if !c.noSandbox {
+		ctx.SandboxURL = srv.URL
+	}
+	ctx.SessionWrites[rel] = true
+	ctx.RecordFileRead(path, c.original)
+
+	if c.readOnlyDir {
+		// Both: edit_file creates a temp file in the directory, the two
+		// line-addressed tools overwrite the file in place.
+		if err := os.Chmod(path, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o755); os.Chmod(path, 0o644) })
+	}
+
+	args := egArgs(tool)
+	if c.argsFor != nil {
+		args = c.argsFor(tool)
+	}
+	res := executeToolCall(tool, args, ctx)
+	if len(st.unexpected) > 0 {
+		t.Fatalf("unexpected endpoints: %v", st.unexpected)
+	}
+	after, _ := os.ReadFile(path)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		if strings.Contains(e.Name(), ".atlas.tmp") {
+			t.Errorf("temporary artifact survived: %s", e.Name())
+		}
+	}
+	return res, string(after), st, events
+}
+
+func TestEditToolsClassifyTheirSyntaxGate(t *testing.T) {
+	broken := func(marker string) func(string) bool {
+		return func(code string) bool { return strings.Contains(code, marker) }
+	}
+	for _, tool := range []string{"edit_file", "insert_after", "replace_lines"} {
+		tool := tool
+		edited := egEdited(tool)
+		// What the edit introduced, used to make the checker condemn exactly
+		// the proposed bytes and not the original.
+		var editedMarker string
+		switch tool {
+		case "edit_file":
+			editedMarker = "negative"
+		case "insert_after":
+			editedMarker = "import sys"
+		default:
+			editedMarker = "r ** 2"
+		}
+
+		for _, c := range []editGateCase{
+			{name: "proposal passes", original: egOriginal,
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSyntaxReqs: 1, wantDisk: "edited"},
+			{name: "checker applicable but unavailable", original: egOriginal,
+				unavailableFor: "import math",
+				wantSuccess:    true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 1, wantDisk: "edited"},
+			{name: "no sandbox configured", original: egOriginal, noSandbox: true,
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 0, wantDisk: "edited"},
+			{name: "failed over a failed baseline lands", original: egOriginal,
+				badFor:      broken("import math"), // both sides are broken
+				wantSuccess: true, wantMutation: MutationApplied,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "edited"},
+			{name: "failed over a passing baseline is refused", original: egOriginal,
+				badFor:      broken(editedMarker),
+				wantSuccess: false, wantMutation: MutationRefused,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "original"},
+			{name: "failed over an unavailable baseline is refused", original: egOriginal,
+				badFor: broken(editedMarker), unavailableCall: 2,
+				wantSuccess: false, wantMutation: MutationRefused,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+				wantSyntaxReqs: 2, wantDisk: "original"},
+			{name: "passed then the write fails", original: egOriginal,
+				readOnlyDir: true,
+				wantSuccess: false, wantMutation: MutationFailed,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+				wantSyntaxReqs: 1, wantDisk: "original"},
+			{name: "not_run then the write fails", original: egOriginal,
+				noSandbox: true, readOnlyDir: true,
+				wantSuccess: false, wantMutation: MutationFailed,
+				wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+				wantSyntaxReqs: 0, wantDisk: "original"},
+		} {
+			c := c
+			t.Run(tool+"/"+c.name, func(t *testing.T) {
+				res, disk, st, events := runEditGate(t, tool, c)
+
+				if res.Success != c.wantSuccess {
+					t.Fatalf("Success = %v, want %v (%s)", res.Success, c.wantSuccess, res.Error)
+				}
+				want := edited
+				if c.wantDisk == "original" {
+					want = c.original
+				}
+				if disk != want {
+					t.Fatalf("bytes on disk:\n got %q\nwant %q", disk, want)
+				}
+				if res.MutationStatus != c.wantMutation ||
+					res.ValidationKind != c.wantKind ||
+					res.ValidationStatus != c.wantStatus {
+					t.Errorf("got %q/%q/%q, want %q/%q/%q",
+						res.MutationStatus, res.ValidationKind, res.ValidationStatus,
+						c.wantMutation, c.wantKind, c.wantStatus)
+				}
+				if !res.Classified() {
+					t.Error("result not fully classified")
+				}
+				if got := st.syntaxCount(); got != c.wantSyntaxReqs {
+					t.Errorf("syntax-check requests = %d, want %d", got, c.wantSyntaxReqs)
+				}
+				// No V3 ran on this route, so no provenance may appear.
+				if res.V3Used || res.CandidatesTested != 0 || res.PhaseSolved != "" {
+					t.Errorf("V3 provenance on a non-pipeline edit: %+v", res)
+				}
+				for _, e := range events {
+					if e != "v3_progress" && e != "text" {
+						t.Errorf("unexpected SSE projection %q", e)
+					}
+				}
+			})
+		}
+	}
+}
+
+// Syntax passes on the edited bytes and a later gate refuses them: the
+// structural failure is decisive, and the passing syntax verdict must not be
+// what the result reports.
+func TestEditToolsReportTheDecisiveStructuralRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		tool string
+		args map[string]interface{}
+	}{
+		{"edit_file", map[string]interface{}{"path": "app.py",
+			"old_str": "    return math.pi * r * r",
+			"new_str": "    return missing_helper(r)"}},
+		{"insert_after", map[string]interface{}{"path": "app.py", "line": 7,
+			"content": "AREA = missing_helper(2)"}},
+		{"replace_lines", map[string]interface{}{"path": "app.py",
+			"start_line": 7, "end_line": 7,
+			"expected_first_line": "    return math.pi * r * r",
+			"expected_last_line":  "    return math.pi * r * r",
+			"content":             "    return missing_helper(r)"}},
+	} {
+		tc := tc
+		t.Run(tc.tool, func(t *testing.T) {
+			dir := t.TempDir()
+			st := &editGateStub{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/internal/cyclomatic_complexity":
+					_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
+				case r.URL.Path == "/internal/structural_check":
+					var body map[string]interface{}
+					json.NewDecoder(r.Body).Decode(&body)
+					src, _ := body["source"].(string)
+					out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+					if strings.Contains(src, "missing_helper(") {
+						out["unresolved"] = []string{"missing_helper"}
+					}
+					json.NewEncoder(w).Encode(out)
+				case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+					var in struct{ Code string }
+					json.NewDecoder(r.Body).Decode(&in)
+					st.mu.Lock()
+					st.syntax = append(st.syntax, in.Code)
+					st.mu.Unlock()
+					_, _ = w.Write([]byte(`{"valid":true}`))
+				default:
+					_, _ = w.Write([]byte(`{"ok":true}`))
+				}
+			}))
+			defer srv.Close()
+
+			path := filepath.Join(dir, "app.py")
+			if err := os.WriteFile(path, []byte(egOriginal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+			ctx.V3URL = srv.URL
+			ctx.SandboxURL = srv.URL
+			ctx.SessionWrites["app.py"] = true
+			ctx.RecordFileRead(path, egOriginal)
+
+			args, _ := json.Marshal(tc.args)
+			res := executeToolCall(tc.tool, args, ctx)
+
+			if res.Success {
+				t.Fatalf("the structural gate did not refuse: %+v", res)
+			}
+			if !strings.Contains(res.Error, "missing_helper") {
+				t.Fatalf("refusal came from a different gate: %q", res.Error)
+			}
+			if res.MutationStatus != MutationRefused ||
+				res.ValidationKind != ValidationKindStructural ||
+				res.ValidationStatus != ValidationFailed {
+				t.Errorf("got %q/%q/%q, want refused/structural/failed",
+					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+			}
+			if !strings.Contains(res.ValidationDetail, "missing_helper") {
+				t.Errorf("ValidationDetail must name the symbol, got %q", res.ValidationDetail)
+			}
+			if !res.Classified() {
+				t.Error("result not fully classified")
+			}
+			if disk, _ := os.ReadFile(path); string(disk) != egOriginal {
+				t.Errorf("a refused edit changed the file: %q", disk)
+			}
+			// Syntax ran first and passed on those exact bytes; exactly one
+			// request, and the baseline was never consulted.
+			if got := st.syntaxCount(); got != 1 {
+				t.Errorf("syntax-check requests = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// Source-level inventory. The three edit handlers now use the structured
+// producer, and the remaining legacy wrapper calls are named rather than
+// counted, so a reintroduction has to edit this list.
+func TestLegacyCheckerWrapperInventory(t *testing.T) {
+	src, err := os.ReadFile("tools.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	span := func(from, to string) string {
+		i := strings.Index(body, from)
+		if i < 0 {
+			t.Fatalf("cannot find %q", from)
+		}
+		rest := body[i:]
+		j := strings.Index(rest, to)
+		if j < 0 {
+			return rest
+		}
+		return rest[:j]
+	}
+	for name, fn := range map[string]string{
+		"edit_file":     span("Name:   \"edit_file\"", "\nfunc structuralEditTool("),
+		"insert_after":  span("Name:   \"insert_after\"", "\n// replaceLinesMaxSpan"),
+		"replace_lines": span("Name:   \"replace_lines\"", "\nfunc deleteFileTool("),
+	} {
+		if n := strings.Count(fn, "checkFallbackSyntax("); n != 0 {
+			t.Errorf("%s still calls the legacy wrapper %d time(s)", name, n)
+		}
+		if !strings.Contains(fn, "editSyntaxObservation(") {
+			t.Errorf("%s does not use the shared structured gate", name)
+		}
+	}
+
+	// What is left, named. Two sites, both inside writeFileWithV3: the V3
+	// preflight's own pair is gone, and these belong to candidate revocation.
+	remaining := strings.Count(body, "checkFallbackSyntax(ctx")
+	if remaining != 0 {
+		t.Errorf("unexpected legacy wrapper calls remain in tools.go: %d", remaining)
+	}
+	// One producer, one wrapper definition -- no second checker implementation.
+	gates, err := os.ReadFile("gates.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(gates), "func checkFallbackSyntax("); n != 1 {
+		t.Errorf("checkFallbackSyntax definitions = %d, want 1", n)
+	}
+	if n := strings.Count(string(gates), "func fallbackSyntaxOutcomeFor("); n != 1 {
+		t.Errorf("fallbackSyntaxOutcomeFor definitions = %d, want 1", n)
+	}
+	// And the shared edit gate exists exactly once.
+	if n := strings.Count(body, "func editSyntaxObservation("); n != 1 {
+		t.Errorf("editSyntaxObservation definitions = %d, want 1", n)
+	}
+}
+
+// Nothing applicable: an artifact type neither checker can speak about. The
+// observation is a real one -- "there was nothing here to check" -- and it is
+// distinct from the unavailable-service case, which reports not_run.
+func TestEditToolsClassifyANotApplicableArtifact(t *testing.T) {
+	// Routing premises, asserted rather than assumed: a future entry in either
+	// map turns this into a different case, and the test must fail then.
+	if _, gated := syntaxGateLanguages[".rs"]; gated {
+		t.Fatal(".rs gained a sandbox checker; pick a type neither check applies to")
+	}
+	if embeddedScriptExts[".rs"] {
+		t.Fatal(".rs gained an embedded-script check; pick a type neither check applies to")
+	}
+
+	const rustOriginal = "pub fn area(radius: f64) -> f64 {\n    if radius < 0.0 {\n        panic!(\"negative radius\");\n    }\n    std::f64::consts::PI * radius * radius\n}\n\npub fn total(radii: &[f64]) -> f64 {\n    let mut sum = 0.0;\n    for r in radii {\n        sum += area(*r);\n    }\n    sum\n}\n"
+
+	edited := map[string]string{
+		"edit_file": strings.Replace(rustOriginal, "let mut sum = 0.0;",
+			"let mut sum: f64 = 0.0;", 1),
+		"insert_after": strings.Replace(rustOriginal, "pub fn area(radius: f64) -> f64 {\n",
+			"pub fn area(radius: f64) -> f64 {\n    // checked\n", 1),
+		"replace_lines": strings.Replace(rustOriginal, "    sum\n}", "    sum + 0.0\n}", 1),
+	}
+	args := func(tool string) []byte {
+		var m map[string]interface{}
+		switch tool {
+		case "edit_file":
+			m = map[string]interface{}{"path": "engine.rs",
+				"old_str": "let mut sum = 0.0;", "new_str": "let mut sum: f64 = 0.0;"}
+		case "insert_after":
+			m = map[string]interface{}{"path": "engine.rs", "line": 1,
+				"content": "    // checked"}
+		default:
+			m = map[string]interface{}{"path": "engine.rs",
+				"start_line": 13, "end_line": 13,
+				"expected_first_line": "    sum",
+				"expected_last_line":  "    sum",
+				"content":             "    sum + 0.0"}
+		}
+		b, _ := json.Marshal(m)
+		return b
+	}
+
+	for _, tool := range []string{"edit_file", "insert_after", "replace_lines"} {
+		tool := tool
+		t.Run(tool, func(t *testing.T) {
+			res, disk, st, events := runEditGate(t, tool, editGateCase{
+				original: rustOriginal, relPath: "engine.rs", argsFor: args})
+
+			if !res.Success {
+				t.Fatalf("the edit did not land: %s", res.Error)
+			}
+			if disk != edited[tool] {
+				t.Fatalf("bytes on disk:\n got %q\nwant %q", disk, edited[tool])
+			}
+			if res.MutationStatus != MutationApplied ||
+				res.ValidationKind != ValidationKindNone ||
+				res.ValidationStatus != ValidationNotApplicable {
+				t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
+					res.MutationStatus, res.ValidationKind, res.ValidationStatus)
+			}
+			if res.ValidationStatus.Passed() {
+				t.Error("nothing was checked, so nothing may read as passed")
+			}
+			if !res.Classified() {
+				t.Error("result not fully classified")
+			}
+			if st.syntaxCount() != 0 {
+				t.Errorf("syntax-check requests = %d, want 0", st.syntaxCount())
+			}
+			st.mu.Lock()
+			embedded, structural := st.embedded, st.structural
+			st.mu.Unlock()
+			if embedded != 0 {
+				t.Errorf("embedded-script requests = %d, want 0", embedded)
+			}
+			if structural != 0 {
+				t.Errorf("structural requests = %d, want 0 (the gate is .py-scoped)", structural)
+			}
+			if res.V3Used || res.CandidatesTested != 0 || res.PhaseSolved != "" {
+				t.Errorf("V3 provenance on a non-pipeline edit: %+v", res)
+			}
+			for _, e := range events {
+				if e != "v3_progress" && e != "text" {
+					t.Errorf("unexpected SSE projection %q", e)
+				}
+			}
+		})
+	}
+}
+
+// --- Deterministic model-facing bytes ----------------------------------------
+//
+// Three parts of every upstream request are built by ranging toolRegistry, a Go
+// map: the response_format tool-name enum, the GBNF tool-name alternation, and
+// the "### <tool>" documentation blocks in the system prompt. Go randomises map
+// iteration per range, so identical inputs produce different bytes on the wire.
+//
+// Within one process the difference is easy to miss, so this compares fresh
+// processes: the test re-executes the test binary, and each child builds the
+// real artefacts with the production builders and prints them.
+
+const promptBytesChildEnv = "ATLAS_PROMPT_BYTES_CHILD"
+
+// promptArtifacts is every model-facing byte sequence these builders produce,
+// across every mode that uses them.
+func promptArtifacts(t *testing.T) map[string]string {
+	t.Helper()
+	// A FIXED working directory, not t.TempDir(): the prompt embeds the path,
+	// and a per-process temp dir is a difference in the INPUT. Holding it
+	// constant keeps this a comparison of the builders, so nothing about the
+	// emitted bytes has to be normalised afterwards.
+	ctx := NewAgentContext("/atlas-prompt-fixture", Tier2Medium)
+	out := map[string]string{}
+	out["system_prompt"] = buildSystemPrompt(ctx)
+	out["tool_docs_excluding"] = buildToolDescriptionsExcluding([]string{"edit_file"})
+	out["grammar"] = buildGBNFGrammarForTools(nil)
+	out["grammar_excluded"] = buildGBNFGrammarForTools([]string{"edit_file", "write_file"})
+	for _, mode := range []string{"strict", "loose"} {
+		t.Setenv("ATLAS_GRAMMAR_MODE", mode)
+		b, err := json.Marshal(buildResponseFormat())
+		if err != nil {
+			t.Fatalf("response_format %s: %v", mode, err)
+		}
+		out["response_format_"+mode] = string(b)
+	}
+	b, err := json.Marshal(buildToolCallSchemaForTools([]string{"edit_file"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out["schema_excluded"] = string(b)
+	return out
+}
+
+// TestPromptBytesChild is the child half: it prints the artefacts and exits.
+// It does nothing when run as part of an ordinary suite.
+func TestPromptBytesChild(t *testing.T) {
+	if os.Getenv(promptBytesChildEnv) != "1" {
+		t.Skip("child-only: driven by TestModelFacingBytesAreProcessStable")
+	}
+	b, err := json.Marshal(promptArtifacts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("ARTIFACTS " + string(b))
+}
+
+// Identical inputs must produce identical model-facing bytes in every process.
+//
+// Nothing is sorted or canonicalised before comparing: these are the bytes that
+// would go to llama-server.
+func TestModelFacingBytesAreProcessStable(t *testing.T) {
+	const runs = 8
+	var seen []map[string]string
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPromptBytesChild$", "-test.v=false")
+		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, out)
+		}
+		var payload string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "ARTIFACTS ") {
+				payload = strings.TrimPrefix(line, "ARTIFACTS ")
+			}
+		}
+		if payload == "" {
+			t.Fatalf("child %d printed no artefacts:\n%s", i, out)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatalf("child %d payload: %v", i, err)
+		}
+		seen = append(seen, m)
+	}
+
+	keys := make([]string, 0, len(seen[0]))
+	for k := range seen[0] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		variants := map[string]int{}
+		for _, m := range seen {
+			variants[m[k]]++
+		}
+		if len(variants) != 1 {
+			// Report where they diverge, and prove the divergence is ordering
+			// and nothing else: the same lines, in a different sequence.
+			var forms []string
+			for v := range variants {
+				forms = append(forms, v)
+			}
+			sort.Strings(forms)
+			a, b := forms[0], forms[1]
+			i := 0
+			for i < len(a) && i < len(b) && a[i] == b[i] {
+				i++
+			}
+			lo := i - 60
+			if lo < 0 {
+				lo = 0
+			}
+			clip := func(s string) string {
+				hi := i + 90
+				if hi > len(s) {
+					hi = len(s)
+				}
+				return s[lo:hi]
+			}
+			t.Errorf("%s differs across %d fresh processes (%d distinct forms), "+
+				"first at byte %d:\n  A: %s\n  B: %s",
+				k, runs, len(variants), i, clip(a), clip(b))
+			continue
+		}
+		t.Logf("%s: identical across %d processes (%d bytes)", k, runs, len(seen[0][k]))
+	}
+}
+
+// The inventory behind those bytes is identical across processes: same tools,
+// same descriptions, same schemas, same grammar alternatives, same
+// documentation bodies. Only their sequence moves.
+//
+// This is green both before and after the ordering fix, which is what makes it
+// the evidence that ordering is the ONLY thing that changed.
+func TestToolInventoryIsIdenticalAcrossProcesses(t *testing.T) {
+	const runs = 6
+	var seen []map[string]string
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestToolInventoryChild$", "-test.v=false")
+		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, out)
+		}
+		var payload string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "INVENTORY ") {
+				payload = strings.TrimPrefix(line, "INVENTORY ")
+			}
+		}
+		if payload == "" {
+			t.Fatalf("child %d printed no inventory:\n%s", i, out)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, m)
+	}
+	for _, m := range seen[1:] {
+		if len(m) != len(seen[0]) {
+			t.Fatalf("inventory size differs: %d vs %d", len(m), len(seen[0]))
+		}
+		for k, v := range seen[0] {
+			if m[k] != v {
+				t.Errorf("%s differs between processes", k)
+			}
+		}
+	}
+	t.Logf("%d inventory facts identical across %d processes", len(seen[0]), runs)
+}
+
+// TestToolInventoryChild prints order-independent facts about the registry.
+func TestToolInventoryChild(t *testing.T) {
+	if os.Getenv(promptBytesChildEnv) != "1" {
+		t.Skip("child-only: driven by TestToolInventoryIsIdenticalAcrossProcesses")
+	}
+	facts := map[string]string{}
+	var names []string
+	for _, tool := range allTools() {
+		names = append(names, tool.Name)
+		facts["desc:"+tool.Name] = tool.Description
+		facts["schema:"+tool.Name] = fmt.Sprintf("%T|%s",
+			tool.InputSchema, generateInputExample(tool.Name))
+		facts["effect:"+tool.Name] = fmt.Sprintf("%v|ro=%v|destructive=%v",
+			tool.Effect, tool.ReadOnly, tool.Destructive)
+	}
+	sort.Strings(names)
+	facts["names"] = strings.Join(names, ",")
+	facts["count"] = fmt.Sprint(len(names))
+
+	// The grammar's alternatives, as a set.
+	var alts []string
+	for _, line := range strings.Split(buildGBNFGrammarForTools(nil), "\n") {
+		head, body, ok := strings.Cut(line, "::=")
+		if !ok || !strings.Contains(strings.TrimSpace(head), "tool-name") {
+			continue
+		}
+		alts = strings.Split(strings.TrimSpace(body), " | ")
+		sort.Strings(alts)
+	}
+	facts["grammar_alternatives"] = strings.Join(alts, ",")
+
+	// The documentation blocks, as a set of bodies keyed by tool.
+	docs := buildToolDescriptionsExcluding(nil)
+	for i, block := range strings.Split(docs, "\n### ") {
+		if i == 0 {
+			facts["docs_preamble"] = block
+			continue
+		}
+		name, body, _ := strings.Cut(block, "\n")
+		// Trailing newlines are trimmed because the "\n### " separator eats
+		// one from every block except the last, so whichever block happens to
+		// sit last keeps an extra one. That is an artefact of splitting here,
+		// not a difference in what production emits -- the emitted bytes are
+		// compared untrimmed by TestModelFacingBytesAreProcessStable.
+		facts["docblock:"+strings.TrimSpace(name)] = strings.TrimRight(body, "\n")
+	}
+
+	// The schema enum, as a set.
+	schema := buildToolCallSchemaForTools(nil)
+	b, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var round map[string]interface{}
+	if err := json.Unmarshal(b, &round); err != nil {
+		t.Fatal(err)
+	}
+	var enums []string
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		switch n := v.(type) {
+		case map[string]interface{}:
+			for k, e := range n {
+				if k == "enum" {
+					if arr, ok := e.([]interface{}); ok {
+						for _, x := range arr {
+							if s, ok := x.(string); ok {
+								enums = append(enums, s)
+							}
+						}
+					}
+				}
+				walk(e)
+			}
+		case []interface{}:
+			for _, e := range n {
+				walk(e)
+			}
+		}
+	}
+	walk(round)
+	sort.Strings(enums)
+	facts["schema_enums"] = strings.Join(enums, ",")
+
+	out, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println("INVENTORY " + string(out))
+}
+
+// One ordering authority, enforced structurally.
+//
+// The determinism above holds because allTools() is the only place that ranges
+// the registry map; the enum and the grammar alternation read their order from
+// it. A future reader that ranges toolRegistry directly would silently get a
+// fresh Go map order and put nondeterministic bytes back on the wire, and the
+// only symptom would be a cache-miss rate nobody attributes. So the direct
+// range is what fails here, not the symptom.
+func TestOnlyAllToolsRangesTheRegistry(t *testing.T) {
+	const authority = "allTools"
+	fset := token.NewFileSet()
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				rng, ok := n.(*ast.RangeStmt)
+				if !ok {
+					return true
+				}
+				id, ok := rng.X.(*ast.Ident)
+				if !ok || id.Name != "toolRegistry" {
+					return true
+				}
+				found++
+				if fd.Name.Name != authority {
+					t.Errorf("%s:%d: %s ranges toolRegistry directly. Map iteration "+
+						"order is randomised per range, and anything derived from it "+
+						"that reaches the model changes bytes between identical "+
+						"requests. Read the order from %s() instead.",
+						name, fset.Position(rng.Pos()).Line, fd.Name.Name, authority)
+				}
+				return true
+			})
+		}
+	}
+	if found == 0 {
+		t.Fatal("no range over toolRegistry found at all — this guard is no longer wired to anything")
+	}
+	if found != 1 {
+		t.Errorf("%d ranges over toolRegistry, want exactly the one in %s()", found, authority)
+	}
 }

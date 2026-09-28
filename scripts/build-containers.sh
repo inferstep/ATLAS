@@ -12,7 +12,7 @@ source "$SCRIPT_DIR/lib/config.sh"
 # Images are tagged exactly as the K3s manifests reference them
 # (templates/*-deployment.yaml.tmpl pull ghcr.io/${ATLAS_GHCR_OWNER}/...),
 # so a side-loaded local build is picked up without editing manifests.
-IMAGE_PREFIX="ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}"
+IMAGE_PREFIX="ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}"
 IMAGE_TAG="${ATLAS_IMAGE_TAG:-latest}"
 
 RED='\033[0;31m'

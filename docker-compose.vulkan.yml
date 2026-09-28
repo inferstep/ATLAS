@@ -34,7 +34,7 @@
 services:
   llama-server:
     # Pull / build the Vulkan-built image, not CUDA/ROCm.
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama-vulkan:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-llama-vulkan:${ATLAS_IMAGE_TAG:-latest}
     build:
       context: ./inference
       dockerfile: Dockerfile.vulkan

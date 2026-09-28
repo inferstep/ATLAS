@@ -1,5 +1,10 @@
-# python:3.11-slim — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/python:3.11-slim@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+# python:3.13-slim, the same digest-pinned base the sandbox runs (Dependabot
+# maintains). Every compile() and ast.parse verdict this service gives --
+# structural_edit's post-splice check, the call graph, the lints -- is about
+# code the sandbox then executes, so it has to use that interpreter's grammar.
+# On 3.11 it rejected valid 3.12+ code (PEP 701 f"{d["k"]}", PEP 695 type
+# parameters) that the sandbox runs fine.
+FROM docker.io/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 WORKDIR /app
 
 # Install system deps
@@ -20,11 +25,22 @@ COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
+COPY v3-service/runtime_verification.py /app/runtime_verification.py
+# contract.py was added and the image kept building without it: this COPY
+# list enumerates modules, so a new one is silently excluded and the service
+# dies at import with the whole suite green. A DELETED one breaks the build
+# instead, which is how evidence.py's retirement surfaced here.
+COPY v3-service/contract.py /app/contract.py
 COPY v3-service/private_values.py /app/private_values.py
 COPY v3-service/structured_log.py /app/structured_log.py
 # Structural call-graph reasoning (issue #39): tree-sitter-backed call graph.
 # Pure stdlib + the tree-sitter grammars installed above; no extra deps.
 COPY v3-service/graph/ /app/graph/
+
+# Prove the image can import what it ships. A missing module is a build
+# failure here rather than a service that starts, fails at import and is
+# discovered by a container that will not come up.
+RUN cd /app && python -c "import main, adapters, pipeline, contract"
 
 # Non-root application account created inside this image. The V3 service
 # writes only to /data/telemetry (stage telemetry, fail-soft) and HOME

@@ -25,6 +25,12 @@ from atlas import compose as compose_config
 RESTORE_DIR = ".atlas-upgrade"
 RESTORE_POINT = "restore-point.json"
 
+# ATLAS moved from itigges22/ATLAS to inferstep/ATLAS. Releases after the
+# move are published only under ghcr.io/inferstep, but `atlas init` used
+# to write the old owner into .env, where it outranks the compose default.
+GHCR_OWNER = "inferstep"
+LEGACY_GHCR_OWNER = "itigges22"
+
 
 class UpgradeError(Exception):
     """A step failed; the engine restores the prior release and re-raises
@@ -180,6 +186,54 @@ def tag_is_mutable(tag: str) -> bool:
     return re.fullmatch(r"v?\d+(\.\d+)*([.-].*)?", tag) is None
 
 
+def legacy_ghcr_owner_applies(env: Dict[str, str],
+                              keep_release_pin: bool) -> bool:
+    """Whether a parsed .env still names the pre-move image owner and
+    should move to the current one.
+
+    An owner set in the process environment is an explicit choice (and
+    wins in compose too), so it is left alone. With keep_release_pin, an
+    ATLAS_IMAGE_TAG that pins a release also keeps the old owner:
+    releases from before the move exist only there."""
+    if os.environ.get("ATLAS_GHCR_OWNER"):
+        return False
+    if env.get("ATLAS_GHCR_OWNER") != LEGACY_GHCR_OWNER:
+        return False
+    tag = env.get("ATLAS_IMAGE_TAG") or "latest"
+    return not (keep_release_pin and not tag_is_mutable(tag))
+
+
+def migrate_legacy_ghcr_owner(env_path: str,
+                              keep_release_pin: bool) -> Optional[str]:
+    """Rewrite ATLAS_GHCR_OWNER from the pre-move owner to the current one
+    in place, keeping every other line. Returns a note when it rewrote
+    the file, None when nothing applied."""
+    env = compose_config.read_env_path(env_path)
+    if not legacy_ghcr_owner_applies(env, keep_release_pin):
+        return None
+    lines = []
+    with open(env_path, encoding="utf-8") as fh:
+        for line in fh:
+            body = line.strip()
+            prefix = "export " if body.startswith("export ") else ""
+            key = body[len(prefix):].split("=", 1)[0].strip()
+            if "=" in body and key == "ATLAS_GHCR_OWNER":
+                line = f"{prefix}ATLAS_GHCR_OWNER={GHCR_OWNER}\n"
+            lines.append(line)
+    d = os.path.dirname(env_path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".env-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        shutil.copymode(env_path, tmp)
+        os.replace(tmp, env_path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return (f"ATLAS_GHCR_OWNER {LEGACY_GHCR_OWNER} → {GHCR_OWNER} in .env "
+            f"(ATLAS moved to {GHCR_OWNER}/ATLAS)")
+
+
 def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
                 stamp: str, run_smoke: bool = True) -> dict:
     """Staged upgrade with automatic restore on failure.
@@ -207,6 +261,13 @@ def run_upgrade(atlas_root: str, target_tag: str, steps: Steps,
     steps.log("restore point recorded")
 
     try:
+        # After the restore point, so a failed upgrade puts the old owner
+        # back along with the rest of .env. The target is a new release,
+        # so a release pin in the current .env does not hold the owner.
+        moved = migrate_legacy_ghcr_owner(_env_path(atlas_root),
+                                          keep_release_pin=False)
+        if moved:
+            steps.log(moved)
         steps.log("verifying target image signatures…")
         steps.verify_signatures(atlas_root, target_tag)
         steps.set_env_tag(atlas_root, target_tag)

@@ -1,6 +1,6 @@
 # ATLAS Support Matrix
 
-Applies to: **V3.1.3 and the current `dev` branch.** This document is
+Applies to: **V3.1.4 and the current `dev` branch.** This document is
 versioned with the repo — the matrix for a release is the file at that
 release's tag.
 
@@ -42,7 +42,7 @@ Supported row cites its validation.
 |---|---|---|---|
 | CUDA (NVIDIA, Blackwell — RTX 50xx / B100 / GB10) | Supported | RTX 5060 Ti 16GB | Primary dev hardware; release smoke tests. Published image is compiled for compute capability 12.0/12.1 only |
 | CUDA (NVIDIA, pre-Blackwell — RTX 20xx–40xx, GTX 10xx, T4/L4/V100/A100/H100) | Preview (local rebuild required) | — | Published image fails with `no kernel image`; rebuild with `--build-arg CUDA_ARCH=<cc>` per SETUP.md. Upstream llama.cpp supports these; no maintainer validation on ATLAS |
-| ROCm (AMD, x86_64) | Community-tested | RX 7900 XTX | [GH #26](https://github.com/itigges22/ATLAS/issues/26) |
+| ROCm (AMD, x86_64) | Community-tested | RX 7900 XTX | [GH #26](https://github.com/inferstep/ATLAS/issues/26) |
 | Metal (Apple Silicon hybrid) | Supported | M2 Pro 32GB | Maintainer-verified; native llama-server + Docker services |
 | Vulkan (universal) | Preview | lavapipe (CPU ICD) boot path | Smoke-tested; the designated fallback for Intel/others |
 | CPU (lavapipe via Vulkan image) | Preview | CI-adjacent smoke | Functional but slow by design |
@@ -59,11 +59,11 @@ and `atlas lens check` report against the installed bundle.
 | Registry ID | Level | Lens | ASA | Notes |
 |---|---|---|---|---|
 | Qwen3.5-9B-Q6_K | Supported | supported (uncalibrated legacy bundle) | supported (A/B-validated May 2026) | Reference model; hash-pinned public download |
-| gemma-4-12b-it-Q4_K_M | Preview | supported; calibration **derived + verified** on maintainer hardware (val AUC 0.73, 287 LCB samples) — live lens reports `cx_calibrated: true`. The published HF bundle is still the uncalibrated one; re-publishing the calibrated bundle is a maintainer decision (moderate AUC, shared artifact) | Preview — vector built, published, hash-pinned; **off by default** (no `.model` marker) pending an A/B measurement. Opt in with `atlas asa build`. Not Supported until an A/B effect measurement + quality-regression bounds exist (see § Feature paths — ASA steering) | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
-| Qwen3.5-9B-Q4_K_M / Q8_0 | Preview | unverified (same-family artifacts, combo unvalidated) | unverified | Hash-pinned public downloads |
-| Qwen3.5-7B / 14B / 32B | Preview | no-artifacts | no-artifacts | HF-gated upstream (HF_TOKEN required; no anonymous hash) |
-| Bring-your-own GGUF | Preview | Requires `atlas lens build` (per-model bundle) | Requires `atlas asa build` | Direct agent mode works model-agnostically; V3 scoring/steering need the per-model bundle — see § Model contract |
-| Frozen Qwen3-14B (74.6% LCB) | Research-only | frozen reference | — | Benchmark provenance only; not a runtime registry entry |
+| gemma-4-12b-it-Q4_K_M | Preview | supported; calibration **derived + verified** on maintainer hardware (val AUC 0.73, 287 LCB samples) — live lens reports `cx_calibrated: true`. The published HF bundle is still the uncalibrated one; re-publishing the calibrated bundle is a maintainer decision (moderate AUC, shared artifact) | Unverified — vector built, published, hash-pinned, and **on**: steering is always on, so `atlas model install-artifacts` writes its `.model` marker. Built from prompts that named the tool `ast_edit` (now `structural_edit`). A/B on 2026-09-27 (120 held-out probes, 2 samples per arm, scale 0.5): no measurable effect on the first file-writing tool, because unsteered gemma already picks `structural_edit` for 95% of whole-function rewrites and never used `edit_file` for one. A vector rebuilt for the current tool names did no better, so the shipped vector stays. Not Supported: no benefit is measured (see § Feature paths — ASA steering) | Manual GGUF download (Gemma ToU); artifacts hash-pinned |
+| Qwen3.5-9B-Q4_K_M / Q8_0 | Preview | no-artifacts: the lens loads a bundle only for the exact model, so each quant needs its own (`atlas bench`, then `atlas lens build --from-results`) | unverified (the Q6_K vector) | Hash-pinned public downloads |
+| Qwen3.5-7B / 14B / 32B | Preview | no-artifacts | no-artifacts | HF-gated upstream (HF_TOKEN required; no anonymous hash). Requests are refused until a lens bundle exists (`atlas lens build`): the lens is required (ADR 0011) |
+| Bring-your-own GGUF | Preview | Requires `atlas lens build` (per-model bundle) | Requires `atlas asa build` | Requests are refused until the model has its lens bundle (ADR 0011); `atlas bench` runs without one, to build it — see § Model contract |
+| Frozen Qwen3-14B (V3.0 benchmark model; its 74.6% LCB result is withdrawn) | Research-only | frozen reference | — | Historical benchmark reference only; not a runtime registry entry |
 
 ### Reference-model status dimensions
 
@@ -77,13 +77,13 @@ computes them in one place (`proxy/lens.go`).
 
 | Dimension | Meaning | Statuses |
 |---|---|---|
-| `model_runtime` | Is the model served and reachable | supported / unreachable |
-| `direct_agent` | The agent loop (tools, permissions, sandbox verify) | **supported** always — model-agnostic, independent of lens/ASA |
+| `model_runtime` | Is the model served and reachable, as the lens sees it | supported / unreachable / unknown (the lens is unreachable) |
+| `direct_agent` | The agent loop (tools, permissions, sandbox verify) | supported / **blocked** — blocked while the lens cannot score, because every request needs it (ADR 0011). An uncalibrated lens can score |
 | `lens_identity` | Cost field matches the served model (identity + dimension) | supported / no-artifacts / dim-mismatch |
-| `lens_scoring` | Raw C(x)+G(x) scoring available | supported / partial / disabled |
+| `lens_scoring` | Raw C(x)+G(x) scoring available | supported / partial (G(x) missing, which blocks `direct_agent`; or the embed capacity is below the generation ceiling so the longest writes come back unscored) / disabled |
 | `lens_calibration` | Per-model normalization + thresholds loaded | calibrated / uncalibrated / disabled |
 | `lens_intervention` | Automatic corrective behavior | active *(only when calibrated)* / neutral / disabled |
-| `asa` | Activation-steering vector | supported / unverified / missing |
+| `asa` | Activation-steering vector for the served model | active (marked for the served model; whether its effect was measured is the registry's `asa_status`) / unverified (no matching marker) / incompatible / missing |
 
 **Automatic intervention stays neutral or disabled whenever calibration
 is absent** — this is enforced in the runtime, not just displayed: the
@@ -95,13 +95,15 @@ Reference model (Qwen3.5-9B-Q6_K), current: `model_runtime` supported,
 `direct_agent` supported, `lens_identity` supported, `lens_scoring`
 supported, `lens_calibration` **uncalibrated** (legacy bundle predates
 the calibration files), `lens_intervention` **neutral**, `asa`
-supported (A/B-validated). The gemma reference install additionally has
-`lens_calibration` calibrated (derived + verified locally) with
-`lens_intervention` active and `asa` unverified (marker withheld).
+active (A/B-validated in May 2026, before the `ast_edit` → `structural_edit`
+rename; not re-measured since). The gemma reference install additionally
+has `lens_calibration` calibrated (derived + verified locally) with
+`lens_intervention` active and `asa` active (registry status unverified:
+a 2026-09-27 A/B found no measurable effect on tool choice).
 
 ### Lens bundle provenance
 
-Every bundle activated by `atlas lens build`/`retrain` auto-writes `provenance.json`:
+Every bundle activated by `atlas lens build` auto-writes `provenance.json`:
 backbone + dim + quant + layer, dataset, training commit,
 hyperparameters, seed, train/val split, validation metrics,
 normalization + thresholds, creation time, and SHA-256 of every artifact
@@ -112,16 +114,17 @@ carries a complete manifest (val AUC 0.73, all seven files hashed).
 
 ### Model contract
 
-ATLAS is **direct-mode model-agnostic, per-model-bundle for Lens/ASA**:
-any llama.cpp-loadable GGUF drives the direct agent loop (grammar
-constraints, tools, sandbox verification) with no model-family
-assumptions — behavior keys off GGUF metadata and stream shape, never
-model names. The differentiating V3 scoring/steering stack requires the
-model's own Lens bundle (identity-checked, dimension-checked at load;
-mismatched bundles are rejected and the lens reports itself disabled)
-and ASA vector (marker-gated at llama-server startup). "Any model, full
-stack" is therefore not claimed: full-stack support = registry entry or
-locally-built bundle.
+ATLAS is **model-agnostic in its agent loop, per-model-bundle for
+Lens/ASA**: the agent loop (grammar constraints, tools, sandbox
+verification) makes no model-family assumptions — behavior keys off
+GGUF metadata and stream shape, never model names. Every request also
+needs the model's own Lens bundle (identity-checked, dimension-checked
+at load; mismatched bundles are rejected and the lens reports itself
+disabled), because the lens is required (ADR 0011): without it the
+proxy refuses the request and says why. The ASA vector is
+marker-gated at llama-server startup. A model is therefore usable once
+it has a registry entry with published artifacts or a locally built
+bundle (`atlas bench`, then `atlas lens build`).
 
 ## Deployment modes
 
@@ -160,8 +163,8 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | Direct agent (tools, permissions, sandbox verify) | Supported | Deterministic E2E in CI + unit/contract suites |
 | V3 pipeline (probe → candidates → selection) | Supported (control plane) / Preview (per-model quality) | Deterministic V3/Lens E2E in CI; real-model quality validated on the reference model only |
 | Lens C(x)/G(x) scoring | Supported (contract) / per-model calibration required for interventions | Identity + dim checks enforced; calibration status surfaced everywhere |
-| ASA steering | Supported on Qwen3.5-9B-Q6_K; Preview on gemma (off by default — opt in with `atlas asa build`) | A/B-validated (May 2026) on Qwen; gemma effect unmeasured, so steering is withheld by default rather than shipped unvalidated |
-| Call-graph reasoning (#39) | Experimental | `ATLAS_CALL_GRAPH=1`; hermetic tests |
+| ASA steering | Always on wherever a vector is installed for the served model. Supported on Qwen3.5-9B-Q6_K; unverified on gemma | A/B-validated (May 2026) on Qwen, before the tool rename, and not re-measured. On gemma, a 2026-09-27 A/B found no measurable effect on the first file-writing tool (no headroom: unsteered gemma already chooses the tool the vector targets); whole-task outcomes were not measured. Every recorded dev-server measurement ran gemma steered |
+| Call-graph reasoning (#39) | Preview | Always on, Python files only (the veto, repair context and read/outline edges); hermetic tests; effect on task outcomes not yet measured |
 | Host verification (`ATLAS_VERIFY_IN=host`) | Experimental | Explicit opt-in; removes the container backstop |
 | Benchmark/ablation stack (`ATLAS_V3_*`, lens feedback) | Research-only | Never read by the product runtime (contract-tested) |
 | IDE integration | Unsupported | No extension exists |

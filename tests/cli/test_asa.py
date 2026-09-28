@@ -590,7 +590,7 @@ def test_render_asa_pr_body_includes_required_fields():
     assert "alice/atlas-asa-test" in body
     assert "apache-2.0" in body
     assert "a" * 64 in body
-    assert "asa_status=\"supported\"" in body or 'asa_status="supported"' in body
+    assert 'asa_status="unverified"' in body
     assert "layer 27" in body
     assert "4096-dim" in body
 
@@ -600,3 +600,24 @@ def test_main_with_no_subcommand_shows_help(capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "check" in out and "build" in out and "publish" in out
+
+
+def test_publishing_records_a_vector_as_unverified():
+    """Publishing shows a vector exists, not that it helps. The registry
+    edit writes "unverified"; "supported" is promoted by hand with an A/B
+    result."""
+    from atlas import publishing
+    content = (
+        "REGISTRY = [\n"
+        "    Model(\n"
+        '        name="TestModel-9B",\n'
+        '        asa_status="no-artifacts",\n'
+        "    ),\n"
+        "]\n"
+    )
+    out = publishing.registry_set_asa(content, "TestModel-9B",
+                                      "alice/atlas-asa-test",
+                                      ["ast_edit_steering.gguf"])
+    assert out is not None
+    assert 'asa_status="unverified"' in out
+    assert 'asa_status="supported"' not in out

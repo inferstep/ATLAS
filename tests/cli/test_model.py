@@ -172,8 +172,8 @@ def test_install_unknown_name_returns_1(capsys):
 
 def test_install_no_artifacts_refused_without_no_lens_flag(tmp_path, capsys):
     """Safety gate: refuse to install a model with no Lens artifacts
-    unless the user explicitly passes --no-lens to acknowledge G(x)
-    will silently no-op."""
+    unless the user passes --no-lens: ATLAS stops agent work on such a
+    model until it has its own Lens bundle."""
     rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--dry-run",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
@@ -952,6 +952,24 @@ def test_install_artifacts_replaces_cross_model_asa_vector(tmp_path,
     assert vector.read_bytes() == b"selected vector"
     assert (tmp_path / "ast_edit_steering.gguf.model").read_text().strip() == \
         "Qwen3.5-9B-Q6_K"
+
+
+def test_install_artifacts_activates_an_unverified_vector(tmp_path, monkeypatch):
+    """Steering is always on. An unverified vector (gemma: never A/B
+    measured) is installed and marked for its model like a supported one;
+    the registry status labels the evidence and switches nothing."""
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "lens"))
+    _install_with_fake_urlopen(monkeypatch, body=b"gemma vector", status=200,
+                                captured=[])
+    _patch_registry_artifact_hashes(monkeypatch, "gemma-4-12b-it-Q4_K_M",
+                                    b"gemma vector")
+
+    rc = model.main(["install-artifacts", "gemma-4-12b-it-Q4_K_M",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 0
+    assert (tmp_path / "ast_edit_steering.gguf").read_bytes() == b"gemma vector"
+    assert (tmp_path / "ast_edit_steering.gguf.model").read_text().strip() == \
+        "gemma-4-12b-it-Q4_K_M"
 
 
 def test_install_artifacts_rejects_hash_mismatch(tmp_path, monkeypatch, capsys):

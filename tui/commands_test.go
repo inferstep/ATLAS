@@ -8,8 +8,14 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestModel() *tuiModel {
@@ -131,5 +137,101 @@ func TestSlashRunRequiresArgument(t *testing.T) {
 	// echo + error message
 	if len(m.chat) != 2 || !strings.Contains(m.chat[1].Body, "/run requires") {
 		t.Errorf("chat = %v, want error about missing arg", m.chat)
+	}
+}
+
+// /ask declares one request a question and forwards only the message.
+func TestAskSelectsQuestionModeOnce(t *testing.T) {
+	var got map[string]interface{}
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		close(done)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"done\",\"summary\":\"ok\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	m := &tuiModel{workingDir: t.TempDir(), proxyURL: srv.URL,
+		chatEvents: make(chan chatEvent, 64)}
+	consumed, cmd, quit := m.handleSlash("/ask what does solve.py do?")
+	if !consumed || quit {
+		t.Fatalf("consumed=%v quit=%v", consumed, quit)
+	}
+	if cmd == nil {
+		t.Fatal("/ask did not send anything")
+	}
+	go cmd()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never arrived")
+	}
+	tc, ok := got["task_contract"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("no task_contract: %v", got)
+	}
+	if tc["task_mode"] != "question" {
+		t.Errorf("task_mode=%v, want question", tc["task_mode"])
+	}
+	if got["message"] != "what does solve.py do?" {
+		t.Errorf("the control syntax reached the model: %v", got["message"])
+	}
+	// One-shot: consumed by that send, so the next turn is work again.
+	if m.pendingTaskMode != "" {
+		t.Errorf("pendingTaskMode=%q after the send; it must be one-shot", m.pendingTaskMode)
+	}
+	if m.takeTaskMode() != taskModeWork {
+		t.Error("the next ordinary message is not work")
+	}
+	// The command word is not part of what the model sees.
+	if m.lastUserMsg != "what does solve.py do?" {
+		t.Errorf("forwarded %q; the control syntax must not reach the model", m.lastUserMsg)
+	}
+	// The chat row shows the message, not the command.
+	last := m.chat[len(m.chat)-1]
+	if last.Body != "what does solve.py do?" || last.Echo {
+		t.Errorf("chat row is %+v", last)
+	}
+}
+
+// /ask with no message asks for one and sends nothing.
+func TestAskWithoutAMessageSendsNothing(t *testing.T) {
+	m := &tuiModel{workingDir: t.TempDir()}
+	consumed, cmd, _ := m.handleSlash("/ask")
+	if !consumed {
+		t.Fatal("not consumed")
+	}
+	if cmd != nil {
+		t.Error("/ask with no message sent a request")
+	}
+	if m.pendingTaskMode != "" {
+		t.Errorf("pendingTaskMode=%q, want unset", m.pendingTaskMode)
+	}
+}
+
+// Every owned sender declares a mode, so a new one cannot silently omit it.
+func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
+	src, err := os.ReadFile("chat.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	// One builder, one place the contract is attached.
+	if n := strings.Count(body, "agentRequest{"); n != 1 {
+		t.Errorf("%d agentRequest constructors, want one: a second sender could "+
+			"omit the contract silently", n)
+	}
+	if n := strings.Count(body, "TaskContract:"); n != 1 {
+		t.Errorf("%d contract attachments, want one", n)
+	}
+	// Every in-repo caller of the builder passes demoOpts, which carries the
+	// mode; the model's own send path sets it from takeTaskMode.
+	m, _ := os.ReadFile("model.go")
+	if !strings.Contains(string(m), "taskMode: declared") {
+		t.Error("the model send path no longer declares a task mode")
+	}
+	if !strings.Contains(string(m), "func (m *tuiModel) takeTaskMode()") {
+		t.Error("the one-shot selector is gone")
 	}
 }

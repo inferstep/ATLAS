@@ -162,22 +162,23 @@ if [ -f "$ATLAS_CONTROL_VECTOR" ]; then
   fi
 fi
 
-# Embedding convention for the Geometric Lens. The C(x)/G(x) artifacts
-# are trained on a specific /embedding convention; serving a different
-# one shifts every energy while all health checks stay green (the
-# 2026-07-15 bench incident: a rebuilt server defaulted to per-token
-# unnormalized output, C(x) served ~600 against a calibrated ~20-30).
-# Pin pooling here rather than inheriting llama.cpp's default so the
-# shipped calibrated artifacts reproduce; L2 normalization is requested
-# per-call by the lens (`embd_normalize` in the /embedding body —
-# llama-server has no `--embd-normalize` server flag). The lens enforces
-# the same convention at load time via model_identity.json's
-# embedding_contract and refuses to serve on mismatch. `--pooling` is
-# server-global in llama.cpp, so the last-layer per-token PRM path
-# (extract_per_token, score-per-step with no explicit layer) needs
-# pooling=none instead; the layer-tapped per-step path uses the PC-202
-# hidden-states extension and is unaffected by pooling.
-ATLAS_EMBED_POOLING="${ATLAS_EMBED_POOLING:-mean}"
+# Embedding convention for the Geometric Lens. `--pooling` is
+# server-global in llama.cpp and two consumers read /embedding: the
+# whole-text C(x) path and the per-step PRM path (extract_per_token,
+# score-per-step with no explicit layer). Only `none` serves both —
+# per-token vectors pool down to the whole-text vector, while a pooled
+# response cannot be unpooled.
+#
+# Pooling and L2 normalization are therefore applied client-side, in
+# embedding_extractor.extract_embedding and the bench's
+# extract_embedding_urllib, which both request `embd_normalize: -1` and
+# normalize after pooling. Normalizing first does not commute: the mean
+# of per-token unit vectors points elsewhere than the normalized mean of
+# the raw vectors. That is what makes the calibrated artifacts reproduce
+# here (the 2026-07-15 bench incident: per-token output pooled without
+# normalizing served C(x) ~600 against a calibrated ~20-30, with every
+# health check green).
+ATLAS_EMBED_POOLING="${ATLAS_EMBED_POOLING:-none}"
 
 echo "=== ATLAS llama-server — $MODEL_BASENAME ==="
 echo "  Backend: $ATLAS_BACKEND${ATLAS_GPU_INDEX:+ (GPU index=$ATLAS_GPU_INDEX)}"

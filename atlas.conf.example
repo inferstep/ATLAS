@@ -64,19 +64,13 @@ ATLAS_MODELS_DIR="/opt/atlas/models"
 # both see the same files.
 ATLAS_PROJECTS_DIR="/opt/atlas/data/projects"
 
-# Lens training-data corpus. hostPath-mounted at /data/lens_training in
-# the atlas-proxy pod (templates/atlas-proxy-deployment.yaml.tmpl) so
-# `atlas lens retrain` on the node reads the corpus the proxy writes.
-ATLAS_LENS_TRAINING_DIR="/opt/atlas/data/lens_training"
-
-# Parent of the lens state/projects paths above; uninstall.sh removes it
+# Parent of the data paths above; uninstall.sh removes it
 # when --data is set.
 ATLAS_DATA_DIR="/opt/atlas/data"
 
 #-------------------------------------------
 # Persistent Volume Sizes
 #-------------------------------------------
-ATLAS_PVC_LENS_STATE_SIZE="1Gi"    # backs lens-state PVC (SQLite learned state)
 ATLAS_PVC_PROJECTS_SIZE="20Gi"     # backs lens-projects PVC in the lens deployment
 
 #-------------------------------------------
@@ -145,17 +139,6 @@ ATLAS_V3_BUDGET_FORCING_DEFAULT_TIER="standard"
 
 # PlanSearch (1A) — number of plans generated per problem
 ATLAS_V3_PLAN_SEARCH_NUM_PLANS=3
-
-# EWC (Phase 4A-EWC) regularization strength
-ATLAS_V3_EWC_LAMBDA=1000.0
-
-# Replay Buffer (Phase 4A-CL)
-ATLAS_V3_REPLAY_BUFFER_MAX_SIZE=5000
-ATLAS_V3_REPLAY_BUFFER_REPLAY_RATIO=0.30
-
-# Lens Feedback Loop — online recalibration during benchmark runs
-ATLAS_V3_LENS_FEEDBACK_ENABLED=false
-ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL=50
 
 #-------------------------------------------
 # Advanced (usually don't change)

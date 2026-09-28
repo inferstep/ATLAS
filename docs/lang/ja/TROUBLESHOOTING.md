@@ -93,7 +93,6 @@ docker compose logs --tail 50
 | `"lens": false` / "Lens unavailable — verification disabled" | [Lens が読み込まれない / 利用不可](#lens-が読み込まれない--利用不可) |
 | すべての候補のスコアが `cx_energy: 0.0`、`gx_score: 0.5` になる | [すべてのスコアが 0.5 付近](#すべてのスコアが-05-付近) |
 | lens のログに "embedding extraction failed" | [エンベディング抽出の失敗](#エンベディング抽出の失敗) |
-| retrain 時の 503 `models directory is mounted read-only` | [`/internal/lens/retrain` が 503 を返す](#internallensretrain-が-503-models-directory-is-mounted-read-only-を返す) |
 | サンドボックスが `"error_type": "Timeout"` を返す | [コード実行のタイムアウト](#コード実行のタイムアウト) |
 | 特定の言語でサンドボックスがエラーになる | [言語がサポートされていない](#言語がサポートされていない) |
 | `--tasks` を下回る `LIMITED MODE: running N tasks` | [bench が要求より少ないタスクしか実行しない](#bench-が要求より少ないタスクしか実行しないlimited-mode-running-n-tasks-の-n-が---tasks-より小さい) |
@@ -383,9 +382,9 @@ fatal: fetch-pack: invalid index-pack output
 
 ### プロキシがワークスペースに書き込めない (`.atlas.tmp: permission denied`)
 
-**症状:** すべての `write_file`/`edit_file` が `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` で失敗します（その後エージェントは「書き込み可能なサブディレクトリ」を探して彷徨います）。レンズのトレーニングサンプルのバンキングも止まります（プロキシのログで `/data/lens_training` への書き込みが失敗）。
+**症状:** すべての `write_file`/`edit_file` が `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` で失敗します（その後エージェントは「書き込み可能なサブディレクトリ」を探して彷徨います）。
 
-**原因:** atlas-proxy イメージはビルド時に焼き込まれた非 root ユーザー（uid 1001、`atlas`）で動作しますが、`/workspace`（`ATLAS_PROJECT_DIR`）と `/data/lens_training` にバインドマウントされるホストディレクトリはオペレーターの uid が所有しています。読み取りは通り（モード 755）、書き込みはすべて拒否されます。`.env` が `ATLAS_PROXY_UID` より古いインストールでは、ハードニングされたプロキシイメージを取得した後にこれが発生します。
+**原因:** atlas-proxy イメージはビルド時に焼き込まれた非 root ユーザー（uid 1001、`atlas`）で動作しますが、`/workspace`（`ATLAS_PROJECT_DIR`）にバインドマウントされるホストディレクトリはオペレーターの uid が所有しています。読み取りは通り（モード 755）、書き込みはすべて拒否されます。`.env` が `ATLAS_PROXY_UID` より古いインストールでは、ハードニングされたプロキシイメージを取得した後にこれが発生します。
 
 **修正:** サンドボックスが既にそうしているのと同じように、プロキシを呼び出し元ユーザーとして実行します:
 
@@ -802,7 +801,7 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **原因:** エンベディングサーバーが、Geometric Lens の `C(x)`/`G(x)` アーティファクトの学習時とは異なる `/embedding` の規約で応答しています — 典型的にはプーリング済みではなくトークンごと、あるいは L2 正規化ではなく未正規化（‖v‖ が ~1 ではなく ≈60）。次元数は同じで分布が違うため、コストフィールドの MLP が巨大なエネルギーへ外挿し、`cx_normalized` が飽和します。これは `--pooling mean` なしでサービングスタックを再ビルドした後に発生します（llama-server に `--embd-normalize` というサーバーフラグはありません。レンズは `/embedding` のボディの `embd_normalize` で呼び出しごとに L2 正規化を要求します）。
 
-**確認:** レンズは起動時、およびリロード/リトレーニングのたびに、保存済みのフィンガープリントを再スコアリングします。`/ready` と `/health` を確認してください:
+**確認:** レンズはセルフテスト（起動時、および再試行可能な失敗の後に `/ready` から再実行されるとき）で、保存済みのフィンガープリントを再スコアリングします。`/ready` と `/health` を確認してください:
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
@@ -814,9 +813,9 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token` であるか、`norm` が 1.0 から大きく外れていれば、サーバーの設定が誤っています。
-2. `ATLAS_EMBED_POOLING=mean`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。
-3. サーバーが正しい規約で応答するようになれば、起動時セルフテストのフィンガープリントチェックが通り、`/ready` は 200 を返します。アーティファクトがフィンガープリントより古い場合は、リトレーニング（`atlas lens retrain`）がフィンガープリントを書き出し、`embedding_contract` を `model_identity.json` に刻みます。
+   プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
+2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
+3. サーバーが正しい規約で応答するようになれば、起動時セルフテストのフィンガープリントチェックが通り、`/ready` は 200 を返します。アーティファクトがフィンガープリントより古い場合は、再ビルド（`atlas lens build`）がフィンガープリントを書き出し、`embedding_contract` を `model_identity.json` に刻みます。
 
 ### エンベディング抽出の失敗
 
@@ -833,14 +832,6 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` フラグは、すべてのデプロイモード（Compose、ベアメタル、K3s）で llama-server のエントリーポイントが設定します — Geometric Lens が依存しているため、セルフエンベディングは常にオンです。レイヤーごとの hidden-states 拡張を運ぶのも、ネイティブの `/embedding` パス（`/v1/embeddings` ではありません）です。
-
-### `/internal/lens/retrain` が 503 "models directory is mounted read-only" を返す
-
-**症状:** lens サービスに `/internal/lens/retrain` を POST すると、``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"`` 付きの HTTP 503 が返る。
-
-**原因:** 標準の Compose デプロイは lens のモデルディレクトリをコンテナに読み取り専用（`:ro`）でマウントするため、サービス内の retrain エンドポイントは新しいウェイトを書き込めません。エンドポイントはトレーニング前に書き込み可能性をプローブし、トレーニング実行を無駄にする代わりに最初から拒否します。
-
-**修正:** リトレーニングはホスト側で実行してください — `atlas lens retrain`（フィードバックコーパス）または `atlas lens build`（ベンチ候補）がホスト上にアーティファクトを書き込み、その後 `docker compose restart geometric-lens` でロードします（サービスは起動時にアーティファクトを読み込みます）。ベンチマーク駆動のオンライン再キャリブレーション（`lens_feedback`）は拒否をログに記録してサンプルバッファを保持するため、何も失われません。
 
 ---
 
@@ -909,14 +900,14 @@ atlas bench --run-id <your-run-id> --tasks 200
 2. `-ngl 99`（`--n-gpu-layers`）— すべてのレイヤーがオフロードされているか?
 3. NVIDIA Container Toolkit — コンテナランタイムが GPU アクセス用に設定されているか?
 
-**想定パフォーマンス:** RTX 5060 Ti 16GB で文法強制時に約 51 tok/s。
+**想定パフォーマンス:** 現在の基準値はありません。スループットはモデル、量子化、文法モードによって変わります。以前の約 51 tok/s という値は、現存しない構成で得られたものです。
 
 ### V3 パイプラインに数分かかる
 
 これは T2 ファイルでは正常な動作です。V3 パイプラインは複数の LLM コールを行います:
 - **プローブのみ（最良ケース）:** 約 10-15 秒（1 回の生成 + 1 回のスコアリング + 1 回のテスト）
 - **Phase 1 生成:** 約 1-2 分（PlanSearch + DivSampling + スコアリング）
-- **Phase 3 修復:** 約 2-5 分（PR-CoT + Refinement + Derivation、必要な場合）
+- **Phase 3 修復:** 約 2-5 分（PR-CoT + Refinement、必要な場合）
 
 より高速な（ただし品質は低い）結果を得るには:
 - ファイルを 10 行未満に保つ（T1 のまま、V3 なし）— 認識されるコード拡張子は 10 行以上で複雑さに関わらず T2 になります

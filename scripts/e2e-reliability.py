@@ -11,8 +11,8 @@ stack and reports two numbers that must not be conflated:
                           the task, and the number that should be 100%.
 
   Task Success Rate       sessions where the requested change actually landed.
-                          Bounded by the model's coding ability, so a low value
-                          is evidence about the model, not about ATLAS.
+                          A failure here can come from the model or from the
+                          harness; this script does not tell them apart.
 
 The split matters because "it built a snake game" moves with model skill and
 sampling luck, so it cannot tell you whether a pipeline regression shipped. A
@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
@@ -141,18 +141,17 @@ def _check_flask_pause(ws: Path) -> tuple[bool, str]:
 
 def _check_add_function(ws: Path) -> tuple[bool, str]:
     src = (ws / "stats.py").read_text()
-    try:
-        tree = ast.parse(src)
-    except SyntaxError as e:
-        return False, f"stats.py does not parse: {e}"
-    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    names, err = _function_names(src)
+    if err:
+        return False, f"stats.py does not parse: {err}"
     if "median" not in names:
         return False, f"no median() defined (found {sorted(names)})"
     # Behaviour, not just presence.
     proc = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.path.insert(0,%r); import stats;"
-         "print(stats.median([3,1,2]), stats.median([4,1,3,2]))" % str(ws)],
+        _runtime_argv() + [
+            "-c",
+            "import sys; sys.path.insert(0,%r); import stats;"
+            "print(stats.median([3,1,2]), stats.median([4,1,3,2]))" % _ws_path(ws)],
         capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         return False, f"median() raised: {proc.stderr.strip()[:160]}"
@@ -163,9 +162,10 @@ def _check_add_function(ws: Path) -> tuple[bool, str]:
 
 def _check_offbyone(ws: Path) -> tuple[bool, str]:
     proc = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.path.insert(0,%r); import chunk;"
-         "print(chunk.chunks([1,2,3,4,5], 2))" % str(ws)],
+        _runtime_argv() + [
+            "-c",
+            "import sys; sys.path.insert(0,%r); import chunk;"
+            "print(chunk.chunks([1,2,3,4,5], 2))" % _ws_path(ws)],
         capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         return False, f"chunks() raised: {proc.stderr.strip()[:160]}"
@@ -197,7 +197,8 @@ def _run_solution(ws: Path, timeout: int = 60) -> tuple[bool, str]:
     if not prog.exists():
         return False, "solve.py was never created"
     try:
-        p = subprocess.run([sys.executable, "solve.py"], cwd=str(ws),
+        p = subprocess.run(_runtime_argv(_ws_path(ws)) + ["solve.py"],
+                           cwd=str(ws),
                            capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return False, f"solve.py did not finish within {timeout}s"
@@ -435,13 +436,100 @@ _EXISTING_LANGS = ("python", "javascript", "typescript", "go", "java",
                    "kotlin", "rust", "ruby", "php", "bash", "json", "yaml")
 
 
+# Runs inside the sandbox. Prints one JSON line: {"ok": bool, "why": str}.
+_TOML_PROBE = r'''
+import ast, json, sys, tempfile, types
+from pathlib import Path
+
+def verdict(ok, why=""):
+    print(json.dumps({"ok": ok, "why": why}))
+    sys.exit(0)
+
+new_src = open("executor_server.py").read()
+old_src = open("_probe_original.py").read()
+
+def dispatch(src):
+    """The lang if/elif chain with the most branches, and its function."""
+    best = None
+    for fn in [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef)]:
+        for stmt in fn.body:
+            if not (isinstance(stmt, ast.If) and "lang" in (ast.get_source_segment(src, stmt.test) or "")):
+                continue
+            chain, node = {}, stmt
+            while True:
+                key = " ".join((ast.get_source_segment(src, node.test) or "").split())
+                chain[key] = ast.dump(ast.Module(body=node.body, type_ignores=[]))
+                if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+                    node = node.orelse[0]
+                    continue
+                if node.orelse:
+                    chain["<else>"] = ast.dump(ast.Module(body=node.orelse, type_ignores=[]))
+                break
+            if best is None or len(chain) > len(best[1]):
+                best = (fn, chain)
+    return best
+
+old = dispatch(old_src)
+new = dispatch(new_src)
+if new is None:
+    verdict(False, "the lang dispatch chain is gone")
+old_fn, old_chain = old
+new_fn, new_chain = new
+if new_fn.name != old_fn.name:
+    verdict(False, "the dispatch moved from %s to %s" % (old_fn.name, new_fn.name))
+changed = [k for k in old_chain if new_chain.get(k) != old_chain[k]]
+if changed:
+    verdict(False, "existing branch changed or removed: %s" % ", ".join(changed[:3]))
+toml_keys = [k for k in new_chain if k not in old_chain and "toml" in k]
+if not toml_keys:
+    verdict(False, "no toml branch in %s's dispatch" % new_fn.name)
+
+# The prompt permits the toml package; the sandbox ships only tomllib. Alias
+# it so a permitted choice is not failed by the environment. This supplies no
+# logic the agent did not write.
+try:
+    import toml  # noqa: F401
+except ImportError:
+    import tomllib
+    shim = types.ModuleType("toml")
+    shim.loads = tomllib.loads
+    shim.TomlDecodeError = tomllib.TOMLDecodeError
+    shim.TOMLDecodeError = tomllib.TOMLDecodeError
+    sys.modules["toml"] = shim
+
+ns = {}
+for stmt in ast.parse(new_src).body:
+    if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+        try:
+            exec(compile(ast.Module(body=[stmt], type_ignores=[]), "executor_server.py", "exec"), ns)
+        except Exception:
+            pass
+ns.setdefault("_safe_overlay_path", lambda f: f)
+exec(compile(ast.Module(body=[new_fn], type_ignores=[]), "executor_server.py", "exec"), ns)
+check = ns[new_fn.name]
+tmp = Path(tempfile.mkdtemp())
+try:
+    good = check("toml", 'title = "ok"\n[owner]\nname = "x"\n', tmp)
+except Exception as e:
+    verdict(False, "valid TOML raised %s: %s" % (type(e).__name__, str(e)[:80]))
+try:
+    bad = check("toml", 'title = "unterminated\n[owner\n', tmp)
+except Exception as e:
+    verdict(False, "invalid TOML raised %s instead of appending an error: %s" % (type(e).__name__, str(e)[:80]))
+if not isinstance(good, list) or good:
+    verdict(False, "valid TOML reported errors: %r" % (good,)[:120])
+if not isinstance(bad, list) or not bad:
+    verdict(False, "invalid TOML reported no error")
+verdict(True)
+'''
+
+
 def _check_add_toml(ws: Path) -> tuple[bool, str]:
     src_path = ws / "executor_server.py"
     src = src_path.read_text()
-    try:
-        ast.parse(src)
-    except SyntaxError as e:
-        return False, f"broke the file: {e.msg} (line {e.lineno})"
+    _, err = _function_names(src)
+    if err:
+        return False, f"broke the file: {err}"
 
     # Regression first — this is the "did everything break" question, and it
     # matters more than the feature.
@@ -461,23 +549,51 @@ def _check_add_toml(ws: Path) -> tuple[bool, str]:
     if not re.search(r"import\s+toml|tomllib|tomli", src):
         return False, "toml branch added but nothing parses TOML"
 
-    # Behavioural: the added branch has to actually accept valid TOML and
-    # reject broken TOML. Exercised by importing just the checker, so this
-    # does not need the server running.
+    # Behavioural, and against the seeded original. The comment here used to
+    # promise this while the probe only checked that "toml" appeared inside
+    # some function, and the success message claimed "all 12 existing
+    # languages intact" having checked only that each was still dispatched.
+    #
+    # Measured on 84296fd smallrung_toml rep2, scored PASS by that check:
+    # insert_after placed `elif lang == "toml":` inside the java branch,
+    # between `stderr = result.get(...)` and the loop that turns compiler
+    # output into errors. The file parsed and every language was still
+    # dispatched -- yet java compile errors were no longer reported, and the
+    # toml branch raised UnboundLocalError on invalid TOML instead of
+    # appending an error. The prompt says "Change nothing else -- the existing
+    # language branches must keep working exactly as they do now", so both
+    # halves are what the user asked for, not a hidden bar.
+    (ws / "_probe_original.py").write_text(_EXECUTOR.read_text())
     probe = ws / "_probe_toml.py"
-    probe.write_text(
-        "import ast, sys\n"
-        "src = open(%r).read()\n"
-        "tree = ast.parse(src)\n"
-        "fn = next((n for n in ast.walk(tree)\n"
-        "           if isinstance(n, ast.FunctionDef) and 'toml' in ast.dump(n)), None)\n"
-        "print('FOUND' if fn else 'MISSING')\n" % str(src_path))
-    p = subprocess.run([sys.executable, str(probe)], capture_output=True,
-                       text=True, timeout=60)
-    probe.unlink(missing_ok=True)
-    if "FOUND" not in p.stdout:
-        return False, "toml appears in the file but not inside any function"
-    return True, "toml handling added, all 12 existing languages intact, file parses"
+    probe.write_text(_TOML_PROBE)
+    # Runs under the sandbox's Python: it needs tomllib (3.11+) and it parses
+    # the agent's source, which targets that interpreter.
+    p = None
+    try:
+        p = subprocess.run(_runtime_argv(_ws_path(ws)) + ["_probe_toml.py"],
+                           cwd=str(ws), capture_output=True,
+                           text=True, timeout=60)
+        out = p.stdout
+    except subprocess.TimeoutExpired:
+        out = ""
+    finally:
+        probe.unlink(missing_ok=True)
+        (ws / "_probe_original.py").unlink(missing_ok=True)
+    verdict = None
+    for line in reversed(out.splitlines()):
+        if line.startswith("{"):
+            try:
+                verdict = json.loads(line)
+            except json.JSONDecodeError:
+                pass
+            break
+    if verdict is None:
+        tail = ((p.stderr if p else "") or out or "timed out")[-160:]
+        return False, f"toml probe produced no verdict: {tail}"
+    if not verdict.get("ok"):
+        return False, verdict.get("why", "toml probe failed")
+    return True, ("toml branch accepts valid TOML and reports invalid TOML; "
+                  "all existing dispatch branches unchanged")
 
 
 TASKS["smallrung_toml"] = Task(
@@ -498,8 +614,9 @@ TASKS["smallrung_toml"] = Task(
 # --- medium rung: find a seeded bug across several real files -----------
 #
 # The deliverable is IDENTIFYING the defect, not editing it. That is
-# deliberate: the model's transcription ceiling is already measured and would
-# dominate any fix-it task at this size, hiding what this actually tests —
+# deliberate: verbatim-transcription failures were already observed on edits
+# of this size, and would likely dominate a fix-it task (a hypothesis, not a
+# measured ceiling), hiding what this actually tests —
 # can it navigate ~1.3k lines across three unfamiliar files, understand a
 # selection algorithm, and locate a one-character bug from a symptom alone.
 
@@ -576,18 +693,17 @@ def _check_multiturn(ws: Path) -> tuple[bool, str]:
     behave, not just the newest one.
     """
     src = (ws / "stats.py").read_text()
-    try:
-        tree = ast.parse(src)
-    except SyntaxError as e:
-        return False, f"stats.py does not parse after the follow-up: {e}"
-    names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    names, err = _function_names(src)
+    if err:
+        return False, f"stats.py does not parse after the follow-up: {err}"
     for want in ("mean", "median", "mode"):
         if want not in names:
             return False, f"{want}() missing after both turns (have {sorted(names)})"
     proc = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.path.insert(0,%r); import stats;"
-         "print(stats.median([3,1,2]), stats.mode([1,2,2,3]))" % str(ws)],
+        _runtime_argv() + [
+            "-c",
+            "import sys; sys.path.insert(0,%r); import stats;"
+            "print(stats.median([3,1,2]), stats.mode([1,2,2,3]))" % _ws_path(ws)],
         capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         return False, f"a function raised: {proc.stderr.strip()[:150]}"
@@ -695,17 +811,17 @@ def _check_multifile(ws: Path) -> tuple[bool, str]:
     if len(store_src.splitlines()) < 5:
         return False, "store.py is a stub"
 
-    tp = subprocess.run([sys.executable, "-m", "pytest", "test_store.py", "-q"],
+    tp = subprocess.run(_runtime_argv(_ws_path(ws)) + ["-m", "pytest", "test_store.py", "-q"],
                         cwd=str(ws), capture_output=True, text=True, timeout=120)
     if tp.returncode != 0:
         tail = (tp.stdout or tp.stderr).strip().splitlines()
         return False, f"tests fail: {tail[-1][:120] if tail else 'no output'}"
 
-    add = subprocess.run([sys.executable, "todo.py", "add", "buy milk"],
+    add = subprocess.run(_runtime_argv(_ws_path(ws)) + ["todo.py", "add", "buy milk"],
                          cwd=str(ws), capture_output=True, text=True, timeout=60)
     if add.returncode != 0:
         return False, f"`todo.py add` failed: {add.stderr.strip()[:120]}"
-    lst = subprocess.run([sys.executable, "todo.py", "list"],
+    lst = subprocess.run(_runtime_argv(_ws_path(ws)) + ["todo.py", "list"],
                          cwd=str(ws), capture_output=True, text=True, timeout=60)
     if lst.returncode != 0:
         return False, f"`todo.py list` failed: {lst.stderr.strip()[:120]}"
@@ -753,6 +869,140 @@ def _js_parses(js: str) -> tuple[bool, str]:
         tmp.unlink(missing_ok=True)
 
 
+# Set once from --sandbox-container. The sandbox's interpreter is the one that
+# will run the agent's code, and it is not necessarily this script's.
+_SANDBOX_CONTAINER = ""
+# Container-side path of the run workspace, set from --subdir. Empty when no
+# sandbox was configured, which is the only case that falls back to the host.
+_SANDBOX_WORKDIR = ""
+
+
+def _runtime_argv(workdir: str = "") -> list[str]:
+    """Run the agent's code in the interpreter that actually runs it.
+
+    This script's Python is 3.9; the sandbox the agent writes and verifies its
+    code in is 3.13. Judging one with the other is how a working program gets
+    scored as broken. Measured on multifile_cli rep2, which wrote
+
+        print(f"{i}: {status} {todo["text"]}")
+
+    -- nested same-type quotes in an f-string, valid since PEP 701 (3.12+).
+    The sandbox ran the app correctly (3 tests pass, `add` and `list` both
+    work); this script raised SyntaxError and recorded a task failure, while
+    ATLAS had truthfully reported deliverables_demonstrated.
+
+    _sandbox_python_parses already established exactly this reasoning for the
+    parse check -- "this script's own interpreter is not the one the code runs
+    under ... ask the runtime that will execute it". It was never applied to
+    the checks that EXECUTE the code, which is where it matters most.
+    """
+    if _SANDBOX_CONTAINER and _SANDBOX_WORKDIR:
+        argv = ["docker", "exec"]
+        if workdir:
+            argv += ["-w", workdir]
+        return argv + [_SANDBOX_CONTAINER, "python3"]
+    return [sys.executable]
+
+
+def _ws_path(ws: Path) -> str:
+    """The workspace as the interpreter that will run the code sees it."""
+    return _SANDBOX_WORKDIR or str(ws)
+
+
+def _sandbox_python_parses(text: str) -> tuple[Optional[bool], str]:
+    """Parse `text` with the sandbox's Python, the one that will run it.
+
+    Returns (None, "") when the sandbox cannot be reached, so the caller falls
+    back to the local verdict rather than silently passing everything.
+    """
+    container = _SANDBOX_CONTAINER
+    if not container:
+        return None, ""
+    try:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", container, "python3", "-c",
+             "import ast,sys\n"
+             "try:\n"
+             "    ast.parse(sys.stdin.read())\n"
+             "    print('OK')\n"
+             "except SyntaxError as e:\n"
+             "    print('ERR', e)\n"],
+            input=text, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    out = (proc.stdout or "").strip()
+    if out.startswith("OK"):
+        return True, ""
+    if out.startswith("ERR"):
+        return False, out[4:].strip()
+    return None, ""
+
+
+EVALUATOR_VERSION = "e2e-eval-v2"
+
+
+def _quality_parser():
+    return _target_parse if _SANDBOX_CONTAINER else None
+
+
+def evaluator_identity() -> dict:
+    """Which interpreter judged Python syntax in this run.
+
+    v1 used this script's interpreter for the quality count and three task
+    checks; the dev server host is 3.9 and the sandbox runs 3.13, so code
+    valid where it runs was scored unparseable. v2 asks the sandbox whenever
+    one is configured and names the fallback when it is not.
+    """
+    target = "unavailable"
+    if _SANDBOX_CONTAINER:
+        try:
+            proc = subprocess.run(["docker", "exec", _SANDBOX_CONTAINER, "python3", "-c",
+                                   "import sys; print('%d.%d.%d' % sys.version_info[:3])"],
+                                  capture_output=True, text=True, timeout=20)
+            image = subprocess.run(["docker", "inspect", "-f", "{{.Image}}", _SANDBOX_CONTAINER],
+                                   capture_output=True, text=True, timeout=20)
+            if proc.returncode == 0:
+                target = (f"sandbox {_SANDBOX_CONTAINER} python {proc.stdout.strip()} "
+                          f"image {image.stdout.strip()[:19]}")
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {"version": EVALUATOR_VERSION, "python_parser": target,
+            "fallback": f"host python {sys.version_info.major}.{sys.version_info.minor}"}
+
+
+def _target_parse(text: str) -> tuple[Optional[bool], str]:
+    return _sandbox_python_parses(text)
+
+
+def _function_names(src: str) -> tuple[set, str]:
+    """Top-level-and-nested def names, judged by the interpreter that runs the
+    code. Returns (names, "") or (set(), error)."""
+    ok, why = _target_parse(src)
+    if ok is False:
+        return set(), why
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        if ok is None:
+            return set(), f"{e} (host python {sys.version_info.major}.{sys.version_info.minor}; sandbox unreachable)"
+        names, err = _sandbox_function_names(src)
+        return names, err
+    return {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}, ""
+
+
+def _sandbox_function_names(src: str) -> tuple[set, str]:
+    try:
+        proc = subprocess.run(
+            ["docker", "exec", "-i", _SANDBOX_CONTAINER, "python3", "-c",
+             "import ast,json,sys\n"
+             "t=ast.parse(sys.stdin.read())\n"
+             "print(json.dumps(sorted({n.name for n in ast.walk(t) if isinstance(n, ast.FunctionDef)})))\n"],
+            input=src, capture_output=True, text=True, timeout=20)
+        return set(json.loads(proc.stdout)), ""
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return set(), f"sandbox could not list functions: {e}"
+
+
 def _file_parses(path: Path) -> tuple[bool, str]:
     """Whole-file parse plus the embedded-script layer, mirroring the gates."""
     try:
@@ -760,10 +1010,17 @@ def _file_parses(path: Path) -> tuple[bool, str]:
     except (UnicodeDecodeError, OSError):
         return True, ""  # binary or unreadable: not our concern
     if path.suffix == ".py":
-        try:
-            ast.parse(text)
-        except SyntaxError as e:
-            return False, f"python: {e}"
+        # The interpreter that runs the code decides (evaluator v2). v1
+        # consulted it only after a host 3.9 failure, so a file valid under
+        # 3.9 and invalid under 3.13 would have passed.
+        ok, why = _target_parse(text)
+        if ok is False:
+            return False, f"python: {why}"
+        if ok is None:
+            try:
+                ast.parse(text)
+            except SyntaxError as e:
+                return False, f"python ({sys.version_info.major}.{sys.version_info.minor}): {e}"
     js = _extract_script(text) if path.suffix in (".py", ".html", ".htm") else None
     if js:
         ok, err = _js_parses(js)
@@ -782,8 +1039,37 @@ def _file_parses(path: Path) -> tuple[bool, str]:
 # integrity only in the sense that undetected classes exist — never inflated by
 # a false positive.
 
+# insert_after and replace_lines were missing, so a session whose only
+# successful write used one of them scored as "no successful write" — H4 fired
+# on go_offbyone and multifile_cli, both of which had written correctly. The
+# same omission has now been found in the lens breaker, the worked-example
+# generator, the productive-change counter, the write-gate chain, and here:
+# a set of tool names that nobody updates when a tool is added.
+# Terminal outcomes a `done` payload may carry (proxy/types.go owns the
+# vocabulary). Kept literal here because this script runs standalone against a
+# deployed proxy and must not import the CLI package.
+TERMINAL_STATUSES = ("completed", "incomplete", "stopped", "timed_out", "failed")
+
 WRITE_TOOLS = {"write_file", "edit_file", "structural_edit", "delete_file",
-               "move_file"}
+               "move_file", "insert_after", "replace_lines"}
+
+
+def task_contract(task: "Task") -> dict:
+    """The task mode this harness declares for a task: question for the
+    conversational probes, work for everything else."""
+    if task.conversational:
+        return {"task_mode": "question"}
+    return {"task_mode": "work"}
+
+
+def _tool_payload(result: dict) -> dict:
+    payload = (result.get("data") or {}).get("data")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 @dataclass
@@ -802,19 +1088,71 @@ class Session:
     def of_type(self, t: str) -> list[dict]:
         return [e for e in self.events if e.get("type") == t]
 
+    @property
+    def v3(self) -> dict:
+        """What the V3 pipeline did in this session, read from the stream.
+
+        planner: /v3/plan events. writes: write-tool calls. generated: write
+        calls during which the generation pipeline emitted anything (beyond
+        the planner). delivered: write results whose bytes V3's candidate
+        supplied (v3_used). A run labelled as measuring ATLAS with zero
+        generations measured the agent loop without V3, and says so.
+        """
+        planner = sum(1 for e in self.events if e.get("type") in ("v3_plan", "plan_loaded"))
+        writes = generated = delivered = 0
+        in_write = saw_v3 = False
+        for e in self.events:
+            t = str(e.get("type") or "")
+            d = e.get("data") or {}
+            if t == "tool_call":
+                in_write = d.get("name") in WRITE_TOOLS
+                saw_v3 = False
+                if in_write:
+                    writes += 1
+            elif in_write and t.startswith("v3_") and t != "v3_plan":
+                saw_v3 = True
+            elif t == "tool_result" and in_write:
+                generated += saw_v3
+                delivered += bool(_tool_payload(e).get("v3_used"))
+                in_write = saw_v3 = False
+        return {"planner_events": planner, "write_calls": writes,
+                "generated": generated, "delivered": delivered}
+
+    @property
+    def capped(self) -> bool:
+        """True when this runner stopped reading at --timeout.
+
+        The stream was cut from this side, so the absence of a `done`
+        event says nothing about the proxy's behaviour.
+        """
+        return any("harness cap:" in str(e.get("data", {}).get("error", ""))
+                   for e in self.of_type("error"))
+
 
 def h1_protocol(s: Session, known_types: set[str]) -> list[str]:
     """Every tool_call answered, stream terminated, every event type known."""
     out = []
     calls = len(s.of_type("tool_call"))
     results = len(s.of_type("tool_result"))
-    if calls != results:
+    # A capped session is cut at an arbitrary point, so the call that was
+    # in flight when we stopped reading has no result yet. More than one
+    # unanswered call is still a real mismatch.
+    allowed_orphans = 1 if s.capped else 0
+    if calls - results > allowed_orphans or results > calls:
         out.append(f"H1 protocol: {calls} tool_call vs {results} tool_result "
                    f"(orphaned call)")
-    if not s.of_type("done"):
-        out.append("H1 protocol: stream ended without a done event")
-    if not s.stream_ok:
-        out.append("H1 protocol: stream terminated abnormally")
+    if s.capped:
+        # This runner stopped reading at --timeout, so there was no
+        # opportunity to send `done` and the socket closed mid-stream.
+        # Charging that to the proxy as two protocol violations counts
+        # our own deadline as its defect. Report the deadline instead.
+        out.append(f"H1 timeout: runner cap cut the session at "
+                   f"{s.wall_s:.0f}s before it finished")
+    else:
+        if not s.of_type("done"):
+            out.append("H1 protocol: stream ended without a done event")
+        if not s.stream_ok:
+            out.append("H1 protocol: stream terminated abnormally")
     seen = {e.get("type") for e in s.events}
     unknown = sorted(t for t in seen if t and t not in known_types)
     if unknown:
@@ -929,30 +1267,67 @@ def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
     # asked — the inverse of the H9 check sitting right below.
     if task is not None and task.conversational:
         return []
+    # Read the tool name off the RESULT rather than pairing positionally with
+    # the calls: one unanswered call (a client timeout mid-stream) shifted
+    # every pair after it and silently mis-scored the rest of the session.
     productive = any((e.get("data") or {}).get("success")
-                     and (c.get("data") or {}).get("name") in WRITE_TOOLS
-                     for c, e in zip(s.of_type("tool_call"),
-                                     s.of_type("tool_result")))
+                     and (e.get("data") or {}).get("tool") in WRITE_TOOLS
+                     for e in s.of_type("tool_result"))
     if productive:
         return []
     if not s.of_type("done"):
         return []
+    # A classified terminal answers this directly: anything but "completed"
+    # is the run saying it did not finish, which is the opposite of escaping.
+    # Absent or unrecognised falls back to the prose match below rather than
+    # being read as completion.
+    for e in s.of_type("done"):
+        raw = (e.get("data") or {}).get("status")
+        if isinstance(raw, str) and raw in TERMINAL_STATUSES and raw != "completed":
+            return []
     # The breaker ending honestly is not an escape — it says it stopped.
     summary = " ".join(str((e.get("data") or {}).get("summary") or "")
                        for e in s.of_type("done"))
     texts = " ".join(str((e.get("data") or {}).get("content") or "")
                      for e in s.of_type("text"))
-    if re.search(r"stopped after|could not|unable to|failed to", summary + texts,
-                 re.I):
+    # "Stopped:" is how the repeated-refusal breaker opens its summary, and
+    # "ran out of turns" is how the turn-cap exit does. Matching only
+    # "stopped after" scored both of those as escaping silently while they
+    # were saying exactly what happened.
+    if re.search(r"\bstopped\b|could not|unable to|failed to|ran out of turns|"
+                 r"nothing was written|no changes were made",
+                 summary + texts, re.I):
         return []
     return ["H4 gate escape: exited with no successful write on an "
             "action-intent prompt, without saying it had stopped"]
+
+
+def _reads(p: Path) -> str | None:
+    try:
+        return p.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def h5_corrupt_write(s: Session, task: Task) -> list[str]:
     out = []
     for p in sorted(s.workspace.rglob("*")):
         if not p.is_file() or p.suffix not in (".py", ".html", ".htm", ".js"):
+            continue
+        # A file the session never touched cannot be a corrupt WRITE. Measured:
+        # bugfind_tiebreak is seeded with ATLAS's own v3-service/adapters.py,
+        # which contains a regex literal for stripping script tags. The
+        # extractor's own `<script>` pattern matches inside that literal,
+        # pulls out `]*\bsrc=)[^>]*>(.*?)`, hands that to `node --check`, and
+        # reports the pristine fixture as unparseable. Both reps of the task
+        # lost harness integrity over a file they never opened — the sessions
+        # wrote nothing at all (quality.files == 0).
+        #
+        # Seeded bytes are the reference, not an allowlist: the moment the
+        # session changes the file it is checked like anything else, so a
+        # fixture the agent genuinely corrupts is still caught.
+        seeded = task.files.get(p.name)
+        if seeded is not None and _reads(p) == seeded:
             continue
         ok, why = _file_parses(p)
         if not ok:
@@ -963,15 +1338,79 @@ def h5_corrupt_write(s: Session, task: Task) -> list[str]:
     return out
 
 
+def _recovered_after(s: Session, idx: int) -> bool:
+    """True when the session kept working after the event at `idx`.
+
+    A successful tool call plus a `done` afterwards means the proxy caught
+    the condition, told the model, and the model carried on.
+    """
+    rest = s.events[idx + 1:]
+    worked = any(e.get("type") == "tool_result"
+                 and (e.get("data") or {}).get("success") for e in rest)
+    finished = any(e.get("type") == "done" for e in rest)
+    return worked and finished
+
+
+def model_output_guards(s: Session) -> list[str]:
+    """The categories of the proxy's model-output guards in a session.
+
+    A guard is the proxy catching the model's own malformed output and telling
+    it: a parse failure, content swallowed by an unescaped quote, or content
+    whose intended bytes were ambiguous. Every such error event carries a
+    "category". The plumbing worked, so these are counted for the summary and
+    never as a harness defect (h6_service_fault).
+    """
+    return [str((ev.get("data") or {}).get("category"))
+            for ev in s.of_type("error") if (ev.get("data") or {}).get("category")]
+
+
+def _ended_on_work_deadline(s: Session) -> bool:
+    for ev in reversed(s.of_type("done")):
+        d = ev.get("data") or {}
+        return d.get("reason") == "work_deadline" or d.get("status") == "timed_out"
+    return False
+
+
 def h6_service_fault(s: Session) -> list[str]:
     out = []
-    for ev in s.of_type("error"):
+    for idx, ev in enumerate(s.events):
+        if ev.get("type") != "error":
+            continue
         d = ev.get("data") or {}
+        # A model-output guard is not a service fault, recovered or not: see
+        # model_output_guards. Smoke run 2026-09-27 (smallrung_toml): the
+        # swallowed_content guard caught a tool call cut by an unescaped quote,
+        # told the model, and the run still showed "1 harness defect" for it.
+        if d.get("category"):
+            continue
         # The proxy's error events carry "error" (see the TUI's own case);
         # "message" is what this harness uses for a stream-level failure it
         # synthesises. Reading only one of them reported every real error as
         # the string "None".
         detail = d.get("error") or d.get("message") or json.dumps(d)[:120]
+        # The cap event is this runner's own, appended when it stops reading
+        # at --timeout. Counting it as a service fault charges our deadline
+        # to the proxy a second time — h1_protocol already reports it as the
+        # timeout it is.
+        if "harness cap:" in str(detail):
+            continue
+        # The session's own work deadline cut an LLM stream in flight. The
+        # terminal status already reports that (timed_out, work_deadline); no
+        # dependency failed. Smoke run 2026-09-28 (multifile_cli rep 2).
+        if ("context deadline exceeded" in str(detail)
+                or "context canceled" in str(detail)) and _ended_on_work_deadline(s):
+            continue
+        # A parse failure the session recovered from is the proxy doing its
+        # job, not a service outage. Measured 2026-08-03 on flask_pause rep2:
+        # the model emitted a 20 KB tool call that ran out of tokens
+        # mid-JSON, the proxy classified it (category=truncated_tool), told
+        # the model, and the session went on to pass the task — and was
+        # scored a harness defect for it. Counting recovered model behaviour
+        # here puts a floor under harness integrity that no amount of
+        # correct proxy behaviour can lift. An unrecovered one still counts:
+        # that is a session the model never got back from.
+        if "parse model response" in str(detail) and _recovered_after(s, idx):
+            continue
         out.append(f"H6 service fault: error event {str(detail)[:160]!r}")
     for ev in s.of_type("tool_result"):
         err = str((ev.get("data") or {}).get("error") or "")
@@ -998,11 +1437,12 @@ def h9_tier_misapplied(s: Session, task: Task) -> list[str]:
     if v3:
         kinds = sorted({str(e.get("type")) for e in v3})[:4]
         out.append(f"H9 tier: the V3 pipeline ran on a question ({kinds})")
-    wrote = [c for c, r in zip(s.of_type("tool_call"), s.of_type("tool_result"))
-             if (c.get("data") or {}).get("name") in WRITE_TOOLS
+    # Same positional-pairing hazard as H4 — read the tool off the result.
+    wrote = [r for r in s.of_type("tool_result")
+             if (r.get("data") or {}).get("tool") in WRITE_TOOLS
              and (r.get("data") or {}).get("success")]
     if wrote:
-        names = sorted({(c.get("data") or {}).get("name") for c in wrote})
+        names = sorted({(r.get("data") or {}).get("tool") for r in wrote})
         out.append(f"H9 tier: a question caused file writes ({names})")
     return out
 
@@ -1088,7 +1528,11 @@ def tui_handled_types() -> set[str]:
 # --------------------------------------------------------------------------
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
-                subdir: str, timeout: int) -> Session:
+                subdir: str, timeout: int, raw_sink=None) -> Session:
+    """`raw_sink`, when given, is an open file the exact SSE lines are written
+    to BEFORE anything parses them. A reconstruction bug then stays visible
+    instead of overwriting its own evidence -- the parsed events beside it are
+    derived, and an unparseable frame is truncated in them but whole here."""
     # Wipe the workspace, then lay down only this task's fixtures. Resetting
     # the fixtures alone is not isolation: solve.py from a previous AoC task
     # survived into the next one, and a session that wrote nothing would have
@@ -1118,17 +1562,36 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     # an earlier version of this harness had every session operating on
     # /workspace while the checks read the subdirectory — so real successes
     # were scored as failures. sandbox_subdir is the field that scopes a run.
-    body = json.dumps({
+    payload = {
         "message": task.prompt,
         "mode": "yolo",
         "sandbox_subdir": subdir,
         "session_id": f"reliability-{task.name}-{rep}",
-    }).encode()
+        # Every owned sender declares a task mode; absence is reserved for
+        # external callers. The harness knows which tasks are questions, as
+        # the TUI does for /ask: declaring work for them sent a question to
+        # the work tier and its planner. It does NOT declare expected outputs
+        # or verification: the evaluator and the holdout are offline
+        # scoring, not obligations the agent was told to meet, and promoting
+        # them here would invent a requirement the task never stated.
+        "task_contract": task_contract(task),
+    }
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(f"{url}/v1/agent", data=body,
                                  headers={"Content-Type": "application/json"})
     events: list[dict] = []
     stream_ok = False
     t0 = time.time()
+
+    def take(ev: dict) -> None:
+        # Arrival time, seconds since the request went out. Saved events had no
+        # timing at all, so a question as basic as "where did the 570s go --
+        # generation, tool execution, or waiting?" could not be answered from
+        # the recorded evidence, and latency claims made without it had to be
+        # withdrawn. Inert to every detector, which read `type` and `data`.
+        ev["_t"] = round(time.time() - t0, 3)
+        events.append(ev)
+
     history: list[dict] = [{"role": "user", "content": task.prompt}]
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -1138,9 +1601,11 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                 # 20 minutes against a 900s cap, trying to satisfy a self-test
                 # it had written with the wrong expectation.
                 if time.time() - t0 > timeout:
-                    events.append({"type": "error", "data": {
+                    take({"type": "error", "data": {
                         "error": f"harness cap: session exceeded {timeout}s"}})
                     break
+                if raw_sink is not None:
+                    raw_sink.write(raw.decode("utf-8", "replace"))
                 line = raw.decode("utf-8", "replace").strip()
                 if not line.startswith("data: "):
                     continue
@@ -1149,11 +1614,11 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                     stream_ok = True
                     break
                 try:
-                    events.append(json.loads(payload))
+                    take(json.loads(payload))
                 except json.JSONDecodeError:
-                    events.append({"type": "__unparseable__", "raw": payload[:200]})
+                    take({"type": "__unparseable__", "raw": payload[:200]})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        events.append({"type": "error", "data": {"error": f"stream failed: {e}"}})
+        take({"type": "error", "data": {"error": f"stream failed: {e}"}})
 
     # Follow-ups: same session, prior exchange replayed as history. The
     # assistant turn is reconstructed from what it actually emitted.
@@ -1167,6 +1632,10 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
             "message": follow, "mode": "yolo", "sandbox_subdir": subdir,
             "session_id": f"reliability-{task.name}-{rep}",
             "history": history[:-1],
+            # The same declaration as the first turn. Sent without one, a
+            # follow-up was a contractless request: no V3 candidate, and the
+            # tier fell back to reading the message.
+            "task_contract": task_contract(task),
         }).encode()
         freq = urllib.request.Request(f"{url}/v1/agent", data=fbody,
                                       headers={"Content-Type": "application/json"})
@@ -1182,11 +1651,11 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                     if payload == "[DONE]":
                         break
                     try:
-                        events.append(json.loads(payload))
+                        take(json.loads(payload))
                     except json.JSONDecodeError:
-                        events.append({"type": "__unparseable__", "raw": payload[:200]})
+                        take({"type": "__unparseable__", "raw": payload[:200]})
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            events.append({"type": "error", "data": {"error": f"followup failed: {e}"}})
+            take({"type": "error", "data": {"error": f"followup failed: {e}"}})
     wall = time.time() - t0
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
@@ -1204,7 +1673,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         s.task_detail = (f"modified the fixture it was given: "
                          f"{', '.join(sorted(tampered))}")
         try:
-            s.quality = analyze_quality(workspace, set(task.files)).as_dict()
+            s.quality = analyze_quality(workspace, set(task.files), _quality_parser(), evaluator_identity()["python_parser"]).as_dict()
         except Exception as e:
             s.quality = {"error": str(e)}
         return s
@@ -1217,7 +1686,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         s.task_passed, s.task_detail = False, f"check raised: {e}"
     # Quality of what the agent wrote, excluding the fixtures it was handed.
     try:
-        s.quality = analyze_quality(workspace, set(task.files)).as_dict()
+        s.quality = analyze_quality(workspace, set(task.files), _quality_parser(), evaluator_identity()["python_parser"]).as_dict()
     except Exception as e:
         s.quality = {"error": str(e)}
     return s
@@ -1307,6 +1776,16 @@ def main() -> int:
         print(f"error: no known tasks in {args.tasks!r}", file=sys.stderr)
         return 2
 
+    # What the proxy says it runs, read once before any session and kept
+    # with every result.
+    STACK = stack_identity(args.url)
+
+    global _SANDBOX_CONTAINER, _SANDBOX_WORKDIR
+    _SANDBOX_CONTAINER = args.sandbox_container or ""
+    # Where the run workspace appears inside the sandbox. Both halves are
+    # required before any check leaves the host interpreter, so a run without
+    # --sandbox-container behaves exactly as it did before.
+    _SANDBOX_WORKDIR = f"/workspace/{args.subdir}" if args.subdir else ""
     if problems := preflight(args.sandbox_container, args.subdir):
         for line in problems:
             print(f"error: {line}", file=sys.stderr)
@@ -1356,16 +1835,49 @@ def main() -> int:
                 print(f"      ! {d}", flush=True)
 
     report(sessions, known)
+    EVAL_ID = evaluator_identity()
+    print(f"evaluator: {EVAL_ID}")
+    print(f"stack: {STACK}")
     if args.json_out:
         Path(args.json_out).write_text(json.dumps([{
             "task": s.task, "rep": s.rep, "task_passed": s.task_passed,
             "task_detail": s.task_detail, "defects": s.defects,
+            "task_mode": task_contract(TASKS[s.task])["task_mode"] if s.task in TASKS else None,
             "turns": len(s.of_type("turn_start")),
             "tools": len(s.of_type("tool_call")), "wall_s": round(s.wall_s, 1),
+            "v3": s.v3,
             "quality": s.quality,
+            "evaluator": EVAL_ID,
+            "stack": STACK,
         } for s in sessions], indent=2))
         print(f"\nwrote {args.json_out}")
     return 0 if all(not s.defects for s in sessions) else 1
+
+
+def stack_identity(url: str) -> dict:
+    """What the proxy reports it is running: the grammar mode (/version) and
+    the lens and steering state (/v1/calibration/status). Every recorded
+    dev-server run was steered and ran loose, and nothing in the evidence
+    said so; a measurement that cannot say which configuration it ran
+    against cannot be compared with another."""
+    raw = {}
+    for key, path in (("version", "/version"), ("calibration", "/v1/calibration/status")):
+        try:
+            with urllib.request.urlopen(f"{url}{path}", timeout=10) as r:
+                raw[key] = json.loads(r.read().decode("utf-8", "replace"))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            raw[key] = {"error": str(e)[:200]}
+    version, calib = raw["version"], raw["calibration"]
+    asa = calib.get("asa") or {}
+    lens = calib.get("lens") or {}
+    return {
+        "api_version": version.get("api_version"),
+        "grammar_mode": version.get("grammar_mode"),
+        "asa": asa.get("verdict"),
+        "asa_detail": asa.get("hint"),
+        "lens": lens.get("verdict"),
+        "errors": {k: v["error"] for k, v in raw.items() if "error" in v},
+    }
 
 
 def report(sessions: list[Session], known: set[str]) -> None:
@@ -1376,7 +1888,16 @@ def report(sessions: list[Session], known: set[str]) -> None:
     print(f"Harness Integrity Rate   {clean}/{total} "
           f"({100.0 * clean / total:.0f}%)   <- ATLAS's own plumbing")
     print(f"Task Success Rate        {passed}/{total} "
-          f"({100.0 * passed / total:.0f}%)   <- bounded by model ability")
+          f"({100.0 * passed / total:.0f}%)   <- task outcome (cause not classified)")
+    v3 = [s.v3 for s in sessions]
+    writes = sum(x["write_calls"] for x in v3)
+    generated = sum(x["generated"] for x in v3)
+    delivered = sum(x["delivered"] for x in v3)
+    print(f"V3 generation            ran on {generated}/{writes} write calls, "
+          f"delivered {delivered} candidate(s)")
+    if writes and not generated:
+        print("  ! no write reached V3 generation: this run measured the "
+              "agent loop without V3")
     print("=" * 72)
 
     by_class: dict[str, int] = {}
@@ -1389,6 +1910,16 @@ def report(sessions: list[Session], known: set[str]) -> None:
             print(f"  {cnt:3d}  {cls}")
     else:
         print("\nNo harness defects detected.")
+    guards = [model_output_guards(s) for s in sessions]
+    if any(guards):
+        kinds: dict[str, int] = {}
+        for g in guards:
+            for k in g:
+                kinds[k] = kinds.get(k, 0) + 1
+        print(f"Model-output guards (the proxy caught malformed model output; "
+              f"not harness defects): {sum(len(g) for g in guards)} in "
+              f"{sum(1 for g in guards if g)} session(s): "
+              + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
 
     print("\nPer task:")
     for name in sorted({s.task for s in sessions}):

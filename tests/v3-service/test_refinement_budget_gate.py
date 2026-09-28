@@ -11,6 +11,7 @@ decision: an exhausted ATLAS_V3_TIMEOUT budget emits ``refinement_skip``
 and never calls the loop; a disabled cap (0) always enters.
 """
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,7 +66,7 @@ class FailingSandbox:
     def __init__(self, project_files=None):
         pass
 
-    def __call__(self, code, test_input=""):
+    def __call__(self, code, test_input="", **_):
         return False, "", "boom"
 
 
@@ -98,7 +99,7 @@ def _run_pipeline(monkeypatch):
         generate=lambda problem, llm, task_id:
             SimpleNamespace(test_cases=[], generation_tokens=0))
     service.plan_search = SimpleNamespace(
-        generate=lambda problem, task_id, llm, num_plans=None:
+        generate=lambda problem, task_id, llm, num_plans=None, budget_tier="standard":
             SimpleNamespace(candidates=["def a():\n    pass\n"],
                             total_tokens=0))
     service.pr_cot = SimpleNamespace(
@@ -110,22 +111,54 @@ def _run_pipeline(monkeypatch):
     return result, refinement
 
 
-def test_exhausted_budget_skips_refinement(monkeypatch):
-    # 1-second total budget: by phase 3 the remaining wall-clock cannot
-    # afford a 180s iteration — the loop must not run.
+def test_exhausted_budget_returns_before_the_repair_phase(monkeypatch):
+    """1-second total budget: the run must not start repair, and must still
+    hand back a result.
+
+    This used to assert the run reached phase 3 and closed through
+    `refinement_skip` + `fallback`. It now stops earlier — entering the
+    repair phase with a spent clock is work whose output the caller would
+    never receive, so the pipeline returns its best candidate at the phase
+    boundary instead. The invariant the test exists for is unchanged: an
+    exhausted budget runs no refinement and still returns.
+    """
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "1")
     result, refinement = _run_pipeline(monkeypatch)
 
     assert refinement.calls == 0
     stages = [e["stage"] for e in result["events"]]
-    assert "refinement_skip" in stages
     assert "refinement" not in stages
-    # The run still closes through the fallback.
-    assert "fallback" in stages
-    skip = next(e for e in result["events"] if e["stage"] == "refinement_skip")
-    assert skip["data"]["estimated_iteration_ms"] == round(
-        ITERATION_LLM_CALLS * FakeLLM.avg_call_ms)
-    assert skip["data"]["remaining_ms"] <= 1000
+    assert "budget_exhausted" in stages
+    # Returning early is only correct if it still returns.
+    assert result["total_time_ms"] > 0
+    assert "code" in result
+
+    spent = next(e for e in result["events"] if e["stage"] == "budget_exhausted")
+    assert spent["data"]["remaining_ms"] <= 1000
+
+
+def test_budget_exit_captures_scored_candidates_before_sandbox(
+        monkeypatch, tmp_path):
+    """A candidate scored before the budget boundary remains attributable.
+
+    The capture record is deliberately unverified: recording the observation
+    must not invent a sandbox result or alter the anytime return decision.
+    """
+    sink = tmp_path / "pool.jsonl"
+    monkeypatch.setenv("ATLAS_V3_TIMEOUT", "1")
+    monkeypatch.setenv(v3pipeline.CAPTURE_ENV, str(sink))
+
+    result, refinement = _run_pipeline(monkeypatch)
+
+    assert refinement.calls == 0
+    assert any(e["stage"] == "budget_exhausted" for e in result["events"])
+    records = [json.loads(line) for line in sink.read_text().splitlines()
+               if line.strip()]
+    generated = [r for r in records
+                 if r.get("type") == "candidate_evaluation"
+                 and r.get("role") == "generated"]
+    assert len(generated) == 1
+    assert generated[0]["lens"]["energy"] == 5.0
 
 
 def test_disabled_cap_always_enters_refinement(monkeypatch):

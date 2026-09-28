@@ -140,3 +140,25 @@ class TestNoFalsePositives:
         unresolved, _ = _unresolved("def m():\n    return helper()\n",
                                     {"other.py": "def helper():\n    return 1\n"})
         assert "helper" in unresolved
+
+
+class TestPythonOnly:
+    """The resolver parses with the Python grammar, which reads any text
+    tolerantly. An HTML page whose <script> called setInterval came back with
+    setInterval and `function` unresolved, so the page with working JavaScript
+    was vetoed and a static one kept. It answers only for Python now."""
+
+    PAGE = ("<!DOCTYPE html>\n<html><body><canvas id='c'></canvas>\n"
+            "<script>function draw() {}\nsetInterval(draw, 100);</script>\n"
+            "</body></html>\n")
+
+    @pytest.mark.parametrize("path, code", [
+        ("templates/index.html", PAGE),
+        ("static/app.js", "fetch('/api').then(r => r.json());\n"),
+        ("main.go", "package main\nfunc main() { helper() }\n"),
+    ])
+    def test_non_python_is_not_resolved(self, path, code):
+        r = graph.unresolved_calls(path, code, {"app.py": "def index():\n    pass\n"})
+        assert r["ok"] is False
+        assert "Python only" in r["error"]
+        assert "unresolved" not in r

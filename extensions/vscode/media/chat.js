@@ -218,7 +218,7 @@
 		pendingChips.clear();
 	}
 
-	function addPermissionCard(id, tool, detail, message, canDiff, note) {
+	function addPermissionCard(id, tool, detail, message, canDiff, note, oneTimeOnly) {
 		const card = document.createElement('div');
 		card.className = 'permission-card';
 
@@ -258,11 +258,10 @@
 			});
 			actions.appendChild(view);
 		}
-		const buttons = [
-			['Allow Once', 'allow-once'],
-			['Allow for Session', 'allow-session'],
-			['Deny', 'deny'],
-		];
+		// A deletion is approved one file at a time: no session-wide answer.
+		const buttons = oneTimeOnly
+			? [['Allow Once', 'allow-once'], ['Deny', 'deny']]
+			: [['Allow Once', 'allow-once'], ['Allow for Session', 'allow-session'], ['Deny', 'deny']];
 		for (const pair of buttons) {
 			const button = document.createElement('button');
 			button.type = 'button';
@@ -375,7 +374,7 @@
 				break;
 			case 'permissionPrompt':
 				closeAssistantBubble();
-				addPermissionCard(message.id, message.tool, message.detail, message.message, message.canDiff, message.note);
+				addPermissionCard(message.id, message.tool, message.detail, message.message, message.canDiff, message.note, message.oneTimeOnly);
 				break;
 			case 'permissionResolved':
 				resolvePermissionCard(message.id, message.outcome);

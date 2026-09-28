@@ -21,7 +21,7 @@
 /** The tools whose permission prompts and tool chips get diffs.
  * move_file / delete_file / run_command are notification-only. */
 export const FILE_EDIT_TOOLS = new Set([
-	'write_file', 'edit_file', 'structural_edit', 'insert_after',
+	'write_file', 'edit_file', 'structural_edit', 'insert_after', 'replace_lines',
 ]);
 
 export interface EditPrediction {
@@ -105,9 +105,48 @@ export function predictEdit(tool: string, args: unknown, current: string | undef
 			}
 			return predictInsertAfter(path, current, line, content);
 		}
+		case 'replace_lines': {
+			// Also exact: the range is line numbers, not text to reproduce.
+			const content = stringField(args, 'content');
+			const start = numberField(args, 'start_line');
+			const end = numberField(args, 'end_line');
+			if (content === undefined || start === undefined || end === undefined
+				|| current === undefined) {
+				return undefined;
+			}
+			return predictReplaceLines(path, current, start, end, content);
+		}
 		default:
 			return undefined;
 	}
+}
+
+/** Replace 1-based lines `start`..`end` (inclusive) with `content`. Mirrors
+ * the proxy: an out-of-range or inverted span is not previewable. */
+function predictReplaceLines(
+	path: string, current: string, start: number, end: number, content: string,
+): EditPrediction | undefined {
+	const hadTrailingNewline = current.endsWith('\n');
+	const lines = current.split('\n');
+	if (hadTrailingNewline) {
+		lines.pop();
+	}
+	if (start < 1 || end < start || end > lines.length) {
+		return undefined;
+	}
+	const replacement = content.split('\n');
+	if (content.endsWith('\n')) {
+		replacement.pop();
+	}
+	const next = [...lines.slice(0, start - 1), ...replacement, ...lines.slice(end)];
+	return {
+		path,
+		kind: 'file',
+		left: current,
+		right: next.join('\n') + (hadTrailingNewline ? '\n' : ''),
+		approximate: false,
+		note: start === end ? `replaced line ${start}` : `replaced lines ${start}-${end}`,
+	};
 }
 
 function numberField(args: unknown, key: string): number | undefined {

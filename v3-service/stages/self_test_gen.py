@@ -44,18 +44,36 @@ class SelfTestGenConfig:
 # Data structures
 # ---------------------------------------------------------------------------
 
+# Where a case's expected output came from. The model wrote both halves of
+# every case this module produces, from the problem statement alone, so the
+# expected output is a second guess at the same problem rather than an
+# answer key. Measured on the captured pool: 21 of 36 valid generated keys
+# disagreed with the task's own reference, 4 of them containing the model's
+# reasoning transcript instead of an answer. A case carries where it came
+# from so no consumer has to infer it.
+PROVENANCE_GENERATED = "generated"
+PROVENANCE_TRUSTED = "trusted"
+
+
 @dataclass
 class GeneratedTestCase:
-    """A single model-generated test case."""
+    """A single model-generated test case.
+
+    `provenance` defaults to generated and this module never sets anything
+    else: nothing here can produce a trusted case. A consumer that cannot
+    read a provenance must treat the case as untrusted.
+    """
     input_str: str
     expected_output: str
     description: str = ""
+    provenance: str = PROVENANCE_GENERATED
 
     def to_dict(self) -> Dict:
         return {
             "input_str": self.input_str,
             "expected_output": self.expected_output,
             "description": self.description,
+            "provenance": self.provenance,
         }
 
     @classmethod

@@ -1,0 +1,57 @@
+name: bot · sync
+
+# Hourly: mirror the board's Ready and Blocked status to status/* labels,
+# add area/* labels to open pull requests from their changed paths,
+# welcome first-time PR authors, and close the issues that a commit or
+# merged pull request on dev names with "Closes #N".
+#
+# This polls instead of reacting to pull_request events, because a fork's
+# pull_request run gets no secrets and a read-only token, and
+# pull_request_target is not allowed here. It never checks out PR code:
+# changed paths come from the API.
+on:
+  schedule:
+    - cron: '41 * * * *'   # hourly
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print what would change, change nothing
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: bot-project
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'inferstep/ATLAS'
+    runs-on: ubuntu-latest
+    environment:
+      name: bots
+      deployment: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/bot
+            .github/atlas-bot.yml
+          sparse-checkout-cone-mode: false
+
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.ATLAS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.ATLAS_BOT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
+          permission-organization-projects: read
+          permission-contents: read   # commits on dev, for "Closes #N"
+
+      - run: python3 scripts/bot/atlas_bot.py sync
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ATLAS_BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}

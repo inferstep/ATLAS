@@ -30,15 +30,15 @@ jobs:
       matrix:
         module: [proxy, tui]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          # 1.26 covers both modules (tui requires 1.26+ via go.mod;
+          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
           # proxy's 1.24 floor builds fine on it). setup-go v6 pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26'
+          go-version: '1.26.6'
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: go test -race
@@ -74,9 +74,9 @@ jobs:
           - tests/perf
           - geometric-lens/tests
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
           cache: pip
@@ -85,15 +85,17 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             **/requirements*.txt
+            .github/requirements/ci.txt
 
       - name: install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          # pyyaml: tests/contracts/test_openapi_contract.py importorskips
-          # yaml — without the install the whole route-parity contract
-          # silently skips instead of gating.
-          pip install pytest pyyaml
+          # The CLI is stdlib-only, so --no-deps installs everything it needs.
+          # pytest and pyyaml come from the hashed tool lock (ci.in lists
+          # them; scripts/ci-lock.sh regenerates it). pyyaml:
+          # tests/contracts/test_openapi_contract.py importorskips yaml —
+          # without it the whole route-parity contract silently skips.
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
           # tree-sitter + grammars for the call-graph/structural_edit tests
           # under tests/v3-service/, at the exact pins the image ships —
           # an unpinned install once pulled a newer tree-sitter whose API
@@ -106,8 +108,13 @@ jobs:
         # tests/infrastructure needs these too: the boundary-regression
         # suite boots sandbox/executor_server.py, which imports
         # fastapi/pydantic unconditionally.
+        # jinja2 too, at the pin the image ships: the sandbox's template
+        # check imports it lazily and passes everything without it, so the
+        # tests of that check failed on a runner that lacked it.
         if: matrix.subset == 'tests/v3-service' || matrix.subset == 'tests/infrastructure'
-        run: pip install -r sandbox/requirements-runtime.txt
+        run: |
+          pip install -r sandbox/requirements-runtime.txt
+          grep -E '^jinja2==' sandbox/requirements-verify.txt | xargs pip install
 
       - name: install lens dependencies (CPU torch)
         if: matrix.subset == 'geometric-lens/tests'
@@ -116,7 +123,7 @@ jobs:
         # service requirements. xgboost tests importorskip if absent, but
         # requirements.txt pins xgboost-cpu so they run here.
         run: |
-          pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r geometric-lens/requirements.txt
 
       - name: pytest
@@ -126,12 +133,12 @@ jobs:
     name: perf budget gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.26.6'
           cache-dependency-path: proxy/go.sum
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
       - name: Build proxy (for binary-size metric)
@@ -146,9 +153,9 @@ jobs:
     name: ruff (python lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -176,19 +183,19 @@ jobs:
         # referenced before assignment) stay on. Tighten later by removing
         # entries from --ignore as the codebase gets cleaner.
         run: |
-          pip install ruff
+          pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only ruff
 
       - name: mypy (typed modules)
         run: |
-          pip install mypy
+          pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only mypy-typed
 
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
@@ -203,7 +210,7 @@ jobs:
     name: docker compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
@@ -222,11 +229,11 @@ jobs:
     name: yamllint (workflows)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: yamllint
         run: |
-          pip install yamllint
+          pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only workflow-yaml
 
   e2e-acceptance:
@@ -244,29 +251,29 @@ jobs:
     name: e2e acceptance (proxy + sandbox + fake llama)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.26.6'
           cache-dependency-path: proxy/go.sum
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: |
             pyproject.toml
             **/requirements*.txt
+            .github/requirements/ci.txt
 
       - name: build proxy
         run: cd proxy && go build -o /tmp/test-atlas-proxy .
 
       - name: install
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pytest
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
           pip install -r sandbox/requirements-runtime.txt
 
       - name: e2e acceptance test
@@ -276,6 +283,12 @@ jobs:
         # into a hard failure so the acceptance test can't silently stop
         # gating (skipif is for local dev boxes, never for this job).
         run: |
+          # The default `run:` shell is `bash -e {0}`, without pipefail, so a
+          # pipeline's status is its LAST command's. Piped through tee, a
+          # pytest that printed "2 failed, 48 passed" exited this step 0 and
+          # the job concluded success (run 33548739140 on 365a0c9). pipefail
+          # makes pytest's own status the step's.
+          set -o pipefail
           python -m pytest tests/e2e -v -rs --no-header | tee /tmp/e2e.out
           if grep -q "SKIPPED" /tmp/e2e.out; then
             echo "::error::e2e acceptance test skipped in CI — its preconditions are this job's responsibility"
@@ -296,7 +309,7 @@ jobs:
     name: llama.cpp patches apply to pinned SHA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: extract LLAMA_CPP_REV + check Dockerfiles agree
         id: sha
@@ -382,7 +395,7 @@ jobs:
           - language: php
             code: '<?php echo "ok";'
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: build sandbox image
         run: docker build -t atlas-sandbox-test ./sandbox
       - name: start sandbox
@@ -399,9 +412,11 @@ jobs:
           # hand-escaped copies of these two curls in the first place.
           body="$(python3 -c 'import json,os; print(json.dumps({"code": os.environ["CODE"], "language": os.environ["LANGUAGE"]}))')"
           for endpoint in execute syntax-check; do
+            # Save the reply, then check it: nothing downloaded is piped
+            # into an interpreter.
             curl -sf -X POST "http://localhost:8020/$endpoint" \
-              -H 'Content-Type: application/json' -d "$body" \
-              | ENDPOINT="$endpoint" python3 -c "import sys,json,os; e=os.environ['ENDPOINT']; d=json.load(sys.stdin); k='success' if e=='execute' else 'valid'; assert d[k], d; print(f'PASS: /{e}')"
+              -H 'Content-Type: application/json' -d "$body" -o reply.json
+            ENDPOINT="$endpoint" python3 -c "import json,os; e=os.environ['ENDPOINT']; d=json.load(open('reply.json')); k='success' if e=='execute' else 'valid'; assert d[k], d; print(f'PASS: /{e}')"
           done
       - name: cleanup
         if: always()

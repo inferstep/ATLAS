@@ -75,9 +75,8 @@ from stages.refinement_loop import (
     can_afford_iteration, estimate_iteration_ms,
 )
 from stages.self_test_gen import SelfTestGen, SelfTestGenConfig
-from stages.lens_feedback import LensFeedbackCollector, LensFeedbackConfig
 from stages.candidate_selection import (
-    CandidateInfo, select_candidate,
+    CandidateInfo, energy_rank_key, select_candidate,
 )
 from stages.embedding_store import EmbeddingWriter
 
@@ -410,7 +409,6 @@ class V3Pipeline:
                  llama_url: str = LLAMA_URL,
                  enable_phase1: bool = True,
                  enable_phase3: bool = True,
-                 enable_feedback: bool = False,
                  selection_strategy: str = "lens"):
         self.telemetry_dir = telemetry_dir
         self.llama_url = llama_url
@@ -427,7 +425,6 @@ class V3Pipeline:
         # Initialize V3 components
         self._init_phase1(telemetry_dir)
         self._init_phase3(telemetry_dir)
-        self._init_feedback(telemetry_dir, enable_feedback)
 
     @staticmethod
     def _load_v3_config() -> Dict[str, str]:
@@ -440,21 +437,6 @@ class V3Pipeline:
             ).strip('"')
             v3["ps_num_plans"] = int(conf.get(
                 "ATLAS_V3_PLAN_SEARCH_NUM_PLANS", "3",
-            ))
-            v3["ewc_lambda"] = float(conf.get(
-                "ATLAS_V3_EWC_LAMBDA", "1000.0",
-            ))
-            v3["replay_max_size"] = int(conf.get(
-                "ATLAS_V3_REPLAY_BUFFER_MAX_SIZE", "5000",
-            ))
-            v3["replay_ratio"] = float(conf.get(
-                "ATLAS_V3_REPLAY_BUFFER_REPLAY_RATIO", "0.30",
-            ))
-            v3["feedback_enabled"] = conf.get(
-                "ATLAS_V3_LENS_FEEDBACK_ENABLED", "false",
-            ).lower() in ("true", "1")
-            v3["feedback_interval"] = int(conf.get(
-                "ATLAS_V3_LENS_FEEDBACK_RETRAIN_INTERVAL", "50",
             ))
         except Exception:
             # best-effort: swallow on failure (caller continues)
@@ -501,16 +483,6 @@ class V3Pipeline:
             SelfTestGenConfig(enabled=self.enable_phase3),
             telemetry_dir=telemetry_dir,
         )
-
-    def _init_feedback(self, telemetry_dir, enable_feedback):
-        self.lens_feedback = LensFeedbackCollector(
-            LensFeedbackConfig(
-                enabled=enable_feedback,
-                retrain_interval=self._v3_conf.get("feedback_interval", 50),
-                lens_url=LENS_URL,
-            ),
-            telemetry_dir=telemetry_dir,
-        ) if enable_feedback else None
 
     def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:
         """Run a single task through the full V3 pipeline.
@@ -574,7 +546,7 @@ class V3Pipeline:
                         energy_raw = probe_scores["cx_energy"]
                         energy_norm = probe_scores["cx_normalized"]
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     result["telemetry"]["probe_cx_normalized"] = energy_norm
                     result["telemetry"]["probe_cx_calibrated"] = (
                         probe_scores["cx_calibrated"])
@@ -644,9 +616,10 @@ class V3Pipeline:
             #
             # The bench has no outer wall-clock cap (the live pipeline's
             # ATLAS_V3_TIMEOUT has no counterpart here), so no budget cap
-            # is passed: this is the arm the four-way triangulation
-            # measured — 66.9% gated vs 64.6% fixed-k=3 vs 61.7% for the
-            # same tier mix shuffled across tasks, n=175/arm.
+            # is passed. An earlier four-way comparison of this arm ran on a
+            # patched out-of-tree runner and another model, on tasks the lens
+            # was trained on; its arms were within noise, so it is not
+            # evidence for the gate.
             alloc = cxgx_gate.allocate(
                 cx_normalized=probe_scores["cx_normalized"],
                 cx_calibrated=probe_scores["cx_calibrated"],
@@ -704,7 +677,7 @@ class V3Pipeline:
                             code, LENS_URL,
                         )
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     candidates.append({
                         "index": len(candidates),
                         "code": code,
@@ -746,7 +719,7 @@ class V3Pipeline:
                             code, LENS_URL,
                         )
                     except Exception:
-                        energy_raw, energy_norm = 0.0, 0.5
+                        energy_raw, energy_norm = None, None
                     return {
                         "code": code,
                         "response": response,
@@ -787,7 +760,7 @@ class V3Pipeline:
                     code, LENS_URL,
                 )
             except Exception:
-                energy_raw, energy_norm = 0.0, 0.5
+                energy_raw, energy_norm = None, None
             candidates.append({
                 "index": 0,
                 "code": code,
@@ -805,9 +778,10 @@ class V3Pipeline:
 
         # ===== Test ALL candidates in sandbox (pipelined, V3.1 4.2) =====
         # Sandbox tests + embedding storage run in parallel threads.
-        # Candidates sorted by energy (low=easy first) for early-exit potential.
+        # Candidates sorted by energy (low=easy first) for early-exit potential;
+        # a candidate the Lens did not score has no energy and goes last.
         sandbox_start = time.time()
-        candidates.sort(key=lambda c: c["energy"])
+        candidates.sort(key=energy_rank_key)
         passing_candidates = []
 
         def _test_and_embed(cand):
@@ -848,8 +822,8 @@ class V3Pipeline:
                         passing_candidates.append(cand)
             # as_completed order is thread-completion order — run-dependent.
             # Sort by energy (ascending, matching the product pipeline) so
-            # the [0] fallbacks are deterministic.
-            passing_candidates.sort(key=lambda c: c.get("energy", 0.0))
+            # the [0] fallbacks are deterministic; unscored candidates last.
+            passing_candidates.sort(key=energy_rank_key)
         else:
             for cand in candidates:
                 cand = _test_and_embed(cand)
@@ -878,7 +852,8 @@ class V3Pipeline:
             for c in candidates
         ]
 
-        # Store best candidate code even on failure (for feedback + analysis)
+        # Store best candidate code even on failure (for analysis and the
+        # `atlas lens build --from-results` corpus)
         if candidates and not passing_candidates:
             result["code"] = candidates[0]["code"]  # Best by energy (sorted)
 
@@ -912,7 +887,6 @@ class V3Pipeline:
             result["telemetry"]["latency"] = latency
             result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
             result["total_time_ms"] = (time.time() - start_time) * 1000
-            self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
             return result
 
@@ -921,7 +895,6 @@ class V3Pipeline:
         if not self.enable_phase3:
             result["telemetry"]["latency"] = latency
             result["total_time_ms"] = (time.time() - start_time) * 1000
-            self._record_feedback(task_id, result)
             self._log_v3_event(task_id, result)
             return result
 
@@ -1045,26 +1018,8 @@ class V3Pipeline:
         result["telemetry"]["latency"] = latency
         result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
         result["total_time_ms"] = (time.time() - start_time) * 1000
-        self._record_feedback(task_id, result)
         self._log_v3_event(task_id, result)
         return result
-
-    def _record_feedback(self, task_id: str, result: Dict) -> None:
-        """Record pass/fail embedding for Lens feedback loop."""
-        if not self.lens_feedback or not self.lens_feedback.config.enabled:
-            return
-        code = result.get("code", "")
-        if not code:
-            return
-        try:
-            embed = EmbedAdapter(self.llama_url)
-            embedding = embed(code)
-            label = "PASS" if result.get("passed") else "FAIL"
-            self.lens_feedback.record(embedding, label, task_id)
-            if self.lens_feedback.needs_propagation:
-                self.lens_feedback.apply_to_components(self.budget_forcing)
-        except Exception:
-            pass  # Never crash benchmark for feedback
 
     def _log_v3_event(self, task_id: str, result: Dict) -> None:
         """Log a unified V3 pipeline event to JSONL.
@@ -1099,8 +1054,7 @@ class V3BenchmarkRunner:
     """Runs V3 benchmark with full pipeline."""
 
     def __init__(self, run_dir: Path, enable_phase1=True,
-                 enable_phase3=True,
-                 enable_feedback=False, selection_strategy="lens"):
+                 enable_phase3=True, selection_strategy="lens"):
         self.run_dir = Path(run_dir)
         self.telemetry_dir = self.run_dir / "telemetry"
         self.telemetry_dir.mkdir(parents=True, exist_ok=True)
@@ -1108,7 +1062,6 @@ class V3BenchmarkRunner:
             self.telemetry_dir,
             enable_phase1=enable_phase1,
             enable_phase3=enable_phase3,
-            enable_feedback=enable_feedback,
             selection_strategy=selection_strategy,
         )
         self._start_time = time.time()
@@ -1279,8 +1232,7 @@ def load_lcb_tasks():
 
 def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
                      enable_phase1=True,
-                     enable_phase3=True, selection_strategy="lens",
-                     enable_feedback=False):
+                     enable_phase3=True, selection_strategy="lens"):
     """Run V3 benchmark on LiveCodeBench."""
     if run_id is None:
         run_id = f"v3_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1296,7 +1248,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         "enable_phase1": enable_phase1,
         "enable_phase3": enable_phase3,
         "selection_strategy": selection_strategy,
-        "enable_feedback": enable_feedback,
         "smoke_only": smoke_only,
         "max_tasks": max_tasks,
     }
@@ -1376,7 +1327,6 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         enable_phase1=enable_phase1,
         enable_phase3=enable_phase3,
         selection_strategy=selection_strategy,
-        enable_feedback=enable_feedback,
     )
     results = runner.run_lcb(tasks)
 
@@ -1428,8 +1378,6 @@ def main():
     parser.add_argument("--selection-strategy", type=str, default="lens",
                         choices=["lens", "random", "logprob", "oracle"],
                         help="Candidate selection strategy (default: lens)")
-    parser.add_argument("--enable-feedback", action="store_true",
-                        help="Enable Lens Evolution (Phase 4): online C(x) retrain during benchmark")
     args = parser.parse_args()
 
     if args.baseline:
@@ -1443,7 +1391,6 @@ def main():
         enable_phase1=not args.no_phase1,
         enable_phase3=not args.no_phase3,
         selection_strategy=args.selection_strategy,
-        enable_feedback=args.enable_feedback,
     )
 
     if run_dir:

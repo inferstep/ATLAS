@@ -23,7 +23,7 @@ from atlas.display import (
     safe_print as _safe_print,
 )
 
-UPSTREAM_REPO = "itigges22/ATLAS"
+UPSTREAM_REPO = "inferstep/ATLAS"
 REGISTRY_PATH = "atlas/commands/model_registry.py"
 
 
@@ -205,9 +205,12 @@ def registry_set_lens(content: str, model_label: str, hf_repo: str,
 
 def registry_set_asa(content: str, model_label: str, hf_repo: str,
                      artifact_files: List[str]) -> Optional[str]:
-    """Within the named entry's block, set asa_status to supported and
+    """Within the named entry's block, set asa_status to unverified and
     record the vector's HF repo + files. Returns new content or None when
-    the entry (or a safe edit point) can't be found."""
+    the entry (or a safe edit point) can't be found.
+
+    Publishing shows a vector exists, not that it helps. Promoting an entry
+    to "supported" is a manual edit that cites an A/B result."""
     import re
     m = re.search(rf'(    Model\(\s*\n\s*name="{re.escape(model_label)}".*?'
                   rf'\n    \),)', content, re.DOTALL)
@@ -215,7 +218,7 @@ def registry_set_asa(content: str, model_label: str, hf_repo: str,
         return None
     block = m.group(1)
     files = ", ".join(f'"{f}"' for f in artifact_files)
-    asa_lines = (f'        asa_status="supported",\n'
+    asa_lines = (f'        asa_status="unverified",\n'
                  f'        asa_artifact_files=[{files}],\n')
     # Only set fields the upstream dataclass declares (it can be older
     # than the publisher's install) — but never drop the download
@@ -455,7 +458,7 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
     _safe_print("  ──────────────────────────────────────────")
     _safe_print("  Publish does TWO things in one command:")
     _safe_print("    1. Uploads the artifact to a HuggingFace repo you own")
-    _safe_print("    2. Opens a registry PR against github.com/itigges22/ATLAS")
+    _safe_print("    2. Opens a registry PR against github.com/inferstep/ATLAS")
     _safe_print("  Full walkthrough: docs/PUBLISHING.md")
     _safe_print("")
 
@@ -497,7 +500,7 @@ def publish_preflight(kind: str, dry_run: bool, color: bool) -> bool:
          gh_ok, required=False,
          hint=(f"{YELL_}optional{RESET_} — without it we'll print the PR "
                "body for you to paste at "
-               "https://github.com/itigges22/ATLAS/compare"))
+               "https://github.com/inferstep/ATLAS/compare"))
     _safe_print("")
 
     if dry_run:

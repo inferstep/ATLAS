@@ -4,14 +4,1316 @@
 
 ## [Unreleased]
 
+### Fixed: the reliability runner counted working guards as service faults
+
+`scripts/e2e-reliability.py` detector H6 ("service fault") flagged every
+`error` event, so Harness Integrity counted two things that were not
+faults:
+- The proxy's model-output guards: a parse failure, content swallowed by an
+  unescaped quote, or content whose bytes were ambiguous. These are the
+  plumbing working (smallrung_toml, 2026-09-27). Any event with a category is
+  now counted on its own summary line ("Model-output guards ... not harness
+  defects"), never as H6.
+- An LLM stream cut by the session's own work deadline (multifile_cli rep 2,
+  2026-09-28). The terminal status already reports it as timed out.
+- A real service fault, such as a refused connection or a 5xx from a
+  service, still counts.
+
+### Fixed: replace_lines called correct-looking numbers "stale" when nothing had changed
+
+When the expected first or last line did not match, `replace_lines` always said
+"The numbers you used are stale". In the smoke run on 2026-09-27
+(smallrung_toml), the file had not changed since the model read it: the model
+had used line 169 for text that is only on lines 1418-1548.
+
+- The refusal now names a cause only when the evidence shows it: the session
+  wrote the file or it changed after the last read (stale), or it still equals
+  what the first full read showed (the numbers never matched). Otherwise it
+  says only that the numbers do not match the file.
+- It also says where the expected text is: not in the file, on one line, or
+  on several lines to choose from.
+- What the tool applies is unchanged.
+
+### Fixed: a fenced write still waited about 50 seconds for the watchdog
+
+The first attempt to fetch a fenced file is constrained by a grammar that
+closes the block with four backticks. The model closes with three, which the
+grammar reads as a line of the file, so the model could not stop. It wrote
+more lines (in one stream, its next tool calls), then went silent, and the
+attempt ended only when the idle watchdog cut it. In the smoke run on 4403ae8
+(2026-09-28), 14 of 29 fenced writes waited that way (median 53 s, maximum
+185 s) before a retry without the grammar.
+
+- For a code file, the grammar now also lets the block end on a line of
+  exactly three backticks. Ending there is allowed, not forced: the line can
+  still be part of the file, and the model decides.
+- Markdown and files of unknown type keep the four-backtick closer, because
+  a ``` line can be their content.
+
+### Security: TUI dependencies with public advisories
+
+- The TUI now uses goldmark 1.7.17 (GO-2026-5320), golang.org/x/net 0.56.0
+  (GO-2026-5942) and golang.org/x/text 0.39.0 (GO-2026-5970).
+- `tui/go.mod` now requires Go 1.26.6. That release also fixes the
+  standard-library advisories that govulncheck reports for older Go 1.26
+  releases. The installer's default Go (`ATLAS_GO_VERSION`) is now 1.26.6.
+- CI sets up Go 1.26.6. setup-go pins `GOTOOLCHAIN=local`, so CI cannot
+  fetch a newer toolchain itself.
+- govulncheck on the TUI: no vulnerabilities found. The proxy image is built
+  with Go 1.27.1, which none of these advisories affect.
+
+### Fixed: the model registry said two quants reuse the Q6_K lens, and the lens rejects them
+
+The registry marked Qwen3.5-9B Q4_K_M and Q8_0 `unverified` and said they use
+the Q6_K lens files. The lens loads a bundle only for the model it was built
+for (same model name and embedding size), so those files never load for them.
+With the lens required, a user who picked one of these quants would be
+stopped after the registry said the lens works. Found while answering
+Discussion #20.
+
+- Both quants are now `no-artifacts`, and their notes say how to build a
+  bundle: install with `--no-lens`, then `atlas bench` and
+  `atlas lens build --from-results`. Their steering vector stays `unverified`
+  (shared with Q6_K).
+- `atlas model`, `atlas doctor`, `atlas init` and the registry notes no
+  longer say that a model without a lens bundle runs with G(x) "silently"
+  switched off. With the lens required, ATLAS stops agent work on such a
+  model, and the messages now say that and name the way out.
+- SUPPORT_MATRIX.md and the macOS guide say the same.
+
+### Changed: torch 2.14.0 in the lens image
+
+- The lens pins torch 2.14.0 (was 2.13.0) in `geometric-lens/requirements.txt`
+  and in the Dockerfile's CPU-only pre-install. Dependabot leaves torch
+  alone, because it can bump only one of the two pins.
+- CI's lens test job pre-installed torch 2.12.1 while the requirements pinned
+  2.13.0, so every run replaced the CPU wheel with PyPI's build. It now
+  pre-installs the pinned version, and a contract test keeps the two equal.
+
+### Fixed: the run was told to stop a server that a planned step still needed
+
+Found by the smoke run on 2026-09-27 (flask_pause rep 1). The gate that asks
+the run to stop its own background jobs before finishing already waited
+while a verification was owed. It did not wait for the plan. The run
+stopped its server, the plan gate then asked for a probe of that server,
+the probe could no longer pass, and the run ended "stopped" on work the
+grader passed.
+
+- The background gate now also waits while the plan gate still owes a step
+  that runs a command, and only while that gate has bounces left, so a spent
+  plan gate cannot keep the job running.
+
+### Fixed: an answer about code past a truncated read counted as evidence
+
+Found by the smoke run on 2026-09-27 (bugfind_tiebreak). The check that
+sends back an answer about a file the session never read worked per file:
+any read of a file counted as seeing all of it. Both reads in that session
+were cut near line 190, the answer named a function it said lay "past the
+provided snippet", and the run ended "completed".
+
+- `read_file` now records which lines it showed. A write or an edit counts
+  as showing the whole file, because the old line numbers no longer hold.
+- An answer that names code (in backticks) whose definition sits only in
+  lines no read showed goes back once, with the file, the line and what the
+  reads showed, so the model reads it before it answers.
+
+### Fixed: a file written through the fenced channel stalled for five minutes
+
+Found by the smoke run on the deployed build (2026-09-27). When the model
+writes a file as `@fenced`, the proxy asks for the file in a fenced block.
+The first attempt is constrained by a grammar that reserves four backticks
+for the closer; the model closes with three, which the grammar takes as a
+line of the file, so the attempt could not end. It also ran with no
+progress watchdog (the watchdog was keyed on the free-text attempt only),
+so it generated to the token ceiling: 8192 tokens, about 306 s, on every
+such write, before a grammar-free retry that took about 10 s. Two tasks
+timed out without ever running their code.
+
+- The watchdog now covers the grammar-constrained attempt, and a cut after
+  the model had written content is not counted as a channel stall, so the
+  grammar-free retry still runs.
+- When the fetch fails because the session was cancelled or ran out of
+  time, or because too little time is left to fetch and check the file,
+  the model is told that. It used to be told "no fenced block followed",
+  which was false.
+
+### Fixed: the plan's verify step demanded the planner's exact command
+
+The planner names its verify command by guess. It planned
+`curl http://127.0.0.1:5000`; the app served on 5001; the model's passing
+`curl -sf http://127.0.0.1:5001/` did not count; and the plan gate then
+demanded the literal step after the server had been stopped, so a finished
+and verified task ended "stopped". The verify step is now satisfied by a
+passing verification (a probe or a run, as the command-evidence rules
+judge it) of the same program, whatever its arguments. Other plan steps
+keep the literal rule.
+
+### Measured: gemma steering does not change its tool choice
+
+An A/B on 2026-09-27 compared the shipped gemma vector, no vector, and a
+vector rebuilt for the current tool names (120 held-out probes, 2 samples
+per arm, scale 0.5, through `POST /v1/agent`). Neither vector changed the
+first file-writing tool measurably: without a vector, gemma already picks
+`structural_edit` for 95% of whole-function rewrites and never used
+`edit_file` for one. The shipped vector stays, and its registry status
+stays `unverified`. SUPPORT_MATRIX records the result; whole-task outcomes
+were not measured.
+
+### Fixed: a passing model-server error at lens boot no longer fails the lens for good
+
+The lens is required, so a lens whose boot self-test failed refuses every
+request until the self-test passes. `/ready` re-runs a failed self-test
+only when the failure is retryable, and three paths made a passing
+llama-server error permanent:
+
+- A 503 while llama-server loads was not retryable: the retry rule named
+  urllib's `HTTPError`, and the transport now raises `ModelServerHTTPError`.
+  Connectivity failures and 5xx answers now retry; a 4xx does not.
+- `evaluate_energy` turned any error into zeros, which the self-test
+  reported as "C(x) evaluation returned zeros". It now raises.
+- A drift-fingerprint reference that could not be scored read as drift.
+  It now raises, as a failed measurement; drift means a measured mismatch.
+
+The drift message also named `--pooling mean`; the convention is
+`--pooling none`.
+
+### Changed: the final summary names the files V3 did not check
+
+When V3 runs out of time or is unavailable on a write, ATLAS still writes
+the model's own version (after the syntax and structural gates), as
+before. The tool result said so at the time; the run's final summary did
+not. The summary now ends with "V3 did not check these files: …", naming
+each file whose bytes on disk are the ones V3 did not check, with the
+reason. A file changed afterwards is not named. ADR 0004 gets a dated
+revision.
+
+### Removed: `GEOMETRIC_LENS_ENABLED`
+
+The lens is required (ADR 0011), and nothing in ATLAS has an off switch,
+so the lens has none either. The service ignores the variable; compose
+and the Kubernetes template no longer set it. The `disabled` lens verdict
+is gone: a lens with no model loaded reports `no-artifacts`, and its
+scoring answers say `enabled: false`, which the proxy and V3 read as a
+lens that cannot score.
+
+Also fixed in the manual (non-Docker) start in SETUP.md: llama-server now
+runs with `--pooling none`, as compose does (the lens's per-step path needs
+per-token vectors), and a comment line no longer cuts the lens command off
+from its environment variables.
+
+### Changed: the lens is required; ATLAS stops and says why when it cannot score
+
+A lens that was switched off, had no model loaded, or could not reach
+llama-server used to degrade to "no signal": writes went unscored, V3
+ranked its candidates on neutral scores, and nothing told the user. The
+lens is now required ([ADR 0011](docs/adr/0011-the-lens-is-required.md),
+superseding ADR 0005).
+
+- Before any work, the proxy checks that the lens can score (lens `/ready`,
+  then its `/health`; cached for 5 s). If it cannot, `/v1/agent` answers
+  HTTP 503 `dependency_down` with the reason and "Run `atlas doctor`." The
+  proxy's `/ready` and `/health` report the same answer as `lens_ready`,
+  with `lens_reason`.
+- If the lens stops scoring during a run, the run ends with
+  `failed` / `lens_unavailable` before the write that needed the score,
+  and the summary says whether earlier changes are on disk.
+- V3 raises `LensUnavailable` instead of scoring neutral; its stages pass
+  it on, and the proxy does not write the model's bytes as a fallback
+  (ADR 0004 still applies to V3's own failures).
+- An input the lens declines (longer than the embedding batch, empty,
+  non-finite) is still reported unscored and does not stop the run. An
+  uncalibrated lens counts as able to score.
+- `/v1/calibration/status` carries `can_score` and the verdicts
+  `disabled`, `drifted`, `self-test-failed` and
+  `model-server-unreachable`; `direct_agent` reads `blocked` while the lens
+  cannot score. `atlas doctor` fails on it. The TUI badge shows a failure
+  (✗, also for missing or mismatched artifacts) and names the command to
+  run, and the TUI shows the proxy's reason for a refused request.
+- A lens with no G(x) model no longer returns its thresholds beside 0.5
+  placeholder scores (`severe_mean` 0.52 read every candidate as severe),
+  and a drifted lens withdraws its thresholds on the per-step endpoint too.
+- Consequence: a model with no lens bundle (Qwen3.5-7B/14B/32B, a
+  bring-your-own GGUF) runs no request until `atlas lens build` or
+  `atlas model install-artifacts` gives it one. `atlas bench` does not go
+  through the proxy and still runs, to build that bundle.
+
+### Changed: the evaluation runners record what they measured
+
+Every recorded dev-server run was steered and ran the loose grammar, and
+the ATLAS arm of the benchmarks generated no V3 candidate at all under the
+old default policy; nothing in the evidence said so.
+
+- `scripts/e2e-reliability.py` and `scripts/novel-atlas.py` record, per
+  session, how many write calls reached V3 generation and how many landed
+  V3's candidate, print the totals, and warn when a run reached V3 on no
+  write. Each run also records what the proxy reports it runs: the grammar
+  mode (`GET /version` now includes `grammar_mode`) and the lens and
+  steering state (`/v1/calibration/status`). `novel-atlas.py` records the
+  image of all five services.
+- `e2e-reliability.py` declares `task_mode: question` for its conversational
+  probes, as the TUI's `/ask` does, and its follow-up turns carry the same
+  declaration; they were sent with no contract.
+
+### Fixed: a new gemma install used the grammar mode gemma cannot use
+
+The docs say gemma needs `ATLAS_GRAMMAR_MODE=loose` (under the strict
+schema grammar it emits `done` instead of calling tools), and every gemma
+measurement on the dev server ran loose. Nothing wrote it: compose and the
+proxy default to strict, so a gemma install made by `atlas init` ran
+strict. The mode is now a property of the model in the registry
+(`grammar_mode`: gemma `loose`, the Qwen entries `strict`); `atlas init`
+writes it, the model's env vars carry it, and `atlas doctor` warns when
+`.env` disagrees with the registry for the configured model.
+
+### Changed: steering is always on, and its labels say what was measured
+
+ASA steering was on in production and in every recorded dev-server
+measurement, while the docs said gemma's vector was "off by default" and
+the registry, the proxy and the TUI called it "supported" or "verified".
+Steering stays always on wherever a vector is installed for the served
+model; the labels now match the evidence.
+
+- The gemma entry's `asa_status` is `unverified`: its vector was built from
+  prompts that named the tool `ast_edit` (now `structural_edit`) and was
+  never A/B measured. `atlas model install-artifacts` still installs and
+  marks it, as it did.
+- `atlas asa publish` and `atlas publish` record a new vector as
+  `unverified`; promoting it to `supported` is a manual edit that cites an
+  A/B result.
+- The proxy reports a vector marked for the served model as `active`, not
+  `supported` ("control vector active for …"); the TUI shows it as ✓.
+- SUPPORT_MATRIX says gemma runs steered by default with an unmeasured
+  effect, and that Qwen's May 2026 A/B predates the tool rename.
+
+### Fixed: work requests without a task verb were read as questions
+
+The message classifier called a request conversational (T0) when it
+opened with a wh-word as a prefix ("Whole-number inputs…", "Whenever a
+user submits…", "However you structure it…"), with a subordinate "When …"
+clause, with an imperative "Do …", or when it contained "?" anywhere,
+including in a URL, and when a mid-message ". Do not …" followed. A T0 run
+is capped and never planned, and for a client that sends no contract the
+done-without-action gate never armed, so a run that wrote nothing ended
+"completed" with the model's "Updated calc.py" as its summary.
+
+- A declared `task_mode: work` is never tiered T0.
+- Wh-openers are matched as whole words; "when" and "where" openers must be
+  inverted; an opening "do" needs a pronoun; a mid-message auxiliary needs
+  a subject; a `?` counts only where it ends a clause, outside brackets and
+  backticks.
+- A completed run that read the project and changed no file (by tool or by
+  shell) ends its summary with "No file was created or changed in this
+  run."
+
+### Fixed: V3 checked files of unknown type as Python
+
+The V3 pipeline picked a syntax checker by file extension and fell back to
+Python for any extension it did not list. A stylesheet, a C file or a
+Makefile was parsed as Python, so every candidate failed with a SyntaxError
+that said nothing about the file, and the Python-only checks ran on it.
+Such a file now fails as "verification unavailable" for its own class.
+Python remains the default only for a bench task that names no file.
+`.pyi` stubs are checked as Python.
+
+### Fixed: the V3 service planned against a budget the proxy did not honour
+
+The proxy cuts each V3 call to half of the session's remaining time, at
+most `ATLAS_V3_TIMEOUT`, and never told the service, which planned every
+phase against `ATLAS_V3_TIMEOUT` alone. With 6 minutes left in a session,
+the service planned a 300 s run inside a 180 s call and started work the
+proxy then abandoned. The proxy now sends the cap it applies as
+`budget_ms`; the service plans against it, and reads `ATLAS_V3_TIMEOUT` only
+when a caller sends none. `docs/CONFIGURATION.md` also gave the cap's
+default as 180 s; it is 300 s.
+
+### Changed: the call graph always runs, for Python files only
+
+- `ATLAS_CALL_GRAPH` is removed. The call-graph veto, the multi-hop repair
+  context, the symbol-index neighborhoods and the call edges on `read_file`
+  and `outline_file` always run. The dev server, where ATLAS is measured,
+  already ran with the flag on, and installs ran with it off, so the
+  measured and shipped configurations differed.
+- The veto and the resolver are Python-only. The resolver parses with the
+  Python grammar, so an HTML page whose `<script>` called `setInterval` was
+  vetoed for an "unresolved" call while a static page was kept, and Go and
+  JavaScript files got the same false names. The structural veto was
+  already Python-only for this reason.
+
+### Changed: one rule decides which V3 candidate lands
+
+The candidate policy modes (`strict`, `advisory`, `automatic_v3`) and
+`ATLAS_CANDIDATE_POLICY` are removed. Under the default, `strict`, a request
+that declared no outputs never generated a candidate. The ordinary
+interactive request declares no outputs, so V3 ran only for clients that
+opted in, and the measured configuration was not the shipped one.
+`advisory` delivered nothing.
+
+- V3's selected candidate replaces the model's bytes when no hard veto fired
+  and a basis holds: a declared verification passed, or the V3 selection
+  path named these exact bytes and every safety requirement holds. Otherwise
+  the model's own bytes land. See `docs/CANDIDATE_POLICY.md`.
+- `task_contract.candidate_policy` is accepted and ignored, so older clients
+  keep working. `ATLAS_CANDIDATE_POLICY` is no longer read; `atlas config
+  validate` flags it.
+- The TUI's `/candidate-policy` command and its header label are removed.
+- A request with no contract, or a `question`, still gets no V3 candidate:
+  no target is grounded. The VS Code extension sends no contract yet.
+
+### Fixed: faults found while removing the modes
+
+- A candidate whose applicable syntax check never ran (for example, the
+  sandbox was down) could be delivered. It is now a hard veto
+  (`execution_evidence_unavailable`).
+- The delivery decision could say "delivers" for a candidate the grant step
+  then refused. The write route then wrote nothing and told the model its
+  content was kept. The decision now reads which basis earned a grant, and a
+  delivery refused before any byte moves writes the model's own bytes, as
+  the edit route already did.
+- Declared verification commands ran against the candidate only for a
+  declared output, so a request that declared commands and no outputs could
+  never have its candidate verified or delivered. They now also run for the
+  file the model's own call named.
+- The e2e fake llama servers crashed on the proxy's body-less slot-erase
+  POST, which filled the e2e log with `JSONDecodeError` tracebacks. They now
+  answer it as a llama-server without slot support does.
+
+### Removed: the lens retrain endpoint
+
+`POST /internal/lens/retrain` answered 503 in every shipped deployment:
+Compose mounts the models directory read-only, and the K3s image runs as a
+user that cannot write it. Its only caller, the bench runner's opt-in
+`--enable-feedback` collector, turned itself off on that 503. It retrained
+on accumulated benchmark embeddings, the test-set-into-scorer path the lens
+training corpus was removed for. Removed with it: `reload_weights`,
+`retrain_cost_field_bce` and `load_cost_field`, the EWC and replay-buffer
+modules, `stages/lens_feedback.py`, the runner's `--enable-feedback` flag
+and its five `ATLAS_V3_*` settings, and the tests and docs of the path. The
+lens is still built host-side with `atlas lens build`.
+
+### Changed: V3 runs on every request
+
+`bypass_v3`, `v3_mode` and `feasibility_mode` are removed. The first two
+turned V3 off, or left only its planner, for the evaluation runners' V3-off
+arm; `feasibility_mode: enforce` skipped generation when no closure path was
+found, for a canary. A switch lets the measured configuration drift from the
+shipped one, and `bypass_v3` did more than its runners said: it also turned
+off three write gates (unresolved calls, embedded scripts, a duplicate
+module entrypoint), so a V3-off arm measured a system with fewer gates, not
+the same system without V3. Earlier V3-off comparisons are confounded by
+that.
+
+- Planning and generation run whenever the routing rules send a write to
+  them: a file of Tier 2 or above, a V3 service configured, and a session
+  not iterating on a file it just watched fail. The three write gates run on
+  every write.
+- A request that asks for V3 off, planner-only or `enforce` is refused with
+  400. `false`, `full` and `observe` are accepted and change nothing.
+- The feasibility answer is still recorded, and never stops generation.
+- `scripts/e2e-reliability.py` and `scripts/novel-atlas.py` lose their V3-off
+  arm. A measurement without V3 takes a research build.
+
+### Fixed: the parts of the command-approval fix that 3.1.4 did not ship
+
+3.1.4 shipped the rest of this fix; see its "Security" section. On dev only:
+
+- `replace_lines`, which 3.1.x does not have, gets the write deny-list. The
+  rules follow what each tool does, so a new tool cannot fall outside them.
+- In the VS Code extension, one "allow for session" answer on a deletion
+  approved every later deletion without showing which file. Each deletion
+  is now asked about on its own, and the approval card shows the whole
+  command; it used to cut it at 117 characters.
+
+### Added: a gated deploy that covers all five services
+
+`scripts/deploy-gated.sh` replaces a host-only script that rebuilt three of
+the five services. The lens and the model server were never rebuilt, so a
+lens change could not reach the running stack while `DEPLOYED_SHA` said it
+had. The script also refuses a dirty checkout, requires every service to be
+healthy, checks that each container runs the image just built, and checks
+the running stack before it records the commit. See
+[OPERATIONS.md](docs/OPERATIONS.md#deploying-a-checkout-gated).
+
+### Changed: V3 candidates run only where the request lets one be delivered
+
+This entry was missing from these notes. Clients declare a task contract
+with each `/v1/agent` request: `task_mode` (`work` or `question`), optional
+`expected_outputs` and `verification` commands, and a `candidate_policy`.
+The proxy, not v3-service, decides whether a V3 candidate may replace the
+model's own bytes, under one of three policies
+([docs/CANDIDATE_POLICY.md](docs/CANDIDATE_POLICY.md)):
+
+- `strict`, the default: a candidate lands only when a verification the
+  client declared passes against those exact bytes.
+- `advisory`: candidates are scored and nothing is delivered.
+- `automatic_v3`: V3's selected candidate lands when every safety
+  requirement holds.
+
+The TUI sends `task_mode` (`work`, or `question` after `/ask`) and the
+session's policy: `strict` unless `/candidate-policy` changed it. The VS
+Code extension sends no contract, so it gets the operator default
+(`ATLAS_CANDIDATE_POLICY`, strict unless set).
+
+A candidate that could not be delivered is not generated: the write and
+edit tools skip V3 with reason `candidate_undeliverable_under_policy`.
+**So in a default TUI or VS Code session (strict policy, no declared
+outputs), write and edit tools do not run V3 generation at all.** The
+model's own write lands, through the usual gates. Candidates are
+generated only under `automatic_v3`, when the client declared outputs, or
+in the capture-only diagnostic mode, which delivers nothing. The entries below that say edits and first writes "go
+through the V3 pipeline" describe the route, which still reaches the
+pipeline entry, not what a default session delivers.
+
+### Changed: a new file that does not parse lands with a warning
+
+This entry was missing from these notes (47be143). A `write_file` of a new
+file whose content does not parse is no longer refused. It lands with a
+warning that names the parse error and says to run the file and read the
+traceback. Refusing it had blocked the write, run and fix loop: three AoC
+sessions and a novel-benchmark session ended with the file never created.
+V3 is skipped for such a write, and a file that already exists is still
+syntax-gated. The write is recorded as a failed parse, so the run cannot
+complete while that version stands. This supersedes "New files
+bypassed the syntax gate" under Measured reliability below.
+
+### Fixed: "completed" resting on a check that never ran the program
+
+A run could end `completed` although nothing it ran showed the program
+working. The proxy counted any command whose first word was `python`, `node`,
+`mypy`, `ruff`, `go build`, `curl` and similar as verification, so a parse
+(`python -m py_compile app.py`), a linter, a build or a `--version` discharged
+the work contract, cleared a failed test and settled the ledger as "executed
+clean". It read only the exit status of the whole line, which the sandbox runs
+without `pipefail`, so `pytest | tail`, `pytest || true` and `app.py; echo`
+passed with the test failing, and so did `curl` against a page that answered
+HTTP 500. And a failed run after a passing one never took the pass back.
+
+`proxy/command_evidence.go` now classifies each command by what it
+demonstrates (execution, probe, static check, nothing) and by whether the
+command line reports that part's exit status. Only execution and probes count,
+from the segments whose status reaches the line; a probe counts when an HTTP
+error would fail it (`curl -f`, or the body piped into `grep`). A failed run is
+recorded and takes back an earlier pass over the same bytes. The exit gates
+name an uncounted command back to the model with the reason, and an unmet work
+contract is said at the exit, with the command that runs the file, instead of
+only in the final status. The system prompt and the `run_command` example no
+longer present a build, lint or `py_compile` as verification, and the
+server-start instruction no longer suggests the headers-only `curl -I`, which
+never counted. Java, Kotlin, PHP, shell and `./script` runs now count, where
+before they never did.
+
+### Changed: a file no check applies to is named in the summary
+
+A run that writes a file of a kind the syntax registry does not cover and
+that is not prose (`style.css`, `.gitignore`, `Dockerfile`, `.rs`, `.toml`)
+cannot demonstrate it, so the run ends `incomplete` /
+`deliverables_not_demonstrated`. The summary used to say "the run ended
+without finishing the task"; it now names the files ATLAS has no check for.
+`.mjs` and `.cjs` are now checked as JavaScript. Rust and C/C++ are not yet:
+the sandbox compiles the lone file, so a sibling header or module would read
+as a syntax error. What to do about assets no check applies to is an open
+decision.
+
+### Fixed: completion did not see what shell commands did to files
+
+A shell command reached the deliverable ledger only by rehashing files the
+ledger already tracked. A module written with `cat > tool.py <<EOF`, broken,
+was never checked, and a user's file removed with `rm` left no trace; both
+runs ended `completed`. The proxy now walks the workspace before and after
+each `run_command`: source and document files the command created or changed
+become the session's deliverables and are checked like any other, and a file
+that was there when the request started and that a command removed is an
+unapproved deletion (`delete_intent_unestablished`). Dependency, cache and
+build directories are not walked, and a file the run created and later
+removed does not block. The system prompt now says deleting a pre-existing
+file goes through `delete_file`. A `run_background` job writes on its own
+schedule, so its changes are compared against the workspace as it stood when
+the job started, once the job can no longer be writing: when completion reaps
+it, when `stop_background` confirms its exit, or when the session reaps it.
+
+### Fixed: harness refusals that stopped correct work
+
+- Outside yolo mode, a server started with `run_background` was refused with
+  the instruction to use `run_background`. Only `run_command` is redirected
+  now; it keeps its check in every mode.
+- That redirect, and the other shell-command refusals, skipped every failure
+  counter, so a model re-sending one looped until the session deadline
+  (measured: 20 identical re-sends). They now count like every other refusal.
+- The f-string syntax advice said the sandbox runs a Python older than 3.12
+  and sent the model after quote nesting. The sandbox runs 3.13, where that
+  nesting is valid; the advice now points inside the braces.
+- A `structural_edit` with a corrected body on the same selector was refused
+  as a byte-for-byte re-send, the tool was banned for the file, and the run
+  ended `repeated_refusal` blaming the model. The re-send refusal now compares
+  the whole call.
+- The fenced sub-call grammar used a three-backtick fence, so the first ```
+  line a file needed (a Markdown code block, a docstring example) ended the
+  file, and the truncated body was written as complete. The fence is four
+  backticks now.
+
+### Fixed: the model was told V3 had verified code nothing had run
+
+After V3 delivered a write or edit whose phase name sounded like success, the
+proxy told the model "V3 verified this edit ... The fix is on disk and
+build-checked ... respond NOW with done ... do not re-read the file". The
+phase could be `phase1` reached by agreement between candidates, or rest on a
+compile, with nothing ever running the code. The message now comes from the
+proxy's own evidence: it says the edit works only when a current run on those
+bytes shows it (including evidence V3's delivery staged), and otherwise says
+V3's checks are not a run and asks for one.
+
+In V3 itself, candidates picked by agreement when none passed were marked
+`passed`. They are now marked `consensus` and reported with `phase_solved:
+"consensus"`, which the proxy does not treat as verified. Agreement is counted
+in distinct programs, so two byte-identical copies no longer outvote a
+different one; a candidate that failed the project's build command or its
+import comparison cannot agree its way in; a trusted oracle is no longer
+overruled by agreement; and function-shaped candidates, which the probe
+silently excluded, now take part.
+
+### Fixed: V3 judged Python with a different interpreter than the one that runs it
+
+v3-service ran on Python 3.11 while the sandbox runs 3.13, so every
+`compile()` or `ast.parse` verdict V3 gave used an older grammar than the
+code's runtime: valid 3.12+ code such as `f"{d["k"]}"` (PEP 701) was
+"invalid Python". The worst place was `edit_file`'s `/internal/pycheck`
+pre-gate, which refused such edits, and ran before the sandbox's own check
+with its rule that a file already broken may be repaired one error at a
+time, so a partial repair was refused too. v3-service now builds on the
+sandbox's digest-pinned `python:3.13-slim`, and a test holds the two bases
+equal. The pre-gate and the V3 endpoint behind it are removed; the sandbox
+check on the edited file already covers the same bytes. The interactive lint
+now reports `SKIPPED` rather than `OK` when it could not parse the code.
+
+### Fixed: the sandbox's syntax check passed what it never checked, and failed valid code
+
+`/syntax-check` built its errors from the checker's stderr and ignored how the
+checker ended, so one stopped at its time or memory ceiling, or that never
+started, came back `valid: true` for nine languages. It now answers `status:
+"not_run"` with the `outcome`, and the proxy and V3 record that as not run
+rather than a pass or a syntax error. Other checks judged the wrong thing:
+
+- HTML could not fail. html.parser accepts any text, so a page with no markup,
+  or one cut off inside its `<script>`, was a pass that completed an HTML
+  deliverable. It now needs markup and a document that does not end inside a
+  tag, a comment, a `<script>` or a `<style>`.
+- JavaScript left the module type to Node. From Node 20.19 `node --check` on a
+  typeless `.js` file with `import` compiles nothing, so garbage and truncated
+  modules passed; before 20.19 every valid module failed. It is now checked as
+  `.cjs`, then as `.mjs` when that fails only on module syntax.
+- Java, Kotlin and TypeScript compiled the file alone, so a reference to a
+  sibling class or an installed package was reported as a syntax error and
+  valid multi-file code was refused. Java is now parsed only, and Kotlin and
+  TypeScript count only syntax diagnostics.
+
+Completion also ignored a broken `<script>` embedded in a served file (the
+Flask `HTML_TEMPLATE` shape) that the harness had just found, and a clean run
+of the server then settled it as "executed clean"; a demonstrated
+embedded-script failure now blocks both.
+
+On macOS the resource contract read `ru_maxrss` as kilobytes (it is bytes
+there), so every sandbox command in a local test run ended
+`memory_exhausted`. Production runs on Linux and is unchanged.
+
+### Fixed: a completion that rests on a parse says so
+
+`completed` with reason `deliverables_demonstrated` could rest on a parse
+alone: without a work contract (VS Code, the bench drivers), and for HTML
+pages under one, nothing demands a run, and the model's own "All tests pass
+and everything works" was then shown word for word. The reason is now
+`deliverables_parse_only` when code or pages that could be run were not, and
+the summary names them ("solve.py parses, but nothing in this run ran it").
+When the model's account claims the code works or its tests pass, the
+server's sentence comes first and the account is labelled as unchecked.
+`deliverables_demonstrated` now means every runnable deliverable was shown
+working by a current run.
+
+### Fixed: a bare test run never covered the files it ran
+
+Coverage came only from files a command named, so a bare `pytest`, `go test
+./...`, `go run .` or `npm test` covered nothing, and a work request verified
+that way could never meet its contract. A runner now covers the files this
+session changed that it discovers (pytest and unittest test files, Go
+packages, JS test files), plus what they import. `go test` covers only
+packages that contain tests; without them it only compiles.
+
+### Fixed: a spent exit gate no longer reads as a clean completion
+
+Every exit gate stops sending the run back after three bounces. Seven of them
+(the claim check, the unread-citation gate, the route, orphan and plan gates,
+redirect-only verification and the artifact gate) then let the exit through
+as `completed`, with nothing in the status, the reason or the summary. A gate
+whose finding still holds at the exit now records it. A claim-check gap and a
+reply citing files the run never read end the run `incomplete`
+(`claim_check_unresolved`, `unread_citation`). The heuristic gates, which have
+known false positives, let it complete with a caveat in the summary, and the
+`done` event names every spent gate in a new `unresolved` field. The artifact
+gate also kept its finding only until its first bounce; the drift now holds
+until something verifies again. The unread-citation gate no longer flags a
+file the run itself moved or deleted: naming it reports the operation, not a
+guess about code it never saw. The run-first gate gets a reason of its own
+(`warned_file_never_run`) as a backstop; the deliverable check already refused
+those exits, because a warned write is recorded as a failed parse.
+
+### Withdrawn: the V3.0 LiveCodeBench result (74.6%)
+
+The 74.6% LiveCodeBench "pass@1" published with V3.0, and the phase-by-phase
+gains derived from it, are withdrawn. The benchmark runner never ran
+LiveCodeBench's hidden tests: its loader cannot decode the private test suite
+and silently falls back to the 1-5 examples printed in each problem, which
+were then both the in-loop tests and the final grade. It counted a task as
+passed when any of three candidates passed those examples, so lens selection
+could not change the count, and repair prompts received the examples'
+expected output. A re-grade of a 130-task sample against the hidden tests
+found that 14 of its 90 published passes fail them. The report
+(`docs/reports/V3_ABLATION_STUDY.md`) now carries a withdrawal notice and is
+otherwise kept as a historical record; the claims in README, SUPPORT_MATRIX,
+the bench README and the translated READMEs are removed.
+
+Also withdrawn, as unsupported: the 66.9% CxGx gate comparison cited in
+ARCHITECTURE (measured on another model, with a patched runner not in the
+repository, on tasks the lens was trained on, and within noise of the other
+arms); ADR 0009's "54% to 75% task-success improvement", which no run in the
+repository supports; the README's "reliability has improved" and the ~51
+tok/s throughput figure, both from configurations that no longer exist.
+ATLAS will be re-measured on held-out tasks once the current product is
+re-verified.
+
+### Removed: the lens training corpus and its capture
+
+The proxy recorded every file the model wrote, stashed each pass's writes by
+session, and appended labeled samples to a per-model corpus: through
+`POST /feedback` (the TUI's `/good`, `/bad` and per-file `/deny`) and
+mechanically (gate rejections as negatives, verified writes as positives).
+`atlas lens retrain` trained the lens on that corpus. Evaluation runs are agent
+use like any other, so the corpus filled with them — 2,425 samples on the dev
+server, 1,198 of them from the AoC benchmark — with no field that could tell
+them apart. A retrain would have trained the scorer on the test set. Nothing
+had retrained from it yet; the deployed lens is the LiveCodeBench-calibrated
+one.
+
+Removed: the pass-write capture and its stash, the mechanical labelling,
+`/feedback` and `/v1/lens/training-status`, the TUI's `/good`, `/bad`,
+`/deny` and `/accept`, its post-pass rating prompt and "retrain available"
+banner, `atlas lens retrain` and its corpus loader, the corpus bind mount
+and its K3s hostPath, and `ATLAS_LENS_DATA_DIR`, `ATLAS_LENS_HOST_DIR`,
+`ATLAS_LENS_RETRAIN_MIN` and `ATLAS_LENS_TRAINING_DIR` (the three `.env`
+keys are now flagged as removed). `/review` and `/redo` stay: they list and
+regenerate the last pass's files and never fed the corpus. The lens is built
+with `atlas lens build` from a bench run or a labeled sample file, as before.
+An existing `lens_training/` directory is no longer written; delete it once
+nothing needs it.
+
+### Removed: the pattern cache and its SQLite state store
+
+After every V3 success, v3-service posted the problem and its solution to the
+lens, where an LLM extracted a "pattern" and stored it; at the start of every
+session the proxy asked the lens for up to three patterns and injected them as
+a `[system note]` of lessons from previous sessions. The store held the
+solutions of evaluation sessions (a fish-timer puzzle, a stats module, a
+standup app), so it was a channel from the test set into the product. Measured
+across 714 injection events in the evaluation evidence, 713 served the same
+three seed idioms and no stored solution was ever served: it changed nothing
+and carried that risk. There was no switch to turn it off.
+
+Removed: the read and write endpoints (`/internal/patterns/*`), the extractor,
+store, scorer, co-occurrence graph and seed patterns, the proxy's
+pattern-context injection and its `pattern_context_injected` event, the V3
+write hook, the TUI row, `ATLAS_LENS_ONLINE_LEARNING`, and the SQLite state
+store that held nothing else — with its `lens-state` volume and PVC,
+`SQLITE_DB_PATH`, the `sqlite` block in the lens `/health` and `/ready`, and
+the doctor's `sqlite_state` check. `SQLITE_DB_PATH` and
+`ATLAS_LENS_ONLINE_LEARNING` are now flagged as removed keys. An existing
+`lens-state` volume is no longer mounted; reclaim it with
+`docker volume rm atlas_lens-state` once nothing needs its contents.
+
+### Removed: the requested-behaviour exit gate and its word lists
+
+A completion exit was bounced, and the terminal set to
+`requirements_unverified`, when a sentence of the request contained a verb
+from a hand-written list and nothing the run executed mentioned one of that
+sentence's words. The lists were grown from the evaluation prompts:
+`pause`, `resume` and `toggle` entered the verb list after the pause task had
+been the measured case for a week, and `confirm` was added quoting the
+benchmark prompt "then run it and confirm the answer", where it let a bare run
+discharge the requirement. A gate whose vocabulary is chosen so the test set
+parses the intended way measures the test set, not the request. The gate,
+both lists, the stop-word list, the summary rewrite and the
+`requirements_unverified` reason are removed; completion is decided by the
+remaining evidence gates exactly as before the gate existed.
+
+### Removed: the browser probe and the evidence modes that gated it
+
+v3-service carried a verifier for one artifact class — browser JavaScript
+with a canvas or a `keydown` listener — whose verdict fields were named for
+one game (`collision_transition`, `food_or_score_transition`), a shadow
+consensus ranking, an enforce-mode override of the lens choice, and a
+bounded dead-oracle consensus. All of it sat behind `ATLAS_EVIDENCE_MODE`
+and `ATLAS_V3_DEAD_ORACLE_CONSENSUS`, which no deployment set, so none of it
+ever ran in production. A verifier for one artifact class is not capability,
+and a criterion named for one game is not a contract; both are removed
+outright rather than left dormant.
+
+**Kept**, because the proxy authorizes V3 delivery on it: the adapter
+registry, contract records, closure eligibility, the evidence envelope and
+`contract.select`. A `.js` file now routes to the JavaScript compile adapter
+(syntax evidence, never closure) and an `.html` file is unsupported
+(unverifiable, never vacuously verified). The consensus fallback for a
+condemned oracle (`_consensus_winners`) is unchanged; it runs only when V3
+selection runs, which a default session does not (see the candidate policy
+entry above). `SandboxAdapter`
+loses the `language` and `timeout` parameters the probe needed: every
+remaining caller ran Python at the default 15 s, which is now fixed.
+
+### Lens scoring boundary
+
+A candidate longer than llama-server's physical batch (`ATLAS_UBATCH`)
+cannot be embedded: the server refuses the request with HTTP 500 (`input
+(2055 tokens) is too large to process. increase the physical batch size
+(current batch size: 2048)`). The Lens answered that with its defaults,
+energy 0.0 / normalized 0.5 / gx 0.5 / verdict `error`, and the min-energy
+selector ranked the candidate first on the lowest energy in the pool.
+Observed in a candidate-selection acquisition on 2026-09-04, where the
+mechanism gate stopped the analysis on that record.
+
+**Changed**
+
+- Every Lens scoring answer says `scored`. An unscored answer carries a
+  typed `failure` (`embed_capacity` with the server's `input_tokens` and
+  `capacity_tokens`, `model_server_error`, `model_server_unreachable`,
+  `embedding_contract`, `nonfinite_score` for a NaN or infinite value,
+  `internal`) and `null` in every score field; consumers read a score
+  field that is not a finite number as unscored as well, and the min-energy
+  rank key never orders on one. Nothing is truncated or split: a Lens score is one forward over the
+  whole sequence ([ADR 0010](docs/adr/0010-lens-capacity-boundary-is-typed.md)).
+- v3-service records the failure on the candidate and in the pool capture,
+  ranks an unscored candidate after every scored one, delivers it only as
+  the last verified candidate standing (the `selected` event says
+  `lens_scored: false`), emits `lens_unscored`, and allocates the k=3 floor
+  with reason `unscored` when the probe itself is unscored. A Lens answer
+  in the older shape (`verdict: "error"` with numbers attached) is read as
+  unscored too. `atlas bench` ranks its pool the same way.
+- The lens reports the embedding capacity it knows on `/health` and
+  `/ready` (`embed_capacity_tokens`, declared through the new
+  `LLAMA_EMBED_CAPACITY_TOKENS`, which compose sets from `ATLAS_UBATCH`, or
+  observed from a refusal). The proxy marks `lens_scoring` partial when that
+  capacity is below `ATLAS_MAX_TOKENS`, and logs an unscored write without
+  applying any threshold to it. `/ready` keeps its gate.
+
+### Verbatim reproduction
+
+Every edit failure observed on the 12B traced to one thing: the model cannot
+reproduce multi-line text exactly. A 1-line anchor lands; a 9-13 line anchor
+comes back with `food.y` written as `hood.y`, `scoreElement` as
+`scorerElement`, a stray `)`, or `℘` where `&&` belongs. The tool call is
+then rejected for a mismatch that has nothing to do with the model's
+understanding of the task. These changes attack the copying itself rather
+than adding another retry around it.
+
+**Changed**
+
+- The tool-choice guidance in the system prompt now names the line-addressed
+  edit tools. It listed `edit_file` / `write_file` / `structural_edit` and
+  repeated those three, so a model changing a multi-line region could only
+  pick from tools that need it reproduced — `replace_lines` and `insert_after`
+  were reachable only from the raw tool list. The `old_str`-not-found steers
+  had the same gap: they pointed at `insert_after`, which *adds*, and named
+  nothing for *changing*. Observed live as two failed 15-line `old_str`
+  attempts in a row followed by the model abandoning the edit; on the next run
+  with the guidance fixed it reached for `replace_lines` directly.
+- DRY sampling now defaults **off** (`ATLAS_DRY_MULTIPLIER=0`, was `0.8`).
+  DRY penalizes repeated sequences, and copying a file into an `old_str` *is*
+  a repeated sequence: the penalty is `multiplier × base^(matched −
+  allowed_length)`, so at the previous defaults a 12-token verbatim run
+  carried a −23.0 logit penalty on the correct next token. The previous
+  `ATLAS_DRY_PENALTY_LAST_N` comment claimed the 2048-token window bounded
+  this to the model's own output; it does not. llama-server's
+  `init_sampler()` seeds the DRY ring buffer with the prompt tokens, so the
+  file being copied from is itself inside the repetition window. The knob
+  still works for any model that needs it.
+- Agent-loop requests now decode greedily by default: `samplers: ["top_k"]`,
+  `top_k: 1` (`ATLAS_TRANSCRIPTION_SAMPLER=0` restores the server chain).
+  An agent turn is transcription — the tool call names a path and repeats a
+  span of the file — and there is one correct token at each step. Sent as a
+  one-element sampler chain rather than `temperature: 0` because temperature
+  is applied *last* in llama.cpp's chain, which would pick greedily from an
+  already penalty-distorted distribution instead of the raw one.
+- The most recently read file is restated, line-numbered, as a final message
+  immediately before the generation point (`ATLAS_RESTATE_LAST_READ=0`
+  disables). The `read_file` result the model copies from sits thousands of
+  tokens back behind the system prompt and every tool description, while the
+  model's own drifting copy sits adjacent to the cursor. Skipped when the
+  content is already the last message, when nothing has been read, and above
+  24 KB.
+
+**Added**
+
+- `outline_file` reports embedded-language regions. The host grammar cannot
+  see into a string literal, so the outline of a Flask app whose whole UI is
+  one module-level template named `function:index` and nothing else — and a
+  model asked to change the game loop reached for `structural_edit
+  selector="function:draw"`, a symbol the outline never mentioned and no
+  selector can reach. Two consecutive runs opened with exactly that call. The
+  outline now names the `<script>`/`<style>` region, its line range, the
+  functions declared inside it, and the fact that they are not selectable,
+  reusing the block extraction the embedded-script gate already performs.
+- `GET /jobs` on the sandbox, listing every background job it holds. The
+  registry is process-wide with no session concept, so a server an earlier
+  session left running keeps its port while `/jobs/{id}` needs an id the new
+  session never saw — the bind failure's own advice, "identify and stop that
+  program", was unfollowable. Observed live: "Address already in use" on port
+  5001 against a server started 50 minutes earlier by a different run. The
+  proxy's port-conflict hint now falls back to this list and names the
+  offending job so the model can `stop_background` it.
+- `replace_lines` — a sixteenth tool that changes an existing line range
+  without reproducing it. `insert_after` removed the verbatim burden for
+  *adding* code; this does the same for *changing* it. The model supplies
+  `start_line`/`end_line` plus `expected_first_line` and
+  `expected_last_line`, so the staleness check costs two lines of copying
+  instead of N. Assertions compare ignoring leading/trailing whitespace
+  (indentation is the most common drift and is not evidence of a stale
+  range); a mismatch returns the actual line and a ±3-line numbered window.
+  Capped at 60 lines and one hunk per call, requires a prior read, and runs
+  the same fallback-syntax, unresolved-call and embedded-script gates as
+  `edit_file`.
+
+- `structural_edit` refuses a replacement that dwarfs the node it replaces,
+  before the splice rather than only when the blob also fails to compile. The
+  check existed but lived inside the post-splice `except SyntaxError` handler,
+  so a blob that happened to be valid Python sailed past it: an observed
+  session replaced `function:index` (3 lines, `return
+  render_template_string(HTML_TEMPLATE)`) with a 258-line `HTML_TEMPLATE =`
+  assignment, which parses fine. The app came out of it with zero
+  `@app.route` decorators — its only route deleted — the file still parsing
+  and the agent reporting success. Whether a blob is syntactically valid says
+  nothing about whether it belongs in that node. Size alone does not refuse
+  either, since writing a real body over a `pass` stub is also many times the
+  node; it takes a second signal, either the replacement duplicating content
+  that already exists elsewhere in the file, or the file holding a
+  template-sized module-level string the model is evidently reaching for.
+- `replace_lines`' size cap is 60 lines, up from the 20 it shipped with, and
+  the over-limit refusal no longer dead-ends. The unit of work that kept
+  hitting the cap is a whole function, and a JavaScript function inside a
+  Flask template runs 40-50 lines. At 20 the refusal said "use structural_edit
+  with function:NAME" — which cannot reach into a Python string literal, so
+  its own refusal pointed straight back, and an observed session spent all
+  three of its strikes on that loop with the file untouched. The refusal now
+  names the split (consecutive calls, bottom of the file upward so earlier
+  line numbers stay valid) and says plainly that no selector reaches code
+  inside a string. The cap was never what makes the tool safe either:
+  `expected_first_line` / `expected_last_line` already fail a stale range, at
+  the same two-line cost whether the span is 5 lines or 50.
+- A missing `}` in embedded JavaScript now names the block that was left
+  open. tree-sitter reports the absence where the parser gave up, which is
+  past the end of the construct that needs it: an observed session was told
+  "line 202: a `}` is missing" against `setInterval(draw, 100);`, a line the
+  edit had never touched. It tried to fix that line twice and the three-strike
+  breaker ended the run with the file unchanged. The rejection now shows both
+  lines — the opener marked as the unclosed block, the stop as where the
+  brace was noticed — and says which one to go look at.
+- The verification gate no longer tells a model to re-run a server. A
+  `run_command` that fails because the process never exited (sandbox timeout)
+  or because the port is already bound is not evidence the code is broken, but
+  the gate treated it as a red test and said "re-run the same command and
+  confirm it exits clean" — which a blocking server start can never do. An
+  observed session started the server correctly with `run_background`, got
+  that advice, and spent all three of its bounces re-sending `done` because
+  nothing it could do satisfied the gate. It now names the actual next step
+  (`curl` the port), and points at the already-running job by id rather than
+  suggesting a second copy. A genuinely red test keeps the fix-it wording.
+- A `structural_edit` that leaves a second `if __name__ == "__main__":` block
+  is refused. Handed content that carried the module entrypoint along with the
+  node body, the splice appended a duplicate and a 209-line file became 388.
+  It parses and it runs — the first `app.run()` blocks and the rest is dead
+  code underneath — so nothing caught it. It is the signature of a whole-file
+  blob smuggled through a node selector. Healthy→broken: a file that already
+  had two is left alone, and an indented guard inside a function is not
+  counted.
+- A repeated `let`/`const` in one scope is now refused at the write gate. An
+  edit appended a second `let score = 0` to a `<script>` that already had one;
+  tree-sitter parses that, so the syntax check passed and it landed. A
+  duplicate lexical binding is an *early* SyntaxError, so the browser throws
+  out the whole script before running a line of it and every handler on the
+  page dies — while the Python compiles, the server starts and the page
+  returns 200. Only `let`/`const` within a single scope are reported, which
+  the spec makes unconditionally an error; `var`, function declarations and
+  shadowing across scopes are all legal and left alone.
+- A stopped render loop is now refused at the write gate. Asked to make the
+  snake speed up with the score, the model replaced `setInterval(draw, 100)`
+  with `setTimeout(draw, delay)` at the same top-level spot and never re-armed
+  it inside `draw()`. The JavaScript parses, `python app.py` starts the
+  server, and the agent reported the change verified — while the game drew
+  exactly one frame. `embedded_script_check` now takes the pre-edit file and
+  reports a function a repeating timer used to drive that fires once and never
+  re-arms; the existing embedded-script gate refuses the write and names the
+  call site. Deleting a loop outright, adding a fresh delayed one-shot, and a
+  loop that re-arms from inside its own body are all left alone — the finding
+  needs both versions, because one alone cannot tell a dead loop from an
+  intentional one.
+
+- A byte-identical re-send of an already-rejected tool call is refused before
+  it executes. The harness is deterministic, so the same call against the same
+  workspace fails for the same reason. Observed: a run emitted the same
+  `replace_lines` call on two consecutive turns against a rejection that named
+  the file, the line, the cause and two concrete fixes, then died on the
+  three-strike breaker with the file untouched — the existing repetition
+  detector needs three occurrences in its window and steers only the following
+  turn, so an identical pair never reached it. Scoped to calls that failed
+  (re-reading a file after editing it is byte-identical and correct) and
+  cleared when the same call later succeeds.
+- A completion claim the run cannot support no longer reaches the user as the
+  model wrote it. The verification gate bounces `done` three times and then,
+  out of bounces, lets it through: three runs ended with a confident "I
+  verified..." over a broken file, once over a Flask app whose only
+  `@app.route` had been deleted. The harness now states what was written and
+  that nothing verified it, keeping the model's account labelled as
+  unverified. Making `done` ungrammatical would be stronger but needs strict
+  schema-GBNF, and Gemma-family models require the loose grammar. See
+  [ADR 0008](docs/adr/0008-harness-mechanisms-over-model-instructions.md).
+
+- The error-loop breaker no longer kills a converging run. It counted three
+  consecutive failures on one path and stopped, which conflates a model
+  looping with a model closing in: an observed run was refused
+  selector-unreachable, then span-too-large, then stale-range — each attempt
+  answering the previous error — and died with the file untouched. Failures
+  are now compared by *kind* (the message with its digits, quoted spans and
+  paths removed), and a rejection that differs from the last one resets the
+  streak. Repeating one failure still breaks at three. A new
+  `maxTotalFailures` ceiling of 12 bounds the run, since resetting the streak
+  is what would otherwise let it cycle through failure modes indefinitely.
+- `done` is refused while planned steps have never landed. The plan is
+  generated up front, `PlanStepsSatisfied` tracks which steps a tool call has
+  matched, and a progress note is injected every turn — but nothing checked it
+  at the exit. An observed run built the variable-delay loop it was asked for,
+  never added the per-food decrement, and declared done: two required edits,
+  one delivered. The per-turn note is an instruction and was ignored; the gate
+  is the same fact used as evidence. Stands down when the plan is not evidence
+  — a planner score below 0.6, a single-step plan, or no step matched at all,
+  since a bad plan blocking finished work is worse than no gate.
+
+**Fixed**
+
+- The retry refusal no longer blocks legitimate retries. It rested on
+  "nothing about the workspace has changed since", and two measured cases
+  falsified that. Re-running `pytest` after fixing the code was refused as a
+  repeat — the verify-fix-verify loop, blocked. And an `edit_file` refused for
+  "file not read yet" was still refused after the model read the file, because
+  only that call's own signature was cleared. Commands and reads are now
+  exempt outright (they observe the world rather than describe an edit), and
+  any successful call clears the memory, since success falsifies the premise.
+  A genuinely repeated call with nothing in between is still refused.
+- A `text` answer cut mid-string is salvaged instead of discarded. The
+  tool-call path has `recoverTruncatedToolCall`; a text answer had no
+  equivalent, so when the loop detector cut a 5,897-character reply the user
+  received nothing at all — the closing quote and brace were missing, so
+  nothing parsed. What was written is now delivered, with a note that it was
+  cut short. Only for a stream the proxy itself cut, and only above 200
+  characters, since a short fragment misleads more than it helps.
+- `scripts/e2e-reliability.py` parses Python with the runtime that will run it.
+  It used this script's interpreter — 3.9 on this host — while the sandbox is
+  3.13, and PEP 701 (3.12+) allows nested same-type quotes inside f-strings.
+  `f"{items[i]["title"]}"` parses in the sandbox and raises `f-string:
+  unmatched '['` here, which reported a perfectly good file as an H5 corrupt
+  write. It now asks the sandbox and falls back to the local verdict only when
+  the container is unreachable.
+- Write-gate rejections blame the submission, not the file. The gate refuses
+  the content, so the file on disk is untouched — but the message read
+  "app.py has a JavaScript syntax error", which sends the model hunting a bug
+  in a file that is fine. Measured as an H2 false rejection on `flask_pause`:
+  the refusal was correct and the wording was not. All three embedded-script
+  headlines (syntax, stopped loop, duplicate binding) now open with "Your
+  content for X ..." and say explicitly that X on disk is unchanged.
+- The planner is told which files already exist, by name, in the prompt. The
+  scorer penalty alone could not fix this: all three `aoc_sonar` candidates
+  opened with `write_file input.txt` and scored 1.00 apiece, so there was
+  nothing better to prefer. Naming the files stops the step being proposed —
+  and the proxy has to send the listing, because v3-service mounts only
+  `/run/atlas-secrets` and `/data/telemetry`, so walking `working_dir` there
+  finds nothing and `project_context` carries only a handful of priority files
+  by content. The first version of this check was unrunnable in the deployed
+  topology for exactly that reason.
+- The planner no longer opens by recreating files that already exist. This was
+  the origin of the worst failure in the measured runs, three layers above
+  where it surfaced: `aoc_sonar`'s winning plan had `write_file input.txt` as
+  step 1 — "create the necessary input data" — against a 2000-line fixture
+  already on disk. The model followed it, tried to retype the file from
+  memory, degenerated into repeating one line, had its stream cut mid-JSON,
+  and the run died on three unparseable responses. `aoc_course` executed the
+  same step successfully and corrupted the fixture. Both plans scored **1.00**,
+  because the scorer checked step count, verify-step shape and filename
+  overlap, and never what was already there. A create-shaped step targeting an
+  existing file now costs 0.5 and says so; the plan that killed those runs
+  drops from 0.90 to 0.40. Editing an existing file is untouched — only
+  creation clobbers.
+- "Failed to parse model response" is diagnosed from the cut, not the
+  wreckage. The proxy's own content-loop detector ends a generation when the
+  model starts repeating itself; the cut lands mid-JSON, so the response then
+  fails to parse — and `classifyParseFailure` inferred a cause from the
+  fragment, reporting `truncated_tool: your response hit the token cap, make
+  the call smaller`. Wrong diagnosis, wrong instruction, so the model re-sent
+  the same call until the three-strike breaker ended the run. The reason for
+  the cut is now carried on the context and reported first, because it is the
+  only fact in that function that is known rather than guessed. Measured
+  across four sessions: `content loop detected (601 chars)` immediately
+  followed by `parse error ... category=truncated_tool raw_len=601`.
+- A `write_file` whose content is the file already on disk is refused. This is
+  where the above chain starts: asked to solve an Advent of Code puzzle, the
+  model called `write_file` on `input.txt` — the fixture — and tried to retype
+  2000 lines of numbers from memory. It degenerated into repeating one line
+  ~50 times (`941` × 50, with `92e`, `93e` and a stray `bsp` corrupted along
+  the way), the stream was cut, and the run died. A sibling session got
+  further and corrupted the fixture outright. Prefix-matched rather than
+  exact, because the collapse truncates; floored at 200 bytes so a short file
+  legitimately rewritten with the same content is not affected.
+- A session refuses to start when the proxy and the sandbox are bound to
+  different host directories. Both containers see the split as `/workspace`,
+  so no value either holds can reveal it — the only detection from inside is
+  to write a token on one side and read it from the other, which the proxy now
+  does once per session (cached, 5-minute TTL, fail-soft when the sandbox is
+  unreachable). Until now nothing caught it live: every `/health` passes, the
+  proxy writes files the sandbox cannot see, `run_command` reports them
+  missing, and the agent spends its turns concluding its own work does not
+  exist. `atlas doctor` has flagged it since 2026-07-18; it recurred on
+  2026-08-03 when a power cut recreated one container from `.env` while the
+  other kept an overridden `ATLAS_PROJECT_DIR`, which is precisely when nobody
+  runs doctor.
+- The geometric lens no longer latches a boot-order race. Its self-test calls
+  llama-server, and llama loads several GB before it answers, so on a cold
+  start the test can 503 — after which `/ready` returned 503 for the life of
+  the container even though the artifacts had loaded and llama came up healthy
+  seconds later. Connectivity failures are now marked retryable and `/ready`
+  re-runs the test once llama is reachable. A real fault (dim mismatch,
+  missing artifacts, fingerprint drift) still fails fast and is not retried.
+- The last-read restatement is bounded by the context window it spends
+  against. It is appended to the wire *after* `trimMessages` has spent the
+  history budget, so nothing counted it — on a 2000-line fixture the
+  line-numbered copy runs ~4700 tokens per turn, and the file was already in
+  the window because `trimMessages` pins the most recent file-content result.
+  Measured: `aoc_sonar` failed both reps at turn 3 with `request (33012
+  tokens) exceeds the available context size (32768 tokens)`. The restatement
+  now skips content already anywhere in the wire (not just the last message)
+  and yields when the slot has no headroom — it is an optimisation, and
+  overflowing the slot ends the run.
+- Every exit from the agent loop emits an outcome. Two did not: an inference
+  failure streamed an `error` and returned, and the post-destructive-op path
+  returned bare. `aoc_sonar` hit the first in both reps and the user got a
+  tool call, an error, and silence — nothing rendering the event stream could
+  tell a failed run from a dropped connection. Context-size failures are
+  named explicitly in the summary, since that one is actionable.
+- `scripts/e2e-reliability.py` was scoring ATLAS against a stale definition of
+  a write: `WRITE_TOOLS` omitted `insert_after` and `replace_lines`, so a
+  session whose only successful write used either was reported as "exited with
+  no successful write" — the fifth place today a tool-name list went stale.
+  H4 also matched only "stopped after" when deciding whether a run said it had
+  stopped, missing the breaker's own "Stopped:" wording, and both H4 and H9
+  paired tool calls to results positionally, so one unanswered call shifted
+  every pair after it. Re-scoring the same 28 saved sessions: harness
+  integrity 15/28 (54%) as originally reported, 22/28 (78%) corrected, and
+  24/28 (86%) excluding two sessions killed by the harness's own 900s client
+  timeout.
+- The identical-retry refusal now obeys the same stopping rules as any other
+  failure. It incremented `consecutiveErrors` and recorded the failure path,
+  then returned — while the path-aware breaker and the `maxTotalFailures`
+  ceiling both live inside the post-execution failure branch that return
+  skips, so the counters had no reader. Observed on an ordinary feature
+  request: four consecutive refusals of the same `structural_edit`, refused
+  cheaply and forever, with no breaker and no ceiling. The condition is now
+  shared (`stuckOnOnePath`) and the run ends with a summary saying the call
+  was refused rather than attempted, and that re-running the prompt unchanged
+  will hit the same wall.
+- `structural_edit` says plainly that it cannot create a node. A model adding
+  a feature reaches for the name it is about to write — observed on "add a
+  done command that marks a task complete": turn 1 was `function:done_task`
+  against a file with no such function. Listing the existing selectors was the
+  right information and the wrong advice, because the model wanted none of
+  them; the rejection now names `insert_after` first.
+- A turn that hits its cap no longer answers with nothing. That path streamed
+  an `error` event and returned, so a user whose request ran long got an empty
+  reply — no answer, no partial, no explanation. Observed on a fresh
+  workspace: "How does the contact form work?" spent its turns on recon, hit
+  the cap, and returned zero bytes. Every other loop exit authors a summary;
+  this one now says it ran out of turns, whether anything was written, which
+  files it managed to read, and to ask again more narrowly.
+- The conversational turn cap is 12, up from 5. A question *about* the code is
+  classified conversational and still has to read the code, and 5 did not
+  survive that: turn 0 went to a bounced text exit, turns 1-3 to searches with
+  the wrong glob, turn 4 reached the right file, and the cap fired. The cap is
+  there to stop conversational input looping, which 12 still does.
+- The announcement detector missed "look into". `text` is a terminal exit, so
+  an announcement that slips the intent gate ends the turn with a promise
+  instead of an answer — observed verbatim: *"I'll look into the contact
+  form's implementation to see how it handles submissions and where the data
+  is sent."*, then done, no tool calls, no answer. Added "look into", "look
+  through", "look over", "take a look", "investigate", "dig into", "trace
+  through" and "review the", with tests pinning that real answers mentioning
+  those words still pass through.
+- A server started in the foreground is redirected before it runs. Observed on
+  the first-contact path — empty workspace, "create a simple portfolio
+  website" — the model wrote three files then ran `python3 -m http.server
+  8000` with `run_command`, waited out the full 30s sandbox timeout, and only
+  then reached for `run_background`: 30 seconds of a 3m39s run, on the most
+  common way anyone will first try ATLAS. `run_command` now returns the exact
+  `run_background` call instead. Deliberately narrow — `python app.py` is left
+  alone, since it is as likely a script that exits.
+- `insert_after` and `replace_lines` now go through the V3 pipeline. (Since
+  the candidate policy entry above, a default session reaches the pipeline
+  entry and skips generation; see there.) They were
+  added as harness-level tools and never wired to tier classification or
+  candidate generation, so their edits got a single greedy sample — no
+  candidates, no lens scoring — whatever the file's tier, while the tool
+  guidance and the selector rejection were both changed to steer toward them.
+  The net effect was to migrate the model off the quality pipeline onto the
+  two tools that lacked it. The V3 entry inlined in `edit_file` is now
+  `runEditPipeline`, shared by all three, so adding an edit tool cannot mean
+  re-deciding whether the pipeline applies to it;
+  `tests/contracts/test_write_gate_coverage.py` asserts every write path
+  reaches it.
+- *Superseded: the corpus and its capture were removed (see "Removed: the
+  lens training corpus" above).* The lens training corpus is fed by the
+  harness, not only by a human.
+  `appendLensSample` had exactly one caller — `POST /feedback`, a thumbs
+  up/down or per-file accept/deny — while `LensSample.Source` had always
+  advertised `v3` and `run` alongside them and nothing wrote either. Twelve
+  instrumented runs produced dozens of deterministic gate rejections and
+  several passing verification commands, and the corpus directory was empty,
+  because nobody clicked. Gate rejections are now recorded as negatives at
+  full weight (a gate does not have opinions); the writes of a run whose
+  verification passed are recorded as positives at weight 0.5, deliberately
+  below a human sample, because "curl exited clean" is weaker than it sounds —
+  one observed run returned 200 over a page whose game loop was dead, another
+  over a Flask app with no routes left. Negatives are recorded at the single
+  point where a failed tool result is handled, so a gate added later cannot
+  miss it, and only content the model actually authored is sampled.
+- Every write path now runs the same gates. `edit_file` — the most used edit
+  tool — ran the syntax and unresolved-call checks but never
+  `embeddedScriptGate`, so the two comparative findings (a render loop that
+  stopped repeating, a lexical binding declared twice) were never evaluated on
+  it; `edit_file` and `write_file` also skipped the duplicate-entrypoint
+  guard. Caught by A/B: the same one-shot `setTimeout(draw, delay)` the gate
+  refuses under `replace_lines` landed through `edit_file` on the next run,
+  and the page returned 200 with a dead game. A gate wired into four of five
+  write paths reads as covered and is not, so
+  `tests/contracts/test_write_gate_coverage.py` now asserts the wiring
+  directly — nothing else can, since each tool builds its own chain and the
+  compiler cannot see a missing call.
+- A selector that names embedded code is told where it lives instead of that
+  it does not exist. `structural_edit selector="function:draw"` against a
+  Flask app whose game loop is in `HTML_TEMPLATE` returned "that symbol does
+  not exist in this file" — plainly contradicted by the file the model had
+  just read, which is why three runs re-sent it. It now reports that `draw`
+  exists as JavaScript at specific lines inside a named string literal, that
+  no selector reaches it, and which tools do.
+- A V3 candidate that rewrites text the caller's edit never touched is now
+  discarded, keeping the caller's content (the same fallback the parse check
+  already used). `edit_file` and `structural_edit` splice their change and
+  hand the composed *file* to v3-service, which regenerates it — on a small
+  file that is a retype of everything the edit left alone, and the same
+  verbatim drift applies. Caught in a live session: V3's accepted candidate
+  wrote `#e94562` as `#e94162` and `<h1 id="msg">` as `<h1 id=" msg">`,
+  which makes `getElementById('msg')` return `null` at runtime. Neither is a
+  syntax error, so the parse and embedded-script gates passed them. The rule
+  is that a line the edit did not remove must survive V3 intact; V3 remains
+  free to improve the lines the edit actually changed.
+- `insert_after` was missing from four `switch` statements that every other
+  edit tool appears in: the lens breaker's failure-path extraction (so three
+  consecutive failures on the same file did not trip the path-aware
+  breaker), the worked-example generator (so its schema shipped without a
+  filled-in example), the productive-change counter (so successful inserts
+  did not count as progress), and workspace-path containment validation.
+  `replace_lines` is registered in all four.
+
+## [3.1.4] - 2026-09-27 — Maia
+
+The first release from ATLAS's new home, **inferstep/ATLAS**. It carries the
+security fixes below, the move to the new image owner, and the new
+contributor setup, on top of the changes since 3.1.3 listed further down.
+
+### Security: commands ran without approval, and file search read credential files
+
+- `run_background` started any command without the approval prompt in the
+  default and accept-edits modes, and was checked against a narrower
+  deny-list than `run_command` (`env rm -rf /` and `(rm -rf /)` passed it).
+  Outside yolo, every tool that runs a command now asks, and one command
+  policy covers both. It looks where a command can start: behind `env`,
+  `nohup`, `nice`, `time`, `timeout` or `exec`, in a subshell and in a
+  command substitution. `grep mkfs notes.txt` is no longer refused.
+- `search_files` returned the contents of credential files that
+  `read_file` refuses (`.env`, keys, cloud credentials) and followed
+  symlinks out of the workspace. It now skips both and reports how many
+  credential files it skipped (`skipped_credential_files`). `move_file`
+  refuses to move a credential file to another name, and `insert_after`
+  gets the write deny-list. The rules follow what a tool does, and a test
+  fails when a new tool is outside them. Shell commands are not covered,
+  and the docs now say so.
+- Approval prompts cut a command at 100 characters, so the end of a chain
+  was never shown. The proxy sends the whole command, and
+  `stop_background` names its job.
+- In the TUI, one "allow for session" answer on a deletion approved every
+  later deletion without showing which file, and the proxy honoured
+  `delete_file` in `session_allowed_tools` from any client. Each deletion
+  is now asked about on its own: the TUI never auto-answers or sends a
+  session approval for `delete_file`, the proxy ignores one, and a new
+  session starts with no approvals. The TUI prompt shows the whole
+  command, wrapped; one too long for the screen keeps its first and last
+  lines in view and says how many are not shown.
+- The TUI's chat stream, events stream, raw demo lane and feedback calls
+  never sent the service token, so on an install with one they failed
+  with 401. Every request to the proxy now sends it, ahead of an api-keys
+  token.
+
+### Moved to inferstep/ATLAS
+
+- The repository is now **github.com/inferstep/ATLAS**. Old links, `git`
+  remotes and the install one-liner redirect.
+- Images are published under **ghcr.io/inferstep/atlas-*** and signed by
+  the inferstep/ATLAS build workflow. `ghcr.io/itigges22/atlas-*` stays
+  published for existing installs but gets no new versions.
+- **Existing installs:** re-run the install command, or `git pull` and then
+  `atlas upgrade`. `atlas upgrade`, `atlas config migrate` and a bootstrap
+  re-run move `ATLAS_GHCR_OWNER=itigges22` in `.env` to `inferstep`. A
+  failed upgrade or a rollback puts it back. An install pinned to a
+  release from before the move keeps the old owner until it upgrades, and
+  an owner set in the shell is left alone.
+
+### Fixed
+
+- `golang.org/x/net` in the TUI is now v0.55.0 (GHSA-5cv4-jp36-h3mw).
+
+### Contributors
+
+- New issue forms for bugs, features, tasks, docs, spikes and RFCs, and a
+  fuller pull request template. [CONTRIBUTING](CONTRIBUTING.md) is
+  rewritten as the path from an issue to a release. [GOVERNANCE](GOVERNANCE.md)
+  describes the trust ladder and the RFC flow. New
+  [TRIAGE](docs/TRIAGE.md) and [INCIDENT_RESPONSE](docs/INCIDENT_RESPONSE.md)
+  guides.
+- The public [Roadmap board](https://github.com/orgs/inferstep/projects/1)
+  has a Start Here view. The atlas-bot handles `/claim` and `/unclaim`,
+  reminds and releases stale claims, adds area labels and welcomes
+  newcomers.
+- Pull requests now also need the dependency review and a conventional
+  title check. An OpenSSF Scorecard runs weekly. Dependabot targets `dev`.
+- Releases record a deployment per promotion, and publishing `:latest` or
+  a version tag waits for the release owner's approval.
+
+### Docs
+
+- The V3.0 LiveCodeBench figure (74.6%) is withdrawn. The benchmark runner
+  never ran LiveCodeBench's hidden tests (see the notice in
+  [V3_ABLATION_STUDY](docs/reports/V3_ABLATION_STUDY.md)). The README says
+  ATLAS has no current benchmark result.
+
 ### Measured reliability
 
 A day of running ATLAS against itself and fixing what the sessions showed.
-Every fix below was traced to an observed session and carries a test that
-fails without it. `scripts/e2e-reliability.py` reports the two numbers this
-work is judged on — harness integrity (ATLAS's own plumbing, which should be
-100%) and task success (bounded by the model) — plus objective code-quality
-probes from `scripts/code_quality.py`.
+Every fix below was traced to an observed session and was meant to carry a
+test that fails without it. A 2026-09 audit reverted four of them: two were
+caught by tests, and two were not (the sandbox's multi-document YAML check,
+and the system-prompt bullet for questions about code, which only a
+whole-prompt hash noticed); both now have tests. `scripts/e2e-reliability.py`
+reports the two numbers this work is judged on — harness integrity (ATLAS's
+own plumbing, which should be 100%) and task success (whose failures it does
+not classify as model or harness) — plus objective code-quality probes from
+`scripts/code_quality.py`.
 
 **Added**
 
@@ -21,11 +1323,13 @@ probes from `scripts/code_quality.py`.
   anchor, `structural_edit` a whole node), and that is the step that
   measurably fails. `read_file` already prints line numbers, so this takes a
   number the model can cite and only the new text.
-- `scripts/verify-deployed.sh` — refuses to let a measurement describe code
-  that is not running, catching both source-newer-than-image and
-  image-newer-than-container.
-- Live-stack coverage for the TUI (17 of 21 slash commands driven through a
-  pty), the control plane (`/cancel`, `/v1/permission`), and multi-turn
+- `scripts/verify-deployed.sh` — a manual pre-measurement check that the
+  running code is the checked-out code, catching both source-newer-than-image
+  and image-newer-than-container. Nothing runs it automatically: no runner
+  or deploy gate calls it.
+- Live-stack coverage for the TUI (13 slash commands and 3 keys driven
+  through a pty; liveness checks, integration-marked and deselected by
+  default), the control plane (`/cancel`, `/v1/permission`), and multi-turn
   conversations, none of which had any.
 
 **Fixed — tier and conversation**
@@ -50,6 +1354,8 @@ probes from `scripts/code_quality.py`.
 - `write_file` could clobber a file the session had never read.
 - New files bypassed the syntax gate, because the sandbox's YAML checker
   wrongly rejected multi-document files and had disabled the gate wholesale.
+  *Superseded for new files by 47be143: an unparseable new file now lands with
+  a warning (see the entry at the top of these notes). The YAML fix stands.*
 
 **Fixed — what ATLAS told the model**
 
@@ -86,7 +1392,8 @@ probes from `scripts/code_quality.py`.
 One component-by-component pass over the whole tree — merge the fragments,
 split the God-files, cut what nothing calls — with the test suites as the
 invariant. Headline numbers, measured from the campaign's first commit:
-**3,047 → 514 tracked files, net ≈ −56,500 lines including data**. The
+**3,047 → 514 tracked files, net ≈ −56,500 lines including data** (counts at
+the end of the campaign, not today's tree, which has grown since). The
 per-component disposition ledgers live in the commit history for that
 range.
 
@@ -101,14 +1408,15 @@ range.
   surface (projects, tasks, queue, chat/completions, auth), the cache
   consolidator + LTM tier, and dead lens routes (`/internal/lens/stats`,
   cache flush/consolidate, `/v1/patterns/write`) are gone.
-- **Pattern-cache reader added.** What replaces retrieval:
+- *Superseded: the pattern cache was removed in 2026-09 (see "Removed: the
+  pattern cache" above).* **Pattern-cache reader added.** What replaces retrieval:
   `POST /internal/patterns/context` serves lessons from previous sessions
   (type + recency + success scoring, co-occurrence expansion), and the
   agent loop injects the top ≤3 as a `[system note]` — always-on,
   fail-soft, no flag.
 - **RPG planning removed everywhere** (it was never shipped in the v3
   image); the A/B on the reference 12B showed no improvement at ~10x
-  planning latency. [#148](https://github.com/itigges22/ATLAS/issues/148)
+  planning latency. [#148](https://github.com/inferstep/ATLAS/issues/148)
   is the record.
 - **V2/TB2 benchmark subgraph and the five superseded trainer scripts
   removed.** The onboarding loop is fully CLI-driven: `atlas bench` →
@@ -154,6 +1462,8 @@ and the sampling and honesty-gate work were kept and remain accurate as written.
   PageIndex tree index, BM25, hybrid retriever, project store, and the router
   stages that fed them are gone. The pattern cache stays: v3-service writes to
   it through `/internal/patterns/write` after every successful candidate.
+  *(Superseded: the pattern cache and `patterns/write` were removed in
+  2026-09, and `atlas lens retrain` with the corpus.)*
 - **Endpoints kept and verified against their callers**: `score-per-step`
   (proxy, v3-service), `gx-score` (CLI, v3-service), `score-text` and
   `sandbox/analyze` (CLI), `retrain` (benchmark), `reload` (retrain scripts),
@@ -181,7 +1491,8 @@ and the sampling and honesty-gate work were kept and remain accurate as written.
 - **Repetition sampling enabled.** llama-server ships every repetition control
   off (`repeat_penalty=1.0`, `dry_multiplier=0.0`, both penalties 0.0), and
   the proxy set none, so nothing bounded a repeating generation. DRY is now
-  set on outgoing requests — chosen over `repeat_penalty`, which scores
+  set on outgoing requests *(superseded: DRY defaults off again, see "Verbatim
+  reproduction" above)* — chosen over `repeat_penalty`, which scores
   individual tokens and punishes the indentation and keywords source code
   repeats legitimately. Six env knobs, forwarded by compose and registered in
   the config schema (which gained a `float` kind rather than demoting them to
@@ -393,7 +1704,9 @@ are uncapped). Fixes:
   skips the V3 pipeline (still syntax-gated) and writes directly, instead of
   paying V3's multi-minute per-call latency (which on a mid-debug file often
   "completes without result" anyway). This unthrottles edit-test-fix loops from
-  ~5 cycles in 25 min to run-speed. V3 still owns the first write of each file.
+  ~5 cycles in 25 min to run-speed. V3 still owns the first write of each file
+  *(under the candidate policy at the top of these notes, only where a
+  candidate can be delivered)*.
 
 ### Agent-loop hardening from the Terminal-Bench 2.0 dogfood round (2026-07-18)
 - **`atlas doctor` workspace-mount check** — new `workspace_mounts` check fails
@@ -420,6 +1733,8 @@ are uncapped). Fixes:
   fixed 256M `~/.local` overflowed on `pip install pandas pyarrow`.
 
 ### V3.2 — RPG-style architecture-first planning (#120, experimental, opt-in)
+*Superseded: RPG planning was removed (see the simplification campaign above);
+`ATLAS_RPG_PLANNING` remains only as a deprecated config key.*
 - New `ATLAS_RPG_PLANNING` flag (default **off**) enables repository-level,
   plan-then-fill planning ahead of the existing problem-level PlanSearch:
   - **Wavelet substrate** (`v3-service/wavelet/`) — a faithful, dependency-free
@@ -864,6 +2179,10 @@ are uncapped). Fixes:
 ## [3.0] - 2026-03-05
 
 ### V3.0 Benchmark Release
+> Withdrawn 2026-09-25: the figures in this entry are not LiveCodeBench
+> pass@1, and "self-verified" is inaccurate; repair also saw, and was accepted
+> on, the examples printed in each problem. See [Unreleased].
+
 - **74.6% LCB pass@1** (447/599) on frozen Qwen3-14B
 - Full ablation study: conditions A–D with per-task results
 - Phase 1 (PlanSearch/DivSampling): +12.4pp

@@ -1,13 +1,34 @@
 # V3 Ablation Study
 
-> **This is the V3.0 ablation report on Qwen3-14B.** It remains the
-> canonical published evidence for the headline 74.6% LCB pass@1 figure
-> referenced from README.md and SOURCES.md. V3.1.0 (current release)
-> targets Qwen3.5-9B with the same V3 pipeline (PlanSearch / DivSampling
-> / Budget Forcing / PR-CoT / Refinement / Derivation), but formal 9B
-> benchmark numbers are mid-run and not yet published — see
-> [`atlas/bench/README.md`](../../atlas/bench/README.md) "V3.1 (Qwen3.5-9B) —
-> In Progress". Forward-looking V3.1 predictions in §10 below were the
+> **Withdrawn (2026-09-25).** The 74.6% LiveCodeBench result in this report,
+> and the phase-by-phase gains derived from it, are withdrawn. They are not
+> LiveCodeBench pass@1, for three reasons found in the benchmark runner (the
+> V3.0 release code and the current `atlas/bench/v3_runner.py` behave the same
+> way):
+>
+> 1. **LiveCodeBench's hidden tests were never run.** The dataset loader
+>    cannot decode the private test suite, so it silently falls back to the
+>    1-5 worked examples printed in each problem statement. Those examples
+>    were the only tests the runner ever ran, and they were also the final
+>    grade.
+> 2. **A task counted as passed when any of the three Phase 1 candidates
+>    passed those examples.** Lens selection only chose among candidates that
+>    had already passed, so it could not change the count (conditions B and C
+>    are both 403/599).
+> 3. **Repair saw the examples' expected output.** Failing candidates'
+>    "Expected / Got" output went into the PR-CoT and failure-analysis
+>    prompts, and a repair counted only once it passed those same examples.
+>
+> The statements below that the real tests were "used only for final
+> scoring", were "never exposed to the model", and that the result "uses no
+> information from the benchmark test suite" are therefore incorrect. A
+> re-grade of a 130-task sample of the published traces against the hidden
+> tests found that 14 of its 90 published passes fail them. The rest of this
+> report is kept unchanged as a historical record. ATLAS will be re-measured
+> on held-out tasks once the current product is re-verified.
+>
+> **This is the V3.0 ablation report on Qwen3-14B.** No later version or
+> model has been benchmarked. Forward-looking V3.1 predictions in §10 below were the
 > author's plan at write time (2026-03); some shifted during
 > implementation (e.g. G(x) was kept and deployed, not redesigned from
 > scratch).
@@ -80,6 +101,7 @@ Phase 3 uses **self-generated test cases** for internal verification: the model 
 about the problem specification and generates input/output pairs independently. The real
 LiveCodeBench test cases are used **only for final scoring**. This avoids the "answer key"
 problem and makes results directly comparable to other systems' pass@1 numbers.
+**[Incorrect: see the withdrawal notice at the top of this report.]**
 
 Self-test generation success rate: approximately 98% of tasks receive valid self-generated
 test cases.
@@ -183,6 +205,7 @@ The self-test pipeline achieves approximately 98% success rate: for nearly all t
 the model can reason about the problem statement and generate valid input/output pairs.
 These self-generated tests serve as the internal verification signal for all Phase 3
 repair attempts. Real LCB tests are never exposed to the model.
+**[Incorrect: see the withdrawal notice at the top of this report.]**
 
 ## 6. Pre-Revamp Comparison (Answer Key vs Self-Verification)
 
@@ -197,6 +220,7 @@ the answer key during an exam. A pre-revamp ablation measured the ceiling perfor
 
 The 4.0pp gap (78.6% → 74.6%) represents the cost of legitimacy. The pre-revamp result
 is retained as a ceiling reference but is not comparable to other systems' pass@1 numbers.
+**[Incorrect: see the withdrawal notice at the top of this report.]**
 The post-revamp result uses no information from the benchmark test suite during repair,
 making it directly comparable.
 

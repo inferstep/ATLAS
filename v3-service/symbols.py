@@ -36,6 +36,23 @@ except ImportError as _e:
 # availability flag: a build without it must still serve structural_edit and
 # the call-resolution checks. A missing grammar degrades to "no finding",
 # never a crash and never a blocked write.
+# Go and TypeScript grammars for structural_edit. Independent of the
+# JavaScript block below: a build without them still serves Python, HTML and
+# JS rather than failing to import.
+try:
+    import tree_sitter_go as _tsg
+    _GO_LANG = _ts.Language(_tsg.language())
+except ImportError:
+    _GO_LANG = None
+
+try:
+    import tree_sitter_typescript as _tst
+    _TS_LANG = _ts.Language(_tst.language_typescript())
+    _TSX_LANG = _ts.Language(_tst.language_tsx())
+except ImportError:
+    _TS_LANG = None
+    _TSX_LANG = None
+
 try:
     import tree_sitter_javascript as _tsj
     _JS_LANG = _ts.Language(_tsj.language())
@@ -47,12 +64,45 @@ except Exception as _e:  # ImportError, or _ts undefined when tree-sitter is abs
 
 
 def _ast_language_for_path(path: str):
+    """Map a path to its tree-sitter grammar.
+
+    v1 shipped Python and HTML. The engine is language-agnostic — a grammar
+    plus a selector mapping is all a language needs — and the gap was
+    measured: across 168 sessions, `unsupported file type for
+    structural_edit` was the only ATLAS-side wall a session hit, 12 times,
+    when the model reached for it on a .go file. The JavaScript grammar was
+    already installed for embedded_script_check and simply not wired here.
+    """
     p = path.lower()
     if p.endswith(".py"):
         return "python", _PY_LANG
     if p.endswith((".html", ".htm")):
         return "html", _HTML_LANG
+    if p.endswith(".go") and _GO_LANG is not None:
+        return "go", _GO_LANG
+    if p.endswith(".tsx") and _TSX_LANG is not None:
+        return "typescript", _TSX_LANG
+    if p.endswith((".ts", ".mts", ".cts")) and _TS_LANG is not None:
+        return "typescript", _TS_LANG
+    if p.endswith((".js", ".mjs", ".cjs", ".jsx")) and _JS_LANG is not None:
+        return "javascript", _JS_LANG
     return None, None
+
+
+def _supported_structural_exts() -> str:
+    """The extensions this build can actually address, for the error text.
+
+    Built from the grammars that imported rather than hardcoded, so a build
+    missing one never advertises it.
+    """
+    exts = [".py", ".html", ".htm"]
+    if _GO_LANG is not None:
+        exts.append(".go")
+    if _TS_LANG is not None:
+        exts.extend([".ts", ".tsx"])
+    if _JS_LANG is not None:
+        exts.extend([".js", ".jsx"])
+    return ", ".join(exts)
 
 
 def _ast_selector_to_query(selector: str, language: str):
@@ -60,6 +110,67 @@ def _ast_selector_to_query(selector: str, language: str):
     Returns (None, None, error_message) for unknown selectors.
     """
     s = selector.strip()
+    if language == "go":
+        # Go separates plain functions from methods, and the model does not
+        # know which it is looking at — `function:Name` matches either, so a
+        # method does not need a different selector than a function.
+        if s.startswith("function:"):
+            name = s[len("function:"):].strip()
+            if not name:
+                return None, None, "selector 'function:' missing name (e.g. 'function:Solve')"
+            return (
+                f'[(function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (method_declaration name: (field_identifier) @_name (#eq? @_name "{name}"))] @target',
+                "target", None,
+            )
+        if s.startswith("class:") or s.startswith("type:"):
+            name = s.split(":", 1)[1].strip()
+            if not name:
+                return None, None, "selector 'type:' missing name (e.g. 'type:Server')"
+            return (
+                f'(type_declaration (type_spec name: (type_identifier) @_name '
+                f'(#eq? @_name "{name}"))) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for go. Supported: function:NAME "
+            f"(matches a func or a method), type:NAME.")
+
+    if language in ("javascript", "typescript"):
+        # One selector covers the four ways JS spells a function, because
+        # which one a file used is not something the model reliably knows:
+        # `function f(){}`, `const f = () => {}`, `const f = function(){}`,
+        # and a class method.
+        if s.startswith("function:"):
+            name = s[len("function:"):].strip()
+            if not name:
+                return None, None, "selector 'function:' missing name (e.g. 'function:render')"
+            return (
+                f'[(function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (generator_function_declaration name: (identifier) @_name (#eq? @_name "{name}"))'
+                f' (lexical_declaration (variable_declarator name: (identifier) @_name'
+                f'   (#eq? @_name "{name}") value: [(arrow_function) (function_expression)]))'
+                f' (method_definition name: (property_identifier) @_name (#eq? @_name "{name}"))] @target',
+                "target", None,
+            )
+        if s.startswith("class:"):
+            name = s[len("class:"):].strip()
+            if not name:
+                return None, None, "selector 'class:' missing name (e.g. 'class:Board')"
+            # TypeScript names a class with type_identifier, JavaScript with
+            # identifier, and tree-sitter rejects a pattern naming a node the
+            # grammar does not have — an alternation covering both is an
+            # error in each. Same selector for the model either way.
+            name_node = "type_identifier" if language == "typescript" else "identifier"
+            return (
+                f'(class_declaration name: ({name_node}) @_name '
+                f'(#eq? @_name "{name}")) @target',
+                "target", None,
+            )
+        return None, None, (
+            f"unknown selector '{selector}' for {language}. Supported: "
+            f"function:NAME (declaration, arrow, expression or method), class:NAME.")
+
     if language == "python":
         if s.startswith("function:"):
             name = s[len("function:"):].strip()
@@ -658,6 +769,34 @@ def cyclomatic_complexity(path: str, source_text: str) -> dict:
     return {"ok": True, "language": "python", "cyclomatic_complexity": cc}
 
 
+def _duplicate_definitions(before_text: str, after_text: str) -> str:
+    """Names defined more than once after the splice that were not before.
+
+    Compares counts rather than presence: a file that already defined a name
+    twice is the caller's business, but a splice that ADDS a second
+    definition is the edit duplicating code it should have left alone.
+    Returns a human-readable name list, or "" when nothing was duplicated.
+    """
+    import ast as _ast
+    from collections import Counter
+
+    def counts(text: str):
+        try:
+            tree = _ast.parse(text)
+        except SyntaxError:
+            return None
+        return Counter(
+            n.name for n in tree.body
+            if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))
+        )
+
+    b, a = counts(before_text), counts(after_text)
+    if b is None or a is None:
+        return ""      # unparseable either side: the syntax gate owns that
+    dupes = [name for name, n in a.items() if n > 1 and n > b.get(name, 0)]
+    return ", ".join(sorted(dupes))
+
+
 def structural_edit(path: str, source_text: str, selector: str, content: str) -> dict:
     """Apply a friendly-selector structural edit. Stateless transform — caller provides
     the source bytes (read from their own filesystem) and gets back new content.
@@ -678,8 +817,8 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     language, lang_obj = _ast_language_for_path(path)
     if not language:
         return {"success": False, "error": (
-            f"unsupported file type for structural_edit: {path}. v1 supports .py, .html, .htm — "
-            f"use edit_file for other languages."
+            f"unsupported file type for structural_edit: {path}. This build supports "
+            f"{_supported_structural_exts()} — use edit_file for other languages."
         )}
 
     query_str, target_cap, err = _ast_selector_to_query(selector, language)
@@ -724,9 +863,30 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
                     available = " This file defines: " + ", ".join(names[:30]) + ". Use one of these exact selectors, or read the file to confirm."
             except Exception:
                 available = ""
+        # The name the model asked for often DOES exist — as JavaScript inside
+        # a template string, which no selector reaches. Saying only "that
+        # symbol does not exist" is then flatly contradicted by the file the
+        # model just read, and it tries the same selector again. Observed on
+        # three runs, all opening with `function:draw` against a Flask app
+        # whose game loop lives in HTML_TEMPLATE.
+        if found := _embedded_symbol_note(path, source_text, selector):
+            # The name exists, just not where a selector can go. Leading with
+            # "does not exist" here is contradicted by the file the model just
+            # read, which is why it re-sent the same selector.
+            return {"success": False, "error": found}
+        # structural_edit REPLACES an existing node; it cannot bring one into
+        # existence. A model adding a feature reaches for the name it is about
+        # to create — observed on "add a done command": turn 1 was
+        # `function:done_task` against a file that does not have one yet. The
+        # list of existing selectors is the right information and the wrong
+        # advice, because the model does not want any of them.
         return {"success": False, "error": (
             f"selector '{selector}' matched 0 nodes in {path} — that symbol does not exist in this file."
+            + " If you are ADDING it, structural_edit is the wrong tool: it replaces a node that"
+            + " is already there. Use insert_after with the line number read_file printed to put"
+            + " the new code in, or edit_file anchored on one unique nearby line."
             + (available or " Read the file first to see what's defined.")
+            + _embedded_regions_note(path, source_text)
         )}
     if len(targets) > 1:
         return {"success": False, "error": (
@@ -748,6 +908,20 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     except UnicodeDecodeError as e:
         return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
 
+    # Node-size precondition. A replacement many times the size of the node is
+    # not an edit of that node — it is the whole file wearing a selector.
+    #
+    # This check used to live inside the post-splice `except SyntaxError`
+    # handler below, so it only ever fired when the blob ALSO failed to
+    # compile. Observed live: `function:index` (3 lines) was replaced by a
+    # 194-line `HTML_TEMPLATE = """..."""` assignment, which is perfectly
+    # valid Python. compile() passed, every gate passed, and the app lost its
+    # only @app.route — the file still parsed, the model reported success.
+    # Whether the blob happens to be syntactically valid says nothing about
+    # whether it belongs in this node, so the check belongs here.
+    if too_big := _replacement_dwarfs_node(source_text, target, content, selector):
+        return {"success": False, "error": too_big}
+
     # Post-splice syntax gate (Python). Tree-sitter is error-tolerant: it
     # happily locates the node and splices in replacement content that is
     # not valid Python — observed live: a model emitted `item["id""]` and
@@ -756,6 +930,27 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     # broken file; return the parse error so the model can fix its quoting
     # on the retry. Keyed off file type, not the model.
     if language == "python":
+        # Duplicate-definition guard. A replacement that carries its
+        # neighbours along splices them in a second time: the node is
+        # replaced, but the originals after it survive, so the file ends up
+        # defining the same names twice. Observed live: `function:a` was
+        # replaced with a body containing a, b AND c, and the file came back
+        # 10 -> 18 lines with b and c duplicated. It compiles, every other
+        # gate passes, and the later definition silently wins at import time.
+        #
+        # This is the same "whole file wearing a selector" failure
+        # _replacement_dwarfs_node exists for, caught by its actual signature
+        # rather than by a size ratio — a 3x replacement is well under any
+        # sane size threshold but still corrupts the file.
+        if dup := _duplicate_definitions(source_text, new_content):
+            return {"success": False, "error": (
+                f"structural_edit: replacing '{selector}' this way would define "
+                f"{dup} twice in {path}. Your replacement carries code that is "
+                f"already in the file outside the node being replaced, so it "
+                f"gets spliced in a second time while the original stays. Send "
+                f"ONLY the new body of {selector} — nothing that already exists "
+                f"elsewhere in the file."
+            )}
         try:
             compile(new_content, path, "exec")
         except SyntaxError as e:
@@ -804,21 +999,9 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
             # and the replacement was ~190, three attempts running. Every
             # rejection talked about quoting, because the content really was
             # malformed, so nothing ever said the selector could not hold this.
-            new_lines = new_content.count("\n") + 1
-            if not lead and new_lines >= node_lines * 5 and new_lines - node_lines >= 30:
-                where = _large_string_constants(source_text)
-                lead = (f"`{selector}` is only {node_lines} line(s) but your "
-                        f"replacement is {new_lines} — you are moving code INTO "
-                        f"this node that does not live here. ")
-                if where:
-                    lead += (f"The bulk of this file is in {where}, a module-level "
-                             f"string. No selector reaches inside a string literal: "
-                             f"a template is ONE literal to the grammar however many "
-                             f"lines it spans. ")
-                lead += ("Use edit_file with old_str set to one unique line copied "
-                         "from the region you are changing, or insert_after with the "
-                         "line number read_file printed. ")
-
+            # The small-node/huge-replacement case is refused before the
+            # splice now (see _replacement_dwarfs_node), so it cannot reach
+            # here.
 
             _msg = (e.msg or "").lower()
             # `and not lead` matters: the wrong-node steer above is the more
@@ -977,6 +1160,234 @@ def _embedded_available() -> bool:
     return bool(_STRUCTURAL_EDIT_AVAILABLE and _EMBEDDED_SCRIPT_AVAILABLE)
 
 
+def _embedded_symbol_note(path: str, source_text: str, selector: str) -> str:
+    """The whole error message when the selector's name exists as embedded
+    code, or "" when it does not.
+
+    A selector-not-found error is where the model actually looks — it does not
+    call outline_file first. Observed on three runs, all opening with
+    `function:draw` against a Flask app whose game loop lives in
+    HTML_TEMPLATE, and re-sending it after being told the symbol did not
+    exist: which, from the file it had just read, was plainly false.
+    """
+    wanted = selector.split(":", 1)[1].strip() if ":" in selector else ""
+    if not wanted:
+        return ""
+    try:
+        regions = embedded_region_outline(path, source_text)
+    except Exception:
+        return ""
+    for r in regions:
+        if wanted in r["symbols"]:
+            return (f"`{wanted}` exists in {path}, but NOT as a node any selector can reach: "
+                    f"it is {r['kind']} at lines {r['start_line']}-{r['end_line']}, inside "
+                    f"{r['where']}. To the host grammar that whole block is one string "
+                    f"literal, so `structural_edit` cannot address anything in it however "
+                    f"many lines it spans. Change it with replace_lines on lines "
+                    f"{r['start_line']}-{r['end_line']}, edit_file with old_str set to one "
+                    f"unique line copied from it, or insert_after.")
+    return ""
+
+
+def _embedded_regions_note(path: str, source_text: str) -> str:
+    """A trailing note naming embedded regions, for when the missing selector
+    is not one of their symbols either."""
+    try:
+        regions = embedded_region_outline(path, source_text)
+    except Exception:
+        return ""
+    if not regions:
+        return ""
+    described = "; ".join(
+        f"{r['kind']} at lines {r['start_line']}-{r['end_line']}"
+        + (f" defining {', '.join(r['symbols'])}" if r["symbols"] else "")
+        for r in regions)
+    return (f" This file also holds embedded code no selector reaches ({described}). "
+            f"For anything in there use replace_lines, edit_file or insert_after.")
+
+
+def embedded_region_outline(path: str, source_text: str) -> list:
+    """Regions of `source_text` that hold code in ANOTHER language.
+
+    Returns [{where, start_line, end_line, kind, symbols}] — the <script> and
+    <style> blocks of an HTML file, and the ones inside Python string literals
+    (the render_template_string shape).
+
+    outline_file otherwise reports only what the host grammar sees. For a
+    Flask app whose whole UI is one module-level string, that is
+    `function:index` and nothing else, so a model asked to change the game
+    loop reaches for `structural_edit selector="function:draw"` — a symbol the
+    outline never mentioned and no selector can reach, because the template is
+    one string literal to the Python grammar however many lines it spans.
+    Observed on two consecutive runs, both opening with exactly that call.
+
+    Naming the regions makes the view true. It does not ask the model to
+    reason better about nesting; it stops hiding the nesting.
+    """
+    if not _embedded_available():
+        return []
+    try:
+        blocks = embedded_script_blocks_for(path, source_text)
+    except Exception:
+        return []
+    if not blocks:
+        return []
+    source = source_text.encode("utf-8")
+    out = []
+    for kind, offset, body, where in blocks:
+        start = source[:offset].count(b"\n") + 1
+        out.append({
+            "where": where,
+            "kind": kind,
+            "start_line": start,
+            "end_line": start + body.count(b"\n"),
+            "symbols": _js_function_names(body) if kind == "javascript" else [],
+        })
+    return out
+
+
+def _js_function_names(block: bytes) -> list:
+    """Names of the functions declared in a JavaScript block, in source order.
+
+    These are the names a model will try to select by, so the outline has to
+    show them alongside the note that no selector reaches them.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    names, seen = [], set()
+
+    def walk(node):
+        if node.type in ("function_declaration", "generator_function_declaration"):
+            ident = node.child_by_field_name("name")
+            if ident is not None:
+                name = ident.text.decode("utf-8", "replace")
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        elif node.type == "variable_declarator":
+            value = node.child_by_field_name("value")
+            ident = node.child_by_field_name("name")
+            if (ident is not None and value is not None
+                    and value.type in ("function_expression", "arrow_function")):
+                name = ident.text.decode("utf-8", "replace")
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return names
+
+
+def orphaned_new_symbols(previous_text: str, source_text: str) -> list:
+    """Top-level Python functions the edit ADDED that nothing references.
+
+    The mirror of the unresolved-call check: that one catches a call with no
+    definition, this catches a definition with no callers. Adding a function
+    and forgetting to wire it up is what "add a feature" fails as — observed
+    on "add a done command that marks a task complete": `done_task` was
+    written correctly and the argv dispatcher was never touched, so the
+    command silently did nothing and `python todo.py done 1` still exited 0.
+
+    Only NEWLY added names are considered, so a codebase full of
+    externally-called helpers reports nothing. A name is referenced if it
+    appears anywhere outside its own `def` line — a call, a decorator, a
+    dispatch table, an __all__ entry, a string in an argv comparison.
+    Deliberately loose: the cost of missing one is a warning not shown, and
+    the cost of a false one is a user told their working code is broken.
+
+    Returns [{"name", "line"}], empty when nothing qualifies or the file does
+    not parse.
+    """
+    if not _STRUCTURAL_EDIT_AVAILABLE:
+        return []
+    try:
+        before = {n for n, kind, _s, _e in
+                  _symbol_index_for_python_source(previous_text.encode("utf-8"))
+                  if kind == "function"}
+        after = list(_symbol_index_for_python_source(source_text.encode("utf-8")))
+    except Exception:
+        return []
+
+    lines = source_text.splitlines()
+    orphans = []
+    for name, kind, start_byte, _end in after:
+        if kind != "function" or name in before:
+            continue
+        if name.startswith("_") or name.startswith("test_"):
+            continue  # private helpers and pytest-collected tests
+        def_line = source_text[:start_byte].count("\n")
+        referenced = False
+        for i, line in enumerate(lines):
+            if i == def_line:
+                continue
+            if name in line:
+                referenced = True
+                break
+        if not referenced:
+            orphans.append({"name": name, "line": def_line + 1})
+    return orphans
+
+
+def _replacement_dwarfs_node(source_text: str, target, content: str, selector: str) -> str:
+    """A refusal when `content` is many times the size of the node it replaces,
+    or "" when the replacement is node-sized.
+
+    The model wants to change markup or JavaScript that lives in a module-level
+    string constant, cannot select into a string, and settles for the nearest
+    function — then inlines the whole template into it. Observed live:
+    `function:index` in a Flask app is 3 lines (`return
+    render_template_string(HTML_TEMPLATE)`), the replacement was 194, and the
+    result was a file with no `@app.route` left in it.
+
+    Size alone is not the test. Writing a real implementation over a `pass`
+    stub is also many times the node, and refusing that would block ordinary
+    work. What separates the two is that the blob is a MOVE: most of what it
+    contains already exists in the file, outside the node being replaced. A
+    genuine implementation is new text.
+    """
+    node_lines = source_text[target.start_byte:target.end_byte].count("\n") + 1
+    new_lines = content.count("\n") + 1
+    if new_lines < node_lines * 5 or new_lines - node_lines < 30:
+        return ""
+    # Suspicious by size. Refuse only with a second signal, so that writing a
+    # real body over a stub stays allowed. Either one is enough:
+    #
+    #   (a) the replacement is a MOVE — most of it already exists in the file
+    #       outside this node (the 258-line HTML_TEMPLATE case);
+    #   (b) the file HAS a module-level string constant big enough to be the
+    #       real target, so a small node swelling by 30+ lines is the model
+    #       reaching for markup it cannot select into — whether it pastes the
+    #       existing template or writes a fresh one inline.
+    #
+    # A plain stub file has neither, which is why an implementation of any
+    # length passes.
+    where = _large_string_constants(source_text)
+    if not where:
+        outside = source_text[:target.start_byte] + source_text[target.end_byte:]
+        # Short lines (`}`, `else:`, blank) collide across unrelated code, so
+        # only lines with real content vote.
+        elsewhere = {ln.strip() for ln in outside.splitlines() if len(ln.strip()) > 20}
+        body = [ln.strip() for ln in content.splitlines() if len(ln.strip()) > 20]
+        reused = sum(1 for ln in body if ln in elsewhere)
+        if not body or reused < 30 or reused * 2 < len(body):
+            return ""
+    msg = (f"structural_edit: `{selector}` is only {node_lines} line(s) but your "
+           f"replacement is {new_lines} — you are moving code INTO this node that "
+           f"does not live here, which would delete whatever the node actually "
+           f"held. The file was NOT modified. ")
+    if where:
+        msg += (f"The bulk of this file is in {where}, a module-level string. No "
+                f"selector reaches inside a string literal: a template is ONE "
+                f"literal to the grammar however many lines it spans. ")
+    msg += ("To change code inside that string, use replace_lines with the line "
+            "numbers read_file printed (up to 60 lines per call, split into "
+            "consecutive calls from the bottom up for more), edit_file with "
+            "old_str set to one unique line, or insert_after to add at a line.")
+    return msg
+
+
 def _large_string_constants(source_text: bytes) -> str:
     """Name module-level string constants big enough to be the real target.
 
@@ -1071,10 +1482,23 @@ def _first_error_node(root):
     return best
 
 
+# Closing tokens whose absence is reported at the point the parser gave up,
+# which is generally NOT where the unclosed block began.
+_JS_CLOSERS_MISSING = frozenset({"}", ")", "]"})
+
+
 def _js_error(block: bytes):
-    """(offset_in_block, message, hint) for the first JavaScript syntax error
-    in `block`, or None when it parses (or when template syntax makes the
-    answer undecidable).
+    """(offset_in_block, message, hint, opener_offset) for the first JavaScript
+    syntax error in `block`, or None when it parses (or when template syntax
+    makes the answer undecidable).
+
+    `opener_offset` is set only for a missing closing token, and points at the
+    block that was left open. tree-sitter reports a missing `}` at the position
+    where it expected one — the end of the enclosing construct, which is often
+    a line the edit never touched. An observed session was told "line 202: a
+    `}` is missing" against `setInterval(draw, 100);`, a line it had not
+    changed, and re-sent the same broken content twice before the breaker
+    stopped it. The line that needs looking at is where the block opened.
 
     Masking only ever REMOVES findings: the raw block is parsed first, so
     legitimate JavaScript that happens to contain `{{` (a block inside a
@@ -1099,21 +1523,177 @@ def _js_error(block: bytes):
 
     if node.is_missing:
         token = node.type
+        if token in _JS_CLOSERS_MISSING:
+            # The nearest ancestor that actually STARTS on an earlier line.
+            # The immediate parent is often a node the recovery invented on
+            # the stopping line itself (an expression_statement wrapping the
+            # phantom token), which is no more useful than the stop position.
+            opener, p = None, node.parent
+            while p is not None:
+                if p.start_point[0] < node.start_point[0]:
+                    opener = p.start_byte
+                    break
+                p = p.parent
+            if opener is not None:
+                return (node.start_byte,
+                        f"a `{token}` is missing",
+                        f"Add the `{token}` that closes it.",
+                        opener)
         return (node.start_byte,
                 f"a `{token}` is missing",
-                f"Add the missing `{token}`.")
+                f"Add the missing `{token}`.",
+                None)
     snippet = text[node.start_byte:node.end_byte].decode("utf-8", "replace").strip()
     if snippet in _CLOSERS:
         opener = _CLOSERS[snippet]
         return (node.start_byte,
                 f"unexpected `{snippet}`",
                 f"Nothing opened a `{opener}` for it to close — delete the stray "
-                f"`{snippet}`, or add the `{opener}` it was meant to close.")
+                f"`{snippet}`, or add the `{opener}` it was meant to close.", None)
     if snippet and "\n" not in snippet and len(snippet) <= 24:
         return (node.start_byte, f"unexpected `{snippet}`",
-                "Rewrite that statement so it parses as JavaScript.")
+                "Rewrite that statement so it parses as JavaScript.", None)
     return (node.start_byte, "invalid JavaScript starts here",
-            "Rewrite that statement so it parses as JavaScript.")
+            "Rewrite that statement so it parses as JavaScript.", None)
+
+
+# Nodes that open a fresh lexical scope. A `let` may shadow an outer binding
+# freely; only a repeat within ONE of these is the early error.
+_JS_SCOPE_NODES = frozenset({
+    "program", "statement_block", "class_body", "switch_body",
+    "for_statement", "for_in_statement",
+})
+
+
+def _js_redeclaration(block: bytes):
+    """(offset, message, hint) for the first `let`/`const` redeclared in the
+    same scope, or None.
+
+    A duplicate lexical binding is an early SyntaxError — the engine refuses
+    the whole script before running a line of it, so one stray `let score = 0`
+    appended to a page kills every handler on it. tree-sitter parses it
+    happily, which is why the syntax check cannot see it.
+
+    Only `let`/`const` are considered, and only within a single scope: those
+    are unconditionally errors per spec, so there is no judgment call and no
+    false positive. `var`, function declarations and shadowing across scopes
+    are all legal and left alone.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    if tree.root_node.has_error or _has_template_marker(block):
+        return None
+
+    def declared_names(decl):
+        """(name, node) for each plain identifier a lexical declaration binds.
+        Destructuring patterns are skipped — conservative on purpose."""
+        for child in decl.named_children:
+            if child.type != "variable_declarator":
+                continue
+            ident = child.child_by_field_name("name")
+            if ident is not None and ident.type == "identifier":
+                yield ident.text.decode("utf-8", "replace"), ident
+
+    def walk(node, scope):
+        if node.type == "lexical_declaration":
+            for name, ident in declared_names(node):
+                if name in scope:
+                    return (ident.start_byte, name)
+                scope[name] = ident.start_byte
+        for child in node.children:
+            inner = {} if child.type in _JS_SCOPE_NODES else scope
+            hit = walk(child, inner)
+            if hit is not None:
+                return hit
+        return None
+
+    hit = walk(tree.root_node, {})
+    if hit is None:
+        return None
+    offset, name = hit
+    return (offset,
+            f"`{name}` is declared twice in the same scope",
+            f"A repeated `let`/`const` is a SyntaxError before anything runs, so "
+            f"the whole script is dead, not just this line. Drop this declaration "
+            f"and use the existing `{name}`, or rename one of them.")
+
+
+# Timers that re-invoke their callback on their own. requestAnimationFrame is
+# NOT one: it fires once, and a render loop built on it re-arms from inside the
+# callback — which is exactly the shape checked for below.
+_RECURRING_TIMERS = frozenset({"setInterval"})
+_ONE_SHOT_TIMERS = frozenset({"setTimeout", "requestAnimationFrame"})
+
+
+def _js_looping_functions(block: bytes):
+    """(looping, one_shot) for this JavaScript block.
+
+    `looping` is the set of function names the code keeps calling; `one_shot`
+    maps a function name to the byte offset of the timer that fires it exactly
+    once, so a caller can point at the call site.
+
+    A function loops when `setInterval` drives it, or when its own body arms
+    any timer — the `setTimeout(draw, delay)` inside `draw()` that schedules
+    the next frame. A one-shot `setTimeout(showBanner, 3000)` at top level is
+    not a loop, and neither is a `draw` whose body no longer re-arms.
+
+    Names only, no scope analysis: this feeds a healthy->broken comparison, so
+    a name that resolves differently in the two versions is the same name in
+    both and cancels out. Returns an empty set when the block does not parse.
+    """
+    parser = _ts.Parser(_JS_LANG)
+    tree = parser.parse(block)
+    if tree.root_node.has_error:
+        return set(), {}
+
+    looping = set()
+    one_shot = {}
+
+    def call_target(node):
+        """(timer_name, callback_identifier) for a timer call, else None."""
+        if node.type != "call_expression":
+            return None
+        fn = node.child_by_field_name("function")
+        args = node.child_by_field_name("arguments")
+        if fn is None or args is None or fn.type != "identifier":
+            return None
+        name = fn.text.decode("utf-8", "replace")
+        if name not in _RECURRING_TIMERS and name not in _ONE_SHOT_TIMERS:
+            return None
+        for arg in args.named_children:
+            return name, (arg.text.decode("utf-8", "replace")
+                          if arg.type == "identifier" else "")
+        return name, ""
+
+    def walk(node, enclosing):
+        hit = call_target(node)
+        if hit is not None:
+            timer, callback = hit
+            if timer in _RECURRING_TIMERS and callback:
+                looping.add(callback)
+            elif timer in _ONE_SHOT_TIMERS and callback:
+                one_shot.setdefault(callback, node.start_byte)
+            # Any timer armed from inside a function body re-arms that body's
+            # own loop — `setTimeout(draw, delay)` written inside draw(), and
+            # the `requestAnimationFrame(loop)` idiom alike.
+            if enclosing:
+                looping.add(enclosing)
+        name = enclosing
+        if node.type in ("function_declaration", "method_definition"):
+            ident = node.child_by_field_name("name")
+            if ident is not None:
+                name = ident.text.decode("utf-8", "replace")
+        elif node.type == "variable_declarator":
+            value = node.child_by_field_name("value")
+            ident = node.child_by_field_name("name")
+            if (ident is not None and value is not None
+                    and value.type in ("function_expression", "arrow_function")):
+                name = ident.text.decode("utf-8", "replace")
+        for child in node.children:
+            walk(child, name)
+
+    walk(tree.root_node, "")
+    return looping, one_shot
 
 
 def _css_error(block: bytes):
@@ -1293,13 +1873,18 @@ def _line_at(source: bytes, offset: int):
     return line_no, offset - line_start + 1, text
 
 
-def embedded_script_check(path: str, source_text: str) -> dict:
+def embedded_script_check(path: str, source_text: str, previous_text: str = "") -> dict:
     """Syntax-check the JavaScript / CSS embedded in `source_text`.
 
     Handles two carriers:
       (a) .html / .htm / .jinja / .jinja2 — <script> and <style> blocks;
       (b) .py — HTML held in a string literal (the render_template_string
           pattern), which is the shape that shipped a broken snake game.
+
+    With `previous_text` (the pre-edit file) it also reports a render loop the
+    edit stopped: a function a recurring timer used to drive that now fires
+    once and never re-arms. That code parses, the server still starts and
+    `curl /` still returns 200 — the page just freezes after one frame.
 
     Returns:
         ok:       False when the check COULDN'T RUN (grammar missing, non-UTF-8
@@ -1319,38 +1904,125 @@ def embedded_script_check(path: str, source_text: str) -> dict:
     if len(source) > _EMBEDDED_MAX_BYTES:
         return {"ok": True, "findings": [], "skipped": "source larger than the embedded-check cap"}
 
+    if not (p.endswith(_EMBEDDED_HTML_EXTS) or p.endswith(".py")):
+        return {"ok": True, "findings": []}
     try:
-        if p.endswith(_EMBEDDED_HTML_EXTS):
-            blocks = _embedded_blocks(source, 0, "", no_escapes=False)
-        elif p.endswith(".py"):
-            blocks = []
-            for offset, content, label in _python_html_strings(source):
-                blocks.extend(_embedded_blocks(content, offset, label, no_escapes=True))
-        else:
-            return {"ok": True, "findings": []}
+        blocks = embedded_script_blocks_for(path, source_text)
     except Exception as e:
         return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
 
     findings = []
     for kind, offset, body, where in blocks:
+        defect = ""
         try:
-            hit = _js_error(body) if kind == "javascript" else _css_error(body)
+            if kind == "javascript":
+                hit = _js_error(body)
+                if hit is None:
+                    # Parses, but a repeated lexical binding still refuses to
+                    # run — checked second because a broken parse makes the
+                    # scope walk meaningless.
+                    hit = _js_redeclaration(body)
+                    if hit is not None:
+                        defect = "redeclaration"
+            else:
+                hit = _css_error(body)
         except Exception as e:
             return {"ok": False, "error": f"parse failed: {type(e).__name__}: {e}"}
         if hit is None:
             continue
-        block_offset, message, hint = hit
+        block_offset, message, hint = hit[0], hit[1], hit[2]
+        opener_offset = hit[3] if len(hit) > 3 else None
         line, column, text = _line_at(source, offset + block_offset)
-        findings.append({
+        finding = {
             "line": line,
             "column": column,
             "kind": kind,
+            "defect": defect,
             "where": where,
             "message": message,
             "hint": hint,
             "text": text,
-        })
+        }
+        if opener_offset is not None:
+            oline, _ocol, otext = _line_at(source, offset + opener_offset)
+            if oline != line:
+                # The line the model has to look at. Reporting only the
+                # parser's stopping point sends it to fix a line it never
+                # touched.
+                finding["opened_line"] = oline
+                finding["opened_text"] = otext
+        findings.append(finding)
         if len(findings) >= _EMBEDDED_MAX_FINDINGS:
             break
+    if previous_text and len(findings) < _EMBEDDED_MAX_FINDINGS:
+        findings.extend(_stopped_loop_findings(path, source, previous_text, blocks))
     findings.sort(key=lambda f: f["line"])
-    return {"ok": True, "findings": findings}
+    return {"ok": True, "findings": findings[:_EMBEDDED_MAX_FINDINGS]}
+
+
+def _stopped_loop_findings(path, source: bytes, previous_text: str, blocks) -> list:
+    """Findings for render loops the edit stopped driving.
+
+    Compares the whole file's looping functions before and after, rather than
+    block by block: an edit is free to move a loop between <script> blocks, and
+    only the names that stop looping everywhere are dead. A name the edit also
+    deleted is not reported — removing a loop outright is a decision, leaving
+    one scheduled once is a mistake.
+    """
+    try:
+        before = embedded_script_blocks_for(path, previous_text)
+    except Exception:
+        return []
+    if not before:
+        return []
+
+    was_looping = set()
+    for kind, _offset, body, _where in before:
+        if kind == "javascript":
+            was_looping |= _js_looping_functions(body)[0]
+    if not was_looping:
+        return []
+
+    still_looping, one_shot, where_by_name = set(), {}, {}
+    for kind, offset, body, where in blocks:
+        if kind != "javascript":
+            continue
+        looping, shots = _js_looping_functions(body)
+        still_looping |= looping
+        for name, block_offset in shots.items():
+            one_shot.setdefault(name, offset + block_offset)
+            where_by_name.setdefault(name, where)
+
+    findings = []
+    for name in sorted(was_looping - still_looping):
+        if name not in one_shot:
+            continue  # the function is gone entirely, or nothing calls it now
+        line, column, text = _line_at(source, one_shot[name])
+        findings.append({
+            "line": line,
+            "column": column,
+            "kind": "javascript",
+            "where": where_by_name.get(name, ""),
+            "defect": "stopped_loop",
+            "message": f"`{name}` used to run on a repeating timer and now runs once",
+            "hint": (f"Nothing schedules the next call, so the loop stops after one "
+                     f"frame. Either put the timer back inside `{name}` so each call "
+                     f"arms the next one, or restore setInterval."),
+            "text": text,
+        })
+    return findings
+
+
+def embedded_script_blocks_for(path: str, source_text: str):
+    """The embedded <script>/<style> blocks of a file, as
+    (kind, offset, body, where). Empty when the carrier is unsupported."""
+    source = source_text.encode("utf-8")
+    p = (path or "").lower()
+    if p.endswith(_EMBEDDED_HTML_EXTS):
+        return _embedded_blocks(source, 0, "", no_escapes=False)
+    if p.endswith(".py"):
+        blocks = []
+        for offset, content, label in _python_html_strings(source):
+            blocks.extend(_embedded_blocks(content, offset, label, no_escapes=True))
+        return blocks
+    return []

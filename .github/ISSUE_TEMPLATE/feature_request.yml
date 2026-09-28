@@ -1,7 +1,12 @@
 name: Feature request
 description: Propose an improvement or new capability
-labels: [enhancement]
+type: Feature
+labels: [needs-triage]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Architecture changes, new dependencies, security-model changes, release policy, support-matrix changes, and breaking changes need an **RFC** instead. Use the RFC form.
   - type: textarea
     id: problem
     attributes:

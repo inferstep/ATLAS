@@ -14,8 +14,9 @@ and asserts every stage happened, in order, with the file actually
 fixed on disk. The model is a four-step script served by the fake
 llama-server; everything else (agent loop, guardrails, permission
 gate, workspace containment, sandbox execution, SSE protocol) is the
-production code path. V3 is bypassed here by request flag — the
-V3/Lens pipeline path is covered by test_v3_lens_acceptance.py.
+production code path. The V3 service here is a dead port, so generation
+fails and the model's own edit lands; the V3/Lens pipeline path is covered
+by test_v3_lens_acceptance.py.
 
 Requirements (provided by the e2e CI job; skipped cleanly when absent
 locally): the proxy binary at $ATLAS_PROXY_BINARY (default
@@ -30,6 +31,7 @@ import uuid
 
 import pytest
 
+from tests.e2e.test_v3_lens_acceptance import fake_lens  # noqa: F401  (fixture)
 from tests.e2e.conftest import (
     drive_agent_turn, free_port, ordered_subsequence,
     sandbox_deps_available, start_proxy, proxy_binary_available,
@@ -95,7 +97,16 @@ class _FakeLlamaHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        req = json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
+        if self.path.startswith("/slots"):
+            # The proxy's per-session slot erase, a POST with no body. This
+            # fake has no slots, like a llama-server without
+            # --slot-save-path, and says so instead of failing to parse.
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        req = json.loads(raw)
         tool_results = sum(
             1 for m in req.get("messages", [])
             if m.get("role") == "user"
@@ -135,12 +146,13 @@ def workspace(workspace_root):
 
 
 @pytest.fixture()
-def proxy(fake_llama, sandbox_executor):
+def proxy(fake_llama, fake_lens, sandbox_executor):  # noqa: F811
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
         "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
-        "ATLAS_LENS_URL": "http://127.0.0.1:9",  # dead — lens fail-soft
-        "ATLAS_V3_URL": "http://127.0.0.1:9",    # bypass_v3 skips it anyway
+        # The lens is required: a request is refused while it cannot score.
+        "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
+        "ATLAS_V3_URL": "http://127.0.0.1:9",    # dead: generation fails, the model's edit lands
     })
     yield port
     proc.terminate()
@@ -155,7 +167,6 @@ def test_full_agent_turn_read_edit_verify_permission_done(proxy, workspace):
         "working_dir": str(workspace),
         "mode": "default",
         "session_id": session,
-        "bypass_v3": True,
     })
 
     def tool_call(name):
@@ -211,7 +222,6 @@ def test_session_less_destructive_call_is_denied(proxy, workspace):
         "working_dir": str(workspace),
         "mode": "default",
         "session_id": "",
-        "bypass_v3": True,
     }, deadline_s=60.0)
 
     assert any(e["type"] == "permission_denied" for e in events), (

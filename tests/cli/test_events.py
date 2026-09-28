@@ -323,3 +323,42 @@ def test_known_pipeline_sequence_round_trips_via_sse():
     assert [ev.type for ev in received] == [ev.type for ev in sequence]
     assert is_terminal(received[-1])
     assert_monotonic(received)
+
+
+# --- terminal status: the consumer half of the proxy's outcome contract -----
+#
+# `summary` is prose, so every consumer that needed to know whether a run
+# finished was matching English. `status` is the contract; the one rule that
+# matters is that anything unnameable reads as incomplete, never completed.
+
+def test_terminal_status_reads_the_classified_outcomes():
+    from atlas.events import terminal_status, TERMINAL_STATUSES
+    for s in TERMINAL_STATUSES:
+        assert terminal_status({"status": s}) == s
+
+
+@pytest.mark.parametrize("payload", [
+    None,
+    {},
+    {"status": None},
+    {"status": ""},
+    {"status": "COMPLETED"},
+    {"status": "success"},
+    {"status": "ok"},
+    {"status": 1},
+    {"status": ["completed"]},
+    {"summary": "Made your change — it's on disk."},
+    "not a dict",
+])
+def test_absent_or_malformed_status_fails_closed(payload):
+    from atlas.events import terminal_status
+    assert terminal_status(payload) == "incomplete"
+
+
+def test_a_legacy_done_payload_still_parses():
+    """A proxy that predates `status` emits summary only, and that must stay
+    a readable event — just never a completed one."""
+    from atlas.events import terminal_status
+    legacy = {"success": True, "total_duration_ms": 1200, "summary": "all done"}
+    assert legacy["summary"] == "all done"
+    assert terminal_status(legacy) == "incomplete"

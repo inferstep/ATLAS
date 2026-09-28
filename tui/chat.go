@@ -57,6 +57,9 @@ type agentRequest struct {
 	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
 	DisableFreshSlot    bool     `json:"disable_fresh_slot,omitempty"` // /demo flag — skip PC-045 so pre-warm survives
 	SandboxSubdir       string   `json:"sandbox_subdir,omitempty"`     // /demo flag — write files into this subdir of the workspace
+	// TaskContract is what this client declares about the request. Omitted
+	// entirely when the caller declared nothing.
+	TaskContract *taskContract `json:"task_contract,omitempty"`
 }
 
 type rawChatRequest struct {
@@ -100,9 +103,7 @@ func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 
 	started := time.Now()
 	resp, err := (&http.Client{Transport: &http.Transport{
@@ -201,93 +202,6 @@ func makeChatEvent(eventType string, payload interface{}) chatEvent {
 	return chatEvent{Type: eventType, Data: data}
 }
 
-// cancelTurn POSTs /cancel for a session_id. Best-effort: returns
-// immediately on connection failure. The TCP-disconnect path in the
-// chat client is the primary cancel mechanism; this is defense-in-depth
-// for cases where a reverse proxy buffers the disconnect.
-// fileVerdict is a per-file accept/deny for the post-pass review. Shape MUST
-// match the proxy's /feedback `files` entries.
-type fileVerdict struct {
-	Path    string `json:"path"`
-	Verdict string `json:"verdict"` // "accept" | "deny"
-}
-
-// submitFeedback posts a pass verdict to the proxy, which turns the pass's
-// writes into labeled lens-training samples. `thumbs` is the pass-level 👍/👎;
-// `files` carries any per-file accept/deny (deny → confident negative; the
-// rest ride the thumbs weight). Returns the number of samples recorded.
-func submitFeedback(proxyURL, sessionID, thumbs string, files []fileVerdict) (int, error) {
-	if sessionID == "" {
-		return 0, fmt.Errorf("no completed pass to rate yet")
-	}
-	payload := map[string]interface{}{"session_id": sessionID, "thumbs": thumbs}
-	if len(files) > 0 {
-		payload["files"] = files
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST",
-		strings.TrimRight(proxyURL, "/")+"/feedback", bytes.NewReader(body))
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return 0, fmt.Errorf("feedback returned %d: %s", resp.StatusCode,
-			strings.TrimSpace(string(b)))
-	}
-	var r struct {
-		Recorded int `json:"recorded"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&r)
-	return r.Recorded, nil
-}
-
-// trainingStatus mirrors the proxy's /v1/lens/training-status payload.
-type trainingStatus struct {
-	Total            int    `json:"total"`
-	Good             int    `json:"good"`
-	Bad              int    `json:"bad"`
-	Threshold        int    `json:"threshold"`
-	RetrainAvailable bool   `json:"retrain_available"`
-	Command          string `json:"command"`
-}
-
-// lensRetrainStatusMsg carries a training-status poll result back to Update
-// (after a pass completes) so the model can surface the "retrain available"
-// banner without blocking on the HTTP call.
-type lensRetrainStatusMsg struct{ status trainingStatus }
-
-// fetchTrainingStatus asks the proxy how many labeled samples have accumulated
-// and whether a retrain is worth offering. Best-effort: errors are returned so
-// the caller can simply skip the banner.
-func fetchTrainingStatus(proxyURL string) (trainingStatus, error) {
-	var ts trainingStatus
-	req, err := http.NewRequest("GET",
-		strings.TrimRight(proxyURL, "/")+"/v1/lens/training-status", nil)
-	if err != nil {
-		return ts, err
-	}
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
-	if err != nil {
-		return ts, err
-	}
-	defer resp.Body.Close()
-	err = json.NewDecoder(resp.Body).Decode(&ts)
-	return ts, err
-}
-
 // postPermissionDecision answers a mid-turn "permission_request" by POSTing to
 // /v1/permission. decision is "allow" or "deny"; scope is "once" or "session".
 // sessionID is the turn's session id (the value sent on THIS turn) and
@@ -310,9 +224,7 @@ func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope str
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return err
@@ -324,6 +236,10 @@ func postPermissionDecision(proxyURL, sessionID, toolCallID, decision, scope str
 	return nil
 }
 
+// cancelTurn POSTs /cancel for a session_id. Best-effort: returns
+// immediately on connection failure. The TCP-disconnect path in the
+// chat client is the primary cancel mechanism; this is defense-in-depth
+// for cases where a reverse proxy buffers the disconnect.
 func cancelTurn(proxyURL, sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("empty session id")
@@ -335,9 +251,7 @@ func cancelTurn(proxyURL, sessionID string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -350,12 +264,48 @@ func cancelTurn(proxyURL, sessionID string) error {
 // demoOpts bundles the per-request flags the /demo split-pane needs.
 // Held in a struct rather than added as positional args to keep
 // sendChatOpts readable as the demo grows.
+// taskMode is what the CLIENT declares about a request: whether the person
+// asked for the workspace to change, or asked a question about it. It mirrors
+// the proxy's task_mode and exists so the decision is a control the user
+// operates rather than something inferred from the words they typed.
+//
+// Nothing here reads the message. The same sentence goes either way depending
+// only on which control the user used.
+type taskMode string
+
+const (
+	taskModeWork     taskMode = "work"
+	taskModeQuestion taskMode = "question"
+)
+
+// taskContract is the optional structured declaration sent with a request.
+// Field tags MUST match proxy/types.go's TaskContract.
+//
+// ExpectedOutputs and Verification stay empty from the TUI: a person typing
+// into a chat box has told the client nothing structured about which files
+// must exist or which command must run, and guessing from their prose is the
+// thing this replaces. A harness that genuinely knows fills them in.
+type taskContract struct {
+	TaskMode        taskMode `json:"task_mode"`
+	ExpectedOutputs []string `json:"expected_outputs,omitempty"`
+	Verification    []string `json:"verification,omitempty"`
+}
+
 type demoOpts struct {
 	disableFreshSlot bool
 	sandboxSubdir    string
 	// allowedTools is the session allowlist sent as session_allowed_tools so
 	// the proxy skips the permission prompt for pre-approved tools.
 	allowedTools []string
+	// taskMode is the client's declaration for this one request. Empty means
+	// the ordinary case, which is work -- an owned sender always declares
+	// something, because a request with no contract is indistinguishable from
+	// a stranger's.
+	taskMode taskMode
+	// omitTaskContract sends no contract at all. Exactly one fixture sets it,
+	// to prove an external or legacy caller is still accepted; ordinary owned
+	// traffic must never reach that path by accident.
+	omitTaskContract bool
 }
 
 // sendChatOpts opens an SSE POST to /v1/agent and forwards each parsed
@@ -373,6 +323,16 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	sessionID string, history []historyMessage,
 	opts demoOpts, out chan<- chatEvent) error {
 
+	var contract *taskContract
+	if !opts.omitTaskContract {
+		// Declared, never derived: the only input is the caller's selection,
+		// and an unselected owned caller is work.
+		mode := opts.taskMode
+		if mode == "" {
+			mode = taskModeWork
+		}
+		contract = &taskContract{TaskMode: mode}
+	}
 	body, err := json.Marshal(agentRequest{
 		Message:             message,
 		WorkingDir:          workingDir,
@@ -382,6 +342,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 		SessionAllowedTools: opts.allowedTools,
 		DisableFreshSlot:    opts.disableFreshSlot,
 		SandboxSubdir:       opts.sandboxSubdir,
+		TaskContract:        contract,
 	})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
@@ -394,9 +355,7 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 
 	// No overall timeout — agent turns can run minutes for long
 	// generations. Connection-level timeout only.
@@ -412,6 +371,16 @@ func sendChatOpts(ctx context.Context, proxyURL, message, workingDir, mode,
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
+		// The proxy answers a refused request with an error envelope; its
+		// detail is the sentence meant for the user (for example: the lens
+		// cannot score, run atlas doctor).
+		var env struct {
+			Error  string `json:"error"`
+			Detail string `json:"detail"`
+		}
+		if json.Unmarshal(b, &env) == nil && env.Detail != "" {
+			return fmt.Errorf("%s", env.Detail)
+		}
 		return fmt.Errorf("status %d: %s", resp.StatusCode,
 			strings.TrimSpace(string(b)))
 	}
@@ -462,9 +431,9 @@ func parseChatSSE(ctx context.Context, r io.Reader, out chan<- chatEvent) error 
 	return scanner.Err()
 }
 
-// loadBearerToken returns the bearer token for /v1/agent if a keys
-// file is configured. The proxy doesn't currently enforce auth, but
-// the file is created by `atlas init` for forward compatibility.
+// loadBearerToken returns the token from the api-keys file, if one is
+// configured. setProxyAuth sends it only when no service token is: a proxy
+// with a service token accepts that token and nothing else.
 //
 // Search order: $ATLAS_API_KEYS_PATH, then ./secrets/api-keys.json
 // relative to cwd. Returns "" if no token is found — caller must
@@ -548,6 +517,19 @@ func loadServiceToken() string {
 	return strings.TrimSpace(string(data))
 }
 
+// setProxyAuth puts the credential the proxy checks on a request to it. The
+// service token wins: when the installation has one, the proxy accepts only
+// it, and sending the api-keys token instead got a 401 on every call.
+func setProxyAuth(req *http.Request) {
+	tok := serviceToken
+	if tok == "" {
+		tok = loadBearerToken()
+	}
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
 type tokenTransport struct {
 	base http.RoundTripper
 }
@@ -564,9 +546,10 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return base.RoundTrip(req)
 }
 
-// installTokenTransport covers every nil-Transport client in the TUI
-// (chat SSE, permission/cancel/feedback POSTs, calibration probe,
-// events stream) through the process default transport.
+// installTokenTransport covers the clients that use the process default
+// transport and set no header themselves. Requests that build their own
+// transport (the chat stream, the raw demo lane, the events stream) set
+// the header with setProxyAuth; the wrapper never ran for them.
 func installTokenTransport() {
 	if serviceToken == "" {
 		return
@@ -616,6 +599,7 @@ func streamEvents(ctx context.Context, eventsURL string, out chan<- Envelope) er
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	setProxyAuth(req)
 
 	client := &http.Client{
 		// No timeout on the response body — SSE streams indefinitely.

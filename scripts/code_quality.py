@@ -52,6 +52,10 @@ class QualityReport:
     max_file_lines: int = 0
     max_file_where: str = ""
     syntax_errors: list[str] = field(default_factory=list)
+    # Files that parse under the target interpreter but not under this
+    # script's own, so no AST metrics could be taken for them.
+    unmeasured_files: list[str] = field(default_factory=list)
+    parser: str = ""
     findings: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -70,6 +74,8 @@ class QualityReport:
             "max_file_lines": self.max_file_lines,
             "max_file_where": self.max_file_where,
             "syntax_errors": self.syntax_errors,
+            "unmeasured_files": self.unmeasured_files,
+            "parser": self.parser,
             "findings": self.findings,
         }
 
@@ -109,8 +115,22 @@ def _iter_python(root: Path, skip: set[str]) -> list[Path]:
     return out
 
 
-def analyze(root: Path, baseline: set[str] | None = None) -> QualityReport:
+def host_parser_label() -> str:
+    return f"host python {sys.version_info.major}.{sys.version_info.minor}"
+
+
+def analyze(root: Path, baseline: set[str] | None = None,
+            target_parse=None, target_label: str = "") -> QualityReport:
+    """`target_parse(src) -> (ok, message)` asks the interpreter the code will
+    run under; ok is None when it cannot be reached. Without it, or when it is
+    unreachable, the verdict is this script's own interpreter and says so.
+
+    Evaluator v2 (2026-09-17). v1 parsed with the host interpreter only, which
+    is Python 3.9 on the dev server while the sandbox runs 3.13: PEP 701
+    f-strings such as f"{d["k"]}" were counted unparseable although they run.
+    """
     rep = QualityReport()
+    rep.parser = target_label if target_parse else host_parser_label()
     skip = baseline or set()
     files = _iter_python(root, skip)
     rep.files = len(files)
@@ -124,10 +144,21 @@ def analyze(root: Path, baseline: set[str] | None = None) -> QualityReport:
         rep.total_lines += lines
         if lines > rep.max_file_lines:
             rep.max_file_lines, rep.max_file_where = lines, path.name
+        verdict = None
+        if target_parse is not None:
+            verdict, why = target_parse(src)
+            if verdict is False:
+                rep.syntax_errors.append(f"{path.name}: {why}")
+                continue
+            if verdict is None:
+                rep.parser = f"{host_parser_label()} (target unreachable)"
         try:
             tree = ast.parse(src)
         except SyntaxError as e:
-            rep.syntax_errors.append(f"{path.name}: {e.msg} (line {e.lineno})")
+            if verdict is True:
+                rep.unmeasured_files.append(path.name)
+            else:
+                rep.syntax_errors.append(f"{path.name}: {e.msg} (line {e.lineno})")
             continue
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

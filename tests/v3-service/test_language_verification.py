@@ -194,3 +194,22 @@ def test_project_relative_path_accepts_only_project_paths(file_path, working_dir
 def test_project_relative_path_rejects_escape_and_invalid_roots(file_path, working_dir):
     with pytest.raises(ValueError):
         v3main._project_relative_path(file_path, working_dir)
+
+
+def test_filename_is_forwarded_so_the_sandbox_can_scope_path_checks():
+    # The Jinja-template check in the sandbox is path-scoped (templates/*.html).
+    # V3's smoke path must carry the target file path, or that check can never
+    # apply to a candidate V3 generated -- which let a broken template ship.
+    sandbox = RecordingSandbox(valid=True)
+    v3main.smoke_compile_check("<html></html>", sandbox, "html",
+                               filename="templates/index.html")
+    assert sandbox.calls, "the sandbox was not consulted"
+    assert sandbox.calls[-1][2] == "templates/index.html", \
+        f"filename not forwarded: {sandbox.calls[-1]}"
+
+
+def test_filename_defaults_to_empty_when_absent():
+    # A call with no filename (the historical signature) must still work.
+    sandbox = RecordingSandbox(valid=True)
+    v3main.smoke_compile_check("print('ok')", sandbox, "python")
+    assert sandbox.calls[-1][2] == ""

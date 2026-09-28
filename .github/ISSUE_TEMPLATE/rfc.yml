@@ -1,0 +1,53 @@
+name: RFC (request for comments)
+description: Propose a significant change before building it
+type: RFC
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An RFC is required for architecture changes, new dependencies, security-model changes, release policy, support-matrix changes, and any breaking change (see GOVERNANCE.md).
+
+        The comment period is 7 days. For line-by-line review, open a pull request that adds `docs/adr/NNNN-title.md` with status Proposed. A maintainer then posts Accepted, Revise, or Declined with reasons. An accepted RFC becomes an Epic on this same issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: The change in two or three sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Problem
+      description: What goes wrong today, for whom, and how you know.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it would work. Name the components it touches.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve it, and why this one.
+    validations:
+      required: true
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: This change
+      options:
+        - label: breaks a CLI flag, config key, API/SSE contract, on-disk state, or drops a supported backend
+        - label: adds a dependency
+        - label: changes the security model
+        - label: changes the release policy or the support matrix
+  - type: textarea
+    id: open
+    attributes:
+      label: Open questions
+      description: What you haven't decided yet.

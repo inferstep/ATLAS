@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { PermissionDecisionRequest, PermissionRequestEventData } from '../src/client/types';
 import {
 	PermissionFlow,
+	commandOf,
 	type DismissReason,
 	type PendingPermission,
 	type PermissionPoster,
@@ -231,5 +232,54 @@ describe('PermissionFlow', () => {
 		await settle();
 
 		expect(ui.events.at(-1)).toMatchObject({ kind: 'post-error', toolName: 'edit_file', error: boom });
+	});
+});
+
+// One "Allow for Session" on a deletion used to answer every later deletion
+// in the conversation without the user seeing which file. The unmarked case
+// is a proxy that does not send one_time_only.
+describe('deletions are approved one file at a time', () => {
+	function deletion(id: string, marked: boolean): PermissionRequestEventData {
+		return {
+			tool_name: 'delete_file',
+			args: { path: 'important.db' },
+			message: 'Allow this one deletion? important.db',
+			tool_call_id: id,
+			...(marked ? { one_time_only: true } : {}),
+		};
+	}
+	for (const marked of [true, false]) {
+		it(`never approves a deletion for the session (marked=${marked})`, async () => {
+			const allowed = new Set<string>();
+			const ui = fakeUi();
+			const poster = fakePoster();
+			const flow = new PermissionFlow(allowed, ui);
+
+			flow.handleRequest(poster, 's', deletion('c1', marked));
+			const first = ui.events.find((e) => e.kind === 'prompt')?.pending;
+			expect(first).toBeDefined();
+			first?.settle('allow-session');
+			await settle();
+			expect(poster.decisions[0]).toMatchObject({ decision: 'allow', scope: 'once' });
+			expect(allowed.has('delete_file')).toBe(false);
+
+			// Even an allowlist entry from elsewhere answers nothing.
+			allowed.add('delete_file');
+			flow.handleRequest(poster, 's', deletion('c2', marked));
+			expect(ui.events.filter((e) => e.kind === 'prompt')).toHaveLength(2);
+			expect(ui.events.some((e) => e.kind === 'auto-allow')).toBe(false);
+		});
+	}
+});
+
+// Approval is the only per-command control, so the card shows the command
+// whole. Condensed to 117 characters, the end of a chain was never seen.
+describe('commandOf', () => {
+	it('returns the whole command, and nothing for a call that runs none', () => {
+		const long =
+			'cd tests && python3 -m pytest -q test_api.py test_models.py test_views.py 2>&1 | tail -n 40 && cd .. && rm -rf src/legacy data/ && git checkout -- .';
+		expect(commandOf({ command: long })).toBe(long);
+		expect(commandOf({ path: 'a.py' })).toBeUndefined();
+		expect(commandOf(null)).toBeUndefined();
 	});
 });

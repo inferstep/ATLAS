@@ -1,261 +1,267 @@
 # Contributing to ATLAS
 
-Guidelines for contributing to ATLAS.
+This page takes you from "I'd like to help" to "my change is in a release".
+If something here is unclear or wrong, that's a bug. Open a Documentation
+issue.
 
-- [DEVELOPMENT.md](docs/DEVELOPMENT.md) — dev iteration workflow (rebuilds, host-side proxy, tests)
-- [PUBLISHING.md](docs/PUBLISHING.md) — publishing Lens / ASA artifacts
-- [RELEASE.md](docs/RELEASE.md) — release contract and verification levels
-- [STORY.md](docs/STORY.md) — project background
+**Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
+[Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
+[ARCHITECTURE](docs/ARCHITECTURE.md) · [MAP](docs/MAP.md) ·
+[DEVELOPMENT](docs/DEVELOPMENT.md) · [GOVERNANCE](GOVERNANCE.md) ·
+[Security reports](SECURITY.md)
 
-## How to Contribute
+## 1. How ATLAS is organized
 
-### Reporting Issues
+ATLAS is a local coding agent made of a few services: the Go agent loop
+(`proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
+candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
+the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
+[MAP.md](docs/MAP.md) says what every directory owns, and
+[ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces work
+together.
 
-Before opening an issue:
+Every change lands on `dev`. `dev` is promoted to `staging` as a release
+candidate, and `staging` to `main` as a release. See
+[section 10](#10-after-your-change-merges).
 
-1. Search existing issues to avoid duplicates
-2. Check the [troubleshooting guide](docs/TROUBLESHOOTING.md)
-3. Gather relevant information:
-   - ATLAS version/commit hash
-   - Operating system and version
-   - GPU model and driver version
-   - Output of `docker compose ps` (or `kubectl get pods` on K3s)
-   - Relevant logs
+## 2. Ways to help without writing code
 
-When opening an issue:
+- **Triage.** Try to reproduce a bug report, ask for what's missing, or
+  point out a duplicate.
+- **Docs.** Anything wrong, missing or unclear: open a Documentation
+  issue, or send a pull request.
+- **Hardware reports.** Run ATLAS on your GPU and report what happened,
+  with your `atlas doctor` output. AMD (ROCm), Apple Silicon (Metal) and
+  Vulkan reports help most; see [SUPPORT_MATRIX](SUPPORT_MATRIX.md).
+- **Trained artifacts** for a new model (see below).
+- **Questions** go to [Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
 
-1. Use a clear, descriptive title
-2. Describe the expected vs actual behavior
-3. Provide steps to reproduce
-4. Include logs and configuration (remove secrets)
+### Contributing trained artifacts (Lens / ASA)
 
-### Suggesting Features
+ATLAS needs a Geometric Lens (`cost_field.pt`) and an ASA control vector
+(`*.gguf`) for each base model, because both are coupled to the model they
+were trained against. If you've trained them with `atlas lens build` /
+`atlas asa build`, publish them with `atlas lens publish` /
+`atlas asa publish`. That uploads to a Hugging Face repo you own and opens
+a registry pull request. You don't need write access here, just a Hugging
+Face account and write token. The walkthrough is in
+[PUBLISHING.md](docs/PUBLISHING.md).
 
-Feature requests are welcome. Please:
+## 3. Set up
 
-1. Describe the use case and problem you're solving
-2. Explain how your feature would work
-3. Consider implementation complexity and trade-offs
+**Without a GPU.** Most of ATLAS can be built and tested without a GPU or a
+model: the quality gate, the unit tests, and the end-to-end tests, which use
+a scripted fake llama-server. You need Python 3.9 or newer, Go 1.26 and git.
 
-### Pull Requests
-
-#### Before You Start
-
-1. Check existing issues/PRs for similar changes
-2. For major changes, open an issue first to discuss
-3. Fork the repository and create a feature branch
-
-#### Development Setup
+Fork the repo first. The fork page copies only `main` unless you untick
+**Copy the `main` branch only**. Either way works: the commands below take
+`dev` from this repository.
 
 ```bash
-# Clone your fork
-git clone https://github.com/<your-username>/atlas.git
-cd atlas
-
-# Create feature branch
-git checkout -b feature/your-feature-name
-
-# Copy configuration
-cp .env.example .env
-# Edit .env if you need to change model path or ports
-
-# Run the complete developer quality gate before making changes
+git clone https://github.com/<you>/ATLAS.git
+cd ATLAS
+git remote add upstream https://github.com/inferstep/ATLAS.git
+git fetch upstream
+git checkout -b dev upstream/dev
+python -m venv .venv && . .venv/bin/activate
+pip install -e . pytest pyyaml
 python scripts/production-readiness.py
 ```
 
-#### Making Changes
+**With a GPU.** Install the full stack with [SETUP.md](docs/SETUP.md). Then
+use the dev mode in [DEVELOPMENT.md](docs/DEVELOPMENT.md), which runs your
+working tree in the containers without a rebuild after every edit.
 
-1. Follow existing code style and patterns
-2. Write tests for new functionality
-3. Update documentation as needed
-4. Keep commits focused and atomic
-5. Write clear commit messages
-
-#### Commit Message Format
-
-```
-component: short description (50 chars max)
-
-Longer description if needed. Explain what and why,
-not how (the code shows how).
-
-Fixes #123
-```
-
-Examples:
-- `geometric-lens: add project caching for faster queries`
-- `sandbox: increase default timeout to 90s`
-- `docs: add GPU troubleshooting section`
-
-#### Submitting
-
-1. Ensure all required checks pass: `python scripts/production-readiness.py`
-2. Update CHANGELOG.md if applicable
-3. Push to your fork
-4. Open a pull request with:
-   - Clear title and description
-   - Link to related issues
-   - Test results
-
-#### Code Review
-
-- Address review feedback promptly
-- Explain your decisions when disagreeing
-- Request re-review after making changes
-
-### Contributing Trained Artifacts (Lens / ASA)
-
-Code isn't the only thing you can contribute. ATLAS ships per-model
-**Geometric Lens** cost fields (`cost_field.pt`) and **ASA control
-vectors** (`*.gguf`) — these are coupled to the base model they were
-trained against, so every new model needs its own pair before ATLAS
-runs end-to-end against it. If you've trained one, please contribute
-it back.
-
-You train locally with `atlas lens build` / `atlas asa build`, then run
-`atlas lens publish` / `atlas asa publish` to upload to a HuggingFace repo
-you own and open a registry PR. You do NOT need a GitHub PAT or write
-access to this repo — a HuggingFace account and write token is enough. The
-full walkthrough (credential setup, verification, troubleshooting) is in
-**[docs/PUBLISHING.md](docs/PUBLISHING.md)**; CLI flag reference is in
-[docs/CLI.md](docs/CLI.md).
-
-## Code Style
-
-### Python
-
-- Follow PEP 8
-- Use type hints for function signatures
-- Document public functions with docstrings
-- Maximum line length: 100 characters
-
-```python
-def process_chunk(
-    content: str,
-    file_path: str,
-    start_line: int,
-) -> dict[str, Any]:
-    """
-    Process a code chunk for vector storage.
-
-    Args:
-        content: The chunk text content
-        file_path: Source file path
-        start_line: Starting line number
-
-    Returns:
-        Dictionary with chunk metadata and embedding
-    """
-    ...
-```
-
-### Bash
-
-- Use shellcheck for linting
-- Quote variables: `"$var"` not `$var`
-- Use `[[` for conditionals
-- Add comments for non-obvious logic
+## 4. Run the quality gate
 
 ```bash
-#!/bin/bash
-set -euo pipefail
-
-# Check if model file exists
-if [[ ! -f "$MODEL_PATH" ]]; then
-    echo "Error: Model not found at $MODEL_PATH" >&2
-    exit 1
-fi
+python scripts/production-readiness.py            # everything
+python scripts/production-readiness.py --list     # the gates
+python scripts/production-readiness.py --only ruff
 ```
 
-### YAML/Kubernetes
+CI runs the same gates, so a green run here usually means a green pull
+request. An optional tool you haven't installed shows as `unavailable`,
+not as a pass. More on tests is in [Testing](#testing).
 
-- Use 2-space indentation
-- Add resource limits to all containers
-- Use meaningful names and labels
+## 5. Find an issue
 
-### Documentation
+Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).
+It lists issues that are **Ready**, sized for newcomers, and unclaimed. The
+[Help Wanted](https://github.com/orgs/inferstep/projects/1/views/2) view
+shows every Ready issue. The board's fields mean:
 
-- Use Markdown for all documentation
-- Include code examples where helpful
-- Keep language clear and concise
-- Update table of contents when adding sections
+| Field | Meaning |
+|---|---|
+| Status | Triage → Needs Design → Backlog → **Ready** → In Progress → In Review → Done. Only Ready issues can be claimed. |
+| Priority | P0 is most urgent, P3 least |
+| Size | XS (under an hour) to XL (more than a week) |
+| Contributor Level | Starter, Intermediate, Advanced, Maintainer-only |
+| Hardware Needed | None means you don't need a GPU |
+| Shepherd | The maintainer who answers your questions on that issue |
+
+Ready means a maintainer wants the change and has written acceptance
+criteria. Meet them and pass CI, and it merges.
+
+**No Ready issue fits?** Small fixes under about 50 lines are welcome
+without an issue. For anything bigger, open an issue first. A large pull
+request without one may be closed with a pointer to do that.
+
+## 6. Claim it
+
+Comment `/claim` (alone, as the first line) on a Ready issue. The bot
+assigns you, moves the card to In Progress, and replies with your Shepherd.
+
+- One person per issue. You can hold **2** open claims, or **1** before
+  your first merged pull request.
+- Link a pull request within **5 days** (put `Closes #<issue>` in its
+  description, or the bot reminds you). After **7 days** without one, the
+  claim is released and the issue is Ready again.
+- Comment `/unclaim` any time to let it go. No hard feelings.
+
+These numbers live in [.github/atlas-bot.yml](.github/atlas-bot.yml).
+
+## 7. Branches, commits and pull request titles
+
+Fork the repo, then branch from `dev` in your fork, e.g. `fix/retry-loop`.
+
+Pull request titles are
+[conventional commits](https://www.conventionalcommits.org/) with the
+component as scope. CI checks this, because the title becomes the commit
+message on `dev` and the line in the release notes:
+
+```
+type(scope): summary
+```
+
+- **type**: `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`,
+  `build`, `ci`, `revert`, `style`
+- **scope**: the component: `proxy`, `tui`, `cli`, `v3`, `lens`, `sandbox`,
+  `inference`, `extensions`, `install`, `ci`, `docs`, `deps`, …
+- **breaking change**: a `!` before the colon, e.g. `feat(proxy)!: …`, plus
+  a `BREAKING CHANGE:` line in the description
+
+Examples: `fix(proxy): stop the retry loop on a closed stream`,
+`feat(tui): show the V3 candidate count`, `docs(setup): add the ROCm driver step`.
+
+Use the same format for your commit messages where you can. The PR title
+is what's kept.
+
+## 8. Open a draft pull request early
+
+Open a **draft** pull request against `dev` as soon as you have something.
+It links you to the issue, lets your Shepherd help early, and keeps your
+claim. Fill in the template: what changed, why, how you verified it, and
+the hardware you ran it on (or "untested on hardware").
+
+GitHub sets **base** to `main` on a new pull request. Change it to `dev`
+before you click **Create pull request**.
+
+CI for a pull request from outside the org waits until a maintainer
+approves the run. CI on a fork never gets the repository's secrets.
+
+## 9. Review
+
+- A maintainer responds within **5 business days**.
+- To merge, a pull request needs:
+  - an approval from a code owner ([CODEOWNERS](.github/CODEOWNERS))
+  - all required checks green
+  - every conversation resolved
+  - the branch up to date with `dev` (use **Update branch**)
+- New commits dismiss earlier approvals, so the last push gets reviewed.
+- Maintainers merge with **squash** (your title becomes the commit) or
+  **rebase**. History on `dev` stays linear.
+
+**Definition of done:** linked issue, tests for new behavior, docs updated
+for behavior changes, conventional title, CI green, and hardware tested (or
+stated as untested).
+
+## 10. After your change merges
+
+| Branch | What it is | When your change gets there |
+|---|---|---|
+| `dev` | Integration | At merge. `:dev` images and an immutable `:sha-<commit>` image are built. |
+| `staging` | Release candidate (`vX.Y.Z-rc.N`) | When a maintainer promotes `dev`. It stays at least 3 days. |
+| `main` | Released (`vX.Y.Z`, `:latest`) | When the candidate passes and the release owner approves |
+
+Your issue: GitHub's `Closes #N` acts only on `main`, and your pull request
+goes into `dev`. So the bot closes the issue for you within a few hours of
+the merge, and the board marks it Done. Its milestone shows the release that
+ships your change. If the issue should stay open after your change lands
+(it still needs a check after a deploy), write `Refs #N` instead.
+
+Minor releases ship when `dev` is ready; there's no fixed calendar. Fixes
+and security releases can ship any time. [RELEASE.md](docs/RELEASE.md) has
+the details.
+
+## 11. Proposing something big
+
+Use the **RFC** issue form for architecture changes, new dependencies,
+security-model changes, release-policy or support-matrix changes, and any
+breaking change. An RFC gets a 7-day comment period and then a decision:
+Accepted, Revise, or Declined. An accepted RFC becomes an Epic with
+sub-issues. The whole flow is in [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic).
+
+## 12. Getting help
+
+Ask your **Shepherd**: the bot names them when you claim, and they're on
+the issue's card. You can also comment on the issue or ask in
+[Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
+Report security problems privately, never in an issue (see
+[SECURITY.md](SECURITY.md)).
+
+## 13. Growing into Triager, Reviewer, Maintainer
+
+Access follows trust built over time, not a count of pull requests. The
+path is Contributor → Triager → Reviewer → Maintainer. Each rung has a
+minimum time, a nomination, and hard technical limits. See the
+[trust ladder](GOVERNANCE.md#trust-ladder).
+
+## Code style
+
+**Python.** PEP 8, type hints on function signatures, docstrings on public
+functions, lines up to 100 characters. `ruff` runs in the gate.
+
+**Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
+for `proxy/` and `tui/`.
+
+**Bash.** Must pass `shellcheck`. Start with `set -euo pipefail`, quote
+variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
+logic.
+
+**YAML and Kubernetes.** 2-space indentation, resource limits on every
+container, meaningful names and labels.
+
+**Docs.** Markdown, with examples where they help. Keep the matching
+`docs/*.md` in step with any behavior change.
 
 ## Testing
 
-### Running Tests
-
 ```bash
-# Run the developer quality gate. Its python test gates cover the same
-# suites CI runs: python-tests runs tests/v3, tests/v3-service, tests/cli,
-# tests/infrastructure, tests/concurrency, tests/perf, tests/contracts,
-# and tests/e2e; python-tests-lens runs geometric-lens/tests in its own
-# process (as CI does). tests/e2e skips cleanly without the built proxy
-# binary; the lens gate needs the lens requirements (CPU torch is enough).
+# The gate's Python test gates cover the suites CI runs: tests/v3,
+# tests/v3-service, tests/cli, tests/infrastructure, tests/concurrency,
+# tests/perf, tests/contracts and tests/e2e; geometric-lens/tests runs in
+# its own process (CPU torch is enough).
 python scripts/production-readiness.py
 
-# Run only the test-integrity validator
-python scripts/production-readiness.py --only test-integrity
-
-# Run specific test file
+# One file
 pytest tests/v3/test_plan_search.py -v
 
-# Run with coverage (needs `pip install pytest-cov` — not a declared dependency)
-pytest tests/ --cov=. --cov-report=html
-
-# End-to-end acceptance test (real proxy + sandbox executor + fake
-# llama-server; no GPU or model needed). Build the proxy binary first.
+# End-to-end acceptance: real proxy + sandbox executor + fake
+# llama-server. No GPU or model needed. Build the proxy binary first.
 cd proxy && go build -o /tmp/test-atlas-proxy . && cd ..
 pip install -r sandbox/requirements-runtime.txt
 pytest tests/e2e -v
 ```
 
-### Writing Tests
-
-- Place tests in `tests/` directory
-- Name test files `test_*.py`
-- Use descriptive test function names
-- Test edge cases and error conditions
-- Keep tests hermetic: never depend on a repo-root `.env`. CI runs on a
-  clean checkout with no `.env`, so a test that reads it (directly, or by
-  shelling out to a script that does) passes locally and fails in CI. Create
-  your own `tmp_path / ".env"` or pass values via the subprocess environment.
-  The `tests/cli/` suite moves any local `.env` aside so local runs match CI;
-  to mimic that elsewhere, run with `.env` temporarily renamed.
-
-```python
-def test_chunk_overlap_preserves_context():
-    """Verify chunk overlap includes surrounding lines."""
-    chunks = chunk_file(content, chunk_size=100, overlap=20)
-
-    # Verify overlap exists
-    assert chunks[0].end_line >= chunks[1].start_line
-```
-
-### Test Requirements
-
-- New features must include tests
-- Bug fixes should include regression tests
-- Maintain or improve test coverage
-
-## Architecture Decisions
-
-When proposing architectural changes:
-
-1. Document the problem and proposed solution
-2. List alternatives considered
-3. Explain trade-offs
-4. Consider backwards compatibility
-5. Update architecture documentation
-
-## Release Process
-
-Releases are handled by maintainers:
-
-1. Update version in relevant files
-2. Update CHANGELOG.md
-3. Create git tag
-4. Build and push container images
-5. Create GitHub release
+- Put tests in `tests/`, name files `test_*.py`, and name tests after the
+  behavior they check.
+- New behavior needs a test. A bug fix needs a regression test.
+- Keep tests hermetic. Never depend on a repo-root `.env`: CI runs on a
+  clean checkout without one. Create your own `tmp_path / ".env"` or pass
+  values through the subprocess environment.
+- `tests/validate_tests.py` (the `test-integrity` gate) rejects weakened
+  tests, e.g. `assert True` or a swallowed exception.
 
 ## License
 
@@ -267,9 +273,3 @@ By submitting a contribution (pull request, patch, or any other form), you agree
 - You retain copyright of your contributions.
 - You grant the project maintainer (Isaac Tigges) a perpetual, irrevocable, worldwide, royalty-free license to use, modify, and distribute your contributions under the project license.
 - You represent that you have the legal right to grant this license and that your contributions do not infringe on any third-party rights.
-
-## Questions?
-
-- Check existing documentation
-- Search closed issues
-- Open a discussion for general questions

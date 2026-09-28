@@ -16,6 +16,9 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Mondays 06:00 UTC
 
+# No token scopes by default; the job below asks for what it needs.
+permissions: {}
+
 concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: true
@@ -37,7 +40,7 @@ jobs:
         language: [python, go, javascript-typescript]
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # setup-go must run BEFORE codeql init: init injects a traced go
       # wrapper into PATH, and a later setup-go would repoint PATH at the
@@ -46,11 +49,11 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          # 1.26 covers both modules (tui requires 1.26+ via go.mod;
+          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
           # proxy's 1.24 floor builds fine on it). setup-go v6 pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26'
+          go-version: '1.26.6'
           # The modules live in proxy/ and tui/ (no root go.mod); without
           # this the default cache lookup warns and never caches.
           cache-dependency-path: |
@@ -58,7 +61,7 @@ jobs:
             tui/go.sum
 
       - name: init codeql (${{ matrix.language }})
-        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
         with:
           languages: ${{ matrix.language }}
           # security-and-quality runs the broader pack — catches both
@@ -78,6 +81,6 @@ jobs:
           (cd tui   && go build ./...)
 
       - name: analyze
-        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a  # v4.37.1
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
         with:
           category: "/language:${{ matrix.language }}"

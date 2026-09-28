@@ -20,15 +20,21 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -154,7 +160,7 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
-	llmOK, lensOK, sandboxOK, lensReady := false, false, false, false
+	llmOK, lensOK, sandboxOK := false, false, false
 
 	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
@@ -164,19 +170,15 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 		lensOK = resp.StatusCode == 200
 	}
-	// Geometric-lens /ready is the gate that flips to 503 when scoring is
-	// degraded (lens weights missing, embedding-dim mismatch, etc).
-	// /health stays informational; /ready is the pass/fail.
-	if resp, err := healthClient.Get(lensURL + "/ready"); err == nil {
-		resp.Body.Close()
-		lensReady = resp.StatusCode == 200
-	}
+	// lens_ready is the gate /v1/agent applies: whether the lens can score
+	// (lens_required.go). /health stays informational.
+	lensCanScore, lensWhy := lensReady(lensURL)
 	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
 	}
 
-	overall := llmOK && lensOK && sandboxOK && lensReady
+	overall := llmOK && lensOK && sandboxOK && lensCanScore
 	overallStatus := "ok"
 	if !overall {
 		overallStatus = "degraded"
@@ -186,26 +188,28 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":       overallStatus,
 		"inference":    llmOK,
 		"lens":         lensOK,
-		"lens_ready":   lensReady,
+		"lens_ready":   lensCanScore,
 		"sandbox":      sandboxOK,
 		"port":         proxyPort,
 		"capabilities": []string{demoRawCapability},
+	}
+	if !lensCanScore {
+		status["lens_reason"] = lensWhy
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
 
 func handleReady(w http.ResponseWriter, r *http.Request) {
-	llmOK, sandboxOK, lensReady := false, false, false
+	llmOK, sandboxOK := false, false
 
 	if resp, err := healthClient.Get(inferenceURL + "/health"); err == nil {
 		resp.Body.Close()
 		llmOK = resp.StatusCode == 200
 	}
-	if resp, err := healthClient.Get(lensURL + "/ready"); err == nil {
-		resp.Body.Close()
-		lensReady = resp.StatusCode == 200
-	}
+	// The same gate /v1/agent applies, so a client that asks /ready first
+	// is not told "ready" for a request the proxy would refuse.
+	lensCanScore, lensWhy := lensReady(lensURL)
 	if resp, err := healthClient.Get(sandboxURL + "/health"); err == nil {
 		resp.Body.Close()
 		sandboxOK = resp.StatusCode == 200
@@ -221,18 +225,22 @@ func handleReady(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ready := llmOK && lensReady && sandboxOK && v3OK
+	ready := llmOK && lensCanScore && sandboxOK && v3OK
+	body := map[string]any{
+		"ready":      ready,
+		"inference":  llmOK,
+		"lens_ready": lensCanScore,
+		"sandbox":    sandboxOK,
+		"v3":         v3OK,
+	}
+	if !lensCanScore {
+		body["lens_reason"] = lensWhy
+	}
 	w.Header().Set("Content-Type", "application/json")
 	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
-	json.NewEncoder(w).Encode(map[string]any{
-		"ready":      ready,
-		"inference":  llmOK,
-		"lens_ready": lensReady,
-		"sandbox":    sandboxOK,
-		"v3":         v3OK,
-	})
+	json.NewEncoder(w).Encode(body)
 }
 
 func newProxyMux() *http.ServeMux {
@@ -241,12 +249,10 @@ func newProxyMux() *http.ServeMux {
 	mux.HandleFunc("/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/ready", handleReady)
-	mux.HandleFunc("/v1/agent", handleAgent)                             // tool-based agent endpoint
-	mux.HandleFunc("/events", handleEvents)                              // typed SSE event stream
-	mux.HandleFunc("/cancel", handleCancel)                              // TUI abort hook
-	mux.HandleFunc("/v1/permission", handlePermission)                   // interactive approve/deny for destructive tools
-	mux.HandleFunc("/feedback", handleFeedback)                          // per-file accept/deny + pass thumbs → lens samples
-	mux.HandleFunc("/v1/lens/training-status", handleLensTrainingStatus) // sample counts for the "retrain available" alert
+	mux.HandleFunc("/v1/agent", handleAgent)           // tool-based agent endpoint
+	mux.HandleFunc("/events", handleEvents)            // typed SSE event stream
+	mux.HandleFunc("/cancel", handleCancel)            // TUI abort hook
+	mux.HandleFunc("/v1/permission", handlePermission) // interactive approve/deny for destructive tools
 	// TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
 	mux.HandleFunc("/version", handleVersion)
@@ -336,6 +342,402 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// --- Private shadow capture --------------------------------------------------
+//
+// ATLAS still works out what the user demanded by reading their English, and
+// the client now declares it structurally. Nothing compares the two. This sink
+// exists so a later corpus can measure how often they disagree and why -- and
+// nothing else: no record it writes is read by any decision, and none reaches a
+// wire. It is off unless an operator names a capture file.
+//
+// Deliberately not /events: that stream is a documented public contract with a
+// permanently connected TUI subscriber and no per-session filter, so anything
+// emitted there would be both a schema expansion and a disclosure. Deliberately
+// not the lens corpus either -- that is training data.
+
+// shadowQueueDepth bounds what a wedged or slow disk can cost. A full queue
+// drops and counts rather than pushing back on an agent request: a diagnostic
+// that can stall a user's run is worse than a diagnostic with a hole in it.
+const shadowQueueDepth = 1024
+
+// maxTrackedShadowRequests bounds duplicate detection. Beyond it, new ids stop
+// being remembered and the footer says so, rather than growing without limit.
+const maxTrackedShadowRequests = 100000
+
+// shadowCaptureRoot is the only directory a capture may live in, following the
+// same envOr convention as the lens data dir.
+func shadowCaptureRoot() string {
+	return envOr("ATLAS_DIAGNOSTIC_DIR", "/data/diagnostics")
+}
+
+// A sink is open, then closing, then closed, and submission is synchronised
+// with that transition rather than merely checking it.
+//
+// Checking a flag and then sending on the queue cannot be made safe by making
+// the flag atomic: the close can land between the check and the send, and a
+// send on a closed channel panics -- inside an agent request, which is the one
+// thing a diagnostic must never be able to do. So admission is a read lock held
+// across the decision AND the enqueue, and the cutoff takes the same lock for
+// writing. When the queue closes, no submitter is inside it and no submitter
+// can enter and find it open. panic/recover is not used as synchronisation.
+type shadowSink struct {
+	queue chan []byte
+	done  chan struct{}
+	f     *os.File
+
+	accepted  atomic.Int64
+	written   atomic.Int64
+	dropped   atomic.Int64
+	errors    atomic.Int64
+	duplicate atomic.Int64
+	refused   atomic.Int64 // arrived after the cutoff, outside the acquisition
+	overflow  atomic.Bool  // duplicate tracking stopped growing
+
+	admit   sync.RWMutex
+	closing bool // guarded by admit
+
+	mu   sync.Mutex
+	seen map[string]bool
+
+	closeOnce sync.Once
+	closeErr  error // the outcome every close() caller reports
+	finalErr  error // written by the writer before it closes done
+}
+
+// activeShadowSink is written once before the listener opens and never again,
+// so every later access is a read of an immutable value.
+var activeShadowSink atomic.Pointer[shadowSink]
+
+// openShadowSink prepares the capture, or returns nil when none is configured.
+//
+// Refuses anything it cannot own: a destination outside the capture root, or
+// one that already exists. Appending to a previous capture would silently merge
+// two runs into what looks like one, and a corpus cannot tell them apart later.
+func openShadowSink() (*shadowSink, error) {
+	name := strings.TrimSpace(os.Getenv("ATLAS_SHADOW_CAPTURE"))
+	if name == "" {
+		return nil, nil
+	}
+	root, err := filepath.Abs(shadowCaptureRoot())
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture root: %w", err)
+	}
+	target, err := filepath.Abs(filepath.Join(root, name))
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture path: %w", err)
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) ||
+		filepath.IsAbs(name) {
+		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q resolves outside %s", name, root)
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil, fmt.Errorf("ATLAS_SHADOW_CAPTURE=%q already exists; a capture must be "+
+			"fresh so two runs cannot merge into one file", target)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return nil, fmt.Errorf("shadow capture dir: %w", err)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("shadow capture: %w", err)
+	}
+	s := newShadowSink(f)
+	go s.run()
+	return s, nil
+}
+
+// newShadowSink builds a sink whose writer has not started, so nothing drains
+// the queue until run() is called.
+func newShadowSink(f *os.File) *shadowSink {
+	return &shadowSink{
+		queue: make(chan []byte, shadowQueueDepth),
+		done:  make(chan struct{}),
+		f:     f,
+		seen:  map[string]bool{},
+	}
+}
+
+func (s *shadowSink) enabled() bool { return s != nil }
+
+// run is the only writer. Records, footer, sync and descriptor all belong to
+// it, so nothing can ever write the file concurrently with it -- in particular
+// not the close hook, which only ever asks it to stop and waits.
+func (s *shadowSink) run() {
+	defer close(s.done)
+	for line := range s.queue {
+		if _, err := s.f.Write(line); err != nil {
+			// Counted, never retried, never surfaced: a capture failure is a
+			// defective capture, not a failed user run.
+			s.errors.Add(1)
+			continue
+		}
+		s.written.Add(1)
+	}
+	// The queue is closed and drained, and admission stopped before it closed,
+	// so no further record exists for this file. Finalise.
+	s.finalize()
+}
+
+// finalize writes the footer after every record its counters describe, then
+// releases the descriptor. Only run() calls it, exactly once, which is what
+// makes a footer's presence mean "this acquisition completed".
+func (s *shadowSink) finalize() {
+	footer, err := json.Marshal(map[string]interface{}{
+		"schema_version":            shadowSchemaVersionFooter,
+		"record_kind":               "task_contract_shadow_footer",
+		"accepted":                  s.accepted.Load(),
+		"written":                   s.written.Load(),
+		"dropped":                   s.dropped.Load(),
+		"errors":                    s.errors.Load(),
+		"duplicate_request_ids":     s.duplicate.Load(),
+		"request_tracking_overflow": s.overflow.Load(),
+		"influences_live_decision":  false,
+	})
+	if err != nil {
+		s.finalErr = err
+	} else if _, werr := s.f.Write(append(footer, '\n')); werr != nil {
+		s.finalErr = werr
+	}
+	if serr := s.f.Sync(); serr != nil && s.finalErr == nil {
+		s.finalErr = serr
+	}
+	if cerr := s.f.Close(); cerr != nil && s.finalErr == nil {
+		s.finalErr = cerr
+	}
+}
+
+// submit enqueues without blocking. A full queue drops and counts; a record
+// arriving after the cutoff is refused and counted separately, so it can never
+// appear in an accepted total the finalised footer is unable to account for.
+func (s *shadowSink) submit(rec map[string]interface{}) {
+	if s == nil {
+		return
+	}
+	// Marshal outside the admission hold: it is the expensive part and it
+	// cannot touch the queue.
+	line, err := json.Marshal(rec)
+	if err != nil {
+		s.errors.Add(1)
+		return
+	}
+	line = append(line, '\n')
+
+	s.admit.RLock()
+	defer s.admit.RUnlock()
+	if s.closing {
+		s.refused.Add(1)
+		return
+	}
+	s.accepted.Add(1)
+	select {
+	case s.queue <- line:
+	default:
+		s.dropped.Add(1)
+	}
+}
+
+// noteRequest records a request id and reports a duplicate within one capture.
+func (s *shadowSink) noteRequest(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.seen[id] {
+		s.duplicate.Add(1)
+		return
+	}
+	if len(s.seen) >= maxTrackedShadowRequests {
+		s.overflow.Store(true)
+		return
+	}
+	s.seen[id] = true
+}
+
+// close stops admission, then waits for the writer to finalise, bounded.
+//
+// It never writes the footer and never closes the descriptor: doing either here
+// could race the writer, and a footer racing a record is a file that looks
+// complete and is not. The writer owns finalisation, so a footer exists only
+// when every record its counters describe was already written.
+//
+// If the writer does not finish within the deadline the capture is left with no
+// footer and the error says so. That is deliberate. A write already inside a
+// blocking filesystem syscall cannot be interrupted portably from another
+// goroutine -- Go offers no such guarantee for a regular file, and neither
+// closing the descriptor nor cancelling a context unblocks it -- so there is no
+// safe cutoff to write a footer after. The process is exiting once this hook
+// returns; an acquisition with no footer is correctly readable as defective,
+// which is better than one that reads as complete and is not.
+func (s *shadowSink) close(ctx context.Context, wait time.Duration) error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		// The cutoff and the channel close happen under the same exclusive
+		// hold, so no submitter is inside and none can enter to find it open.
+		s.admit.Lock()
+		s.closing = true
+		close(s.queue)
+		s.admit.Unlock()
+
+		select {
+		case <-s.done:
+			s.closeErr = s.finalErr
+		case <-time.After(wait):
+			s.closeErr = fmt.Errorf("shadow capture did not finalise within %v; "+
+				"the capture has no footer and is incomplete", wait)
+		case <-ctx.Done():
+			s.closeErr = fmt.Errorf("shadow capture finalisation cancelled (%w); "+
+				"the capture has no footer and is incomplete", ctx.Err())
+		}
+	})
+	return s.closeErr
+}
+
+// --- Bounded graceful shutdown ----------------------------------------------
+//
+// main() blocked in ListenAndServe and died on log.Fatalf, so a SIGTERM cut the
+// process where it stood: an agent request lost its turn mid-write, the TUI's
+// permanent /events subscriber had no coordinated close, and ordered cleanup
+// had nowhere to run. Anything that must flush before exit -- a diagnostic
+// capture, a drained buffer -- needs that landing site to exist first.
+//
+// The budget is derived, not chosen. An agent request is already bounded by its
+// own session context, so the drain window is exactly that session total: a
+// signal arriving late in a session does not grant it a fresh 600 seconds, it
+// only means the server will wait up to that long for whatever remains. On top
+// sits a small margin for the close hooks.
+const shutdownHookMargin = 10 * time.Second
+
+// defaultShutdownGraceSec is what the shipped compose file allows. It is an
+// operator DECLARATION of the grace the environment will give this process --
+// the proxy cannot read an orchestrator's real termination budget, so the two
+// are pinned together and validated against the session configuration instead.
+const defaultShutdownGraceSec = 650
+
+type shutdownBudgetValues struct {
+	drain      time.Duration
+	hookMargin time.Duration
+}
+
+// shutdownBudget derives the drain window and validates it against the grace
+// the operator says the environment allows.
+//
+// Strict: the required window must be LESS than the declared grace, so there is
+// real headroom between the process finishing and the environment killing it.
+// A session raised beyond what the declared grace supports refuses to serve
+// rather than quietly running with a shutdown that cannot complete -- and
+// rather than quietly shortening the session the operator asked for.
+func shutdownBudget() (shutdownBudgetValues, error) {
+	total, _ := sessionBudget() // the 600s total already contains its reserve
+	need := total + shutdownHookMargin
+
+	graceSec := defaultShutdownGraceSec
+	if raw := strings.TrimSpace(os.Getenv("ATLAS_SHUTDOWN_GRACE_SEC")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return shutdownBudgetValues{}, fmt.Errorf(
+				"ATLAS_SHUTDOWN_GRACE_SEC=%q is not a positive number of seconds", raw)
+		}
+		graceSec = n
+	}
+	grace := time.Duration(graceSec) * time.Second
+	if need >= grace {
+		return shutdownBudgetValues{}, fmt.Errorf(
+			"shutdown budget does not fit: session total %v + hook margin %v = %v, "+
+				"which is not less than ATLAS_SHUTDOWN_GRACE_SEC=%v. Raise "+
+				"ATLAS_SHUTDOWN_GRACE_SEC and the container/orchestrator grace period "+
+				"together, or lower ATLAS_AGENT_SESSION_TIMEOUT_SEC",
+			total, shutdownHookMargin, need, grace)
+	}
+	return shutdownBudgetValues{drain: total, hookMargin: shutdownHookMargin}, nil
+}
+
+// closeHook is ordered cleanup that runs once, after the listener has stopped
+// and request draining has been classified. A hook cannot extend shutdown and
+// cannot turn a completed request into a failure.
+type closeHook struct {
+	name string
+	fn   func(context.Context) error
+}
+
+// shutdownResult says what actually happened, so a forced close is never
+// mistaken for a clean one -- or for a listener failure.
+type shutdownResult struct {
+	signalled  bool
+	forced     bool // the drain deadline expired with requests still running
+	hooksRan   bool
+	hookErrors []string
+}
+
+// runServer serves until the listener fails or a signal arrives, then drains
+// within the budget and runs the hooks. Separated from main so a test can drive
+// a real listener, a real in-flight request and a real signal.
+func runServer(srv *http.Server, ln net.Listener, signals <-chan os.Signal,
+	hooks []closeHook, budget shutdownBudgetValues) (shutdownResult, error) {
+	var res shutdownResult
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+
+	select {
+	case err := <-serveErr:
+		// A listener that never started must not sit waiting for a signal.
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return res, err
+		}
+		return res, nil
+	case <-signals:
+		res.signalled = true
+	}
+
+	// New connections stop here. Active handlers keep their own deadlines --
+	// an agent request is bounded by its session context, not by this.
+	log.Printf("[lifecycle] shutdown signal received — draining for up to %v", budget.drain)
+
+	// The infrastructure stream would otherwise hold the drain open for its
+	// whole budget: nothing ends /events but the client leaving.
+	defaultBroker.drain()
+
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), budget.drain)
+	defer cancelDrain()
+	if err := srv.Shutdown(drainCtx); err != nil {
+		// Requests outlived the window. Say so as its own outcome.
+		res.forced = true
+		log.Printf("[lifecycle] drain deadline reached with requests still active — forcing close")
+		_ = srv.Close()
+	}
+
+	hookCtx, cancelHooks := context.WithTimeout(context.Background(), budget.hookMargin)
+	defer cancelHooks()
+	res.hooksRan = true
+	for _, h := range hooks {
+		done := make(chan error, 1)
+		go func(h closeHook) { done <- h.fn(hookCtx) }(h)
+		select {
+		case err := <-done:
+			if err != nil {
+				res.hookErrors = append(res.hookErrors, h.name+": "+err.Error())
+			}
+		case <-hookCtx.Done():
+			res.hookErrors = append(res.hookErrors, h.name+": "+hookCtx.Err().Error())
+		}
+	}
+	for _, e := range res.hookErrors {
+		log.Printf("[lifecycle] close hook failed: %s", e)
+	}
+	// Drain whatever Serve reports after Shutdown; ErrServerClosed is normal.
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return res, err
+		}
+	case <-time.After(time.Second):
+	}
+	return res, nil
+}
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	// Private-value filtering: every log line passes through the
@@ -351,7 +753,7 @@ func main() {
 	log.SetOutput(filteringWriter{w: out})
 
 	addr := ":" + proxyPort
-	log.Printf("ATLAS Proxy v3.1.3 starting on %s", addr)
+	log.Printf("ATLAS Proxy v3.1.4 starting on %s", addr)
 	log.Printf("  Inference: %s", inferenceURL)
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
@@ -371,6 +773,15 @@ func main() {
 		log.Printf("  Keep-warm: pinging %s every 45s (set ATLAS_KEEP_LLAMA_WARM=0 to disable)", inferenceURL)
 	}
 
+	// Validated before the listener opens: a shutdown that cannot finish
+	// inside the environment's grace is a configuration error, not something
+	// to discover during a deploy.
+	budget, err := shutdownBudget()
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
+	log.Printf("  Shutdown: drain up to %v, then %v for close hooks", budget.drain, budget.hookMargin)
+
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           http.MaxBytesHandler(withRequestID(requireServiceToken(newProxyMux())), maxRequestBodyBytes),
@@ -378,8 +789,44 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
 	}
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("server error: %v", err)
+	// Opened before the listener: a capture that cannot be created is a
+	// configuration error to discover now, not mid-acquisition.
+	sink, err := openShadowSink()
+	if err != nil {
+		log.Fatalf("configuration: %v", err)
+	}
+	var hooks []closeHook
+	if sink != nil {
+		activeShadowSink.Store(sink)
+		log.Printf("  Shadow capture: enabled (%s)", os.Getenv("ATLAS_SHADOW_CAPTURE"))
+		hooks = append(hooks, closeHook{
+			name: "shadow-capture",
+			fn: func(hctx context.Context) error {
+				return sink.close(hctx, budget.hookMargin)
+			},
+		})
+	}
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", addr, err)
+	}
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+
+	// hooks is empty unless a diagnostic capture is configured, which is the
+	// ordinary production path and costs nothing.
+	res, serveErr := runServer(server, ln, signals, hooks, budget)
+	if serveErr != nil {
+		log.Printf("server error: %v", serveErr)
+		os.Exit(1)
+	}
+	switch {
+	case res.forced:
+		log.Printf("[lifecycle] shutdown complete (forced: requests outlived the drain window)")
+	case res.signalled:
+		log.Printf("[lifecycle] shutdown complete")
 	}
 }
 
@@ -727,6 +1174,10 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 		"api_version":      APIVersion,
 		"protocol_version": ProtocolVersion,
 		"error_codes":      AllErrorCodes,
+		// The tool-call grammar mode this process applies. A run records
+		// it: two installs of one model can differ here and behave
+		// differently.
+		"grammar_mode": effectiveGrammarMode(),
 	})
 }
 

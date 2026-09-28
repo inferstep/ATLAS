@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -253,7 +254,7 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 	// truncation explicitly so the model shrinks the next attempt.
 	raw := `{"type":"tool_call","name":"edit_file","args":{"path":"snake/app.py","old_str":"@app.route('/')\ndef index():\n    return render_template('index.html')\n\n@app.route('/product')\ndef product():\n    return render_template('product.html')\n\n@app.route('/solutions')\ndef solutions():\n    return render_template('solutions.html')\n\n@app.route('/pricing"`
 
-	_, got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw, "")
 	if !strings.Contains(got, "TRUNCATED") {
 		t.Errorf("expected TRUNCATED callout, got %q", got)
 	}
@@ -263,10 +264,10 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 }
 
 func TestClassifyParseFailureEmptyResponse(t *testing.T) {
-	if _, got := classifyParseFailure(""); !strings.Contains(got, "empty") {
+	if _, got := classifyParseFailure("", ""); !strings.Contains(got, "empty") {
 		t.Errorf("empty input should mention empty, got %q", got)
 	}
-	if _, got := classifyParseFailure("   \n\t "); !strings.Contains(got, "empty") {
+	if _, got := classifyParseFailure("   \n\t ", ""); !strings.Contains(got, "empty") {
 		t.Errorf("whitespace-only should be treated as empty, got %q", got)
 	}
 }
@@ -275,7 +276,7 @@ func TestClassifyParseFailureMalformedToolCall(t *testing.T) {
 	// Looks like a tool_call but ends cleanly — different feedback
 	// than truncation.
 	raw := `{"type":"tool_call","name":"read_file","args":{"path":"app.py",}}`
-	_, got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw, "")
 	if strings.Contains(got, "TRUNCATED") {
 		t.Errorf("clean-ending malformed shouldn't say TRUNCATED, got %q", got)
 	}
@@ -283,7 +284,7 @@ func TestClassifyParseFailureMalformedToolCall(t *testing.T) {
 
 func TestClassifyParseFailureProse(t *testing.T) {
 	raw := "Here's what I'll do: I'll read the file first..."
-	_, got := classifyParseFailure(raw)
+	_, got := classifyParseFailure(raw, "")
 	if !strings.Contains(got, "JSON") {
 		t.Errorf("prose response should get JSON-only nudge, got %q", got)
 	}
@@ -344,26 +345,43 @@ func TestIsContextOverflow(t *testing.T) {
 
 // --- repetition sampling ---------------------------------------------------
 
-func TestApplyRepetitionSamplingDefaultsEnableDry(t *testing.T) {
+func TestApplyRepetitionSamplingDefaultsOffBecauseItPenalisesCopying(t *testing.T) {
+	// Flipped from on-by-default. DRY penalises "extending a sequence that
+	// already occurred in the input", which is the definition of copying an
+	// anchor out of a file the model just read.
+	//
+	// The old default was 0.8 with dry_penalty_last_n=2048, believed to bound
+	// the scan to the current generation. It does not: llama-server's
+	// init_sampler() accepts every PROMPT token into the same ring buffer, so
+	// the read_file result is inside it. Penalty is
+	// multiplier * base^(matched-allowed_length), so a 12-token match costs
+	// -23.0 logits and the correct continuation loses to the runner-up.
+	// Observed as scoreElement -> scorerElement.
 	body := map[string]interface{}{}
 	applyRepetitionSampling(body)
 
-	if body["dry_multiplier"] != 0.8 {
-		t.Fatalf("dry_multiplier = %v, want 0.8 (DRY must be on by default — "+
-			"llama-server ships every repetition control disabled)", body["dry_multiplier"])
-	}
-	// Above llama.cpp's default of 2: 3-token runs are ordinary in source.
-	if body["dry_allowed_length"] != 6 {
-		t.Fatalf("dry_allowed_length = %v, want 6", body["dry_allowed_length"])
-	}
-	if body["dry_penalty_last_n"] != 2048 {
-		t.Fatalf("dry_penalty_last_n = %v, want 2048 (bounded lookback, not -1)",
-			body["dry_penalty_last_n"])
+	for _, k := range []string{"dry_multiplier", "dry_base", "dry_allowed_length", "dry_penalty_last_n"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("%s must not be set by default, got %v", k, body[k])
+		}
 	}
 	// repeat_penalty scores individual tokens and mangles code indentation;
 	// it must stay off unless explicitly opted into.
 	if _, ok := body["repeat_penalty"]; ok {
-		t.Fatalf("repeat_penalty must not be set by default, got %v", body["repeat_penalty"])
+		t.Errorf("repeat_penalty must not be set by default, got %v", body["repeat_penalty"])
+	}
+}
+
+func TestDryStillConfigurableBackOn(t *testing.T) {
+	// The escape hatch has to work, or the change is irreversible in the field.
+	t.Setenv("ATLAS_DRY_MULTIPLIER", "0.8")
+	body := map[string]interface{}{}
+	applyRepetitionSampling(body)
+	if body["dry_multiplier"] != 0.8 {
+		t.Fatalf("dry_multiplier = %v, want 0.8 when explicitly set", body["dry_multiplier"])
+	}
+	if body["dry_allowed_length"] != 6 {
+		t.Fatalf("dry_allowed_length = %v, want 6", body["dry_allowed_length"])
 	}
 }
 
@@ -539,7 +557,7 @@ func TestCategorizeParseFailureHtmlEntitiesShape(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _ := classifyParseFailure(tc.raw)
+			got, _ := classifyParseFailure(tc.raw, "")
 			if got != tc.want {
 				t.Errorf("classifyParseFailure() category = %q, want %q\nraw: %q", got, tc.want, tc.raw)
 			}
@@ -1030,13 +1048,6 @@ func TestShouldGeneratePlanGates(t *testing.T) {
 	}
 }
 
-func TestShouldGeneratePlanV3BypassDisablesPlanner(t *testing.T) {
-	ctx := &AgentContext{Tier: Tier3Hard, BypassV3: true}
-	if shouldGeneratePlan(ctx, "Build and verify a multi-file service") {
-		t.Fatal("V3-bypassed baseline request must not run the pre-flight planner")
-	}
-}
-
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -1223,14 +1234,18 @@ func TestHasUserPackagesIgnoresPipOnly(t *testing.T) {
 }
 
 // May 10 2026: T1/T2/T3 default to uncapped (returns 0); the 8
-// stuck-pattern detectors are the real safety net. T0 keeps a small
-// cap as a SHAPE constraint (conversational input shouldn't loop).
+// stuck-pattern detectors are the real safety net. T0 keeps a cap as a SHAPE
+// constraint (conversational input shouldn't loop) — 12 since 2026-08-02,
+// because a question ABOUT the code is conversational and still has to read
+// it. At 5, "how does the contact form work?" spent turn 0 on a bounced text
+// exit and turns 1-3 on searches with the wrong glob, reached the right file
+// on turn 4, and hit the cap with no answer for the user.
 // The agent loop treats MaxTurns == 0 as "no limit"; cancellation
 // via ctx.Ctx is the upper bound.
 func TestTierMaxTurnsUncappedDefaults(t *testing.T) {
 	t.Setenv("ATLAS_MAX_TURNS", "")
-	if got := TierMaxTurns(Tier0Conversational); got != 5 {
-		t.Errorf("T0 = %d, want 5 (shape constraint)", got)
+	if got := TierMaxTurns(Tier0Conversational); got != 12 {
+		t.Errorf("T0 = %d, want 12 (shape constraint with room to read)", got)
 	}
 	if got := TierMaxTurns(Tier1Simple); got != 0 {
 		t.Errorf("T1 = %d, want 0 (uncapped)", got)
@@ -1266,8 +1281,8 @@ func TestTierMaxTurnsZeroEnvFallsThrough(t *testing.T) {
 	if got := TierMaxTurns(Tier2Medium); got != 0 {
 		t.Errorf("env=0, T2 = %d, want 0 (uncapped default)", got)
 	}
-	if got := TierMaxTurns(Tier0Conversational); got != 5 {
-		t.Errorf("env=0, T0 = %d, want 5 (shape cap preserved)", got)
+	if got := TierMaxTurns(Tier0Conversational); got != 12 {
+		t.Errorf("env=0, T0 = %d, want 12 (shape cap preserved)", got)
 	}
 }
 
@@ -1307,123 +1322,26 @@ func TestRecoverStructuredReasoningAcceptsDoneAndToolCall(t *testing.T) {
 	}
 }
 
-// May 9 2026: under BiasBusters mitigations the model now reaches for
-// structural_edit + edit_file too. Real flask test logs show 10K-12K char
-// structural_edit responses parse-erroring with no recovery path. Lock the
-// generalized recovery so future regressions can't slip back in.
-
-func TestRecoverTruncatedStructuralEditFullPayload(t *testing.T) {
-	// Well-formed but unparseable-as-JSON payload (e.g. trailing brace
-	// dropped by the model). Recovery still extracts the fields.
-	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"templates/index.html","selector":"<html>","content":"<!DOCTYPE html>\n<html lang=\"en\"><head></head><body>hi</body></html>"`
-	resp, ok := recoverTruncatedToolCall(partial)
-	if !ok {
-		t.Fatal("recovery returned false")
-	}
-	if resp.Type != "tool_call" || resp.Name != "structural_edit" {
-		t.Fatalf("got Type=%q Name=%q, want tool_call/structural_edit", resp.Type, resp.Name)
-	}
-	var args StructuralEditInput
-	if err := json.Unmarshal(resp.Args, &args); err != nil {
-		t.Fatalf("unmarshal recovered args: %v", err)
-	}
-	if args.Path != "templates/index.html" {
-		t.Errorf("Path = %q, want templates/index.html", args.Path)
-	}
-	if args.Selector != "<html>" {
-		t.Errorf("Selector = %q, want <html>", args.Selector)
-	}
-	if !strings.HasPrefix(args.Content, "<!DOCTYPE html>") {
-		preview := args.Content
-		if len(preview) > 20 {
-			preview = preview[:20]
+// A cut-off or malformed content-bearing tool call is refused, never rebuilt.
+// Recovery used to reconstruct write_file / edit_file / structural_edit args
+// from whatever prefix arrived and execute them: a write cut mid-structure
+// landed as the fragment, reported as a clean success. The intended bytes
+// cannot be known from a prefix, so extractModelResponse must return an error
+// and let the parse-failure path tell the model nothing was executed.
+func TestTruncatedOrMalformedContentCallsAreNotReconstructed(t *testing.T) {
+	for _, partial := range []string{
+		`{"type":"tool_call","name":"write_file","args":{"path":"cut.py","content":"def f():\n    return [{\"user\": 1`,
+		`{"type":"tool_call","name":"write_file","args":{"path":"bad.py","content":"P = re.compile(\"\d+\")\n"}}`,
+		`{"type":"tool_call","name":"edit_file","args":{"path":"e.py","old_str":"return 1","new_str":"return [1, 2`,
+		`{"type":"tool_call","name":"structural_edit","args":{"path":"templates/index.html","selector":"<html>","content":"<!DOCTYPE html>\n<html lang=\"en\"><head></head><body>hi</body></html>"`,
+	} {
+		resp, err := extractModelResponse(partial)
+		if err == nil {
+			t.Errorf("a truncated/malformed call was reconstructed into %s %s:\n  %s", resp.Type, resp.Name, partial)
 		}
-		t.Errorf("Content prefix = %q, want <!DOCTYPE html>", preview)
-	}
-	if !strings.Contains(args.Content, `lang="en"`) {
-		t.Errorf("Content missing unescaped lang=\"en\": %q", args.Content)
 	}
 }
 
-func TestRecoverTruncatedStructuralEditMidContent(t *testing.T) {
-	// Realistic case from May 9 logs: response cut off mid-content with
-	// no closing quote/braces. Recovery returns whatever content made
-	// it through so the agent can write SOMETHING useful and continue.
-	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","selector":"function:dashboard","content":"@app.route('/dashboard')\ndef dashboard():\n    users = get_users()\n    return render_template(`
-	resp, ok := recoverTruncatedToolCall(partial)
-	if !ok {
-		t.Fatal("recovery returned false on mid-content truncation")
-	}
-	var args StructuralEditInput
-	if err := json.Unmarshal(resp.Args, &args); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if args.Path != "app.py" || args.Selector != "function:dashboard" {
-		t.Errorf("path/selector wrong: %+v", args)
-	}
-	if !strings.Contains(args.Content, "def dashboard()") {
-		t.Errorf("content missing def dashboard: %q", args.Content)
-	}
-}
-
-func TestRecoverTruncatedEditFileBothFields(t *testing.T) {
-	partial := `{"type":"tool_call","name":"edit_file","args":{"path":"app.py","old_str":"return None","new_str":"return {}","replace_all":false}`
-	resp, ok := recoverTruncatedToolCall(partial)
-	if !ok {
-		t.Fatal("recovery returned false")
-	}
-	if resp.Name != "edit_file" {
-		t.Errorf("Name = %q", resp.Name)
-	}
-	var args EditFileInput
-	if err := json.Unmarshal(resp.Args, &args); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if args.Path != "app.py" || args.OldStr != "return None" || args.NewStr != "return {}" {
-		t.Errorf("field recovery wrong: %+v", args)
-	}
-}
-
-func TestRecoverTruncatedEditFileMidNewStr(t *testing.T) {
-	// Truncated mid new_str — should still recover with what we have.
-	partial := `{"type":"tool_call","name":"edit_file","args":{"path":"app.py","old_str":"return None","new_str":"return {\\"users\\":`
-	resp, ok := recoverTruncatedToolCall(partial)
-	if !ok {
-		t.Fatal("recovery returned false")
-	}
-	var args EditFileInput
-	_ = json.Unmarshal(resp.Args, &args)
-	if args.OldStr != "return None" {
-		t.Errorf("OldStr = %q", args.OldStr)
-	}
-	if !strings.HasPrefix(args.NewStr, "return ") {
-		t.Errorf("NewStr should start with 'return ', got %q", args.NewStr)
-	}
-}
-
-func TestRecoverTruncatedToolCallUnknownToolReturnsFalse(t *testing.T) {
-	// Tool we don't have a recovery for → return false so caller falls
-	// through to the diagnostic error (not silent failure).
-	partial := `{"type":"tool_call","name":"read_file","args":{"path":"app.py"`
-	if _, ok := recoverTruncatedToolCall(partial); ok {
-		t.Error("expected no recovery for read_file")
-	}
-}
-
-func TestRecoverTruncatedStructuralEditMissingSelectorFails(t *testing.T) {
-	// Malformed — selector missing entirely. Recovery should fail
-	// rather than emit a tool call with empty selector that structural_edit
-	// would reject downstream anyway.
-	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","content":"def foo(): pass"}`
-	if _, ok := recoverTruncatedToolCall(partial); ok {
-		t.Error("expected no recovery when selector is missing")
-	}
-}
-
-// Locks the new diagnostic behavior: when the brace-balanced parse
-// fails, extractModelResponse must surface the actual unmarshal error
-// so logs tell us WHY ("invalid character '\\n'" vs "unexpected end")
-// instead of a generic "could not parse JSON".
 func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 	// Brace-balanced JSON with a literal LF inside a string — invalid
 	// per RFC 8259 and the kind of failure we used to swallow.
@@ -1450,82 +1368,6 @@ func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 // field extractor can read. Degenerate generations parse just as cleanly as
 // real content, so without a sense-check they are "recovered" into a real
 // write against the user's file.
-
-func TestRecoveryRejectsRepeatedNewlineContent(t *testing.T) {
-	junk := strings.Repeat("\n", 400)
-	partial := `{"type":"tool_call","name":"write_file","args":{"path":"app.py","content":"` +
-		strings.ReplaceAll(junk, "\n", `\n`)
-
-	if _, ok := recoverTruncatedToolCall(partial); ok {
-		t.Fatal("recovered a write_file from 400 repeated newlines — degenerate output must not become a real write")
-	}
-}
-
-func TestRecoveryRejectsRepeatingTailEditFile(t *testing.T) {
-	tail := strings.Repeat("return None; return None; return None; return None;", 8)
-	partial := `{"type":"tool_call","name":"edit_file","args":{"path":"app.py","old_str":"x = 1","new_str":"` + tail
-
-	if _, ok := recoverTruncatedToolCall(partial); ok {
-		t.Fatal("recovered an edit_file whose new_str is a repeating tail")
-	}
-}
-
-func TestRecoveryRejectsDegenerateStructuralEditContent(t *testing.T) {
-	junk := strings.Repeat(" ", 500)
-	partial := `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","selector":"function:main","content":"` + junk
-
-	if _, ok := recoverTruncatedToolCall(partial); ok {
-		t.Fatal("recovered a structural_edit from 500 spaces")
-	}
-}
-
-// The guard must not reject legitimate truncated code, which is the entire
-// reason recovery exists.
-func TestRecoveryStillAcceptsRealTruncatedCode(t *testing.T) {
-	body := "def handler(request):\n" +
-		"    user = get_user(request)\n" +
-		"    if user is None:\n" +
-		"        return abort(404)\n" +
-		"    rows = query_orders(user.id)\n" +
-		"    total = sum(r.amount for r in rows)\n" +
-		"    return render_template('orders.html', rows=rows, total=total"
-	partial := `{"type":"tool_call","name":"write_file","args":{"path":"app.py","content":"` +
-		strings.ReplaceAll(strings.ReplaceAll(body, `"`, `\"`), "\n", `\n`)
-
-	got, ok := recoverTruncatedToolCall(partial)
-	if !ok {
-		t.Fatal("rejected a legitimately truncated write_file — recovery must still work for real code")
-	}
-	if got.Name != "write_file" {
-		t.Fatalf("recovered %q, want write_file", got.Name)
-	}
-}
-
-// Indented code is whitespace-heavy but nowhere near the degenerate ratio.
-func TestLooksDegenerateAllowsIndentedCode(t *testing.T) {
-	code := "            result.append(transform(item, config, index))\n" +
-		"            totals[key] = totals.get(key, 0) + item.amount\n" +
-		"            if item.status == 'pending' and not item.archived:\n" +
-		"                queue.push(item.id, priority=item.rank)\n" +
-		"            seen.add(item.id)\n"
-	if looksDegenerate(code) {
-		t.Fatal("flagged ordinary deeply-indented code as degenerate")
-	}
-
-	// A long file that legitimately repeats a boilerplate line must survive:
-	// repetition only counts as degeneracy when it dominates the value.
-	boiler := strings.Repeat("x = compute(a, b, c, d, e, f, g, h, i, j, k)\n", 3)
-	body := boiler + strings.Repeat("def f(q):\n    return q.value * 2 + offset(q)\n", 40)
-	if looksDegenerate(body) {
-		t.Fatal("flagged a long file with some repeated boilerplate as degenerate")
-	}
-}
-
-func TestLooksDegenerateIgnoresShortValues(t *testing.T) {
-	if looksDegenerate("\n\n\n\n") {
-		t.Fatal("short values must be exempt — a small new_str cannot look degenerate")
-	}
-}
 
 // May 2026 BiasBusters #2/#3 — locks the trigger that activates the
 // per-step grammar restriction. The restriction must fire exactly when
@@ -1680,10 +1522,14 @@ func v3AndStructuralServer(t *testing.T, winnerCode, flagName string) *httptest.
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
 			fl, _ := w.(http.Flusher)
+			// A service that verified this winner says so in the envelope.
+			// Without one nothing is authorized -- `passed` alone no longer
+			// replaces the caller's content.
 			payload, _ := json.Marshal(map[string]interface{}{
 				"code": winnerCode, "passed": true,
 				"phase_solved": "phase1", "candidates_tested": 3,
 				"winning_score": 0.9,
+				"evidence":      envelopeFor(t, winnerCode, nil),
 			})
 			for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
 				fmt.Fprint(w, line+"\n")
@@ -1742,7 +1588,9 @@ func writeGateCtx(t *testing.T, v3URL, sandboxURL, workDir string) *AgentContext
 	ctx := NewAgentContext(workDir, Tier2Medium)
 	ctx.V3URL = v3URL
 	ctx.SandboxURL = sandboxURL
-	ctx.Ctx = context.Background()
+	// A request identity, because the route mints one entry per attempt and a
+	// call that cannot be named bounds no mutation. Production always has one.
+	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-write-gate")
 	return ctx
 }
 
@@ -1794,6 +1642,11 @@ func TestWriteFileV3CleanWinnerKeepsTelemetry(t *testing.T) {
 	sb := fakeSyntaxSandbox(t, "")
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+	// The client declares the artifact it asked for. Without a declared target
+	// there is nothing to authorize against and the model's own bytes land,
+	// which is a different test from this one.
+	ctx.TaskContract = mustContract(t, dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`)
 
 	res, err := writeFileWithV3(path, baseline, ctx)
 	if err != nil {
@@ -1824,6 +1677,8 @@ func TestWriteFileV3BothBrokenRejects(t *testing.T) {
 	sb := fakeSyntaxSandbox(t, "")
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
+	ctx.TaskContract = mustContract(t, dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`)
 
 	res, err := writeFileWithV3(path, baseline, ctx)
 	if err != nil {
@@ -1896,16 +1751,21 @@ func TestImproveContentV3KeepsCandidateWhenCallerAlreadyBroken(t *testing.T) {
 }
 
 // V3 output arrives wrapped in a markdown fence often enough that both callers
-// used to strip it after the fact. The strip now happens at the boundary, and
-// it MUST run before the regression check: a fenced candidate does not parse as
-// Python, so checking first would drop good candidates as "broken" and silently
-// disable V3 for every fenced response.
-func TestImproveContentV3SanitizesBeforeJudgingCandidate(t *testing.T) {
+// used to strip it after the fact. The strip happens at the boundary, before
+// the regression check, so a fenced candidate is never mistaken for a broken
+// one -- and stripping produces DIFFERENT bytes, which the service's evidence
+// does not describe. Authorization is re-asked of the stripped form and
+// withdrawn, so the caller's own content stands with no provenance. A fenced
+// candidate becomes deliverable again when the service hashes the form it
+// hands over.
+func TestImproveContentV3RevokesAFencedCandidateItMustRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.py")
 	modelEdit := "def index():\n    return 'ok'\n"
 	code := "def index():\n    return 'better'\n"
-	fenced := "Looking at the task, I need to update the handler.\n\n```python\n" + code + "```\n"
+	// Only an exact whole-content wrapper is stripped; prose around a fence is
+	// left for the syntax gate to reject.
+	fenced := "```python\n" + code + "```\n"
 
 	v3 := v3AndStructuralServer(t, fenced, "render_template")
 	defer v3.Close()
@@ -1913,18 +1773,32 @@ func TestImproveContentV3SanitizesBeforeJudgingCandidate(t *testing.T) {
 	defer sb.Close()
 	ctx := writeGateCtx(t, v3.URL, sb.URL, dir)
 
-	out, meta, err := improveContentWithV3(path, modelEdit, ctx)
+	out, _, err := improveContentWithV3(path, modelEdit, ctx)
 	if err != nil {
 		t.Fatalf("improveContentWithV3 error: %v", err)
 	}
-	if strings.Contains(out, "```") || strings.Contains(out, "Looking at the task") {
-		t.Errorf("wrapper must be stripped at the boundary, got %q", out)
+	if strings.Contains(out, "```") {
+		t.Errorf("the wrapper must never reach the caller, got %q", out)
 	}
-	if strings.TrimSpace(out) != strings.TrimSpace(code) {
-		t.Errorf("expected the unwrapped code, got %q", out)
+	// The stripped bytes are a proposal -- they are materially different from
+	// the caller's edit -- and the route that receives them decides. Nothing
+	// the service says about them is an authorization, and a request that
+	// declared nothing has no trusted verification to satisfy, so what lands
+	// is the caller's own edit.
+	if out != code {
+		t.Errorf("the sanitised proposal was not carried; got %q", out)
 	}
-	if !meta.Used {
-		t.Error("a fenced but otherwise clean candidate must still be adopted, not dropped as unparseable")
+	// The same code, returned in the form it is delivered in, IS adopted --
+	// this is authorization against the final bytes, not a refusal of fences.
+	v3b := v3AndStructuralServer(t, code, "render_template")
+	defer v3b.Close()
+	outB, metaB, err := improveContentWithV3(path, modelEdit, writeGateCtx(t, v3b.URL, sb.URL, dir))
+	if err != nil {
+		t.Fatalf("improveContentWithV3 error: %v", err)
+	}
+	if outB != code || !metaB.Used {
+		t.Errorf("an unwrapped verified candidate must be adopted, got %q used=%v",
+			outB, metaB.Used)
 	}
 }
 
@@ -2085,14 +1959,24 @@ func TestWriteFileRejectsUnparseableContentWithoutCallingV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_file: %v", err)
 	}
-	if res == nil || res.Success {
-		t.Fatalf("unparseable content must be rejected, got %+v", res)
+	// The contract here changed on measured evidence. Rejecting broken
+	// content in a NEW file forbade the write-run-read-the-traceback loop —
+	// the one the no-tool baseline resolves its own syntax errors with at
+	// 85-100% — and sessions died as "solve.py was never created" instead.
+	// The write now LANDS with a warning. What this test still pins is the
+	// original point: V3 must not be fed content that does not parse.
+	if res == nil || !res.Success {
+		t.Fatalf("a new file lands with a warning, got %+v", res)
+	}
+	var out WriteFileOutput
+	if json.Unmarshal(res.Data, &out) != nil || out.Warning == "" {
+		t.Fatalf("the result must warn that the content does not parse: %s", string(res.Data))
 	}
 	if v3Called {
 		t.Error("V3 must not be called for content that does not parse")
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		t.Error("nothing should have landed on disk")
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Error("the file must be on disk so the model can run it")
 	}
 }
 
@@ -2106,8 +1990,16 @@ func TestBounceToolCallEmitsAMatchingResult(t *testing.T) {
 	ctx := &AgentContext{
 		StreamFn: func(evt string, data interface{}) { events = append(events, evt) },
 	}
-	st := &runState{turn: 3, response: "{}"}
+	st := &runState{turn: 3, response: "{}", pendingToolCall: "write_file"}
 	st.bounceToolCall(ctx, "write_file", "write_file is for creating files")
+
+	// The bounce answers the call, so the outstanding-call marker has to
+	// clear with it. Left set, a later exit answers the same call a second
+	// time through endStream and the counts disagree the other way.
+	if st.pendingToolCall != "" {
+		t.Errorf("bounce answered the call but left it marked outstanding (%q)",
+			st.pendingToolCall)
+	}
 
 	var results int
 	for _, e := range events {
@@ -2149,7 +2041,7 @@ func TestPlainBounceEmitsNoToolResult(t *testing.T) {
 // multi-document files (valid YAML, and the shape every Kubernetes manifest
 // uses); with that checker fixed, the gate is safe here. Observed: a 4-line
 // test_discount.py with an unterminated string reached disk this way.
-func TestDirectWriteGatesAnUnparseableNewFile(t *testing.T) {
+func TestDirectWriteLandsAnUnparseableNewFileWithAWarning(t *testing.T) {
 	dir := t.TempDir()
 	sb := fakeSyntaxSandbox(t, "UNTERMINATED")
 	defer sb.Close()
@@ -2161,11 +2053,14 @@ func TestDirectWriteGatesAnUnparseableNewFile(t *testing.T) {
 	if err != nil && res == nil {
 		t.Fatalf("write_file: %v", err)
 	}
-	if res != nil && res.Success {
-		t.Error("an unparseable new file must not reach disk")
+	// Fail-forward: a NEW file lands with a warning so the model can run it
+	// and read the real traceback (see TestWriteFileRejectsUnparseable...
+	// for the measured reasoning). An EXISTING file is still protected.
+	if res == nil || !res.Success {
+		t.Errorf("an unparseable new file lands with a warning, got %+v", res)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "t.py")); statErr == nil {
-		t.Error("nothing should have been written")
+	if _, statErr := os.Stat(filepath.Join(dir, "t.py")); statErr != nil {
+		t.Error("the file must be on disk so the model can run it")
 	}
 }
 
@@ -2267,5 +2162,884 @@ func TestReadOnlyRequestsGetNoPlan(t *testing.T) {
 		if !shouldGeneratePlan(ctx, m) {
 			t.Errorf("work request lost its plan: %q", m)
 		}
+	}
+}
+
+// The read_file result the model copies from sits thousands of tokens back,
+// behind the system prompt and every tool description, while its own emitted
+// copy sits at the very end. Restating the file at the generation point makes
+// the source reachable at the same distance as the model's own output.
+func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(filepath.Join(dir, "app.py"), "alpha\nbravo\n")
+
+	wire := []map[string]string{{"role": "user", "content": "fix the bug"}}
+	got := appendLastReadRestatement(ctx, wire)
+	if len(got) != 2 {
+		t.Fatalf("expected a restatement appended, got %d messages", len(got))
+	}
+	last := got[len(got)-1]["content"]
+	for _, want := range []string{"app.py", "1\talpha", "2\tbravo", "NOT in the file"} {
+		if !strings.Contains(last, want) {
+			t.Errorf("restatement missing %q:\n%s", want, last)
+		}
+	}
+}
+
+func TestRestatementSkipsWhenItWouldDuplicate(t *testing.T) {
+	// Immediately after read_file the content is already the last message.
+	// Restating there costs prompt-processing on every turn and buys nothing.
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
+
+	wire := []map[string]string{{"role": "user", "content": "here it is: alpha\n"}}
+	if got := appendLastReadRestatement(ctx, wire); len(got) != 1 {
+		t.Errorf("must not duplicate content already at the end, got %d messages", len(got))
+	}
+}
+
+func TestRestatementSkipsBigFilesAndEmptyState(t *testing.T) {
+	dir := t.TempDir()
+	wire := []map[string]string{{"role": "user", "content": "x"}}
+
+	// Nothing read yet.
+	fresh := NewAgentContext(dir, Tier1Simple)
+	if got := appendLastReadRestatement(fresh, wire); len(got) != 1 {
+		t.Error("restated with no file read")
+	}
+	// Too big to be worth pasting every turn.
+	big := NewAgentContext(dir, Tier1Simple)
+	big.RecordFileRead(filepath.Join(dir, "big.py"), strings.Repeat("x", restatementMaxBytes+1))
+	if got := appendLastReadRestatement(big, wire); len(got) != 1 {
+		t.Error("restated a file over the size cap")
+	}
+	// Escape hatch works.
+	t.Setenv("ATLAS_RESTATE_LAST_READ", "0")
+	off := NewAgentContext(dir, Tier1Simple)
+	off.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
+	if got := appendLastReadRestatement(off, wire); len(got) != 1 {
+		t.Error("ATLAS_RESTATE_LAST_READ=0 did not disable it")
+	}
+}
+
+// The model had written 5,897 characters answering a question, began
+// repeating itself, the loop detector cut the stream, and the user received
+// nothing — the closing quote and brace were missing so nothing parsed. The
+// tool-call path had recoverTruncatedToolCall; a text answer had no
+// equivalent.
+func TestACutTextAnswerIsSalvagedRatherThanDiscarded(t *testing.T) {
+	body := "The issue is in `scoring.py` within the `score_candidate` function " +
+		"(lines 122-130). Line 129 returns the raw value instead of the normalised " +
+		"one, so every candidate scores identically and the tie-break never runs. " +
+		"The fix is to divide by the max before returning, which is what the " +
+		"docstring already describes and what the caller assumes."
+	raw := `{"type":"text","content":"` + strings.ReplaceAll(body, `"`, `\"`)
+
+	got, ok := recoverTruncatedText(raw)
+	if !ok {
+		t.Fatal("a cut text answer was discarded")
+	}
+	if !strings.Contains(got, "scoring.py") || !strings.Contains(got, "tie-break never runs") {
+		t.Errorf("salvaged content lost the answer:\n%s", got)
+	}
+
+	// Escapes have to survive the hand-rolled walk.
+	esc := `{"type":"text","content":"line one\nline two\ta \"quoted\" bit, and a \\ backslash. ` +
+		strings.Repeat("padding to clear the length floor. ", 8)
+	out, ok := recoverTruncatedText(esc)
+	if !ok {
+		t.Fatal("escaped content was discarded")
+	}
+	for _, want := range []string{"line one\nline two\ta", `"quoted"`, `\ backslash`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("escape handling lost %q:\n%s", want, out)
+		}
+	}
+
+	// A fragment too short to be useful is more likely to mislead than help.
+	if _, ok := recoverTruncatedText(`{"type":"text","content":"the issue is`); ok {
+		t.Error("salvaged a fragment too short to be worth showing")
+	}
+	// A tool call is not a text answer.
+	if _, ok := recoverTruncatedText(`{"type":"tool_call","name":"write_file","args":{"path":"a.py"`); ok {
+		t.Error("mistook a truncated tool call for a text answer")
+	}
+}
+
+// Code inside a tool_call stream is legitimately self-similar — a grid
+// walker's four elif-direction branches repeat a 48-char window 4 times in a
+// perfectly healthy file. With one threshold for everything, the detector
+// cut healthy write_file drafts at the same structural spot every session:
+// measured across one 50-task run, 17 cuts, 10 truncating write_file code,
+// and the two most self-similar families (walk, debounce) went 0/5 each.
+// A real spiral runs to max_tokens — hundreds of repeats — so demanding 10
+// inside tool calls keeps the guard without shooting healthy code.
+func TestBranchShapedCodeIsNotALoop(t *testing.T) {
+	branch := "\\n    elif direction == '%s':\\n        y = (y + 1) %% 20"
+	code := `{"type":"tool_call","name":"write_file","args":{"path":"solve.py","content":"`
+	for _, d := range []string{"N", "S", "E", "W"} {
+		code += fmt.Sprintf(branch, d)
+	}
+	code += `"}}`
+	if n := loopingTailCount(code); n >= toolCallLoopThreshold {
+		t.Fatalf("4 branch repeats must stay under the tool-call threshold, count=%d", n)
+	}
+}
+
+func TestASpiralInsideAToolCallStillCuts(t *testing.T) {
+	code := `{"type":"tool_call","name":"write_file","args":{"content":"`
+	for i := 0; i < 40; i++ {
+		code += "# I'll just print the answer. Wait, I can't see it.\\n"
+	}
+	if n := loopingTailCount(code); n < toolCallLoopThreshold {
+		t.Fatalf("a 40x repeat is a spiral at any threshold, count=%d", n)
+	}
+}
+
+// Truncation recovery must never panic on the buffers it exists to handle.
+//
+// Found by fuzzing: the content offset was re-derived by probing a fixed
+// 15-byte window (`partial[idx:idx+15]`), which reads past the end whenever
+// the content marker lands within 15 bytes of the buffer's end. Truncation
+// puts the marker near the end by definition, so the panic sat in the one
+// path built for truncated output — and net/http answers a panicking handler
+// by closing the connection, so the user's session died mid-stream with no
+// `done` event and no error.
+func TestTruncationRecoveryNeverPanicsNearTheBufferEnd(t *testing.T) {
+	cases := []string{
+		`{"name":"write_file"content":"`,
+		`{"type":"tool_call","name":"write_file","args":{"path":"a.py","content":"`,
+		`{"type":"tool_call","name":"write_file","args":{"path":"a.py","content": "`,
+		`"content":"`,
+		`"content": "`,
+		`{"content":"x`,
+	}
+	for _, partial := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic on truncated buffer %q: %v", partial, r)
+				}
+			}()
+			// The parser must not panic on a truncated buffer.
+			_, _ = extractModelResponse(partial)
+		}()
+	}
+}
+
+// A fenced sub-call whose model streams the file into reasoning_content never
+// resets the content watchdog, so the watchdog cancels the request. The file
+// is sitting in reasoning_content, and the salvage must run on the cut rather
+// than the error being returned with the buffer discarded. Observed
+// 2026-09-14: a second file's sub-call on a large context was cut this way and
+// the run died having delivered only the first file.
+func TestFencedSubCallSalvagesReasoningOnAWatchdogCut(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "1")
+	fileBody := "<!DOCTYPE html>\n<html>\n<body><h1>Runs</h1></body>\n</html>\n"
+	reasoning := "Let me write the template.\n```html\n" + fileBody + "```\n"
+	rjson, _ := json.Marshal(reasoning)
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			// Only the chat endpoint streams and holds open. The
+			// prompt-progress poller hits /slots on this same server; if that
+			// blocked too, its wait group would never release and the call
+			// could never return.
+			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			// The whole file arrives as reasoning_content — never as content,
+			// so progress() (content-only) never fires and the 1s
+			// first-content watchdog cancels the request.
+			sseWrite(w, `data: {"choices":[{"delta":{"reasoning_content":`+string(rjson)+`}}]}`)
+			// Hold the stream open until the watchdog cancels, but never
+			// past a bound: httptest's Close waits on live handlers, so an
+			// unbounded wait here hangs teardown rather than the test.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+			}
+		}))
+	defer srv.Close()
+
+	ctx := llmTestCtx(srv.URL)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.2, rawEmissionSentinel)
+	if err != nil {
+		t.Fatalf("a watchdog-cut sub-call errored instead of salvaging the file: %v", err)
+	}
+	if !strings.Contains(content, "<!DOCTYPE html>") || !strings.Contains(content, "</html>") {
+		t.Errorf("salvaged content lost the file body: %q", content)
+	}
+
+	// The control: a real session cancel (not our watchdog) is NOT salvaged —
+	// the caller must see the cancellation, not a half-generated file.
+	cctx := llmTestCtx(srv.URL)
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cctx.Ctx = cancelCtx
+	cancel() // session already cancelled
+	if _, _, err := callLLMOnceWithGrammar(cctx, cctx.Messages, 0.2, rawEmissionSentinel); err == nil {
+		t.Error("a cancelled session salvaged a file instead of surfacing the cancel")
+	}
+}
+
+// A fenced sub-call whose stream opens and then says nothing is dead: on every
+// healthy stream the first content frame follows the opening frame in the same
+// millisecond. Waiting the whole first-content budget for it burned ~2 minutes
+// of a ~9.5 minute session on each file (observed 2026-09-14, dev7/dev8 each
+// delivered one file and ran out of time). The stalled deadline must cut it
+// early, well before the first-content budget.
+func TestFencedSubCallCutsAStreamThatOpensAndGoesSilent(t *testing.T) {
+	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "60") // the full budget
+	t.Setenv("ATLAS_FENCED_STALL_SEC", "2")          // the stalled deadline
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			// Exactly what the live failure sends: the opening role frame,
+			// then silence while the server generates out of sight.
+			sseWrite(w, `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null}}]}`)
+			select {
+			case <-r.Context().Done():
+			case <-time.After(30 * time.Second):
+			}
+		}))
+	defer srv.Close()
+
+	ctx := llmTestCtx(srv.URL)
+	start := time.Now()
+	_, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.2, rawEmissionSentinel)
+	elapsed := time.Since(start)
+	t.Logf("stalled sub-call returned after %s (err=%v)", elapsed.Round(time.Millisecond), err)
+
+	if err == nil {
+		t.Error("a stream that never sent content returned success")
+	}
+	if elapsed > 20*time.Second {
+		t.Errorf("stalled stream was not cut early: took %s, want the ~2s stalled deadline "+
+			"rather than the 60s first-content budget", elapsed.Round(time.Millisecond))
+	}
+}
+
+// A model that degenerates into repetition is the failure this system exists
+// to absorb. Ending the run the first time it happens hands back a half-built
+// project: measured 2026-09-14, a run with three of five files written was
+// terminated on the first loop with the fourth never attempted. The run must
+// answer the loop and keep working, bounded.
+func TestContentLoopIsCorrectedBeforeItEndsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	const good = "def solve():\n    return 7\n\n\nprint(solve())\n"
+	var mu sync.Mutex
+	turns := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			// The workspace-alignment probe: the proxy writes a marker and
+			// asks the sandbox to read it back. Without this the run aborts
+			// as workspace_misaligned before reaching the loop under test.
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		io.ReadAll(r.Body)
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		if i == 0 {
+			// Turn 0: degenerate into repetition mid tool-call. The loop
+			// detector needs enough repeated tail to fire.
+			var b strings.Builder
+			b.WriteString(`{"type":"tool_call","name":"write_file","args":{"path":"solve.py","content":"`)
+			for j := 0; j < 400; j++ {
+				b.WriteString("the same line over and over and over. ")
+			}
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": b.String()}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			return
+		}
+		// After the corrective: do the work properly, then finish.
+		var call map[string]interface{}
+		if i == 1 {
+			call = writeCall("solve.py", good)
+		} else {
+			call = map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
+		}
+		c, _ := json.Marshal(call)
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(c)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	recoveries := 0
+	terminal := map[string]string{}
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		if et == "agent_loop_recovery" {
+			recoveries++
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Write solve.py so it prints 7.")
+
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	t.Logf("recoveries=%d status=%q reason=%q disk=%q",
+		recoveries, terminal["status"], terminal["reason"], string(got))
+
+	if recoveries == 0 {
+		t.Fatal("the repetition cut ended the run instead of correcting the model")
+	}
+	if string(got) != good {
+		t.Errorf("the run never produced the file after recovering: %q", got)
+	}
+	if !NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that recovered and did the work reported %q", terminal["status"])
+	}
+}
+
+// The lint named the exact defect at write time -- "calls "/add_book", but
+// no Flask route matches it" -- called it advisory, and the run finished with
+// a form that 404s (acceptance run, 2026-09-15). The exit gate must ask for it
+// before the run can finish, and a run that fixes it finishes.
+func TestDoneIsBouncedWhileAFormPostsToAMissingRoute(t *testing.T) {
+	dir := t.TempDir()
+	appPy := "from flask import Flask, render_template\n" +
+		"app = Flask(__name__)\n" +
+		"@app.route('/', methods=['GET', 'POST'])\ndef index():\n" +
+		"    return render_template('index.html')\n"
+	badPage := "<form method=\"POST\" action=\"/add_book\"><input name=\"title\"></form>\n"
+	var mu sync.Mutex
+	turns := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		io.ReadAll(r.Body)
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		var call map[string]interface{}
+		switch i {
+		case 0:
+			call = writeCall("app.py", appPy)
+		case 1:
+			call = writeCall("templates/index.html", badPage)
+		case 2:
+			call = map[string]interface{}{"type": "done", "summary": "built the book site"}
+		case 3:
+			// Bounced: the model reads and fixes the action.
+			call = map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]string{"path": "templates/index.html"}}
+		case 4:
+			call = map[string]interface{}{"type": "tool_call", "name": "edit_file",
+				"args": map[string]string{"path": "templates/index.html",
+					"old_str": `action="/add_book"`, "new_str": `action="/"`}}
+		default:
+			call = map[string]interface{}{"type": "done", "summary": "fixed the form action"}
+		}
+		c, _ := json.Marshal(call)
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(c)}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	var gates []string
+	terminal := map[string]string{}
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		if et == "gate" {
+			var g struct{ Gate, Reason string }
+			if json.Unmarshal(b, &g) == nil && g.Gate == "route_contract_gate" {
+				gates = append(gates, g.Reason)
+			}
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Create app.py and templates/index.html for a book list.")
+
+	page, _ := os.ReadFile(filepath.Join(dir, "templates/index.html"))
+	t.Logf("route gates=%d status=%q reason=%q page=%q", len(gates), terminal["status"], terminal["reason"], page)
+	if len(gates) != 1 {
+		t.Fatalf("expected exactly one route_contract_gate bounce, got %d", len(gates))
+	}
+	if !strings.Contains(gates[0], "/add_book") {
+		t.Errorf("the gate must name the unmatched target: %s", gates[0])
+	}
+	// The full message the model receives steers to the cheap repair.
+	msg := routeContractMessage(routeContractFindings(dir))
+	if !strings.Contains(msg, "insert_after") || !strings.Contains(msg, "not a whole-file write_file") {
+		t.Errorf("the gate must say how to repair without re-entering the pipeline: %s", msg)
+	}
+	if !strings.Contains(string(page), `action="/"`) {
+		t.Errorf("the fix never landed: %q", page)
+	}
+	if !NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that fixed the route reported %q (%s)", terminal["status"], terminal["reason"])
+	}
+}
+
+// The gate is about this run's own contract. A project that already had a
+// stale form action, asked a question about, must get its answer -- the other
+// exit gates are scoped the same way (files this run warned, jobs this run
+// started), and an unscoped route gate would bounce that answer three times.
+func TestRouteContractGateLeavesAQuestionAboutAnOldProjectAlone(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "templates"), 0o755)
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("from flask import Flask\napp = Flask(__name__)\n@app.route('/')\ndef index():\n    return 'x'\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "templates/index.html"), []byte("<form action=\"/add_book\"></form>\n"), 0o644)
+	ctx := NewAgentContext(dir, Tier0Conversational)
+	if len(routeContractFindings(dir)) == 0 {
+		t.Fatal("fixture has no mismatch; the test proves nothing")
+	}
+	// Nothing written this session: the gate must stay out of the way.
+	if sessionWroteWebFiles(ctx) {
+		t.Fatal("an empty session claims to have written web files")
+	}
+	st := &runState{}
+	if gate, _ := st.exitGates(ctx, "what does app.py do?", "It serves one route."); gate == "route_contract_gate" {
+		t.Error("a question about a pre-existing project was bounced by the route gate")
+	}
+	// Once the run has written a page, the same mismatch is its own.
+	ctx.SessionWrites = map[string]bool{"templates/index.html": true}
+	if gate, _ := st.exitGates(ctx, "fix the form", "done"); gate != "route_contract_gate" {
+		t.Errorf("after writing the page the gate must fire, got %q", gate)
+	}
+}
+
+// A file the run executed cleanly is demonstrated, whatever parse verdict the
+// route that wrote it left behind. Observed 2026-09-15: a structural_edit
+// landed through V3 with no verdict, the server then started fine, and the
+// run was told at completion the file was never written in a checkable state.
+func TestACleanExecutionSettlesContentDebt(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('served')\n"), 0o644)
+	ctx := NewAgentContext(dir, Tier2Medium)
+	key := ledgerKey(ctx, "app.py")
+	// A prior syntax checkpoint that restoration may still need...
+	observeDeliverable(ctx, key, []byte("print('old')\n"), ValidationKindSyntax, ValidationPassed, "")
+	// ...and then the state a content debt actually lives in: new bytes on
+	// disk that no route ever gave a verdict (a structural_edit that landed
+	// through V3). The ledger knows the bytes changed and knows nothing else.
+	ctx.LedgerMu.Lock()
+	d0 := ctx.Ledger[key]
+	d0.CurrentHash, d0.CurrentSize = hashBytes([]byte("print('served')\n")), len("print('served')\n")
+	d0.ValidationKind, d0.ValidationStatus, d0.ValidatedHash = ValidationKindUnknown, ValidationUnknown, ""
+	ctx.LedgerMu.Unlock()
+	newState := func() *runState {
+		return &runState{mutationDebt: map[string]*mutationDebtEntry{
+			key: {Rel: "app.py", Kind: debtContent}}}
+	}
+
+	// Naming the file is not running it.
+	st := newState()
+	settleDebtByExecution(ctx, st, "cat app.py", true)
+	if len(st.mutationDebt) != 1 {
+		t.Error("`cat app.py` settled a content debt")
+	}
+	// A failed execution settles nothing.
+	st = newState()
+	settleDebtByExecution(ctx, st, "python3 app.py", false)
+	if len(st.mutationDebt) != 1 {
+		t.Error("a failed run settled a content debt")
+	}
+	// A clean execution settles it, against the bytes that ran, as its own kind.
+	st = newState()
+	settleDebtByExecution(ctx, st, "python3 app.py", true)
+	if len(st.mutationDebt) != 0 {
+		t.Fatalf("a clean run left the debt: %v", st.mutationDebt)
+	}
+	d := ctx.Ledger[key]
+	if k, s := d.CurrentValidation(); k != ValidationKindExecution || s != ValidationPassed {
+		t.Errorf("verdict = %s/%s, want execution/passed", k, s)
+	}
+	if d.CurrentHash != hashBytes([]byte("print('served')\n")) {
+		t.Error("the verdict does not describe the bytes that ran")
+	}
+	// The syntax checkpoint was not disturbed: an execution is not a write.
+	if d.CheckpointKind != ValidationKindSyntax || string(d.CheckpointBytes) != "print('old')\n" {
+		t.Errorf("execution overwrote the syntax checkpoint: kind=%s bytes=%q", d.CheckpointKind, d.CheckpointBytes)
+	}
+
+	// The executor's own answer decides success.
+	zero, one := 0, 1
+	mk := func(v interface{}) *ToolResult { b, _ := json.Marshal(v); return &ToolResult{Success: true, Data: b} }
+	if !executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 0})) {
+		t.Error("exit 0 is a success")
+	}
+	if executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 1})) {
+		t.Error("exit 1 is not a success")
+	}
+	if executionSucceeded("run_command", mk(RunCommandOutput{ExitCode: 0, TimedOut: true})) {
+		t.Error("a killed command is not a success")
+	}
+	if !executionSucceeded("run_background", mk(RunBackgroundOutput{Running: true})) {
+		t.Error("a server still serving after its settle window is a success")
+	}
+	if executionSucceeded("run_background", mk(RunBackgroundOutput{Running: false, ExitCode: &one})) {
+		t.Error("a background job that died with exit 1 is not a success")
+	}
+	if !executionSucceeded("run_background", mk(RunBackgroundOutput{Running: false, ExitCode: &zero})) {
+		t.Error("a background script that exited 0 is a success")
+	}
+}
+
+// --- swallowed-content detection (scenario D, 2026-09-15) ------------------
+//
+// A write_file whose content string carries an unescaped `"` closes the JSON
+// string early; the file's remainder is absorbed into a junk key that the
+// typed struct discards, so a truncated file lands reported as a clean write.
+// The envelope parses, so extractModelResponse cannot catch it — the loop's
+// post-parse detector must.
+
+func TestKnownArgKeysReadsTheToolSchema(t *testing.T) {
+	k := knownArgKeys("write_file")
+	if !k["path"] || !k["content"] || len(k) != 2 {
+		t.Fatalf("write_file keys = %v, want {path, content}", k)
+	}
+	if e := knownArgKeys("edit_file"); !e["old_str"] || !e["new_str"] || !e["path"] {
+		t.Errorf("edit_file keys = %v, want path/old_str/new_str", e)
+	}
+	if knownArgKeys("no_such_tool") != nil {
+		t.Error("an unknown tool must yield nil, not a claim about its shape")
+	}
+}
+
+func TestAnUnescapedQuoteTruncatesTheWriteAndIsCaught(t *testing.T) {
+	// The D shape, minimized: content is `<script>x("y"` and the bare quote
+	// after it ends the string; the rest of the "file" becomes a long key
+	// with value "DONE".
+	raw := `{"type":"tool_call","name":"write_file","args":{"path":"a.html","content":"<script>x(\"y\"",");\nthe rest of the file body running well past forty characters\n</script>":"DONE"}}`
+
+	parsed, err := extractModelResponse(raw)
+	if err != nil {
+		t.Fatalf("the envelope is valid JSON and must parse: %v", err)
+	}
+	var in WriteFileInput
+	if e := json.Unmarshal(parsed.Args, &in); e != nil {
+		t.Fatalf("args decode: %v", e)
+	}
+	// The bug: the typed decode silently truncated the file.
+	if strings.Contains(in.Content, "</script>") {
+		t.Fatalf("expected the truncated shape (no </script>), got %q", in.Content)
+	}
+	// The fix: the loop's detector refuses it and explains why.
+	fb, bad := swallowedContentFeedback(parsed.Name, parsed.Args)
+	if !bad {
+		t.Fatal("a content string cut by an unescaped quote must be caught")
+	}
+	if !strings.Contains(fb, "unescaped") || !strings.Contains(fb, "NOT performed") {
+		t.Errorf("feedback must name the cause and say the write did not happen:\n%s", fb)
+	}
+}
+
+func TestACleanWriteIsNotFlaggedAsSwallowed(t *testing.T) {
+	args, _ := json.Marshal(WriteFileInput{
+		Path:    "templates/index.html",
+		Content: "<!DOCTYPE html>\n<html>\n<script>const x = \"ok\";</script>\n</html>\n",
+	})
+	if _, bad := swallowedContentFeedback("write_file", args); bad {
+		t.Error("a well-formed write must not be flagged")
+	}
+	// An edit_file with real, correctly-escaped multi-line bodies is clean too.
+	eargs, _ := json.Marshal(EditFileInput{
+		Path: "app.py", OldStr: "def f():\n    return 1\n", NewStr: "def f():\n    return 2\n",
+	})
+	if _, bad := swallowedContentFeedback("edit_file", eargs); bad {
+		t.Error("a well-formed edit must not be flagged")
+	}
+}
+
+func TestAShortUnexpectedKeyIsNotMistakenForSwallowedContent(t *testing.T) {
+	// A model that adds a small stray field (a short identifier-shaped key) is
+	// not the truncation shape — that is liftMissingArgs / harmless territory,
+	// and flagging it would refuse a real write.
+	raw := `{"path":"a.html","content":"<html></html>","note":"fyi"}`
+	if _, bad := swallowedContentFeedback("write_file", json.RawMessage(raw)); bad {
+		t.Error("a short extra key must not trip the detector")
+	}
+}
+
+func TestNonEditToolsAreNotSubjectToTheContentCheck(t *testing.T) {
+	// read_file has no long free-text field; an odd key there is not this bug.
+	raw := `{"path":"a.py","this key is long enough to look like leaked content":"x"}`
+	if _, bad := swallowedContentFeedback("read_file", json.RawMessage(raw)); bad {
+		t.Error("a tool with no content/old_str/new_str field must be exempt")
+	}
+}
+
+// --- fenced channel session-wide disable (scenarios C, E, 2026-09-15) -------
+//
+// The fenced sub-call stalls (opens a stream, then silence) as a property of
+// the session's llama state, so once one file's fetch stalls the next file's
+// stalls too. After the first stall the channel is off session-wide and writes
+// go inline (now safe via the swallowed-content detector), instead of paying a
+// ~25s watchdog cut per remaining file.
+
+func TestFencedChannelDisablesAfterOneStall(t *testing.T) {
+	ctx := &AgentContext{}
+	if fencedChannelDisabledForSession(ctx) {
+		t.Fatal("a clean session must not have the channel disabled")
+	}
+	ctx.FencedStalls = fencedSessionStallLimit
+	if !fencedChannelDisabledForSession(ctx) {
+		t.Fatal("reaching the stall limit must disable the channel session-wide")
+	}
+}
+
+func TestFencedFetchMakesNoSubCallOnceTheSessionIsDisabled(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	ctx := llmTestCtx(srv.URL)
+	ctx.FencedStalls = fencedSessionStallLimit // already stalled earlier this run
+
+	_, err := fetchFencedContent(ctx, "the original @fenced call", "second_file.py")
+	if err == nil {
+		t.Fatal("a disabled fenced channel must not resolve content")
+	}
+	if !strings.Contains(err.Error(), "stalled") {
+		t.Errorf("the error should explain the channel stalled: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 0 {
+		t.Errorf("no sub-call may be made once the channel is disabled, got %d", calls)
+	}
+}
+
+// A conversationally-phrased BUILD request must not be misread as a question
+// and capped at the conversational tier. The lost-and-found acceptance prompt
+// (2026-09-15) described item fields as "(what it is, where it was found)";
+// the ", where" relative clause tripped the question heuristic, so a full
+// web-app build was classified T0 chat, capped at 12 turns, and never
+// finished. A relative clause keeps subject-verb order; only an inverted
+// clause ("what DOES x do") is a question.
+func TestClassifyAgentTierDescriptiveWhClauseIsNotAQuestion(t *testing.T) {
+	build := "our school office gets buried in lost property. i want a simple web " +
+		"page where a staff member can post an item (what it is, where it was found) " +
+		"and later, when someone comes for it, mark it as claimed with the claimants " +
+		"name so it drops off the open list onto a claimed list. it needs to keep " +
+		"working after the office pc restarts. python please, and put how to run it in a readme"
+	if isQuestionMessage(build) {
+		t.Errorf("a descriptive field list (what it is, where it was found) must not read as a question")
+	}
+	if got := classifyAgentTier(build); got == Tier0Conversational {
+		t.Errorf("classifyAgentTier = T0 — a web-app build must not be capped at the conversational tier")
+	}
+	// Inversion is still a question, with or without a '?'. The clause opener
+	// is the wh-word immediately after ", " or ". ".
+	for _, q := range []string{
+		"In orders.py, what does find_duplicates do",
+		"the config loads. where is it read from",
+		"looks fine. how do I run the tests",
+	} {
+		if !isQuestionMessage(q) {
+			t.Errorf("inverted wh-clause must read as a question: %q", q)
+		}
+	}
+	// Relative clauses are descriptive, not questions.
+	for _, d := range []string{
+		"save the row with what it is and where it came from",
+		"log when it happened and who it belonged to",
+	} {
+		if isQuestionMessage(d) {
+			t.Errorf("relative clause must not read as a question: %q", d)
+		}
+	}
+}
+
+// Audit follow-up: a field list with PAST-tense wh-clauses must not read as a
+// question either. Past auxiliaries were dropped from the inverted-question
+// set, so "(what was lost, where were they found)" stays a build request.
+func TestPastTenseFieldClauseIsNotAQuestion(t *testing.T) {
+	for _, d := range []string{
+		"log an incident: what was lost, where were they found, who did report it",
+		"store what was returned and where it had been",
+	} {
+		if isQuestionMessage(d) {
+			t.Errorf("a past-tense field list must not read as a question: %q", d)
+		}
+	}
+	// Present-tense and modal questions are still detected mid-message.
+	for _, q := range []string{
+		"In orders.py, what does find_duplicates do",
+		"the config loads. how do I run it",
+	} {
+		if !isQuestionMessage(q) {
+			t.Errorf("present/modal inverted question must still be detected: %q", q)
+		}
+	}
+}
+
+// Work requests with no task verb were read as questions: a wh-word matched
+// as a prefix ("Whole", "Whenever", "However"), a subordinate "When ..."
+// clause, an imperative "Do ...", a mid-message "Do not ...", or a "?" in a
+// URL. Classified T0, the run was capped and never planned, and for a client
+// that sends no contract the action gate never armed.
+func TestVerblessWorkIsNotAQuestion(t *testing.T) {
+	for _, msg := range []string{
+		"Whole-number inputs should be rejected by the parser in calc.py",
+		"Whenever a user submits the form, store the entry in entries.json",
+		"Whatever port is free, serve the site on it with a small Flask app",
+		"However you structure it, the CLI in tool.py needs a --verbose flag",
+		"Whichever sorting approach you pick, the rows in report.py need ordering by date",
+		"When the timer hits zero the page in index.html should flash red",
+		"Do the same thing for the /users route",
+		"solve.py should print the total of input.txt. Do not hardcode the answer.",
+		"The endpoint at /api/items?page=2 returns nothing when the list is empty",
+		"the pattern `a?b` in parse.py matches too much",
+	} {
+		if got := classifyAgentTier(msg); got == Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = T0, want a work tier", msg)
+		}
+	}
+}
+
+// The questions stay questions.
+func TestQuestionsStillClassifyAsQuestions(t *testing.T) {
+	for _, msg := range []string{
+		"why does the game store direction as a string",
+		"what does the lens actually score here",
+		"what's the difference between run_command and run_background",
+		"is the sandbox mounted read-only?",
+		"When does the cache expire",
+		"where is the config file read",
+		"When did we switch to SQLite",
+		"how is the retry delay computed",
+		"who calls parse_config",
+		"which file handles authentication",
+		"Do you know which module owns the cache",
+		"In orders.py, what does find_duplicates do",
+		"what does find_duplicates do? Just explain.",
+		"The docs mention a cache. Is it shared between sessions",
+	} {
+		if got := classifyAgentTier(msg); got != Tier0Conversational {
+			t.Errorf("classifyAgentTier(%q) = %v, want T0", msg, got)
+		}
+	}
+}
+
+// A client that declared work is never tiered as a question, whatever the
+// message looks like. "Can the page also show today's date" is a request
+// phrased as a question; only the declaration can tell.
+func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
+	const msg = "Can the page in index.html also show today's date"
+	classified := classifyAgentTier(msg)
+	if classified != Tier0Conversational {
+		t.Fatalf("precondition: %q classified %v, want T0", msg, classified)
+	}
+	for _, c := range []struct {
+		name string
+		tc   *TaskContract
+		in   Tier
+		want Tier
+	}{
+		{"declared work", &TaskContract{TaskMode: TaskModeWork}, classified, Tier2Medium},
+		{"declared question", &TaskContract{TaskMode: TaskModeQuestion}, classified, Tier0Conversational},
+		{"no contract", nil, classified, Tier0Conversational},
+		{"work never lowers a tier", &TaskContract{TaskMode: TaskModeWork}, Tier3Hard, Tier3Hard},
+	} {
+		if got := declaredTier(c.tc, c.in); got != c.want {
+			t.Errorf("%s: declaredTier = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// handleAgent applies it once the contract is validated, and resets the
+	// turn cap with it.
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	set := strings.Index(body, "ctx.TaskContract = validatedContract")
+	apply := strings.Index(body, "declaredTier(validatedContract, ctx.Tier)")
+	if set < 0 || apply < set {
+		t.Error("handleAgent does not apply the declared tier after validating the contract")
+	}
+	if !strings.Contains(body[apply:apply+200], "TierMaxTurns(t)") {
+		t.Error("the declared tier does not reset the turn cap")
 	}
 }

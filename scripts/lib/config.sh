@@ -141,14 +141,8 @@ load_config
 
 # GHCR namespace for the service images (templates/*.yaml.tmpl render
 # ghcr.io/${ATLAS_GHCR_OWNER}/...). Default: upstream-published images.
-ATLAS_GHCR_OWNER="${ATLAS_GHCR_OWNER:-itigges22}"
+ATLAS_GHCR_OWNER="${ATLAS_GHCR_OWNER:-inferstep}"
 export ATLAS_GHCR_OWNER
-
-# Lens training-data corpus hostPath (atlas-proxy template). Defaulted
-# here so an atlas.conf written before the key existed still renders a
-# non-empty hostPath in the manifest.
-ATLAS_LENS_TRAINING_DIR="${ATLAS_LENS_TRAINING_DIR:-${ATLAS_DATA_DIR:-/opt/atlas/data}/lens_training}"
-export ATLAS_LENS_TRAINING_DIR
 
 # Proxy runtime uid/gid (atlas-proxy template securityContext). The proxy
 # writes the /workspace hostPath; it must run as the owner of that dir.

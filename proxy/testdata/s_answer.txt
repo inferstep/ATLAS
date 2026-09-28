@@ -1,0 +1,6 @@
+The pricing cache hit rate is low because of a key mismatch in `keys.py`. 🔍 **The Issue:**
+
+1. **`write_key`** (used when storing a result) uses the customer's **`id`**: `sku:customer_id`.
+2. **`read_key`** (used when looking up a result) uses the customer's **`tier`**: `sku:customer_tier`.
+
+Because the keys used to store the data don't match the keys used to retrieve it, the cache will almost always result in a miss. To fix this, `read_key` should be updated to use the customer's `id` to match the storage logic.

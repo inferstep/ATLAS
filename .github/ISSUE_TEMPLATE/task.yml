@@ -1,0 +1,24 @@
+name: Task
+description: A refactor, CI change, dependency update, or other chore
+type: Task
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing
+      description: The change, and where in the repo it happens.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What this fixes or makes possible.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: How a reviewer can tell it's finished (a test, a command, a file).

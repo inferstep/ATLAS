@@ -53,7 +53,7 @@ Each user message drives an agent loop that runs until the model emits
 |------|-------------|-----------|
 | T0 | Conversational (hi, thanks) | Agent loop capped at 5 turns; no plan mode; text response only |
 | T1 | Config/data/style/prose files, or under 10 lines | Tool calls executed directly. No V3 offload. |
-| T2 | ≥ 10 lines with logic indicators, or a recognized code/markup extension | `write_file` / `edit_file` may route through V3 (PlanSearch / DivSampling / Budget Forcing / PR-CoT / Refinement / Derivation, S\* candidate selection). |
+| T2 | ≥ 10 lines with logic indicators, or a recognized code/markup extension | `write_file` / `edit_file` may route through V3 (PlanSearch / DivSampling / Budget Forcing / PR-CoT / Refinement, lens candidate selection). |
 | T3 | Escalated from cyclomatic complexity (CC ≥ 16) | Same V3 treatment as T2. |
 
 ## Usage
@@ -72,7 +72,7 @@ atlas-proxy-v2                          # listens on :8090
 |---------|---------|-------------|
 | ATLAS_INFERENCE_URL | http://localhost:8080 | llama-server inference URL |
 | ATLAS_LLAMA_URL | (= ATLAS_INFERENCE_URL) | Override for llama-server target |
-| ATLAS_LENS_URL | http://localhost:8099 | Geometric Lens API (C(x)+G(x) scoring, pattern cache) |
+| ATLAS_LENS_URL | http://localhost:8099 | Geometric Lens API (C(x)+G(x) scoring) |
 | ATLAS_SANDBOX_URL | http://localhost:30820 | Code execution sandbox |
 | ATLAS_V3_URL | http://localhost:8070 | V3 pipeline service |
 | ATLAS_PROXY_PORT | 8090 | Proxy listen port |

@@ -1,0 +1,45 @@
+# Settings for the contributor bot (scripts/bot/atlas_bot.py), in one place
+# so the numbers in CONTRIBUTING and GOVERNANCE have a single source.
+# The bot reads this file from the default branch.
+
+bot:
+  login: inferstep-atlas-bot[bot]   # only this account's comments count as the bot's
+
+claims:
+  ping_after_days: 5       # no linked PR by then: the claimant gets a reminder
+  release_after_days: 7     # still none: the claim is released and the issue is Ready again
+  max_open: 2               # open claims per contributor
+  max_open_first_timer: 1   # before their first merged pull request
+
+project:
+  owner: inferstep
+  number: 1
+
+links:
+  contributing: https://github.com/inferstep/ATLAS/blob/main/CONTRIBUTING.md
+  start_here: https://github.com/orgs/inferstep/projects/1/views/1
+
+rfc_dedupe:
+  max_links: 5
+
+# Path prefix -> area label, for pull requests. A file can match several.
+areas:
+  proxy/: area/proxy
+  tui/: area/tui
+  atlas/: area/cli
+  v3-service/: area/v3
+  geometric-lens/: area/lens
+  inference/: area/inference
+  sandbox/: area/sandbox
+  extensions/: area/extensions
+  scripts/: area/install
+  docker-compose: area/install
+  .github/: area/ci
+  docs/: area/docs
+  README.md: area/docs
+
+# A fix that lands on this branch closes the issues its commit or pull
+# request names with "Closes #N" (GitHub does that only on main).
+done:
+  branch: dev
+  lookback_days: 3          # how far back each sync looks

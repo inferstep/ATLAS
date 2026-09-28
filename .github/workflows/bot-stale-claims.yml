@@ -1,0 +1,50 @@
+name: bot · stale claims
+
+# Daily: a /claim with no linked pull request gets a reminder after
+# claims.ping_after_days and is released after claims.release_after_days
+# (.github/atlas-bot.yml). Scheduled runs use the default branch's copy.
+on:
+  schedule:
+    - cron: '17 7 * * *'   # daily, 07:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print what would change, change nothing
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: bot-project
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    if: github.repository == 'inferstep/ATLAS'
+    runs-on: ubuntu-latest
+    environment:
+      name: bots
+      deployment: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/bot
+            .github/atlas-bot.yml
+          sparse-checkout-cone-mode: false
+
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.ATLAS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.ATLAS_BOT_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: read
+          permission-organization-projects: write
+
+      - run: python3 scripts/bot/atlas_bot.py stale
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          ATLAS_BOT_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}

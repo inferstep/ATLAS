@@ -23,7 +23,7 @@ EXT_MISMATCH = REPO / "extensions" / "vscode" / "src" / "workspace" / "mismatch.
 
 # Tools that write to a file the user can see. Anything registered in the
 # proxy that mutates a path belongs here; read-only tools do not.
-EDIT_TOOLS = {"write_file", "edit_file", "structural_edit", "insert_after"}
+EDIT_TOOLS = {"write_file", "edit_file", "structural_edit", "insert_after", "replace_lines"}
 # Mutating but diff-less: the extension prompts for these without a preview.
 MUTATING_NO_DIFF = {"delete_file", "move_file"}
 

@@ -96,7 +96,6 @@ docker compose logs --tail 50
 | `"lens": false` / "Lens unavailable — verification disabled" | [Lens 未加载/不可用](#lens-未加载不可用) |
 | 每个候选都得到 `cx_energy: 0.0`、`gx_score: 0.5` | [所有分数接近 0.5](#所有分数接近-05) |
 | lens 日志中出现 "embedding extraction failed" | [嵌入向量提取失败](#嵌入向量提取失败) |
-| 重训练时 503 `models directory is mounted read-only` | [`/internal/lens/retrain` 返回 503](#internallensretrain-返回-503-models-directory-is-mounted-read-only) |
 | Sandbox 返回 `"error_type": "Timeout"` | [代码执行超时](#代码执行超时) |
 | Sandbox 对特定语言报错 | [语言不受支持](#语言不受支持) |
 | `LIMITED MODE: running N tasks` 的 N 低于 `--tasks` | [bench 运行的任务数少于请求数](#bench-运行的任务数少于请求数limited-mode-running-n-tasks-的-n-小于---tasks) |
@@ -386,9 +385,9 @@ fatal: fetch-pack: invalid index-pack output
 
 ### 代理无法写入工作区（`.atlas.tmp: permission denied`）
 
-**症状：** 所有 `write_file`/`edit_file` 都以 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` 失败（随后 agent 会四处寻找"可写的子目录"）。lens 训练样本也不再入库（代理日志中 `/data/lens_training` 写入失败）。
+**症状：** 所有 `write_file`/`edit_file` 都以 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` 失败（随后 agent 会四处寻找"可写的子目录"）。
 
-**原因：** atlas-proxy 镜像以内置的非 root 用户（uid 1001，`atlas`）运行，但绑定挂载到 `/workspace`（`ATLAS_PROJECT_DIR`）和 `/data/lens_training` 的宿主目录归操作者的 uid 所有。读取可以（模式 755），写入全部被拒绝。`.env` 早于 `ATLAS_PROXY_UID` 的安装在拉取加固后的代理镜像后会遇到这个问题。
+**原因：** atlas-proxy 镜像以内置的非 root 用户（uid 1001，`atlas`）运行，但绑定挂载到 `/workspace`（`ATLAS_PROJECT_DIR`）的宿主目录归操作者的 uid 所有。读取可以（模式 755），写入全部被拒绝。`.env` 早于 `ATLAS_PROXY_UID` 的安装在拉取加固后的代理镜像后会遇到这个问题。
 
 **解决：** 像 sandbox 已经做的那样，让代理以调用者身份运行：
 
@@ -805,7 +804,7 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **原因：** 嵌入服务器提供的 `/embedding` 约定，与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时所用的不一致 —— 通常是逐 token 而非池化，或未归一化而非 L2 归一化（‖v‖≈60 而不是 ~1）。维度相同、分布不同；cost-field MLP 会外推出一个巨大的能量，`cx_normalized` 随之饱和。这通常发生在没有 `--pooling mean` 就重建服务栈之后（llama-server 没有 `--embd-normalize` 这个服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize` 逐次请求 L2 归一化）。
 
-**验证：** lens 会在启动时以及每次重载/重训练时，对存储的指纹重新打分。检查 `/ready` 和 `/health`：
+**验证：** lens 会在自检中（启动时，以及可重试的失败之后由 `/ready` 重新运行时）对存储的指纹重新打分。检查 `/ready` 和 `/health`：
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
@@ -817,9 +816,9 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   如果是 `shape per_token`，或 `norm` 远离 1.0，说明服务器配置有误。
-2. 设置 `ATLAS_EMBED_POOLING=mean`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。
-3. 服务器提供正确约定后，启动自检的指纹校验会通过，`/ready` 返回 200。如果工件早于指纹机制，一次重训练（`atlas lens retrain`）会写入指纹，并把 `embedding_contract` 刻进 `model_identity.json`。
+   池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
+2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
+3. 服务器提供正确约定后，启动自检的指纹校验会通过，`/ready` 返回 200。如果工件早于指纹机制，一次重建（`atlas lens build`）会写入指纹，并把 `embedding_contract` 刻进 `model_identity.json`。
 
 ### 嵌入向量提取失败
 
@@ -836,14 +835,6 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` 标志由 llama-server 的入口点在每种部署模式（Compose、裸机、K3s）中都会设置 —— 自嵌入始终开启，因为 Geometric Lens 依赖它。逐层 hidden-states 扩展也由原生的 `/embedding` 路径（而非 `/v1/embeddings`）承载。
-
-### `/internal/lens/retrain` 返回 503 "models directory is mounted read-only"
-
-**现象：** 对 lens 服务 POST `/internal/lens/retrain` 返回 HTTP 503，带 ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``。
-
-**原因：** 标准的 Compose 部署把 lens 模型目录以只读（`:ro`）挂载进容器，因此服务内的重训练端点无法写出新权重。该端点在训练前会探测可写性，宁可提前拒绝也不浪费一轮训练。
-
-**解决方法：** 在主机侧运行重训练 —— `atlas lens retrain`（反馈语料）或 `atlas lens build`（bench 候选）在主机上写出工件，然后 `docker compose restart geometric-lens` 加载它们（服务在启动时读取工件）。基准驱动的在线重校准（`lens_feedback`）会记录这次拒绝并保留其样本缓冲区，因此不会丢失任何东西。
 
 ---
 
@@ -912,14 +903,14 @@ atlas bench --run-id <your-run-id> --tasks 200
 2. `-ngl 99`（`--n-gpu-layers`）—— 所有层是否已卸载到 GPU？
 3. NVIDIA Container Toolkit —— 容器运行时是否已配置 GPU 访问？
 
-**预期性能：** 在 RTX 5060 Ti 16GB 上启用语法强制执行时约 51 tok/s。
+**预期性能：** 目前没有参考数值；吞吐量取决于模型、量化方式和语法模式。此前约 51 tok/s 的数字来自一个已不存在的配置。
 
 ### V3 Pipeline 需要几分钟
 
 对于 T2 文件来说这是正常的。V3 pipeline 会进行多次 LLM 调用：
 - **仅探测（最佳情况）：** 约 10-15 秒（1 次生成 + 1 次评分 + 1 次测试）
 - **Phase 1 生成：** 约 1-2 分钟（PlanSearch + DivSampling + 评分）
-- **Phase 3 修复：** 约 2-5 分钟（PR-CoT + Refinement + Derivation，如果需要）
+- **Phase 3 修复：** 约 2-5 分钟（PR-CoT + Refinement，如果需要）
 
 如需更快（但质量较低）的结果：
 - 保持文件不足 10 行（维持 T1，不触发 V3）—— 可识别的代码扩展名达到 10 行以上时，无论复杂度如何都会归入 T2

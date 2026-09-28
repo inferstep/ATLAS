@@ -25,7 +25,8 @@ Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 
 `fastapi`, `uvicorn`, `pydantic`, `httpx`, `pyyaml`
 (lens/sandbox — MIT/BSD/Apache-2.0); `numpy` (BSD-3); `xgboost` /
-`xgboost-cpu` (Apache-2.0); `scikit-learn` (BSD-3); `torch` (BSD-style,
+`xgboost-cpu` (Apache-2.0); `scikit-learn` (BSD-3); `jinja2` (BSD-3,
+the sandbox's template check); `torch` (BSD-style,
 lens + v3-service images and the `train` extra); `defusedxml` (PSF);
 `tree-sitter` + grammar packages (MIT); `python-multipart`
 (Apache-2.0); `tiktoken` (MIT); `gguf` (MIT); `huggingface_hub`
@@ -65,9 +66,9 @@ under `itigges22/*`, hash-pinned in the registry.
 ## Research implementations
 
 ATLAS implements techniques from published research (clean-room, from
-the papers): PlanSearch, budget forcing, EWC, Thompson sampling
-routing, activation steering, speculative-decode-era patches,
-and others — the full citation list with arXiv links is
+the papers): PlanSearch, budget forcing, activation steering,
+speculative-decode-era patches, and others — the full citation list
+with arXiv links is
 `docs/SOURCES.md`. No third-party research *code* is vendored.
 
 ## Benchmarks

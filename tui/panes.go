@@ -542,8 +542,7 @@ func renderStatsPane(p *pipelineState, width int,
 // slashCommandList drives the slash-mode autocomplete hint. Order is
 // the order users see; keep frequent commands first.
 var slashCommandList = []string{
-	"/help", "/good", "/bad", "/review",
-	"/deny", "/accept", "/redo",
+	"/help", "/review", "/redo",
 	"/clear", "/compact",
 	"/add", "/drop", "/context",
 	"/diff", "/commit", "/undo",
@@ -616,42 +615,77 @@ var permBorderStyle = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
 	BorderForeground(lipgloss.Color("214"))
 
-// permPromptRows is the fixed rendered height of the permission modal box
-// (2 border rows + title + tool + message + legend). Kept constant so the
-// vertical layout budget can reserve for it before the box is rendered; each
-// content line is truncated to one row so the height never grows.
-const permPromptRows = 6
+// The permission modal shows the request whole. Approval is the only
+// per-command control, and a box fixed at one row per line cut a command at
+// the terminal width: the tail of a chain (`... && rm -rf src`) was never
+// seen by the person approving it.
+
+// permPromptLines are the modal's content rows at innerW: title, tool, the
+// message wrapped to its end, and the legend. A message longer than maxRows
+// allows keeps its first lines and its last two, and says how many are not
+// shown between them, so the end of a command is always on screen.
+func permPromptLines(pp *permPrompt, innerW, maxRows int) []string {
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")).Bold(true).
+		Render("⚠ Permission required")
+	tool := chatToolStyle.Render("tool · " + pp.toolName)
+	msg := pp.message
+	if strings.TrimSpace(msg) == "" {
+		msg = "Allow " + pp.toolName + "?"
+	}
+	var body []string
+	for _, ln := range strings.Split(msg, "\n") {
+		body = append(body, strings.Split(ansi.Hardwrap(ln, innerW, true), "\n")...)
+	}
+	room := maxRows - 2 - 3 // borders; title, tool and legend
+	if room < 3 {
+		room = 3
+	}
+	if len(body) > room {
+		head, tail := body[:room-3], body[len(body)-2:]
+		hidden := len(body) - len(head) - len(tail)
+		body = append(append(append([]string{}, head...),
+			dimStyle.Render(fmt.Sprintf("… %d lines not shown …", hidden))), tail...)
+	}
+	legendText := "[y] allow once   [a] allow for session   [n] deny"
+	if pp.oneTimeOnly {
+		legendText = "[y] allow this one   [n] deny"
+	}
+	legend := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Render(legendText)
+
+	lines := []string{title, tool}
+	for _, ln := range body {
+		lines = append(lines, chatAssistantStyle.Render(ln))
+	}
+	lines = append(lines, legend)
+	for i, ln := range lines {
+		if lipgloss.Width(ln) > innerW {
+			lines[i] = ansi.Truncate(ln, innerW, "")
+		}
+	}
+	return lines
+}
+
+// permPromptHeight is the rendered height of the modal, borders included, so
+// the layout can reserve it before the box is drawn. 0 without a request.
+func permPromptHeight(pp *permPrompt, innerW, maxRows int) int {
+	if pp == nil {
+		return 0
+	}
+	return len(permPromptLines(pp, innerW, maxRows)) + 2
+}
 
 // renderPermPrompt renders the permission approval modal as a bordered box
 // `innerW` wide (matching the input box's content width). Returns "" when
-// there is no pending request. Each content line is truncated to the box width
-// so the box is always exactly permPromptRows tall.
-func renderPermPrompt(pp *permPrompt, innerW int) string {
+// there is no pending request. The box is exactly permPromptHeight tall.
+func renderPermPrompt(pp *permPrompt, innerW, maxRows int) string {
 	if pp == nil {
 		return ""
 	}
 	if innerW < 10 {
 		innerW = 10
 	}
-	title := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("214")).Bold(true).
-		Render("⚠ Permission required")
-	tool := chatToolStyle.Render("tool · " + pp.toolName)
-	msg := strings.ReplaceAll(pp.message, "\n", " ")
-	if strings.TrimSpace(msg) == "" {
-		msg = "Allow " + pp.toolName + "?"
-	}
-	msg = chatAssistantStyle.Render(msg)
-	legend := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("117")).
-		Render("[y] allow once   [a] allow for session   [n] deny")
-	lines := []string{title, tool, msg, legend}
-	for i, ln := range lines {
-		if lipgloss.Width(ln) > innerW {
-			lines[i] = ansi.Truncate(ln, innerW, "")
-		}
-	}
-	return permBorderStyle.Width(innerW).Render(strings.Join(lines, "\n"))
+	return permBorderStyle.Width(innerW).Render(strings.Join(permPromptLines(pp, innerW, maxRows), "\n"))
 }
 
 // renderBashHint shows a single warning row above the bash input box.
@@ -732,12 +766,29 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		headerH = 1
 		statsH  = 1
 	)
-	// Reserve rows for the permission modal (rendered above the input box)
-	// so nothing clips and View() height stays == terminal height.
-	permH := 0
-	if perm != nil {
-		permH = permPromptRows
+	// Sidebar gets a fixed 26 cols when there's enough room. Dropped
+	// on truly narrow terminals (<90 cols) so the chat/events panes
+	// don't get squeezed unreadably small. The previous 110-col
+	// threshold meant the safe-default render (width=100, used before
+	// the first WindowSizeMsg) hid the sidebar entirely — making it
+	// look like the feature was broken at startup.
+	sidebarW := 0
+	if width >= 90 && !hideFiles {
+		sidebarW = 26
 	}
+	rightW := width - sidebarW
+	if rightW < 20 {
+		// Pathological narrow case — a 10-col terminal still has to
+		// produce *some* output. Force a minimum so lipgloss doesn't
+		// see negative widths.
+		rightW = 20
+		sidebarW = 0
+	}
+	innerW := rightW - 2 // border consumes 2 cols on each box
+	if innerW < 10 {
+		innerW = 10
+	}
+
 	// Input box: 6 rows by default (title + 3 textarea rows + 2 border).
 	// bash/slash mode adds a one-row hint banner above, so reserve one
 	// extra row. help mode shows the multi-line slashCommandHelp body —
@@ -775,6 +826,15 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			pipelineH = 10
 		}
 	}
+	// Reserve rows for the permission modal (rendered above the input box)
+	// so nothing clips and View() height stays == terminal height. It gets
+	// what the other panes leave at their minimum: a 4-row pipeline and a
+	// 4-row chat.
+	permMax := height - headerH - statsH - inputH - eventsH - 4
+	if !hidePipeline {
+		permMax -= 4
+	}
+	permH := permPromptHeight(perm, innerW, permMax)
 	chatH := height - headerH - pipelineH - eventsH - statsH - inputH - permH
 	if chatH < 5 {
 		// Squeeze the pipeline (down to its 4-row minimum: title + one
@@ -790,29 +850,6 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		if chatH < 4 {
 			chatH = 4
 		}
-	}
-
-	// Sidebar gets a fixed 26 cols when there's enough room. Dropped
-	// on truly narrow terminals (<90 cols) so the chat/events panes
-	// don't get squeezed unreadably small. The previous 110-col
-	// threshold meant the safe-default render (width=100, used before
-	// the first WindowSizeMsg) hid the sidebar entirely — making it
-	// look like the feature was broken at startup.
-	sidebarW := 0
-	if width >= 90 && !hideFiles {
-		sidebarW = 26
-	}
-	rightW := width - sidebarW
-	if rightW < 20 {
-		// Pathological narrow case — a 10-col terminal still has to
-		// produce *some* output. Force a minimum so lipgloss doesn't
-		// see negative widths.
-		rightW = 20
-		sidebarW = 0
-	}
-	innerW := rightW - 2 // border consumes 2 cols on each box
-	if innerW < 10 {
-		innerW = 10
 	}
 
 	// Reset pane snapshots — populated by each pane's render below.
@@ -992,7 +1029,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	// Permission modal sits just above the input box so the y/a/n legend is
 	// next to where the user types. Reserved in the height budget above.
 	if perm != nil {
-		rightParts = append(rightParts, renderPermPrompt(perm, innerW))
+		rightParts = append(rightParts, renderPermPrompt(perm, innerW, permMax))
 	}
 	rightParts = append(rightParts, inputBox)
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, rightParts...)

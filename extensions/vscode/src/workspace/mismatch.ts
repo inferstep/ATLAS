@@ -26,6 +26,7 @@ const FILE_OP_KINDS: Record<string, FileOpKind> = {
 	edit_file: 'edit',
 	structural_edit: 'edit',
 	insert_after: 'edit',
+	replace_lines: 'edit',
 	delete_file: 'delete',
 	move_file: 'move',
 };

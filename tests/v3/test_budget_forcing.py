@@ -175,6 +175,20 @@ class TestGetSystemPrompt:
             assert "/nothink" not in prompt
             assert "think" in prompt.lower() or "step by step" in prompt.lower()
 
+    @pytest.mark.parametrize("tier", ["nothink", "light", "standard", "hard", "extreme"])
+    def test_every_generation_tier_preserves_exact_public_contracts(self, tier):
+        prompt = get_system_prompt(tier)
+        assert "public name and declaration as immutable" in prompt
+        assert "spelling, capitalization" in prompt
+        assert "parameter order and kinds (including / and * markers)" in prompt
+        assert "defaults, and type annotations exactly" in prompt
+        assert "do not substitute aliases" in prompt
+        assert "laziness, stopping conditions, ordering" in prompt
+        assert "complete, syntactically valid requested artifact" in prompt
+        assert "never import that artifact from itself" in prompt
+        assert "verify the artifact parses" in prompt
+        assert "do not add demos, tests, or main blocks unless requested" in prompt
+
 
 # ---------------------------------------------------------------------------
 # Test: BudgetForcing class (integration)
@@ -349,13 +363,15 @@ class TestAC1C4TokenBudgetCompliance:
 # ---------------------------------------------------------------------------
 
 class TestAC1C5NothinkNoRegression:
-    """AC-1C-5: /nothink mode matches V2 behavior exactly."""
+    """AC-1C-5: /nothink keeps direct generation semantics."""
 
-    def test_nothink_system_prompt_matches_v2(self):
-        """The nothink prompt keeps V2's wording minus the Qwen-specific
-        /nothink token (thinking is disabled by the shared client)."""
+    def test_nothink_system_prompt_retains_direct_prefix(self):
+        """The nothink prompt keeps its direct wording and adds only the
+        model-agnostic artifact contract."""
         prompt = get_system_prompt("nothink")
-        assert prompt == "You are an expert programmer. Respond directly and concisely."
+        assert prompt.startswith(
+            "You are an expert programmer. Respond directly and concisely.")
+        assert "explicitly requested public name and declaration" in prompt
 
     def test_nothink_chatml_has_no_prefill(self, bf_enabled):
         """The closed-think-block prefill was Qwen-specific and breaks

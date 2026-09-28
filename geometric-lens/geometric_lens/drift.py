@@ -5,8 +5,9 @@ health checks green — the 2026-07-15 bench incident: a rebuilt embed
 server switched to per-token unnormalized responses, C(x) served ~600
 against a calibrated range of ~20-30, and pods stayed Ready throughout.
 A fingerprint written at training time makes that state detectable: the
-boot self-test (and every reload/retrain) re-scores the references and
-fails /ready when any deviates beyond tolerance.
+lens self-test (at boot, and again from /ready after a retryable failure)
+re-scores the references and fails /ready when any deviates beyond
+tolerance.
 
 File format (drift_fingerprint.json, next to cost_field.pt):
 
@@ -100,11 +101,10 @@ def check_fingerprint(models_dir: str,
     if fp is None:
         return False, True, ""
     for ref in fp["references"]:
-        try:
-            got = float(score_fn(ref["text"]))
-        except Exception as exc:
-            return True, False, (f"fingerprint reference could not be "
-                                 f"scored: {type(exc).__name__}: {exc}")
+        # A reference that cannot be scored raises: that is a failed
+        # measurement, not drift. Reading it as drift made a passing
+        # model-server hiccup at boot a lasting "drifted" verdict.
+        got = float(score_fn(ref["text"]))
         expected = ref["expected_energy"]
         tol = max(abs(expected) * fp["tolerance_pct"] / 100.0,
                   MIN_ABS_TOLERANCE)
@@ -113,8 +113,8 @@ def check_fingerprint(models_dir: str,
                 f"embedding stack drift: reference scored {got:.2f}, "
                 f"expected {expected:.2f} ±{fp['tolerance_pct']:g}%. The "
                 f"serving stack no longer matches what the lens artifacts "
-                f"were trained on — check the embed server's `--pooling "
-                f"mean` flag and the loaded model."
+                f"were trained on — check the embed server's `--pooling` "
+                f"flag (ATLAS_EMBED_POOLING=none) and the loaded model."
             )
     return True, True, ""
 
@@ -125,8 +125,8 @@ def write_fingerprint(models_dir: str,
                       tolerance_pct: float = DEFAULT_TOLERANCE_PCT,
                       note: str = "") -> str:
     """Score the reference texts through the live stack and persist the
-    fingerprint next to the artifacts. Called after a successful retrain
-    so the expectations always describe the current weights + embedding
+    fingerprint next to the artifacts. Write it right after training, so
+    the expectations describe the current weights + embedding
     convention."""
     fp = validate_fingerprint({
         "tolerance_pct": tolerance_pct,

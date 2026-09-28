@@ -1,0 +1,41 @@
+name: scorecard
+
+# OpenSSF Scorecard: scores the repo's security practices (branch
+# protection, pinned actions, token permissions, signed releases, …),
+# publishes the result for the README badge, and uploads findings to the
+# Security tab. Scheduled runs use the default branch's copy of this file.
+on:
+  schedule:
+    - cron: '30 4 * * 1'   # weekly, Monday 04:30 UTC
+  push:
+    branches: [main]
+  branch_protection_rule:
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  analysis:
+    name: scorecard analysis
+    # Publishing is tied to this repo's identity; a fork has nothing to publish.
+    if: github.repository == 'inferstep/ATLAS'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write   # upload the SARIF to the Security tab
+      id-token: write          # publish_results signs the result with the workflow identity
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc  # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        with:
+          sarif_file: results.sarif

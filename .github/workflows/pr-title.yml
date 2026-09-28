@@ -1,0 +1,42 @@
+name: pr title
+
+# The PR title becomes the squash commit title, and release notes are
+# built from those titles, so it must be a conventional commit with the
+# component as scope: `type(scope): summary`, e.g. `fix(proxy): …` or
+# `docs(setup): …`. A `!` after the scope marks a breaking change.
+#
+# The title is read from the event payload through an environment
+# variable, never interpolated into the script, so a crafted title can't
+# run as shell. No checkout, no token.
+on:
+  pull_request:
+    branches: [main, dev]
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  pr-title:
+    name: pr title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          types='feat|fix|docs|chore|refactor|perf|test|build|ci|revert|style'
+          # Dependabot writes its own titles, and a group title can pass 100
+          # characters after a rebase (#180). Check its format, not its length.
+          len='{0,99}'
+          if [[ "$AUTHOR" == "dependabot[bot]" ]]; then len='*'; fi
+          re="^($types)\\([a-z0-9][a-z0-9._/-]*\\)!?:\\ [^[:space:]].${len}\$"
+          if [[ "$TITLE" =~ $re ]]; then
+            echo "ok: $TITLE"
+            exit 0
+          fi
+          echo "::error::PR title must look like 'type(scope): summary', e.g. 'fix(proxy): stop the retry loop'."
+          echo "::error::type is one of: ${types//|/, }. scope is the component in lowercase (proxy, tui, cli, v3, lens, sandbox, inference, install, ci, docs, zh-cn, …). Keep it under 100 characters."
+          echo "got: $TITLE"
+          exit 1

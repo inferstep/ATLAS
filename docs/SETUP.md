@@ -13,7 +13,7 @@ The install steps depend on your hardware + OS. Find the row that matches your s
 | NVIDIA RTX 50-series / Blackwell (B100, GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
 | NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
 | NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) | Unsupported — untested, no claims made; reports welcome |
-| AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) | Community-tested ([GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) | Community-tested ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](SETUP_MACOS.md)** (dedicated guide — hybrid native Metal + Docker) | Supported (maintainer-verified, M2 Pro) |
 | Intel Arc / Iris Xe | Linux | [Method 1: Docker — Vulkan](#vulkan--cross-vendor-fallback) | Preview — Vulkan is smoke-tested on lavapipe only; no real-GPU validation yet |
 | Snapdragon X Elite (laptops) | Linux | [Vulkan](#vulkan--cross-vendor-fallback) + [arm64 section](#arm64) | Preview (Linux arm64). Windows on ARM is Unsupported |
@@ -49,7 +49,7 @@ Single curl command that detects your distro, installs Docker + nvidia-container
 > Full arch table: [CUDA Compute Capability](#cuda-compute-capability-dockerfilev31).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 Or, from a checkout:
@@ -101,10 +101,10 @@ atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns
 ```bash
 # Run as your normal user; sudo elevates as needed (Docker install, etc).
 # Install ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 
 # Run via sudo. SUDO_USER is detected, install still ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
 
 # Real root login (no sudo) — install owned by root. Only do this if there's
 # no human user on the box (CI runner, container, etc).
@@ -117,11 +117,11 @@ pipe a moving `main` script into bash):
 # Pinned to a release: fetch the script AT the tag and install that tag.
 # The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
 # pinned to the matching cosign-signed images.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
   | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
 
 # Review before running: download, read, then execute the same bytes.
-curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
 less atlas-bootstrap.sh
 bash atlas-bootstrap.sh
 ```
@@ -140,12 +140,12 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
-| `ATLAS_GO_VERSION=1.26.2` | Go toolchain version installed for the TUI build (the TUI needs 1.26.2+; older installed toolchains auto-fetch it) |
+| `ATLAS_GO_VERSION=1.26.6` | Go toolchain version installed for the TUI build (the TUI needs 1.26.6+; older installed toolchains auto-fetch it) |
 
 **Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
@@ -217,7 +217,7 @@ This is the most heavily exercised deployment method: CI validates the compose f
 
 ```bash
 # 1. Clone
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 
 # 2. Install the ATLAS CLI (puts `atlas` in ~/.local/bin)
@@ -232,13 +232,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.2+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.6+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.6.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.6.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -375,12 +375,12 @@ For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t
 
 - No prebuilt arm64 images on GHCR yet — arm64 users must build locally with the recipes above. Prebuilt multi-arch images will land once at least one arm64 device has been validated end-to-end.
 - Bootstrap installer (`scripts/atlas-bootstrap.sh`) hasn't been audited for arm64 paths.
-- Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/itigges22/ATLAS/issues/115).
+- Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/inferstep/ATLAS/issues/115).
 
 ### What Happens on First Run
 
 1. Docker pulls 5 prebuilt container images from
-   `ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,sandbox}` (~3 min on a
+   `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` (~3 min on a
    fast connection). To build from source instead (the dev path), run
    `docker compose build` before the `up` step — see "Image source"
    below.
@@ -411,7 +411,7 @@ ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
 
-Available tags are listed at <https://github.com/itigges22/ATLAS/pkgs/container/atlas-proxy>
+Available tags are listed at <https://github.com/inferstep/ATLAS/pkgs/container/atlas-proxy>
 (swap `atlas-proxy` for the other service names: `atlas-v3`,
 `atlas-lens`, `atlas-llama`, `atlas-sandbox`).
 
@@ -458,11 +458,10 @@ The checks:
 | Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
 | Stack | internal_auth | internal service auth: token file present with tight permissions, and live enforcement probed both ways (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
 | Stack | status_dimensions | informational: the seven lens/ASA status dimensions from the proxy `/v1/calibration/status` (the same source the TUI badge reads); never fails the run |
-| Stack | sqlite_state | lens `/health` reports the SQLite state store available (`subsystems.sqlite`) |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
 
-The `vulkan` and `metal-native` rows are conditional on the configured backend; the health, `internal_auth`, `status_dimensions`, and `sqlite_state` rows run only when at least one container is up; `e2e_smoke` is skipped by `--quick`. The remaining checks always run.
+The `vulkan` and `metal-native` rows are conditional on the configured backend; the health, `internal_auth`, and `status_dimensions` rows run only when at least one container is up; `e2e_smoke` is skipped by `--quick`. The remaining checks always run.
 
 If you'd rather check by hand:
 
@@ -541,7 +540,7 @@ Run all services as local processes without containers. Useful for development o
 
 | Requirement | Details |
 |-------------|---------|
-| **Go 1.26.2+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
+| **Go 1.26.6+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
@@ -550,7 +549,7 @@ Run all services as local processes without containers. Useful for development o
 
 ```bash
 # 1. Clone and install Python CLI
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 pip install -e .
 
@@ -583,14 +582,16 @@ llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
-  --embeddings --pooling mean --flash-attn on --fit off
+  --embeddings --pooling none --flash-attn on --fit off
+# --pooling none: the lens's per-step path needs per-token vectors, and it
+# pools and normalizes them itself for the whole-text path (the compose
+# default, ATLAS_EMBED_POOLING=none).
 
-# Terminal 2: Geometric Lens
+# Terminal 2: Geometric Lens (required: the proxy refuses requests while it
+# cannot score)
 cd geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
-GEOMETRIC_LENS_ENABLED=true \
-# (PROJECT_DATA_DIR is not read by the lens; omitted) \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # Terminal 3: V3 Pipeline
@@ -626,7 +627,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas` builds the `atlas-tui` binary from `tui/` automatically if it is missing or older than the checkout (requires Go 1.26.2+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
+`atlas` builds the `atlas-tui` binary from `tui/` automatically if it is missing or older than the checkout (requires Go 1.26.6+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
 
 ---
 
@@ -697,7 +698,7 @@ K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts and pip
 | Service exposure | Host ports (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | Project workspace | Bind mount (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath` (`ATLAS_PROJECTS_DIR` → `/workspace` on every Pod that needs it) |
 | Model files | Bind mount (`ATLAS_MODELS_DIR` → `/models:ro`) | `hostPath` on the GPU node (`ATLAS_MODELS_DIR`, `Directory`, ro) |
-| Stateful storage | Named volumes (`lens-state`, `v3-telemetry`) | PVCs (`lens-projects` sized by `ATLAS_PVC_PROJECTS_SIZE`) |
+| Stateful storage | Named volume (`v3-telemetry`) | PVC `lens-projects` (sized by `ATLAS_PVC_PROJECTS_SIZE`; mounted, but unused since the project indexer was removed) |
 | GPU allocation | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (requires GPU Operator or device plugin) |
 | Sandbox toolchain caches | `tmpfs` mounts per language | `emptyDir` with `sizeLimit` per language (universal pattern, same set) |
 
@@ -778,8 +779,8 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 |---|---|---|---|---|
 | NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
 | NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
-| AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
-| Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/itigges22/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
+| AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
+| Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
 | Any (cross-vendor fallback) | Vulkan | Preview | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) smoke-tested; no real-GPU validation yet |
 | Intel Arc | SYCL | Roadmap — Intel Arc uses Vulkan today | TBD | Arc A770 16GB (target) |
 
@@ -855,17 +856,17 @@ Your GPU's gfx target: `rocminfo | grep -i gfx | head -1` (or look it up in the 
 
 ---
 
-## Geometric Lens Weights (Optional)
+## Geometric Lens Weights (Required)
 
-ATLAS works without Geometric Lens weights — the service degrades gracefully, returning neutral scores. The V3 pipeline falls back to sandbox-only verification.
+ATLAS needs the Geometric Lens for every request ([ADR 0011](adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_down` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
 
-To enable C(x)/G(x) scoring, you need trained model weights. Pre-trained weights and training data are available on HuggingFace:
+Models listed with lens artifacts in [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) get them from `atlas model install-artifacts`. Pre-trained weights and training data are also available on HuggingFace:
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — includes embeddings, training data, and weight files.
 
 Place weight files in `geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
 
-To train on your own benchmark data, the whole loop is CLI-driven:
+For a model with no weights, build them from your own benchmark data. `atlas bench` runs the V3 stages directly, not through the proxy, so it works before the lens has weights. The whole loop is CLI-driven:
 
 ```bash
 atlas bench --run-id mymodel_lens --tasks 200    # generate + self-label candidates

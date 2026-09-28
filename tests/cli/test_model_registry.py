@@ -121,6 +121,30 @@ def test_qwen_9b_q6k_claims_asa_supported():
     assert "ast_edit_steering.gguf" in m.asa_artifact_files
 
 
+def test_gemma_asa_is_unverified_until_measured():
+    """The gemma vector was built from prompts that named the tool ast_edit
+    (now structural_edit) and was never A/B measured on gemma. The label
+    says only that; it does not switch steering off."""
+    m = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    assert m is not None
+    assert m.asa_status == "unverified"
+    assert "ast_edit_steering.gguf" in m.asa_artifact_files
+
+
+def test_grammar_mode_is_a_property_of_the_model():
+    """Gemma under the strict schema grammar emits `done` instead of
+    calling tools, and every recorded gemma measurement ran loose. The
+    registry says so, and env_vars carries it so an install writes it."""
+    gemma = model_registry.by_name("gemma-4-12b-it-Q4_K_M")
+    assert gemma.grammar_mode == "loose"
+    assert gemma.env_vars()["ATLAS_GRAMMAR_MODE"] == "loose"
+    for m in model_registry.REGISTRY:
+        assert m.grammar_mode in ("strict", "loose"), m.name
+        if not m.name.startswith("gemma"):
+            assert m.grammar_mode == "strict", m.name
+            assert m.env_vars()["ATLAS_GRAMMAR_MODE"] == "strict", m.name
+
+
 # ---------------------------------------------------------------------------
 # Lookups
 # ---------------------------------------------------------------------------
@@ -259,18 +283,34 @@ def test_pc0561_three_quants_for_9b():
                             "Qwen3.5-9B-Q8_0"}
 
 
-def test_pc0561_only_q6k_is_supported_others_unverified():
-    """Lens metric tensor was trained on Q6_K specifically. Other quants
-    of the same model should mark `unverified` — Lens should structurally
-    transfer but the exact (quant, Lens) combo isn't validated."""
+def test_only_q6k_has_a_lens_bundle_among_the_9b_quants():
+    """The lens loads a bundle only for the model it was built for (same
+    model name and embedding size: identity_matches in
+    geometric_lens/identity.py). The 9B bundle was built for Q6_K, so the
+    other quants have no Lens artifacts until they get their own. The
+    registry used to call them `unverified` and say they reuse the Q6_K
+    files, which the lens rejects (#247)."""
     assert model_registry.by_name("Qwen3.5-9B-Q6_K").lens_status == "supported"
-    assert model_registry.by_name("Qwen3.5-9B-Q4_K_M").lens_status == "unverified"
-    assert model_registry.by_name("Qwen3.5-9B-Q8_0").lens_status == "unverified"
+    for name in ("Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q8_0"):
+        assert model_registry.by_name(name).lens_status == "no-artifacts", name
+
+
+def test_a_model_without_a_bundle_says_how_to_build_one():
+    """With the lens required, a model with no bundle stops agent work.
+    Its notes must say so and name the way out, not promise a silent
+    no-op."""
+    for m in model_registry.REGISTRY:
+        if m.lens_status != "no-artifacts":
+            continue
+        notes = m.notes.lower()
+        assert "atlas lens build" in notes, f"{m.name}: no build path in notes"
+        assert "stops agent work" in notes, f"{m.name}: notes hide the stop"
+        assert "silently no-op" not in notes, f"{m.name}: stale no-op claim"
 
 
 def test_pc0561_for_tier_medium_still_picks_supported_q6k():
-    """With multiple medium-tier entries (Q4 unverified, Q6 supported,
-    Q8 unverified), for_tier must pick the SUPPORTED one — that's why
+    """With multiple medium-tier entries (Q4 no-artifacts, Q6 supported,
+    Q8 no-artifacts), for_tier must pick the SUPPORTED one — that's why
     the 'prefer supported' rule was important."""
     assert model_registry.for_tier("medium").name == "Qwen3.5-9B-Q6_K"
 

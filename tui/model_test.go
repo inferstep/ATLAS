@@ -447,8 +447,8 @@ func TestBuildChatHistorySkipsEchoRows(t *testing.T) {
 	m.chat = []chatMessage{
 		{Role: roleUser, Body: "real ask"},
 		{Role: roleAssistant, Body: "real reply"},
-		{Role: roleUser, Body: "/good", Echo: true}, // slash echo
-		{Role: roleUser, Body: "! ls", Echo: true},  // bash echo
+		{Role: roleUser, Body: "/review", Echo: true}, // slash echo
+		{Role: roleUser, Body: "! ls", Echo: true},    // bash echo
 		{Role: roleUser, Body: "current"},
 	}
 	got := m.buildChatHistory()

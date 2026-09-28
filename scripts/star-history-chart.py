@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-REPO = os.environ.get("GITHUB_REPOSITORY", "itigges22/ATLAS")
+REPO = os.environ.get("GITHUB_REPOSITORY", "inferstep/ATLAS")
 SERIES_FILE = "star-history.json"
 
 # Chart tokens per color scheme. Each SVG carries its own surface rect

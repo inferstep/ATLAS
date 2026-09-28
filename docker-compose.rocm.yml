@@ -34,7 +34,7 @@ services:
     # signature verification for that reason, and the bootstrap's ASA
     # step (`docker run …/atlas-llama-rocm`) finds it in the local image
     # store after the first `up`.
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama-rocm:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-llama-rocm:${ATLAS_IMAGE_TAG:-latest}
     # Build, never pull: the image name above is not published. Without
     # this, `docker compose pull` (scripts/atlas-bootstrap.sh runs one
     # before `up`) fails the whole install with a 404 on the AMD path.

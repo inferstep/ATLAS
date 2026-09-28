@@ -1,0 +1,1016 @@
+{
+  "cases": [
+    {
+      "description": "behavioural, requirements complete, closure eligible, delivered",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "behavioral",
+        "reason_contains": "",
+        "selection_status": "verified_winner"
+      },
+      "id": "01_verified_winner",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "verified_winner",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "behavioural evidence with one required criterion never demonstrated",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "behavioral",
+        "reason_contains": "",
+        "selection_status": "best_not_closure_eligible"
+      },
+      "id": "02_behavioral_incomplete_requirements",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a"
+            ],
+            "missing": [
+              "criterion_b"
+            ],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "unobserved"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": false,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 0.0,
+              "overall": 0.3333,
+              "required_coverage": 0.5
+            },
+            "requirements_complete": false,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "best_not_closure_eligible",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "the verifier could observe nothing beyond parsing",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "syntax",
+        "reason_contains": "",
+        "selection_status": "best_not_closure_eligible"
+      },
+      "id": "03_syntax_only",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [],
+            "missing": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "unobserved"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": false,
+            "evidence_strength": "syntax",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 0.0,
+              "overall": 0.0,
+              "required_coverage": 0.0
+            },
+            "requirements_complete": false,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "best_not_closure_eligible",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "complete and healthy, but below the contract's strength floor",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "runtime",
+        "reason_contains": "",
+        "selection_status": "best_not_closure_eligible"
+      },
+      "id": "04_best_not_closure_eligible",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": false,
+            "evidence_strength": "runtime",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "best_not_closure_eligible",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "unsupported artifact: unverified, never failed",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "syntax",
+        "reason_contains": "",
+        "selection_status": "ineligible"
+      },
+      "id": "05_unsupported_candidate",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [],
+            "missing": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "unobserved"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": false,
+            "evidence_strength": "syntax",
+            "execution_status": "skipped",
+            "quality": {
+              "optional_quality": 0.0,
+              "overall": 0.0,
+              "required_coverage": 0.0
+            },
+            "requirements_complete": false,
+            "supported": false
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 1,
+            "reason": "every comparable record failed to execute or was unsupported",
+            "status": "ineligible",
+            "tied_count": 0
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "every comparable record died: a record exists, a winner does not",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "syntax",
+        "reason_contains": "",
+        "selection_status": "ineligible"
+      },
+      "id": "06_no_verified_winner",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [],
+            "missing": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "unobserved"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": false,
+            "evidence_strength": "syntax",
+            "execution_status": "crash",
+            "quality": {
+              "optional_quality": 0.0,
+              "overall": 0.0,
+              "required_coverage": 0.0
+            },
+            "requirements_complete": false,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 1,
+            "reason": "every comparable record failed to execute or was unsupported",
+            "status": "ineligible",
+            "tied_count": 0
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "measured under a different rubric than the expected one",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "behavioral",
+        "reason_contains": "",
+        "selection_status": "incomparable"
+      },
+      "id": "07_incomparable_records",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/other.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 1,
+            "ineligible_count": 0,
+            "reason": "no comparable record",
+            "status": "incomparable",
+            "tied_count": 0
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": false,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "two records of identical rank",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": true,
+        "evidence_strength": "behavioral",
+        "reason_contains": "",
+        "selection_status": "tied"
+      },
+      "id": "08_tied_records",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "stable order among exact ties",
+            "status": "tied",
+            "tied_count": 2
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "well formed, and about bytes other than the delivered ones",
+      "expect": {
+        "availability": "available",
+        "describes_delivered_candidate": false,
+        "evidence_strength": "behavioral",
+        "reason_contains": "",
+        "selection_status": "verified_winner"
+      },
+      "id": "09_evidence_for_other_candidate",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": false
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "5adc10c8239ec4c566b09973fc04cf91c0340737f6de977fc2e645c5b76e7ffd",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "verified_winner",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "a producer that predates the envelope entirely",
+      "expect": {
+        "availability": "absent",
+        "describes_delivered_candidate": false,
+        "evidence_strength": "",
+        "reason_contains": "no evidence envelope",
+        "selection_status": ""
+      },
+      "id": "10_legacy_no_envelope",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "a future producer's wire major: not interpreted at all",
+      "expect": {
+        "availability": "unavailable",
+        "describes_delivered_candidate": false,
+        "evidence_strength": "",
+        "reason_contains": "unsupported wire version",
+        "selection_status": ""
+      },
+      "id": "11_unknown_wire_version",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "verified_winner",
+            "tied_count": 1
+          },
+          "wire_version": "99.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "identity with a blank required component",
+      "expect": {
+        "availability": "unavailable",
+        "describes_delivered_candidate": false,
+        "evidence_strength": "",
+        "reason_contains": "identity incomplete",
+        "selection_status": ""
+      },
+      "id": "12_malformed_identity",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "ok",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": ""
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "verified_winner",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    },
+    {
+      "description": "closure claimed over an execution that did not complete",
+      "expect": {
+        "availability": "unavailable",
+        "describes_delivered_candidate": false,
+        "evidence_strength": "",
+        "reason_contains": "closure claimed over execution status",
+        "selection_status": ""
+      },
+      "id": "13_closure_contradicts_execution",
+      "response": {
+        "candidates_tested": 3,
+        "code": "const board = [];\nfor (const c of board) { console.log(c); }\n",
+        "evidence": {
+          "coverage": {
+            "demonstrated": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "missing": [],
+            "optional": [
+              {
+                "id": "criterion_c",
+                "status": "demonstrated"
+              }
+            ],
+            "required": [
+              "criterion_a",
+              "criterion_b"
+            ],
+            "unmeasurable": []
+          },
+          "delivery": {
+            "delivered_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "describes_delivered_candidate": true
+          },
+          "evaluation": {
+            "closure_eligible": true,
+            "evidence_strength": "behavioral",
+            "execution_status": "timeout",
+            "quality": {
+              "optional_quality": 1.0,
+              "overall": 1.0,
+              "required_coverage": 1.0
+            },
+            "requirements_complete": true,
+            "supported": true
+          },
+          "identity": {
+            "adapter_id": "probe_adapter",
+            "adapter_version": "1.0.0",
+            "artifact_scope": "static/game.js",
+            "calibration_id": "",
+            "candidate_content_hash": "d6a4e0c7d9b30f0e2470affc1318ca1bcb8d0ff068064d27ac0a0e8767d13fd8",
+            "contract_id": "generate:js",
+            "contract_version": "1",
+            "evaluation_context_hash": "8c18f8ca7636a72f4b7094981c794556166b67322bf13eff3bfe6cb265a44c4a"
+          },
+          "record_schema_version": "1.1.0",
+          "selection": {
+            "incomparable_count": 0,
+            "ineligible_count": 0,
+            "reason": "highest evidence rank",
+            "status": "verified_winner",
+            "tied_count": 1
+          },
+          "wire_version": "1.0.0"
+        },
+        "evidence_unavailable_reason": "",
+        "passed": true,
+        "phase_solved": "phase1",
+        "total_time_ms": 4567.0,
+        "total_tokens": 1234,
+        "verification_evidence": [
+          {
+            "status": "passed",
+            "verifier": "sandbox"
+          }
+        ],
+        "winning_score": 0.87
+      }
+    }
+  ],
+  "schema": "atlas.evidence_wire.cases/1"
+}

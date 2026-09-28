@@ -170,9 +170,37 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             unavailable_reason="pytest/torch not installed "
                                "(pip install -r geometric-lens/requirements.txt)",
         ),
+        # Candidate staging against a REAL executor process, not a stub.
+        # Isolation, `finally` teardown and the before/after observation are
+        # properties of the running executor, and a stub can only assert that
+        # the contract was honoured, never that it is. Optional because it
+        # needs uvicorn/fastapi and a free port; when those are missing it
+        # reports `unavailable`, which the skip policy does not count as a
+        # pass. `--only staging-executor` makes a missing dependency a failure.
+        "staging-executor": Gate(
+            "staging-executor",
+            (python, "scripts/staging-integration.py"),
+            required=False,
+            available=lambda: (_command_available("go")
+                               and _module_available("uvicorn")
+                               and _module_available("fastapi")),
+            unavailable_reason="Go, uvicorn or fastapi is not installed "
+                               "(pip install -r sandbox/requirements.txt)",
+            env=go_env,
+        ),
         "go-proxy-test": Gate(
             "go-proxy-test",
-            ("go", "test", "-race", "./..."),
+            # An explicit budget, because Go's implicit 10m default is not one
+            # this suite ever chose. proxy is a single package of ~1470 tests
+            # that run serially under -race. It measured 1473s before the
+            # slot-erase retry stopped waiting on a refused erase (every fake
+            # llama-server here answers /slots with 404, and each agent loop
+            # paid 1.5s per slot for four slots), and 279s after. 20m is over
+            # four times that measurement, room for a runner slower than this
+            # machine, and it still bounds a real hang inside one job. A CI
+            # panic here should be read from its goroutine dump: one young
+            # running test means budget, a test stuck for minutes means hang.
+            ("go", "test", "-race", "-timeout", "20m", "./..."),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason="Go is not installed",

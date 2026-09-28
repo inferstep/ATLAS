@@ -42,7 +42,7 @@ For the per-service health-check curls, see [SETUP.md § Verify Installation](SE
 }
 ```
 
-If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. The split between `lens` and `lens_ready` lets you tell "Lens process is up but its `/ready` gate is failing — usually missing weights or embedding-dim mismatch" apart from "Lens HTTP is unreachable."
+If any field is `false`, that service is the problem. `status` flips to `"degraded"` whenever any of `inference`, `lens`, `lens_ready`, or `sandbox` is false. `lens` says whether the lens answers at all. `lens_ready` says whether it can score, by the same check the proxy applies to every request: when it is `false`, `lens_reason` says why, and every request is refused until it is `true` (see [Requests Refused: the Lens Cannot Score](#requests-refused-the-lens-cannot-score)).
 
 ---
 
@@ -93,11 +93,10 @@ Exact error strings and symptoms, mapped to their entries.
 | `file not read yet — use read_file first before editing` | [File Not Read Before Editing](#file-not-read-before-editing) |
 | `file modified since last read — read it again before editing` | [File Modified Externally](#file-modified-externally) |
 | `You have full project context in the system prompt. Do not read more files.` | [Exploration Budget Warning](#exploration-budget-warning) |
-| `"lens": false` / "No gx_thresholds.json — Lens scores are uncalibrated" | [Lens Not Loaded / Unavailable](#lens-not-loaded--unavailable) |
-| Every candidate scores `cx_energy: 0.0`, `gx_score: 0.5` | [All Scores Near 0.5](#all-scores-near-05) |
+| "ATLAS needs the geometric lens for every request" / run ends `lens_unavailable` / `"lens_ready": false` | [Requests Refused: the Lens Cannot Score](#requests-refused-the-lens-cannot-score) |
+| "No gx_thresholds.json — Lens scores are uncalibrated" | [Lens Uncalibrated](#lens-uncalibrated) |
 | Scores plausible but off-scale; `fingerprint_ok: false` / `drifted: true` | [Embedding-convention drift](#scores-look-plausible-but-are-wildly-off-scale-embedding-convention-drift) |
 | "embedding extraction failed" in lens logs | [Embedding Extraction Fails](#embedding-extraction-fails) |
-| 503 `models directory is mounted read-only` on retrain | [`/internal/lens/retrain` Returns 503](#internallensretrain-returns-503-models-directory-is-mounted-read-only) |
 | Sandbox returns `"error_type": "Timeout"` | [Code Execution Timeout](#code-execution-timeout) |
 | Sandbox errors on a specific language | [Language Not Supported](#language-not-supported) |
 | `LIMITED MODE: running N tasks` below `--tasks` | [Bench runs fewer tasks than requested](#bench-runs-fewer-tasks-than-requested-limited-mode-running-n-tasks-with-n-below---tasks) |
@@ -273,7 +272,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/itigges22/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
+If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/inferstep/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x required
 
@@ -387,9 +386,9 @@ After the rebuild loads the model, the Geometric Lens still needs retraining for
 
 ### Proxy Can't Write the Workspace (`.atlas.tmp: permission denied`)
 
-**Symptom:** Every `write_file`/`edit_file` fails with `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` (the agent then wanders looking for "a writable subdirectory"). Lens training samples also stop banking (`/data/lens_training` writes fail in proxy logs).
+**Symptom:** Every `write_file`/`edit_file` fails with `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied` (the agent then wanders looking for "a writable subdirectory").
 
-**Cause:** The atlas-proxy image runs as a baked-in non-root user (uid 1001, `atlas`), but the host directories bind-mounted at `/workspace` (`ATLAS_PROJECT_DIR`) and `/data/lens_training` are owned by the operator's uid. Reads work (mode 755); every write is denied. Installs whose `.env` predates `ATLAS_PROXY_UID` hit this after pulling a hardened proxy image.
+**Cause:** The atlas-proxy image runs as a baked-in non-root user (uid 1001, `atlas`), but the host directory bind-mounted at `/workspace` (`ATLAS_PROJECT_DIR`) is owned by the operator's uid. Reads work (mode 755); every write is denied. Installs whose `.env` predates `ATLAS_PROXY_UID` hit this after pulling a hardened proxy image.
 
 **Fix:** run the proxy as the invoking user, the same way the sandbox already does:
 
@@ -468,7 +467,7 @@ All ports are configurable via `.env`. See [CONFIGURATION.md](CONFIGURATION.md).
 
 **Applies to:** NVIDIA GPUs older than Blackwell — RTX 40xx (Ada), RTX 30xx
 (Ampere), RTX 20xx / T4 (Turing), GTX 10xx (Pascal), V100/A100/H100/L4 —
-running the prebuilt `ghcr.io/itigges22/atlas-llama` image. The sibling
+running the prebuilt `ghcr.io/inferstep/atlas-llama` image. The sibling
 errors `invalid device function` (runtime) and
 `nvcc fatal: unsupported gpu architecture` (local build) have the same cause.
 (For the same error on AMD, see [the ROCm entry](#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm).)
@@ -484,7 +483,7 @@ This is an image/GPU mismatch, not a driver or VRAM problem.
 # Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
 nvidia-smi --query-gpu=name,compute_cap --format=csv
 # What the image was built for (Blackwell-only image prints sm_120/sm_121)
-docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+docker run --rm --entrypoint bash ghcr.io/inferstep/atlas-llama:latest \
   -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
 ```
 If your compute capability is below 12.0 and the image only lists
@@ -782,7 +781,7 @@ If `/v3/generate` receives an approved project build command, V3 emits a `build_
 
 **What's happening:** The agent-loop tier classifier (`proxy/agent.go:classifyAgentTier`) answers one question: is this conversation, or work? Work is the default, and T0 requires positive evidence, because the two mistakes cost very differently. Reading conversation as work wastes one planner call on a message the model closes in a single turn; reading work as conversation caps the turn at 5 and skips planning, which makes the request fail outright.
 
-A message is conversational only when it is under 12 characters (`hi`, `thanks`, `ok`) or shaped as a question — ending in `?`, or opening with an interrogative (`why`, `what`, `how`, `is`, `can`, …). Task wording outranks both, so `can you fix the login bug?` is work despite the question mark. Everything else is work: `still doesn't work, try again` and `the snake is moving way too fast, slow it down` both get the pipeline, even though neither names a file or matches a task-verb list.
+A message is conversational only when it is under 12 characters (`hi`, `thanks`, `ok`) or shaped as a question — a `?` that ends a clause, or an interrogative opener (`why`, `what`, `how`, `is`, `can`, …) matched as a whole word. Task wording outranks both, so `can you fix the login bug?` is work despite the question mark. A client that declares `task_mode: work` (the TUI does) is never classified as conversational. Everything else is work: `still doesn't work, try again` and `the snake is moving way too fast, slow it down` both get the pipeline, even though neither names a file or matches a task-verb list.
 
 **What to do:** Say what you want, even briefly — "yes, fix it" clears the T0 gate. If a follow-up runs the agent loop but V3 stays silent, the request tier isn't the gate — the file's own tier is. See [V3 Pipeline Not Firing on Feature Files](#v3-pipeline-not-firing-on-feature-files) and check `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` for the file-tier line (e.g. `[write_file] app.py → T1:simple (8 lines)`).
 
@@ -814,36 +813,35 @@ A message is conversational only when it is under 12 characters (`hi`, `thanks`,
 
 ## Geometric Lens Issues
 
-### Lens Not Loaded / Unavailable
+### Requests Refused: the Lens Cannot Score
 
-**Symptom:** Proxy health shows `"lens": false`. Or the lens logs `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled` at startup.
+**Symptom:** A request fails at once with HTTP 503 `dependency_down`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
 
-**Impact:** ATLAS still works but without C(x)/G(x) scoring. V3 candidate selection falls back to sandbox-only verification.
+**Impact:** No request runs until the lens can score. This is deliberate: the lens is required ([ADR 0011](adr/0011-the-lens-is-required.md)). A run that stopped says whether it changed files before it stopped.
 
-**Fix:** Check Lens health and logs:
+**Fix:** The message names the cause. Check the lens health and logs:
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:8099/health | python3 -m json.tool
 docker compose logs geometric-lens
 ```
 
-Common causes:
-- Lens can't connect to llama-server (check `LLAMA_URL` env var)
-- Model weight files missing (service degrades gracefully — this is expected if you haven't trained custom models)
+| Reason in the message | Fix |
+|---|---|
+| unreachable | The lens container is down or `ATLAS_LENS_URL` is wrong. `docker compose ps geometric-lens`. |
+| no C(x) / no G(x) model loaded | The served model has no lens weights. Run `atlas model install-artifacts <name>` for a registry model, or `atlas lens build` ([SETUP.md](SETUP.md#geometric-lens-weights-required)). |
+| cannot reach llama-server | The lens cannot reach the model server. Check `LLAMA_URL` / `LLAMA_EMBED_URL` and llama-server health. |
+| self-test failed | See the `self_test_error` in `/health`. |
+| drifted from the served model | See [Embedding-convention drift](#scores-look-plausible-but-are-wildly-off-scale-embedding-convention-drift). |
 
-### All Scores Near 0.5
+The proxy caches the lens answer for 5 seconds, so a fixed lens is accepted within 5 seconds.
 
-**Symptom:** Every candidate gets `cx_energy: 0.0` and `gx_score: 0.5` regardless of code quality.
+### Lens Uncalibrated
 
-**Cause:** Model weights are not loaded. The service returns neutral defaults when models are absent.
+**Symptom:** The lens logs `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled` at startup, and the status shows `lens_calibration: uncalibrated`.
 
-**Verify:**
-```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
-  -H "Content-Type: application/json" \
-  -d '{"text": "print(1)"}' | python3 -m json.tool
-```
+**Impact:** Requests run. The lens scores raw C(x) energies and G(x) probabilities; the calibrated uses (normalized routing, veto and correction thresholds) stay off until the model's calibration files exist.
 
-If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expected for a fresh install — model weights are not included in the repository and must be trained or downloaded from [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
+**Fix:** `atlas lens build` calibrates the thresholds and writes `cx_normalization.json` and `gx_thresholds.json` into the bundle. See [CLI.md § atlas lens](CLI.md#atlas-lens).
 
 ### Scores Look Plausible but Are Wildly Off-Scale (embedding-convention drift)
 
@@ -851,21 +849,26 @@ If `enabled: false` or `cx_energy: 0.0`, the models aren't loaded. This is expec
 
 **Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean` (llama-server has no `--embd-normalize` server flag; the lens requests L2 normalization per-call via `embd_normalize` in the `/embedding` body).
 
-**Verify:** the lens re-scores a stored fingerprint at boot and on every reload/retrain. Check `/ready` and `/health`:
+**Verify:** where a `drift_fingerprint.json` sits next to the artifacts (see step 3 below), the lens re-scores it in its self-test (at boot, and again from `/ready` after a retryable failure). Check `/ready` and `/health`:
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
-`fingerprint_ok: false` with a `fingerprint_error` naming expected-vs-observed energy is the drift signal — `/ready` returns 503 and scored responses carry `"drifted": true` with all `calibrated` flags forced false, so nothing downstream can mistake them for trustworthy.
+`fingerprint_ok: false` with a `fingerprint_error` naming expected-vs-observed energy is the drift signal — `/ready` returns 503, the proxy refuses requests and names the drift, and scored responses carry `"drifted": true` with all `calibrated` flags forced false and no thresholds, so nothing downstream can mistake them for trustworthy or act on them.
 
 **Fix:**
 1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token` or `norm` far from 1.0 means the server is misconfigured.
-2. Set `ATLAS_EMBED_POOLING=mean` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags.
-3. After the server serves the correct convention, the boot self-test's fingerprint check passes and `/ready` returns 200. If the artifacts predate the fingerprint, a retrain (`atlas lens retrain`) writes one and stamps the `embedding_contract` into `model_identity.json`.
+   The pooled norm should land in the low hundreds (~100-150 for the
+   shipped Gemma artifacts). A norm of exactly `1.0` means the server
+   normalized the vector despite `embd_normalize: -1`, and C(x) will read
+   a flat ~0.8 for every input — scores that look healthy but separate
+   nothing. Compare against `pass_energy_mean` in `cx_normalization.json`:
+   served energies should span that band, not sit on one value.
+2. Set `ATLAS_EMBED_POOLING=none` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags. `--pooling` is server-global, and only `none` serves both the whole-text and per-step paths; pooling and scale are handled client-side.
+3. After the server serves the correct convention, the boot self-test passes and `/ready` returns 200. A rebuild (`atlas lens build`) stamps the `embedding_contract` into `model_identity.json`. It does not write a drift fingerprint: `geometric_lens.drift.write_fingerprint` exists, but no command calls it yet, so the fingerprint check runs only where a `drift_fingerprint.json` was written by hand.
 
 ### Embedding Extraction Fails
 
@@ -883,13 +886,21 @@ curl -s http://localhost:8080/embedding \
 
 The `--embeddings` flag is set by the llama-server entrypoint in every deployment mode (Compose, bare metal, K3s) — self-embeddings are always on because the Geometric Lens depends on them. The native `/embedding` path (not `/v1/embeddings`) also carries the per-layer hidden-states extension.
 
-### `/internal/lens/retrain` Returns 503 "models directory is mounted read-only"
+### Candidate Reported `unscored` (input exceeds the physical batch)
 
-**Symptom:** POSTing `/internal/lens/retrain` on the lens service returns HTTP 503 with ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``.
+**Symptom:** The lens log shows `unscored: the input of 2055 tokens exceeds the /embedding physical batch of 2048 tokens`, v3-service emits `lens_unscored` for a candidate (`kind: embed_capacity`, `input_tokens`, `capacity_tokens`), or `atlas doctor` shows `lens_scoring: partial` naming an embed capacity below `ATLAS_MAX_TOKENS`.
 
-**Cause:** The standard Compose deployment mounts the lens models directory into the container read-only (`:ro`), so the in-service retrain endpoint cannot write new weights. The endpoint probes writability before training and refuses up front rather than burning a training run.
+**Cause:** llama-server processes one embedding request in a single physical batch (`-ub`, `ATLAS_UBATCH`) and refuses any longer input with HTTP 500. A Lens score is one forward over the whole sequence, so the lens reports the candidate as unscored rather than truncating or splitting it: a split input embeds later pieces without the context of earlier ones and is not the vector the artifacts were calibrated on. The generation budgets that produce candidates (4,096-token PlanSearch code, `ATLAS_MAX_TOKENS` 8,192 for a write) are larger than the largest micro-batch `atlas tier fit` chooses (2,048), so this is expected for long candidates on a default deployment.
 
-**Fix:** Run the retrain host-side — `atlas lens retrain` (feedback corpus) or `atlas lens build` (bench candidates) write the artifacts on the host, then `docker compose restart geometric-lens` loads them (the service reads its artifacts at startup). Benchmark-driven online recalibration (`lens_feedback`) logs the refusal and keeps its sample buffer, so nothing is lost.
+**Impact:** The candidate keeps its sandbox result and is ranked after every scored candidate; it is delivered only when no scored candidate passed, and the `selected` event says so. Nothing is scored 0.0 or 0.5 in its place.
+
+**Verify:**
+```bash
+curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(sys.stdin)['subsystems']['lens']; print({k:v for k,v in l.items() if k.startswith('embed_capacity')})"
+```
+`embed_capacity_tokens` is the longest input the lens can score; `embed_capacity_source` is `declared` (from `ATLAS_UBATCH`) or `observed` (from a refusal, authoritative).
+
+**Fix:** Raising `ATLAS_UBATCH` raises the capacity, at a VRAM cost of roughly `ubatch × n_embd × 280` bytes for the compute buffer (about 4.4 GB at 4,096 on a 3,840-dim model): size it with `atlas tier fit`, recreate llama-server, and confirm it starts under `--fit off`. Lowering `ATLAS_MAX_TOKENS` bounds the writes the proxy asks the lens to score. Neither makes a split input scorable; scoring past the physical batch needs the calibration work described in [ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md).
 
 ---
 
@@ -969,14 +980,14 @@ The model is running on CPU instead of GPU. Check:
 2. `-ngl 99` (`--n-gpu-layers`) — are all layers offloaded?
 3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
 
-**Expected performance:** ~51 tok/s on RTX 5060 Ti 16GB with grammar enforcement.
+**Expected performance:** there is no current reference figure; throughput depends on the model, quantization and grammar mode. An earlier ~51 tok/s figure came from a configuration that no longer exists.
 
 ### V3 Pipeline Takes Several Minutes
 
 This is normal for T2 files. The V3 pipeline makes multiple LLM calls:
 - **Probe only (best case):** ~10-15 seconds (1 generation + 1 score + 1 test)
 - **Phase 1 generation:** ~1-2 minutes (PlanSearch + DivSampling + scoring)
-- **Phase 3 repair:** ~2-5 minutes (PR-CoT + Refinement + Derivation, if needed)
+- **Phase 3 repair:** ~2-5 minutes (PR-CoT + Refinement, if needed)
 
 To get faster (but lower quality) results:
 - Keep files under 10 lines (stays T1, no V3) — recognized code extensions at 10+ lines go T2 regardless of complexity
@@ -1004,4 +1015,4 @@ If your issue isn't listed here:
 1. Check service logs: `docker compose logs <service-name>`
 2. Check the proxy health endpoint: `curl http://localhost:8090/health`
 3. See [CONFIGURATION.md](CONFIGURATION.md) for all environment variables
-4. Open an issue on [GitHub](https://github.com/itigges22/ATLAS/issues)
+4. Open an issue on [GitHub](https://github.com/inferstep/ATLAS/issues)

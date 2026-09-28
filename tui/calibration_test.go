@@ -32,16 +32,18 @@ func TestRenderCalibrationBadge_BothSupported_ShowsCheck(t *testing.T) {
 	}
 }
 
-func TestRenderCalibrationBadge_NoArtifacts_ShowsWarning(t *testing.T) {
+// A lens with no artifacts cannot score, and the lens is required: requests
+// are refused, so the badge is a failure, not a warning.
+func TestRenderCalibrationBadge_NoArtifacts_ShowsFailure(t *testing.T) {
 	s := &calibrationStatus{}
 	s.Lens.Verdict = "no-artifacts"
 	s.ASA.Verdict = "supported"
 	got := renderCalibrationBadge(s)
-	if !strings.Contains(got, "Lens ⚠") {
-		t.Errorf("expected 'Lens ⚠' warn badge, got %q", got)
+	if !strings.Contains(got, "Lens ✗") {
+		t.Errorf("expected 'Lens ✗' failure badge, got %q", got)
 	}
 	if !strings.Contains(got, "ASA ✓") {
-		t.Errorf("expected 'ASA ✓' ok badge alongside warn, got %q", got)
+		t.Errorf("expected 'ASA ✓' ok badge alongside the failure, got %q", got)
 	}
 }
 
@@ -193,13 +195,48 @@ func TestBadgeActionHint_BothWarn_SuggestsBoth(t *testing.T) {
 }
 
 func TestBadgeActionHint_Unreachable_NoBuildSuggestion(t *testing.T) {
-	// When lens/asa are unreachable the artifact is fine — the service is
-	// down. Telling the user to "build" would be misleading.
+	// When the lens is down the artifact may be fine — the service is.
+	// Telling the user to "build" would be misleading; the lens is
+	// required, so the pointer is atlas doctor.
+	for _, v := range []string{"unreachable", "drifted", "self-test-failed",
+		"model-server-unreachable"} {
+		s := &calibrationStatus{}
+		s.Lens.Verdict = v
+		s.ASA.Verdict = "incompatible"
+		got := badgeActionHint(s)
+		if strings.Contains(got, "build") || !strings.Contains(got, "atlas doctor") {
+			t.Errorf("%s: hint %q, want atlas doctor and no build suggestion", v, got)
+		}
+		if badge := renderOneBadge("Lens", v); !strings.Contains(badge, "✗") {
+			t.Errorf("%s: badge %q, want a failure mark", v, badge)
+		}
+	}
+}
+
+// Missing or mismatched artifacts leave the lens unable to score, so requests
+// are refused: a failure mark, a build pointer, and the reason. An
+// uncalibrated lens scores, so it stays a warning.
+func TestBadgeActionHint_MissingArtifactsSayRequestsAreRefused(t *testing.T) {
+	for _, v := range []string{"no-artifacts", "incomplete-artifacts", "dim-mismatch"} {
+		s := &calibrationStatus{}
+		s.Lens.Verdict = v
+		s.ASA.Verdict = "active"
+		got := badgeActionHint(s)
+		if !strings.Contains(got, "atlas lens build") || !strings.Contains(got, "refused") {
+			t.Errorf("%s: hint %q, want atlas lens build and that requests are refused", v, got)
+		}
+		if badge := renderOneBadge("Lens", v); !strings.Contains(badge, "✗") {
+			t.Errorf("%s: badge %q, want a failure mark", v, badge)
+		}
+	}
 	s := &calibrationStatus{}
-	s.Lens.Verdict = "unreachable"
-	s.ASA.Verdict = "incompatible"
-	if got := badgeActionHint(s); got != "" {
-		t.Errorf("expected no build-hint for service-down verdicts, got %q", got)
+	s.Lens.Verdict = "uncalibrated"
+	s.ASA.Verdict = "active"
+	if got := badgeActionHint(s); strings.Contains(got, "refused") {
+		t.Errorf("uncalibrated: hint %q says requests are refused; an uncalibrated lens scores", got)
+	}
+	if badge := renderOneBadge("Lens", "uncalibrated"); !strings.Contains(badge, "⚠") {
+		t.Errorf("uncalibrated: badge %q, want a warning mark", badge)
 	}
 }
 

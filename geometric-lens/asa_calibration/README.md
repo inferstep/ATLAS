@@ -19,8 +19,8 @@ the HuggingFace dataset — renaming the file would 404 every download.
 
 A published vector still encodes the underlying decision (replace a whole
 named node vs. patch a line), which is what the contrast was built to
-capture, so it does not break tool calling. It has not been re-measured
-against the new tool name. To rebuild against the current prompts, per
+capture. Whether it still helps, or harms tool calling, under the new tool
+name has not been measured. To rebuild against the current prompts, per
 model:
 
 ```

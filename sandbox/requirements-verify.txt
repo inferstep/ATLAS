@@ -3,9 +3,15 @@
 # Pinned for reproducible builds.
 pytest==9.1.1
 requests==2.34.2
-ruff==0.15.22
-mypy==2.3.0
+ruff==0.16.9
+mypy==2.3.1
 # executor_server's YAML syntax verification (lazy `import yaml`) —
 # absent, every YAML verify call false-fails with a ModuleNotFoundError
 # reported as a YAML error.
 pyyaml==6.0.3
+# executor_server's Jinja-template syntax verification (lazy `import jinja2`
+# in _jinja_template_errors) — it is a CHECKER tool, not a user app lib, and
+# is not otherwise baked (app libraries are installed per-project at run
+# time). Without it the check fails open and every `{% ... %)` template ships
+# with a render-time 500 the write-time gate was meant to catch.
+jinja2==3.1.6

@@ -31,7 +31,14 @@ Per-type payload contracts
   tool_result   {name: str, success: bool, summary?: str}
   metric        {name: str, value: number, unit?: str}
   error         {stage: str, message: str, recoverable: bool}
-  done          {success: bool, total_duration_ms: int, summary?: str}
+  done          {success: bool, total_duration_ms: int, summary?: str,
+                 status?: str, reason?: str}
+
+`status` and `reason` are additive. `summary` keeps its prose meaning, and a
+consumer that predates them reads the event exactly as before; a consumer that
+uses them must pass the raw value through `terminal_status`, which maps
+absent, malformed and unrecognised values to "incomplete" rather than letting
+an unnameable outcome read as success.
 
 One `done` event closes each agent pass. `/events` is a persistent
 broker stream: it keeps heartbeating after a `done`, so EOF-without-done
@@ -59,6 +66,32 @@ from typing import Any, Dict, Optional
 # ---------------------------------------------------------------------------
 # Type registry — exhaustive list of legal envelope types
 # ---------------------------------------------------------------------------
+
+# Terminal outcomes carried by a `done` payload's optional `status` key. The
+# proxy owns the vocabulary (proxy/types.go); this is the consumer half.
+TERMINAL_STATUSES = (
+    "completed",
+    "incomplete",
+    "stopped",
+    "timed_out",
+    "failed",
+)
+
+
+def terminal_status(payload: dict | None) -> str:
+    """Read a `done` payload's outcome, failing closed.
+
+    Absent, malformed, or unrecognised becomes "incomplete". A run whose
+    outcome cannot be named did not finish, and the one thing this must never
+    do is let that read as "completed".
+    """
+    if not isinstance(payload, dict):
+        return "incomplete"
+    raw = payload.get("status")
+    if isinstance(raw, str) and raw in TERMINAL_STATUSES:
+        return raw
+    return "incomplete"
+
 
 EVENT_TYPES = (
     "stage_start",

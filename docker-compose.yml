@@ -12,7 +12,7 @@ services:
     # Default behavior: pull prebuilt image from GHCR (PC-052). To rebuild
     # locally for dev, run: docker compose build llama-server
     # Tag is overridable via ATLAS_IMAGE_TAG (default: latest from main).
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-llama:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
       context: ./inference
@@ -36,6 +36,26 @@ services:
       - ./inference/entrypoint-v3.1.sh:/entrypoint.sh:ro
     ports:
       - "127.0.0.1:${ATLAS_LLAMA_PORT:-8080}:8080"
+    # The model's budget, and why it is UNSET.
+    #
+    # It was the OOM victim precisely because it had no limit: unbounded and
+    # largest is what the kernel's victim selection looks for. The obvious fix
+    # is a cgroup limit, and the first draft of this file shipped one at 9.5
+    # GiB. Measuring the deployed server showed that value is below what it
+    # already uses: process peak RSS 10.31 GiB, anonymous working set 8.81 GiB
+    # once the 2.1 GiB it has swapped is counted back, and only 16 MiB of
+    # reclaimable page cache to give back under pressure. A hard limit under
+    # the peak does not produce reclaim, it produces a certain kill of the one
+    # process everything else depends on -- trading a rare host-pressure event
+    # for a reliable outage.
+    #
+    # So it stays unenforced until a real-model canary establishes a value with
+    # measured headroom. `0` is docker's own spelling of "no limit", which is
+    # the state this service is in today; ATLAS_LLAMA_BUDGET_BYTES carries the
+    # measured expectation for the envelope arithmetic instead. Setting
+    # ATLAS_LLAMA_MEM enforces whatever you put in it; do that only with canary
+    # evidence, and never below the observed peak.
+    mem_limit: ${ATLAS_LLAMA_MEM:-0}
     ulimits:
       memlock: -1
       stack: 67108864
@@ -57,13 +77,13 @@ services:
       # behavior; the entrypoint comments confirm --parallel 4 at 40k
       # per slot fits within budget on a 16 GB card.
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
-      # Embedding pooling for the Geometric Lens (`--pooling`). Pinned so
-      # a rebuilt serving stack can't silently switch convention and
-      # invalidate every score (the 2026-07-15 bench incident). L2
-      # normalization is requested per-call by the lens (`embd_normalize`
-      # in the /embedding body); the lens enforces both via
-      # model_identity.json's embedding_contract.
-      - ATLAS_EMBED_POOLING=${ATLAS_EMBED_POOLING:-mean}
+      # Embedding pooling for the Geometric Lens (`--pooling`). `none`
+      # returns per-token vectors, which the per-step C(x)/G(x) path
+      # requires; the whole-text path pools and L2-normalizes them
+      # client-side, so it reads the same vector it would under `mean`.
+      # `--pooling` is server-global in llama.cpp, so one mode has to
+      # serve both consumers and only `none` carries enough information.
+      - ATLAS_EMBED_POOLING=${ATLAS_EMBED_POOLING:-none}
       # Canonical ATLAS_* names take precedence; the nested legacy fallback
       # keeps .env files generated before the rename working during upgrade.
       - PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}
@@ -98,23 +118,26 @@ services:
     # (GH #146). Harmless when the bundled llama-server is in use.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-lens:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 1.56 GiB.
+    mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
       context: ./geometric-lens
     environment:
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
+      # The /embedding physical batch llama-server runs with (its `-ub`,
+      # UBATCH_SIZE above): the longest input one Lens score can be computed
+      # from. Declared here so /health reports it before any request is
+      # refused; the lens replaces it with the value the server states on a
+      # refusal. Information only, scoring is never gated on it: a longer
+      # input is reported unscored, never truncated or split.
+      - LLAMA_EMBED_CAPACITY_TOKENS=${ATLAS_UBATCH:-1024}
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
-      - GEOMETRIC_LENS_ENABLED=true
-      # SQLite state store (pattern cache, co-occurrence graph). Learned
-      # TTL-less state — lives on the lens-state volume; losing the
-      # volume resets learning (documented in docs/OPERATIONS.md).
-      - SQLITE_DB_PATH=/data/state/geometric_state.db
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
-      - lens-state:/data/state
       - ${ATLAS_LENS_MODELS:-./geometric-lens/geometric_lens/models}:/app/geometric_lens/models:ro
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
     ports:
@@ -137,9 +160,11 @@ services:
       # restarts unhealthy containers, and restarting cannot conjure missing
       # weights; it would just restart-loop.
       #
-      # The readiness question IS gated, in the right place: proxy/main.go's
-      # handleReady reads this service's /ready, and lens scoring fail-softs
-      # everywhere else, so a degraded lens costs scoring, not the stack.
+      # The readiness question IS gated, in the right place: the proxy asks
+      # whether the lens can score before every request and refuses it, with
+      # the reason, when it cannot (proxy/lens_required.go; ADR 0011). Its
+      # /ready reports the same answer. The stack stays up, so `atlas doctor`
+      # and `atlas lens build` can still run.
       test: ["CMD", "curl", "-sf", "http://localhost:8099/health"]
       interval: 15s
       timeout: 5s
@@ -158,8 +183,10 @@ services:
     # (GH #146). Harmless when the bundled llama-server is in use.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-v3:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 52 MiB: it orchestrates, the executor runs.
+    mem_limit: ${ATLAS_V3_MEM:-512m}
     build:
       context: .
       dockerfile: v3-service/Dockerfile
@@ -169,9 +196,6 @@ services:
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
-      # Structural call-graph reasoning (#39, experimental, default off). Read by
-      # call_graph_enabled() inside this process, so it must be forwarded here.
-      - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
       # Plan-generation thinking mode (read inside this process — must be
       # forwarded here or setting it in .env has no effect).
       - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}
@@ -214,7 +238,7 @@ services:
     # (GH #146). Harmless when the bundled llama-server is in use.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-sandbox:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
     build:
       context: ./sandbox
@@ -224,6 +248,14 @@ services:
       # proxy's 300s run_command cap so long builds/tests aren't cut off
       # by the executor's internal 60s default.
       - MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}
+      # The rest of the per-command contract, validated by the executor at
+      # startup. Each is a hard maximum a request may narrow and never raise.
+      # The memory ceiling sits BELOW the container's mem_limit because the
+      # executor process and the output it buffers share that container with
+      # the command: one command may not consume the whole allocation.
+      - ATLAS_EXEC_MEMORY_BYTES=${ATLAS_EXEC_MEMORY_BYTES:-1073741824}
+      - ATLAS_EXEC_MAX_PROCESSES=${ATLAS_EXEC_MAX_PROCESSES:-256}
+      - ATLAS_EXEC_OUTPUT_BYTES=${ATLAS_EXEC_OUTPUT_BYTES:-33554432}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       # Workspace-snapshot caps for overlay-file runs (executor_server.py
       # reads these; without the passthrough the documented .env knobs
@@ -237,6 +269,13 @@ services:
       - HOME=/home/sandbox
       - CARGO_HOME=/home/sandbox/.cargo
       - GOPATH=/home/sandbox/go
+      # `go run` links the program into GOTMPDIR and then executes it,
+      # and every tmpfs below is noexec, so the default (/tmp) makes
+      # `go run x.go` fail with "fork/exec ...: permission denied" on
+      # every invocation. Measured across four benchmark runs: 22
+      # permission-denied results, all of them Go. Points at the one
+      # tmpfs that allows exec.
+      - GOTMPDIR=/home/sandbox/gobuild
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     # Writable mounts for language toolchains. The container fs is
     # read_only=true for hardening, so every install/cache target a
@@ -262,6 +301,13 @@ services:
       - /home/sandbox/.npm:size=256M     # Node: npm cache
       - /home/sandbox/.cargo:size=512M   # Rust: crate downloads (CARGO_HOME; toolchain stays read-only in /opt)
       - /home/sandbox/go:size=512M       # Go: module cache + bin (GOPATH)
+      # The one writable path that permits exec, for compiled languages
+      # that link a binary outside the project and run it. Scoped
+      # deliberately: /tmp stays noexec. This grants no capability the
+      # sandbox lacked, since the bind-mounted /workspace already
+      # permits exec, so `go build -o ./prog && ./prog` always worked;
+      # it makes the toolchain's own default path work too.
+      - /home/sandbox/gobuild:size=512M,exec  # Go: `go run` link+exec dir (GOTMPDIR)
       - /home/sandbox/.m2:size=512M      # Java: Maven local repo
       - /home/sandbox/.gradle:size=512M  # Java/Kotlin: Gradle caches
       - /home/sandbox/.bundle:size=256M  # Ruby: bundler --path
@@ -294,8 +340,25 @@ services:
     # OOM or peg the host out of the box. `atlas init` detects host RAM/
     # cores and writes host-appropriate ATLAS_SANDBOX_MEM (~75% RAM) /
     # ATLAS_SANDBOX_CPUS (~75% cores) to .env, which override these floors.
+    #
+    # THE MEMORY ENVELOPE.
+    #
+    # These numbers are not independent. A staged verification command reached
+    # 5.9 GB in seconds on a 16 GB host where the inference server held 9 GB
+    # with no limit of its own; every process was inside its own bounds and the
+    # kernel still had to pick something to kill, so it took the model. What
+    # was missing was not one limit, it was a SUM that fits the machine.
+    #
+    # The default below assumes a 16 GiB host running a 12B Q4 model. On that
+    # machine the model's steady resident set is the dominant term and the
+    # sandbox gets what is left, which is not much: 1.5 GiB, holding one
+    # command at 1 GiB plus the executor and the output it buffers. `atlas
+    # init` sizes these from the real host; ATLAS_HOST_MEMORY_BYTES turns the
+    # arithmetic into a startup check rather than a comment, and the proxy
+    # refuses to run commands when the declared sum does not fit.
     pids_limit: ${ATLAS_SANDBOX_PIDS:-1024}
-    mem_limit: ${ATLAS_SANDBOX_MEM:-4g}
+    mem_limit: ${ATLAS_SANDBOX_MEM:-1536m}
+    memswap_limit: ${ATLAS_SANDBOX_MEM:-1536m}   # no swap: a swapping test is a hung one
     cpus: ${ATLAS_SANDBOX_CPUS:-2}
     # Don't override working_dir — the image uses WORKDIR=/app for
     # executor_server.py. The /shell endpoint defaults its cwd to
@@ -340,19 +403,45 @@ services:
     # (GH #146). Harmless when the bundled llama-server is in use.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    image: ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
+    image: ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}/atlas-proxy:${ATLAS_IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Part of the memory envelope; measured peak 33 MiB.
+    mem_limit: ${ATLAS_PROXY_MEM:-256m}
+    # Must exceed the proxy's own shutdown budget (ATLAS_SHUTDOWN_GRACE_SEC,
+    # default 650s): session total 600s of request drain plus a 10s close-hook
+    # margin is 610s, and the proxy refuses to start if that does not fit. The
+    # extra 40s is headroom between the process finishing and Docker killing it.
+    stop_grace_period: 650s
     build:
       context: ./proxy
     # Run as the invoking user (same rationale as the sandbox's
-    # ATLAS_SANDBOX_UID): the proxy writes to two host bind mounts —
-    # /workspace (write_file/edit_file targets) and /data/lens_training
-    # (lens sample banking). The image's baked-in non-root user (uid 1001)
-    # can't write host dirs owned by the operator, which fails every file
-    # write with `permission denied` on the .atlas.tmp temp file.
+    # ATLAS_SANDBOX_UID): the proxy writes to the /workspace host bind mount
+    # (write_file/edit_file targets). The image's baked-in non-root user
+    # (uid 1001) can't write host dirs owned by the operator, which fails
+    # every file write with `permission denied` on the .atlas.tmp temp file.
     # `atlas init` writes the invoking user's ids into .env.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      # THE DECLARED MEMORY ENVELOPE. Absent ATLAS_HOST_MEMORY_BYTES nothing
+      # is declared and nothing is checked -- an envelope this build guessed
+      # at would be asserting something the operator never said. When it IS
+      # declared, the proxy adds every hard maximum below plus the host
+      # reserve and refuses to run commands if the sum does not fit, because a
+      # deployment that can over-commit is one where every process is inside
+      # its own limit at the moment the kernel picks a victim.
+      - ATLAS_HOST_MEMORY_BYTES=${ATLAS_HOST_MEMORY_BYTES:-}
+      - ATLAS_HOST_RESERVE_BYTES=${ATLAS_HOST_RESERVE_BYTES:-1610612736}
+      # Unset by default: the enforced limit. See the inference service above.
+      - ATLAS_LLAMA_MEM=${ATLAS_LLAMA_MEM:-}
+      # The measured expectation, used for accounting only. Above the deployed
+      # server's observed peak resident set of 10.31 GiB.
+      - ATLAS_LLAMA_BUDGET_BYTES=${ATLAS_LLAMA_BUDGET_BYTES:-11811160064}
+      - ATLAS_LENS_MEM=${ATLAS_LENS_MEM:-1792m}
+      - ATLAS_V3_MEM=${ATLAS_V3_MEM:-512m}
+      - ATLAS_PROXY_MEM=${ATLAS_PROXY_MEM:-256m}
+      - ATLAS_SANDBOX_MEM=${ATLAS_SANDBOX_MEM:-1536m}
+      - ATLAS_EXEC_MEMORY_BYTES=${ATLAS_EXEC_MEMORY_BYTES:-1073741824}
+      - ATLAS_EXEC_CONCURRENCY=${ATLAS_EXEC_CONCURRENCY:-1}
       - ATLAS_GRAMMAR_MODE=${ATLAS_GRAMMAR_MODE:-strict}
       - ATLAS_PROXY_PORT=8090
       - ATLAS_INFERENCE_URL=http://llama-server:8080
@@ -368,6 +457,13 @@ services:
       - ATLAS_ALLOW_CREDENTIAL_READS=${ATLAS_ALLOW_CREDENTIAL_READS:-}
       - ATLAS_PERMISSION_TIMEOUT_SEC=${ATLAS_PERMISSION_TIMEOUT_SEC:-}
       - ATLAS_REASONING_BUDGET=${ATLAS_REASONING_BUDGET:-}
+      # Fenced-content sub-call watchdog (seconds to first CONTENT token).
+      # Default 60 in code; a large agent context + a reasoning preamble on a
+      # slower/contended GPU can exceed that before the file starts, cancelling
+      # a generation that would have produced it. Raise per deployment.
+      - ATLAS_FENCED_FIRST_CONTENT_SEC=${ATLAS_FENCED_FIRST_CONTENT_SEC:-}
+      - ATLAS_FENCED_IDLE_SEC=${ATLAS_FENCED_IDLE_SEC:-}
+      - ATLAS_FENCED_STALL_SEC=${ATLAS_FENCED_STALL_SEC:-}
       # Repetition-control sampling. llama-server defaults every one of
       # these off, so the proxy sets DRY on outgoing requests; these let
       # a .env override reach the container. Empty means the in-code
@@ -378,6 +474,11 @@ services:
       - ATLAS_DRY_PENALTY_LAST_N=${ATLAS_DRY_PENALTY_LAST_N:-}
       - ATLAS_REPEAT_PENALTY=${ATLAS_REPEAT_PENALTY:-}
       - ATLAS_REPEAT_LAST_N=${ATLAS_REPEAT_LAST_N:-}
+      # Greedy decoding for the agent loop, and restating the last-read file
+      # at the generation point. Both target verbatim reproduction; set to 0
+      # to fall back to the server's sampler chain / drop the restatement.
+      - ATLAS_TRANSCRIPTION_SAMPLER=${ATLAS_TRANSCRIPTION_SAMPLER:-}
+      - ATLAS_RESTATE_LAST_READ=${ATLAS_RESTATE_LAST_READ:-}
       # Context budget for conversation trimming (PC-216). Same
       # values the llama-server gets; the proxy trims history to a
       # token budget derived from per-slot context instead of a
@@ -390,10 +491,6 @@ services:
       # (useful for weak models that lean on re-reads as extra reasoning
       # passes).
       - ATLAS_DEDUP_READS=${ATLAS_DEDUP_READS:-1}
-      # Structural call-graph reasoning (#39). The proxy reads this to decide
-      # whether to attach the intra-file call graph to read_file/outline_file
-      # output; v3-service reads the same flag (line above) to compute it.
-      - ATLAS_CALL_GRAPH=${ATLAS_CALL_GRAPH:-0}
       # PC-192: opt-in host execution for run_command. Set to "host"
       # to bypass the sandbox container and run verifications on the
       # host (works when proxy runs locally, not in Docker — Docker
@@ -417,8 +514,6 @@ services:
       - ATLAS_MAX_COMPLETION_TOKENS=${ATLAS_MAX_COMPLETION_TOKENS:-}
       # Conversation-history token budget override.
       - ATLAS_AGENT_HISTORY_BUDGET=${ATLAS_AGENT_HISTORY_BUDGET:-}
-      # Labeled-sample count at which the "retrain available" prompt fires.
-      - ATLAS_LENS_RETRAIN_MIN=${ATLAS_LENS_RETRAIN_MIN:-}
       # Set 0 to disable the 45s llama-server keep-warm ping (PC-035).
       - ATLAS_KEEP_LLAMA_WARM=${ATLAS_KEEP_LLAMA_WARM:-}
       # Set 0 to reuse KV slots across sessions instead of erasing (PC-045).
@@ -432,11 +527,16 @@ services:
       - ${ATLAS_PROJECT_DIR:-.}:/workspace
       # Internal-auth token (read-only; absent dir => auth disabled).
       - ${ATLAS_SECRETS_DIR:-./secrets}:/run/atlas-secrets:ro
-      # Lens training-data corpus (per-file accept/deny + pass thumbs → labeled,
-      # weighted samples). Host bind-mount so `atlas lens retrain` (host CLI)
-      # reads the same corpus the proxy writes. Persists + accumulates toward a
-      # retrain. ATLAS_LENS_HOST_DIR overrides the host path.
-      - ${ATLAS_LENS_HOST_DIR:-./lens_training}:/data/lens_training
+      # Private diagnostic captures (ATLAS_SHADOW_CAPTURE, default OFF — see
+      # docs/OPERATIONS.md). Its own host dir, deliberately not the V3
+      # telemetry volume: that is service telemetry, and a diagnostic
+      # acquisition must be separable from it.
+      # Bind-mounted rather than a named volume so the directory carries the
+      # invoking user's ownership — the proxy already runs as that user for the
+      # workspace mount, and a named volume would be created
+      # root-owned and unwritable to it. Nothing is written here unless
+      # ATLAS_SHADOW_CAPTURE names a file.
+      - ${ATLAS_DIAGNOSTIC_HOST_DIR:-./diagnostics}:/data/diagnostics
     working_dir: /workspace
     ports:
       - "127.0.0.1:${ATLAS_PROXY_PORT:-8090}:8090"
@@ -459,7 +559,6 @@ services:
       - sandbox-net
 
 volumes:
-  lens-state:
   v3-telemetry:
 
 networks:

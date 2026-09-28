@@ -280,7 +280,7 @@ def _check_asa(atlas_root: str) -> ASACheckVerdict:
     if not v.vector_model_marker:
         v.reason = (f"control vector is present but {marker_path} is missing. "
                     "The inference entrypoint will keep it disabled; run "
-                    "`atlas asa build` to create a verified vector and marker."
+                    "`atlas asa build` to create a vector and its model marker."
                     f"{dl_hint}")
         return v
     if (selected_model and publishing.canonical_model_identity(v.vector_model_marker)
@@ -715,9 +715,10 @@ Model(
     name="{model_name}",
     # ... existing fields ...
     lens_status="supported",
-    # New (V3.1.2 forward-compat): ASA vector tracking
+    # New (V3.1.2 forward-compat): ASA vector tracking. "unverified" until
+    # an A/B measurement shows the effect; then promote to "supported".
     asa_artifact_files=["{DEFAULT_VECTOR_NAME}"],
-    asa_status="supported",
+    asa_status="unverified",
     license="{license_id}",
 ),
 ```

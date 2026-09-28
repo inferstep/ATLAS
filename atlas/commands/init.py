@@ -262,7 +262,7 @@ def _step_select_model(profile: tier.TierProfile,
                         color: bool) -> Optional[model_registry.Model]:
     """Pick a model for the user. Tier default if `supported`, otherwise
     surface the supported-fallback so wizard never recommends a model
-    where G(x) silently no-ops.
+    that the lens cannot score (ATLAS stops agent work on such a model).
 
     PC-054 audit fix: refuse on cpu tier — the user has no GPU and
     `docker compose up -d` would fail at llama-server load. Better to
@@ -388,7 +388,8 @@ def _step_select_model(profile: tier.TierProfile,
     # Tier default is missing or no-artifacts — fall back.
     if tier_default and tier_default.lens_status != "supported":
         _safe_print(f"  Tier default ({tier_default.name}) has lens_status="
-                    f"{tier_default.lens_status} — G(x) verification would no-op.")
+                    f"{tier_default.lens_status}: the lens could not score it, and "
+                    f"ATLAS would stop agent work on it.")
     if fallback is None:
         _safe_print(f"  {RED if color else ''}No Lens-supported model in registry; "
                     f"cannot recommend.{RESET if color else ''}")
@@ -540,6 +541,9 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         "ATLAS_MODELS_DIR": models_value,
         "ATLAS_MODEL_FILE": m.model_file,
         "ATLAS_MODEL_NAME": m.model_file.rsplit(".", 1)[0],
+        # The model's grammar mode from the registry: an install runs the
+        # configuration the model was measured with.
+        "ATLAS_GRAMMAR_MODE": m.grammar_mode,
         "ATLAS_CTX_SIZE": str(profile.context_length),
         "ATLAS_PARALLEL_SLOTS": str(profile.parallel_slots),
         "ATLAS_KV_TYPE_K": profile.kv_cache_k,
@@ -562,10 +566,9 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         "ATLAS_SANDBOX_CPUS": sandbox_cpus,
         "ATLAS_SANDBOX_UID": sandbox_uid,
         "ATLAS_SANDBOX_GID": sandbox_gid,
-        # The proxy writes two host bind mounts (/workspace,
-        # /data/lens_training); run it as the invoking user for the same
-        # reason as the sandbox — the image's baked-in uid 1001 can't
-        # write operator-owned host dirs.
+        # The proxy writes the /workspace host bind mount; run it as the
+        # invoking user for the same reason as the sandbox — the image's
+        # baked-in uid 1001 can't write operator-owned host dirs.
         "ATLAS_PROXY_UID": sandbox_uid,
         "ATLAS_PROXY_GID": sandbox_gid,
     }
@@ -819,8 +822,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="override default <atlas_root>/models")
     parser.add_argument("--image-tag", default="latest",
         help="ATLAS_IMAGE_TAG to write into .env (default: latest)")
-    parser.add_argument("--ghcr-owner", default="itigges22",
-        help="ATLAS_GHCR_OWNER to write into .env (default: itigges22)")
+    parser.add_argument("--ghcr-owner", default="inferstep",
+        help="ATLAS_GHCR_OWNER to write into .env (default: inferstep)")
     parser.add_argument("--backend", default=None,
         choices=["cuda", "rocm", "vulkan", "metal"],
         help="force a specific llama-server backend instead of "
@@ -841,7 +844,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"parent directory.{RESET if color else ''}")
         _safe_print("  The wizard writes .env and secrets/ relative to your "
                     "ATLAS checkout. cd into the repo (or clone it: "
-                    "git clone https://github.com/itigges22/ATLAS.git) "
+                    "git clone https://github.com/inferstep/ATLAS.git) "
                     "before re-running.")
         return 1
     models_dir = _resolve_models_dir(args.models_dir, atlas_root)

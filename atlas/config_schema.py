@@ -46,7 +46,6 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_TRUST_MODE": Field("enum",
                               enum=("untrusted", "trusted", "fully-trusted")),
     "ATLAS_VERIFY_IN": Field("enum", enum=("sandbox", "host")),
-    "ATLAS_CALL_GRAPH": Field("bool"),
     "ATLAS_KEEP_LLAMA_WARM": Field("bool"),
     "ATLAS_FRESH_SLOT_PER_SESSION": Field("bool"),
     "ATLAS_DEDUP_READS": Field("bool"),
@@ -65,8 +64,12 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_DRY_PENALTY_LAST_N": Field("int", min=-1, max=2_000_000),
     "ATLAS_REPEAT_PENALTY": Field("float", min=0.5, max=2),
     "ATLAS_REPEAT_LAST_N": Field("int", min=0, max=100_000),
+    # Greedy decoding for agent turns, and restating the last-read file at
+    # the generation point. Both exist because an agent turn is transcription
+    # of text already in context, not free generation.
+    "ATLAS_TRANSCRIPTION_SAMPLER": Field("bool"),
+    "ATLAS_RESTATE_LAST_READ": Field("bool"),
     "ATLAS_MAX_TURNS": Field("int", min=0, max=1000),
-    "ATLAS_LENS_RETRAIN_MIN": Field("int", min=0, max=10_000_000),
     "ATLAS_SANDBOX_PIDS": Field("int", min=1, max=1_000_000),
     "ATLAS_SANDBOX_UID": Field("int", min=0, max=2_000_000),
     "ATLAS_SANDBOX_GID": Field("int", min=0, max=2_000_000),
@@ -94,6 +97,11 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_EMBED_POOLING": Field("enum", enum=("none", "mean", "cls", "last", "rank")),
     "ATLAS_REASONING_BUDGET": Field("int", min=0),
     "ATLAS_PERMISSION_TIMEOUT_SEC": Field("int", min=0),
+    # Fenced file-content sub-call watchdogs (proxy/agent.go). The proxy
+    # accepts 1..600 seconds and falls back to its default otherwise.
+    "ATLAS_FENCED_FIRST_CONTENT_SEC": Field("int", min=1, max=600),
+    "ATLAS_FENCED_IDLE_SEC": Field("int", min=1, max=600),
+    "ATLAS_FENCED_STALL_SEC": Field("int", min=1, max=600),
     # GPU-vendor overlay knobs. Read by the rocm/vulkan compose files
     # rather than the base one, so they are only set on those installs —
     # but they are still ordinary .env keys and must not be called typos.
@@ -113,7 +121,7 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_GHCR_OWNER": Field("str"),
     "ATLAS_PROJECT_DIR": Field("str"),
     "ATLAS_LENS_MODELS": Field("str"),
-    "ATLAS_LENS_HOST_DIR": Field("str"),
+    "ATLAS_DIAGNOSTIC_HOST_DIR": Field("str"),
     "ATLAS_SECRETS_DIR": Field("str"),
     "ATLAS_MACOS_PREFIX": Field("str"),
     "ATLAS_LLAMA_HOST": Field("str"),
@@ -125,8 +133,7 @@ SCHEMA: Dict[str, Field] = {
     # ASA control-vector path (entrypoint-v3.1.sh + `atlas asa`); the
     # _SCALE/_LAYER_RANGE/_ALLOW_UNVERIFIED tuning knobs are above.
     "ATLAS_CONTROL_VECTOR": Field("str"),
-    # Proxy-side lens-training corpus dir + read_file byte cap.
-    "ATLAS_LENS_DATA_DIR": Field("str"),
+    # read_file byte cap.
     "ATLAS_MAX_READ_BYTES": Field("int", min=0),
     # TUI: proxy base URL, debug log path, mouse capture (on/off).
     "ATLAS_PROXY_URL": Field("str"),
@@ -139,21 +146,31 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_SANDBOX_TMP_SIZE": Field("str"),
     "ATLAS_SANDBOX_PIP_SIZE": Field("str"),
     "ATLAS_SANDBOX_CACHE_SIZE": Field("str"),
-    # Lens SQLite state store path (host/dev runs; compose pins the
-    # container path). Not ATLAS_-prefixed: read directly by the lens
-    # service, listed here so migrate() carries it forward.
-    "SQLITE_DB_PATH": Field("str"),
     # Removed keys: ignored on read, flagged as deprecated on validate.
     "ATLAS_ENABLE_TRAINING": Field("bool",
         deprecated="removed; training is always available"),
     "ATLAS_REGISTRY": Field("str",
         deprecated="removed; the registry is in-package"),
     "ATLAS_REDIS_MAXMEMORY": Field("str",
-        deprecated="removed; lens state is SQLite (SQLITE_DB_PATH)"),
+        deprecated="removed; the lens keeps no state"),
     "ATLAS_REDIS_MEM": Field("str",
-        deprecated="removed; lens state is SQLite (SQLITE_DB_PATH)"),
+        deprecated="removed; the lens keeps no state"),
+    "SQLITE_DB_PATH": Field("str",
+        deprecated="removed with the pattern cache; the lens keeps no state"),
+    "ATLAS_LENS_ONLINE_LEARNING": Field("bool",
+        deprecated="removed with the pattern cache it froze"),
+    "ATLAS_LENS_HOST_DIR": Field("str",
+        deprecated="removed; the proxy no longer collects a lens training corpus"),
+    "ATLAS_LENS_DATA_DIR": Field("str",
+        deprecated="removed; the proxy no longer collects a lens training corpus"),
+    "ATLAS_LENS_RETRAIN_MIN": Field("int",
+        deprecated="removed with the lens training corpus and its retrain prompt"),
     "ATLAS_RPG_PLANNING": Field("bool",
         deprecated="removed; RPG planning was cut — see issue #148"),
+    "ATLAS_CANDIDATE_POLICY": Field("str",
+        deprecated="removed; one delivery rule, not selectable — see docs/CANDIDATE_POLICY.md"),
+    "ATLAS_CALL_GRAPH": Field("bool",
+        deprecated="removed; the call graph always runs, for Python files"),
 }
 
 

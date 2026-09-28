@@ -30,7 +30,6 @@ from .resolve import resolve_imports
 from .cache import FileGraphCache, default_cache
 from .resolve_calls import unresolved_calls
 from .context import repair_context, symbol_neighborhood
-from .flags import call_graph_enabled
 
 
 def build_graph(file_map: Dict[str, str], cache: Optional[FileGraphCache] = None) -> CodeGraph:
@@ -57,7 +56,6 @@ def build_graph(file_map: Dict[str, str], cache: Optional[FileGraphCache] = None
 
 __all__ = [
     "build_graph",
-    "call_graph_enabled",
     "repair_context",
     "symbol_neighborhood",
     "unresolved_calls",

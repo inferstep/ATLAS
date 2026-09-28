@@ -1,4 +1,4 @@
-"""Tests for graph support pieces: import resolution, cache, flag, and the
+"""Tests for graph support pieces: import resolution, cache, and the
 build_graph entry point (issue #39, Phase 0)."""
 
 import sys
@@ -14,7 +14,6 @@ from graph.extract import available as extraction_available  # noqa: E402
 from graph.types import CodeGraph, ImportsFact  # noqa: E402
 from graph.resolve import resolve_imports, _module_name  # noqa: E402
 from graph.cache import FileGraphCache, file_hash  # noqa: E402
-from graph.flags import call_graph_enabled, ENV_VAR  # noqa: E402
 
 _HAS_TS = extraction_available()
 
@@ -98,17 +97,6 @@ class TestCache:
         c.get_or_extract("b.py", "def b(): pass")
         c.get_or_extract("c.py", "def c(): pass")
         assert len(c) == 2
-
-
-class TestFlag:
-    def test_default_off(self, monkeypatch):
-        monkeypatch.delenv(ENV_VAR, raising=False)
-        assert call_graph_enabled() is False
-
-    def test_truthy(self, monkeypatch):
-        for v in ("1", "true", "On", "yes"):
-            monkeypatch.setenv(ENV_VAR, v)
-            assert call_graph_enabled() is True
 
 
 class TestBuildGraph:

@@ -9,7 +9,7 @@ It's the long-form walkthrough for the artifact-contribution flow introduced in 
 ## What you'll do, end to end
 
 1. **Train** an artifact locally (`atlas lens build` or `atlas asa build`).
-2. **Publish** it (`atlas lens publish` / `atlas asa publish`) — one command uploads the binary to a HuggingFace repo you own and opens a registry PR against `github.com/itigges22/ATLAS`.
+2. **Publish** it (`atlas lens publish` / `atlas asa publish`) — one command uploads the binary to a HuggingFace repo you own and opens a registry PR against `github.com/inferstep/ATLAS`.
 3. **Wait for review** — the maintainer verifies the artifact and merges the PR (see [What happens after you submit](#what-happens-after-you-submit)).
 
 Once merged, downstream users see your model under `atlas model list` and get
@@ -50,7 +50,7 @@ registry field it sets differ:
 2. **Hash** — SHA-256s the artifact so the PR carries a tamper-detectable fingerprint.
 3. **Upload to HF** — creates the repo (idempotent), uploads the artifact files, and generates a model card README with license + base-model badge.
 4. **Render PR body** — produces a markdown checklist with the HF URL, SHA-256, input dim, license, and a suggested diff for `atlas/commands/model_registry.py`.
-5. **Open the PR** — with `gh` installed and authed, the PR is built entirely through the GitHub API (branch created on your fork if you can't push upstream, a complete `Model(...)` registry entry committed) and opened against the `dev` branch — no local git checkout needed. If the model is already registered upstream or `gh` is unavailable, the body is printed for manual paste into https://github.com/itigges22/ATLAS/compare.
+5. **Open the PR** — with `gh` installed and authed, the PR is built entirely through the GitHub API (branch created on your fork if you can't push upstream, a complete `Model(...)` registry entry committed) and opened against the `dev` branch — no local git checkout needed. If the model is already registered upstream or `gh` is unavailable, the body is printed for manual paste into https://github.com/inferstep/ATLAS/compare.
 
 `--dry-run` runs pre-flight, hash, and PR-body render but skips the HF upload
 and PR. `--skip-pr` uploads to HF and prints the PR body for manual paste.
@@ -160,7 +160,7 @@ Run `pip install huggingface_hub`. The lens container has it baked in, but the h
 
 ### `gh: command not found`
 
-Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI will print the PR body and you paste it into github.com/itigges22/ATLAS/compare manually. Both paths produce the same review outcome. (With `gh` present, no git checkout is required — the PR is created entirely through the GitHub API, including the fork for non-maintainers.)
+Either install `gh` from https://cli.github.com, or use `--skip-pr` — the CLI will print the PR body and you paste it into github.com/inferstep/ATLAS/compare manually. Both paths produce the same review outcome. (With `gh` present, no git checkout is required — the PR is created entirely through the GitHub API, including the fork for non-maintainers.)
 
 ### `Artifact input dim (unverified)` in the PR body
 

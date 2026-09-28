@@ -125,10 +125,14 @@ func recordToolCall(ctx *AgentContext, toolName string, args json.RawMessage) (s
 
 	if toolName == "structural_edit" {
 		if path, sel := structuralEditTarget(args); path != "" && sel != "" {
+			// Counted before execution and on the target alone: the window
+			// sees that the calls kept coming at one selector, not whether
+			// they failed or how their bodies differed, so it says only that.
 			return fmt.Sprintf(
-				"⚠ `structural_edit` on `%s` with selector `%s` has failed %d times. The body was different each "+
-					"time, so the body is not what is wrong — the SELECTOR is. That node either does not contain the "+
-					"code you are changing, or is mostly a string literal you cannot re-emit byte-for-byte. No "+
+				"⚠ `structural_edit` on `%s` with selector `%s` has been sent %d times in a row. If those attempts "+
+					"were refused, changing the body will not help — the SELECTOR is the problem. That node either "+
+					"does not contain the code you are changing, or is mostly a string literal you cannot re-emit "+
+					"byte-for-byte. No "+
 					"selector reaches INSIDE a string: an HTML/JS template held in a Python string is one literal to "+
 					"the grammar, however many lines it spans. Switch tools now: `edit_file` with old_str set to ONE "+
 					"unique line copied out of the region you are changing, or `insert_after` with the line number "+
@@ -236,6 +240,45 @@ func structuralEditTarget(args json.RawMessage) (string, string) {
 	return in.Path, in.Selector
 }
 
+// signaturePath collapses the spellings of one target so a rename of the
+// STRING cannot buy a fresh repetition budget: `solve.py` and `./solve.py` are
+// the same file to the loop and must be the same signature to the detector.
+// filepath.Clean is enough here -- the detector compares a session's calls with
+// each other, and every one of them was written by the same model against the
+// same working directory.
+// retryIdentityArgs chooses the arguments that identify a call for the
+// identical-resend ban.
+//
+// Two layers, deliberately. Channel and repetition identity stay RAW: the
+// fenced allowance and the repeat detector both exist to bound a model
+// re-sending one call, and `content:"@fenced"` is the same seven bytes every
+// time, which is exactly what those two are counting. An EXECUTED write_file
+// is a different question -- "have these bytes already been refused?" -- and
+// the answer has to be about the bytes that would be written, not about the
+// request that went to fetch them.
+//
+// Measured on a session-owned file whose current bytes were exact-hash
+// syntax/passed: three fenced fetches, one proposal evaluated. The second and
+// third bodies were obtained, a generation each, and dropped before any syntax
+// gate saw them, and a valid fourth body never got that far.
+//
+// Only write_file moves. Everything else keeps the identity it had, and a call
+// with nothing resolved keeps the intent -- a pre-resolution failure must stay
+// bounded without pretending resolved bytes exist.
+func retryIdentityArgs(name string, intent, resolved json.RawMessage) json.RawMessage {
+	if name != "write_file" || len(resolved) == 0 {
+		return intent
+	}
+	return resolved
+}
+
+func signaturePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(p)
+}
+
 func toolCallSignature(toolName string, args json.RawMessage) string {
 	// structural_edit is keyed on (path, selector) and deliberately ignores
 	// `content`. When a selector cannot carry the change the model is
@@ -248,13 +291,13 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 	// the failure cap with the model never told the selector was the problem.
 	if toolName == "structural_edit" {
 		if p, sel := structuralEditTarget(args); p != "" && sel != "" {
-			h := sha1.Sum([]byte(toolName + "|path:" + p + "|sel:" + sel))
+			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(p) + "|sel:" + sel))
 			return hex.EncodeToString(h[:])
 		}
 	}
 	if toolName == "write_file" {
 		if p := writeFilePath(args); p != "" {
-			key := toolName + "|path:" + p
+			key := toolName + "|path:" + signaturePath(p)
 			if fp := writeFileContentFingerprint(args); fp != "" {
 				key += "|c:" + fp
 			}
@@ -797,4 +840,188 @@ func tracebackSteer(ctx *AgentContext, output string) string {
 		fmt.Fprintf(&sb, "Fix the code at line %d — change only the buggy logic, keep all other identifiers exactly as written.", lineNo)
 	}
 	return sb.String()
+}
+
+// identicalRetryRefusal returns the refusal text when this exact call has
+// already been rejected in this session, or "" to let it run.
+//
+// The harness is deterministic: the same (tool, args) against the same file
+// produces the same rejection. Re-sending it cannot succeed, so it is refused
+// before execution rather than executed and nudged afterwards.
+//
+// This is the one intervention in this class that needs no per-model tuning.
+// Everything about WHY a model repeats itself is model-specific; that a
+// byte-identical call against a deterministic harness will fail again is not.
+// Observed 2026-08-02: run 9 emitted the same `replace_lines` call on turns 2
+// and 3 against a rejection that named the file, the line, the cause and two
+// concrete fixes. The existing repetition detector needs three occurrences in
+// its window and emits a corrective for the NEXT turn, so a two-turn identical
+// pair never reached it, and the run died on the three-strike breaker with the
+// file untouched.
+//
+// Scoped to calls that FAILED. Re-reading a file after editing it is
+// byte-identical and correct, and this must never touch it.
+func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMessage) string {
+	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
+		return ""
+	}
+	// Polling a background job is the one call that is meant to repeat
+	// byte-for-byte: the output it reads changes while nothing in this
+	// session succeeds.
+	//
+	// Nothing else needs an exemption. The verify-fix-verify loop is
+	// already protected one layer down — clearFailedToolCall drops every
+	// remembered rejection on any success, so fixing the code and
+	// re-running the same `pytest` finds an empty map. A signature that
+	// is still here proves nothing has succeeded since it was recorded,
+	// which is exactly what the refusal claims.
+	//
+	// Exempting commands wholesale cost more than it saved. Observed
+	// 2026-08-03 on multiturn_stats: the model sent one `python3 -c`
+	// with mismatched quotes, bash rejected it with a syntax error, and
+	// it re-sent the identical command seven times across six turns
+	// before the turn cap ended the request.
+	if toolName == "tail_background" {
+		return ""
+	}
+	prev, seen := ctx.FailedToolCalls[retryIdentity(toolName, args)]
+	if !seen {
+		return ""
+	}
+	return fmt.Sprintf(
+		"This is the same `%s` call, byte for byte, that was already rejected. Nothing about "+
+			"the workspace has changed since, so it fails for the same reason and re-sending it "+
+			"again will not help:\n\n%s\n\nChange the call. If the rejection named a line or a "+
+			"block, go read it with read_file before editing. If it named a different tool, use "+
+			"that one. If you cannot see what to change, use read_file or outline_file to look "+
+			"at the file again rather than re-sending this.",
+		toolName, truncateStr(prev, 600))
+}
+
+// recordFailedToolCall remembers a rejected call so an identical re-send is
+// refused. Keyed on retryIdentity -- the args the MODEL sent rather than
+// whatever fenced resolution left behind.
+func recordFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage, errMsg string) {
+	if ctx == nil || errMsg == "" {
+		return
+	}
+	if ctx.FailedToolCalls == nil {
+		ctx.FailedToolCalls = make(map[string]string)
+	}
+	ctx.FailedToolCalls[retryIdentity(toolName, args)] = errMsg
+}
+
+// retryIdentity is what "the same call" means to the identical-resend
+// refusal, whose message says "byte for byte": the whole call. It is
+// toolCallSignature for every tool but structural_edit, whose repeat window
+// keys on (path, selector) and ignores the body, on purpose, so different
+// bodies against one doomed selector still count as repeats. The refusal
+// used that key too, so a corrected body on the same selector was refused as
+// identical, the tool was banned for the file, and the run ended
+// repeated_refusal blaming the model for an unchanged re-send (audit
+// P-safety/INTEGRITY#4).
+func retryIdentity(toolName string, args json.RawMessage) string {
+	if toolName == "structural_edit" {
+		var in StructuralEditInput
+		if json.Unmarshal(args, &in) == nil && in.Path != "" && in.Selector != "" {
+			body := sha1.Sum([]byte(in.Content))
+			h := sha1.Sum([]byte(toolName + "|path:" + signaturePath(in.Path) + "|sel:" + in.Selector +
+				"|c:" + hex.EncodeToString(body[:])))
+			return hex.EncodeToString(h[:])
+		}
+	}
+	return toolCallSignature(toolName, args)
+}
+
+// clearFailedToolCall forgets remembered rejections once ANY tool call
+// succeeds.
+//
+// The refusal rests on "nothing has changed since", and a successful call
+// falsifies that outright. Observed on multifile_cli: an edit was refused for
+// "file not read yet", the model read the file — exactly the right response —
+// and the retry was then refused as an identical re-send, because only the
+// edit's own signature was being cleared. The precondition had been met and
+// the call was valid.
+//
+// Forgetting everything is the honest reading: after a successful read, edit
+// or command, the harness can no longer claim any earlier failure still
+// holds. A call that is genuinely still wrong fails again and is remembered
+// again, at the cost of one turn.
+func clearFailedToolCall(ctx *AgentContext, toolName string, args json.RawMessage) {
+	if ctx == nil || len(ctx.FailedToolCalls) == 0 {
+		return
+	}
+	ctx.FailedToolCalls = make(map[string]string)
+}
+
+// rejectionClass reduces a rejection to its skeleton, so two failures can be
+// compared for whether they are the SAME failure or different ones.
+//
+// The error-loop breaker counts consecutive failures and stops at three. That
+// conflates a model looping with a model converging: run 11 was refused three
+// times — selector-unreachable, then span-too-large, then stale-range — each
+// attempt responding to the previous error, and the run was killed with the
+// file untouched while it was visibly closing in. The path-aware breaker
+// already carries the same insight on a different axis ("3 fails across
+// DIFFERENT files = grinding through multi-file work, keep going"); a
+// different REASON on one file is progress for the same reason.
+//
+// Skeleton = the message with the parts that vary between two instances of
+// the same failure removed: digits, quoted spans, and paths. Two
+// "line N of X is not what you expected" rejections collapse together; a
+// size-cap and a stale-range do not.
+func rejectionClass(errMsg string) string {
+	if errMsg == "" {
+		return ""
+	}
+	skeleton := reRejectionVariable.ReplaceAllString(errMsg, "")
+	skeleton = strings.Join(strings.Fields(skeleton), " ")
+	return truncateStr(skeleton, 160)
+}
+
+// Digits, backtick/quote-delimited spans, and path-like tokens — the parts
+// that differ between two occurrences of one failure.
+var reRejectionVariable = regexp.MustCompile(
+	"`[^`]*`" + `|"[^"]*"|'[^']*'|[0-9]+|[\w./-]+\.(?:py|js|ts|html|htm|css|json|md|go|txt)`)
+
+// stuckOnOnePath reports the path-aware breaker's condition: three
+// consecutive failures, all on the same named target. Three failures spread
+// across different files is a model grinding through multi-file work; three
+// on one file is a model stuck.
+//
+// Shared so the pre-execution refusal path applies the same rule as the
+// post-execution one. It did not, and the counters it incremented had no
+// reader: a model that re-sent the same rejected call was refused every time,
+// cheaply, forever — four refusals in one observed run with no breaker and no
+// ceiling, because both live inside the branch the refusal skips.
+func stuckOnOnePath(paths []string) bool {
+	return len(paths) == 3 && paths[0] != "" &&
+		paths[0] == paths[1] && paths[1] == paths[2]
+}
+
+// appendRecentFailurePath keeps the trailing window stuckOnOnePath reads.
+// Shared so every rejection branch feeds the same window; a branch that
+// skipped it left the path-aware breaker blind to its failures.
+func appendRecentFailurePath(paths []string, path string) []string {
+	paths = append(paths, path)
+	if len(paths) > 3 {
+		paths = paths[len(paths)-3:]
+	}
+	return paths
+}
+
+// shouldStopForFailures is the single stopping decision every rejection
+// branch shares. It exists because the branches disagreed: each one
+// incremented totalFailures and consecutiveErrors, but only some of them
+// read the result afterwards, so a rejection that took a counting-but-not-
+// reading branch was free. Measured on the locked benchmark at dev head
+// 78d345c: a session bounced 19 identical calls off a tool ban and reached 22
+// failures against a ceiling of 12, and another reached 96 failures across
+// 102 turns and two hours. Both had passed the ceiling many times over.
+//
+// Thresholds are unchanged from the branch that did read them; this only
+// gives every branch the same reader.
+func shouldStopForFailures(totalFailures, consecutiveErrors int, recentPaths []string) bool {
+	return totalFailures >= maxTotalFailures ||
+		(consecutiveErrors >= 3 && stuckOnOnePath(recentPaths))
 }

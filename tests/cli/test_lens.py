@@ -199,6 +199,22 @@ def test_check_rejects_artifacts_for_same_dim_different_model(monkeypatch,
     assert "other-model" in verdict.reason
 
 
+def test_check_rejects_the_q6k_bundle_for_another_quant(monkeypatch, tmp_path):
+    """#247: a quant of the same model has the same embedding size, but a
+    bundle built for Q6_K does not load for Q4_K_M. `atlas lens check`
+    must say so, as the registry notes now do."""
+    torch = pytest.importorskip("torch")
+    torch.save({"net.0.weight": torch.zeros(512, 4096)},
+               tmp_path / "cost_field.pt")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe(
+        model_name="Qwen3.5-9B-Q4_K_M.gguf"))
+    verdict = lens._check_model(None, str(tmp_path))
+    assert verdict.verdict == "needs-build"
+    assert "Qwen3.5-9B-Q6_K" in verdict.reason
+
+
 def test_check_compat_warns_when_pc202_patch_missing(monkeypatch, tmp_path):
     """Compat verdict but no PC-202 patch -> reason mentions G(x) limitation."""
     torch = pytest.importorskip("torch")
@@ -298,46 +314,6 @@ def test_load_training_samples_missing_file(tmp_path):
     """Missing file returns empty list, not an exception."""
     assert lens._load_training_samples(str(tmp_path / "nope.json")) == []
     assert lens._load_training_samples(None) == []
-
-
-# ---------------------------------------------------------------------------
-# Collected-corpus loader (atlas lens retrain source)
-# ---------------------------------------------------------------------------
-
-def test_load_collected_samples_reads_corpus(tmp_path, monkeypatch):
-    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
-    mdir = tmp_path / "gemma-4-12b-it-Q4_K_M"
-    mdir.mkdir()
-    (mdir / "samples.jsonl").write_text(
-        '{"content": "FROM python:3.11\\n", "label": 1, "weight": 1.0}\n'
-        '{"content": "FROM base\\nCMD run\\n", "label": 0, "weight": 1.0}\n'
-        '{"content": "def f(): pass\\n", "label": 1, "weight": 0.4}\n'
-    )
-    samples = lens._load_collected_samples("gemma-4-12b-it-Q4_K_M")
-    assert len(samples) == 3
-    # mapped to the {text, label, weight} shape _extract_training_embeddings wants
-    assert samples[0] == {"text": "FROM python:3.11\n", "label": 1, "weight": 1.0}
-    assert samples[2]["weight"] == 0.4
-
-
-def test_load_collected_samples_single_subdir_fallback(tmp_path, monkeypatch):
-    """A wrong/blank model name still resolves when exactly one corpus exists."""
-    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
-    mdir = tmp_path / "only-model"
-    mdir.mkdir()
-    (mdir / "samples.jsonl").write_text('{"content": "x\\n", "label": 1}\n')
-    assert len(lens._load_collected_samples("some-other-name")) == 1
-
-
-def test_load_collected_samples_empty_when_absent(tmp_path, monkeypatch):
-    monkeypatch.setenv("ATLAS_LENS_HOST_DIR", str(tmp_path))
-    assert lens._load_collected_samples("whatever") == []
-
-
-def test_sanitize_model_dir_matches_proxy(tmp_path):
-    # Must mirror proxy/lens_samples.go:sanitizeModelName.
-    assert lens._sanitize_model_dir("vendor/Model:Q6_K") == "vendor_Model_Q6_K"
-    assert lens._sanitize_model_dir("") == "default"
 
 
 # ---------------------------------------------------------------------------

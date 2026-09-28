@@ -437,11 +437,10 @@ atlas doctor -v           # verbose: show detail for each check
 | Stack | health/llama, lens, v3, sandbox, proxy | 5개 `/health` 엔드포인트 모두 ok 반환 |
 | Stack | internal_auth | 내부 서비스 인증: 토큰 파일이 엄격한 권한과 함께 존재하고, 실제 강제 여부를 양방향으로 탐침(잘못된 토큰 → 401, 유효한 토큰은 수락); 인증이 비활성화된 경우(`secrets/service-token` 없음) 경고 |
 | Stack | status_dimensions | 정보성: 프록시 `/v1/calibration/status`가 보고하는 lens/ASA 상태 7개 차원(TUI 배지가 읽는 것과 동일한 소스); 실행을 실패시키지 않음 |
-| Stack | sqlite_state | lens `/health`가 SQLite 상태 저장소 사용 가능을 보고 (`subsystems.sqlite`) |
 | Stack | image_skew | `atlas-*` 이미지 5개가 모두 같은 태그 |
 | End-to-end | e2e_smoke | llama-server로의 라이브 `/v1/chat/completions` 왕복 (`--quick`으로 건너뜀) |
 
-`vulkan`과 `metal-native` 행은 구성된 백엔드에 따라 조건부입니다. health, `internal_auth`, `status_dimensions`, `sqlite_state` 행은 컨테이너가 하나 이상 떠 있을 때만 실행되고, `e2e_smoke`는 `--quick`으로 건너뜁니다. 나머지 점검은 항상 실행됩니다.
+`vulkan`과 `metal-native` 행은 구성된 백엔드에 따라 조건부입니다. health, `internal_auth`, `status_dimensions` 행은 컨테이너가 하나 이상 떠 있을 때만 실행되고, `e2e_smoke`는 `--quick`으로 건너뜁니다. 나머지 점검은 항상 실행됩니다.
 
 직접 확인하고 싶다면:
 
@@ -675,7 +674,7 @@ K3s는 설정에 `.env`가 아닌 `atlas.conf`를 사용합니다. HTTP 계약�
 | 서비스 노출 | 호스트 포트 (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | 프로젝트 워크스페이스 | 바인드 마운트 (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath` (`ATLAS_PROJECTS_DIR` → 필요한 모든 Pod의 `/workspace`) |
 | 모델 파일 | 바인드 마운트 (`ATLAS_MODELS_DIR` → `/models:ro`) | GPU 노드의 `hostPath` (`ATLAS_MODELS_DIR`, `Directory`, 읽기 전용) |
-| 상태 저장 스토리지 | 명명된 볼륨 (`lens-state`, `v3-telemetry`) | PVC (`lens-projects`는 `ATLAS_PVC_PROJECTS_SIZE`로 크기 지정) |
+| 상태 저장 스토리지 | 명명된 볼륨 (`v3-telemetry`) | PVC (`lens-projects`는 `ATLAS_PVC_PROJECTS_SIZE`로 크기 지정. 마운트되지만 프로젝트 인덱서 제거 이후 사용되지 않음) |
 | GPU 할당 | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (GPU Operator 또는 디바이스 플러그인 필요) |
 | 샌드박스 툴체인 캐시 | 언어별 `tmpfs` 마운트 | 언어별 `sizeLimit` 지정 `emptyDir` (공통 패턴, 동일 세트) |
 

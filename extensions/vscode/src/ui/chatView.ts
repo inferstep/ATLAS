@@ -33,6 +33,8 @@ import {
 	PermissionFlow,
 	type DismissReason,
 	type PermissionChoice,
+	commandOf,
+	isOneTimeOnly,
 } from '../session/permissionFlow';
 import { TurnManager } from '../session/turnManager';
 import { describeForLog, renderError } from '../util/errors';
@@ -57,7 +59,7 @@ type OutboundMessage =
 	| { type: 'doneSummary'; text: string }
 	| { type: 'note'; text: string }
 	| { type: 'badge'; text: string }
-	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string; canDiff: boolean; note?: string }
+	| { type: 'permissionPrompt'; id: number; tool: string; detail: string; message: string; canDiff: boolean; note?: string; oneTimeOnly: boolean }
 	| { type: 'permissionResolved'; id: number; outcome: string }
 	| { type: 'planLoaded'; steps: { id: string; label: string }[]; revision: number }
 	| { type: 'planStep'; stepId: string }
@@ -556,10 +558,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			type: 'permissionPrompt',
 			id: pending.id,
 			tool: pending.request.tool_name,
-			detail: condenseArgs(pending.request.args),
+			detail: commandOf(pending.request.args) ?? condenseArgs(pending.request.args),
 			message: pending.request.message || '',
 			canDiff: prediction !== undefined,
 			note: prediction?.note,
+			oneTimeOnly: isOneTimeOnly(pending.request),
 		});
 		this.showPermissionNotification(pending, prediction !== undefined);
 	}
@@ -568,10 +571,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * re-raises the notification (a notification consumes itself on any
 	 * click) so the user can still answer from it. */
 	private showPermissionNotification(pending: PendingPermission, canDiff: boolean): void {
-		const label = pending.request.message || `ATLAS wants to run '${pending.request.tool_name}'.`;
-		const buttons = canDiff
-			? ['View Diff', 'Allow Once', 'Allow for Session', 'Deny']
+		let label = pending.request.message || `ATLAS wants to run '${pending.request.tool_name}'.`;
+		if (commandOf(pending.request.args) !== undefined) {
+			// A notification may cut a long message; the card never does.
+			label += ' (The full command is in the ATLAS chat view.)';
+		}
+		const answers = isOneTimeOnly(pending.request)
+			? ['Allow Once', 'Deny'] // a deletion is approved one file at a time
 			: ['Allow Once', 'Allow for Session', 'Deny'];
+		const buttons = canDiff ? ['View Diff', ...answers] : answers;
 		void vscode.window.showInformationMessage(label, ...buttons).then((choice) => {
 			if (choice === undefined) {
 				return; // dismissed — the card (or the timeout) decides

@@ -296,3 +296,43 @@ def pytest_collection_modifyitems(config, items):
         ))
         if "/tests/integration/" in path or live_infrastructure:
             item.add_marker(pytest.mark.integration)
+
+
+# --- driving the executor's async /shell handler from a test -----------------
+#
+# The handler became a coroutine so it could notice a caller that goes away: a
+# synchronous handler is already blocked in the threadpool when the socket
+# dies, and the command runs on to its own deadline holding a CPU and a memory
+# budget for an answer nobody will read. Tests that call it directly are
+# standing in for a client, so they say which kind of client they are.
+
+
+class ConnectedCaller:
+    """A caller that stays on the line for the whole command."""
+
+    async def is_disconnected(self):
+        return False
+
+
+class DepartedCaller:
+    """A caller that is gone by the time the handler first asks.
+
+    is_disconnected is what Starlette exposes for this, and it is what the
+    handler watches; a test that stubbed a socket instead would be testing a
+    mechanism the handler does not use.
+    """
+
+    def __init__(self, after=0):
+        self.after = after
+        self.asked = 0
+
+    async def is_disconnected(self):
+        self.asked += 1
+        return self.asked > self.after
+
+
+def run_shell_sync(module, request, caller=None):
+    """Run the async /shell handler to completion and return its response."""
+    import asyncio
+
+    return asyncio.run(module.run_shell(request, caller or ConnectedCaller()))

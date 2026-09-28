@@ -87,12 +87,26 @@ VALID_TIERS = frozenset(BUDGET_TIERS.keys())
 # in the system prompt ("Think step by step" / "Think carefully" / "Think
 # through") because the LLMCallable contract has no tier parameter. Reword
 # these prompts and the adapter's marker list together.
+_CODE_CONTRACT_SUFFIX = (
+    " When the user asks for code, treat every explicitly requested public "
+    "name and declaration as immutable. Copy spelling, capitalization, "
+    "parameter order and kinds (including / and * markers), defaults, and "
+    "type annotations exactly; do not substitute aliases. Implement "
+    "behavioral contracts such as laziness, stopping conditions, ordering, "
+    "and error behavior literally. Return one complete, syntactically valid "
+    "requested artifact; never import that artifact from itself, and do not "
+    "add demos, tests, or main blocks unless requested. Before answering, "
+    "verify the artifact parses and every requested declaration still matches."
+)
+
 _SYSTEM_PROMPT_NOTHINK = (
     "You are an expert programmer. Respond directly and concisely."
+    + _CODE_CONTRACT_SUFFIX
 )
 _SYSTEM_PROMPT_THINK = (
     "You are an expert programmer. Think step by step about the problem "
     "before writing code."
+    + _CODE_CONTRACT_SUFFIX
 )
 
 
@@ -244,9 +258,6 @@ class BudgetForcing:
             steepness=self.config.energy_steepness,
         )
 
-    def get_tier_config(self, tier: str) -> Dict:
-        """Return the full config dict for a tier."""
-        return BUDGET_TIERS.get(tier, BUDGET_TIERS["standard"])
 
     def format_chatml(self, user_content: str, tier: str) -> str:
         """Format a ChatML prompt with the appropriate system prompt for the tier.

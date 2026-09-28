@@ -11,7 +11,7 @@ Within that model:
 
 Model-generated tool calls are treated as untrusted input: file edits are constrained to the workspace and shell commands run in the sandbox container (read-only rootfs, no-new-privileges, pids limit, `/workspace` as the only writable host mount). If you find a way around either boundary, that is exactly the kind of report we want.
 
-Two current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`4g` memory, `2` CPUs, `1024` PIDs), never unlimited.
+Three current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`4g` memory, `2` CPUs, `1024` PIDs), never unlimited. Third, execution is permitted from the bind-mounted `/workspace` and from one 512M tmpfs (`/home/sandbox/gobuild`, the Go toolchain's link-and-run directory); every other writable tmpfs, `/tmp` included, is mounted `noexec`. That scoped grant adds no capability the sandbox lacked, since `/workspace` already permitted exec, but it is where compiled output can run.
 
 ## Supported versions
 
@@ -43,14 +43,21 @@ the sandbox with conservative memory/CPU/PID caps, never unlimited.
 
 Two defaults reduce accidental data exposure:
 
-**Sensitive-file exclusion** — the agent's read tools refuse known
+**Sensitive-file exclusion** — the agent's file tools keep known
 credential-bearing files (`.env` and variants, `.netrc`, `.npmrc`,
 `.pypirc`, key files, SSH/AWS/kube/docker credential stores,
-`secrets/service-token`, `secrets/api-keys.json`) so their contents never enter model context, session
-files, or lens training samples by default. A user who knows a
+`secrets/service-token`, `secrets/api-keys.json`) out of model context
+and session files by default: `read_file` and `outline_file` refuse
+them, `search_files` skips them and never follows a symlink, and
+`move_file` refuses to move one to another name. A user who knows a
 specific file is non-sensitive can include it explicitly by setting
 `ATLAS_ALLOW_CREDENTIAL_READS=1` on the proxy (the refusal message
 says exactly this). `.env.example` stays readable — it's a template.
+
+Shell commands are not covered. `run_command` and `run_background` run
+in the sandbox, where the workspace is mounted, so `cat .env` there
+reads the file. In the default and accept-edits modes every command
+asks for approval first.
 
 **Private-value filtering** — log output across all services passes
 through a shared filter that masks credential-shaped values
@@ -66,13 +73,15 @@ the exclusion rule above is the primary control.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately via [GitHub Security Advisories](https://github.com/itigges22/ATLAS/security/advisories/new) rather than opening a public issue.
+Please report vulnerabilities privately via [GitHub Security Advisories](https://github.com/inferstep/ATLAS/security/advisories/new) rather than opening a public issue.
 
 Include what you can of: the affected component (proxy, TUI, CLI, v3-service, geometric-lens, sandbox, install scripts), reproduction steps, and the impact under the single-user local model above.
 
 You can expect an acknowledgment within a week. Fixes for confirmed vulnerabilities land on `dev` and are promoted to a release as soon as they are validated; credit is given in the changelog unless you ask otherwise.
 
 If GitHub advisories are unavailable to you, open a minimal public issue saying "security — need a private channel" **without details**, and the maintainer will provide one.
+
+How the maintainers respond once a report is in (containment, fixes, communication) is in [docs/INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md).
 
 ## Severity and response targets
 

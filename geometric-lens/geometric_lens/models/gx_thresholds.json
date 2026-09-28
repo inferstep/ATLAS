@@ -1,5 +1,6 @@
 {
-  "off_rails": 0.34,
-  "low": 0.34,
-  "severe": 0.28
+ "off_rails": 0.34,
+ "low": 0.34,
+ "severe": 0.28,
+ "severe_mean": 0.52
 }

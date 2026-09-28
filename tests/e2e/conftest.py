@@ -171,10 +171,28 @@ def request_status(port: int, method: str, path: str, body: dict = None,
         conn.close()
 
 
+def agent_request_body(body: dict) -> dict:
+    """Add this suite's task contract to an agent request body.
+
+    Every owned sender declares a task mode. A request with no contract is
+    indistinguishable from an external caller's, and that absence is reserved
+    for the one compatibility fixture. Outputs and verification stay out: this
+    helper knows nothing structured about either, and guessing them from the
+    prompt text is exactly what the contract replaces.
+
+    A caller that genuinely represents a question passes its own contract, and
+    that choice is left alone.
+    """
+    out = dict(body)
+    out.setdefault("task_contract", {"task_mode": "work"})
+    return out
+
+
 def drive_agent_turn(port: int, body: dict, deadline_s: float = 120.0):
     """POST /v1/agent, stream events, answer permission prompts inline.
     Returns the ordered event list."""
     events = []
+    body = agent_request_body(body)
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=deadline_s)
     conn.request("POST", "/v1/agent", json.dumps(body),
                  {"Content-Type": "application/json",

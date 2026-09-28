@@ -349,3 +349,40 @@ func TestExecuteToolCallRejectsWorkspaceEscape(t *testing.T) {
 		t.Fatalf("result = %+v, want workspace rejection", res)
 	}
 }
+
+// A build command is the project's own, never an invented syntax sweep. V3
+// runs a detected build command against a candidate and records the result
+// as the project's build, so "python -m py_compile *.py" passed candidates in
+// src/ it never compiled and failed every project with no top-level .py, and
+// "bash -n *.sh" checked only the first script.
+func TestDetectInventsNoSyntaxSweepAsABuild(t *testing.T) {
+	cases := []struct {
+		name      string
+		files     map[string]string
+		wantBuild string
+		wantTest  string
+	}{
+		{"python src layout", map[string]string{"pyproject.toml": "[project]\nname='x'\n", "src/pkg/mod.py": "x = 1\n"}, "", "python -m pytest"},
+		{"python flat", map[string]string{"requirements.txt": "flask\n", "app.py": "x = 1\n"}, "", "python -m pytest"},
+		{"shell scripts", map[string]string{"a.sh": "echo a\n", "b.sh": "echo b\n"}, "", ""},
+		{"go subpackages", map[string]string{"go.mod": "module x\n\ngo 1.22\n", "pkg/a/a.go": "package a\n"}, "go build ./...", "go test ./..."},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		for name, body := range c.files {
+			p := filepath.Join(dir, name)
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		info := detectProjectInfo(dir)
+		if info == nil {
+			t.Fatalf("%s: no project detected", c.name)
+		}
+		if info.BuildCommand != c.wantBuild || info.TestCommand != c.wantTest {
+			t.Errorf("%s: build %q test %q, want %q / %q", c.name,
+				info.BuildCommand, info.TestCommand, c.wantBuild, c.wantTest)
+		}
+	}
+}

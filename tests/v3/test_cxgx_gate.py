@@ -14,10 +14,12 @@ from stages.cxgx_gate import (
     K_FLOOR,
     MIN_CANDIDATE_MS,
     TIER_MIN_K,
+    TIER_ORDER,
     allocate,
     base_tier,
     budget_capped_tier,
     estimate_candidate_ms,
+    CANDIDATE_LLM_CALLS,
     estimate_escalation_ms,
     gx_escalation,
 )
@@ -190,19 +192,30 @@ def test_short_wall_clock_lowers_the_tier():
     assert alloc.k < TIER_MIN_K["extreme"]
 
 
-def test_exhausted_wall_clock_caps_at_the_floor_never_below():
+def test_an_exhausted_wall_clock_caps_below_the_floor():
+    """The floor stops the LENS starving generation, not the clock.
+
+    Holding k at 3 when the clock cannot afford 3 spends the whole budget on
+    candidates and leaves phase-3 repair — which the cap explicitly reserves
+    for — unable to run. Measured across 43 pipeline runs: capped_from was
+    empty in all 33 allocations, sessions spent a median 207s of a 180s
+    budget on generation alone, and refinement was skipped 19 times with
+    7-9s left.
+    """
     alloc = allocate(cx_normalized=0.9, cx_calibrated=True,
                      gx_score=0.1, gx_available=True,
                      remaining_ms=1_000.0, observed_llm_call_ms=60_000.0)
-    assert (alloc.k, alloc.tier) == (K_FLOOR, FLOOR_TIER)
+    assert alloc.k < K_FLOOR, "a budget that affords nothing must not buy k=3"
+    assert alloc.tier == TIER_ORDER[0]
     assert alloc.capped_from == "extreme"
+    assert alloc.reason == "budget_capped"
 
 
-def test_negative_remaining_budget_still_yields_the_floor():
+def test_negative_remaining_budget_yields_the_smallest_allocation():
     alloc = allocate(cx_normalized=0.9, cx_calibrated=True,
                      gx_score=0.1, gx_available=True,
                      remaining_ms=-10_000.0, observed_llm_call_ms=5_000.0)
-    assert (alloc.k, alloc.tier) == (K_FLOOR, FLOOR_TIER)
+    assert (alloc.k, alloc.tier) == (TIER_MIN_K[TIER_ORDER[0]], TIER_ORDER[0])
 
 
 def test_generous_wall_clock_leaves_the_escalation_intact():
@@ -218,8 +231,8 @@ def test_cap_is_monotonic_in_the_remaining_budget():
                    gx_available=True, remaining_ms=float(ms),
                    observed_llm_call_ms=10_000.0).k
           for ms in range(0, 600_000, 20_000)]
-    assert ks == sorted(ks)
-    assert min(ks) == K_FLOOR
+    assert ks == sorted(ks), "more budget must never buy fewer candidates"
+    assert min(ks) == TIER_MIN_K[TIER_ORDER[0]]
     assert max(ks) == TIER_MIN_K["extreme"]
 
 
@@ -230,7 +243,11 @@ def test_budget_cap_never_promotes_a_tier():
 # --- Cost model ---------------------------------------------------------------
 
 def test_candidate_estimate_scales_with_observed_latency():
-    assert estimate_candidate_ms(10_000.0) == 10_000.0 + CANDIDATE_VERIFY_MS
+    # PlanSearch spends two calls per candidate (plan, then code), which is
+    # what the estimate has to price: a one-call model halved it and is why
+    # the budget cap never fired.
+    assert estimate_candidate_ms(10_000.0) == (
+        CANDIDATE_LLM_CALLS * 10_000.0 + CANDIDATE_VERIFY_MS)
 
 
 def test_candidate_estimate_falls_back_to_a_conservative_floor():

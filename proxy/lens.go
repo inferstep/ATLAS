@@ -1,6 +1,6 @@
 // The proxy's lens surfaces: everything that reads the geometric-lens
-// service, feeds the corpus it trains on, or reports whether it is calibrated
-// for the model currently being served.
+// service or reports whether it is calibrated for the model currently being
+// served.
 //
 // In file order:
 //
@@ -10,28 +10,18 @@
 //	  loop" signal the agent loop breaks with a corrective. Thresholds come
 //	  from the model's own calibration or the check is skipped — one model's
 //	  cutoffs are meaningless against another's residual stream.
-//	Training-corpus collection — each file the model authored during a pass
-//	  is stashed, then labeled and weighted by the human verdict and
-//	  appended as per-model JSONL. Nothing trains here; `atlas lens retrain`
-//	  consumes the corpus later.
-//	The /feedback handler — where that verdict arrives from the TUI, with
-//	  the pending-pass stash it draws from and the training-status endpoint
-//	  behind the "retrain available" alert.
+//	VerificationRecord — the evidence record the agent loop keeps for every
+//	  passing verification command.
 //	Calibration probes — /v1/calibration/status, built from the lens
 //	  service's /health plus a local read of the ASA control vector, is the
 //	  seven-dimension table the TUI badge and `atlas doctor` both render.
 //
-// Scoring and collection are one loop seen at two points: the write the lens
-// scores now is the write a human labels later, and that label trains the
-// lens that scores the next one. Keeping both in one file keeps the round
-// trip legible — and keeps the calibration probe next to the code whose
-// behavior it reports on.
+// The calibration probe sits next to the scoring code whose behavior it
+// reports on.
 
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,10 +29,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -90,8 +78,21 @@ type lensThresholds struct {
 	Severe   float64 `json:"severe"`
 }
 
+// lensFailure is why the lens did not score an input. `embed_capacity` is
+// llama-server refusing the embedding because the input exceeds its physical
+// batch (ATLAS_UBATCH); the two counts are the server's own. It is a transport
+// limit on this deployment, reported as such, and never a score.
+type lensFailure struct {
+	Kind           string `json:"kind"`
+	InputTokens    int    `json:"input_tokens,omitempty"`
+	CapacityTokens int    `json:"capacity_tokens,omitempty"`
+	Status         int    `json:"status,omitempty"`
+	Detail         string `json:"detail,omitempty"`
+}
+
 type lensPerStepResult struct {
 	Enabled     bool            `json:"enabled"`
+	Scored      *bool           `json:"scored,omitempty"`
 	GxAvailable bool            `json:"gx_available"`
 	NTokens     int             `json:"n_tokens"`
 	HiddenDim   int             `json:"hidden_dim"`
@@ -99,6 +100,7 @@ type lensPerStepResult struct {
 	Aggregate   lensAggregate   `json:"aggregate"`
 	LatencyMS   float64         `json:"latency_ms"`
 	Thresholds  *lensThresholds `json:"thresholds,omitempty"`
+	Failure     *lensFailure    `json:"failure,omitempty"`
 	Error       string          `json:"error,omitempty"`
 }
 
@@ -115,46 +117,70 @@ func (r lensPerStepResult) calibratedThresholds() (low, severe float64, ok bool)
 }
 
 // scoreContentForAgent calls /internal/lens/score-per-step on the given
-// text and returns the parsed result. Fail-soft: returns (zero, false)
-// on any error so a lens outage degrades to "no signal" rather than
-// breaking the agent loop. Carries the agent's ctx so client cancellation
+// text and returns the parsed result, whether it is a score, and -- when the
+// lens itself cannot score -- why. The lens is required: a non-empty third
+// value ends the run (lens_required.go). An answer that declined this input
+// (a typed failure such as embed_capacity, or no tokens scored) is returned
+// unscored with an empty reason, its failure attached, so nothing downstream
+// can read it as a verdict. Carries the agent's ctx so client cancellation
 // kills the lens call too.
-func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPerStepResult, bool) {
+func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPerStepResult, bool, string) {
 	var zero lensPerStepResult
 	if lensURL == "" || content == "" {
-		return zero, false
+		return zero, false, ""
 	}
 	body, err := json.Marshal(map[string]interface{}{"text": content})
 	if err != nil {
-		return zero, false
+		return zero, false, ""
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, "POST",
-		lensURL+"/internal/lens/score-per-step", bytes.NewReader(body))
+	req, err := newLensRequest(reqCtx, "POST", lensURL+"/internal/lens/score-per-step", body)
 	if err != nil {
-		return zero, false
+		return zero, false, ""
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			// The request was cancelled: that is the cancellation's to
+			// report, not the lens's.
+			return zero, false, ""
+		}
 		log.Printf("[agent-lens] score request failed: %v", err)
-		return zero, false
+		return zero, false, "it did not answer: " + truncateStr(err.Error(), 160)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return zero, false
+		return zero, false, "its answer could not be read"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return zero, false, fmt.Sprintf("it answered HTTP %d", resp.StatusCode)
 	}
 	var r lensPerStepResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		log.Printf("[agent-lens] score parse failed: %v", err)
-		return zero, false
+		return zero, false, "its answer could not be read"
 	}
-	if !r.Enabled || r.NTokens == 0 {
-		return zero, false
+	if !r.Enabled {
+		return zero, false, "it has no model loaded"
 	}
-	return r, true
+	if r.Failure != nil && lensDownKinds[r.Failure.Kind] {
+		log.Printf("[agent-lens] the lens cannot score (%s)", r.Failure.Kind)
+		return r, false, r.Failure.Kind + ": " + truncateStr(r.Failure.Detail, 160)
+	}
+	if r.Failure != nil || (r.Scored != nil && !*r.Scored) || r.NTokens == 0 {
+		if r.Failure != nil {
+			// Counts are stated in prose: the log filter masks `<name>token<...>=`
+			// pairs as credentials, and these are the numbers an operator needs.
+			log.Printf("[agent-lens] unscored (%s): input %d tokens, embed capacity %d tokens, status %d",
+				r.Failure.Kind, r.Failure.InputTokens, r.Failure.CapacityTokens, r.Failure.Status)
+		} else {
+			log.Printf("[agent-lens] unscored: no tokens scored (%s)", truncateStr(r.Error, 120))
+		}
+		return r, false, ""
+	}
+	return r, true, ""
 }
 
 // extractScorableContent pulls lens-scoreable text from a tool call.
@@ -192,7 +218,11 @@ func extractScorableContent(toolName string, args json.RawMessage) (string, bool
 // from firing on tool-mix sequences.
 func extractFailurePath(toolName string, args json.RawMessage) string {
 	switch toolName {
-	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file":
+	// insert_after and replace_lines were missing here, so a failing loop on
+	// either returned "" and the path-aware 3-strike breaker read three
+	// identical failures as three different paths and never fired.
+	case "read_file", "write_file", "edit_file", "structural_edit", "delete_file", "find_file",
+		"insert_after", "replace_lines":
 		var p struct {
 			Path string `json:"path"`
 		}
@@ -273,303 +303,54 @@ func formatScoreSlice(s []float64) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// Lens training-data collection (foundation for in-the-loop labeling).
-//
-// As the agent runs, each file write becomes a candidate lens-training sample.
-// The LABEL + WEIGHT come from human verification:
-//   - per-file accept / deny  → label good / bad (review mode)
-//   - per-pass 👍 / 👎          → a confidence weight on that pass's samples
-// The weighting lets a thumbs-down pass down-weight even its accepted files
-// (the whole approach was wrong) while keeping its denials as confident
-// negatives — so "good result, one bad file" yields the cleanest data and a
-// "bad overall" pass doesn't pull the lens toward a wrong pattern.
-//
-// Samples are appended per-model (the lens is per-model) as JSONL. Nothing
-// trains here; `atlas lens retrain` consumes the corpus later. Content is
-// stored raw and re-embedded at train time, so a lens/layer change doesn't
-// invalidate the collection.
+// VerificationRecord binds one green verification command to what it
+// exercised. Covered maps each session-written path the command named to
+// the sha256 of its bytes at the moment the command passed — the bytes the
+// run vouched for, nothing else.
+type VerificationRecord struct {
+	Command  string            // the run_command line
+	Redirect string            // stdin redirect source ("" = ran standalone)
+	Covered  map[string]string // session-written path -> sha256 when it ran
+	Turn     int
 
-// LensSample is one labeled, weighted training example.
-type LensSample struct {
-	Content   string  `json:"content"`
-	Label     int     `json:"label"`  // 1 = good (accepted), 0 = bad (denied)
-	Weight    float64 `json:"weight"` // confidence, set by the pass-level verdict
-	Source    string  `json:"source"` // accept | deny | thumbs | v3 | run
-	Tool      string  `json:"tool,omitempty"`
-	Path      string  `json:"path,omitempty"`
-	PassID    string  `json:"pass_id,omitempty"`
-	Timestamp string  `json:"timestamp"`
+	// Kind is what the run demonstrates (commandEvidenceKind.String):
+	// "execution" or "probe" show the program working; "static" (a parse,
+	// lint or build) and "none" are recorded only because the client declared
+	// the command, and bind no coverage. Empty is a record made before kinds
+	// existed, which only a verification command could produce.
+	Kind string
+	// Failed marks a run that exited non-zero. It is kept so a later failure
+	// on the same bytes takes back an earlier pass (coverageRecord).
+	Failed bool
+
+	// The workspace this run was about, stamped from workspaceIdentity after
+	// the command's own effects were reconciled into the ledger.
+	//
+	// Covered answers "which artifact bytes did this command exercise", and a
+	// command that names no file answers it with nothing -- which is honest,
+	// and is why a pathless command could never be current before. These two
+	// answer a different question: WHEN did it run, in terms the session can
+	// re-check. A pathless command is current exactly while both still equal
+	// the workspace's current identity, and any material mutation to a tracked
+	// artifact moves them.
+	//
+	// They are not a second coverage: they say nothing about which bytes the
+	// command touched, and nothing here may satisfy a path obligation.
+	WorkspaceGeneration int
+	WorkspaceStateHash  string
 }
 
-// PassWrite is one file the model authored during a pass, captured for later
-// labeling. Content is the model's own output (what the lens scores), not the
-// post-V3 winner, so a collected sample matches the score it was judged by.
-type PassWrite struct {
-	Tool    string
-	Path    string
-	Content string
-}
-
-var lensSampleMu sync.Mutex
-
-// lensDataDir is the root for collected samples. Per-model subdirs live under
-// it. Defaults to /data/lens_training (mount a volume there to persist across
-// proxy restarts); override with ATLAS_LENS_DATA_DIR.
-func lensDataDir() string {
-	return envOr("ATLAS_LENS_DATA_DIR", "/data/lens_training")
-}
-
-// sanitizeModelName makes a model name safe for a directory component.
-func sanitizeModelName(name string) string {
-	if name == "" {
-		return "default"
+// showsWorking reports a passing run of a kind that shows the program
+// working.
+func (r VerificationRecord) showsWorking() bool {
+	if r.Failed {
+		return false
 	}
-	repl := func(r rune) rune {
-		if r == '/' || r == '\\' || r == ':' || r == ' ' {
-			return '_'
-		}
-		return r
+	switch r.Kind {
+	case "", "execution", "probe":
+		return true
 	}
-	return strings.Map(repl, name)
-}
-
-// appendLensSample appends one sample to the model's JSONL corpus.
-func appendLensSample(model string, s LensSample) (returnErr error) {
-	if s.Timestamp == "" {
-		s.Timestamp = time.Now().UTC().Format(time.RFC3339)
-	}
-	dir := filepath.Join(lensDataDir(), sanitizeModelName(model))
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("lens-samples: mkdir %s: %w", dir, err)
-	}
-	line, err := json.Marshal(s)
-	if err != nil {
-		return fmt.Errorf("lens-samples: marshal: %w", err)
-	}
-	lensSampleMu.Lock()
-	defer lensSampleMu.Unlock()
-	f, err := os.OpenFile(filepath.Join(dir, "samples.jsonl"),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("lens-samples: open: %w", err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil && returnErr == nil {
-			returnErr = fmt.Errorf("lens-samples: close: %w", closeErr)
-		}
-	}()
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("lens-samples: write: %w", err)
-	}
-	return nil
-}
-
-// lensSampleCounts scans the model's corpus and returns (good, bad) counts.
-// Used by the "retrain available" alert. Linear scan — fine at the scale this
-// reaches before a retrain (tens of thousands of lines); switch to a sidecar
-// counter if it ever becomes hot.
-func lensSampleCounts(model string) (good, bad int) {
-	path := filepath.Join(lensDataDir(), sanitizeModelName(model), "samples.jsonl")
-	lensSampleMu.Lock()
-	defer lensSampleMu.Unlock()
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, 0
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 1<<20), 1<<20)
-	for sc.Scan() {
-		var s LensSample
-		if json.Unmarshal(sc.Bytes(), &s) != nil {
-			continue
-		}
-		if s.Label == 1 {
-			good++
-		} else {
-			bad++
-		}
-	}
-	return good, bad
-}
-
-// Pending passes await their human verdict. A pass completes (returns to the
-// client) before the user rates it, so its writes are stashed by session id
-// here until a /feedback call arrives — or the janitor evicts it.
-type stashedPass struct {
-	writes []PassWrite
-	model  string
-	at     time.Time
-}
-
-var (
-	pendingPasses   = map[string]stashedPass{}
-	pendingPassesMu sync.Mutex
-)
-
-const pendingPassTTL = 2 * time.Hour
-
-// stashPendingPass records a completed pass's writes for deferred feedback.
-// A new pass under the same session id replaces the prior one (you rate the
-// most recent pass). No-op when there were no writes to label.
-func stashPendingPass(sessionID, model string, writes []PassWrite) {
-	if sessionID == "" || len(writes) == 0 {
-		return
-	}
-	pendingPassesMu.Lock()
-	defer pendingPassesMu.Unlock()
-	// Opportunistic eviction of stale entries (no separate janitor goroutine).
-	now := time.Now()
-	for id, p := range pendingPasses {
-		if now.Sub(p.at) > pendingPassTTL {
-			delete(pendingPasses, id)
-		}
-	}
-	cp := make([]PassWrite, len(writes))
-	copy(cp, writes)
-	pendingPasses[sessionID] = stashedPass{writes: cp, model: model, at: now}
-}
-
-// takePendingPass removes and returns the stashed pass for a session id.
-func takePendingPass(sessionID string) (stashedPass, bool) {
-	pendingPassesMu.Lock()
-	defer pendingPassesMu.Unlock()
-	p, ok := pendingPasses[sessionID]
-	if ok {
-		delete(pendingPasses, sessionID)
-	}
-	return p, ok
-}
-
-// feedbackVerdict maps a per-file verdict + the pass-level thumbs to a
-// (label, weight, keep) for one sample. keep=false means there's no usable
-// signal (e.g. no per-file verdict AND no thumbs) — don't record it.
-//
-//	verdict: "accept" | "deny" | ""   (""= no per-file label, thumbs-only mode)
-//	thumbs:  "up" | "down" | ""        (""= pass not rated)
-func feedbackVerdict(verdict, thumbs string) (label int, weight float64, keep bool) {
-	switch verdict {
-	case "deny":
-		// A denial is a confident negative regardless of the pass verdict —
-		// a bad pass's rejections are the most reliable negatives we get.
-		return 0, 1.0, true
-	case "accept":
-		switch thumbs {
-		case "up":
-			return 1, 1.0, true // good result, accepted → confident positive
-		case "down":
-			return 1, 0.4, true // whole pass was wrong → weak positive
-		default:
-			return 1, 0.7, true // accepted, pass unrated → moderate positive
-		}
-	default:
-		// No per-file verdict (thumbs-only / fast mode). The pass thumbs is the
-		// only signal: it labels every write in the pass, coarsely.
-		switch thumbs {
-		case "up":
-			return 1, 0.6, true
-		case "down":
-			return 0, 0.6, true
-		default:
-			return 0, 0, false // nothing to learn from
-		}
-	}
-}
-
-// lensRetrainThreshold is the labeled-sample count at which the TUI surfaces
-// the "retrain available" prompt. Configurable; a balance guard (below) also
-// requires enough of the minority class so the lens doesn't learn "all good".
-func lensRetrainThreshold() int {
-	if v := envOr("ATLAS_LENS_RETRAIN_MIN", ""); v != "" {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 2000
-}
-
-// handleFeedback records a pass's human verdict as weighted lens samples.
-// Body: {"session_id":"...", "thumbs":"up|down|", "files":[{"path":"...",
-// "verdict":"accept|deny"}]}. Per-file verdicts (review mode) take precedence;
-// when absent, the pass thumbs labels every write coarsely.
-func handleFeedback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
-		return
-	}
-	var req struct {
-		SessionID string `json:"session_id"`
-		Thumbs    string `json:"thumbs"`
-		Files     []struct {
-			Path    string `json:"path"`
-			Verdict string `json:"verdict"`
-		} `json:"files"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
-		return
-	}
-	pass, ok := takePendingPass(req.SessionID)
-	if !ok {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"recorded": 0, "note": "no pending pass for that session"})
-		return
-	}
-	verdictByPath := map[string]string{}
-	for _, f := range req.Files {
-		verdictByPath[f.Path] = f.Verdict
-	}
-	recorded := 0
-	for _, wr := range pass.writes {
-		verdict := verdictByPath[wr.Path]
-		label, weight, keep := feedbackVerdict(verdict, req.Thumbs)
-		if !keep {
-			continue
-		}
-		source := verdict
-		if source == "" {
-			source = "thumbs"
-		}
-		if err := appendLensSample(pass.model, LensSample{
-			Content: wr.Content, Label: label, Weight: weight, Source: source,
-			Tool: wr.Tool, Path: wr.Path, PassID: req.SessionID,
-		}); err == nil {
-			recorded++
-		}
-	}
-	good, bad := lensSampleCounts(pass.model)
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"recorded": recorded, "good": good, "bad": bad,
-	})
-}
-
-// handleLensTrainingStatus reports the collected-sample counts and whether a
-// retrain is worth offering, so the TUI can show the banner + the command.
-func handleLensTrainingStatus(w http.ResponseWriter, r *http.Request) {
-	good, bad := lensSampleCounts(modelName)
-	total := good + bad
-	thresh := lensRetrainThreshold()
-	minClass := good
-	if bad < minClass {
-		minClass = bad
-	}
-	// Need the total AND enough of the minority class (>= 25% of threshold) so
-	// the corpus isn't all-positive or all-negative.
-	available := total >= thresh && minClass >= thresh/4
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"model":             modelName,
-		"good":              good,
-		"bad":               bad,
-		"total":             total,
-		"threshold":         thresh,
-		"retrain_available": available,
-		"command":           "atlas lens retrain",
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	return false
 }
 
 // Calibration status endpoint — surfaces lens + ASA compat for the TUI.
@@ -612,11 +393,27 @@ type StatusDimension struct {
 func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	reachable := lens.Verdict != "unreachable"
 
+	// The model server as the lens sees it. Reaching the lens is not
+	// reaching llama-server: this row said "model served and reachable"
+	// while the lens reported llama-server down.
 	modelRuntime := "supported"
 	modelDetail := "model served and reachable"
-	if !reachable {
-		modelRuntime = "unreachable"
-		modelDetail = "lens/model service not reachable"
+	switch {
+	case !reachable:
+		modelRuntime, modelDetail = "unknown", "the lens is unreachable, so nothing reports on the model server"
+	case lens.ModelServerReachable != nil && !*lens.ModelServerReachable:
+		modelRuntime, modelDetail = "unreachable", "llama-server is not reachable from the lens"
+	}
+
+	// The agent runs only while the lens can score (lens_required.go).
+	canScore := lensVerdictCanScore(lens.Verdict)
+	directAgent, directDetail := "supported", "tools, permissions and sandbox verify; the lens can score"
+	if !canScore {
+		directAgent = "blocked"
+		directDetail = "requests are refused while the lens cannot score: " + lens.Verdict
+		if lens.Hint != "" {
+			directDetail += " — " + lens.Hint
+		}
 	}
 
 	// Identity/dimension contract.
@@ -637,16 +434,41 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	// Raw scoring availability.
 	scoring := "disabled"
 	scoringDetail := "cost field / G(x) not loaded"
-	if reachable && lens.CostFieldLoaded && lens.GxLoaded {
+	if !canScore && reachable && lens.CostFieldLoaded && lens.GxLoaded {
+		scoringDetail = "the lens cannot score: " + lens.Verdict
+	} else if reachable && lens.CostFieldLoaded && lens.GxLoaded {
 		scoring, scoringDetail = "supported", "C(x) + G(x) scoring available"
 	} else if reachable && lens.CostFieldLoaded && !lens.GxLoaded {
 		scoring, scoringDetail = "partial", "C(x) loaded; G(x) missing"
+	}
+	// Capacity. One score is one embedding request, and llama-server refuses
+	// any input longer than its physical batch (ATLAS_UBATCH). When the lens
+	// knows that capacity and it is below the per-turn generation ceiling,
+	// the longest writes this proxy can produce come back unscored (typed,
+	// never a neutral number), so raw scoring is partial. An unknown capacity
+	// changes nothing; calibration and intervention are not affected.
+	if scoring != "disabled" && lens.EmbedCapacityTokens > 0 {
+		if ceiling := agentMaxTokens(); lens.EmbedCapacityTokens < ceiling {
+			source := lens.EmbedCapacitySource
+			if source == "" {
+				source = "reported"
+			}
+			scoring = "partial"
+			scoringDetail = fmt.Sprintf(
+				"%s for inputs up to %d tokens (%s embed capacity); "+
+					"ATLAS_MAX_TOKENS=%d allows longer writes, which are reported "+
+					"unscored. Raise ATLAS_UBATCH (VRAM: ~ubatch x n_embd x 280 B) "+
+					"or lower ATLAS_MAX_TOKENS",
+				scoringDetail, lens.EmbedCapacityTokens, source, ceiling)
+		}
 	}
 
 	// Calibration.
 	calibration := "disabled"
 	calDetail := "artifacts not loaded"
-	if reachable && lens.CostFieldLoaded {
+	if !canScore && reachable && lens.CostFieldLoaded {
+		calDetail = "the lens cannot score: " + lens.Verdict
+	} else if reachable && lens.CostFieldLoaded {
 		if lens.CxCalibrated && lens.GxCalibrated {
 			calibration, calDetail = "calibrated",
 				"per-model normalization + thresholds loaded"
@@ -669,8 +491,7 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 
 	return []StatusDimension{
 		{"model_runtime", modelRuntime, modelDetail},
-		{"direct_agent", "supported",
-			"model-agnostic; independent of lens/ASA state"},
+		{"direct_agent", directAgent, directDetail},
 		{"lens_identity", identity, identityDetail},
 		{"lens_scoring", scoring, scoringDetail},
 		{"lens_calibration", calibration, calDetail},
@@ -681,15 +502,28 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 
 type LensStatus struct {
 	// "supported" | "no-artifacts" | "incomplete-artifacts" |
-	// "uncalibrated" | "dim-mismatch" | "unreachable"
-	Verdict         string `json:"verdict"`
-	CostFieldLoaded bool   `json:"cost_field_loaded"`
-	CostFieldDim    int    `json:"cost_field_dim"`
-	EmbedDim        int    `json:"embed_dim"`
-	GxLoaded        bool   `json:"gx_loaded"`
-	CxCalibrated    bool   `json:"cx_calibrated"`
-	GxCalibrated    bool   `json:"gx_calibrated"`
-	Hint            string `json:"hint"`
+	// "uncalibrated" | "dim-mismatch" | "unreachable" |
+	// "drifted" | "self-test-failed" | "model-server-unreachable"
+	Verdict string `json:"verdict"`
+	// CanScore says whether this lens can score, the question the request
+	// path asks before it starts any work (lens_required.go). An
+	// uncalibrated lens can; every other verdict but "supported" cannot.
+	CanScore bool `json:"can_score"`
+	// ModelServerReachable is llama-server's reachability as the lens sees
+	// it; nil when the lens did not say (or could not be reached).
+	ModelServerReachable *bool `json:"model_server_reachable,omitempty"`
+	CostFieldLoaded      bool  `json:"cost_field_loaded"`
+	CostFieldDim         int   `json:"cost_field_dim"`
+	EmbedDim             int   `json:"embed_dim"`
+	GxLoaded             bool  `json:"gx_loaded"`
+	CxCalibrated         bool  `json:"cx_calibrated"`
+	GxCalibrated         bool  `json:"gx_calibrated"`
+	// The longest input one score can be computed from: llama-server's
+	// physical batch (`-ub`, ATLAS_UBATCH) as the lens reports it, declared
+	// by the deployment or observed from a refusal. 0 when unknown.
+	EmbedCapacityTokens int    `json:"embed_capacity_tokens"`
+	EmbedCapacitySource string `json:"embed_capacity_source"`
+	Hint                string `json:"hint"`
 }
 
 type ASAStatus struct {
@@ -706,8 +540,12 @@ type ASAStatus struct {
 type lensHealthShape struct {
 	Status     string `json:"status"`
 	Subsystems struct {
+		// Pointer: an older lens that omits the field is not read as down.
+		LlamaServer struct {
+			Reachable *bool  `json:"reachable"`
+			Error     string `json:"error"`
+		} `json:"llama_server"`
 		Lens struct {
-			Enabled         bool   `json:"enabled"`
 			CostFieldLoaded bool   `json:"cost_field_loaded"`
 			CostFieldDim    int    `json:"cost_field_dim"`
 			EmbedDim        int    `json:"embed_dim"`
@@ -716,6 +554,13 @@ type lensHealthShape struct {
 			GxCalibrated    bool   `json:"gx_calibrated"`
 			SelfTestPass    bool   `json:"self_test_pass"`
 			SelfTestError   string `json:"self_test_error"`
+			// Null while no fingerprint file exists, so only an explicit
+			// false means drift.
+			FingerprintOK    *bool  `json:"fingerprint_ok"`
+			FingerprintError string `json:"fingerprint_error"`
+			// Pointer: the lens reports null while the capacity is unknown.
+			EmbedCapacityTokens *int   `json:"embed_capacity_tokens"`
+			EmbedCapacitySource string `json:"embed_capacity_source"`
 		} `json:"lens"`
 	} `json:"subsystems"`
 }
@@ -749,13 +594,19 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 		return out
 	}
 
+	out.ModelServerReachable = h.Subsystems.LlamaServer.Reachable
 	out.CostFieldLoaded = h.Subsystems.Lens.CostFieldLoaded
 	out.CostFieldDim = h.Subsystems.Lens.CostFieldDim
 	out.EmbedDim = h.Subsystems.Lens.EmbedDim
 	out.GxLoaded = h.Subsystems.Lens.GxLoaded
 	out.CxCalibrated = h.Subsystems.Lens.CxCalibrated
 	out.GxCalibrated = h.Subsystems.Lens.GxCalibrated
+	if h.Subsystems.Lens.EmbedCapacityTokens != nil && *h.Subsystems.Lens.EmbedCapacityTokens > 0 {
+		out.EmbedCapacityTokens = *h.Subsystems.Lens.EmbedCapacityTokens
+		out.EmbedCapacitySource = h.Subsystems.Lens.EmbedCapacitySource
+	}
 
+	lens := h.Subsystems.Lens
 	switch {
 	case !out.CostFieldLoaded:
 		out.Verdict = "no-artifacts"
@@ -772,6 +623,16 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 	case !out.GxLoaded:
 		out.Verdict = "incomplete-artifacts"
 		out.Hint = "C(x) loaded but G(x) artifacts are missing — run `atlas lens build`"
+	case lens.FingerprintOK != nil && !*lens.FingerprintOK:
+		out.Verdict = "drifted"
+		out.Hint = "the lens has drifted from the served model: " + truncateStr(lens.FingerprintError, 160)
+	case !lens.SelfTestPass:
+		out.Verdict = "self-test-failed"
+		out.Hint = "the lens self-test failed: " + truncateStr(lens.SelfTestError, 160) +
+			" — see `docker logs atlas-geometric-lens-1` and `atlas doctor`"
+	case out.ModelServerReachable != nil && !*out.ModelServerReachable:
+		out.Verdict = "model-server-unreachable"
+		out.Hint = "the lens cannot reach llama-server, so it cannot score"
 	case !out.CxCalibrated || !out.GxCalibrated:
 		out.Verdict = "uncalibrated"
 		out.Hint = "Lens weights loaded without this model's calibration files — " +
@@ -780,7 +641,16 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 		out.Verdict = "supported"
 		out.Hint = "ready"
 	}
+	out.CanScore = lensVerdictCanScore(out.Verdict)
 	return out
+}
+
+// lensVerdictCanScore is whether a lens with this verdict can score: the
+// question the request path asks before it starts (lens_required.go). An
+// uncalibrated lens can; it scores raw energies, and only the calibrated
+// uses of them wait for calibration.
+func lensVerdictCanScore(verdict string) bool {
+	return verdict == "supported" || verdict == "uncalibrated"
 }
 
 // probeASAStatus checks for the configured ASA control-vector file on disk.
@@ -829,8 +699,11 @@ func probeASAStatus() ASAStatus {
 			size := strconv.FormatInt(info.Size(), 10)
 			switch {
 			case expected != "" && sameModelIdentity(markedFor, expected):
-				out.Verdict = "supported"
-				out.Hint = "control vector verified for " + expected +
+				// Active, not "supported": the marker says which model the
+				// vector is for, not that its effect was measured. That is
+				// the registry's asa_status, which the proxy does not hold.
+				out.Verdict = "active"
+				out.Hint = "control vector active for " + expected +
 					" (" + size + " bytes)"
 			case expected != "" && markedFor != "":
 				out.Verdict = "incompatible"

@@ -8,6 +8,8 @@
 //     request; the proxy does not persist it), fire-and-forget, no prompt.
 //   - "Allow for session" adds the tool to the allowlist AND answers with
 //     scope "session" so the in-flight turn honors it too.
+//   - Except for a one-time request (a deletion): it is never auto-answered,
+//     and "Allow for session" on it allows this request only.
 //   - A proxy-side permission_denied (timeout, cancel) can arrive while the
 //     prompt is still up — the pending prompt is dismissed by tool name.
 //   - Decision POSTs are advisory: the proxy has its own deny fail-safe, so
@@ -82,6 +84,27 @@ export class PendingPermission {
 	}
 }
 
+/** A request whose answer covers only itself. The proxy marks deletions
+ * one_time_only, and delete_file is treated so for a proxy that does not. One
+ * "Allow for Session" used to answer every later deletion in the
+ * conversation without the user seeing which file. */
+export function isOneTimeOnly(request: PermissionRequestEventData): boolean {
+	return request.one_time_only === true || request.tool_name === 'delete_file';
+}
+
+/** The command a request would run, shown whole. Approval is the only
+ * per-command control, and a detail cut at 117 characters hid the end of a
+ * chain. undefined when the call runs no command. */
+export function commandOf(args: unknown): string | undefined {
+	if (args !== null && typeof args === 'object') {
+		const command = (args as { command?: unknown }).command;
+		if (typeof command === 'string') {
+			return command;
+		}
+	}
+	return undefined;
+}
+
 export class PermissionFlow {
 	private pending: PendingPermission[] = [];
 	private nextId = 1;
@@ -95,17 +118,19 @@ export class PermissionFlow {
 
 	/** Handle a permission_request event from the stream. */
 	handleRequest(poster: PermissionPoster, sessionId: string, request: PermissionRequestEventData): void {
-		if (this.sessionAllowedTools.has(request.tool_name)) {
+		const once = isOneTimeOnly(request);
+		if (!once && this.sessionAllowedTools.has(request.tool_name)) {
 			this.post(poster, sessionId, request, 'allow', 'once');
 			this.ui.onAutoAllow(request.tool_name);
 			return;
 		}
 		const pending = new PendingPermission(this.nextId++, sessionId, request, (settled, choice) => {
 			this.remove(settled);
-			if (choice === 'allow-session') {
+			const forSession = choice === 'allow-session' && !once;
+			if (forSession) {
 				this.sessionAllowedTools.add(request.tool_name);
 			}
-			this.post(poster, sessionId, request, choice === 'deny' ? 'deny' : 'allow', choice === 'allow-session' ? 'session' : 'once');
+			this.post(poster, sessionId, request, choice === 'deny' ? 'deny' : 'allow', forSession ? 'session' : 'once');
 			this.ui.onDismiss(settled, 'answered');
 		});
 		this.pending.push(pending);

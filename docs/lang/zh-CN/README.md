@@ -10,7 +10,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.4-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="模型无关"/>
 </p>
@@ -42,10 +42,10 @@
 ## 📰 最新动态
 
 - **2026-07-06** - **[V3.1.3 "Maia" 发布](https://github.com/itigges22/ATLAS/releases/tag/v3.1.3)** - 面向生产平台的一轮打磨：分阶段升级/回滚并自动还原、SQLite 状态存储（不再需要 Redis）、签名的工件清单、结构化日志 + 关联 ID、交互式权限、会话恢复，以及两轮对抗性 bug 修复扫荡
-- **2026-06-17** - **[V3.1.2 "Maia" 发布](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - 更广的硬件覆盖（ROCm / Metal / Vulkan）、自带模型的 Lens + ASA 训练、基于自有工作负载的在环 lens 重训练，以及一轮 agent 可靠性加固
+- **2026-06-17** - **[V3.1.2 "Maia" 发布](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - 更广的硬件覆盖（ROCm / Metal / Vulkan）、自带模型的 Lens + ASA 训练、基于自有工作负载的在环 lens 重训练（后已移除，见 CHANGELOG），以及一轮 agent 可靠性加固
 - **2026-05-12** - **[V3.1.0 "Maia" 发布](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - 原生 Bubbletea TUI、一条命令的 bootstrap、流式 Lens + ASA 激活操控、感知 AST 的外科式编辑
 - **2026-03-26** - [Hacker News 首页](https://news.ycombinator.com/item?id=47533297) - 489 点赞、285 条评论
-- **2026-03-05** - **[V3.0 发布](../../reports/V3_ABLATION_STUDY.md)** - 在冻结的 Qwen3-14B 上实现 74.6% LiveCodeBench pass@1-v(k=3)（pass@1，k=3 个生成候选、Lens 选择与修复 - 不是单次生成的 pass@1；[方法论](../../reports/V3_ABLATION_STUDY.md)）
+- **2026-03-05** - **V3.0 发布** - 在冻结的 Qwen3-14B 上运行的多阶段 V3 流水线。*随本次发布公布的 LiveCodeBench 74.6% 已撤回：基准测试运行器从未运行 LiveCodeBench 的隐藏测试，并且只要三个候选之一、或看过失败输出的修复通过题面给出的示例，就把任务记为通过（[撤回说明](../../reports/V3_ABLATION_STUDY.md)）。当前产品重新验证后将重新测量。*
 - **2026-02-18** - **[V2.0 发布](../../../CHANGELOG.md)** - 基准测试基础设施、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 评估套件
 
 ## ⭐ Star 历史
@@ -80,12 +80,11 @@
    - [安全限制](../../ARCHITECTURE.md#safety-limits) - 轮次上限、token 预算、超时
 
 3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
-   - [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 约束驱动的结构化规划
-   - [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 跨温度和策略的多样化候选生成
-   - [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 按阶段分配思考 token
-   - [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 用自生成测试做迭代修复
-   - [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - 沙箱验证与修正，然后重复
-   - [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 针对难题的多步推理
+   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
+   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
+   - [预算层级](../../ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；目前层级只决定生成多少候选，不改变思考深度
+   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
+   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
@@ -146,20 +145,19 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 ## ⚠️ 已知限制
 
 - **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/itigges22/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
-- **当前注册表中的模型尚未正式基准测试。** 官方公布的 74.6% LiveCodeBench 分数来自冻结的 14B 参考构建。新的逐模型数据在 [#28](https://github.com/itigges22/ATLAS/issues/28) 中跟踪。参考方法论与消融实验见 [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md)；原始 trace 发布在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)。
-- **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。经过 V3.1.2 的 agent 可靠性加固，可靠性已有提升；最新的逐模型数据在 [#28](https://github.com/itigges22/ATLAS/issues/28) 中跟踪。
-- **语法约束解码速度偏慢。** llama-server 上约 51 tok/s。
+- **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见最新动态），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/itigges22/ATLAS/issues/28) 中跟踪。
+- **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。
+- **语法约束解码比不受约束的解码更慢。**
 
 ---
 
 ## 🗺️ 路线图
 
-**V3.1.3 "Maia"** - 当前版本。在 V3.1.2 之上的生产平台打磨：带自动还原的分阶段 `atlas upgrade`/`rollback`、用 SQLite 状态存储替代 Redis（[ADR 0007](../../adr/0007-sqlite-state-store.md)）、签名的工件清单、带跨服务关联 ID 的结构化 JSON 日志、交互式权限提示、会话恢复、类型化的配置校验/迁移，以及两轮对抗性 bug 修复扫荡（33 个确认修复）。
+**V3.1.3 "Maia"** - 当前版本。在 V3.1.2 之上的生产平台打磨：带自动还原的分阶段 `atlas upgrade`/`rollback`、用 SQLite 状态存储替代 Redis（[ADR 0007](../../adr/0007-sqlite-state-store.md)；2026-09 在 `dev` 上随其唯一使用者模式缓存一并停用）、签名的工件清单、带跨服务关联 ID 的结构化 JSON 日志、交互式权限提示、会话恢复、类型化的配置校验/迁移，以及两轮对抗性 bug 修复扫荡（33 个确认修复）。
 
 **V3.1.2 "Maia"** - 在 V3.1.0 基座（TUI、一条命令安装、流式 Lens + ASA）之上的更广硬件覆盖、自带模型训练与 agent 可靠性加固。
 - 硬件覆盖：通过 llama.cpp 支持 AMD ROCm，包括 RDNA4 / RX 9070 (gfx1200/gfx1201) ([#26](https://github.com/itigges22/ATLAS/issues/26))；Apple Silicon 原生 macOS 混合 Metal 方案（[#32](https://github.com/itigges22/ATLAS/issues/32)，见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）；Vulkan 通用回退，覆盖 AMD / Intel / Snapdragon / 通过 MoltenVK 的 Apple / CPU ([#114](https://github.com/itigges22/ATLAS/issues/114))。
-- 自带模型：本地 Lens 训练流水线（`atlas lens build` / `retrain`，[#100](https://github.com/itigges22/ATLAS/issues/100)）与 ASA 逐模型校准对齐（`atlas asa check/build/publish`，[#113](https://github.com/itigges22/ATLAS/issues/113)）- 为额外的 GGUF 训练 Lens + ASA 工件，逐模型的工作阈值随 lens 一起发布。
-- 在环 lens 训练：在 TUI 中为每一轮打分（`/good` · `/bad` · `/review` · `/deny`）→ 收集、加权样本 → 在你自己的工作负载上运行 `atlas lens retrain`。
+- 自带模型：本地 Lens 训练流水线（`atlas lens build`，[#100](https://github.com/itigges22/ATLAS/issues/100)）与 ASA 逐模型校准对齐（`atlas asa check/build/publish`，[#113](https://github.com/itigges22/ATLAS/issues/113)）- 为额外的 GGUF 训练 Lens + ASA 工件，逐模型的工作阈值随 lens 一起发布。
 - Agent 可靠性：工具结果可见性修复、读取去重、回溯 → 定向编辑、`move_file`、pip 安装 / 大小写不匹配操控、沙箱 shell 策略 + 按主机调整的 cgroup 限制。
 - 结构化调用图推理（[#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125)，感谢 [@yogthos](https://github.com/yogthos)）；ARCHITECTURE.md 翻译为 zh-CN / ja / ko ([#25](https://github.com/itigges22/ATLAS/issues/25))。
 

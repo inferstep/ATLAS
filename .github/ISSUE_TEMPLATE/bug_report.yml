@@ -1,6 +1,7 @@
 name: Bug report
 description: Something in ATLAS misbehaves
-labels: [bug]
+type: Bug
+labels: [needs-triage]
 body:
   - type: textarea
     id: what-happened

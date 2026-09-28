@@ -1,7 +1,10 @@
 version: 2
+# Version updates target dev, where all changes land (GOVERNANCE). Security
+# updates always target the default branch (main) and are retargeted by hand.
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     groups:
@@ -9,7 +12,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: pip
-    directory: /
+    # /.github/requirements holds CI's hashed tool lock (ci.txt); its ruff
+    # and mypy must move with sandbox/requirements-verify.txt, so both sit
+    # in the same group PR.
+    directories: ["/", "/.github/requirements"]
+    target-branch: dev
     schedule:
       interval: weekly
     groups:
@@ -19,10 +26,16 @@ updates:
       # setuptools >=83 requires python >=3.10, but RHEL9-family hosts
       # (a supported bootstrap target) build the CLI from pyproject on
       # system python 3.9. Revisit when the py3.9 floor is dropped.
-      - dependency-name: "setuptools" 
+      - dependency-name: "setuptools"
+      # torch is pinned twice per service: requirements.txt and the
+      # Dockerfile's CPU-only pre-install, which must match
+      # (tests/contracts/test_torch_cpu_pin.py). Dependabot can bump only
+      # the first, so torch is bumped by hand in both places.
+      - dependency-name: "torch"
 
   - package-ecosystem: gomod
     directory: /proxy
+    target-branch: dev
     schedule:
       interval: weekly
     groups:
@@ -31,6 +44,7 @@ updates:
 
   - package-ecosystem: gomod
     directory: /tui
+    target-branch: dev
     schedule:
       interval: weekly
     groups:
@@ -44,6 +58,7 @@ updates:
       - /sandbox
       - /geometric-lens
       - /inference
+    target-branch: dev
     schedule:
       interval: weekly
     groups:

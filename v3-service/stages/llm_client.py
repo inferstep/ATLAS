@@ -11,6 +11,7 @@ receive plain text. Any GGUF's own prompt format is honored without per-model
 handling.
 """
 
+import ast
 import json
 import os
 import re
@@ -82,7 +83,12 @@ def strip_reasoning_leak(text: str) -> str:
     Covers all three shapes: a closed `<think>...</think>` pair, an orphan
     closing tag (`...</think>answer` — keep the answer), and an orphan opening
     tag (`answer<think>truncated...` — keep the answer, drop the unclosed
-    reasoning to end-of-text)."""
+    reasoning to end-of-text).
+
+    Leading whitespace left behind by a removed block is framing and goes.
+    Trailing bytes stay: when the content is an artifact, its final newline is
+    part of the artifact, and this helper runs on every completion before any
+    extractor sees it."""
     if not text:
         return text
     out = _THINK_BLOCK.sub("", text)
@@ -94,7 +100,7 @@ def strip_reasoning_leak(text: str) -> str:
     # content, if any, precedes the open; everything after is reasoning.
     if "<think>" in out:
         out = out.split("<think>", 1)[0]
-    return out.strip()
+    return out.lstrip()
 
 
 def extract_code(response: str) -> str:
@@ -107,28 +113,38 @@ def extract_code(response: str) -> str:
     - Raw code without blocks
     - optional <think>...</think> reasoning blocks (stripped before extraction)
 
+    The bytes come back exactly as the model wrote them. The fence is framing
+    and is not returned; everything inside it is, including the final newline
+    when there is one, none when there is not, and every trailing blank line.
+    Nothing here normalizes whitespace, line endings or indentation. Every
+    candidate hash, selection record, authorization identity and disk write
+    downstream is computed from this return value, so a byte dropped here is
+    a candidate that matches nothing it was compared against. Only leading
+    framing -- prose or whitespace before an unfenced artifact -- is trimmed.
+
     Args:
         response: Raw LLM response text
 
     Returns:
-        Extracted Python code
+        The artifact's exact bytes
     """
     # Strip template-emitted thinking blocks first; they can consume tokens
     # before the actual code output
     think_pattern = r'<think>.*?</think>'
-    response = re.sub(think_pattern, '', response, flags=re.DOTALL).strip()
+    response = re.sub(think_pattern, '', response, flags=re.DOTALL).lstrip()
 
     # Safety net: strip unclosed <think> tags (edge case where
-    # thinking mode doesn't fully strip thinking)
+    # thinking mode doesn't fully strip thinking). What precedes the tag is
+    # the content, terminator included.
     if '<think>' in response and '</think>' not in response:
-        response = response[:response.index('<think>')].strip()
+        response = response[:response.index('<think>')]
 
     # Try MBPP [BEGIN]...[DONE] delimiters first
     begin_done_pattern = r'\[BEGIN\]\s*\n(.*?)(?:\[DONE\]|$)'
     begin_matches = re.findall(begin_done_pattern, response, re.DOTALL)
     if begin_matches:
         # Return the last match (the model's answer, not the few-shot examples)
-        return begin_matches[-1].strip()
+        return begin_matches[-1]
 
     # Extract fenced code with an optional language label. The V3 service
     # supports multiple languages, so limiting labels to Python leaves fences
@@ -138,12 +154,12 @@ def extract_code(response: str) -> str:
     matches = re.findall(pattern, response, re.DOTALL)
 
     if matches:
-        # Return the longest match (likely the main code block)
-        return max(matches, key=len).strip()
+        # Return the longest match (likely the main code block), verbatim.
+        return max(matches, key=len)
 
-    # No code blocks found, assume raw code
-    # Strip common prefixes/suffixes
-    code = response.strip()
+    # No code blocks found, assume raw code. Leading framing goes; the
+    # artifact's own trailing bytes stay.
+    code = response.lstrip()
 
     # Remove common LLM artifacts
     lines = code.split('\n')
@@ -158,7 +174,219 @@ def extract_code(response: str) -> str:
             continue
         filtered_lines.append(line)
 
-    return '\n'.join(filtered_lines).strip()
+    return '\n'.join(filtered_lines)
+
+
+_FENCED_CODE = re.compile(
+    r'```[^\S\r\n]*[A-Za-z0-9_+.#-]*[^\S\r\n]*\r?\n(.*?)```',
+    re.DOTALL,
+)
+_EXACT_FUNCTION = re.compile(
+    r'\bImplement\s+exactly\s*:\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(',
+    re.IGNORECASE,
+)
+_EXACT_CLASS = re.compile(
+    r'\bImplement\s+class\s+([A-Za-z_]\w*)\b', re.IGNORECASE,
+)
+
+
+def _requested_python_declarations(problem: str) -> List[str]:
+    """Return only declarations explicitly named as the requested artifact.
+
+    Existing project context and reference implementations can contain many
+    declarations, so broad ``def`` matching would let context accidentally
+    choose a response block.  These two forms are the generation contract's
+    explicit target forms; callers without one retain their historical
+    extraction policy.
+    """
+    names = _EXACT_FUNCTION.findall(problem or "")
+    names.extend(_EXACT_CLASS.findall(problem or ""))
+    return list(dict.fromkeys(names))
+
+
+def _requested_python_function_contracts(problem: str) -> Dict[str, tuple]:
+    """Return exact, parseable one-line function declarations in the request.
+
+    The explicit ``Implement exactly:`` form names an interface, not merely a
+    function.  Parsing the declaration lets post-processing distinguish that
+    contract from annotations or aliases a model added on its own.
+    """
+    requested = set(_EXACT_FUNCTION.findall(problem or ""))
+    contracts = {}
+    lines = (problem or "").splitlines()
+    for line_index, raw_line in enumerate(lines):
+        declaration = raw_line.strip()
+        if not declaration.startswith(("def ", "async def ")):
+            continue
+        # Only the declaration immediately owned by ``Implement exactly:``
+        # is authoritative.  The generated problem also contains a reference
+        # implementation whose model-authored signature may differ; scanning
+        # every matching ``def`` let that later baseline overwrite the user's
+        # exact contract.  Existing project context can contain the same name
+        # too.  Neither is permission to rewrite the requested interface.
+        previous = line_index - 1
+        while previous >= 0 and not lines[previous].strip():
+            previous -= 1
+        if previous < 0 or not re.search(
+            r"\bImplement\s+exactly\s*:\s*$",
+            lines[previous], re.IGNORECASE,
+        ):
+            continue
+        try:
+            parsed = ast.parse(declaration + "\n    pass").body
+        except SyntaxError:
+            continue
+        if len(parsed) != 1 or not isinstance(
+            parsed[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        node = parsed[0]
+        if node.name in requested:
+            contracts[node.name] = (declaration, node)
+    return contracts
+
+
+def _declares_name(code: str, name: str) -> bool:
+    return bool(re.search(
+        rf'(?m)^\s*(?:(?:async\s+)?def|class)\s+{re.escape(name)}\b', code
+    ))
+
+
+def _repair_unambiguous_python_syntax(code: str) -> str:
+    """Repair only parser-identified, unambiguous punctuation/indent typos.
+
+    This is deliberately not a general code fixer.  It removes an unmatched
+    closing delimiter at the exact SyntaxError offset, or an indentation that
+    Python reports as unexpected at top level.  The changed artifact is used
+    only when the complete file then parses; otherwise the model bytes are
+    returned unchanged for the normal sandbox/repair path to reject.
+    """
+    original = code
+    current = code
+    for _ in range(4):
+        try:
+            ast.parse(current)
+            return current
+        except SyntaxError as exc:
+            if not exc.lineno or not exc.offset:
+                return original
+            lines = current.splitlines(keepends=True)
+            if exc.lineno > len(lines):
+                return original
+            line = lines[exc.lineno - 1]
+            pos = exc.offset - 1
+            if (exc.msg.startswith("unmatched ") and 0 <= pos < len(line)
+                    and line[pos] in ")]}"):
+                lines[exc.lineno - 1] = line[:pos] + line[pos + 1:]
+            elif exc.msg == "unexpected indent" and line[:1] in (" ", "\t"):
+                lines[exc.lineno - 1] = line.lstrip(" \t")
+            else:
+                return original
+            current = "".join(lines)
+    try:
+        ast.parse(current)
+    except SyntaxError:
+        return original
+    return current
+
+
+def _restore_exact_requested_signatures(code: str, problem: str) -> str:
+    """Restore an explicit requested signature without rewriting function bodies.
+
+    Models sometimes add equivalent-looking annotations or substitute typing
+    aliases even when the request says the declaration is exact.  For a unique
+    top-level target, replace only its header with the parseable declaration
+    supplied by the user.  Ambiguous targets, one-line bodies, async/sync
+    changes, or a result that does not parse are left byte-for-byte unchanged.
+    """
+    contracts = _requested_python_function_contracts(problem)
+    if not contracts:
+        return code
+    try:
+        # Parsed for validity only: unparseable input is returned untouched.
+        ast.parse(code)
+    except SyntaxError:
+        return code
+    current = code
+    # Requests currently name one exact artifact, but deterministic iteration
+    # keeps this safe if a future request explicitly names several functions.
+    for name, (declaration, requested) in contracts.items():
+        try:
+            parsed = ast.parse(current)
+        except SyntaxError:
+            return code
+        matches = [
+            node for node in parsed.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ]
+        if len(matches) != 1:
+            continue
+        candidate = matches[0]
+        if type(candidate) is not type(requested) or not candidate.body:
+            continue
+        # A same-line body cannot be separated from its header without a broad
+        # rewrite.  Leave it to normal fail-closed handling.
+        if candidate.body[0].lineno <= candidate.lineno:
+            continue
+        lines = current.splitlines(keepends=True)
+        start = candidate.lineno - 1
+        body_start = candidate.body[0].lineno - 1
+        indent = lines[start][:len(lines[start]) - len(lines[start].lstrip(" \t"))]
+        newline = "\r\n" if lines[start].endswith("\r\n") else "\n"
+        trial = "".join(lines[:start] + [indent + declaration + newline] + lines[body_start:])
+        try:
+            checked = ast.parse(trial)
+        except SyntaxError:
+            continue
+        restored = [
+            node for node in checked.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ]
+        if len(restored) != 1:
+            continue
+        restored_node = restored[0]
+        restored_return = (
+            ast.dump(restored_node.returns, include_attributes=False)
+            if restored_node.returns is not None else None
+        )
+        requested_return = (
+            ast.dump(requested.returns, include_attributes=False)
+            if requested.returns is not None else None
+        )
+        if (ast.dump(restored_node.args, include_attributes=False)
+                != ast.dump(requested.args, include_attributes=False)
+                or restored_return != requested_return):
+            continue
+        current = trial
+    return current
+
+
+def extract_code_for_problem(
+    response: str, problem: str, *, fallback: str = "longest"
+) -> str:
+    """Extract the requested artifact and conservatively syntax-gate Python.
+
+    When the request explicitly names a function or class, a fenced block
+    declaring that target outranks supplemental examples/tests even if those
+    are longer or later.  Without an explicit target, historical longest/last
+    behavior is preserved.  For explicit Python artifacts, only the narrow
+    parser-proven repair above is attempted.
+    """
+    cleaned = strip_reasoning_leak(response or "")
+    blocks = _FENCED_CODE.findall(cleaned)
+    names = _requested_python_declarations(problem)
+    if blocks:
+        targeted = [b for b in blocks if all(_declares_name(b, n) for n in names)]
+        choices = targeted or blocks
+        code = choices[-1] if fallback == "last" else max(choices, key=len)
+    else:
+        code = extract_code(cleaned)
+    if names:
+        repaired = _repair_unambiguous_python_syntax(code)
+        return _restore_exact_requested_signatures(repaired, problem)
+    return code
 
 
 def chatml_to_messages(prompt: str) -> List[Dict[str, str]]:

@@ -50,7 +50,7 @@ class FailingSandbox:
     def __init__(self, project_files=None):
         pass
 
-    def __call__(self, code, test_input=""):
+    def __call__(self, code, test_input="", **_):
         return False, "", "boom"
 
 
@@ -60,13 +60,16 @@ class FakeEmbed:
 
 
 class RecordingPlanSearch:
-    """Records the k the allocator asked generation for."""
+    """Records the k and tier the allocator asked generation for."""
 
     def __init__(self):
         self.num_plans = None
+        self.budget_tier = None
 
-    def generate(self, problem, task_id, llm, num_plans=None):
+    def generate(self, problem, task_id, llm, num_plans=None,
+                 budget_tier="standard"):
         self.num_plans = num_plans
+        self.budget_tier = budget_tier
         return SimpleNamespace(candidates=["def a():\n    pass\n"],
                                total_tokens=0)
 
@@ -111,14 +114,26 @@ def test_gx_escalation_reaches_allocation_and_generation(monkeypatch):
     assert data["capped_from"] == ""
     assert data["reason"] == "gated"
     # The allocation is what generation actually runs on, not a label:
-    # the probe already holds slot 0, so PlanSearch fills k-1.
+    # the probe already holds slot 0, so PlanSearch fills k-1 — at the
+    # allocator's tier, not the signature default (the tier was silently
+    # dropped at the production call before; third-party audit finding).
     assert plan_search.num_plans == 7
+    assert plan_search.budget_tier == "extreme"
 
 
 def test_short_wall_clock_caps_the_tier(monkeypatch):
-    # 20s per observed call and a 60s cap: after reserving one refinement
-    # iteration there is nothing left to buy candidates with, so the gate
-    # falls back to the floor rather than guaranteeing a timeout.
+    """20s per observed call against a 60s cap buys almost nothing.
+
+    The cap used to stop at the floor, which meant it could not act at all:
+    it priced tiers by what they add BEYOND k=3, so the floor itself looked
+    free and the affordability walk exited immediately. Measured across 43
+    pipeline runs, capped_from was empty in all 33 allocations while sessions
+    spent a median 207s of a 180s budget on generation alone and phase-3
+    repair was skipped 19 times with 7-9s left.
+
+    The floor still stops the LENS starving generation. It no longer
+    overrides the clock.
+    """
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "60")
     _, data, plan_search = _run(monkeypatch, ESCALATING_SCORES,
                                 llm_cls=SlowLLM)
@@ -126,10 +141,11 @@ def test_short_wall_clock_caps_the_tier(monkeypatch):
     assert data["base_tier"] == "hard"
     assert data["gx_escalation"] == 2
     assert data["capped_from"] == "extreme"
-    assert data["tier"] == FLOOR_TIER
-    assert data["k"] == K_FLOOR
     assert data["reason"] == "budget_capped"
-    assert plan_search.num_plans == K_FLOOR - 1
+    assert data["k"] < K_FLOOR, "a clock that affords nothing must not buy k=3"
+    # k=1 is the baseline alone, so PlanSearch is asked for nothing at all
+    # (never invoked) rather than for zero plans.
+    assert plan_search.num_plans in (None, data["k"] - 1)
 
 
 def test_disabled_cap_leaves_the_escalation_alone(monkeypatch):

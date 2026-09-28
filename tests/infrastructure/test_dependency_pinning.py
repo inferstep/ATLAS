@@ -151,3 +151,17 @@ def test_proxy_apk_packages_are_pinned():
         if tok.startswith("-"):
             continue
         assert "=" in tok, f"proxy apk package not version-pinned: {tok!r}"
+
+
+def test_v3_judges_python_with_the_interpreter_the_sandbox_runs():
+    """Every compile() and ast.parse verdict v3-service gives is about code the
+    sandbox then executes. On different interpreters they disagreed: V3 on
+    3.11 rejected f"{d["k"]}" and PEP 695 type parameters as invalid Python
+    while the 3.13 sandbox ran them (audit V-service/INTEGRITY#1)."""
+    def base(rel):
+        for line in (REPO / rel).read_text().splitlines():
+            if line.startswith("FROM ") and "python:" in line:
+                return line.split()[1]
+        raise AssertionError(f"{rel} has no python base image")
+
+    assert base("v3-service/Dockerfile") == base("sandbox/Dockerfile")

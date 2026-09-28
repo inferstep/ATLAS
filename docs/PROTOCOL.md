@@ -166,6 +166,8 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 }
 ```
 
+The agent-loop `done` (`stage: "agent"`) additionally carries the run's outcome, from the same fields as the SSE terminal: `status` (`completed`, `incomplete`, `stopped`, `failed` or `timed_out`; `success` is `status == "completed"`), `reason`, and `unresolved` — the exit gates that spent their bounces with their finding still true, comma-separated, present only when there are some. It also carries the run's token accounting: `total_tokens`, plus `fenced_calls` / `fenced_tokens` — how many `@fenced` sub-call generations the pass made and what they cost, already folded into `total_tokens`. Each individual sub-call attempt also emits a `stage_end` on stage `fenced_fetch` with `path`, `attempt`, `generated_tokens`, `content_bytes`, and `success` in the payload, so a retried fetch is visible as two attempts.
+
 ## Producer endpoints
 
 | Service | Endpoint | Notes |

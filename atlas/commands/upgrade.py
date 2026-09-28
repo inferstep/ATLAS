@@ -17,6 +17,7 @@ import urllib.request
 from typing import Dict, List, Optional
 
 from atlas import compose as compose_config
+from atlas import config_schema as cs
 from atlas import env as cli_env
 from atlas import upgrade_engine as eng
 
@@ -36,14 +37,28 @@ def _compose(atlas_root: str, args: List[str], timeout: int = 600) -> None:
 # GHCR image the base compose file deploys.
 _IMAGES = ["atlas-proxy", "atlas-v3", "atlas-lens", "atlas-sandbox",
            "atlas-llama"]
-_OWNER = os.environ.get("ATLAS_GHCR_OWNER", "itigges22")
-# Images are built + signed on both branch pushes (refs/heads/…) and tag
-# pushes (refs/tags/vX.Y.Z), so the identity must accept either ref type
-# — matching only refs/heads would reject a validly-signed release image.
-_COSIGN_IDENTITY = (
-    r"https://github.com/itigges22/ATLAS/.github/workflows/"
-    r"build-images.yml@refs/(heads|tags)/.*")
 _COSIGN_ISSUER = "https://token.actions.githubusercontent.com"
+
+
+def _owner(atlas_root: str) -> str:
+    """The GHCR owner compose resolves: shell env, then .env, then the
+    default. Read at call time, after the engine's .env migration."""
+    return cs.resolve("ATLAS_GHCR_OWNER",
+                      compose_config.read_env_file(atlas_root),
+                      eng.GHCR_OWNER) or eng.GHCR_OWNER
+
+
+def _cosign_identity(owner: str) -> str:
+    """The workflow identity that signed this owner's images. Images keep
+    the signature of the repo that built them, so releases from before
+    the move carry itigges22/ATLAS's identity. Images are built + signed
+    on both branch pushes (refs/heads/…) and tag pushes (refs/tags/vX.Y.Z),
+    so the identity must accept either ref type — matching only
+    refs/heads would reject a validly-signed release image."""
+    repo = (eng.LEGACY_GHCR_OWNER if owner == eng.LEGACY_GHCR_OWNER
+            else eng.GHCR_OWNER)
+    return (rf"https://github.com/{repo}/ATLAS/.github/workflows/"
+            r"build-images.yml@refs/(heads|tags)/.*")
 
 
 def _target_images(atlas_root: str, tag: str) -> List[str]:
@@ -51,7 +66,7 @@ def _target_images(atlas_root: str, tag: str) -> List[str]:
     overlays included — e.g. the Vulkan llama image), re-pinned to the
     target tag. Falls back to the static list if compose can't answer."""
     refs: List[str] = []
-    prefix = f"ghcr.io/{_OWNER}/"
+    prefix = f"ghcr.io/{_owner(atlas_root)}/"
     with contextlib.suppress(subprocess.SubprocessError, OSError):
         cmd = compose_config.command(atlas_root, ["config", "--images"])
         out = subprocess.check_output(cmd, cwd=atlas_root, text=True,
@@ -76,11 +91,12 @@ def _verify_signatures(atlas_root: str, tag: str) -> None:
     if shutil.which("cosign") is None:
         print("  (cosign not installed — skipping signature verification)")
         return
+    identity = _cosign_identity(_owner(atlas_root))
     for ref in _target_images(atlas_root, tag):
         try:
             proc = subprocess.run(
                 ["cosign", "verify",
-                 "--certificate-identity-regexp", _COSIGN_IDENTITY,
+                 "--certificate-identity-regexp", identity,
                  "--certificate-oidc-issuer", _COSIGN_ISSUER, ref],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 text=True, timeout=300)

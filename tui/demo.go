@@ -286,9 +286,7 @@ func fetchDemoModelIdentity(proxyURL string) (string, string) {
 	if err != nil {
 		return "", demoModelFallback
 	}
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {
 		return "", demoModelFallback
@@ -317,9 +315,7 @@ func proxySupportsRawDemo(proxyURL string) bool {
 	if err != nil {
 		return false
 	}
-	if tok := loadBearerToken(); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
+	setProxyAuth(req)
 	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
 	if err != nil {
 		return false

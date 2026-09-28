@@ -238,9 +238,8 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 					m.modifiedFiles[path] = true
 					// Force-expire the debounce so the next tick scans.
 					m.lastFileScan = time.Time{}
-					// Track content writes for post-pass review (delete isn't a
-					// lens sample). The path here matches what the proxy keys
-					// /feedback verdicts by, so /deny <path> lines up.
+					// Track content writes for /review (a deleted file has
+					// nothing to review or regenerate).
 					if p.Name != "delete_file" {
 						if m.passWrites == nil {
 							m.passWrites = map[string]bool{}
@@ -277,19 +276,42 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			})
 		}
 
+	case "gate":
+		// A completion gate holding the run back — "you were asked to change
+		// something and have not". The rejection reached the model and
+		// nothing else, so the user watched an unexplained pause while the
+		// run silently retried. Shown as a system line: it is the harness
+		// speaking, not a tool result, and no tool was executed.
+		var p struct {
+			Gate   string `json:"gate"`
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(ev.Data, &p) == nil {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: p.Gate,
+				Body: p.Reason, Echo: true,
+			})
+		}
+
 	case "permission_request":
 		var p struct {
-			ToolName   string          `json:"tool_name"`
-			Message    string          `json:"message"`
-			ToolCallID string          `json:"tool_call_id"`
-			Args       json.RawMessage `json:"args"`
+			ToolName    string          `json:"tool_name"`
+			Message     string          `json:"message"`
+			ToolCallID  string          `json:"tool_call_id"`
+			Args        json.RawMessage `json:"args"`
+			OneTimeOnly bool            `json:"one_time_only"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
+		// A deletion is approved one file at a time: the proxy marks the
+		// request one_time_only, and delete_file is treated so for a proxy
+		// that does not. One "allow for session" used to answer every later
+		// deletion here, without the user seeing which file.
+		oneTime := p.OneTimeOnly || p.ToolName == "delete_file"
 		// A tool already approved "for session" auto-answers allow without
 		// showing the modal, so the user isn't re-prompted for it. The POST
 		// is fire-and-forget (appendChatEvent has no Cmd return path); the
 		// proxy fail-safe still bounds the turn if it never lands.
-		if m.sessionAllowedTools[p.ToolName] {
+		if m.sessionAllowedTools[p.ToolName] && !oneTime {
 			proxyURL := m.proxyURL
 			sid := m.turnSessionID
 			cid := p.ToolCallID
@@ -304,11 +326,11 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		// Capture the current turn's session id so the decision correlates
 		// to THIS turn on POST /v1/permission.
 		m.pendingPerm = &permPrompt{
-			toolName:   p.ToolName,
-			message:    p.Message,
-			toolCallID: p.ToolCallID,
-			sessionID:  m.turnSessionID,
-			args:       string(p.Args),
+			toolName:    p.ToolName,
+			message:     p.Message,
+			toolCallID:  p.ToolCallID,
+			sessionID:   m.turnSessionID,
+			oneTimeOnly: oneTime,
 		}
 
 	case "permission_denied":
@@ -584,6 +606,27 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			Body: fmt.Sprintf("content loop detected — stream cut after %d chars", p.Chars),
 		})
 
+	// The other half of content_loop_cut: the cut was ANSWERED rather than
+	// ending the run — the model was told why and given another attempt.
+	// Without a case here the user watched a stream stop and a new turn begin
+	// with nothing said in between, and the run reported an event the TUI
+	// could not render (measured on 2 of 28 benchmark sessions).
+	case "agent_loop_recovery":
+		var p struct {
+			Turn    int    `json:"turn"`
+			Attempt int    `json:"attempt"`
+			Reason  string `json:"reason"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		body := p.Reason
+		if body == "" {
+			body = "the model began repeating itself; the stream was cut and it was told why"
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "recovered",
+			Body: fmt.Sprintf("%s — retrying (attempt %d)", body, p.Attempt),
+		})
+
 	// Stream cut: the model burned its reasoning budget without ever
 	// emitting content, so the proxy stopped the call and re-prompts.
 	case "reasoning_budget_cut":
@@ -603,17 +646,6 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		if body != "" {
 			m.chat = append(m.chat, chatMessage{
 				Role: roleSystem, Meta: "symbols", Body: body,
-			})
-		}
-
-	// Pattern-cache context: the lens served lessons from previous
-	// sessions on similar tasks and the proxy injected them as a
-	// system note before the first LLM call.
-	case "pattern_context_injected":
-		body := formatPatternContextInjected(ev.Data)
-		if body != "" {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "patterns", Body: body,
 			})
 		}
 
@@ -860,24 +892,6 @@ func formatSymbolIndexInjected(data json.RawMessage) string {
 	}
 	if p.Skipped > 0 {
 		body += fmt.Sprintf(" (%d skipped)", p.Skipped)
-	}
-	return body
-}
-
-// formatPatternContextInjected renders the pattern_context_injected
-// event — the proxy fetched pattern-cache lessons from the lens and
-// prepended them as a system note before the first LLM call.
-func formatPatternContextInjected(data json.RawMessage) string {
-	var p struct {
-		Count int      `json:"count"`
-		Types []string `json:"types"`
-	}
-	if err := json.Unmarshal(data, &p); err != nil {
-		return ""
-	}
-	body := fmt.Sprintf("injected %d pattern(s) from previous sessions", p.Count)
-	if types := strings.Join(p.Types, ", "); types != "" {
-		body += " — " + types
 	}
 	return body
 }

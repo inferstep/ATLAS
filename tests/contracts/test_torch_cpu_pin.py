@@ -60,6 +60,27 @@ def test_torch_preinstall_uses_cpu_index(name, dockerfile, requirements):
     )
 
 
+def test_ci_lens_job_preinstalls_the_same_torch():
+    """CI's lens test job pre-installs CPU torch the way the Dockerfile does.
+
+    It drifted once: CI pre-installed 2.12.1 while requirements.txt pinned
+    2.13.0, so the requirements install replaced the CPU wheel with PyPI's
+    build on every run, the failure this file exists to prevent in images.
+    """
+    workflow = (REPO / ".github" / "workflows" / "test.yml").read_text()
+    ci_pin = re.search(
+        r"pip install torch==([0-9][\w.+]*) --index-url "
+        r"https://download\.pytorch\.org/whl/cpu", workflow)
+    req_pin = REQUIREMENTS_TORCH.search(
+        (REPO / "geometric-lens" / "requirements.txt").read_text())
+    assert ci_pin, "test.yml: no CPU-index torch pre-install in the lens job"
+    assert req_pin
+    assert ci_pin.group(1) == req_pin.group(1), (
+        f"test.yml pre-installs torch=={ci_pin.group(1)} but "
+        f"geometric-lens/requirements.txt pins torch=={req_pin.group(1)}. "
+        f"Keep them identical.")
+
+
 def test_v3_service_ships_no_torch():
     """v3-service must not install torch: it imports none.
 

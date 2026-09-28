@@ -86,6 +86,10 @@ def _resolve_models_dir(arg_models_dir: Optional[str]) -> str:
 # Lens-status rendering
 # ---------------------------------------------------------------------------
 
+# How a user makes a Lens bundle for a model that has none.
+BUILD = "`atlas bench`, then `atlas lens build --from-results`"
+
+
 def _lens_icon(status: str, color: bool) -> str:
     if not color or not UNICODE_OK:
         return {"supported": "[OK]  ", "no-artifacts": "[WARN]",
@@ -180,9 +184,9 @@ def _emit_list(args: argparse.Namespace, color: bool) -> int:
                             f"{m.model_size_gb:.1f} GB{RESET if color else ''}")
         _safe_print()
     _safe_print(f"  {DIM if color else ''}Run `atlas model install <name>` "
-                f"to download. Models marked Lens no-artifacts will install as "
-                f"raw GGUFs but G(x) verification will silently no-op — pass "
-                f"--no-lens to acknowledge.{RESET if color else ''}")
+                f"to download. A model marked Lens no-artifacts installs only "
+                f"with --no-lens, and ATLAS stops agent work on it until it "
+                f"has its own Lens bundle ({BUILD}).{RESET if color else ''}")
     return 0
 
 
@@ -243,8 +247,9 @@ def _emit_recommend(args: argparse.Namespace, color: bool) -> int:
     # Tier-default has no Lens artifacts. Surface a published bundle.
     _safe_print()
     _safe_print(f"  {YELL if color else ''}This tier's recommended model has "
-                f"no Lens artifacts.{RESET if color else ''} G(x) verification "
-                f"will silently no-op if you install it.")
+                f"no Lens artifacts.{RESET if color else ''} The lens could not "
+                f"score it, so ATLAS would stop agent work on it until you "
+                f"build a bundle for it.")
     supported = sorted(model_registry.supported_models(),
                        key=lambda item: not item.lens_calibrated)
     if supported:
@@ -336,16 +341,14 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
             _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
                         f"Lens status `{m.lens_status}`.{RESET if color else ''}")
             _safe_print()
-            _safe_print("  This model has no trained Lens artifacts. ATLAS "
-                        "will run llama-server on it, but G(x) verification "
-                        "will silently no-op (gx_score: 0.5 on every "
-                        "generation). Half of what makes ATLAS *ATLAS* will "
-                        "be missing.")
+            _safe_print("  This model has no Lens bundle of its own. The lens is "
+                        "required: it cannot score this model, so ATLAS stops "
+                        "agent work on it and says why. The lens loads a bundle "
+                        "only for the model it was built for, so a bundle for "
+                        "another quant of the same model does not load.")
             _safe_print()
-            _safe_print("  To proceed anyway: rerun with `--no-lens` to "
-                        "acknowledge.")
-            _safe_print("  See PC-058 roadmap for the Lens training pipeline "
-                        "that will fix this.")
+            _safe_print("  To build one: install with `--no-lens`, then run "
+                        f"{BUILD}.")
             return 1
         if m.lens_status == "supported" and not m.lens_calibrated:
             _safe_print(f"  {YELL if color else ''}Note: `{m.name}` has a "
@@ -376,8 +379,8 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:
         _safe_print()
         if m.lens_status != "supported":
             _safe_print(f"  Note: even with auth, this model has Lens "
-                        f"status `{m.lens_status}` — G(x) verification "
-                        f"will silently no-op (--no-lens to acknowledge).")
+                        f"status `{m.lens_status}`: ATLAS stops agent work on "
+                        f"it until it has its own Lens bundle.")
         return 1
 
     target = os.path.join(models_dir, m.model_file)
@@ -1299,8 +1302,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_inst.add_argument("--dry-run", action="store_true",
         help="print what would happen, no network or disk writes")
     p_inst.add_argument("--no-lens", action="store_true",
-        help="acknowledge installing a model with no Lens artifacts "
-             "(G(x) verification will silently no-op)")
+        help="install a model that has no Lens bundle yet, to build one "
+             "(ATLAS stops agent work on it until the bundle exists)")
     p_inst.add_argument("--yes", action="store_true",
         help="overwrite existing file without prompt")
     p_inst.add_argument("--no-resume", action="store_true",

@@ -1,8 +1,6 @@
 # geometric-lens — C(x)/G(x) scoring + PC-207 per-token scoring + project
-# RAG store. Stateful via the projects PVC (indexed project source) and
-# the state PVC (SQLite: pattern cache, co-occurrence graph, router
-# posteriors, task queue, metrics); depends on llama-server for
-# embeddings.
+# RAG store. Stateful via the projects PVC (indexed project source);
+# depends on llama-server for embeddings.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -14,17 +12,6 @@ spec:
   resources:
     requests:
       storage: ${ATLAS_PVC_PROJECTS_SIZE}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: lens-state
-  namespace: ${ATLAS_NAMESPACE}
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: ${ATLAS_PVC_LENS_STATE_SIZE}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -52,14 +39,10 @@ spec:
         - {name: LLAMA_URL,              value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
         - {name: LLAMA_EMBED_URL,        value: "http://llama-server:${ATLAS_LLAMA_PORT}"}
         - {name: ATLAS_MODEL_NAME,       value: "${ATLAS_MAIN_MODEL}"}
-        - {name: GEOMETRIC_LENS_ENABLED, value: "true"}
         - {name: PROJECT_DATA_DIR,       value: "/data/projects"}
-        - {name: SQLITE_DB_PATH,         value: "/data/state/geometric_state.db"}
         volumeMounts:
         - name: projects
           mountPath: /data/projects
-        - name: state
-          mountPath: /data/state
         readinessProbe:
           httpGet:
             path: /ready          # /ready is strict (PC-019); /health is informational.
@@ -85,9 +68,6 @@ spec:
       - name: projects
         persistentVolumeClaim:
           claimName: lens-projects
-      - name: state
-        persistentVolumeClaim:
-          claimName: lens-state
 ---
 apiVersion: v1
 kind: Service

@@ -1,0 +1,24 @@
+name: Documentation
+description: Something in the docs is wrong, missing, or unclear
+type: Docs
+labels: [needs-triage, area/docs]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: The file or URL, e.g. docs/SETUP.md or a section of the README.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong or missing
+      description: Quote the text if it's wrong. Say what you were trying to do if something's missing.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix
+      description: Optional. What the page should say instead.

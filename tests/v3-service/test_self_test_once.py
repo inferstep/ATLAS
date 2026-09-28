@@ -36,7 +36,7 @@ class FailingSandbox:
     def __init__(self, project_files=None):
         pass
 
-    def __call__(self, code, test_input=""):
+    def __call__(self, code, test_input="", **_):
         return False, "", "boom"
 
 

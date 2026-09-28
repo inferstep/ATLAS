@@ -50,18 +50,24 @@ differ deliberately; read bench numbers with that in mind:
 - **Lens usage.** The bench scores C(x) via `/internal/lens/score-text`;
   the product additionally runs per-step G(x) scoring and threshold
   interventions on every write.
-- **Verification oracle.** The bench verifies against the dataset's
-  ground-truth tests; the product has no oracle at runtime and uses
+- **Verification oracle.** The bench verifies against the tests its
+  dataset loader returns, which today are only the examples printed in each
+  problem (see "Published results" below); the product has no oracle at runtime and uses
   self-tests + build/syntax gates instead.
 - **Candidate budget.** `atlas bench` is baseline-mode (one candidate per
   task); the product allocates candidates adaptively when V3 fires.
 
 ## Published results
 
-The canonical published evidence is the V3 (14B) ablation study —
-74.6% LiveCodeBench v5 pass@1, 599 tasks, 4 conditions:
-[docs/reports/V3_ABLATION_STUDY.md](../../docs/reports/V3_ABLATION_STUDY.md),
-raw traces indexed in
-[docs/reports/ablation/README.md](../../docs/reports/ablation/README.md).
-Per-registry-model numbers are tracked in
-[#28](https://github.com/itigges22/ATLAS/issues/28).
+None current. The V3 (14B) ablation study's 74.6% LiveCodeBench figure is
+withdrawn: this runner's LiveCodeBench loader cannot decode the dataset's
+hidden tests and falls back to the 1-5 examples printed in each problem, so
+every `pass` it reports means "passed the printed examples". In V3 mode it
+also counts a task as passed when any candidate passes them, and repair sees
+their expected output. See the notice at the top of
+[docs/reports/V3_ABLATION_STUDY.md](../../docs/reports/V3_ABLATION_STUDY.md);
+the raw traces stay indexed in
+[docs/reports/ablation/README.md](../../docs/reports/ablation/README.md) so
+the withdrawal can be checked. Numbers from this runner are not LiveCodeBench
+pass@1 until those are fixed. Per-registry-model numbers will be tracked in
+[#28](https://github.com/inferstep/ATLAS/issues/28).

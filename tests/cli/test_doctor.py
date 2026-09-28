@@ -318,45 +318,6 @@ def test_check_arch_warn_on_aarch64_linux(monkeypatch):
     assert "no rocm" in result.message
 
 
-def test_check_sqlite_state_pass_when_connected(monkeypatch):
-    """A healthy `subsystems.sqlite` block in lens /health passes."""
-    body = ('{"status": "healthy", "subsystems": '
-            '{"sqlite": {"connected": true}}}')
-    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
-    result = doctor.check_sqlite_state()
-    assert result.status == "pass"
-
-
-def test_check_sqlite_state_fail_when_unavailable(monkeypatch):
-    """An unavailable state store fails and names the degradation
-    (neutral cache/router, 503 task queue) so the operator knows the
-    blast radius."""
-    body = ('{"status": "degraded", "subsystems": '
-            '{"sqlite": {"connected": false, "error": "disk I/O error"}}}')
-    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
-    result = doctor.check_sqlite_state()
-    assert result.status == "fail"
-    assert "503" in result.message
-    assert "disk I/O error" in (result.detail or "")
-
-
-def test_check_sqlite_state_warns_without_subsystem(monkeypatch):
-    """A lens image whose /health lacks the sqlite block warns rather
-    than failing — the store may still be fine, doctor just can't see it."""
-    body = '{"status": "healthy", "subsystems": {}}'
-    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (True, body))
-    result = doctor.check_sqlite_state()
-    assert result.status == "warn"
-
-
-def test_check_sqlite_state_skips_when_unreachable(monkeypatch):
-    """Endpoint reachability is health/lens's job; this check skips."""
-    monkeypatch.setattr(doctor, "_http_get",
-                        lambda url, timeout=5: (False, "connection refused"))
-    result = doctor.check_sqlite_state()
-    assert result.status == "skip"
-
-
 def test_check_gpu_apple_silicon_returns_pass(monkeypatch):
     """Apple GPU vendor should PASS the gpu dispatcher check (Metal
     hybrid path is supported via #32). The old 'Metal -> V3.1.2 native
@@ -439,3 +400,46 @@ def test_workspace_mounts_skip_when_not_running():
     result = doctor.check_workspace_mounts(
         [{"Service": "atlas-proxy", "Name": "x", "State": "running"}])
     assert result.status == "skip"
+
+
+def test_grammar_mode_check_compares_the_env_with_the_registry(tmp_path):
+    """A .env edited by hand, or written before the registry carried the
+    mode, can run a model in a configuration it was not measured with."""
+    from atlas.commands import doctor
+    env = tmp_path / ".env"
+    env.write_text("ATLAS_MODEL_FILE=gemma-4-12b-it-Q4_K_M.gguf\n"
+                   "ATLAS_GRAMMAR_MODE=strict\n")
+    r = doctor.check_grammar_mode(str(tmp_path))
+    assert r.status == "warn", r
+    assert "loose" in r.message and "ATLAS_GRAMMAR_MODE=loose" in r.detail
+    env.write_text("ATLAS_MODEL_FILE=gemma-4-12b-it-Q4_K_M.gguf\n"
+                   "ATLAS_GRAMMAR_MODE=loose\n")
+    assert doctor.check_grammar_mode(str(tmp_path)).status == "pass"
+    # Unset means the proxy's default, strict, which is the Qwen profile.
+    env.write_text("ATLAS_MODEL_FILE=Qwen3.5-9B-Q6_K.gguf\n")
+    assert doctor.check_grammar_mode(str(tmp_path)).status == "pass"
+    # A model the registry does not know has no profile to compare.
+    env.write_text("ATLAS_MODEL_FILE=my-own-model.gguf\n")
+    assert doctor.check_grammar_mode(str(tmp_path)).status == "skip"
+
+
+
+def test_status_dimensions_fail_while_the_agent_is_blocked(monkeypatch):
+    """The proxy refuses every request while the lens cannot score and
+    points the user at `atlas doctor`; doctor has to say so, not pass."""
+    def status(direct_agent, detail):
+        return json.dumps({"dimensions": [
+            {"name": "model_runtime", "status": "supported", "detail": "ok"},
+            {"name": "direct_agent", "status": direct_agent, "detail": detail},
+        ]})
+
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (
+        True, status("blocked", "requests are refused while the lens cannot score: drifted")))
+    [blocked] = doctor.check_status_dimensions()
+    assert blocked.status == "fail"
+    assert "drifted" in blocked.message
+
+    monkeypatch.setattr(doctor, "_http_get", lambda url, timeout=5: (
+        True, status("supported", "the lens can score")))
+    [fine] = doctor.check_status_dimensions()
+    assert fine.status == "pass"

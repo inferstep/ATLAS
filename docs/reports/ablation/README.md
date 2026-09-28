@@ -1,8 +1,12 @@
 # V3 Ablation Study — Raw Results
 
 This documents the per-task pass/fail data from the ATLAS V3.0 ablation study on
-LiveCodeBench (599 tasks). These are the raw traces behind the published 74.6%
-pass@1 result.
+LiveCodeBench (599 tasks). They are the raw traces behind the 74.6% result,
+which is **withdrawn**: the runner graded only the examples printed in each
+problem, counted any of three candidates passing as a pass, and let repair see
+the examples' expected output (see the notice at the top of
+[V3_ABLATION_STUDY.md](../V3_ABLATION_STUDY.md)). The traces are kept so the
+withdrawal can be checked. Every pass rate on this page comes from that run.
 
 ## Where the data lives
 
@@ -79,16 +83,10 @@ All conditions used:
 - **1 seed per condition** (k=3 candidates per task in Phase 1)
 - **Hardware**: RTX 5060 Ti 16GB, single GPU
 
-To reproduce condition D (74.6%) with the current runner (the dataset is
-always LiveCodeBench v5 — there is no `--dataset` flag):
-
-```bash
-cd /path/to/ATLAS
-python -m atlas.bench.v3_runner \
-  --selection-strategy lens \
-  --no-phase2 \
-  --run-id condition_d_reproduction
-```
+Condition D cannot be reproduced at this commit, and reproducing it would
+not be useful: the runner no longer has a `--no-phase2` flag, the Qwen3-14B
+configuration and several V3.0 stages no longer exist, and the grading flaws
+described above are still present in the current runner.
 
 To reproduce condition A (baseline):
 
@@ -117,5 +115,6 @@ tasks = glob.glob(f"{condition}/v3_lcb/per_task/*.json")
 passed = sum(1 for t in tasks if json.load(open(t)).get("passed", False))
 total = len(tasks)
 print(f"Pass@1: {passed}/{total} = {passed/total:.1%}")
-# Expected output: Pass@1: 447/599 = 74.6%
+# Prints 447/599: the published count of tasks that passed the printed
+# examples. This is not LiveCodeBench pass@1 (see the withdrawal notice).
 ```

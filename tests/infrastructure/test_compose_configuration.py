@@ -93,3 +93,55 @@ def test_legacy_runtime_keys_are_upgrade_fallbacks_only():
         "ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}"
         in compose
     )
+
+
+def _sandbox(compose):
+    return compose["services"]["sandbox"]
+
+
+def test_go_run_has_an_exec_permitted_link_directory():
+    """`go run` links the program into GOTMPDIR and then executes it.
+
+    Docker mounts every tmpfs noexec unless told otherwise, and the sandbox
+    runs on a read-only rootfs, so GOTMPDIR's default (/tmp) made `go run`
+    fail with "fork/exec ...: permission denied" on every invocation.
+    Measured across four benchmark runs: 22 permission-denied results,
+    every one of them a Go build, each followed by the model re-sending the
+    identical command.
+
+    So GOTMPDIR must point at a tmpfs that actually permits exec.
+    """
+    yaml = pytest.importorskip("yaml")
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    sandbox = _sandbox(compose)
+
+    env = dict(
+        item.split("=", 1) for item in sandbox["environment"] if "=" in item
+    )
+    gotmpdir = env.get("GOTMPDIR")
+    assert gotmpdir, "sandbox must set GOTMPDIR away from the noexec default"
+
+    matching = [t for t in sandbox["tmpfs"] if t.split(":", 1)[0] == gotmpdir]
+    assert matching, f"GOTMPDIR={gotmpdir} has no tmpfs declaration"
+    assert "exec" in matching[0].split(":", 1)[1].split(","), (
+        f"GOTMPDIR={gotmpdir} is mounted noexec, so `go run` cannot execute "
+        f"what it just linked: {matching[0]}"
+    )
+
+
+def test_tmp_stays_noexec():
+    """The exec grant is scoped to one path on purpose.
+
+    /workspace is a bind mount and already permits exec, so this adds no
+    capability the sandbox lacked; it makes the Go toolchain's own default
+    path work. /tmp, which is where untrusted downloads and build scratch
+    land, must not pick up exec along the way.
+    """
+    yaml = pytest.importorskip("yaml")
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    for entry in _sandbox(compose)["tmpfs"]:
+        path, _, opts = entry.partition(":")
+        if path == "/tmp":
+            assert "exec" not in opts.split(","), f"/tmp must stay noexec: {entry}"
+            return
+    raise AssertionError("sandbox declares no /tmp tmpfs")

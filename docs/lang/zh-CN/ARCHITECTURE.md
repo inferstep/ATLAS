@@ -3,7 +3,7 @@
 
 # ATLAS 架构
 
-ATLAS V3.1.3 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
+ATLAS V3.1.4 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
 
 ---
 
@@ -77,7 +77,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | **atlas-proxy** | 8090 | Go | agent 循环、工具调用路由、tier 分类、`/v1/agent` SSE、`/events` 类型化 SSE、`/cancel`。`/v1/chat/completions` 原样透传给 llama-server。 |
 | **atlas-tui** | （客户端） | Go | Bubbletea TUI；消费 `/events` 和 `/v1/agent` SSE 流。 |
 | **v3-service** | 8070 | Python | V3 pipeline 的 HTTP 封装（PlanSearch、DivSampling、PR-CoT 等） |
-| **geometric-lens** | 8099 | Python (FastAPI) | 内部 `/internal/*` 打分服务：C(x) 能量打分、G(x) XGBoost 质量预测、逐步打分，以及模式缓存（读 + 写）；拥有 SQLite 状态存储（`lens-state` 卷上的 `SQLITE_DB_PATH`），支撑模式缓存、共现图和任务队列 |
+| **geometric-lens** | 8099 | Python (FastAPI) | 内部 `/internal/*` 打分服务：C(x) 能量打分、G(x) XGBoost 质量预测、逐步打分 |
 | **sandbox** | 30820（主机）/ 8020（容器） | Python (FastAPI) | 隔离的代码执行、编译、检查、测试运行 |
 
 ---
@@ -91,13 +91,13 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | 文件 | 职责 |
 |---|---|
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
-| `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、模式上下文注入、卡死循环断路器 |
-| `tools.go` | 14 个工具定义与执行器、层级分类、工具调用语法 |
+| `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、卡死循环断路器 |
+| `tools.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
 | `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
-| `lens.go` | lens 打分调用、lens 样本入库（`/feedback`）、校准状态 |
+| `lens.go` | lens 打分调用、校准状态 |
 | `guardrails.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
 | `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
@@ -163,7 +163,7 @@ flowchart LR
 
 ### 工具
 
-`proxy/tools.go` 中注册了 14 个工具：
+`proxy/tools.go` 中注册了 16 个工具：
 
 | 工具 | 用途 | 只读 |
 |------|---------|-----------|
@@ -171,6 +171,8 @@ flowchart LR
 | `outline_file` | 列出文件的顶层函数/类及其行号范围，不含函数体（`.py` 使用 tree-sitter，其余为尽力而为的扫描）。外科式读取的入口点：先 outline，再用带 offset/limit 的 `read_file` | 是 |
 | `write_file` | 创建一个新文件（对超过 5 行的已有文件会被拒绝 —— 见安全限制） | 否 |
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
+| `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
+| `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 60 行 | 否 |
 | `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
 | `delete_file` | 删除文件或空目录（之后强制退出循环） | 否 |
 | `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |
@@ -295,10 +297,7 @@ flowchart LR
     AnyPass -->|"0"| FA["Failure Analysis"] --> PRCOT["PR-CoT"]
     PRCOT --> PRPass{"Pass?"}
     PRPass -->|"Yes"| Done
-    PRPass -->|"No"| Refine["Refinement"]
-    Refine --> RefPass{"Pass?"}
-    RefPass -->|"Yes"| Done
-    RefPass -->|"No"| Derive["Derivation"] --> Done
+    PRPass -->|"No"| Refine["Refinement"] --> Done
 
     style Entry fill:#1a3a5c,color:#fff
     style Done fill:#333,color:#fff
@@ -315,7 +314,6 @@ flowchart LR
     style Build fill:#2d5016,color:#fff
     style PRCOT fill:#5c3a1a,color:#fff
     style Refine fill:#5c3a1a,color:#fff
-    style Derive fill:#5c3a1a,color:#fff
     style FA fill:#5c3a1a,color:#fff
 ```
 
@@ -327,7 +325,7 @@ flowchart LR
 
 **候选分配：CxGx 闸门**（以 `phase2` / `phase2_allocated` 发出）决定失败的探测能获得多少个候选。探测的 C(x)+G(x) 组合分数（一次嵌入提取，两个模型都用）驱动一条两步规则：校准后的 C(x) 归一化能量在 Budget Forcing 所用的同一阶梯上选出基础 tier，而 G(x) 质量分数在低于该模型校准的 severe 边界时把这个 tier 抬高 +1，在远低于它（0.75 倍）时抬高 +2 —— 也就是探测在 C(x) 看来便宜、在 G(x) 看来却是错的那种情况。tier 决定 k（`nothink` 1、`standard` 3、`hard` 5、`extreme` 8），并受一条硬性的 **k >= 3 下限**约束，因此闸门只能在原先固定的 k=3 之上增加候选，不能减少；它的最坏情况就是旧行为。两个信号都需要该模型的校准文件（`cx_normalization.json`、`gx_thresholds.json`）：lens 缺失、不可达或未校准时，一律在 `standard` 下分配恰好 k=3，于是未校准的 bundle 会运行它此前运行的那条 pipeline，而不是按一把对它毫无意义的尺子来路由。
 
-这条下限正是它与此前被移除的纯 C(x) 分配器的区别：那一版没有下限，会把 k=1 交给探测*刚刚失败*的任务，实测为 +0.0 pp。每臂 n=175 的四臂三角验证：带闸门 66.9%，固定 k=3 为 64.6%，把同样的 tier 组合在任务间打乱为 61.7%，全部 k=8 则以多出约 27% 的 token 达到 67.4%。在同等开销下比打乱臂高出 5.1 pp，这才说明 lens 信号本身携带信息，而不只是算力在起作用。
+这条下限正是它与此前被移除的纯 C(x) 分配器的区别：那一版没有下限，会把 k=1 交给探测*刚刚失败*的任务。由 lens 驱动的分配是否优于固定或随机分配的层级，目前尚未测量。此前的四臂比较（带闸门、固定 k=3、把同样的层级组合在任务间打乱、k=8，每臂 n=175）无法作为任何一方的证据：它在 Qwen3.5-9B 上、使用不在本仓库中的打过补丁的运行器、开启了线上闸门无法使用的升级思考模式、并在训练 G(x) 头所用的 LiveCodeBench 任务上运行，而在该样本量下各臂的差异都在噪声范围之内。
 
 线上路径的差异：代理的 V3 桥接会在 `ATLAS_V3_TIMEOUT`（默认 180s）后放弃一次 pipeline 调用，这是 bench 从未有过的上限；因此无限制地升级到 k=8 会把预算全花在生成上，最终返回超时兜底，而不是时钟本可以产出的 k=3 答案。为此线上编排器会把剩余的实际时间以及在该任务上观测到的单次调用延迟一并传入，闸门则把 tier 降到预算真正能生成的水平 —— 同时保留一次精化迭代，使升级不会饿死 Phase 3 —— 但绝不会低于下限。bench 运行器不传预算，严格按测得的结果分配。实现位于 `v3-service/stages/cxgx_gate.py`，由两个编排器共享。
 
@@ -359,11 +357,10 @@ Wait 注入会追加 "Wait, let me reconsider.\n" 以请求更长的一轮推理
 - **元认知评估**：从观察到的失败类别推导并注入补偿性约束
 - **PR-CoT**：4 个视角（logical_consistency、information_completeness、biases、alternative_solutions）×（分析 + 修复）= 约 8 次 LLM 调用，最多 3 轮
 - **Refinement Loop**：失败分析 → 约束精炼 → 代码生成 → 测试 → 学习。2 次迭代，120s 预算，每次约 5+ 次 LLM 调用。余弦距离过滤（>= 0.15）防止假设重复
-- **Derivation Chains**：分解为至多 5 个子问题，逐个用 sandbox 验证，组合出最终结果。约 7+ 次 LLM 调用
 
 ### 模块图
 
-pipeline 阶段是 `v3-service/stages/` 中的 13 个 Python 模块。`v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`lens_feedback` 和 `embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
+pipeline 阶段是 `v3-service/stages/` 中的 12 个 Python 模块。`v3-service/pipeline.py` 编排其中 11 个（10 个直接调用，`constraint_refinement` 通过精化循环）；`embedding_store` 只在离线 bench 运行器（`atlas/bench/v3_runner.py`）下运行，该运行器会把 checkout 中的 `v3-service/` 加入自身路径，因此两个调用方共享同一份阶段实现：
 
 ```mermaid
 graph LR
@@ -377,14 +374,12 @@ graph LR
     Main --> RL["RefinementLoop 3E"]
     Main --> STG["SelfTestGen"]
     Main --> LLM["LLMClient"]
-    Bench["v3_runner.py\n(bench only)"] --> LF["LensFeedback"]
-    Bench --> ES["EmbeddingStore"]
+    Bench["v3_runner.py\n(bench only)"] --> ES["EmbeddingStore"]
 
     RL --> FA
     RL --> CR["ConstraintRefiner 3B"]
     CG -->|"tier table"| BF
     CG -->|"budget helpers"| RL
-    LF --> BF
 
     style Main fill:#333,color:#fff
     style Bench fill:#333,color:#fff
@@ -399,7 +394,6 @@ graph LR
     style RL fill:#5c3a1a,color:#fff
     style STG fill:#333,color:#fff
     style LLM fill:#333,color:#fff
-    style LF fill:#333,color:#fff
     style ES fill:#333,color:#fff
 ```
 
@@ -409,7 +403,7 @@ graph LR
 
 ## 5. Geometric Lens
 
-一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。服务表面仅对内（`/internal/*`）：C(x)/G(x) 打分（单次与逐步），以及把此前会话中的经验回灌进 agent 循环的[模式缓存](#模式缓存)。
+一个神经打分系统，通过分析模型嵌入的几何结构，在不执行代码的情况下评估代码质量。完全运行在 CPU 上。服务表面仅对内（`/internal/*`）：C(x)/G(x) 打分（单次与逐步）。
 
 #### 为什么叫 "Geometric Lens"？
 
@@ -435,8 +429,6 @@ graph LR
     V -->|"below artifact severe"| LI["likely_incorrect"]
 
     TR["Training Pipeline\ncontrastive ranking loss"] --> CX
-    EWC["EWC\nFisher information\nprevents catastrophic forgetting"] --> TR
-    RB["Replay Buffer\ndomain-stratified\n30% old / 70% new"] --> TR
 
     MT["Metric Tensor\ndiagonal G(x) in PCA space\n(code exists, not deployed)"] -.-> CORR["Correction Engine\n-α · G⁻¹ · ∇C"]
 
@@ -445,8 +437,6 @@ graph LR
     style GX fill:#2d5016,color:#fff
     style SVC fill:#333,color:#fff
     style TR fill:#1a3a5c,color:#fff
-    style EWC fill:#1a3a5c,color:#fff
-    style RB fill:#1a3a5c,color:#fff
     style MT fill:#555,color:#ccc
     style CORR fill:#555,color:#ccc
 ```
@@ -464,35 +454,9 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 
-### 模式缓存
-
-跨会话记忆：成功运行后写入的模式，会作为上下文回灌给后续的 agent 循环。
-
-```mermaid
-graph LR
-    subgraph write["Write path (v3-service, post-run)"]
-        PE["Pattern Extractor"] --> PS["Pattern Store\nSQLite"]
-        PS --> COO["Co-occurrence Graph\nHebbian edge weights"]
-    end
-
-    subgraph read["Read path (/internal/patterns/context)"]
-        CLS["Task-type classifier\n(heuristic, on the task text)"] --> PSC["Pattern Scorer\ntype match × Ebbinghaus decay × success"]
-        PSC --> EXP["1-hop expansion\nco_occurrence.get_linked_patterns"]
-        EXP --> OUT["top-k patterns\n→ proxy [system note] injection"]
-    end
-
-    PS --> PSC
-    COO --> EXP
-
-    style write fill:#1a3a5c,color:#fff
-    style read fill:#2d5016,color:#fff
-```
-
-模块：`geometric-lens/cache/{pattern_store, pattern_extractor, pattern_scorer, co_occurrence, seed_patterns}.py`。匹配依据是模式类型 + 新近度 + 成功率 —— 不存在检索索引；store 会在首次启动时用 `seed_patterns` 自我播种，每次服务都会更新该模式的访问统计。消费方是代理的模式上下文注入（§3）。
-
 <a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
 
-> **已移除的子系统。** 早期版本在 lens 内部附带了 RAG/PageIndex 项目索引器、BM25 模式匹配器，以及基于 Thompson 采样的置信度路由器。它们只能通过产品中无人调用的 lens 端点触达，已在 2026-08 的简化行动中移除（见 CHANGELOG）。上面的模式缓存是那套栈残留下来的部分，并围绕单一常驻读取器做了重建。
+> **已移除的子系统。** 早期版本在 lens 内部附带了 RAG/PageIndex 项目索引器、BM25 模式匹配器，以及基于 Thompson 采样的置信度路由器。它们只能通过产品中无人调用的 lens 端点触达，已在 2026-08 的简化行动中移除（见 CHANGELOG）。那套栈中最后残留的模式缓存也已于 2026-09 移除：它保存了每个成功会话（包括评测运行）的解答，并作为“经验”注入之后的每次运行，因而成了从测试集通向产品的通道。
 
 ---
 

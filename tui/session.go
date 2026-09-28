@@ -211,4 +211,7 @@ func (m *tuiModel) saveSession() {
 func (m *tuiModel) startNewSession() {
 	m.sessionUID = newSessionID()
 	m.sessionCreatedAt = time.Now().UTC().Format(time.RFC3339)
+	// A new session does not inherit the previous session's "allow for
+	// session" answers.
+	m.sessionAllowedTools = map[string]bool{}
 }

@@ -75,6 +75,11 @@ export interface PermissionRequestEventData {
 	message: string;
 	/** Echo back on POST /v1/permission. */
 	tool_call_id: string;
+	/** The answer covers this request only (the proxy sets it on deletions):
+	 * no session-wide answer may be offered or applied. */
+	one_time_only?: boolean;
+	/** For a deletion: the exact path that would be removed. */
+	canonical_path?: string;
 }
 
 export interface PermissionDeniedEventData {

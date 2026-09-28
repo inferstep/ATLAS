@@ -39,7 +39,7 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 | `atlas model list \| recommend \| install \| install-artifacts \| verify \| remove` | Model registry operations. `recommend` names the best registry model for this hardware; `install --url <hf>` fetches an **unregistered** model (drop-in / BYO); `install-artifacts <name>` fetches a registered model's published lens + ASA artifacts. |
 | `atlas onboard` | Guided drop-in for a new model: arch check, rebuild gate, lens-retrain guidance (see below). |
 | `atlas bench` | Generate + self-label candidates for the loaded model (baseline benchmark). Feeds `atlas lens build --from-results` (see below). |
-| `atlas lens check \| build \| retrain \| publish` | Geometric Lens compat probe + per-model training (see below). |
+| `atlas lens check \| build \| publish` | Geometric Lens compat probe + per-model training (see below). |
 | `atlas asa check \| build \| publish` | ASA control-vector compat probe + per-model training + publish (see below). |
 | `atlas publish` | One-step publish: lens artifacts + ASA vector to HF, one registry PR covering both. `--lens-only` / `--asa-only` delegate to the per-component flows. |
 | `atlas compose <args...>` | `docker compose` passthrough with ATLAS's compose file set (base file + the backend overlay resolved from `ATLAS_BACKEND`). E.g. `atlas compose ps`, `atlas compose logs -f atlas-proxy`. |
@@ -180,12 +180,8 @@ the last message; pass an integer for the last N messages).
 | `/commit [msg]` | Stage all changes and create a commit (default msg if omitted) |
 | `/undo` | `git reset --soft HEAD~1` — revert the last commit, keep changes |
 | `/run <cmd>` | Run a shell command in the working dir; output appears in chat |
-| `/good` | 👍 the last completed pass — bank its writes as positive lens-training samples |
-| `/bad` | 👎 the last completed pass — bank its writes as negative lens-training samples |
-| `/review` | List the files the last pass wrote, with any per-file verdicts |
-| `/deny <path> [reason]` | Mark one file from the last pass bad (a confident negative); submitted on the next `/good`/`/bad` |
-| `/accept <path>` | Undo a `/deny` |
-| `/redo <path> [reason]` | Ask the agent to regenerate a rejected file (reuses the `/deny` reason) |
+| `/review` | List the files the last pass wrote |
+| `/redo <path> [reason]` | Ask the agent to regenerate a file from the last pass |
 | `/clear` | Clear chat history (session token counter is preserved) |
 | `/compact` | Ask the agent to summarize the conversation in 3-4 sentences |
 | `/hide <pane>` | Hide a pane: `files`, `pipeline`, `events`, or `all` |
@@ -200,18 +196,6 @@ The `/add /drop /context` set is TUI-side state — file paths are
 appended to outgoing messages as a hint
 (`[atlas-tui context: foo.go, bar.go]`) so the agent can `read_file`
 them on demand. No file content is sent eagerly.
-
-`/good` and `/bad` rate the most recently completed pass. The proxy turns
-that pass's writes into labeled, weighted lens-training samples (collected
-in the proxy container under `ATLAS_LENS_DATA_DIR`, bind-mounted from the
-host path `ATLAS_LENS_HOST_DIR`, default `./lens_training`). For finer control, `/review` lists the pass's
-files and `/deny <path>` marks individual ones bad — so a thumbs-up pass with
-one denied file banks the good files as positives and the denied one as a
-confident negative (the per-file verdict overrides the pass thumbs). `/redo`
-asks the agent to regenerate a rejected file. As samples accumulate, the TUI
-shows a one-time **"🧠 Lens retrain available"** banner with the command to run
-(`atlas lens retrain`), which retrains the lens on your own workloads. See
-[CONFIGURATION.md](CONFIGURATION.md) (lens onboarding) for the full loop.
 
 ---
 
@@ -312,20 +296,24 @@ Cycle with `Ctrl+T`:
 
 | Mode | Behavior |
 |---|---|
-| `default` | Read tools and surgical edits (`edit_file`, `structural_edit`) auto-allow; `write_file`, `delete_file`, `run_command`, and `stop_background` require user approval |
-| `accept-edits` | As above + `write_file` auto-allow; `delete_file`, `run_command`, and `stop_background` still confirm |
-| `yolo` | Auto-allow everything |
+| `default` | Read tools, in-place edits (`edit_file`, `structural_edit`, `insert_after`, `replace_lines`) and `move_file` auto-allow; `write_file`, `delete_file` and every command (`run_command`, `run_background`, `stop_background`) require user approval |
+| `accept-edits` | As above + `write_file` auto-allow; `delete_file` and every command still confirm |
+| `yolo` | Auto-allow everything except `delete_file`, which asks about each file |
 
-The exact gate is `Destructive: true` on the tool definition in
-`proxy/tools.go`; `accept-edits` additionally auto-approves
-`write_file`, `edit_file`, `structural_edit`, and `move_file`.
+The exact gate is `needsPermission` in `proxy/agent.go`: `delete_file`
+always asks; outside yolo, every tool that runs a command asks; otherwise
+`Destructive: true` on the tool definition in `proxy/tools.go` decides, and
+`accept-edits` additionally auto-approves `write_file`, `edit_file`,
+`structural_edit`, and `move_file`.
 
 The current mode shows in the header.
 
 ### Approval prompt
 
-When a destructive tool needs approval, the turn pauses and a bordered
-prompt appears above the input box showing the tool and what it will do:
+When a tool needs approval, the turn pauses and a bordered prompt appears
+above the input box showing the tool and what it will do. A command is shown
+whole, wrapped over as many rows as it needs; one too long for the screen
+keeps its first and last lines in view and says how many are not shown:
 
 ```
 ⚠ Permission required
@@ -337,7 +325,9 @@ Run command: npm install
 - **`y`** — allow this one call.
 - **`a`** — allow this tool for the rest of the session; you won't be
   asked again for it (the tool is added to the request's
-  `session_allowed_tools` on later turns).
+  `session_allowed_tools` on later turns). A deletion is the exception: each
+  file is asked about, the prompt offers only `y` and `n`, and `a` allows
+  that one file. A new session (`/clear`) starts with no approvals.
 - **`n`** / **`Esc`** — deny; the model is told the call was refused and
   continues.
 
@@ -592,7 +582,7 @@ K3s); explicit `LLAMA_URL`/`ATLAS_LENS_URL` env vars override.
 
 ```bash
 atlas bench --tasks 15                       # quick sanity subset
-atlas bench --run-id mymodel_lens --tasks 200   # named run for the lens retrain
+atlas bench --run-id mymodel_lens --tasks 200   # named run for the lens build
 atlas bench                                  # full dataset (hours on a local model)
 ```
 
@@ -675,6 +665,9 @@ Training runs host-side and needs PyTorch plus XGBoost/scikit-learn
 `pip install xgboost scikit-learn` — CPU builds are enough). Samples longer
 than the server's micro-batch are embedded in line-boundary chunks and
 mean-pooled rather than dropped; the build log notes each chunked sample.
+That is a training-time convention: the serving path scores a whole
+sequence or reports it unscored, and a chunked score has not been measured
+against a whole-sequence one ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)).
 
 Extracted embeddings are cached (keyed by text hash and dim), so re-running a
 build only embeds the new samples. The cache sits beside its input:
@@ -687,28 +680,6 @@ After a successful build:
 2. Restart the lens service so it loads them: `docker compose restart geometric-lens`.
 3. Re-run `atlas lens check` — should now report `compat`.
 4. Run `atlas lens publish` (below) to upload to HuggingFace + open a registry PR. Or, for private/manual flows, hand-edit `atlas/commands/model_registry.py` to set `lens_status="supported"`.
-
-### `atlas lens retrain`
-
-Retrains the lens on samples collected from your own agent use — the `/good`/`/bad` pass verdicts and per-file `/deny` marks banked in the host-side corpus dir (`ATLAS_LENS_HOST_DIR`, default `./lens_training` — the host side of the proxy's lens-training bind mount; see [Slash commands](#slash-commands)). This is `build` sourced from the collected corpus: the same pipeline (embed → C(x)+G(x) → calibrated thresholds → save), always replacing the current artifacts.
-
-```bash
-atlas lens retrain                     # retrain on the collected corpus
-atlas lens retrain <registry-name>    # target a registry entry by name
-atlas lens retrain --epochs 400        # tune training (default 200)
-atlas lens retrain --dry-run           # extract embeddings, skip training + save
-```
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `model` (positional) | _(loaded model)_ | registry name or path; defaults to whatever llama-server has loaded |
-| `--epochs N` | `200` | training epochs |
-| `--lr F` | `1e-3` | learning rate |
-| `--margin F` | `1.0` | contrastive ranking margin |
-| `--artifact-dir DIR` | _(registry-resolved path)_ | where to save the artifacts |
-| `--dry-run` | — | extract embeddings but skip training + save |
-
-The TUI's **"🧠 Lens retrain available"** banner points here once enough labeled samples have accumulated.
 
 ### `atlas lens publish`
 
@@ -806,7 +777,7 @@ When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/A
 ┌ Pipeline   Lens ✓   ASA ⚠ ─────────────────────────────┐
 ```
 
-`✓` = supported, `⚠` = no-artifacts / dim-mismatch / missing vector, `✗` = unreachable / incompatible, `?` = unknown verdict. If the proxy is reachable but the lens hint asks you to run `atlas lens check` or `atlas asa check`, the badge gives you a one-glance prompt — the full diagnostic stays in those CLI commands' output.
+`✓` = supported / active, `⚠` = uncalibrated lens / missing or unverified vector, `✗` = the lens cannot score (no-artifacts, incomplete-artifacts, dim-mismatch, drifted, self-test-failed, model-server-unreachable, unreachable: requests are refused until it can, and the hint names the command to run) / incompatible vector, `?` = unknown verdict. If the proxy is reachable but the lens hint asks you to run `atlas lens check` or `atlas asa check`, the badge gives you a one-glance prompt — the full diagnostic stays in those CLI commands' output.
 
 ### Prereqs
 

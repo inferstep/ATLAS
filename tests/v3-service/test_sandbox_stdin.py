@@ -89,3 +89,67 @@ def test_stdin_field_name_matches_executor_schema():
         raise
 
     assert "stdin" in module.ExecuteRequest.model_fields
+
+
+# --- per-call staged files -------------------------------------------------
+#
+# The self-test wrapper used to create the case's input file by executing
+# `open('input.txt','w')` inside the sandbox. The sandbox already stages
+# files for a request — that is how project context reaches a candidate —
+# and staging is the mechanism that works: the executable write lands in the
+# process's working directory, which is read-only in a `read_only: true`
+# container, so it raised before the candidate ran. These pin the per-call
+# files map on the real serialized body, not on a signature.
+
+
+def test_per_call_files_reach_the_execute_body(monkeypatch):
+    captured = {}
+    _capture_urlopen(monkeypatch, captured)
+
+    sandbox = adapters.SandboxAdapter()
+    sandbox("print(open('input.txt').read())", files={"input.txt": "199\n200\n"})
+
+    assert captured["body"]["files"] == {"input.txt": "199\n200\n"}
+
+
+def test_per_call_files_merge_over_project_files(monkeypatch):
+    """Project context still reaches the candidate; the case's own input
+    wins where the two name the same file."""
+    captured = {}
+    _capture_urlopen(monkeypatch, captured)
+
+    sandbox = adapters.SandboxAdapter(
+        project_files={"helper.py": "X = 1\n", "input.txt": "project copy\n"})
+    sandbox("print(1)", files={"input.txt": "case copy\n"})
+
+    assert captured["body"]["files"] == {
+        "helper.py": "X = 1\n", "input.txt": "case copy\n"}
+
+
+def test_omitting_files_leaves_every_existing_caller_unchanged(monkeypatch):
+    captured = {}
+    _capture_urlopen(monkeypatch, captured)
+
+    adapters.SandboxAdapter()("print('x')")
+    assert "files" not in captured["body"]
+
+    adapters.SandboxAdapter(project_files={"helper.py": "X = 1\n"})("print('x')")
+    assert captured["body"]["files"] == {"helper.py": "X = 1\n"}
+
+
+def test_files_field_name_matches_executor_schema():
+    """Same honesty check the stdin field gets: the server must declare it."""
+    if str(SANDBOX_DIR) not in sys.path:
+        sys.path.insert(0, str(SANDBOX_DIR))
+    module_path = SANDBOX_DIR / "executor_server.py"
+    spec = importlib.util.spec_from_file_location(
+        "atlas_sandbox_executor_files", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
+
+    assert "files" in module.ExecuteRequest.model_fields

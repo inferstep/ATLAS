@@ -3,7 +3,9 @@
 Provides:
 - evaluate(embedding) -> energy scalar (C(x))
 - evaluate_combined(query) -> C(x) + G(x) verdict dict
-- is_enabled() -> bool
+
+The lens has no off switch: ATLAS requires it (docs/adr/0011). A scoring
+answer says `enabled: false` only when no model is loaded.
 """
 
 import logging
@@ -14,13 +16,12 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Guards the mutable model globals below. reload_weights()/_ensure_models_loaded
-# mutate them as a set; scoring paths read them as a set. Both run concurrently
-# in FastAPI's threadpool (and the v3 ThreadingHTTPServer), so a hot reload can
-# otherwise null a global mid-scoring. Reentrant because the load path nests
-# (_ensure_models_loaded → reload_weights → _ensure_models_loaded). Held only
-# for the global read/swap — never across the torch/xgboost forward passes or
-# the embedding HTTP call.
+# Guards the mutable model globals below. _ensure_models_loaded populates them
+# as a set on the one-time load; scoring paths read them as a set through
+# _snapshot_weights(). Both run concurrently in FastAPI's threadpool (and the
+# v3 ThreadingHTTPServer). Held across the one-time artifact load and the
+# snapshot read — never across the torch/xgboost forward passes or the
+# embedding HTTP call.
 _weights_lock = threading.RLock()
 
 # Lazy-loaded models (CPU only)
@@ -39,7 +40,7 @@ _active_models_dir = None
 
 # Cached llama-server /v1/models probe. The lens artifact must match the
 # model the server is actually serving, not just whatever ATLAS_MODEL_NAME
-# was exported at container start. Reset by reload_weights().
+# was exported at container start. Probed once, on the one-time load.
 _served_model_id = None
 _served_model_probed = False
 
@@ -62,8 +63,8 @@ _gx_thresholds = None
 def _probe_served_model() -> str:
     """Return the model id llama-server is actually serving ("" if unknown).
 
-    Cheap by design: short timeout, one probe per load cycle (the result is
-    cached until reload_weights() resets it).
+    Cheap by design: short timeout, one probe per process (the result is
+    cached; the artifacts load once).
     """
     global _served_model_id, _served_model_probed
     if _served_model_probed:
@@ -72,10 +73,8 @@ def _probe_served_model() -> str:
     _served_model_id = ""
     base = os.environ.get("LLAMA_URL", "http://llama-server:8080").rstrip("/")
     try:
-        import json as _json
-        from urllib.request import urlopen
-        with urlopen(f"{base}/v1/models", timeout=2.0) as resp:
-            data = _json.loads(resp.read())
+        from geometric_lens.model_transport import model_request
+        data = model_request(f"{base}/v1/models", timeout=2.0)
         models = data.get("data", []) if isinstance(data, dict) else []
         if models and models[0].get("id"):
             _served_model_id = str(models[0]["id"])
@@ -177,18 +176,31 @@ def _load_cx_normalization(models_dir: str) -> None:
         logger.warning("cx_normalization.json load failed (%s) — C(x) normalized scores are neutral", e)
 
 
-def _normalize_cx_energy(energy: float, cx_cfg=None) -> float:
+def _score_length(text: str) -> int:
+    """Length used for the C(x) baseline: characters.
+
+    The baseline is fitted on character counts, so scoring uses the same
+    unit. Tokens would need a tokenizer round-trip per score, and the two
+    do not track each other — `x = 1\n` repeated is 6 characters and 5
+    tokens, ordinary code closer to 4 characters per token — so mixing the
+    units moves a sample into the wrong baseline.
+    """
+    return max(1, len(text))
+
+
+def _normalize_cx_energy(energy: float, cx_cfg=None,
+                         length: int = 0) -> float:
     from geometric_lens.calibration import normalize_cx_energy
     cfg = _cx_normalization if cx_cfg is None else cx_cfg
-    return normalize_cx_energy(energy, cfg)
+    return normalize_cx_energy(energy, cfg, length=length)
 
 
 def _snapshot_weights():
     """Read the mutable model globals into locals as one consistent set.
 
     Scoring paths call this once, then compute against the returned
-    references so a concurrent reload_weights() cannot null a global (or
-    mix generations) mid-forward-pass. Returns a tuple in a fixed order.
+    references, so a forward pass never reads a global that the one-time
+    load is still populating. Returns a tuple in a fixed order.
     """
     with _weights_lock:
         return (
@@ -201,8 +213,8 @@ def _snapshot_weights():
 def _gx_verdict(score: float, thresholds=None) -> str:
     """Classify a G(x) score only when this model has calibration.
 
-    thresholds defaults to the module global; scoring paths pass a snapshot
-    taken under _weights_lock so a concurrent reload can't swap it mid-call.
+    thresholds defaults to the module global; scoring paths pass the
+    snapshot they took under _weights_lock.
     """
     t = _gx_thresholds if thresholds is None else thresholds
     if t is None:
@@ -239,11 +251,6 @@ def _load_gx_thresholds(models_dir: str) -> None:
         logger.warning("gx_thresholds.json load failed (%s) — threshold interventions disabled", e)
 
 
-def is_enabled() -> bool:
-    """Check if Geometric Lens is enabled (GEOMETRIC_LENS_ENABLED env var)."""
-    return os.environ.get("GEOMETRIC_LENS_ENABLED", "false").lower() in ("true", "1", "yes")
-
-
 class _BoosterClassifier:
     """Minimal predict_proba shim around an xgboost.Booster.
 
@@ -270,9 +277,8 @@ class _BoosterClassifier:
 def _load_gx_models(models_dir: str) -> None:
     """Load G(x) models from `models_dir` (XGBoost preferred, metric tensor legacy).
 
-    Shared by _ensure_models_loaded and the reload_weights(model_dir=...)
-    path so per-directory reloads yield a complete lens. Non-fatal: any
-    failure leaves the corresponding G(x) slot None and scoring degrades
+    Called by the one-time load (_do_load_models). Non-fatal: any failure
+    leaves the corresponding G(x) slot None and scoring degrades
     gracefully.
     """
     global _gx_xgboost, _gx_pca_components, _gx_pca_mean, _gx_top_dims
@@ -404,112 +410,84 @@ def _do_load_models() -> bool:
         return False
 
 
-def reload_weights(model_dir: str = None) -> dict:
-    """Reload C(x) and G(x) weights from disk without restarting the process.
+# --- a score that did not happen ------------------------------------------------------
+#
+# Every scoring answer says whether it scored. When it did not, it carries a
+# typed `failure` (geometric_lens.embed_capacity.failure_from_exception) and
+# no number in any score field: an unscored candidate must not be readable
+# as energy 0.0 / gx 0.5, which the min-energy selector ranks first and the
+# allocator reads as a neutral verdict.
 
-    Used after retraining to hot-swap model weights.
-
-    All global mutation happens in _reload_weights_locked(), which declares
-    the globals it assigns; this wrapper only takes the lock.
-    """
-    # Hold the lock across the whole reset+load so scoring never observes the
-    # nulled-then-repopulated globals of an in-progress swap. This is the write
-    # critical section; the artifact loads here are not scoring forward passes.
-    with _weights_lock:
-        return _reload_weights_locked(model_dir)
+_UNSCORED_COMBINED = {
+    "cx_energy": None, "cx_normalized": None, "cx_calibrated": False,
+    "gx_score": None, "gx_available": False, "verdict": "unscored",
+}
 
 
-def _reload_weights_locked(model_dir: str = None) -> dict:
-    """Body of reload_weights(); callers hold _weights_lock."""
-    global _cost_field, _gx_xgboost, _gx_pca_components
-    global _gx_pca_mean, _gx_top_dims, _models_loaded, _load_attempted
-    global _cx_normalization, _gx_thresholds
-    global _artifact_model_identity, _model_identity_error
-    global _served_model_id, _served_model_probed, _active_models_dir
-
-    _models_loaded = False
-    _load_attempted = False
-    _cost_field = None
-    _gx_xgboost = None
-    _gx_pca_components = None
-    _gx_pca_mean = None
-    _gx_top_dims = None
-    _cx_normalization = None
-    _gx_thresholds = None
-    _artifact_model_identity = None
-    _model_identity_error = ""
-    _active_models_dir = None
-    from geometric_lens.embedding_extractor import set_embedding_contract
-    set_embedding_contract(None)
-    # Re-probe llama-server on reload — the served model may have changed.
-    _served_model_id = None
-    _served_model_probed = False
-
-    if model_dir:
-        try:
-            from geometric_lens.training import load_cost_field
-            cost_field = load_cost_field(model_dir)
-            dim = next(cost_field.parameters()).shape[1]
-            if not _verify_model_identity(model_dir, embedding_dim=int(dim)):
-                raise ValueError(_model_identity_error)
-            _cost_field = cost_field
-            _active_models_dir = model_dir
-            _load_cx_normalization(model_dir)
-            _load_gx_thresholds(model_dir)
-            _load_gx_models(model_dir)
-            _models_loaded = True
-            _load_attempted = True
-            logger.info(f"Geometric Lens C(x) reloaded from {model_dir}")
-            return {
-                "status": "reloaded",
-                "model_dir": model_dir,
-                "gx_loaded": _gx_xgboost is not None,
-            }
-        except Exception as e:
-            logger.error(f"Failed to reload models from {model_dir}: {e}",
-                         exc_info=True)
-            _load_attempted = True
-            # The message reaches the /internal/lens/retrain HTTP response —
-            # full detail stays in the log above.
-            return {"status": "error",
-                    "message": f"{type(e).__name__}: reload failed "
-                               "(see service log)"}
+def failure_record(exc: BaseException, path: str) -> dict:
+    """Log why `path` did not score and return the typed failure."""
+    from geometric_lens.embed_capacity import (
+        KIND_CAPACITY, KIND_NONFINITE, KIND_UNREACHABLE, failure_from_exception)
+    failure = failure_from_exception(exc)
+    if failure["kind"] == KIND_CAPACITY:
+        logger.warning(
+            "%s unscored: the input of %s tokens exceeds the /embedding "
+            "physical batch of %s tokens; a calibrated score needs the whole "
+            "sequence, so it is reported unscored rather than split",
+            path, failure.get("input_tokens"), failure.get("capacity_tokens"))
+    elif failure["kind"] == KIND_UNREACHABLE:
+        logger.warning("%s unscored: model server unreachable (%s)",
+                       path, failure.get("detail"))
+    elif failure["kind"] == KIND_NONFINITE:
+        logger.error("%s unscored: %s is not a finite number (%s); the "
+                     "artifacts or the calibration produced a degenerate value",
+                     path, failure.get("field"), failure.get("detail"))
     else:
-        success = _ensure_models_loaded()
-        return {
-            "status": "reloaded" if success else "error",
-            "gx_loaded": _gx_xgboost is not None,
-        }
+        logger.error(f"{path} evaluation failed: {exc}", exc_info=True)
+    return failure
+
+
+def unscored_combined(failure: dict, error: str) -> dict:
+    """The combined-scoring answer for a score that did not happen."""
+    return {**_UNSCORED_COMBINED, "enabled": True, "scored": False,
+            "failure": dict(failure), "error": error}
+
+
+def unscored_per_step(failure: dict, error: str) -> dict:
+    """The per-step answer for a score that did not happen."""
+    return {"enabled": True, "scored": False, "gx_available": False,
+            "cx_calibrated": False,
+            "per_step": [], "aggregate": {}, "n_tokens": 0,
+            "failure": dict(failure), "error": error}
 
 
 def evaluate_energy(query: str) -> Tuple[float, float]:
     """Evaluate raw and normalized energy for a query.
 
-    Returns (raw_energy, normalized_energy).
-    Returns (0.0, 0.0) if lens is disabled or models aren't loaded.
+    Returns (raw_energy, normalized_energy), or (0.0, 0.0) if models aren't
+    loaded. A failed evaluation raises. Its caller is the boot self-test,
+    which must tell a model server that is not answering yet (retryable)
+    from a real fault; a zero used to stand for both, and a lens whose
+    self-test failed on a passing hiccup stayed failed until a restart.
     """
-    if not is_enabled() or not _ensure_models_loaded():
+    if not _ensure_models_loaded():
         return (0.0, 0.0)
 
-    try:
-        import torch
-        from geometric_lens.embedding_extractor import extract_embedding
+    import torch
+    from geometric_lens.embedding_extractor import extract_embedding
 
-        cost_field, _, _, _, _, cx_cfg, _ = _snapshot_weights()
+    cost_field, _, _, _, _, cx_cfg, _ = _snapshot_weights()
 
-        emb = extract_embedding(query)
-        x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
+    emb = extract_embedding(query)
+    x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
 
-        with torch.no_grad():
-            energy = cost_field(x).item()
+    with torch.no_grad():
+        energy = cost_field(x).item()
 
-        normalized = _normalize_cx_energy(energy, cx_cfg)
+    normalized = _normalize_cx_energy(energy, cx_cfg,
+                                      length=_score_length(query))
 
-        return (energy, normalized)
-
-    except Exception as e:
-        logger.error(f"Geometric lens evaluation failed: {e}")
-        return (0.0, 0.0)
+    return (energy, normalized)
 
 
 def get_model_info() -> dict:
@@ -517,7 +495,6 @@ def get_model_info() -> dict:
     if not _models_loaded:
         return {
             "loaded": False,
-            "enabled": is_enabled(),
             "artifact_model": (_artifact_model_identity or {}).get("model"),
             "error": _model_identity_error or None,
         }
@@ -526,7 +503,6 @@ def get_model_info() -> dict:
 
     info = {
         "loaded": True,
-        "enabled": is_enabled(),
         "cost_field_params": cost_params,
         "device": "cpu",
         "cx_calibrated": _cx_normalization is not None,
@@ -552,7 +528,7 @@ def evaluate_combined(query: str) -> dict:
     Returns dict with C(x) energy, G(x) quality score, and verdict.
     Most efficient way to get both scores — avoids duplicate embedding calls.
     """
-    if not is_enabled() or not _ensure_models_loaded():
+    if not _ensure_models_loaded():
         return {
             "cx_energy": 0.0, "cx_normalized": 0.5,
             "cx_calibrated": False,
@@ -565,6 +541,8 @@ def evaluate_combined(query: str) -> dict:
         import numpy as np
         from geometric_lens.embedding_extractor import extract_embedding
 
+        from geometric_lens.embed_capacity import finite
+
         (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
          _, cx_cfg, gx_thresholds) = _snapshot_weights()
 
@@ -573,11 +551,14 @@ def evaluate_combined(query: str) -> dict:
         # Single embedding extraction (shared between C(x) and G(x))
         emb = extract_embedding(query)
 
-        # C(x) evaluation
+        # C(x) evaluation. A NaN or infinite value is not a score: it is
+        # raised here, typed, before it can be normalized or reported.
         x = torch.tensor(emb, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
-            energy = cost_field(x).item()
-        normalized = _normalize_cx_energy(energy, cx_cfg)
+            energy = finite(cost_field(x).item(), "cx_energy")
+        normalized = finite(_normalize_cx_energy(energy, cx_cfg,
+                                                 length=_score_length(query)),
+                            "cx_normalized")
 
         # G(x) evaluation (if available)
         gx_score = 0.5
@@ -588,7 +569,7 @@ def evaluate_combined(query: str) -> dict:
             emb_np = np.array(emb, dtype=np.float32).reshape(1, -1)
             x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
             proba = gx_xgboost.predict_proba(x_pca)[0]
-            gx_score = float(proba[1])
+            gx_score = finite(proba[1], "gx_score")
             gx_available = True
 
             verdict = _gx_verdict(gx_score, gx_thresholds)
@@ -600,6 +581,7 @@ def evaluate_combined(query: str) -> dict:
         )
 
         return {
+            "scored": True,
             "cx_energy": energy,
             "cx_normalized": normalized,
             "cx_calibrated": cx_cfg is not None,
@@ -619,15 +601,9 @@ def evaluate_combined(query: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Combined evaluation failed: {e}", exc_info=True)
-        return {
-            "cx_energy": 0.0, "cx_normalized": 0.5,
-            "cx_calibrated": False,
-            "gx_score": 0.5, "verdict": "error",
-            "enabled": True, "gx_available": False,
-            "error": f"{type(e).__name__}: combined evaluation failed "
-                     "(see service log)",
-        }
+        return unscored_combined(
+            failure_record(e, "combined"),
+            f"{type(e).__name__}: combined evaluation failed (see service log)")
 
 
 def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
@@ -652,7 +628,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         max/mean across tokens), `n_tokens`, `hidden_dim`, `layer`, and
         `latency_ms`. On error, `enabled=False` or `error` keys are set.
     """
-    if not is_enabled() or not _ensure_models_loaded():
+    if not _ensure_models_loaded():
         return {
             "enabled": False, "gx_available": False,
             "per_step": [], "aggregate": {}, "n_tokens": 0,
@@ -661,6 +637,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
     try:
         import numpy as np
         import torch
+        from geometric_lens.embed_capacity import finite_array
         from geometric_lens.embedding_extractor import (
             extract_per_layer_per_token,
             extract_per_token,
@@ -682,24 +659,29 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
         n_tokens = len(per_token_vecs)
         if n_tokens == 0:
+            from geometric_lens.embed_capacity import KIND_EMPTY
             return {
-                "enabled": True, "gx_available": gx_xgboost is not None,
-                "per_step": [], "aggregate": {}, "n_tokens": 0,
+                **unscored_per_step(
+                    {"kind": KIND_EMPTY, "detail": "no token embeddings returned"},
+                    "empty token list"),
+                "gx_available": gx_xgboost is not None,
                 "layer": tap_label,
-                "error": "empty token list",
             }
 
         # Batched C(x): one MLP forward over [n_tokens, hidden_dim]
         x = torch.tensor(per_token_vecs, dtype=torch.float32)
         with torch.no_grad():
             cx_raw = cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
+        # One NaN or infinite token would carry into every aggregate, so
+        # the whole text is unscored, typed, rather than numbered.
+        cx_raw = finite_array(cx_raw, "cx_energy")
         if cx_cfg is None:
             cx_norm = np.full(n_tokens, 0.5, dtype=float)
         else:
             midpoint = cx_cfg["midpoint"]
             steepness = cx_cfg["steepness"]
             z = np.clip(steepness * (cx_raw - midpoint), -709.0, 709.0)
-            cx_norm = 1.0 / (1.0 + np.exp(-z))
+            cx_norm = finite_array(1.0 / (1.0 + np.exp(-z)), "cx_normalized")
 
         # Batched G(x) when XGBoost is loaded
         gx_available = gx_xgboost is not None and gx_pca_components is not None
@@ -707,7 +689,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             emb_np = np.asarray(per_token_vecs, dtype=np.float32)
             x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
             proba = gx_xgboost.predict_proba(x_pca)
-            gx_scores = proba[:, 1].astype(float)
+            gx_scores = finite_array(proba[:, 1], "gx_score")
         else:
             gx_scores = np.full(n_tokens, 0.5, dtype=float)
 
@@ -760,6 +742,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
         return {
             "enabled":      True,
+            "scored":       True,
             "gx_available": gx_available,
             "cx_calibrated": cx_cfg is not None,
             "per_step":     per_step,
@@ -772,14 +755,14 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             # uses these for its run-of-N / severe regression checks instead of
             # its own hardcoded constants, so the whole intervention chain is
             # calibrated to the loaded model's score scale.
-            "thresholds":   dict(gx_thresholds) if gx_thresholds is not None else None,
+            # Only for real G(x) scores. Without G(x) the scores above are
+            # 0.5 placeholders, and a threshold beside them (severe_mean
+            # 0.52) made every candidate read as severe.
+            "thresholds":   (dict(gx_thresholds)
+                             if gx_available and gx_thresholds is not None else None),
         }
 
     except Exception as e:
-        logger.error(f"per-step evaluation failed: {e}", exc_info=True)
-        return {
-            "enabled": True, "gx_available": False,
-            "per_step": [], "aggregate": {}, "n_tokens": 0,
-            "error": f"{type(e).__name__}: per-step evaluation failed "
-                     "(see service log)",
-        }
+        return unscored_per_step(
+            failure_record(e, "per-step"),
+            f"{type(e).__name__}: per-step evaluation failed (see service log)")

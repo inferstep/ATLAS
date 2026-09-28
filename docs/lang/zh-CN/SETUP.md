@@ -436,11 +436,10 @@ atlas doctor -v           # verbose: show detail for each check
 | Stack | health/llama, lens, v3, sandbox, proxy | 全部 5 个 `/health` 端点返回 ok |
 | Stack | internal_auth | 内部服务认证：token 文件存在且权限收紧，并从两个方向实际探测在线校验（错误 token → 401，有效 token 被接受）；认证被禁用时（没有 `secrets/service-token`）给出警告 |
 | Stack | status_dimensions | 信息性检查：来自代理 `/v1/calibration/status` 的七个 lens/ASA 状态维度（与 TUI 徽标读取的是同一来源）；从不导致运行失败 |
-| Stack | sqlite_state | lens 的 `/health` 报告 SQLite 状态存储可用（`subsystems.sqlite`） |
 | Stack | image_skew | 全部 5 个 `atlas-*` 镜像在同一标签上 |
 | End-to-end | e2e_smoke | 到 llama-server 的一次真实 `/v1/chat/completions` 往返（`--quick` 可跳过） |
 
-`vulkan` 和 `metal-native` 两行依赖于所配置的后端；health、`internal_auth`、`status_dimensions` 和 `sqlite_state` 各行仅在至少有一个容器运行时才执行；`e2e_smoke` 会被 `--quick` 跳过。其余检查始终运行。
+`vulkan` 和 `metal-native` 两行依赖于所配置的后端；health、`internal_auth` 和 `status_dimensions` 各行仅在至少有一个容器运行时才执行；`e2e_smoke` 会被 `--quick` 跳过。其余检查始终运行。
 
 如果你更想手动检查：
 
@@ -674,7 +673,7 @@ K3s 使用 `atlas.conf`（而非 `.env`）进行配置。HTTP 契约与流水线
 | 服务暴露方式 | 主机端口（`8090`、`8080`、`8099`、`8070`、`30820`） | NodePort（`30080`、`32735`、`31144`、`30070`、`30820`） |
 | 项目工作区 | 绑定挂载（`ATLAS_PROJECT_DIR` → `/workspace`） | `hostPath`（`ATLAS_PROJECTS_DIR` → 每个需要的 Pod 的 `/workspace`） |
 | 模型文件 | 绑定挂载（`ATLAS_MODELS_DIR` → `/models:ro`） | GPU 节点上的 `hostPath`（`ATLAS_MODELS_DIR`，`Directory`，只读） |
-| 有状态存储 | 命名卷（`lens-state`、`lens-data`） | PVC（`lens-projects` 由 `ATLAS_PVC_PROJECTS_SIZE` 指定大小） |
+| 有状态存储 | 命名卷（`v3-telemetry`） | PVC（`lens-projects` 由 `ATLAS_PVC_PROJECTS_SIZE` 指定大小；仍会挂载，但自项目索引器移除后已不再使用） |
 | GPU 分配 | `deploy.resources.reservations.devices`（nvidia） | `resources.limits.nvidia.com/gpu: 1`（需要 GPU Operator 或设备插件） |
 | 沙箱工具链缓存 | 按语言的 `tmpfs` 挂载 | 按语言、带 `sizeLimit` 的 `emptyDir`（通用模式，集合相同） |
 

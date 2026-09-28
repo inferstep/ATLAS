@@ -31,27 +31,321 @@ docker compose logs --tail 100      # everything recent
 TUI-side debugging: `atlas tui --log <path>` writes a local TUI event log;
 `ATLAS_TUI_LOG=<path>` does the same and `=off` disables it.
 
+## Private diagnostics: task-contract shadow capture
+
+**Off by default, and not an ordinary production feature.** This is
+instrumentation for one open question — how often what ATLAS infers from a
+request's English disagrees with the `task_contract` the client declared — and it
+exists to produce evidence for that migration, nothing else. No record it writes
+is read by any decision, and none reaches `/events`, the agent SSE stream, a
+prompt, or a model.
+
+Enable it only when you are deliberately acquiring evidence:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `ATLAS_SHADOW_CAPTURE` | unset (**off**) | Filename of the capture, relative to the diagnostic root. Unset means no file is opened, no writer runs, and no record is built. |
+| `ATLAS_DIAGNOSTIC_DIR` | `/data/diagnostics` | The only directory a capture may live in. Compose bind-mounts the host's `${ATLAS_DIAGNOSTIC_HOST_DIR:-./diagnostics}` here, owned by the same user the proxy runs as. |
+
+Containment and startup rules:
+
+- The resolved destination must stay **inside** the diagnostic root. An absolute
+  path or one that escapes via `..` is refused.
+- The destination must **not already exist**. Appending to a previous capture
+  would merge two acquisitions into what later reads as one, and no analysis
+  could separate them afterwards.
+- Both refusals, and an unwritable destination, **fail at startup** — the proxy
+  does not serve with a capture it cannot own. Pick a fresh filename per
+  acquisition.
+
+### Reading a capture
+
+One JSON object per line. Two record kinds carry the contract observation — a
+request snapshot and one record per live gate evaluation — plus the
+observe-only candidate records (`shadow_invocation_feasibility`,
+`shadow_route_disposition`, `candidate_policy_decision`,
+`candidate_authorization_decision`, `authorization_grant_event`,
+`shadow_delivery_disposition`, `candidate_mutation_scope`,
+`candidate_generation_bypass`, `automatic_delivery_attribution`), and a footer
+written at shutdown.
+
+An acquisition is **clean** only when all of these hold:
+
+- the **last line is the footer** (`record_kind: task_contract_shadow_footer`);
+- `dropped == 0`, `errors == 0`, `duplicate_request_ids == 0`;
+- `request_tracking_overflow == false`;
+- `accepted == written`, and the file holds exactly `written + 1` lines;
+- every `request_id` has exactly one snapshot and a gate sequence of
+  `1..n` with no gaps.
+
+Anything else is **defective** and must be reported as such rather than quietly
+analysed. In particular:
+
+- **No footer at all.** The process died before its close hook ran, or the
+  writer did not finish within the hook's deadline. Both leave a partial file,
+  which is the intended outcome: the footer is written by the writer itself,
+  after every record its counters describe, so a footer that exists always means
+  the acquisition completed. Nothing manufactures one to make a truncated
+  capture look whole. A write already inside a blocking filesystem call cannot
+  be interrupted portably, so there is no safe cutoff at which a late footer
+  could be added.
+- **Drops.** The queue was full and records were discarded rather than made to
+  block an agent request. The count is honest; the file is incomplete.
+- **Errors.** Records failed to serialise or failed to write. The run was
+  unaffected; the capture is not trustworthy as a census.
+- **Duplicate request IDs.** Two runs presented the same
+  `X-ATLAS-Request-ID`. They are reported, never merged.
+- **Overflow.** Duplicate tracking hit its bound and stopped remembering new
+  ids, so later duplicates may go undetected.
+
+### What the records do and do not tell you
+
+- **`request_id` is a join key only.** It is the existing
+  `X-ATLAS-Request-ID`, which a client may supply, so it correlates records
+  within one capture and carries no authority. It is not a session id, not a
+  task id, and it does not establish who sent anything. The same id, with
+  the `X-ATLAS-V3-Invocation-ID` V3 mints per generation, travels on V3's
+  calls to the Lens and on the Lens's own embedding and identity-probe calls
+  to the model server, so an embedding request can be joined to the exact
+  request and invocation it served; an acquisition relay may require that
+  pair on embedding traffic and refuse calls without it.
+- **Hashes are identities, not secrets.** Paths and verification commands are
+  stored as unsalted SHA-256, truncated to 16 hex characters; the user message
+  is stored as a full unsalted SHA-256. They exist so two records naming the
+  same thing collide and two naming different things do not. Over a small
+  guessable domain — `app.py` and the like — the original is recoverable by
+  enumeration. Treat a capture as revealing which paths and commands were
+  involved, and do not treat hashing as a confidentiality control.
+  The proxy's own direct Lens calls (per-write scoring)
+  carry the same `request_id` with a proxy-owned `proxy-lens:` invocation
+  derived from it in the same historical header (ARCHITECTURE, attribution
+  on model-bound calls); that value is a join key too, never an authority.
+- **No record decides anything.** Every record carries
+  `influences_live_decision: false`, and that is enforced structurally rather
+  than by convention.
+
 ## Runbooks
 
 | Symptom | Procedure |
 |---|---|
 | Service won't start | `docker compose logs <svc>`; port collision → change the `ATLAS_*_PORT` in `.env`; bad override → `docker compose config` names the offending key |
 | Model load failure | llama logs name the reason (VRAM, arch, quant); `atlas tier fit --write` re-sizes; `atlas model verify` checks file integrity against the pinned hash |
-| Lens degraded (`self_test_error`) | `atlas lens check` prints the exact missing artifact + fix command (`atlas lens build` / `retrain`); identity mismatch means the bundle belongs to another model |
+| Lens degraded (`self_test_error`) | `atlas lens check` prints the exact missing artifact + fix command (`atlas lens build`); identity mismatch means the bundle belongs to another model |
 | ASA inactive | llama startup log prints why (missing vector / marker mismatch); `atlas asa check`, then `atlas asa build` |
 | Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show as 137/timeout in tool results |
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
-| Disk full | models dir is the usual consumer; `atlas model remove <name> --yes`; learned state is a single SQLite file on the `lens-state` volume (small — pattern state, not bulk data) |
-| Corrupt state after crash | restart alone can't fix a corrupt `geometric_state.db` — the `lens-state` volume survives any plain `down`. Confirm: `atlas doctor` fails `sqlite_state`; lens `/health` shows `subsystems.sqlite.connected: false` (note `docker compose ps` still shows the lens **healthy** — its healthcheck probes `/health`, which always returns 200); then § Repairing corrupt learned state (SQLite). Artifacts re-verify by hash on doctor |
+| Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
 | Bad/revoked artifact | SECURITY.md § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
-| Full reset (keep models) | `docker compose down -v && docker compose up -d` — **destructive**: wipes the learned SQLite state (`lens-state` volume) + lens project index stack-wide, keeps models/config. Last resort; never needed for corruption alone (§ Repairing corrupt learned state) |
+| Full reset (keep models) | `docker compose down -v && docker compose up -d` — **destructive**: wipes the stack's named volumes (`v3-telemetry`), keeps models/config. Last resort |
 
 ## Resource tuning
 
 All knobs in CONFIGURATION.md; the load-bearing ones: `ATLAS_CTX_SIZE`
 + `ATLAS_PARALLEL_SLOTS` (VRAM), `ATLAS_SANDBOX_MEM/CPUS/PIDS`
 (runaway-build protection), `ATLAS_V3_TIMEOUT` (interactive cap).
+
+## The memory envelope
+
+These numbers are not independent, and getting the sum wrong is not a
+performance problem. A staged verification command once reached 5.9 GB in
+seconds on a 16 GB host where the inference server held 9 GB with no limit of
+its own. Every process was inside its own bounds; the kernel still had to pick
+something to kill, and it picked the largest resident process, which was the
+model. What was missing was not one limit — it was a total that fits the
+machine.
+
+Two layers, and both are needed.
+
+**Per command.** The executor bounds every untrusted command: wall clock,
+memory, process count and output bytes, installed before the command starts and
+applied to everything it spawns, however it spawns it. A command stopped at a
+ceiling is reported as stopped, never as failed — see "Truthful results" below.
+
+| Variable | Default | What it bounds |
+| --- | --- | --- |
+| `MAX_EXECUTION_TIME` | 300 (compose) / 60 (executor) | wall clock per command |
+| `ATLAS_EXEC_MEMORY_BYTES` | 1 GiB | resident memory of the command and its descendants |
+| `ATLAS_EXEC_MAX_PROCESSES` | 256 | processes in the command's tree |
+| `ATLAS_EXEC_OUTPUT_BYTES` | 32 MiB | stdout + stderr the executor will buffer |
+
+Malformed, zero, negative or internally inconsistent values stop the executor
+at startup rather than being clamped into something plausible at the moment a
+command runs. An output cap at or above the memory ceiling is one of the
+inconsistent ones: the executor holds that buffer.
+
+**Per deployment.** Every container's hard maximum, plus a host reserve, has to
+fit the host. The shipped defaults assume a 16 GiB machine running a 12B Q4
+model:
+
+| Component | Variable | Default | Basis |
+| --- | --- | --- | --- |
+| inference | `ATLAS_LLAMA_MEM` | **unset** | see below — a limit below its peak is a certain kill |
+| geometric lens | `ATLAS_LENS_MEM` | 1.75 GiB | measured peak 1.56 GiB |
+| sandbox | `ATLAS_SANDBOX_MEM` | 1.5 GiB | one 1 GiB command + the executor and its buffers |
+| v3-service | `ATLAS_V3_MEM` | 0.5 GiB | measured peak 52 MiB |
+| proxy | `ATLAS_PROXY_MEM` | 0.25 GiB | measured peak 33 MiB |
+| host reserve | `ATLAS_HOST_RESERVE_BYTES` | 1.5 GiB | kernel, container daemon, logging, shutdown |
+| **total (enforced)** | | **5.5 GiB** | on a 15.36 GiB host: 9.86 GiB left for the unbounded model |
+
+**Why the inference service has no limit.** Its measured peak resident set is
+10.31 GiB, its anonymous working set is 8.81 GiB once the 2.11 GiB it has
+swapped is counted back, and it has 16 MiB of reclaimable page cache — so a
+hard limit under the peak yields a kill, not reclaim. It ships unset until a
+real-model canary establishes a value with measured headroom, with
+`ATLAS_LLAMA_BUDGET_BYTES` carrying the measured expectation for accounting.
+Setting `ATLAS_LLAMA_MEM` enforces whatever you put in it: do that only with
+canary evidence, and never below the observed peak.
+
+This has a consequence worth stating plainly: **the enforced-maxima check alone
+would not have caught the configuration that killed it.** With the model
+unbounded there is no inference maximum to add, so an 11 GiB sandbox plus the
+small services plus the reserve fits a 15 GiB host — which is exactly how every
+process came to be inside its own limit at the moment the kernel went looking
+for a victim. What catches it is the **remainder**: what the enforced budgets
+leave over for the one component nothing holds. Today that is 9.86 GiB against
+an expectation of 11 GiB, and the proxy reports the shortfall at startup. Under
+the old 11 GiB sandbox it was 0.33 GiB against 11 GiB.
+
+An overrun is reported, not refused. The refusal is for enforced maxima that
+over-commit — a number an operator can edit. An unbounded component that
+outgrows the remainder needs a different fix (a validated limit, or a smaller
+model), and disabling execution would not make the machine safer.
+
+Set `ATLAS_HOST_MEMORY_BYTES` to your machine's RAM to turn that arithmetic
+into a check. When it is declared and the sum does not fit, the proxy **refuses
+to run commands** and says by how much it is over; reading files and answering
+questions still work, because the diagnosis has to be readable. Left unset,
+nothing is declared and nothing is checked — the per-command contract still
+applies, and it carries the safety on its own.
+
+Raising `ATLAS_EXEC_CONCURRENCY` is checked the same way: two commands at the
+per-command ceiling must still fit inside the sandbox's own budget.
+
+`ATLAS_SANDBOX_MEM` is what `atlas init` sizes from host RAM. A value chosen as
+a fraction of RAM without subtracting the model is exactly the shape that
+caused the kill — on a 16 GiB host with a 12B model resident, the sandbox's
+share is about 1.5 GiB, not 11.
+
+Swap is disabled for the sandbox (`memswap_limit` tracks `mem_limit`): a
+swapping test is a hung one, and swap hides an over-commit rather than
+absorbing it.
+
+## Cancelling a command by going away
+
+A caller that stops waiting for an answer cancels the command. The executor's
+`/shell` handler watches the request's own connection through Starlette's
+`is_disconnected`, and tells the bounded runner to stop through the same
+cancellation callback every other stop uses — a reset connection, a closed one,
+an explicitly aborted request and a graceful shutdown all arrive the same way.
+
+The distinction is kept in the answer: `cancelled` is its own outcome, separate
+from `timed_out` and from `memory_exhausted`, `process_limit_exceeded` and
+`output_limit_exceeded`. A cancelled command produces no verification evidence,
+mints no candidate grant, and takes its whole process tree with it — including
+descendants that left the process group. Cancelling twice is the same as
+cancelling once, a neighbouring command is unaffected, and the watcher for each
+request is per-request, so a reused file descriptor cannot cancel a later one.
+
+## Building for verification without claiming the deployable tag
+
+`docker compose build atlas-proxy` writes `ghcr.io/inferstep/atlas-proxy:dev` —
+the same tag the running stack was started from. Nothing restarts, so the
+running container keeps its image; but the deployable **name** now points at
+the new build, and the previous image becomes untagged. If it is later pruned,
+the tag cannot be put back: the image the container is running no longer exists
+in the local store, and its identity is recoverable only from
+`docker inspect <container>` and the compose labels.
+
+For a build you only want to test, use a throwaway tag and leave the deployable
+name alone:
+
+```bash
+docker build -t atlas-proxy:my-slice-check ./proxy      # never :dev
+ATLAS_IMAGE_TAG=my-slice-check docker compose config    # check it resolves
+```
+
+**A tag is not an identity.** The image ID is. A tag can be rewritten under a
+running container, and once the old image is pruned the tag cannot be put back
+— the deployable name then points at something the running container is not,
+and nothing about inspecting the tag reveals it. Acquisition runners refuse to
+launch from `:dev` or `:latest` for that reason, pin the exact `sha256:` image
+ID plus the built binary's hash before the first case, and report a missing
+historical image rather than pulling or rebuilding one: a reconstructed image
+is a different artifact wearing the same name.
+
+Before any build, record what is actually running, so the tag can be restored:
+
+```bash
+docker inspect -f '{{.Image}}' atlas-atlas-proxy-1
+docker inspect -f '{{index .Config.Labels "com.docker.compose.image"}}' atlas-atlas-proxy-1
+```
+
+## Deploying a checkout, gated
+
+`scripts/deploy-gated.sh` deploys the checked-out commit to the local Compose
+stack and records what "deployed" means. In order, it:
+
+- refuses a checkout with uncommitted changes;
+- runs `go test ./...` in `proxy/` and `pytest tests/v3 tests/v3-service
+  tests/cli`, and stops on a failure;
+- tags each image it replaces as `atlas-prev:<service>-<stamp>`, the rollback
+  target;
+- rebuilds geometric-lens, v3-service, sandbox and atlas-proxy, and
+  llama-server when `inference/` changed since the last deploy or the running
+  model server was not put there by the script (a recreate reloads the model);
+- recreates them one at a time, each healthy before the next;
+- checks that every container runs the image its tag names, and pins it as
+  `atlas-built:<service>-<sha>`;
+- checks the running stack: the proxy sees every upstream, v3-service is
+  healthy, the lens serves no pattern-cache routes, the sandbox's Jinja and
+  subdirectory checks work, and v3-service can syntax-check an absolute path;
+- writes `DEPLOYED_SHA` only when all of that passed.
+
+Records go to `ATLAS_DEPLOY_DIR` (default `~/atlas-ralph`). To roll one
+service back, tag its `atlas-prev:*` image with the service's image name and
+recreate that service with `docker compose up -d --force-recreate --no-deps`.
+
+## Cancellation
+
+A caller that goes away stops the command it asked for. A reset connection, a
+closed one, an aborted request or a shutdown all reach the executor's bounded
+runner through its cancellation callback, which kills the process tree the same
+way a timeout does — and reports `cancelled`, which is a different outcome from
+`timed_out` and from the resource ones, so a stopped command is never mistaken
+for a finished one.
+
+This required the executor's middlewares to be pure ASGI rather than
+`BaseHTTPMiddleware`. The latter interposes on the receive channel, so
+`http.disconnect` never reaches the endpoint and `Request.is_disconnected()`
+returns False forever: measured directly, the same probe reports "disconnected
+at 1.0s" without a middleware and "never disconnected" with one.
+
+Graceful shutdown **drains** rather than cutting in-flight work off, so the
+bound it completes within is the running command's own deadline
+(`MAX_EXECUTION_TIME`, or a shorter per-request one). Nothing survives it.
+
+## Truthful results
+
+A command stopped at a ceiling exits non-zero exactly like a failing test — a
+Python process that runs out of memory raises `MemoryError` and exits 1. Read as an exit code alone, a verification that never completed becomes a
+behavioural failure of the code under test.
+
+So the executor reports **how** the command ended, from a closed set:
+`completed`, `timed_out`, `memory_exhausted`, `process_limit_exceeded`,
+`output_limit_exceeded`, `cancelled`, `spawn_failed`, and the fail-closed
+`internal_unclassified`. Only `completed` means the command reached its own
+end, and only then does its exit code mean anything.
+
+A stopped command cannot mint a candidate authorization, consume a grant,
+settle mutation debt or claim completion. In candidate staging it becomes
+`resource_exhausted`, which reports as `evidence_resource_exhausted` — the
+obligation is unmet for want of an observation, not because an observation went
+against the candidate.
+
+The model is told what happened in words it can act on ("it used too much
+memory to finish; it did NOT fail"), with no host limits, pids, cgroup paths or
+deployment detail in the message.
 
 ---
 
@@ -85,9 +379,7 @@ signed; `sha-*` tags never move.
   bundles are per-model and identity-checked at load; an upgrade that
   changes bundle requirements surfaces as a doctor warning with the
   exact rebuild command, not a silent break.
-- **Learned state:** the `lens-state` volume (the pattern cache +
-  co-occurrence graph in `geometric_state.db`) and the `v3-telemetry` volume
-  persist across upgrades.
+- **Telemetry:** the `v3-telemetry` volume persists across upgrades.
 
 ## Version compatibility
 
@@ -195,12 +487,6 @@ snapshot, re-download the pinned published bundle
 pinned in the registry, so you get exactly the published bytes) or
 restore your own backup of the lens models dir (§ Backup and restore).
 
-## Learned state
-
-The SQLite state store has no schema coupling to ATLAS versions; it
-rolls back with the `lens-state` volume (or keeps working across
-versions untouched).
-
 ---
 
 # Backup and restore
@@ -211,108 +497,15 @@ What actually holds state, where it lives, and what losing it costs.
 |---|---|---|---|
 | Configuration | `.env` (+ `atlas.conf` for K3s) | Re-run `atlas init` | copy the file |
 | Models | `ATLAS_MODELS_DIR` (default `./models`) | Re-download (hash-verified) | optional — large, re-fetchable |
-| Lens/ASA bundles | `geometric-lens/geometric_lens/models/` + `models/*.gguf(.model)` | Published bundles re-download; **locally-trained calibration does not** | copy the dir after any `atlas lens build`/`retrain` |
-| Lens training corpus | `ATLAS_LENS_HOST_DIR` (default `./lens_training`) + `benchmark/results/` | Lose the ability to retrain calibration | copy before pruning |
-| Learned state | `geometric_state.db` on the `lens-state` volume (pattern cache + co-occurrence graph — TTL-less) | Learning resets to the seed patterns; nothing breaks | one file — see below |
+| Lens/ASA bundles | `geometric-lens/geometric_lens/models/` + `models/*.gguf(.model)` | Published bundles re-download; **locally-trained calibration does not** | copy the dir after any `atlas lens build` |
+| Lens training data | `benchmark/results/` | Lose the ability to rebuild calibration from your own bench runs | copy before pruning |
 | TUI sessions | `~/.cache/atlas-tui/sessions/` | Lose `--resume` history | copy the dir |
 | Project files | your repo | — | your VCS |
 
 ## Restore
 
-Config/models/bundles/corpus: copy back into place, `docker compose up
+Config/models/bundles/bench results: copy back into place, `docker compose up
 -d`, `atlas doctor` (it re-verifies artifact identity + hashes).
-
-## Learned state (SQLite)
-
-The entire learned state is one file: `geometric_state.db` at
-`SQLITE_DB_PATH` (default `/data/state/geometric_state.db`) on the
-`lens-state` volume. Two safe ways to copy it out:
-
-```bash
-# 1. Cold copy — stop the stack first (no writers, plain file copy).
-#    Copy the WAL/SHM siblings too: recent commits can still live in
-#    geometric_state.db-wal until SQLite checkpoints them.
-docker compose stop
-docker run --rm -v atlas_lens-state:/data/state -v "$PWD":/backup alpine \
-  sh -c 'cp /data/state/geometric_state.db* /backup/'
-docker compose start
-
-# 2. Online copy — SQLite's backup API is consistent under WAL
-#    (python stdlib; the lens image has no sqlite3 CLI)
-docker compose exec geometric-lens python -c "import sqlite3; \
-  src = sqlite3.connect('/data/state/geometric_state.db'); \
-  dst = sqlite3.connect('/tmp/state-backup.db'); \
-  src.backup(dst); dst.close(); src.close()"
-docker compose cp geometric-lens:/tmp/state-backup.db ./geometric_state.db
-```
-
-Do NOT `cp` the live file while the stack is running — a plain copy of
-a database mid-write can be torn; use one of the two forms above.
-
-Restore: stop the stack, copy the file back into the volume (inverse of
-the cold copy), start, check `/health` on the lens — the
-`subsystems.sqlite` block should report the store available.
-
-## Repairing corrupt learned state (SQLite)
-
-Four distinct procedures — use the least destructive that applies:
-
-| Procedure | Command | Fixes |
-|---|---|---|
-| Restart | `docker compose restart geometric-lens` | transient init failures (locked file, unwritable path) — NOT file corruption; the `lens-state` volume survives any plain `down`/`up` |
-| Repair | steps below | a corrupt `geometric_state.db` — the service re-creates an empty schema on start |
-| Restore | § Learned state (SQLite) | corruption when you have a known-good backup |
-| Reset | `docker compose down -v` | **destructive** — wipes learned state + lens project index stack-wide; last resort, never needed for corruption alone |
-
-Symptoms: `atlas doctor` fails `sqlite_state`; lens `/health` shows
-`subsystems.sqlite.connected: false` with a `DatabaseError` (`file is
-not a database`, `malformed database schema`, `database disk image is
-malformed`); `/ready` returns 503. `docker compose ps` still shows the
-lens **healthy** (its healthcheck probes `/health`, which always
-returns 200). Scoring keeps answering — pattern-context reads just
-return empty until the store is repaired.
-
-```bash
-# 1. Stop the lens so nothing writes during the copy
-docker compose stop geometric-lens
-
-# 2. Back up the current files — db + WAL/SHM siblings — even corrupt
-#    (recovery tooling may salvage rows from them later)
-docker run --rm -v atlas_lens-state:/data/state -v "$PWD":/backup alpine \
-  sh -c 'cp /data/state/geometric_state.db* /backup/'
-
-# 3. Confirm corruption on the backed-up copy (host python; the lens
-#    image has no sqlite3 CLI). Any DatabaseError, or rows other than
-#    [('ok',)], confirms corruption. A clean 'ok' means the problem is
-#    elsewhere (permissions, volume mount) — stop here and diagnose.
-python3 -c "import sqlite3; print(sqlite3.connect( \
-  'file:geometric_state.db?mode=ro', uri=True) \
-  .execute('PRAGMA integrity_check').fetchall())"
-
-# 4. Move the corrupt files aside on the volume — don't delete, and
-#    move all three together (a stale -wal beside a fresh db re-corrupts)
-docker run --rm -v atlas_lens-state:/data/state alpine \
-  sh -c 'for f in /data/state/geometric_state.db*; do mv "$f" "$f.corrupt"; done'
-
-# 5. Start — the service re-creates the full schema on an empty file
-docker compose start geometric-lens
-
-# 6. Have a known-good backup? Restore it instead of running on the
-#    empty schema: stop again, copy the backup in (inverse of step 2),
-#    start.
-
-# 7. Verify
-atlas doctor                      # sqlite_state: pass
-curl -s localhost:8099/health     # subsystems.sqlite.connected: true
-```
-
-What an empty schema costs: learned patterns and the co-occurrence
-graph reset. Seed patterns re-load automatically at startup, then the
-cache re-learns from use — nothing breaks.
-
-Caveat: `PRAGMA integrity_check` can pass while corruption sits in
-unused pages — if store errors recur with a clean check, treat the file
-as corrupt anyway and repair.
 
 ## Honest gaps
 

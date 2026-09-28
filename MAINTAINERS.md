@@ -4,6 +4,9 @@
 |---|---|---|---|
 | Johnathon Isaac Tigges | [@itigges22](https://github.com/itigges22) | Lead maintainer, release authority, security contact | All (proxy, TUI, CLI, v3-service, lens, sandbox, inference, CI/release) |
 
+Roles, what each can and can't do, and how people move between them are
+in the [trust ladder](GOVERNANCE.md#trust-ladder).
+
 **Open seats.** The project is looking for co-maintainers, in order of
 need:
 

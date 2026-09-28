@@ -82,7 +82,6 @@ paths:
                   type: array
                   description: Tool names pre-approved for the session (skip the permission prompt)
                   items: {type: string}
-                bypass_v3: {type: boolean, description: Disable V3 orchestration for the turn}
                 disable_fresh_slot: {type: boolean, description: Keep the pre-warmed KV-cache prefix instead of requesting a fresh slot}
                 sandbox_subdir: {type: string, description: Confine the turn to a bare subdirectory name under the workspace}
       responses:
@@ -131,16 +130,6 @@ paths:
       responses:
         "200": {description: Decision delivered}
         "404": {description: No matching pending request (already resolved, cancelled, or timed out)}
-  /feedback:
-    post:
-      summary: Per-file accept/deny + pass signals into lens samples
-      responses:
-        "200": {description: Recorded}
-  /v1/lens/training-status:
-    get:
-      summary: Labeled-sample counts for the retrain-available alert
-      responses:
-        "200": {description: Counts}
   /v1/calibration/status:
     get:
       summary: Lens/ASA status incl. the seven canonical dimensions

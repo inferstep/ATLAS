@@ -19,7 +19,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |
 | Homebrew | brew package manager | https://brew.sh |
 | pipx | install atlas CLI in an isolated venv (Homebrew Python enforces PEP 668, plain `pip install` is blocked) | `brew install pipx` (the setup script handles this automatically) |
-| Go 1.26.2+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
+| Go 1.26.6+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
 | Docker Desktop | runs the 4 non-inference services | https://docker.com/products/docker-desktop |
 
 Notes:
@@ -31,7 +31,7 @@ Notes:
 ## Install — TL;DR
 
 ```bash
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 
 # One-time setup (5-10 minutes): brew deps + builds llama.cpp with Metal
@@ -232,6 +232,10 @@ Unified memory is shared with the OS. Realistic GPU budget on Apple Silicon is ~
 - 32 GB Mac: 9B-Q6 (~7.5 GB) or 14B-Q5 (~10 GB) fits comfortably
 - 64 GB+ Mac: 32B-Q5 (~22 GB) or larger
 
+Only a model with its own Lens bundle runs agent work out of the box;
+`atlas model list` shows which ones have one. For any other model, build
+a bundle first: `atlas bench`, then `atlas lens build --from-results`.
+
 Run `atlas tier` to see the recommendation for your hardware.
 
 ### `atlas` says `atlas-tui binary not found and Go is not available to build it`
@@ -296,4 +300,4 @@ Inference will be slower but you don't need brew, cmake, or the setup script.
 - [ ] Pre-built `llama-server-metal` binaries on GHCR releases (skip the build step)
 - [ ] Pure-native path (drop Docker entirely on Mac, use launchd) — separate ticket if there's demand
 
-Report issues on [#32](https://github.com/itigges22/ATLAS/issues/32) with your Mac model + memory size + `atlas doctor` output.
+Report issues on [#32](https://github.com/inferstep/ATLAS/issues/32) with your Mac model + memory size + `atlas doctor` output.

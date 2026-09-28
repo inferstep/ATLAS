@@ -1,8 +1,8 @@
 # ATLAS VS Code Extension
 
-A VS Code client for the [ATLAS](https://github.com/itigges22/ATLAS) agent proxy — a thin UI layer wrapping `atlas-proxy`'s agent loop (chat, tool calls, permission gating, diffs) with no agent logic in the extension itself.
+A VS Code client for the [ATLAS](https://github.com/inferstep/ATLAS) agent proxy — a thin UI layer wrapping `atlas-proxy`'s agent loop (chat, tool calls, permission gating, diffs) with no agent logic in the extension itself.
 
-**Status: Work in progress.** Tracking [issue #35](https://github.com/itigges22/ATLAS/issues/35). Chat, permission flow, diff review, status bar, and the workspace-mismatch warning are implemented.
+**Status: Work in progress.** Tracking [issue #35](https://github.com/inferstep/ATLAS/issues/35). Chat, permission flow, diff review, status bar, and the workspace-mismatch warning are implemented.
 
 ## Diff review
 
@@ -19,7 +19,7 @@ The extension is a thin SSE client over the proxy HTTP API (see `docs/API.md`):
 * `POST /cancel` — cancels the in-flight turn
 * `GET /ready` — status bar connectivity polling
 
-The TUI (`tui/`) is the reference client; the extension mirrors its session conventions (client-minted `session_id` per turn, `session_allowed_tools` re-sent each turn, cancel = abort + best-effort `POST /cancel`).
+The TUI (`tui/`) is the reference client; the extension mirrors its session conventions (client-minted `session_id` per turn, `session_allowed_tools` re-sent each turn, cancel = abort + best-effort `POST /cancel`). A deletion (`one_time_only`) is never answered automatically and offers no "Allow for Session"; a command is shown whole in the chat card.
 
 ## Settings
 

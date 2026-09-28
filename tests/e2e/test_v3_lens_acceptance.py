@@ -23,14 +23,17 @@ skipped (ordered v3_* event subsequence).
 
 Failure modes covered here at the seam level: V3 unreachable, V3
 malformed response, V3 timeout (all → documented direct-write
-fallback), and Lens unreachable on the optional path (pipeline
-completes uncalibrated). Deeper in-pipeline failure cases (no valid
+fallback), and the Lens, which is required (docs/adr/0011): unreachable
+when a request arrives, the request is refused and says why; unreachable
+from V3 during a run, the run stops and says why. Deeper in-pipeline failure cases (no valid
 candidate → repair phases, winner-selection edge cases, malformed lens
 payloads and missing thresholds) are pinned by the hermetic unit
 suites tests/v3-service/test_winner_selection.py and
 tests/v3-service/test_lens_calibration.py.
 """
 
+import hashlib
+import http.client
 import http.server
 import json
 import os
@@ -146,7 +149,16 @@ class _FakeLlamaHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        req = json.loads(self.rfile.read(length))
+        raw = self.rfile.read(length)
+        if self.path.startswith("/slots"):
+            # The proxy's per-session slot erase, a POST with no body. This
+            # fake has no slots, like a llama-server without
+            # --slot-save-path, and says so instead of failing to parse.
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        req = json.loads(raw)
         if self.path.startswith("/v1/embeddings") or self.path.startswith("/embedding"):
             self.send_response(404)  # EmbedAdapter fail-softs to []
             self.send_header("Content-Length", "0")
@@ -185,7 +197,20 @@ class _FakeLensHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self._reply({"status": "ok"})
+        # A lens that can score, as the proxy's readiness probe reads it: the
+        # lens is required, and a request is refused while it cannot score.
+        if self.path == "/health":
+            self._reply({"service": "geometric-lens", "status": "healthy",
+                         "subsystems": {
+                             "llama_server": {"reachable": True},
+                             "lens": {"cost_field_loaded": True,
+                                      "gx_loaded": True, "cx_calibrated": True,
+                                      "gx_calibrated": True, "self_test_pass": True,
+                                      "fingerprint_ok": None}}})
+        elif self.path == "/ready":
+            self._reply({"ready": True, "llama_server": True, "lens_self_test": True})
+        else:
+            self._reply({"status": "ok"})
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -222,7 +247,7 @@ class _FakeLensHandler(http.server.BaseHTTPRequestHandler):
                 "thresholds": {"off_rails": 0.34, "low": 0.34,
                                "severe": 0.28},
             })
-        else:  # /internal/patterns/write and anything else
+        else:  # anything else
             self._reply({"status": "ok"})
 
 
@@ -260,7 +285,6 @@ def v3_service(fake_llama, fake_lens, sandbox_executor):
            "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
            # the sandbox executor enforces internal auth session-wide
            "ATLAS_SERVICE_TOKEN_FILE": conftest._TOKEN_FILE}
-    env.pop("ATLAS_CALL_GRAPH", None)
     proc = subprocess.Popen(
         ["python", "main.py"],
         cwd=str(REPO / "v3-service"), env=env,
@@ -309,14 +333,55 @@ def _agent_body(workspace, **overrides):
     return body
 
 
+# The request contract these tests send: work, with the output declared as a
+# canonical workspace-relative path, nothing read from the prose. One rule
+# decides what lands (docs/CANDIDATE_POLICY.md); nothing in the contract
+# selects another.
+DECLARED_OUTPUT_CONTRACT = {
+    "task_mode": "work",
+    "output_knowledge": "declared",
+    "expected_outputs": ["todo_app.py"],
+}
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_result(events):
+    return next(e for e in events
+                if e["type"] == "tool_result"
+                and e["data"].get("tool") == "write_file")
+
+
+def _payload(result):
+    payload = result["data"]["data"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return payload
+
+
+# No candidate reaches a person inside V3: the event vocabulary a client sees
+# carries permission prompts for dangerous tools and nothing that asks anyone
+# to approve, confirm or choose a candidate. write_file under accept-edits is
+# auto-allowed, so the whole turn must run without a single prompt.
+def _assert_no_human_gate_inside_v3(events):
+    assert not [e for e in events if e["type"] == "permission_request"], (
+        "a permission prompt fired on an accept-edits write")
+    leaked = [e["type"] for e in events
+              if any(w in e["type"] for w in ("approv", "confirm", "choose"))]
+    assert not leaked, f"candidate approval surface leaked into events: {leaked}"
+
+
 # ---------------------------------------------------------------------------
 # The V3/Lens acceptance test
 # ---------------------------------------------------------------------------
 
 def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
     _FakeLensHandler.calls.clear()
-    events = drive_agent_turn(proxy, _agent_body(workspace),
-                              deadline_s=180.0)
+    events = drive_agent_turn(
+        proxy, _agent_body(workspace, task_contract=DECLARED_OUTPUT_CONTRACT),
+        deadline_s=180.0)
 
     # No stage silently skipped: the v3_* event subsequence of a full
     # pipeline run, in order.
@@ -369,6 +434,55 @@ def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
     assert "# cand-A" in written, "lens-preferred candidate not written"
     assert "# cand-B" not in written
     assert abs(payload.get("winning_score", -1) - 0.20) < 1e-6, payload
+    # What landed is the selected candidate, byte for byte, terminator
+    # included. The one-time authorization the proxy spent is the hash of
+    # exactly these bytes; that hash lives on the ToolResult and the grant,
+    # not in the event stream, and the proxy's own tests pin it
+    # (TestDeliveryKeepsTheCandidatesTrailingBytes). Here the client-visible
+    # facts are the bytes and v3_used.
+    assert written == CAND_A, "disk bytes are not the selected candidate's"
+    assert _sha256(written) == _sha256(CAND_A)
+    _assert_no_human_gate_inside_v3(events)
+
+
+# Control: the same request with no contract at all, as a client that sends
+# none (the VS Code extension today). No target is grounded, so no candidate
+# could land, and the proxy does not ask V3 for one: the model's own bytes
+# land. Pinned so a contractless client cannot start receiving candidates
+# without someone changing this test.
+def test_a_contractless_request_keeps_the_models_bytes(proxy, workspace):
+    # An explicit null: the harness adds a work contract to any body that
+    # names none.
+    events = drive_agent_turn(proxy, _agent_body(workspace, task_contract=None),
+                              deadline_s=180.0)
+
+    assert not any(e["type"] == "v3_select" for e in events), (
+        "V3 was asked for a candidate no contractless request can receive: "
+        f"{[(e['type'], e.get('data', {}).get('tool') or e.get('data', {}).get('name')) for e in events]}")
+    result = _write_result(events)
+    assert result["data"].get("success") is True
+    payload = _payload(result)
+    assert payload.get("v3_used") is not True, payload
+    written = (workspace / "todo_app.py").read_text()
+    assert written == T2_CONTENT, "a contractless request did not keep the model's own bytes"
+    assert "# cand-" not in written
+    _assert_no_human_gate_inside_v3(events)
+
+
+# An older client that still names a policy gets the same rule: the same
+# winner lands, byte for byte.
+def test_an_older_strict_spelling_changes_nothing(proxy, workspace):
+    events = drive_agent_turn(
+        proxy, _agent_body(workspace, task_contract={
+            **DECLARED_OUTPUT_CONTRACT, "candidate_policy": "strict"}),
+        deadline_s=180.0)
+
+    assert any(e["type"] == "v3_select" for e in events), "V3 never selected"
+    result = _write_result(events)
+    assert result["data"].get("success") is True
+    assert _payload(result).get("v3_used") is True, _payload(result)
+    assert (workspace / "todo_app.py").read_text() == CAND_A
+    _assert_no_human_gate_inside_v3(events)
 
 
 def test_v3_unreachable_falls_back_to_direct_write(fake_llama, fake_lens,
@@ -472,19 +586,47 @@ def test_v3_failure_modes_fall_back_visibly(handler, extra_env, fake_llama,
         server.shutdown()
 
 
-def test_lens_unreachable_pipeline_completes_uncalibrated(
-        fake_llama, sandbox_executor, workspace):
-    """Lens is optional on this path: with it unreachable, v3-service
-    must fall back to neutral scores (k=3 default, no vetoes), still
-    test candidates in the sandbox, and complete the turn."""
+def test_an_unreachable_lens_refuses_the_request(fake_llama, sandbox_executor, workspace):
+    """The lens is required: while it cannot score, a request is not
+    started. The client gets an ordinary HTTP error that says why and what
+    to run, and nothing is written."""
+    port, proc = start_proxy({
+        "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
+        "ATLAS_LENS_URL": "http://127.0.0.1:9",  # unreachable
+        "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
+        "ATLAS_V3_URL": "http://127.0.0.1:9",
+    })
+    try:
+        body = conftest.agent_request_body(
+            _agent_body(workspace, task_contract=DECLARED_OUTPUT_CONTRACT))
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+        conn.request("POST", "/v1/agent", json.dumps(body),
+                     {"Content-Type": "application/json", **conftest._auth_header()})
+        resp = conn.getresponse()
+        payload = json.loads(resp.read())
+        assert resp.status == 503, payload
+        assert payload["error"] == "dependency_unavailable"
+        assert "geometric lens" in payload["detail"]
+        assert "atlas doctor" in payload["detail"]
+        assert not (workspace / "todo_app.py").exists()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_a_lens_that_v3_cannot_reach_stops_the_run(
+        fake_llama, fake_lens, sandbox_executor, workspace):
+    """The proxy's lens answers, but the one V3 scores with does not. V3
+    stops and says why; the proxy ends the run on it, writing nothing,
+    instead of falling back to the model's bytes or ranking on neutral
+    scores."""
     v3_port = free_port()
     env = {**os.environ,
            "ATLAS_V3_PORT": str(v3_port),
            "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
-           "ATLAS_LENS_URL": "http://127.0.0.1:9",  # unreachable
+           "ATLAS_LENS_URL": "http://127.0.0.1:9",  # unreachable from V3
            "ATLAS_SERVICE_TOKEN_FILE": conftest._TOKEN_FILE,
            "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}"}
-    env.pop("ATLAS_CALL_GRAPH", None)
     v3_proc = subprocess.Popen(
         ["python", "main.py"],
         cwd=str(REPO / "v3-service"), env=env,
@@ -492,28 +634,22 @@ def test_lens_unreachable_pipeline_completes_uncalibrated(
     wait_for_port(v3_port)
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
-        "ATLAS_LENS_URL": "http://127.0.0.1:9",
+        "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
         "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
         "ATLAS_V3_URL": f"http://127.0.0.1:{v3_port}",
     })
     try:
-        events = drive_agent_turn(port, _agent_body(workspace),
-                                  deadline_s=180.0)
-        result = next(e for e in events
-                      if e["type"] == "tool_result"
-                      and e["data"].get("tool") == "write_file")
-        assert result["data"]["success"] is True
-        payload = result["data"]["data"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        assert payload.get("v3_used") is True, (
-            "lens outage must not disable V3 itself")
-        # A candidate was written; with neutral scores the first passing
-        # candidate wins — either tag is acceptable, but ONE of them is.
-        written = (workspace / "todo_app.py").read_text()
-        assert "# cand-A" in written or "# cand-B" in written
-        assert any(e["type"] == "v3_sandbox" for e in events), (
-            "sandbox verification stage missing")
+        events = drive_agent_turn(
+            port, _agent_body(workspace, task_contract=DECLARED_OUTPUT_CONTRACT),
+            deadline_s=180.0)
+        done = [e for e in events if e["type"] == "done"]
+        assert done, [e["type"] for e in events]
+        assert done[-1]["data"].get("reason") == "lens_unavailable", done[-1]["data"]
+        assert "atlas doctor" in done[-1]["data"].get("summary", "")
+        result = _write_result(events)
+        assert result["data"]["success"] is False
+        assert not (workspace / "todo_app.py").exists(), (
+            "the model's bytes were written although the lens could not score")
     finally:
         proc.terminate()
         proc.wait(timeout=10)

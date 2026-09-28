@@ -41,12 +41,46 @@ _REQUEST_ID: "contextvars.ContextVar[str]" = contextvars.ContextVar(
     "atlas_request_id", default="")
 
 
+# The invocation id identifies ONE /v3/generate or /v3/plan call. A request
+# id can cover several (the planner and the generation pipeline share it, and
+# a plan revision adds another), so joining relay traffic to a specific
+# pipeline run needs both. Carried beside the request id for the same reason:
+# a reader correlating a log line with a relay call must not have to infer
+# which invocation it belonged to from timing.
+_INVOCATION_ID: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "atlas_invocation_id", default="")
+
+
 def set_request_id(request_id):
     _REQUEST_ID.set(request_id or "")
 
 
 def get_request_id():
     return _REQUEST_ID.get()
+
+
+def set_invocation_id(invocation_id):
+    _INVOCATION_ID.set(invocation_id or "")
+
+
+def get_invocation_id():
+    return _INVOCATION_ID.get()
+
+
+def current_identity():
+    """(request_id, invocation_id) for the calling thread or task.
+
+    Captured on the owning thread and handed to workers explicitly -- a
+    worker inherits neither ContextVar, which is the defect that cost a
+    whole acquisition.
+    """
+    return _REQUEST_ID.get(), _INVOCATION_ID.get()
+
+
+def bind_identity(request_id, invocation_id):
+    """Re-establish a captured identity inside a worker thread."""
+    _REQUEST_ID.set(request_id or "")
+    _INVOCATION_ID.set(invocation_id or "")
 
 
 class JsonFormatter(logging.Formatter):
@@ -65,6 +99,9 @@ class JsonFormatter(logging.Formatter):
         rid = get_request_id()
         if rid:
             rec["request_id"] = rid
+        inv = get_invocation_id()
+        if inv:
+            rec["invocation_id"] = inv
         if record.exc_text:
             # Pre-formatted (and private-value-masked) by
             # PrivateValueLogFilter.

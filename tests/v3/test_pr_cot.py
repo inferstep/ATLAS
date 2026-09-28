@@ -153,12 +153,12 @@ class TestExtractCodeFromRepair:
     def test_python_block(self):
         response = "Here is the fix:\n```python\ndef solve(n):\n    return n + 1\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_plain_code_block(self):
         response = "Fixed:\n```\ndef solve(n):\n    return n + 1\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_raw_code_fallback(self):
         response = "def solve(n):\n    return n + 1"
@@ -172,12 +172,12 @@ class TestExtractCodeFromRepair:
             "```python\ndef solve(n):\n    return n + 1\n```"
         )
         code = extract_code_from_repair(response)
-        assert code == "def solve(n):\n    return n + 1"
+        assert code == "def solve(n):\n    return n + 1\n"
 
     def test_strips_thinking_blocks(self):
         response = "<think>Let me fix this.</think>\n```python\ndef solve(): pass\n```"
         code = extract_code_from_repair(response)
-        assert code == "def solve(): pass"
+        assert code == "def solve(): pass\n"
 
     def test_empty_response(self):
         code = extract_code_from_repair("")
@@ -528,3 +528,15 @@ class TestDataStructures:
         assert cfg.repair_temperature == 0.4
         assert cfg.analysis_max_tokens == 2048
         assert cfg.repair_max_tokens == 4096
+
+
+def test_repair_prompt_preserves_the_declared_interface_contract():
+    prompt = PRCoT(PRCoTConfig(enabled=True))._build_repair_prompt(
+        "Implement the requested API", "def old(): pass", "wrong interface")
+    assert "exact signature" in prompt
+    assert "Preserve existing public interfaces" in prompt
+    assert "parameter order and kinds (including / and * markers)" in prompt
+    assert "laziness, stopping conditions, ordering" in prompt
+    assert "never import that file or requested artifact from itself" in prompt
+    assert "mentally compile" in prompt
+    assert "complete, syntactically valid fixed Python source file" in prompt

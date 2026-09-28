@@ -324,3 +324,150 @@ func writeJSON(path string, v interface{}) error {
 	}
 	return os.WriteFile(path, b, 0o600)
 }
+
+// --- The structured task contract, sent by the client ------------------------
+//
+// The proxy still decides everything from the user's English. This is the
+// client saying, in a typed field, what only the client knows: whether the
+// person was asking for work or asking a question. It is a control the user
+// operates, never an inference from what they typed -- the same sentence can
+// go either way, and only the explicit selection differs.
+
+// captureContract posts one message and returns the decoded request body.
+func captureContract(t *testing.T, mode taskMode, message string) map[string]interface{} {
+	t.Helper()
+	var got map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"done\",\"summary\":\"ok\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	out := make(chan chatEvent, 16)
+	err := sendChatOpts(context.Background(), srv.URL, message, t.TempDir(), "default",
+		"sess-1", nil, demoOpts{taskMode: mode}, out)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	return got
+}
+
+func contractOf(t *testing.T, body map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	tc, ok := body["task_contract"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("no task_contract in %v", body)
+	}
+	return tc
+}
+
+// 1/2: an ordinary message is work; the explicit control sends question.
+func TestTaskContractModeIsClientSelected(t *testing.T) {
+	work := captureContract(t, taskModeWork, "What does this repository do?")
+	if got := contractOf(t, work)["task_mode"]; got != "work" {
+		t.Errorf("ordinary send task_mode=%v, want work", got)
+	}
+	question := captureContract(t, taskModeQuestion, "Create app.py.")
+	if got := contractOf(t, question)["task_mode"]; got != "question" {
+		t.Errorf("explicit question task_mode=%v, want question", got)
+	}
+	// 5/6: identical prose, opposite modes, chosen only by the client.
+	same := "Fix the failing test."
+	a := contractOf(t, captureContract(t, taskModeWork, same))["task_mode"]
+	b := contractOf(t, captureContract(t, taskModeQuestion, same))["task_mode"]
+	if a != "work" || b != "question" {
+		t.Errorf("the same sentence gave %v and %v; selection is not client-owned", a, b)
+	}
+}
+
+// 4: the control never edits the user's message.
+func TestQuestionSelectionLeavesTheMessageAlone(t *testing.T) {
+	const msg = "Is app.py valid?"
+	for _, mode := range []taskMode{taskModeWork, taskModeQuestion} {
+		body := captureContract(t, mode, msg)
+		if body["message"] != msg {
+			t.Errorf("mode %q changed the message to %q", mode, body["message"])
+		}
+	}
+}
+
+// 7: no obligation is invented when the client knows none.
+func TestTaskContractSendsNoFabricatedObligations(t *testing.T) {
+	tc := contractOf(t, captureContract(t, taskModeWork, "Write four files."))
+	if _, ok := tc["expected_outputs"]; ok {
+		t.Errorf("the TUI invented expected_outputs: %v", tc["expected_outputs"])
+	}
+	if _, ok := tc["verification"]; ok {
+		t.Errorf("the TUI invented verification: %v", tc["verification"])
+	}
+}
+
+// 3: question mode is one-shot -- the next ordinary message is work again.
+func TestQuestionModeIsOneShot(t *testing.T) {
+	m := &tuiModel{}
+	if got := m.takeTaskMode(); got != taskModeWork {
+		t.Errorf("default task mode is %q, want work", got)
+	}
+	m.pendingTaskMode = taskModeQuestion
+	if got := m.takeTaskMode(); got != taskModeQuestion {
+		t.Errorf("selected mode was not used: %q", got)
+	}
+	if got := m.takeTaskMode(); got != taskModeWork {
+		t.Errorf("question mode persisted into the next turn: %q — it must be one-shot", got)
+	}
+}
+
+// A default caller declares work. Absence is reserved for the one legacy
+// fixture: an owned sender that omits the contract is indistinguishable from a
+// stranger's request.
+func TestDefaultCallerDeclaresWork(t *testing.T) {
+	var got map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"done\",\"summary\":\"ok\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	out := make(chan chatEvent, 16)
+	// demoOpts{} is the default caller: no explicit mode selected.
+	if err := sendChatOpts(context.Background(), srv.URL, "hi", t.TempDir(),
+		"default", "s", nil, demoOpts{}, out); err != nil {
+		t.Fatal(err)
+	}
+	tc, ok := got["task_contract"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("a default owned caller sent no task_contract: %v", got)
+	}
+	if tc["task_mode"] != "work" {
+		t.Errorf("task_mode=%v, want work", tc["task_mode"])
+	}
+	if _, ok := tc["expected_outputs"]; ok {
+		t.Error("the default caller fabricated expected_outputs")
+	}
+	if _, ok := tc["verification"]; ok {
+		t.Error("the default caller fabricated verification")
+	}
+}
+
+// Exactly one path omits the contract, and it exists to prove an external or
+// legacy caller is still accepted.
+func TestLegacyOmissionFixtureIsTheOnlyContractlessSender(t *testing.T) {
+	var got map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"done\",\"summary\":\"ok\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	out := make(chan chatEvent, 16)
+	if err := sendChatOpts(context.Background(), srv.URL, "hi", t.TempDir(),
+		"default", "s", nil, demoOpts{omitTaskContract: true}, out); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["task_contract"]; ok {
+		t.Errorf("the legacy fixture sent a contract: %v", got["task_contract"])
+	}
+	if got["message"] != "hi" {
+		t.Errorf("the legacy path changed the message: %v", got["message"])
+	}
+}

@@ -10,7 +10,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.3-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.4-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="Model-agnostic"/>
 </p>
@@ -42,10 +42,10 @@
 ## 📰 最新ニュース
 
 - **2026-07-06** - **[V3.1.3 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.3)** - 本番プラットフォーム強化: 自動復元付きの段階的アップグレード/ロールバック、SQLite ステートストア（Redis を廃止）、署名付きアーティファクトマニフェスト、相関 ID 付き構造化ログ、対話式パーミッション、セッション再開、そして2回の敵対的バグ修正スイープ
-- **2026-06-17** - **[V3.1.2 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - ハードウェア対応の拡大（ROCm / Metal / Vulkan）、持ち込みモデルの Lens + ASA トレーニング、自分のワークロードからのインザループ lens 再トレーニング、エージェント信頼性の強化
+- **2026-06-17** - **[V3.1.2 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - ハードウェア対応の拡大（ROCm / Metal / Vulkan）、持ち込みモデルの Lens + ASA トレーニング、自分のワークロードからのインザループ lens 再トレーニング（その後削除。CHANGELOG を参照）、エージェント信頼性の強化
 - **2026-05-12** - **[V3.1.0 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - ネイティブ Bubbletea TUI、ワンコマンドブートストラップ、ストリーミング Lens + ASA 活性化ステアリング、AST 対応の外科的編集
 - **2026-03-26** - [Hacker News フロントページ](https://news.ycombinator.com/item?id=47533297) - 489 ポイント、285 コメント
-- **2026-03-05** - **[V3.0 リリース](../../reports/V3_ABLATION_STUDY.md)** - 凍結された Qwen3-14B で LiveCodeBench pass@1-v(k=3) 74.6%（k=3 の生成候補 + Lens 選択 + 修復を伴う pass@1 であり、単発生成の pass@1 ではありません。[手法の詳細](../../reports/V3_ABLATION_STUDY.md)）
+- **2026-03-05** - **V3.0 リリース** - 凍結された Qwen3-14B 上のマルチフェーズ V3 パイプライン。*このリリースで公表した LiveCodeBench 74.6% は撤回しました。ベンチマークランナーは LiveCodeBench の非公開テストを一度も実行しておらず、3 つの候補のいずれか、または失敗出力を見せた修復が問題文の例に合格すればタスクを合格としていました（[撤回のお知らせ](../../reports/V3_ABLATION_STUDY.md)）。現行製品の再検証後に改めて測定します。*
 - **2026-02-18** - **[V2.0 リリース](../../../CHANGELOG.md)** - ベンチマークインフラ、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 評価スイート
 
 ## ⭐ Star History
@@ -80,12 +80,11 @@
    - [安全制限](../../ARCHITECTURE.md#safety-limits) - ターン上限、トークン予算、タイムアウト
 
 3. **[V3 パイプライン](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。
-   - [PlanSearch](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 制約駆動の構造化プランニング
-   - [DivSampling](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - 温度と戦略をまたぐ多様な候補生成
-   - [Budget Forcing](../../reports/V3_ABLATION_STUDY.md#phase-1-constraint-driven-generation-124pp) - フェーズごとの思考トークン割り当て
-   - [PR-CoT Repair](../../reports/V3_ABLATION_STUDY.md#pr-cot-repair-36-rescues) - 自己生成テストによる反復修正
-   - [Refinement Loops](../../reports/V3_ABLATION_STUDY.md#refinement-loop-6-rescues) - サンドボックスでの検証と修正を繰り返す
-   - [Derivation Chains](../../reports/V3_ABLATION_STUDY.md#derivation-chains-0-rescues) - 難問向けのマルチステップ推論
+   - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 制約駆動の構造化プランニング
+   - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 温度と戦略をまたぐ多様な候補生成
+   - [予算ティア](../../ARCHITECTURE.md#pipeline-flow) - アロケータがタスクごとに計算ティアを選ぶ。現状、ティアが決めるのは候補数であり、思考の深さではない
+   - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスのエラー出力をもとに失敗した候補を修復
+   - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスでの検証と修正を繰り返す
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
@@ -146,20 +145,19 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 ## ⚠️ 既知の制限事項
 
 - **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
-- **現行のレジストリモデルはまだ正式にベンチマークされていません。** 公式の 74.6% LiveCodeBench スコアは凍結された 14B リファレンスビルドのものです。モデル別の新しい数値は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡しています。リファレンスの手法とアブレーションは [`docs/reports/V3_ABLATION_STUDY.md`](../../reports/V3_ABLATION_STUDY.md) に、生トレースは [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) に公開しています。
-- **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。信頼性は V3.1.2 のエージェント信頼性強化で改善しています。モデル別の最新の数値は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡しています。
-- **文法制約デコーディングは遅め。** llama-server で約 51 tok/s。
+- **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（最新ニュース参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡します。
+- **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。
+- **文法制約デコーディングは制約なしのデコーディングより遅くなります。**
 
 ---
 
 ## 🗺️ ロードマップ
 
-**V3.1.3 "Maia"** - 現在のリリース。V3.1.2 の上に本番プラットフォーム強化を実施: 自動復元付きの段階的な `atlas upgrade`/`rollback`、Redis を置き換える SQLite ステートストア ([ADR 0007](../../adr/0007-sqlite-state-store.md))、署名付きアーティファクトマニフェスト、サービス横断の相関 ID を持つ構造化 JSON ログ、対話式パーミッションプロンプト、セッション再開、型付き設定のバリデーション/マイグレーション、2回の敵対的バグ修正スイープ（確認済み修正 33 件）。
+**V3.1.3 "Maia"** - 現在のリリース。V3.1.2 の上に本番プラットフォーム強化を実施: 自動復元付きの段階的な `atlas upgrade`/`rollback`、Redis を置き換える SQLite ステートストア ([ADR 0007](../../adr/0007-sqlite-state-store.md)。2026-09 に `dev` で、唯一の利用者だったパターンキャッシュとともに廃止)、署名付きアーティファクトマニフェスト、サービス横断の相関 ID を持つ構造化 JSON ログ、対話式パーミッションプロンプト、セッション再開、型付き設定のバリデーション/マイグレーション、2回の敵対的バグ修正スイープ（確認済み修正 33 件）。
 
 **V3.1.2 "Maia"** - V3.1.0 の基盤（TUI、ワンコマンドインストール、ストリーミング Lens + ASA）の上に、ハードウェア対応の拡大、持ち込みモデルのトレーニング、エージェント信頼性の強化を実施。
 - ハードウェア対応: llama.cpp 経由の AMD ROCm — RDNA4 / RX 9070 (gfx1200/gfx1201) を含む ([#26](https://github.com/itigges22/ATLAS/issues/26))。Apple Silicon のネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)、[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照)。AMD / Intel / Snapdragon / MoltenVK 経由の Apple / CPU をカバーする Vulkan ユニバーサルフォールバック ([#114](https://github.com/itigges22/ATLAS/issues/114))。
-- 持ち込みモデル: ローカル Lens トレーニングパイプライン (`atlas lens build` / `retrain`、[#100](https://github.com/itigges22/ATLAS/issues/100)) と ASA のモデル別キャリブレーション同等化 (`atlas asa check/build/publish`、[#113](https://github.com/itigges22/ATLAS/issues/113)) — 追加の GGUF 向けに Lens + ASA アーティファクトをトレーニングし、lens に同梱されるモデル別の動作閾値付きで出荷。
-- インザループ lens トレーニング: TUI でパスを評価 (`/good` · `/bad` · `/review` · `/deny`) → 収集・重み付けされたサンプル → 自分のワークロードで `atlas lens retrain`。
+- 持ち込みモデル: ローカル Lens トレーニングパイプライン (`atlas lens build`、[#100](https://github.com/itigges22/ATLAS/issues/100)) と ASA のモデル別キャリブレーション同等化 (`atlas asa check/build/publish`、[#113](https://github.com/itigges22/ATLAS/issues/113)) — 追加の GGUF 向けに Lens + ASA アーティファクトをトレーニングし、lens に同梱されるモデル別の動作閾値付きで出荷。
 - エージェント信頼性: ツール結果の可視性修正、読み取り重複排除、トレースバック → 指向的編集、`move_file`、pip インストール / 大文字小文字不一致のステア、サンドボックスシェルポリシー + ホストサイズの cgroup 制限。
 - 構造的な呼び出しグラフ推論 ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125)、[@yogthos](https://github.com/yogthos) に感謝)。ARCHITECTURE.md の zh-CN / ja / ko 翻訳 ([#25](https://github.com/itigges22/ATLAS/issues/25))。
 

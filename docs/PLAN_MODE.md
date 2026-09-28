@@ -45,7 +45,7 @@ Defined in `v3-service/planning.py`; `v3-service/main.py` serves the route. The 
 4. Scores each parsed plan with `_score_plan`:
    - **+0.3** for having a `verify_step`
    - **+0.2** for `len(steps) ∈ [2, 6]`
-   - **+0.2** if the verify step's action references a known verification command (`pytest`, `python`, `curl`, `go test`, etc.)
+   - **+0.2** if the verify step runs the program or its tests, or fetches a page (`pytest`, `python3 app.py`, `curl`, `go test`, etc.). A step that only builds, parses or lints (`py_compile`, `tsc`, `ruff`, `go build`) earns nothing: the agent loop does not count it as verification either
    - **+0.1 per step** that targets a file the user named (capped at +0.2)
    - **+0.1** for a non-empty `rationale`
 5. Picks the highest-scoring plan; tie-break favours fewer steps (less waffle).
@@ -94,11 +94,10 @@ Defined in `proxy/gates.go`:
 
 ## When plan mode is skipped
 
-Three predicates in `shouldGeneratePlan`:
+Two predicates in `shouldGeneratePlan`:
 
-1. **`ctx.BypassV3`** — a V3-bypassed turn (the baseline side of the split-pane demo) doesn't plan; its file writes bypass V3 later in the turn, so a plan would make that pane look orchestrated.
-2. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
-3. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
+1. **`ctx.Tier == Tier0Conversational`** — trivial chat ("hi", "thanks") never plans.
+2. **`len(message) < 12`** — short acks ("yes do it", "looks good") that depend on the prior turn's plan don't plan again.
 
 Outside those, every turn plans. Failures (`/v3/plan` 5xx, network error, all candidates unparseable beyond the fallback) degrade silently — the loop runs without `ctx.Plan`, and the agent loop behaves as it does when plan mode is off.
 
@@ -112,7 +111,7 @@ Both are paid up front before the agent's first tool call. The investment is rec
 
 | Layer | File | What's covered |
 |---|---|---|
-| v3-service plan endpoint | `tests/v3-service/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer recognizes language-specific linters as verification commands and does not credit recon calls as verification; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
+| v3-service plan endpoint | `tests/v3-service/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer credits a verify step that runs the program, its tests or a probe, and credits neither a static check (build, parse, linter) nor a recon call; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
 | proxy bridge | `proxy/v3_bridge_test.go` | SSE parse, missing-result error, stage routing |
 | proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
 | proxy adherence | `proxy/gates_test.go` | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |

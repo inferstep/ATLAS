@@ -1,0 +1,30 @@
+name: Spike (maintainers)
+description: Time-boxed research whose output is a written answer, not code
+type: Spike
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Spikes are opened by maintainers. To propose a change, use the Feature or RFC form.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: The one question this spike answers.
+    validations:
+      required: true
+  - type: input
+    id: timebox
+    attributes:
+      label: Time box
+      description: The most time this gets, e.g. "2 days".
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Where the write-up goes and what decision it feeds.
+    validations:
+      required: true

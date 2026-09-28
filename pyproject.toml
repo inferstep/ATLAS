@@ -1,6 +1,6 @@
 [project]
 name = "atlas"
-version = "3.1.3"
+version = "3.1.4"
 description = "Adaptive Test-time Learning and Autonomous Specialization"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -24,9 +24,10 @@ classifiers = [
 # the G(x) training step. Lower bounds only — the CLI has no reason to
 # pin exact versions.
 train = [
-    # Floor at the newest torch published to default PyPI — 2.13.x exists
-    # only on the pytorch CPU index, which plain `pip install atlas[train]`
-    # never consults (the audit found the old >=2.13.0 floor unsatisfiable).
+    # A lower bound that default PyPI can satisfy: plain `pip install
+    # atlas[train]` never consults the pytorch CPU index (a >=2.13.0 floor
+    # was once unsatisfiable there). The lens image pins its own torch in
+    # geometric-lens/requirements.txt; keep this floor at or below it.
     "torch>=2.12",
     "numpy>=1.24",
     "gguf",
@@ -37,10 +38,10 @@ train = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/itigges22/ATLAS"
-Repository = "https://github.com/itigges22/ATLAS"
-Issues = "https://github.com/itigges22/ATLAS/issues"
-Changelog = "https://github.com/itigges22/ATLAS/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/inferstep/ATLAS"
+Repository = "https://github.com/inferstep/ATLAS"
+Issues = "https://github.com/inferstep/ATLAS/issues"
+Changelog = "https://github.com/inferstep/ATLAS/blob/main/CHANGELOG.md"
 
 [project.scripts]
 atlas = "atlas.__main__:main"

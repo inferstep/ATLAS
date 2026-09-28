@@ -96,7 +96,6 @@ docker compose logs --tail 50
 | `"lens": false` / "Lens unavailable — verification disabled" | [Lens가 로드되지 않음 / 사용 불가](#lens가-로드되지-않음--사용-불가) |
 | 모든 후보가 `cx_energy: 0.0`, `gx_score: 0.5`를 받음 | [모든 점수가 0.5 부근](#모든-점수가-05-부근) |
 | lens 로그에 "embedding extraction failed" | [임베딩 추출 실패](#임베딩-추출-실패) |
-| 재학습 시 503 `models directory is mounted read-only` | [`/internal/lens/retrain`이 503을 반환](#internallensretrain이-503-models-directory-is-mounted-read-only를-반환) |
 | 샌드박스가 `"error_type": "Timeout"`을 반환 | [코드 실행 타임아웃](#코드-실행-타임아웃) |
 | 특정 언어에서 샌드박스 오류 | [지원되지 않는 언어](#지원되지-않는-언어) |
 | `--tasks`보다 작은 `LIMITED MODE: running N tasks` | [bench가 요청보다 적은 태스크만 실행함](#bench가-요청보다-적은-태스크만-실행함-limited-mode-running-n-tasks의-n이---tasks보다-작음) |
@@ -386,9 +385,9 @@ fatal: fetch-pack: invalid index-pack output
 
 ### 프록시가 워크스페이스에 쓰지 못함 (`.atlas.tmp: permission denied`)
 
-**증상:** 모든 `write_file`/`edit_file`이 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied`로 실패합니다(이후 에이전트는 "쓰기 가능한 하위 디렉터리"를 찾아 헤맵니다). 렌즈 학습 샘플 뱅킹도 중단됩니다(프록시 로그에서 `/data/lens_training` 쓰기 실패).
+**증상:** 모든 `write_file`/`edit_file`이 `cannot write /workspace/...: open /workspace/....atlas.tmp: permission denied`로 실패합니다(이후 에이전트는 "쓰기 가능한 하위 디렉터리"를 찾아 헤맵니다).
 
-**원인:** atlas-proxy 이미지는 이미지에 구워진 비루트 사용자(uid 1001, `atlas`)로 실행되지만, `/workspace`(`ATLAS_PROJECT_DIR`)와 `/data/lens_training`에 바인드 마운트된 호스트 디렉터리는 운영자의 uid가 소유합니다. 읽기는 되지만(모드 755) 쓰기는 모두 거부됩니다. `.env`가 `ATLAS_PROXY_UID`보다 오래된 설치는 하드닝된 프록시 이미지를 받은 뒤 이 문제를 겪습니다.
+**원인:** atlas-proxy 이미지는 이미지에 구워진 비루트 사용자(uid 1001, `atlas`)로 실행되지만, `/workspace`(`ATLAS_PROJECT_DIR`)에 바인드 마운트된 호스트 디렉터리는 운영자의 uid가 소유합니다. 읽기는 되지만(모드 755) 쓰기는 모두 거부됩니다. `.env`가 `ATLAS_PROXY_UID`보다 오래된 설치는 하드닝된 프록시 이미지를 받은 뒤 이 문제를 겪습니다.
 
 **해결:** 샌드박스가 이미 하는 것과 동일하게, 프록시를 호출한 사용자로 실행하세요:
 
@@ -825,7 +824,7 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **원인:** 임베딩 서버가 Geometric Lens의 `C(x)`/`G(x)` 아티팩트가 학습된 것과 다른 `/embedding` 규약으로 응답하고 있습니다 — 보통 풀링 대신 토큰별, 또는 L2 정규화 대신 비정규화(‖v‖가 ~1이 아니라 ≈60). 차원은 같고 분포가 다르므로, 코스트 필드 MLP가 거대한 에너지로 외삽하고 `cx_normalized`가 포화됩니다. `--pooling mean` 없이 서빙 스택을 재빌드한 뒤에 발생합니다(llama-server에는 `--embd-normalize` 서버 플래그가 없습니다. 렌즈는 `/embedding` 본문의 `embd_normalize`로 호출마다 L2 정규화를 요청합니다).
 
-**확인:** 렌즈는 부팅 시, 그리고 리로드/재학습 때마다 저장된 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
+**확인:** 렌즈는 자체 테스트(부팅 시, 그리고 재시도 가능한 실패 후 `/ready`가 다시 실행할 때)에서 저장된 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
@@ -837,9 +836,9 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   `shape per_token`이거나 `norm`이 1.0에서 크게 벗어나 있으면 서버 설정이 잘못된 것입니다.
-2. `ATLAS_EMBED_POOLING=mean`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요.
-3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트의 지문 검사가 통과하고 `/ready`가 200을 반환합니다. 아티팩트가 지문보다 오래되었다면 재학습(`atlas lens retrain`)이 지문을 쓰고 `embedding_contract`를 `model_identity.json`에 새깁니다.
+   풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다.
+2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
+3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트의 지문 검사가 통과하고 `/ready`가 200을 반환합니다. 아티팩트가 지문보다 오래되었다면 재빌드(`atlas lens build`)가 지문을 쓰고 `embedding_contract`를 `model_identity.json`에 새깁니다.
 
 ### 임베딩 추출 실패
 
@@ -856,14 +855,6 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` 플래그는 모든 배포 모드(Compose, 베어메탈, K3s)에서 llama-server 엔트리포인트가 설정합니다 — Geometric Lens가 셀프 임베딩에 의존하므로 항상 켜져 있습니다. 레이어별 hidden-states 확장을 실어 나르는 것도 네이티브 `/embedding` 경로입니다(`/v1/embeddings`가 아님).
-
-### `/internal/lens/retrain`이 503 "models directory is mounted read-only"를 반환
-
-**증상:** lens 서비스에 `/internal/lens/retrain`을 POST하면 ``"reason": "models directory is mounted read-only; run host-side retrain via `atlas lens retrain`"``과 함께 HTTP 503이 반환됩니다.
-
-**원인:** 표준 Compose 배포는 lens 모델 디렉토리를 읽기 전용(`:ro`)으로 컨테이너에 마운트하므로, 서비스 내 재학습 엔드포인트가 새 가중치를 쓸 수 없습니다. 엔드포인트는 학습 전에 쓰기 가능 여부를 탐침하고, 학습 실행을 낭비하는 대신 처음부터 거부합니다.
-
-**해결:** 재학습을 호스트 측에서 실행하세요 — `atlas lens retrain`(피드백 코퍼스) 또는 `atlas lens build`(벤치 후보)가 호스트에 아티팩트를 쓰고, `docker compose restart geometric-lens`로 로드합니다(서비스는 시작 시 아티팩트를 읽습니다). 벤치마크 기반 온라인 재캘리브레이션(`lens_feedback`)은 거부를 로그로 남기고 샘플 버퍼를 유지하므로 잃는 것은 없습니다.
 
 ---
 
@@ -932,14 +923,14 @@ atlas bench --run-id <your-run-id> --tasks 200
 2. `-ngl 99`(`--n-gpu-layers`) — 모든 레이어가 오프로드되었는지
 3. NVIDIA Container Toolkit — 컨테이너 런타임이 GPU 접근용으로 설정되었는지
 
-**예상 성능:** RTX 5060 Ti 16GB에서 문법 강제 시 약 51 tok/s.
+**예상 성능:** 현재 기준 수치는 없습니다. 처리량은 모델, 양자화, 문법 모드에 따라 달라집니다. 이전의 약 51 tok/s 수치는 더 이상 존재하지 않는 구성에서 나온 것입니다.
 
 ### V3 파이프라인이 수 분 소요됨
 
 T2 파일에 대해서는 정상입니다. V3 파이프라인은 여러 번의 LLM 호출을 수행합니다:
 - **프로브만 (최상의 경우):** 약 10-15초 (생성 1회 + 스코어링 1회 + 테스트 1회)
 - **Phase 1 생성:** 약 1-2분 (PlanSearch + DivSampling + 스코어링)
-- **Phase 3 수리:** 약 2-5분 (필요 시 PR-CoT + Refinement + Derivation)
+- **Phase 3 수리:** 약 2-5분 (필요 시 PR-CoT + Refinement)
 
 더 빠른(그러나 품질이 낮은) 결과를 원한다면:
 - 파일을 10줄 미만으로 유지 (T1 유지, V3 미실행) — 인식되는 코드 확장자는 10줄 이상이면 복잡도와 무관하게 T2가 됩니다

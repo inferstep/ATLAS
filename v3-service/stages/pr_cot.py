@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import strip_reasoning_leak
+from .llm_client import extract_code_for_problem, strip_reasoning_leak
 
 
 # Type alias for LLM callable
@@ -166,7 +166,11 @@ Original failing code:
 {code}
 ```
 
-Think step by step about what needs to change, then write the complete fixed Python code."""
+Treat every explicitly requested public name, exact signature, entry point, and input/output behavior as a hard contract.
+Preserve existing public interfaces unless the problem explicitly requires changing them.
+Copy parameter order and kinds (including / and * markers), defaults, and type annotations exactly.
+Implement behavioral contracts such as laziness, stopping conditions, ordering, and error behavior literally.
+Think step by step about what needs to change, then write one complete, syntactically valid fixed Python source file; never import that file or requested artifact from itself. Before answering, mentally compile it and verify every requested declaration and contract is implemented."""
 
 
 # ---------------------------------------------------------------------------
@@ -181,17 +185,20 @@ def extract_code_from_repair(response: str) -> str:
     # reasoning block model-agnostically before code extraction.
     response = strip_reasoning_leak(response)
 
+    # The block comes back verbatim: the fence is framing, the bytes inside
+    # it are the artifact, final newline and trailing blank lines included.
+    # The candidate hash downstream is computed from exactly this value.
     # Try ```python blocks
     py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
     if py_blocks:
-        return py_blocks[-1].strip()
+        return py_blocks[-1]
 
     # Try plain ``` blocks
     code_blocks = re.findall(r'```\s*\n(.*?)```', response, re.DOTALL)
     if code_blocks:
-        return code_blocks[-1].strip()
+        return code_blocks[-1]
 
-    return response.strip()
+    return response.lstrip()
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +293,9 @@ class PRCoT:
             )
             total_tokens += repair_tokens
 
-            repair_code = extract_code_from_repair(repair_response)
+            repair_code = extract_code_for_problem(
+                repair_response, problem, fallback="last"
+            )
             perspective_time = (time.time() - perspective_start) * 1000
 
             perspective_result = PerspectiveResult(

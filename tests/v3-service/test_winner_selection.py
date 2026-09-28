@@ -65,17 +65,26 @@ class _TC:
         self.expected_output = expected_output
 
 
-def _run_generated(test_code):
-    """Exec a generated self-test the way the sandbox would (module import):
-    fresh namespace, captured stdout. Restores sys.stdin afterwards."""
-    buf = io.StringIO()
-    old_stdin = sys.stdin
-    try:
-        with contextlib.redirect_stdout(buf):
-            exec(compile(test_code, "solution.py", "exec"), {"__name__": "solution"})
-    finally:
-        sys.stdin = old_stdin
-    return buf.getvalue()
+def _run_generated(built):
+    """Run a generated self-test the way the sandbox does: the request's
+    files staged into a fresh workspace, the wrapper imported as `solution`
+    from that directory. The candidate now travels as a staged file, so an
+    in-process exec no longer reproduces the real shape."""
+    import subprocess
+    import tempfile
+    body, files = built
+    work = tempfile.mkdtemp()
+    for name, content in (files or {}).items():
+        Path(work, name).write_text(content)
+    Path(work, "solution.py").write_text(body)
+    run = subprocess.run(
+        [sys.executable, "-c",
+         f"import sys; sys.path.insert(0,{work!r}); import solution"],
+        cwd=work, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=60)
+    if run.returncode != 0 and "AssertionError" in run.stderr:
+        raise AssertionError(run.stderr)
+    return run.stdout
 
 
 def test_make_self_test_stdin_form_preserves_multiline_string_literals():

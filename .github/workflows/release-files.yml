@@ -1,0 +1,80 @@
+name: release files
+
+# When a release is published, attach a signed list of its images:
+#   atlas-<version>-images.txt              one line per service,
+#                                           ghcr.io/<owner>/atlas-<svc>@sha256:…
+#   atlas-<version>-images.txt.sigstore.json  a keyless cosign bundle for it
+# Anyone can then check, offline, that a digest belongs to the release, and
+# the OpenSSF Scorecard Signed-Releases check finds the signature. Verify:
+#   cosign verify-blob --bundle atlas-X.Y.Z-images.txt.sigstore.json \
+#     --certificate-identity https://github.com/inferstep/ATLAS/.github/workflows/release-files.yml@refs/tags/vX.Y.Z \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com atlas-X.Y.Z-images.txt
+#
+# The images already exist: build-images.yml promotes :X.Y.Z at the tag,
+# before anyone publishes the release. This job reads their digests from the
+# registry anonymously; it builds nothing and checks out nothing.
+on:
+  release:
+    types: [published]
+  # For a release published before this workflow existed (v3.1.4). GitHub
+  # runs a manual trigger only from the default branch, so the signature
+  # then names refs/heads/main instead of the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to sign, e.g. v3.1.4
+        required: true
+
+permissions: {}
+
+jobs:
+  sign:
+    name: sign the release's image list
+    if: github.repository == 'inferstep/ATLAS'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload the two files to the release
+      id-token: write   # keyless cosign signature
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+
+      - name: List the image digests
+        id: list
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::release tag '$TAG' is not vX.Y.Z[-pre]"; exit 1
+          fi
+          ver="${TAG#v}"
+          out="atlas-${ver}-images.txt"
+          accept="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json"
+          for svc in proxy v3 lens sandbox llama llama-vulkan; do
+            repo="${OWNER}/atlas-${svc}"
+            token=$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+            digest=$( (curl -fsSI -H "Authorization: Bearer ${token}" -H "Accept: ${accept}" \
+              "https://ghcr.io/v2/${repo}/manifests/${ver}" || true) \
+              | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}' | tr -d '\r')
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::no image ghcr.io/${repo}:${ver}"; exit 1
+            fi
+            echo "ghcr.io/${repo}@${digest}" >> "$out"
+          done
+          cat "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the list
+        env:
+          FILE: ${{ steps.list.outputs.file }}
+        run: cosign sign-blob --yes --bundle "${FILE}.sigstore.json" "${FILE}"
+
+      - name: Attach both files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          FILE: ${{ steps.list.outputs.file }}
+        run: gh release upload "$TAG" "$FILE" "${FILE}.sigstore.json" --clobber -R "$REPO"

@@ -13,6 +13,7 @@ from typing import List, Optional
 from atlas import compose as compose_config
 from atlas import env as cli_env
 from atlas import config_schema as cs
+from atlas import upgrade_engine as eng
 
 
 def _default_env() -> str:
@@ -44,6 +45,11 @@ def _migrate(path: str, dry_run: bool = False) -> int:
     # comments, blank lines, and formatting survive the migration.
     dropped = {k for k in env if k not in _migrated}
     have_version = "ATLAS_CONFIG_SCHEMA_VERSION" in env
+    # A release-pinned install keeps the pre-move owner: its images live
+    # there. `atlas upgrade` moves it along with the new release.
+    owner_moves = eng.legacy_ghcr_owner_applies(env, keep_release_pin=True)
+    owner_kept = (not owner_moves and
+                  eng.legacy_ghcr_owner_applies(env, keep_release_pin=False))
 
     if dry_run:
         added = [] if have_version else ["ATLAS_CONFIG_SCHEMA_VERSION"]
@@ -53,6 +59,9 @@ def _migrate(path: str, dry_run: bool = False) -> int:
             print("  would remove: " + ", ".join(sorted(dropped)))
         if added:
             print("  would add:    " + ", ".join(added))
+        if owner_moves:
+            print(f"  would set:    ATLAS_GHCR_OWNER={eng.GHCR_OWNER} "
+                  f"(was {eng.LEGACY_GHCR_OWNER})")
         print("  (no changes written — drop --dry-run to apply)")
         return 0
 
@@ -85,6 +94,14 @@ def _migrate(path: str, dry_run: bool = False) -> int:
     with open(tmp, "w") as fh:
         fh.writelines(out_lines)
     os.replace(tmp, path)
+    if owner_moves:
+        note = eng.migrate_legacy_ghcr_owner(path, keep_release_pin=True)
+        if note:
+            print(f"  {note}")
+    elif owner_kept:
+        print(f"  kept ATLAS_GHCR_OWNER={eng.LEGACY_GHCR_OWNER}: "
+              "ATLAS_IMAGE_TAG pins a release from before the move. "
+              "`atlas upgrade` moves it with the next release.")
     print(f"config migrate: wrote schema v{cs.CONFIG_SCHEMA_VERSION} "
           "(comments preserved)")
     return 0

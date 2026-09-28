@@ -581,3 +581,136 @@ def add(num_a: int, num_b: int) -> int:
         lint_score = data.get("lint_score")
         if lint_score is not None:
             assert lint_score >= 5.0, f"Good code should score >= 5, got {lint_score}"
+
+
+class TestWorkingDirectoryContract:
+    """Where a candidate executes from.
+
+    `/execute` stages the request's `files` into a fresh per-request
+    workspace and writes the candidate there as `solution.py`, but the
+    plain-execution branch launched the process without a `cwd`, so it ran
+    from the image WORKDIR — a read-only directory in a `read_only: true`
+    container. A candidate told to read `input.txt` therefore could not see
+    the file the same request had just staged for it, and any relative write
+    raised `[Errno 30] Read-only file system`. The pytest branch two lines
+    away already passed `cwd=workspace`, so the two ways of running the same
+    candidate disagreed about where it stood.
+    """
+
+    REPORT = (
+        "import os\n"
+        "print('CWD=' + os.getcwd())\n"
+        "print('LISTING=' + ','.join(sorted(os.listdir('.'))))\n"
+        "try:\n"
+        "    print('READ=' + repr(open('input.txt').read()))\n"
+        "except OSError as e:\n"
+        "    print('READ_FAIL=' + type(e).__name__)\n"
+        "try:\n"
+        "    open('scratch.txt', 'w').write('x')\n"
+        "    print('WRITE=ok')\n"
+        "except OSError as e:\n"
+        "    print('WRITE_FAIL=' + str(e))\n"
+    )
+
+    @staticmethod
+    def _fields(stdout: str):
+        out = {}
+        for line in stdout.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                out[k] = v
+        return out
+
+    def test_execution_starts_in_the_per_request_workspace(self, sandbox_client):
+        """The staged file is readable by the name the task states."""
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": self.REPORT, "language": "python",
+                  "files": {"input.txt": "push 1\npush 2\n"}},
+            timeout=60.0,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True, data.get("stderr")
+        f = self._fields(data["stdout"])
+
+        # The workspace is where the request's files were staged, and it is
+        # where the candidate runs.
+        assert f["CWD"].startswith("/tmp/sandbox/"), f["CWD"]
+        assert "input.txt" in f["LISTING"], f["LISTING"]
+        assert "solution.py" in f["LISTING"], f["LISTING"]
+        assert f.get("READ") == repr("push 1\npush 2\n"), f
+        assert f.get("WRITE") == "ok", f
+
+    def test_the_pytest_branch_already_ran_from_the_workspace(self, sandbox_client):
+        """Pin on the neighbouring branch, so a regression there cannot make
+        the test above pass for the wrong reason."""
+        test_code = (
+            "import os\n"
+            "def test_cwd_is_the_workspace():\n"
+            "    assert os.getcwd().startswith('/tmp/sandbox/')\n"
+            "    assert open('input.txt').read() == 'staged\\n'\n"
+        )
+        response = sandbox_client.post(
+            "/execute",
+            json={"code": "x = 1\n", "language": "python",
+                  "test_code": test_code,
+                  "files": {"input.txt": "staged\n"}},
+            timeout=90.0,
+        )
+        data = response.json()
+        assert data["tests_passed"] >= 1, data.get("stdout", "")[-800:]
+
+    def test_the_container_root_stays_read_only(self, sandbox_client):
+        """Running from the workspace must not have made anything else
+        writable. `/app`, `/etc` and `/` stay exactly as hardened as before."""
+        code = (
+            "for p in ('/app/x', '/etc/x', '/x'):\n"
+            "    try:\n"
+            "        open(p, 'w').write('x')\n"
+            "        print('WROTE ' + p)\n"
+            "    except OSError as e:\n"
+            "        print('BLOCKED ' + p + ' ' + type(e).__name__)\n"
+        )
+        data = sandbox_client.post(
+            "/execute", json={"code": code, "language": "python"},
+            timeout=60.0).json()
+        assert "WROTE" not in data["stdout"], data["stdout"]
+        for p in ("/app/x", "/etc/x", "/x"):
+            assert f"BLOCKED {p}" in data["stdout"], data["stdout"]
+
+    def test_each_request_gets_its_own_workspace_and_it_is_removed(
+            self, sandbox_client):
+        """Distinct per request, and gone once the request is answered."""
+        import concurrent.futures
+
+        def one():
+            data = sandbox_client.post(
+                "/execute",
+                json={"code": "import os\nprint('CWD=' + os.getcwd())\n",
+                      "language": "python"},
+                timeout=60.0).json()
+            return self._fields(data["stdout"])["CWD"]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            paths = list(pool.map(lambda _: one(), range(3)))
+        assert len(set(paths)) == 3, paths
+
+        probe = ("import os\n"
+                 + "".join(f"print({p!r} + '=' + str(os.path.exists({p!r})))\n"
+                           for p in paths))
+        data = sandbox_client.post(
+            "/execute", json={"code": probe, "language": "python"},
+            timeout=60.0).json()
+        for p in paths:
+            assert f"{p}=False" in data["stdout"], data["stdout"]
+
+    def test_failure_reporting_is_unchanged(self, sandbox_client):
+        """A candidate that raises is still a failure with its traceback,
+        and the cwd change must not swallow either."""
+        data = sandbox_client.post(
+            "/execute",
+            json={"code": "raise ValueError('boom')\n", "language": "python"},
+            timeout=60.0).json()
+        assert data["success"] is False
+        assert "ValueError" in data["stderr"] and "boom" in data["stderr"]

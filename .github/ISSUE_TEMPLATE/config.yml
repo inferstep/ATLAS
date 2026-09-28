@@ -1,5 +1,11 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/itigges22/ATLAS/security/advisories/new
+    url: https://github.com/inferstep/ATLAS/security/advisories/new
     about: Report security issues privately via a GitHub security advisory, not a public issue.
+  - name: Question or help
+    url: https://github.com/inferstep/ATLAS/discussions/categories/q-a
+    about: Ask how to install, configure, or use ATLAS.
+  - name: Documentation
+    url: https://github.com/inferstep/ATLAS/tree/main/docs
+    about: Setup, configuration, troubleshooting, and architecture docs.

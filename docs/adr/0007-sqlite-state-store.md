@@ -1,6 +1,7 @@
 # ADR 0007: SQLite as the lens-service state store
 
-Status: accepted 2026-07 (supersedes 0002)
+Status: accepted 2026-07 (supersedes 0002); retired 2026-09-22 — the pattern
+cache, the store's only consumer, was removed, and the lens keeps no state
 
 ## Context
 SQLite was originally proposed in GH #57; PR #128 (core implementation

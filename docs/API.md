@@ -31,8 +31,6 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 | `/v1/permission` | POST | Answer a `permission_request` (approve/deny a destructive tool call mid-turn) |
 | `/events` | GET | Subscribe to a global typed-envelope event broker — same events the TUI's pipeline pane uses |
 | `/v1/calibration/status` | GET | Lens + ASA compat verdict for the loaded model — what the TUI's Pipeline pane badge reads on startup |
-| `/feedback` | POST | Record a pass's human verdict (per-file accept/deny and/or pass-level thumbs) as weighted lens training samples |
-| `/v1/lens/training-status` | GET | Collected lens-sample counts for the loaded model plus a retrain-available flag |
 
 **OpenAI compatibility:**
 
@@ -46,7 +44,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/health` | GET | Liveness — always 200, `status` reports `"ok"` or `"degraded"` |
-| `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (`lens/ready`), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
+| `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (the lens can score: the check `/v1/agent` applies), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 | `/version` | GET | API version, SSE protocol version, and the full error-code set — see [Versioning and error codes](#versioning-and-error-codes) |
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
@@ -71,15 +69,18 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 |-------|------|---------|-------------|
 | `message` | string | (required) | The user's request |
 | `working_dir` | string | `"."` | Host-side working directory. Inside the proxy container this is overridden to `ATLAS_WORKSPACE_DIR` (the bind-mount target — `/workspace` by default). The startup wrapper aligns the bind mount to the user's cwd, so writes land in the right place. |
-| `mode` | string | `"default"` | Permission mode: `"default"` (prompt for destructive ops), `"accept-edits"` (auto-approve `write_file`/`edit_file`/`structural_edit`/`move_file`, prompt for delete/run), `"yolo"` (auto-approve everything) |
+| `mode` | string | `"default"` | Permission mode: `"default"` (asks before `write_file`, `delete_file` and every command: `run_command`, `run_background`, `stop_background`; in-place edits and `move_file` run without asking), `"accept-edits"` (also runs `write_file` without asking; still asks before deletes and commands), `"yolo"` (asks for nothing except `delete_file`, which is always asked about per file) |
 | `session_id` | string | `""` | Required for `/cancel` and for the interactive permission prompt (`/v1/permission`). The proxy keys the cancel handle and pending permission requests by this id while the turn is running. **Without a session_id, destructive tool calls in `default`/`accept-edits` mode are denied** (there is no channel to answer the prompt) — unattended clients use `mode:"yolo"` or pre-approve tools via `session_allowed_tools`. |
 | `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
-| `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. |
-| `bypass_v3` | bool | `false` | Optional. Disables V3 orchestration for the turn. Used by the TUI's `/demo` split-pane baseline. |
+| `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. `delete_file` is never covered: each deletion is its own `permission_request` with `one_time_only: true`, and a client must not answer one on its own or offer a session-wide answer for it. |
+| `task_contract` | object | absent | Optional. What the client knows about the request. `task_mode` (required when the object is sent): `"work"` (the workspace should change) or `"question"` (nothing should change). `expected_outputs`: exact workspace paths the request must produce. `verification`: exact commands that must be run and pass. `candidate_policy`: accepted and ignored, so older clients keep working; one rule decides whether a V3 candidate replaces the model's own write ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)). A contract that does not validate (an unknown mode, a path outside the workspace, a `question` that declares outputs or commands) is refused with HTTP 400 rather than dropped. Without a contract, the proxy decides from the message whether a change is required, and no V3 candidate is generated, because no target is grounded. See [ARCHITECTURE.md § Client task mode](ARCHITECTURE.md#client-task-mode). |
+| `bypass_v3`, `v3_mode`, `feasibility_mode` | — | — | Removed. V3 runs on every request and feasibility is recorded, never enforced. A request that asks for V3 off (`bypass_v3: true`, `v3_mode` other than `full`) or `feasibility_mode: enforce` is refused with 400; `false`, `full` and `observe` are accepted and change nothing. |
 | `disable_fresh_slot` | bool | `false` | Optional. Keeps the pre-warmed KV-cache prefix instead of requesting a fresh slot. Used by `/demo`. |
 | `sandbox_subdir` | string | `""` | Optional. Confines the turn to a subdirectory of the workspace (a bare directory name — anything with path separators or traversal is ignored). `/demo` uses one per pane so concurrent sessions don't clobber each other's files. |
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
+
+**The lens is required** ([ADR 0011](adr/0011-the-lens-is-required.md)). Before any work, the proxy checks that the Geometric Lens can score (the same check as `/ready`; the answer is cached for 5 s). If it cannot, the request gets a plain HTTP 503 error envelope, not a stream: `error` is `dependency_down`, and `detail` says why and to run `atlas doctor`. If the lens stops scoring during the run, the run ends with `done` `status: "failed"`, `reason: "lens_unavailable"`; the tool call that needed the score is answered with `success: false`, and the summary says whether earlier changes are on disk.
 
 #### Event types on `/v1/agent`
 
@@ -112,7 +113,6 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_structural_veto` | A sandbox-passing candidate was rejected because tree-sitter found direct-identifier calls resolving to no local def, import, builtin, or project symbol. The candidate is marked failed and re-enters the Phase-3 repair pool; the energy fallback never returns it. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
 | `v3_call_chain_context` | Phase-3 repair injected a call-chain context block for the failing function. Informational. | `stage`, `detail`, `function` (string — the failing function name) |
 | `symbol_index_injected` | Turn-zero auto-injection of function/class snippets for symbols named in the user message. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
-| `pattern_context_injected` | Turn-zero injection of the lens pattern-cache reader's results (`POST /internal/patterns/context`): lessons from previous sessions whose pattern type matches the task, injected as one `[system note]` block. Absent when the lens is unreachable or returns nothing (fail-soft). | `count` (int — patterns injected, ≤3), `types` (string[] — the injected patterns' types) |
 | `agent_lens_score` | Lens scored a `write_file` or `edit_file` tool call's content. Fires per write/edit before tool execution. | `tool` (`write_file`\|`edit_file`), `turn` (int), `n_tokens` (int), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `latency_ms` (float) |
 | `agent_lens_intervention` | Lens detected consecutive low-quality writes against the model's `low`/`severe` thresholds and queued a corrective for the next LLM call. Absent when calibration is missing. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
 | `agent_repeat_intervention` | Proxy saw the same `(tool_name, args)` signature ≥3× in the last 8 turns and queued a corrective. | `turn` (int), `tool` (string), `reason` (string — the corrective injected into ctx.Messages) |
@@ -127,7 +127,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `plan_loaded` | A winning plan has been generated. Fires once after initial generation and again after each revision. Carries the full step list. | `steps` (array of `{id, action, target, why}`), `verify_step` (string id), `rationale` (string), `winning_score` (float), `revision` (int — 0 for initial plan, 1+ for revisions) |
 | `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`, no `neutral`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. Recon tools (`read_file`, `list_directory`, `find_file`, `search_files`) emit the miss shape plus `neutral=true` — they don't satisfy steps but leave `off_streak` unchanged. |
 | `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (5) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
-| `done` | Agent loop ended cleanly | `summary` (string — empty for a `text`-shaped turn) |
+| `done` | The session ended, once per request, whatever the outcome. Only `status: "completed"` means the work was finished; read an absent or unknown `status` as `incomplete`. See [ARCHITECTURE.md § Terminal contract](ARCHITECTURE.md#terminal-contract-and-the-session-budget) | `summary` (string — the server's account; for a `text`-shaped turn it may be empty), `status` (`completed`, `incomplete`, `stopped`, `failed` or `timed_out`; the summary ends with "V3 did not check these files: …" when a file's bytes on disk were written after V3 ran out of time or was unavailable), `reason` (string — why, for example `deliverables_demonstrated` (the deliverables that can run were run), `deliverables_parse_only` (some were only checked to parse), `verification_demanded_unmet`, `claim_check_unresolved`, `lens_unavailable` (the lens stopped scoring; the run stopped)), `unresolved` (comma-separated exit gates whose bounces were spent with their finding still true; present only when there are some — a `completed` run with `unresolved` completed with the caveats its summary names) |
 | `error` | LLM/parse/turn-cap error | `error` (string) |
 
 After the final event the server writes the SSE sentinel `data: [DONE]\n\n` and closes the response.
@@ -161,7 +161,12 @@ with requests.post(
         elif t == "text":
             print(d["content"])
         elif t == "done":
-            print(f"✓ {d.get('summary', '')}")
+            # Only "completed" is a finished task; absent or unknown is not.
+            if d.get("status") == "completed":
+                print(f"✓ {d.get('summary', '')}")
+            else:
+                print(f"not complete ({d.get('status', 'incomplete')}: "
+                      f"{d.get('reason', '')}) {d.get('summary', '')}")
         elif t == "error":
             print(f"✗ {d['error']}")
 ```
@@ -211,6 +216,8 @@ Answer a `permission_request` event. In `default` and `accept-edits` mode the ag
 | `decision` | string | `"allow"` or `"deny"` (anything other than `"allow"` denies) |
 | `scope` | string | `"once"` (this call only) or `"session"`. `"session"` additionally skips re-prompting for the same tool for the rest of the turn; the client typically also adds the tool to `session_allowed_tools` on subsequent turns. |
 
+**Deletions are approved once, against the object inspected.** For `delete_file` the prompt describes the exact target (canonical path, type, and for a regular file its content hash), `scope: "session"` is downgraded to this one call, and the approval is spent by the next attempt whatever its outcome. While the prompt is open the proxy holds a kernel reference to the inspected object (Linux `O_PATH`, following nothing, so a symlink is held as the link), and just before removal it checks that the object it holds still has a name and is what the path now refers to, then that the bytes, type, link text and size are unchanged. A file removed and recreated with identical bytes, a link recreated with the same text, an empty directory replaced by another, an in-place edit, a retarget, a type change or a directory that gained a child all make the approval stale: nothing is deleted and the model is told to ask again. On a platform without a held reference the proxy refuses to ask at all. What remains is the window between that final check and the `unlink`: Linux offers no unlink conditional on the object behind the name, so a replacement landing inside that window is not ruled out.
+
 **Response (200):** `{"delivered": true}` — the blocked turn was signaled.
 **Response (404):** `{"delivered": false}` — no matching pending request (already resolved, cancelled, or timed out).
 
@@ -256,12 +263,16 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
 {
   "lens": {
     "verdict": "supported",
+    "can_score": true,
+    "model_server_reachable": true,
     "cost_field_loaded": true,
     "cost_field_dim": 4096,
     "embed_dim": 4096,
     "gx_loaded": true,
     "cx_calibrated": true,
     "gx_calibrated": true,
+    "embed_capacity_tokens": 2048,
+    "embed_capacity_source": "declared",
     "hint": "ready"
   },
   "asa": {
@@ -273,7 +284,7 @@ Returns the proxy's view of whether the loaded model has compatible Geometric Le
 }
 ```
 
-`cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model.
+`cost_field_dim` / `embed_dim` reflect the loaded model's hidden dimension — the values differ per model. `embed_capacity_tokens` is the longest input the lens can score (llama-server's physical batch, `ATLAS_UBATCH`) as the lens reports it, `0` when unknown; `embed_capacity_source` is `declared` or `observed`. When it is below the proxy's per-turn generation ceiling (`ATLAS_MAX_TOKENS`), the `lens_scoring` dimension reads `partial` and its detail names both numbers: writes longer than the capacity come back unscored.
 
 The payload also carries a `dimensions` array — the seven status dimensions the TUI and `atlas doctor` render, each `{name, status, detail}`:
 
@@ -281,7 +292,7 @@ The payload also carries a `dimensions` array — the seven status dimensions th
 {
   "dimensions": [
     {"name": "model_runtime", "status": "supported", "detail": "model served and reachable"},
-    {"name": "direct_agent", "status": "supported", "detail": "model-agnostic; independent of lens/ASA state"},
+    {"name": "direct_agent", "status": "supported", "detail": "tools, permissions and sandbox verify; the lens can score"},
     {"name": "lens_identity", "status": "supported", "detail": "cost field matches the served model's dimension"},
     {"name": "lens_scoring", "status": "supported", "detail": "C(x) + G(x) scoring available"},
     {"name": "lens_calibration", "status": "calibrated", "detail": "per-model normalization + thresholds loaded"},
@@ -293,8 +304,8 @@ The payload also carries a `dimensions` array — the seven status dimensions th
 
 **Verdict values:**
 
-- **Lens:** `supported` | `no-artifacts` | `incomplete-artifacts` | `uncalibrated` | `dim-mismatch` | `unreachable`. `incomplete-artifacts` means C(x) loaded but G(x) artifacts are missing; `uncalibrated` means weights loaded without the model's calibration files (`cx_normalization.json` / `gx_thresholds.json`) — both point at `atlas lens build`.
-- **ASA:** `supported` | `missing` | `unverified` | `incompatible`. `incompatible` means the control vector on disk is marked for a different model than the one selected.
+- **Lens:** `supported` | `uncalibrated` | `no-artifacts` | `incomplete-artifacts` | `dim-mismatch` | `drifted` | `self-test-failed` | `model-server-unreachable` | `unreachable`. `incomplete-artifacts` means C(x) loaded but G(x) artifacts are missing; `uncalibrated` means weights loaded without the model's calibration files (`cx_normalization.json` / `gx_thresholds.json`) — both point at `atlas lens build`. `can_score` is `true` only for `supported` and `uncalibrated`; for every other verdict the `direct_agent` dimension is `blocked` and requests are refused ([ADR 0011](adr/0011-the-lens-is-required.md)). `model_server_reachable` is llama-server's reachability as the lens reports it.
+- **ASA:** `active` | `missing` | `unverified` | `incompatible`. `active` means the control vector is marked for the served model; whether its effect was measured is the registry's `asa_status`. `incompatible` means the control vector on disk is marked for a different model than the one selected.
 
 **Use:**
 
@@ -303,61 +314,6 @@ curl http://localhost:8090/v1/calibration/status | jq .
 ```
 
 **Cache:** none — every call re-probes the lens service. Cost is ~50–200 ms (one HTTP round-trip to `lens/health`). TUI calls once at startup; CI / monitoring should poll no faster than every few seconds.
-
----
-
-### POST /feedback
-
-Records a human verdict on the most recent pass for a session as weighted lens training samples (`proxy/lens.go`). The TUI's `/good`, `/bad`, and per-file accept/deny review flow post here. Per-file verdicts take precedence; when a file carries no verdict, the pass-level thumbs labels it coarsely (with lower weight). A denial is recorded as a confident negative regardless of the pass thumbs.
-
-**Request:**
-```json
-{
-  "session_id": "tui-7f3a2c1b",
-  "thumbs": "up",
-  "files": [
-    {"path": "app.py", "verdict": "accept"},
-    {"path": "utils.py", "verdict": "deny"}
-  ]
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `session_id` | string | The session whose pending pass is being rated. One pending pass per session — rating consumes it. |
-| `thumbs` | string | `"up"` \| `"down"` \| `""` — pass-level verdict, applied to files without a per-file verdict |
-| `files[].verdict` | string | `"accept"` \| `"deny"` — per-file verdict (review mode) |
-
-**Response (200):**
-```json
-{"recorded": 2, "good": 143, "bad": 27}
-```
-
-When there is no pending pass for the session, the response is `{"recorded": 0, "note": "no pending pass for that session"}`. Samples land in the per-model training corpus that `atlas lens retrain` consumes.
-
----
-
-### GET /v1/lens/training-status
-
-Reports the collected-sample counts for the loaded model and whether a retrain is worth offering. The TUI polls this to show the "retrain available" banner.
-
-```bash
-curl http://localhost:8090/v1/lens/training-status
-```
-
-```json
-{
-  "model": "local-model",
-  "good": 1650,
-  "bad": 420,
-  "total": 2070,
-  "threshold": 2000,
-  "retrain_available": true,
-  "command": "atlas lens retrain"
-}
-```
-
-`retrain_available` is true when `total >= threshold` **and** the minority class holds at least 25% of the threshold (so the corpus isn't all-positive or all-negative). The threshold defaults to 2000 and is overridable via `ATLAS_LENS_RETRAIN_MIN`.
 
 ---
 
@@ -393,10 +349,11 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | Tool | Purpose |
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
-| `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Cheaper than `read_file` for orienting in a large file. |
+| `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Orients inside a file too large to read whole; returns no bodies, so it locates code without showing it. |
 | `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
-| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change; before 2026-09-17 such edits were applied with the prefixes silently stripped from both arguments. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
 | `insert_after` | Insert lines into a file after line `line` (1-based, as printed by `read_file`; `0` inserts at the top). Only the new text is supplied — there is no anchor to reproduce, which is what makes it the right tool for ADDING code rather than changing it. Requires the file to have been read, so the line numbers are current. Same syntax, structural and embedded-script gates as `edit_file`. |
+| `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written. A mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
 | `structural_edit` | Surgical replacement of one whole named block (function, class, or HTML element). Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
 | `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
@@ -440,7 +397,7 @@ curl http://localhost:8090/health
 }
 ```
 
-Always returns 200. `status` is `"ok"` when inference, the lens (`/health` and `/ready`), and the sandbox all respond healthy, `"degraded"` otherwise. `lens` reflects the lens service's informational `/health`; `lens_ready` reflects its pass/fail `/ready` gate. `capabilities` advertises optional proxy features clients can probe for.
+Always returns 200. `status` is `"ok"` when inference, the lens, and the sandbox all respond healthy and the lens can score, `"degraded"` otherwise. `lens` reflects the lens service's informational `/health`; `lens_ready` says whether the lens can score, by the check `/v1/agent` applies to every request (lens `/ready`, then its `/health`: C(x) and G(x) loaded, self-test passed, not drifted, llama-server reachable). When `lens_ready` is `false`, `lens_reason` says why, and every request is refused. `capabilities` advertises optional proxy features clients can probe for.
 
 ### GET /ready
 
@@ -458,7 +415,7 @@ curl http://localhost:8090/ready
 }
 ```
 
-Returns 200 only when **all** gates pass: llama-server `/health`, geometric-lens `/ready` (503s when scoring is degraded — lens weights missing, embedding-dim mismatch), sandbox `/health`, and v3-service `/health` (checked whenever a V3 URL is configured). 503 with the same body otherwise.
+Returns 200 only when **all** gates pass: llama-server `/health`, the lens can score (the check `/v1/agent` applies; `lens_reason` says why when it cannot), sandbox `/health`, and v3-service `/health` (checked whenever a V3 URL is configured). 503 with the same body otherwise.
 
 ---
 
@@ -480,11 +437,12 @@ Run the V3 pipeline for a file generation task. Streams progress events as SSE.
   "build_command": "npx next build",
   "constraints": ["Must use Tailwind CSS", "Must be a client component"],
   "tier": 2,
-  "working_dir": "/path/to/project"
+  "working_dir": "/path/to/project",
+  "budget_ms": 150000
 }
 ```
 
-All fields are optional except the task itself. `tier` defaults to 2.
+All fields are optional except the task itself. `tier` defaults to 2. `budget_ms` is the wall-clock cap the caller applies to this call; when it is a positive number the pipeline plans every phase against it, and otherwise it reads `ATLAS_V3_TIMEOUT`. The proxy always sends the cap it applies.
 
 **Response (SSE stream):**
 ```
@@ -684,20 +642,16 @@ Top-level function/class listing for a file — the backend of the proxy's `outl
 }
 ```
 
-When `ATLAS_CALL_GRAPH` is enabled, each symbol additionally carries its intra-file call-graph neighborhood (`calls` / `called_by` string arrays).
+Each symbol also carries its intra-file call-graph neighborhood (`calls` / `called_by` string arrays).
 
-### POST /internal/pycheck
+An `embedded_regions` array is added when the file holds code in another language — `<script>` / `<style>` blocks in HTML, and the same inside Python string literals (the `render_template_string` shape). The host grammar cannot see into a string literal, so without it the outline of a Flask app whose whole UI is one template reports `function:index` and nothing else, and a model looking for the game loop reaches for `structural_edit selector="function:draw"` — a symbol no selector can reach. Each entry carries `where`, `kind`, `start_line`, `end_line`, and for JavaScript the `symbols` declared inside it.
 
-Parse-check Python source without executing it (pure `compile()`). Used by the proxy's `edit_file` path to refuse writing a `.py` file the edit would break — the same gate `structural_edit` applies post-splice.
-
-**Request:**
 ```json
-{"path": "app.py", "source": "<file text>"}
-```
-
-**Response:** `{"ok": true}` on success, or:
-```json
-{"ok": false, "error": "SyntaxError at line 3: invalid syntax (offending line: def foo(:)", "line": 3}
+{"embedded_regions": [
+  {"where": "the <script> block inside the Python string HTML_TEMPLATE",
+   "kind": "javascript", "start_line": 77, "end_line": 202,
+   "symbols": ["draw", "spawnFood", "collision", "gameOver"]}
+]}
 ```
 
 ### POST /internal/structural_check
@@ -724,11 +678,13 @@ Resolve every direct-identifier call in a Python source against its local defs, 
 
 ### POST /internal/embedded_script_check
 
-Syntax-check the JavaScript (and brace-balance the CSS) *embedded* in a file — what `/internal/pycheck` and the sandbox's `/syntax-check` are both blind to, because they see the host language only. Two carriers are handled: `<script>`/`<style>` blocks in `.html`/`.htm`/`.jinja`/`.jinja2` files, and HTML held in a **Python string literal** (the `render_template_string` shape). Backs the proxy's embedded-script gate on `edit_file`, `structural_edit` and the `write_file` branches.
+Syntax-check the JavaScript (and brace-balance the CSS) *embedded* in a file — what the sandbox's `/syntax-check` is blind to, because it sees the host language only. Two carriers are handled: `<script>`/`<style>` blocks in `.html`/`.htm`/`.jinja`/`.jinja2` files, and HTML held in a **Python string literal** (the `render_template_string` shape). Backs the proxy's embedded-script gate on `edit_file`, `insert_after`, `replace_lines`, `structural_edit` and the `write_file` branches.
+
+Given the optional `previous` (the pre-edit file) it also reports a **stopped render loop**: a function a repeating timer used to drive that the edit left scheduled exactly once, never re-arming. That finding carries `"defect": "stopped_loop"` and needs both versions, because one version alone cannot tell a dead loop from a deliberate delayed one-shot. A finding for a missing closing token also carries `opened_line` / `opened_text`, the block that was left unclosed: tree-sitter reports the absence at the point the parser gave up, which is generally a line the edit never touched. A `let`/`const` declaring the same name twice in one scope is reported from the edited file alone as `"defect": "redeclaration"` — the spec makes that an unconditional early error, so the browser refuses the whole script. Same blind spot as the syntax check, one level up — the JavaScript parses, the server starts and the page returns 200, and the page freezes after one frame.
 
 **Request:**
 ```json
-{"path": "app.py", "source": "<full file content>"}
+{"path": "app.py", "source": "<full file content>", "previous": "<pre-edit content, optional>"}
 ```
 
 **Response:**
@@ -766,7 +722,7 @@ curl http://localhost:8070/health
 
 ## Geometric Lens (Port 8099)
 
-Energy-based code scoring using C(x) cost field and G(x) quality prediction, plus the pattern cache (lessons from previous sessions, served back to the agent loop). Every route is internal to the stack — the proxy and v3-service are the only callers.
+Energy-based code scoring using C(x) cost field and G(x) quality prediction. Every route is internal to the stack — the proxy and v3-service are the only callers.
 
 > **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
@@ -782,6 +738,7 @@ Score code using combined C(x) + G(x) energy. Single embedding extraction serves
 **Response:**
 ```json
 {
+  "scored": true,
   "cx_energy": 5.2,
   "cx_normalized": 0.32,
   "cx_calibrated": true,
@@ -795,16 +752,31 @@ Score code using combined C(x) + G(x) energy. Single embedding extraction serves
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `cx_energy` | float | Raw cost field energy (lower = more likely correct) |
-| `cx_normalized` | float | 0–1 normalized energy |
+| `scored` | bool | Whether a score was computed. `false` means every score field is `null` and `failure` says why |
+| `cx_energy` | float or null | Raw cost field energy (lower = more likely correct) |
+| `cx_normalized` | float or null | 0–1 normalized energy |
 | `cx_calibrated` | bool | Whether the model's C(x) normalization calibration (`cx_normalization.json`) is loaded |
-| `gx_score` | float | 0–1 probability of correctness (G(x) model) |
-| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when the Lens is disabled or the G(x) model isn't loaded; `"error"` when evaluation failed (payload carries `error`) |
+| `gx_score` | float or null | 0–1 probability of correctness (G(x) model) |
+| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when the Lens is disabled or the G(x) model isn't loaded; `"unscored"` when no score was computed (payload carries `failure` and `error`) |
 | `gx_available` | bool | Whether the G(x) model was loaded |
 | `enabled` | bool | Whether Geometric Lens is enabled |
 | `latency_ms` | float | Execution time in milliseconds |
+| `failure` | object | Present only when `scored` is `false`: `kind` plus its detail (below) |
 
-When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`).
+When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`): a configuration state, not a failed score.
+
+When the Lens could not score the text, the response is not a score: `scored: false`, `verdict: "unscored"`, `null` in every score field, and a `failure` object. `kind` is one of:
+
+| `failure.kind` | Meaning | Extra fields |
+|---|---|---|
+| `embed_capacity` | The input exceeds llama-server's physical batch (`ATLAS_UBATCH`), which processes one embedding request whole. The counts are the server's own. | `input_tokens`, `capacity_tokens`, `detail` |
+| `model_server_error` | llama-server answered an HTTP error that was not the capacity refusal | `status`, `detail` |
+| `model_server_unreachable` | No answer from llama-server (refused, reset, timed out) | `detail` (exception type) |
+| `embedding_contract` | The answer violated the artifact's embedding convention | `detail` |
+| `nonfinite_score` | A score came out NaN or infinite (a degenerate forward or calibration); reported as unscored, never serialized as a number | `field` (`cx_energy`, `cx_normalized`, `gx_score`), `detail` |
+| `internal` | Anything else; the service log has the traceback | `detail` |
+
+Nothing in such a response is truncated, split or substituted: the whole sequence is what the calibrated score is computed from ([ADR 0010](adr/0010-lens-capacity-boundary-is-typed.md)). v3-service records the failure on the candidate, ranks it after every scored candidate, and delivers it only as the last verified candidate standing; the proxy applies no threshold to an unscored write.
 
 **Example:**
 ```bash
@@ -817,10 +789,12 @@ curl http://localhost:8099/internal/lens/gx-score \
 
 ```bash
 curl http://localhost:8099/health
-# {"service": "geometric-lens", "status": "healthy", "subsystems": {"sqlite": {...}, "llama_server": {...}, "lens": {...}}}
+# {"service": "geometric-lens", "status": "healthy", "subsystems": {"llama_server": {...}, "lens": {...}}}
 ```
 
 Always returns 200 — the endpoint is informational. `status` is `"healthy"` or `"degraded"`; the `subsystems.lens` block carries `cost_field_loaded`, `cost_field_dim`, `embed_dim`, `gx_loaded`, `cx_calibrated`, `gx_calibrated`, and the self-test result the proxy's `/v1/calibration/status` verdict is derived from.
+
+It also carries the embedding capacity contract: `embed_capacity_tokens` (the longest input one score can be computed from, llama-server's physical batch; `null` until known), `embed_capacity_source` (`"declared"` from `LLAMA_EMBED_CAPACITY_TOKENS`, `"observed"` once the server has refused an input, which is authoritative), `embed_capacity_rejections` and `embed_capacity_max_rejected_tokens`. Information only: an input past the capacity is reported `unscored` per request, never gated here.
 
 ### GET /ready
 
@@ -828,25 +802,7 @@ Always returns 200 — the endpoint is informational. `status` is `"healthy"` or
 curl http://localhost:8099/ready
 ```
 
-Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). The atlas-proxy `/health` and `/ready` handlers both call this — `/health` is informational, `/ready` is pass/fail.
-
-### POST /internal/patterns/context
-
-The pattern-cache read path. Returns patterns from previous sessions whose pattern type matches the task text, scored by type match + recency + success rate, with 1-hop co-occurrence expansion. The proxy calls this in its agent-loop setup and injects the results as a `[system note]` block (see the `pattern_context_injected` event on `/v1/agent`). Served patterns get their access stats updated in the background.
-
-**Request:**
-```json
-{"task": "fix the broken index.html template", "top_k": 3}
-```
-
-**Response:**
-```json
-{
-  "patterns": [
-    {"summary": "...", "content": "...", "type": "error_fix", "age_days": 3.2}
-  ]
-}
-```
+Readiness probe (`geometric-lens/main.py`). Flips to 503 when scoring is degraded (lens weights missing, embedding-dim mismatch). It answers 200 for a lens with no G(x) model, so the atlas-proxy asks this and then the lens `/health` before it accepts a request ([ADR 0011](adr/0011-the-lens-is-required.md)); its `/health` and `/ready` report the result as `lens_ready`. The payload repeats `embed_capacity_tokens`; the capacity never changes the verdict.
 
 ### Additional endpoints
 
@@ -854,10 +810,8 @@ These are not part of the public API — every row is consumed by other ATLAS se
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/internal/patterns/write` | POST | Write pattern data — in-stack path used by v3-service after a successful run |
-| `/internal/lens/score-text` | POST | Score text (C(x) only) |
-| `/internal/lens/retrain` | POST | Retrain cost field model. Returns 503 with structured guidance when the models dir is mounted read-only (the standard Compose deployment mounts it `:ro`) — run `atlas lens retrain` host-side instead. |
-| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). |
+| `/internal/lens/score-text` | POST | Score text (C(x) only). `scored: false` with `energy`/`normalized` `null` and a `failure` when no score was computed (same kinds as `gx-score`, plus `models_not_loaded`) |
+| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). `scored: false` with an empty `per_step`/`aggregate`, `n_tokens: 0` and a `failure` when no score was computed (same kinds as `gx-score`). |
 
 ---
 
@@ -885,6 +839,17 @@ Spawn a background process and return a `job_id` immediately. Used by the proxy'
 
 **Errors:** 400 on empty command; 429 when active-job count exceeds `BG_MAX_JOBS`.
 
+### GET /jobs
+
+Every job the sandbox is holding, whoever started it. The registry is process-wide and has no session concept, so a server left running by an earlier session keeps its port while `/jobs/{job_id}` needs an id the new session never saw — the bind failure's own advice ("identify and stop that program") was unfollowable without this. The proxy's port-conflict hint falls back to this list and names the offending job so the model can `stop_background` it.
+
+**Response:**
+```json
+{"jobs": [{"job_id": "a1b2c3d4e5f6", "command": "python app.py", "started_at": 1714617823.4, "running": true}]}
+```
+
+Ordered oldest first. Exited jobs stay listed with `"running": false` until the reaper clears them, so a just-finished job is distinguishable from one still holding a port.
+
 ### GET /jobs/{job_id}/output
 
 Snapshot of recent stdout/stderr plus run state. Used by the proxy's `tail_background` tool. Each stream is a ring buffer capped at `BG_MAX_LINES`; pass `?lines=N` (default 50) for the tail length.
@@ -910,7 +875,7 @@ SIGTERM the process group, wait briefly, SIGKILL if still alive. Used by the pro
 
 ### POST /shell
 
-Run a shell command against the bind-mounted workspace. The proxy's `run_command` tool routes here so the agent's verification commands (`pytest`, `python app.py`, `npm run build`, `curl`, etc.) execute against the user's actual files with the full language matrix the proxy lacks.
+Run a shell command against the bind-mounted workspace. The proxy's `run_command` tool routes here so the agent's verification commands (`pytest`, `python app.py`, `npm test`, `curl -sf`, etc.) execute against the user's actual files with the full language matrix the proxy lacks.
 
 **Request:**
 ```json
@@ -929,6 +894,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
 | `timeout` | int | 30 | Max execution time in seconds. Capped at `MAX_EXECUTION_TIME` (60s in-code default; the Compose stack sets it to 300 via `ATLAS_SANDBOX_MAX_EXECUTION_TIME`, matching the proxy's `run_command` cap). |
 | `env` | object | null | Extra env vars merged on top of the container's environment. |
 | `files` | object | null | Optional map of `relative-path → content`. When present, `/shell` copies a bounded snapshot of the workspace into `/tmp`, overlays these files, runs the command there, then deletes the snapshot. Used by V3 build verification to test a candidate without writing it into the real bind-mounted project. |
+| `observe_paths` | array | null | Optional list of workspace-relative paths to hash before and after the command. When present, the response carries an `observation`. Opt-in: existing callers pay nothing. An empty list still reports the workspace digest. |
 
 **Response:**
 ```json
@@ -937,11 +903,40 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
   "stdout": "Hello World\n",
   "stderr": "",
   "exit_code": 0,
-  "elapsed_ms": 78
+  "elapsed_ms": 78,
+  "timed_out": false
 }
 ```
 
-`success` is `exit_code == 0`. Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
+`success` is `exit_code == 0`. `timed_out` states the timeout structurally so a
+caller does not have to recognise it from prose.
+
+**Observation** (present only when `observe_paths` was sent):
+
+```json
+{
+  "observation": {
+    "target_before": {"solve.py": "e3b0c442…"},
+    "target_after":  {"solve.py": "e3b0c442…"},
+    "workspace_before": "9f86d081…",
+    "workspace_after":  "9f86d081…",
+    "workspace_files": 42,
+    "digest_truncated": false
+  }
+}
+```
+
+The snapshot is deleted before the response returns, so nothing outside the
+executor can look at it afterwards — this is the only way a caller can learn
+whether a command changed what it was testing. It reports **facts and no
+conclusions**: an absent path is `""` rather than omitted, and
+`digest_truncated` is `true` when the tree exceeded
+`ATLAS_SHELL_OBSERVE_MAX_FILES` (5000) rather than a partial digest being
+passed off as a complete one. Whether any observed change was *permitted* is
+the caller's question; the executor has no way to know.
+
+The proxy uses this for candidate staging — see
+[CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md). Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
 
 The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps one `bash -c "…"` / `eval "…"` layer so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
 
@@ -1019,9 +1014,13 @@ Check syntax without executing code.
   "valid": false,
   "errors": ["SyntaxError: invalid syntax (line 1)"],
   "language": "python",
-  "check_time_ms": 12
+  "check_time_ms": 12,
+  "status": "checked",
+  "outcome": "completed"
 }
 ```
+
+The verdict is about syntax only, for the one file sent. `status` is `checked` when the checker ran to its own conclusion, and `not_run` when the resource contract stopped it or it never started; then `valid` is `false`, `outcome` says how it ended (`timed_out`, `memory_exhausted`, `spawn_failed`, ...), and `errors` holds one `syntax verification unavailable` line rather than a syntax error.
 
 ### GET /languages
 
@@ -1169,11 +1168,13 @@ curl http://localhost:8080/health
 
 ## Versioning and error codes
 
-`GET /version` returns the API version, the SSE protocol version, and
-the full error-code set:
+`GET /version` returns the API version, the SSE protocol version, the
+full error-code set, and the tool-call grammar mode this proxy applies
+(`strict` or `loose`, from `ATLAS_GRAMMAR_MODE`), so a measurement can
+record the configuration it ran against:
 
 ```json
-{"api_version": "1.0.0", "protocol_version": 1, "error_codes": [...]}
+{"api_version": "1.0.0", "protocol_version": 1, "error_codes": [...], "grammar_mode": "strict"}
 ```
 
 `api_version` follows semver (minor = additive, major = breaking).

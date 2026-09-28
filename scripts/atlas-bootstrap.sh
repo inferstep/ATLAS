@@ -23,9 +23,9 @@
 # Idempotent — safe to re-run. Each step checks "already done" before acting.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 #   # pinned to a release (script AND checkout at the same tag):
-#   curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/vX.Y.Z/scripts/atlas-bootstrap.sh \
+#   curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/vX.Y.Z/scripts/atlas-bootstrap.sh \
 #     | ATLAS_BOOTSTRAP_REF=vX.Y.Z bash
 #   # or, from a checkout:
 #   ./scripts/atlas-bootstrap.sh
@@ -44,7 +44,7 @@
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
-#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.2)
+#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.6)
 #
 # Exit codes:
 #   0   success
@@ -83,7 +83,7 @@ die() {
     log_err "$*"
     echo
     echo -e "${RED}${BOLD}Bootstrap failed.${NC} Re-run after addressing the issue above."
-    echo -e "${DIM}For help: https://github.com/itigges22/ATLAS/issues${NC}"
+    echo -e "${DIM}For help: https://github.com/inferstep/ATLAS/issues${NC}"
     exit 1
 }
 
@@ -782,7 +782,7 @@ ensure_repo_and_env() {
     # If we're not in a checkout, clone to ATLAS_INSTALL_DIR
     if [[ ! -f "./docker-compose.yml" || ! -d "./proxy" ]]; then
         local install_dir="${ATLAS_INSTALL_DIR:-/opt/atlas}"
-        local repo_url="${ATLAS_REPO_URL:-https://github.com/itigges22/ATLAS.git}"
+        local repo_url="${ATLAS_REPO_URL:-https://github.com/inferstep/ATLAS.git}"
 
         local pin_ref="${ATLAS_BOOTSTRAP_REF:-}"
         log_info "Not in a checkout. Cloning $repo_url to $install_dir…"
@@ -889,6 +889,7 @@ ensure_repo_and_env() {
         log_ok "Pinned ATLAS_IMAGE_TAG=${image_tag} in .env"
     fi
 
+    migrate_legacy_ghcr_owner
     ensure_default_model_selected
     persist_backend_selection
 
@@ -905,6 +906,37 @@ env_file_value() {
     # as empty, not fatal. Broke every install-matrix distro when
     # persist_backend_selection queried the commented-out ATLAS_BACKEND.
     grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+# ATLAS moved from itigges22/ATLAS to inferstep/ATLAS, and releases after
+# the move are published only under ghcr.io/inferstep. Older installs
+# carry ATLAS_GHCR_OWNER=itigges22 in .env (atlas init wrote it), which
+# outranks the compose default, so an install that follows a moving tag
+# (latest, dev) would keep pulling images that no longer update. A
+# release-pinned install keeps the old owner: its images live there. An
+# owner exported in the shell is an explicit choice and is left alone.
+# Same rule as `atlas config migrate` (atlas/upgrade_engine.py).
+migrate_legacy_ghcr_owner() {
+    local owner tag
+    [[ -z "${ATLAS_GHCR_OWNER:-}" ]] || return 0
+    owner=$(env_file_value ATLAS_GHCR_OWNER)
+    owner="${owner//[\"\']/}"
+    [[ "$owner" == "itigges22" ]] || return 0
+    tag=$(env_file_value ATLAS_IMAGE_TAG)
+    tag="${tag//[\"\']/}"
+    if [[ "${tag:-latest}" =~ ^v?[0-9]+(\.[0-9]+)*([.-].*)?$ ]]; then
+        log_info "Keeping ATLAS_GHCR_OWNER=itigges22: ATLAS_IMAGE_TAG=${tag} pins a release from before the move. \`atlas upgrade\` moves it with the next release."
+        return 0
+    fi
+    # Rewrite through a temp file and `cat >` so the .env keeps its
+    # owner and mode, with no GNU-only `sed -i`.
+    if sed -E 's/^ATLAS_GHCR_OWNER=.*/ATLAS_GHCR_OWNER=inferstep/' .env > .env.owner-tmp \
+        && cat .env.owner-tmp > .env; then
+        log_ok "ATLAS_GHCR_OWNER: itigges22 → inferstep in .env (ATLAS moved to inferstep/ATLAS)"
+    else
+        log_warn "Could not update ATLAS_GHCR_OWNER in .env; set it to inferstep by hand."
+    fi
+    rm -f .env.owner-tmp
 }
 
 # Set (or append) key=value in ./.env.
@@ -1069,7 +1101,7 @@ install_go() {
     # toolchain when building tui. We pick 1.24 as the install target
     # since it's the proven floor and the smallest stable download.
     local need_version="1.24"
-    local install_version="${ATLAS_GO_VERSION:-1.26.2}"
+    local install_version="${ATLAS_GO_VERSION:-1.26.6}"
 
     # Already have new-enough Go? A previous bootstrap may have installed it
     # under /usr/local/go while this non-login process still lacks that PATH.
@@ -1406,7 +1438,7 @@ build_asa_steering_vector() {
     # no GPU to run it on (CPU-only Vulkan hosts).
     local -a gpu_run_args=()
     local image_tag="${ATLAS_IMAGE_TAG:-latest}"
-    local ghcr_owner="${ATLAS_GHCR_OWNER:-itigges22}"
+    local ghcr_owner="${ATLAS_GHCR_OWNER:-inferstep}"
     local image=""
     case "$GPU_VENDOR" in
         nvidia)
@@ -1602,8 +1634,8 @@ print_ready_banner() {
     echo -e "    ${CYAN}docker compose ps${NC}       ${DIM}# raw container status${NC}"
     echo -e "    ${CYAN}docker compose logs -f${NC}  ${DIM}# stream logs across all services${NC}"
     echo
-    echo -e "  ${BOLD}Docs${NC}: https://github.com/itigges22/ATLAS/tree/main/docs"
-    echo -e "  ${BOLD}Issues${NC}: https://github.com/itigges22/ATLAS/issues"
+    echo -e "  ${BOLD}Docs${NC}: https://github.com/inferstep/ATLAS/tree/main/docs"
+    echo -e "  ${BOLD}Issues${NC}: https://github.com/inferstep/ATLAS/issues"
     echo
 }
 

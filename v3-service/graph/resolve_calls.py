@@ -57,8 +57,16 @@ def unresolved_calls(
 
     Returns {"ok", "unresolved": [...], "n_calls_total", "lenient": bool}.
     `lenient` is True when an unresolvable wildcard import means nothing can be
-    confidently flagged. `ok=False` (with "error") when extraction is unavailable.
+    confidently flagged. `ok=False` (with "error") when extraction is
+    unavailable or the candidate is not Python.
+
+    Python only. The walks below use the Python grammar, which parses any text
+    tolerantly: an HTML page whose <script> called setInterval came back with
+    setInterval and `function` unresolved, so the page with working JavaScript
+    was vetoed and a static one kept.
     """
+    if not _extract.is_python(candidate_path):
+        return {"ok": False, "error": "call-graph resolution supports Python only"}
     if not _extract.available():
         return {"ok": False, "error": "tree-sitter not installed"}
 

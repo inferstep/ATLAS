@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,29 +11,48 @@ import (
 	"testing"
 )
 
-func TestSanitizeFileContentStripsMarkdownWrapper(t *testing.T) {
-	// The exact failure mode from /home/isaac/snake/templates/index.html:
-	// LLM prose preamble + ```html fence + actual HTML + closing fence +
-	// numbered-list explanation containing literal {{ url_for(...) }}.
-	in := strings.Join([]string{
-		"Looking at the task, I need to create a complete index.html file.",
-		"",
-		"```html",
-		"<!DOCTYPE html>",
-		"<html><body>hi</body></html>",
-		"```",
-		"",
-		"This file:",
-		"1. Renders correctly",
-		"2. **Includes Jinja syntax** ({{ url_for(...) }})",
-	}, "\n")
-	got, sanitized := sanitizeFileContent("templates/index.html", in)
-	if !sanitized {
-		t.Fatal("sanitized=false, want true")
-	}
-	want := "<!DOCTYPE html>\n<html><body>hi</body></html>"
-	if got != want {
-		t.Errorf("got %q\nwant %q", got, want)
+// Prose around a fence is not an exact whole-file wrapper, so which lines are
+// the file is a guess. The sanitizer no longer makes it (on c5927b3 the same
+// fuzzy search reduced a YAML file with a ```bash example in a block scalar to
+// "  ls -la\n"); the JSON channel refuses the shape before execution instead.
+func TestSanitizeFileContentLeavesProseAroundAFenceUnchanged(t *testing.T) {
+	for _, c := range []struct{ path, in string }{
+		// The failure mode from /home/isaac/snake/templates/index.html.
+		{"templates/index.html", strings.Join([]string{
+			"Looking at the task, I need to create a complete index.html file.",
+			"",
+			"```html",
+			"<!DOCTYPE html>",
+			"<html><body>hi</body></html>",
+			"```",
+			"",
+			"This file:",
+			"1. Renders correctly",
+			"2. **Includes Jinja syntax** ({{ url_for(...) }})",
+		}, "\n")},
+		{"app.js", strings.Join([]string{
+			"Here's app.js with the /* config */ block rewritten:",
+			"```javascript",
+			"const x = 1;",
+			"export default x;",
+			"```",
+		}, "\n")},
+	} {
+		got, sanitized := sanitizeFileContent(c.path, c.in)
+		if sanitized || got != c.in {
+			t.Errorf("%s: content was rewritten (sanitized=%v):\n%q", c.path, sanitized, got)
+		}
+		args, _ := json.Marshal(map[string]string{"path": c.path, "content": c.in})
+		msg, refused := jsonChannelContentFeedback("write_file", args)
+		if !refused {
+			t.Errorf("%s: prose around a fence was not refused", c.path)
+			continue
+		}
+		for _, want := range []string{"NOT performed", "@fenced", "only the file's own"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s: refusal lacks %q:\n%s", c.path, want, msg)
+			}
+		}
 	}
 }
 
@@ -59,19 +79,41 @@ func TestSanitizeFileContentLeavesMarkdownFilesAlone(t *testing.T) {
 	}
 }
 
-func TestSanitizeFileContentHandlesUnmatchedFence(t *testing.T) {
-	// Truncated response: opener but no closer. Take everything after
-	// the opener (better than discarding the file).
+// A fence that never closes (a cut response) is not a wrapper either. The old
+// sanitizer took "everything after the opener", which is a guess about where
+// the file begins and says nothing about where it ends.
+func TestSanitizeFileContentLeavesAnUnclosedFenceUnchanged(t *testing.T) {
 	in := "Here's the code:\n\n```python\ndef foo():\n    return 1\n"
 	got, sanitized := sanitizeFileContent("foo.py", in)
-	if !sanitized {
-		t.Fatal("sanitized=false, want true (opener present)")
+	if sanitized || got != in {
+		t.Errorf("unclosed fence was rewritten (sanitized=%v): %q", sanitized, got)
 	}
-	if !strings.Contains(got, "def foo()") {
-		t.Errorf("lost the code body: %q", got)
+	args, _ := json.Marshal(map[string]string{"path": "foo.py", "content": in})
+	if _, refused := jsonChannelContentFeedback("write_file", args); !refused {
+		t.Error("an unclosed fence with a preamble was not refused")
 	}
-	if strings.Contains(got, "Here's the code") {
-		t.Errorf("kept the prose preamble: %q", got)
+}
+
+// Exactly one fenced block and nothing else is the one shape whose file is
+// unambiguous. It is stripped, and only it.
+func TestSanitizeFileContentStripsOnlyAnExactWholeFileWrapper(t *testing.T) {
+	for _, c := range []struct {
+		name, in, want string
+		stripped       bool
+	}{
+		{"plain wrapper", "```python\ndef foo():\n    pass\n```\n", "def foo():\n    pass\n", true},
+		{"blank lines around it", "\n```python\nx = 1\n```\n\n", "x = 1\n", true},
+		{"four-backtick wrapper keeps interior fences", "````python\ns = \"\"\"\n```\nx\n```\n\"\"\"\n````\n",
+			"s = \"\"\"\n```\nx\n```\n\"\"\"\n", true},
+		{"interior line would close a three-backtick wrapper", "```\n```python\nx = 1\n```\n```\n",
+			"```\n```python\nx = 1\n```\n```\n", false},
+		{"text after the closer", "```python\nx = 1\n```\ny = 2\n", "```python\nx = 1\n```\ny = 2\n", false},
+		{"CRLF wrapper", "```python\r\nx = 1\r\n```\r\n", "x = 1\r\n", true},
+	} {
+		got, stripped := sanitizeFileContent("solve.py", c.in)
+		if stripped != c.stripped || got != c.want {
+			t.Errorf("%s: stripped=%v got %q\n  want stripped=%v %q", c.name, stripped, got, c.stripped, c.want)
+		}
 	}
 }
 
@@ -147,25 +189,6 @@ func TestSanitizeFileContentLeavesInlineDocstringFenceAlone(t *testing.T) {
 	}
 	if got != in {
 		t.Errorf("content changed (data loss):\n%q", got)
-	}
-}
-
-func TestSanitizeFileContentStripsWrapperWithProseCommentMention(t *testing.T) {
-	// A genuine whole-file wrapper whose intro prose merely mentions a
-	// comment marker must still be stripped (the marker is not at line start).
-	in := strings.Join([]string{
-		"Here's app.js with the /* config */ block rewritten:",
-		"```javascript",
-		"const x = 1;",
-		"export default x;",
-		"```",
-	}, "\n")
-	got, sanitized := sanitizeFileContent("app.js", in)
-	if !sanitized {
-		t.Fatal("sanitized=false; the wrapper should have been stripped")
-	}
-	if strings.Contains(got, "```") || strings.Contains(got, "Here's app.js") {
-		t.Errorf("wrapper not fully stripped:\n%q", got)
 	}
 }
 
@@ -684,21 +707,53 @@ func TestIsVerificationCommand(t *testing.T) {
 		"python app.py",
 		"python3 -m pytest",
 		"go test ./...",
-		"go build",
 		"cargo test",
 		"npm test",
-		"npm run build",
-		"curl http://localhost:5000/",
+		"curl -sf http://localhost:5000/",
 		"make test",
+		// GB-4#3: these ran the program and were never counted.
+		"java App.java",
+		"javac App.java && java App",
+		"php index.php",
+		"bash run.sh",
+		"./solve.py",
+	}
+	for _, cmd := range verifies {
+		if !isVerificationCommand(cmd) {
+			t.Errorf("isVerificationCommand(%q) = false, want true", cmd)
+		}
+	}
+	// A build, a parse, a linter, a formatter or a version check shows the code
+	// is well formed, not that it works. Each of these used to discharge the
+	// work contract and clear a red test (P-guardrails/INTEGRITY#2).
+	static := []string{
+		"go build",
+		"npm run build",
 		"ruff check src/",
 		"mypy app.py",
 		"markdownlint README.md",
 		"shellcheck scripts/setup.sh",
 		"golangci-lint run ./...",
+		"python3 -m py_compile app.py",
+		"node --check app.js",
+		"python3 --version",
 	}
-	for _, cmd := range verifies {
-		if !isVerificationCommand(cmd) {
-			t.Errorf("isVerificationCommand(%q) = false, want true", cmd)
+	for _, cmd := range static {
+		if isVerificationCommand(cmd) {
+			t.Errorf("isVerificationCommand(%q) = true, want false (a static check)", cmd)
+		}
+	}
+	// The verifying part's exit status never reaches the line's
+	// (P-guardrails/INTEGRITY#1).
+	hidden := []string{
+		"pytest | tail -5",
+		"pytest || true",
+		"python3 app.py; echo done",
+		"curl http://localhost:5000/",
+	}
+	for _, cmd := range hidden {
+		if isVerificationCommand(cmd) {
+			t.Errorf("isVerificationCommand(%q) = true, want false (its result is hidden)", cmd)
 		}
 	}
 	recon := []string{
@@ -708,6 +763,7 @@ func TestIsVerificationCommand(t *testing.T) {
 		"find . -name '*.py'",
 		"echo hello",
 		"pip install flask",
+		"python3 -m pip install flask",
 	}
 	for _, cmd := range recon {
 		if isVerificationCommand(cmd) {
@@ -1438,5 +1494,1146 @@ func TestCorruptedCharacterIsNamed(t *testing.T) {
 	// Empty inputs are not corruption.
 	if r := foreignRunes("", file); len(r) != 0 {
 		t.Errorf("empty old_str flagged: %q", string(r))
+	}
+}
+
+// The verification gate bounces `done` three times and then, out of bounces,
+// lets the model's summary through unchanged. Three runs on 2026-08-02 ended
+// with a confident "I verified..." over a broken file — once over a Flask app
+// whose only @app.route had been deleted.
+func TestAnUnverifiedRunDoesNotShipTheModelsClaim(t *testing.T) {
+	claim := "I updated the snake game logic and verified that the page loads."
+
+	wrote := unverifiedSummary(true, claim)
+	for _, want := range []string{"NOTHING in this run verified", "Run it yourself", "UNVERIFIED"} {
+		if !strings.Contains(wrote, want) {
+			t.Errorf("summary missing %q:\n%s", want, wrote)
+		}
+	}
+	// The model's account is kept — it usually describes the intended change
+	// correctly; it is the verification claim inside it that is unsupported.
+	if !strings.Contains(wrote, claim) {
+		t.Errorf("dropped the agent's account entirely:\n%s", wrote)
+	}
+
+	nothing := unverifiedSummary(false, claim)
+	if !strings.Contains(nothing, "Nothing was written to disk") {
+		t.Errorf("a run that wrote nothing must say so:\n%s", nothing)
+	}
+}
+
+func TestVerificationDemandedAndUnmetIsIndependentOfTheBounceBudget(t *testing.T) {
+	s := &runState{sawFailedVerification: true, gateBounces: map[string]int{}}
+	if !s.verificationDemandedAndUnmet() {
+		t.Fatal("a red verification with nothing green must report unmet")
+	}
+	// Exhausting the bounces means the gate stopped blocking, not that
+	// anything got verified.
+	for i := 0; i < maxGateBounces+2; i++ {
+		s.chargeBounce("verification_gate")
+	}
+	if !s.verificationDemandedAndUnmet() {
+		t.Error("running out of bounces was mistaken for a passing verification")
+	}
+	s.verifiedThisLoop = true
+	if s.verificationDemandedAndUnmet() {
+		t.Error("a green verification still reported unmet")
+	}
+}
+
+// Run 11 was refused three times — selector-unreachable, span-too-large,
+// stale-range — each attempt responding to the previous error, and the
+// error-loop breaker killed it with the file untouched while it was closing
+// in. Three DIFFERENT rejections is a model converging, not one looping.
+func TestRejectionClassSeparatesConvergingFromLooping(t *testing.T) {
+	selector := rejectionClass("`draw` exists in app.py, but NOT as a node any selector can reach: it is javascript at lines 77-202")
+	tooLarge := rejectionClass("replace_lines: 126 lines is too large a range (limit 60).")
+	stale := rejectionClass("replace_lines: line 202 of app.py is not what you expected, so the range is wrong")
+
+	for _, pair := range [][2]string{{selector, tooLarge}, {tooLarge, stale}, {selector, stale}} {
+		if pair[0] == pair[1] {
+			t.Errorf("distinct rejections collapsed into one class:\n%q\n%q", pair[0], pair[1])
+		}
+	}
+
+	// The same failure on different lines of different files IS one class —
+	// that is the loop the breaker exists for.
+	a := rejectionClass("replace_lines: line 202 of app.py is not what you expected, so the range is wrong")
+	b := rejectionClass("replace_lines: line 87 of main.py is not what you expected, so the range is wrong")
+	if a != b {
+		t.Errorf("the same failure was split by its variable parts:\n%q\n%q", a, b)
+	}
+	if rejectionClass("") != "" {
+		t.Error("an empty error must not produce a class")
+	}
+}
+
+// Run 4 built the variable-delay loop it was asked for, never added the
+// per-food decrement, and emitted `done`. The plan named both; the reminder
+// showing progress every turn was ignored; nothing checked it at the exit.
+func TestDoneIsRefusedWhilePlanStepsRemain(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.Plan = &Plan{
+		WinningScore: 0.8,
+		Steps: []PlanStep{
+			{ID: "s1", Action: "replace setInterval with a variable-delay loop"},
+			{ID: "s2", Action: "decrement the delay by 3ms per food eaten"},
+		},
+	}
+	ctx.PlanStepsSatisfied = []bool{true, false}
+
+	msg := planIncompleteMessage(ctx)
+	if msg == "" {
+		t.Fatal("done must be refused while a planned step has never landed")
+	}
+	if !strings.Contains(msg, "s2") || !strings.Contains(msg, "decrement the delay") {
+		t.Errorf("the unsatisfied step is not named:\n%s", msg)
+	}
+	if !strings.Contains(msg, "1 of 2") {
+		t.Errorf("progress not stated:\n%s", msg)
+	}
+
+	ctx.PlanStepsSatisfied = []bool{true, true}
+	if planIncompleteMessage(ctx) != "" {
+		t.Error("a fully satisfied plan still blocked done")
+	}
+}
+
+// A bad plan blocking a finished task is worse than no gate.
+func TestThePlanGateStandsDownWhenThePlanIsNotEvidence(t *testing.T) {
+	base := func() *AgentContext {
+		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+		ctx.Plan = &Plan{WinningScore: 0.8, Steps: []PlanStep{
+			{ID: "s1", Action: "a"}, {ID: "s2", Action: "b"}}}
+		ctx.PlanStepsSatisfied = []bool{true, false}
+		return ctx
+	}
+	low := base()
+	low.Plan.WinningScore = 0.2
+	if planIncompleteMessage(low) != "" {
+		t.Error("gated on a plan the planner itself rates as weak")
+	}
+	// Nothing matched: the matcher is not tracking this task, which is not
+	// evidence the model did nothing.
+	untracked := base()
+	untracked.PlanStepsSatisfied = []bool{false, false}
+	if planIncompleteMessage(untracked) != "" {
+		t.Error("gated when no step matched at all")
+	}
+	single := base()
+	single.Plan.Steps = single.Plan.Steps[:1]
+	single.PlanStepsSatisfied = []bool{false}
+	if planIncompleteMessage(single) != "" {
+		t.Error("gated on a one-step plan, which carries no multi-part signal")
+	}
+	none := base()
+	none.Plan = nil
+	if planIncompleteMessage(none) != "" {
+		t.Error("gated with no plan at all")
+	}
+}
+
+// Asked "how does the contact form work?" on a fresh workspace, the loop hit
+// its 5-turn conversational cap during recon and ended with an `error` event
+// and nothing else — no answer, no partial, zero bytes. A blank reply is the
+// worst thing the harness can produce: the user cannot tell whether ATLAS is
+// broken, still thinking, or ignoring them.
+func TestRunningOutOfTurnsStillSaysSomething(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier0Conversational)
+	ctx.RecordFileRead(filepath.Join(dir, "index.html"), "<html></html>")
+	ctx.RecordFileRead(filepath.Join(dir, "script.js"), "const f = 1;")
+
+	msg := outOfTurnsSummary(ctx, false)
+	for _, want := range []string{"ran out of turns", "Nothing was written", "index.html", "script.js", "narrower request"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("summary missing %q:\n%s", want, msg)
+		}
+	}
+	if wrote := outOfTurnsSummary(ctx, true); !strings.Contains(wrote, "written to disk") {
+		t.Errorf("a run that wrote must say so:\n%s", wrote)
+	}
+}
+
+// A server started in the foreground burns the whole sandbox timeout and then
+// reports a failure that says nothing about the code. Observed on the
+// first-contact path: `python3 -m http.server 8000` cost 30s of a 3m39s run
+// before the model reached for run_background on its own.
+func TestForegroundServerStartsAreRedirectedBeforeTheyRun(t *testing.T) {
+	for _, cmd := range []string{
+		"python3 -m http.server 8000",
+		"python -m http.server",
+		"npm run dev",
+		"npm start",
+		"flask run --port 5001",
+		"uvicorn main:app --reload",
+		"php -S localhost:8000",
+		"npx vite",
+		"cd site && python3 -m http.server 9000",
+	} {
+		if foregroundServerRejection(cmd) == "" {
+			t.Errorf("not redirected: %q", cmd)
+		}
+	}
+	// Narrow on purpose. These exit on their own, and refusing them would
+	// block a legitimate verification.
+	for _, cmd := range []string{
+		"python app.py", // just as likely a script that exits
+		"pytest tests/",
+		"curl -I http://localhost:8000",
+		"npm run build",
+		"npm test",
+		"go build ./...",
+		"ls -la",
+	} {
+		if r := foregroundServerRejection(cmd); r != "" {
+			t.Errorf("wrongly redirected %q:\n%s", cmd, r)
+		}
+	}
+	// The rejection has to carry the exact replacement call.
+	r := foregroundServerRejection("python3 -m http.server 8000")
+	for _, want := range []string{"run_background", "python3 -m http.server 8000", "curl", "stop_background"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("rejection missing %q:\n%s", want, r)
+		}
+	}
+}
+
+// `text` is a terminal exit, so an announcement that slips this check ends the
+// turn and the user gets a promise instead of an answer. Observed on a fresh
+// workspace: "How does the contact form work?" came back as "I'll look into
+// the contact form's implementation to see how it handles submissions and
+// where the data is sent." — then done, with no tool calls and no answer.
+// "look at" was in the verb list; "look into" was not.
+func TestAnnouncementDetectorCoversTheWaysModelsStall(t *testing.T) {
+	for _, s := range []string{
+		"I'll look into the contact form's implementation to see how it handles submissions and where the data is sent.",
+		"Let me look through the source to find where that is set.",
+		"I'm going to investigate how routing works here.",
+		"I need to take a look at the config first.",
+		"First, I will read app.py to understand the structure.",
+		"I'll dig into the handler and report back.",
+	} {
+		if !announcesImminentToolUse(s) {
+			t.Errorf("announcement not detected: %q", s)
+		}
+	}
+	// Real answers that merely mention these words must pass through.
+	for _, s := range []string{
+		"The contact form does not send anything — script.js calls preventDefault and only shows a status message.",
+		"It reads the config at startup and caches it for the process lifetime.",
+		"I looked at both files: routing is handled by Flask's @app.route decorators.",
+		"Yes. The form posts to /contact, which is defined in app.py at line 42.",
+	} {
+		if announcesImminentToolUse(s) {
+			t.Errorf("real answer wrongly flagged as an announcement: %q", s)
+		}
+	}
+}
+
+// `aoc_sonar` died in BOTH reps at turn 3 with a context-size 400, and the
+// stream ended on an `error` event with no outcome — the user got silence.
+// The 2000-line fixture was being restated, line-numbered, on every turn,
+// outside the token budget that trimMessages spends against.
+func TestInferenceFailureAlwaysProducesAnOutcome(t *testing.T) {
+	ctxErr := fmt.Errorf(`LLM returned 400: {"code":400,"message":"request (33012 tokens) ` +
+		`exceeds the available context size (32768 tokens)","type":"exceed_context_size_error"}`)
+	msg := inferenceFailureSummary(ctxErr, false)
+	for _, want := range []string{"outgrew the model's context window", "large file was read", "Nothing was written"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("context-overflow summary missing %q:\n%s", want, msg)
+		}
+	}
+	// Any other inference failure still has to say something.
+	other := inferenceFailureSummary(fmt.Errorf("connection refused"), true)
+	if !strings.Contains(other, "model call failed") || !strings.Contains(other, "connection refused") {
+		t.Errorf("generic failure summary is unhelpful:\n%s", other)
+	}
+	if !strings.Contains(other, "are on disk") {
+		t.Errorf("a run that wrote must say so:\n%s", other)
+	}
+	if inferenceFailureSummary(nil, false) == "" {
+		t.Error("a nil error must still produce an outcome")
+	}
+}
+
+// The restatement is appended to the wire AFTER trimMessages has spent the
+// budget, so nothing counted it. It has to yield rather than overflow: a
+// missing restatement costs the model some convenience, a 400 ends the run.
+func TestRestatementYieldsWhenTheSlotIsFull(t *testing.T) {
+	dir := t.TempDir()
+	// The real aoc_sonar fixture: 2000 short lines, ~8.7 KB — under the
+	// restatementMaxBytes cap, so the size guard does not fire and headroom
+	// is what decides.
+	big := strings.Repeat("159\n", 2000)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "input.txt"), big)
+
+	// A wire already close to the slot limit leaves no room.
+	full := []map[string]string{{"role": "user", "content": strings.Repeat("x", perSlotContext()*4)}}
+	if got := appendLastReadRestatement(ctx, full); len(got) != len(full) {
+		t.Error("restated into a full context window — this is the 400")
+	}
+
+	// With room, it still restates.
+	small := []map[string]string{{"role": "user", "content": "fix the bug"}}
+	if got := appendLastReadRestatement(ctx, small); len(got) != len(small)+1 {
+		t.Error("refused to restate despite plenty of headroom")
+	}
+}
+
+// The file trimMessages pins is already in the window; restating it appended a
+// second full copy of the same bytes.
+func TestRestatementSkipsContentAlreadyAnywhereInTheWire(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\nbravo\n")
+
+	// Pinned earlier in the conversation, not just in the last message.
+	wire := []map[string]string{
+		{"role": "user", "content": "here is the file: alpha\nbravo\n"},
+		{"role": "assistant", "content": "ok"},
+		{"role": "user", "content": "now fix it"},
+	}
+	if got := appendLastReadRestatement(ctx, wire); len(got) != len(wire) {
+		t.Error("appended a second copy of content already in the window")
+	}
+}
+
+// A foreground server start costs the sandbox timeout before anything
+// happens. The steer that follows is correct and already existed — it just
+// fired 30 seconds too late. Measured 2026-08-04 on flask_pause: the model
+// ran `python app.py`, the run blocked, and the user watched dead air until
+// the timeout fired.
+func TestForegroundServerStartIsRedirectedBeforeItRuns(t *testing.T) {
+	server := "from flask import Flask\napp = Flask(__name__)\napp.run(port=5000)\n"
+	plain := "import sys\nprint(sum(int(x) for x in sys.stdin))\n"
+	files := map[string]string{"app.py": server, "solve.py": plain}
+	read := func(rel string) (string, bool) { src, ok := files[rel]; return src, ok }
+
+	t.Run("a file that serves is redirected", func(t *testing.T) {
+		got := foregroundServerRejectionWithSource("python app.py", read)
+		if got == "" {
+			t.Fatal("a blocking server start was allowed to run")
+		}
+		if !strings.Contains(got, "run_background") {
+			t.Errorf("steer should name run_background:\n%s", got)
+		}
+	})
+
+	t.Run("a file that exits is left alone", func(t *testing.T) {
+		// The whole point of reading the file: `python solve.py` looks
+		// identical to `python app.py` from the command text alone.
+		if got := foregroundServerRejectionWithSource("python3 solve.py", read); got != "" {
+			t.Errorf("a script that exits was refused:\n%s", got)
+		}
+	})
+
+	t.Run("an unreadable target is left alone", func(t *testing.T) {
+		if got := foregroundServerRejectionWithSource("python missing.py", read); got != "" {
+			t.Errorf("refused on a name alone, which is the guess this avoids:\n%s", got)
+		}
+	})
+
+	t.Run("launchers that always block need no file", func(t *testing.T) {
+		for _, cmd := range []string{"flask run", "npm start",
+			"uvicorn main:app", "gunicorn app:app"} {
+			if foregroundServerRejectionWithSource(cmd, read) == "" {
+				t.Errorf("%q serves until killed and was allowed", cmd)
+			}
+		}
+	})
+
+	t.Run("an already-backgrounded command is not touched", func(t *testing.T) {
+		// `nohup` alone is NOT backgrounded — it only ignores SIGHUP and
+		// still holds the foreground, so it stays redirected.
+		for _, cmd := range []string{"python app.py &", "python app.py  &"} {
+			if got := foregroundServerRejectionWithSource(cmd, read); got != "" {
+				t.Errorf("%q already detaches:\n%s", cmd, got)
+			}
+		}
+	})
+
+	t.Run("ordinary verification is untouched", func(t *testing.T) {
+		for _, cmd := range []string{"pytest -q", "go test ./...",
+			"python3 solve.py < input.txt", "ls -la"} {
+			if got := foregroundServerRejectionWithSource(cmd, read); got != "" {
+				t.Errorf("%q is normal verification:\n%s", cmd, got)
+			}
+		}
+	})
+}
+
+// The action gate bounces a run that was asked to change something and has
+// not, then stops — its bounces are capped so an exhausted gate cannot
+// loop. Past the cap the exit is unremarked, and the worst version looks
+// like success: observed on smallrung_toml, a refused structural_edit, the
+// model giving up on tools and emitting the replacement as chat text, and
+// that code arriving as the run's summary with nothing on disk.
+func TestNothingWrittenSummary(t *testing.T) {
+	t.Run("says it plainly when the model said nothing", func(t *testing.T) {
+		got := nothingWrittenSummary("")
+		if !strings.Contains(got, "Nothing was written") {
+			t.Errorf("summary must state it:\n%s", got)
+		}
+	})
+
+	t.Run("keeps what the model said but strips the claim", func(t *testing.T) {
+		code := "elif lang == \"toml\":\n    fpath.write_text(code)"
+		got := nothingWrittenSummary(code)
+		if !strings.Contains(got, code) {
+			t.Error("the model's content is still useful and should survive")
+		}
+		if !strings.HasPrefix(got, "Nothing was written") {
+			t.Errorf("the correction has to lead, or it reads as success:\n%s", got)
+		}
+		if !strings.Contains(got, "proposal, not something on disk") {
+			t.Errorf("a code block needs saying it was not applied:\n%s", got)
+		}
+	})
+
+	t.Run("whitespace-only is treated as empty", func(t *testing.T) {
+		if got := nothingWrittenSummary("   \n  "); !strings.HasPrefix(got, "Nothing was written") {
+			t.Errorf("got %q", got)
+		}
+	})
+}
+
+// phase_solved is initialised to "none" and only overwritten when a
+// candidate passes, so "not empty" is not the same question as "verified".
+// The done-nudge tested that way and fired on every unverified fallback,
+// telling the model its code was build-checked when nothing had passed.
+// Measured across one 28-session run: 0 of 44 candidates passed the
+// sandbox and the nudge fired 11 times.
+func TestVerifiedPhase(t *testing.T) {
+	for _, phase := range []string{"probe", "phase1", "pr_cot", "refinement", "budget"} {
+		if !verifiedPhase(phase) {
+			t.Errorf("%q means a candidate passed", phase)
+		}
+	}
+	for _, phase := range []string{"none", "", "fallback", "unknown_future_phase"} {
+		if verifiedPhase(phase) {
+			t.Errorf("%q does not mean verified", phase)
+		}
+	}
+}
+
+// A run has three ways to reach the user: done, text, and the salvage path
+// that recovers a reply the content-loop detector cut. The first two check
+// whether anything was actually written; the third did not.
+//
+// Observed on aoc_slope rep2 and smallrung_toml rep2 (run 16): the cut
+// reply was half-written code, so the run handed back something that reads
+// like the answer while nothing was on disk, and the reliability checker
+// flagged both as exiting "without saying it had stopped".
+func TestSalvagedTextStillSaysNothingWasWritten(t *testing.T) {
+	salvaged := "def solve():\n    grid = [line.strip() for line in f]\n    # Wait, if"
+	cut := salvaged + "\n\n(The reply was cut short — it had begun repeating itself. " +
+		"Ask again if something is missing.)"
+
+	got := nothingWrittenSummary(cut)
+	if !strings.HasPrefix(got, "Nothing was written") {
+		t.Errorf("the correction has to lead, or the code reads as the answer:\n%s", got)
+	}
+	if !strings.Contains(got, "cut short") {
+		t.Error("the salvage note is still useful and should survive")
+	}
+	if !strings.Contains(got, salvaged) {
+		t.Error("the salvaged content itself should survive")
+	}
+	// The reliability checker looks for exactly this phrasing to tell an
+	// honest stop from a silent one.
+	if !strings.Contains(strings.ToLower(got), "nothing was written") {
+		t.Error("must match what the checker recognises as saying it stopped")
+	}
+}
+
+// The sanitizer must never destroy a write. Found by fuzzing: content whose
+// only fence was an unmatched opener took "everything after the opener" —
+// nothing — and returned an empty string with modified=true, so a generation
+// truncated right after ```python would have landed on disk as an empty file.
+func TestSanitizeNeverEmptiesAFile(t *testing.T) {
+	for _, content := range []string{"```python\n", "```", "```python", "```\n```"} {
+		cleaned, _ := sanitizeFileContent("solve.py", content)
+		if strings.TrimSpace(content) != "" && strings.TrimSpace(cleaned) == "" {
+			t.Errorf("sanitizer emptied a non-empty write\n  in=%q\n out=%q",
+				content, cleaned)
+		}
+	}
+}
+
+// Sanitizing already-sanitized content must be a no-op: the result of a write
+// never depends on how many times the content passed through.
+func TestSanitizeIsIdempotent(t *testing.T) {
+	for _, content := range []string{
+		"```python\nx = 1\n```\n",
+		"```\n```python\nx = 1\n```\n```\n",
+		"```\n```0\n```0\n```0\n```0\n0",
+		"Here it is:\n```python\nx = 1\n```\n",
+		"````\n```python\nx = 1\n```\n````\n",
+	} {
+		once, _ := sanitizeFileContent("solve.py", content)
+		twice, _ := sanitizeFileContent("solve.py", once)
+		if once != twice {
+			t.Errorf("sanitize is not a fixpoint\n   in=%q\n once=%q\ntwice=%q",
+				content, once, twice)
+		}
+	}
+}
+
+// The model plans, the harness copies: content the user spelled out must
+// land byte-exact regardless of what the sampler did. Measured live and
+// deterministically: `BANNER = "ready"` arrives as `BANNER = " ready"`
+// under greedy AND default sampling (space-prefixed BPE token wins after a
+// quote), so the write path repairs whitespace-only drift from a stated
+// literal mechanically.
+func TestExtractLiteralBlocks(t *testing.T) {
+	task := "Create banner.py containing exactly one line:\nBANNER = \"ready\"\nDo not modify any existing file."
+	lits := extractLiteralBlocks(task)
+	if len(lits) != 1 || lits[0] != `BANNER = "ready"` {
+		t.Fatalf("exactly-line extraction: %#v", lits)
+	}
+	task2 := "Make it print this:\n```\nhello world one\nhello world two\n```\nthanks"
+	lits2 := extractLiteralBlocks(task2)
+	if len(lits2) != 1 || lits2[0] != "hello world one\nhello world two" {
+		t.Fatalf("fence extraction: %#v", lits2)
+	}
+	// Too short to be a contract.
+	if got := extractLiteralBlocks("set it to exactly this value:\nx = 1\n"); len(got) != 0 {
+		t.Fatalf("short fragments must not become contracts: %#v", got)
+	}
+}
+
+func TestRepairLiteralDrift(t *testing.T) {
+	lit := []string{`BANNER = "ready"`}
+	// The live corruption: a space inserted inside the string.
+	fixed, rep, changed := repairLiteralDrift("BANNER = \" ready\"\n", lit)
+	if !changed || fixed != "BANNER = \"ready\"\n" || len(rep) != 1 {
+		t.Fatalf("space-in-string not repaired: %q changed=%v", fixed, changed)
+	}
+	// Already exact: untouched.
+	if _, _, changed := repairLiteralDrift("BANNER = \"ready\"\n", lit); changed {
+		t.Fatal("byte-exact content must not be rewritten")
+	}
+	// Literal present as a substring of a longer line: satisfied, untouched.
+	if _, _, changed := repairLiteralDrift("x = 1\nBANNER = \"ready\"  # note\n", lit); changed {
+		t.Fatal("substring-satisfied contract must not trigger repair")
+	}
+	// Non-whitespace corruption is NOT auto-repaired (too bold for v1).
+	if _, _, changed := repairLiteralDrift("BANNER = \"redy\"\n", lit); changed {
+		t.Fatal("non-whitespace divergence must be left alone")
+	}
+	// Multi-line window repair.
+	mlit := []string{"a = 1\nb = 2"}
+	fixed2, _, changed2 := repairLiteralDrift("pre\na  =  1\nb =\t2\npost\n", mlit)
+	if !changed2 || !strings.Contains(fixed2, "a = 1\nb = 2") {
+		t.Fatalf("multi-line window not repaired: %q", fixed2)
+	}
+	// Unrelated content: no change.
+	if _, _, changed := repairLiteralDrift("def f():\n    return 1\n", lit); changed {
+		t.Fatal("unrelated content must not change")
+	}
+}
+
+// A probe that never fetches a body is not verification. Measured on a
+// "build me a snake game" session: `curl -I http://localhost:8000` was
+// recorded as the verification, which opened the done-gate and shipped an
+// index.html holding JavaScript and zero HTML. A static server answers 200
+// for a directory listing, so HEAD cannot tell a working page from a broken
+// one.
+func TestHeadOnlyProbeIsNotVerification(t *testing.T) {
+	notVerification := []string{
+		"curl -I http://localhost:8000",
+		"curl --head http://localhost:5000/",
+		"curl -sI http://localhost:8000",
+		"wget --spider http://localhost:8000",
+	}
+	for _, c := range notVerification {
+		if isVerificationCommand(c) {
+			t.Errorf("header-only probe counted as verification: %q", c)
+		}
+	}
+	// curl without -f exits 0 on an error page, so it shows the server
+	// answered, not that the page works. A body check or -f makes it count.
+	for _, c := range []string{"curl http://localhost:8000", "curl -s http://localhost:5000/api"} {
+		if isVerificationCommand(c) {
+			t.Errorf("a probe that exits 0 on an HTTP error counted as verification: %q", c)
+		}
+	}
+	realVerification := []string{
+		"curl -sf http://localhost:8000",
+		"curl -s --fail http://localhost:5000/api",
+		"curl -s http://localhost:5000/api | grep -q ok",
+		"wget -qO- http://localhost:8000",
+		"python3 solve.py",
+		"pytest tests/",
+	}
+	for _, c := range realVerification {
+		if !isVerificationCommand(c) {
+			t.Errorf("real verification was rejected: %q", c)
+		}
+	}
+}
+
+// A tool the model proved it cannot use on a file is withdrawn, not
+// re-explained. Measured dogfooding "build me a snake game": a no-op
+// edit_file was refused with an explicit "re-sending will not help, use
+// structural_edit instead", and the model re-sent the identical call on the
+// next turn, twice, until the breaker ended a 48-minute session.
+func TestToolBanNoteNamesTheRemainingTools(t *testing.T) {
+	py := toolBanNote("edit_file", "app.py")
+	if !strings.Contains(py, "structural_edit") || !strings.Contains(py, "write_file") {
+		t.Errorf(".py ban should offer structural_edit and write_file: %s", py)
+	}
+	js := toolBanNote("edit_file", "game.js")
+	if !strings.Contains(js, "replace_lines") || strings.Contains(js, "structural_edit") {
+		t.Errorf(".js ban should offer replace_lines, not structural_edit: %s", js)
+	}
+	for _, s := range []string{py, js} {
+		if !strings.Contains(s, "no longer available") {
+			t.Errorf("ban must state the tool is gone, not suggest: %s", s)
+		}
+	}
+}
+
+// A module or inline invocation that names a server script is not a server
+// start: `python3 -m py_compile app.py` compiles it and exits. Observed
+// 2026-09-14: the compile check a model reached for after a SyntaxError was
+// refused as a foreground server, and the file was never fixed.
+func TestModuleAndInlineInvocationsAreNotServerStarts(t *testing.T) {
+	read := func(rel string) (string, bool) {
+		if rel == "app.py" {
+			return "from flask import Flask\napp = Flask(__name__)\napp.run()\n", true
+		}
+		return "", false
+	}
+	for _, cmd := range []string{
+		"python3 -m py_compile app.py",
+		"python -m py_compile app.py",
+		"python3 -u -m py_compile app.py",
+		"python3 -m pytest app.py",
+		"python3 -m pyflakes app.py",
+		`python3 -c "import ast; ast.parse(open('app.py').read())"`,
+	} {
+		if got := foregroundServerRejectionWithSource(cmd, read); got != "" {
+			t.Errorf("wrongly redirected %q:\n%s", cmd, got)
+		}
+	}
+	// The control: actually running the script is still redirected.
+	for _, cmd := range []string{"python3 app.py", "python -u app.py"} {
+		if foregroundServerRejectionWithSource(cmd, read) == "" {
+			t.Errorf("not redirected: %q", cmd)
+		}
+	}
+}
+
+// A chained command whose LAST segment starts the server must still be
+// redirected, even when an earlier segment is a -m/-c invocation. The
+// exemption is scoped to the invocation that runs the script, not the whole
+// command line. Observed 2026-09-14: `pip install ... && python3 app.py`
+// escaped the redirect because the pip step's -m shadowed the real start, and
+// app.py ran in the foreground until the sandbox timeout.
+func TestChainedInstallThenServerStartIsRedirected(t *testing.T) {
+	read := func(rel string) (string, bool) {
+		if rel == "app.py" {
+			return "from flask import Flask\napp = Flask(__name__)\napp.run()\n", true
+		}
+		return "", false
+	}
+	for _, cmd := range []string{
+		"python3 -m pip install -r requirements.txt && python3 app.py",
+		"pip install flask; python3 app.py",
+		"python3 -m pip install flask && python app.py",
+	} {
+		if foregroundServerRejectionWithSource(cmd, read) == "" {
+			t.Errorf("chained server start not redirected: %q", cmd)
+		}
+	}
+	// A chained command that only compiles is still exempt.
+	if got := foregroundServerRejectionWithSource(
+		"pip install flask && python3 -m py_compile app.py", read); got != "" {
+		t.Errorf("a chained compile was wrongly redirected:\n%s", got)
+	}
+}
+
+// A file body whose escapes were doubled arrives as one long line of "\n"
+// text. Observed 2026-09-14: a delivered README.md was a single 876-character
+// line. It used to be decoded in place, which also decodes content that is
+// meant to be one line; it is now refused before execution, with a retry path
+// that cannot hit the same escaping (@fenced), and never rewritten.
+func TestDoubledEscapesAreRefusedNotDecoded(t *testing.T) {
+	escapedReadme := `# Running Club Website\n\nThis is a simple web application to track runs.\n\n## Setup and Installation\n\n1. **Install dependencies**:\n   ` +
+		"```bash\\npip install -r requirements.txt\\n```" +
+		`\n\n2. **Run the application**:\n   ` +
+		"```bash\\npython3 app.py\\n```" +
+		`\n\nOnce started, the site is at http://127.0.0.1:5000.`
+
+	args, _ := json.Marshal(map[string]string{"path": "README.md", "content": escapedReadme})
+	msg, refused := jsonChannelContentFeedback("write_file", args)
+	if !refused {
+		t.Fatal("the fully escaped README was not refused")
+	}
+	for _, want := range []string{"NOT performed", "escaped once", "@fenced"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, msg)
+		}
+	}
+	if cleaned, modified := sanitizeFileContent("README.md", escapedReadme); modified || cleaned != escapedReadme {
+		t.Error("the sanitizer still rewrites an escaped body")
+	}
+
+	// Everything that must NOT be refused.
+	minified := `{"a":"x\ny","b":"p\nq","c":"r\ns","d":"` + strings.Repeat("z", 120) + `"}`
+	for _, c := range []struct{ name, path, body string }{
+		{"a genuine multi-line file that uses \\n in a string", "main.py",
+			"import sys\n\ndef main():\n    sys.stdout.write(\"a\\nb\\n\")\n    return 0\n"},
+		{"a short one-liner that legitimately contains escapes", "run.sh", `printf 'a\nb\nc\n'`},
+		{"a normal file with no escapes at all", "solve.py", "def solve():\n    return 7\n"},
+		{"one-line minified JSON", "data.json", minified},
+		{"the @fenced sentinel", "README.md", "@fenced"},
+	} {
+		args, _ := json.Marshal(map[string]string{"path": c.path, "content": c.body})
+		if msg, refused := jsonChannelContentFeedback("write_file", args); refused {
+			t.Errorf("%s was refused:\n%s", c.name, msg)
+		}
+	}
+}
+
+// The model wants "\n" then "function" and emits "\function"; the decoder
+// correctly reads the form-feed escape and the file would land with 0x0C where
+// the line break was. Observed 2026-09-15. It used to be rewritten to a line
+// break plus the letter -- which also rewrites a real page break before a
+// definition. It is now refused and named, and a genuine control character can
+// still be written through @fenced, which does not go through JSON decoding.
+func TestControlCharacterBeforeALetterIsRefusedNotRewritten(t *testing.T) {
+	refuse := func(tool, field, path, body string) (string, bool) {
+		args, _ := json.Marshal(map[string]string{"path": path, field: body})
+		return jsonChannelContentFeedback(tool, args)
+	}
+	msg, refused := refuse("write_file", "content", "server.js",
+		" // Serve the frontend\x0cunction serveStatic() {\n  app.get('/', (req, res) => {\n")
+	if !refused {
+		t.Fatal("form feed before a letter was not refused")
+	}
+	for _, want := range []string{"NOT performed", "form feed", "line 1", "@fenced"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, msg)
+		}
+	}
+	for _, c := range []struct {
+		name, tool, field, body string
+		refused                 bool
+	}{
+		{"backspace before bar", "write_file", "content", "x = 1\x08ar = 2\n", true},
+		{"carriage return ate the r of return, LF file", "write_file", "content", "  }\return x;\n", true},
+		{"in an edit replacement", "edit_file", "new_str", "a\x0cb\n", true},
+		{"in inserted lines", "insert_after", "content", "a\x0cb\n", true},
+		// Must NOT refuse:
+		{"page-break form feed on its own line", "write_file", "content", "def a():\n    pass\n\x0c\ndef b():\n    pass\n", false},
+		{"CRLF line endings", "write_file", "content", "line one\r\nline two\r\n", false},
+		{"CR-only file (its own convention)", "write_file", "content", "line one\rline two\r", false},
+		{"form feed before a space", "write_file", "content", "text \x0c more\n", false},
+		{"ordinary source", "write_file", "content", "def f():\n\treturn 1\n", false},
+	} {
+		if _, got := refuse(c.tool, c.field, "server.js", c.body); got != c.refused {
+			t.Errorf("%s: refused=%v, want %v", c.name, got, c.refused)
+		}
+	}
+	in := " // Serve the frontend\x0cunction serveStatic() {\n"
+	if cleaned, modified := sanitizeFileContent("server.js", in); modified || cleaned != in {
+		t.Errorf("the sanitizer still rewrites a control character: %q", cleaned)
+	}
+}
+
+// --- an explicit read-only request must not mutate, by ANY path -------------
+//
+// Measured on the 38eaa0a benchmark: 6 sessions edited a fixture after the user
+// wrote "do not change any code" / "do not fix it yet". The tier was classified
+// CORRECTLY as conversational in every case — nothing enforced it. Enforcement
+// is now at executeToolCallInner, keyed on the tool's declared effect, so it
+// holds for arbitrary shell as well as the edit tools.
+
+func readOnlyCtx(t *testing.T, ask string) *AgentContext {
+	t.Helper()
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	ctx.HumanTask = ask
+	return ctx
+}
+
+func TestAnExplicitReadOnlyRequestRefusesEveryMutatingTool(t *testing.T) {
+	// Both benchmark prompts, plus the "do not fix" phrasing.
+	for _, ask := range []string{
+		"In orders.py, what does find_duplicates do, and what is its time complexity? Just explain — do not change any code.",
+		"Explain what is going on here and whether it is actually a bug. Do not change the code.",
+		"Find what is causing it and tell me — do not fix it yet.",
+	} {
+		ctx := readOnlyCtx(t, ask)
+		if !mutationForbidden(ctx) {
+			t.Fatalf("mutationForbidden = false for an explicit prohibition: %q", ask)
+		}
+		// DIRECT mutation and INDIRECT (arbitrary shell) are both refused.
+		for _, name := range []string{
+			"write_file", "edit_file", "structural_edit", "insert_after",
+			"replace_lines", "delete_file", "move_file",
+			"run_command", "run_background",
+		} {
+			tool := getTool(name)
+			if tool == nil {
+				t.Fatalf("tool %s not registered", name)
+			}
+			if got := readOnlyRequestRefusal(tool, ctx); got == "" {
+				t.Errorf("%s was ALLOWED under %q — effect %q must be refused",
+					name, ask, tool.Effect)
+			}
+		}
+		// Reading is always allowed: the model still has to read to answer.
+		for _, name := range []string{"read_file", "outline_file", "search_files",
+			"list_directory", "find_file"} {
+			if got := readOnlyRequestRefusal(getTool(name), ctx); got != "" {
+				t.Errorf("%s was refused under %q — reading must stay available: %s", name, ask, got)
+			}
+		}
+	}
+}
+
+func TestTheReadOnlyRefusalPointsAtTheAnswerPath(t *testing.T) {
+	ctx := readOnlyCtx(t, "Just explain what this does — do not change any code.")
+	msg := readOnlyRequestRefusal(getTool("write_file"), ctx)
+	for _, want := range []string{"not run", "NOT to change", "read_file", `"type":"text"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal must name the answer path (missing %q):\n%s", want, msg)
+		}
+	}
+}
+
+// The guard must not touch ordinary work, or it would refuse the product.
+func TestOrdinaryWorkIsUnaffectedByTheReadOnlyGuard(t *testing.T) {
+	for _, ask := range []string{
+		"add a median() function to stats.py",
+		"the snake is still moving way too fast, please slow it down",
+		"what does find_duplicates do?", // a question, but NO prohibition
+		"fix the off-by-one in chunks()",
+		"explain the retry logic and then add a test for it",
+	} {
+		ctx := readOnlyCtx(t, ask)
+		if mutationForbidden(ctx) {
+			t.Errorf("mutationForbidden = true for ordinary work: %q", ask)
+		}
+		if got := readOnlyRequestRefusal(getTool("write_file"), ctx); got != "" {
+			t.Errorf("write_file refused for %q — the guard must only fire on an explicit prohibition", ask)
+		}
+	}
+}
+
+// A change the user forbade must never also be REQUIRED.
+//
+// The reliability harness declares task_contract {"task_mode":"work"} on every
+// task, including the ones it marks conversational. A contract is authoritative
+// when present, so the action gate demanded a change on prompts whose text says
+// "do not change any code" — while the read-only boundary correctly refused
+// every edit. All six such sessions bounced their own exit and ended
+// action_demanded_unmet. ATLAS must not require what it forbids.
+func TestAForbiddenChangeIsNeverAlsoDemanded(t *testing.T) {
+	work := &TaskContract{TaskMode: TaskModeWork}
+	for _, ask := range []string{
+		"In orders.py, what does find_duplicates do, and what is its time complexity? Just explain — do not change any code.",
+		"Explain what is going on here and whether it is actually a bug. Do not change the code.",
+		"Find the cause. Tell me which file and which comparison is wrong — do not change any code.",
+	} {
+		// Even with an explicit work contract AND the workspace inspected.
+		if d := decideActionDemand(work, ask, Tier0Conversational, true); d.Required {
+			t.Errorf("action demanded under an explicit prohibition (contract=work): %q", ask)
+		}
+		if d := decideActionDemand(nil, ask, Tier2Medium, true); d.Required {
+			t.Errorf("action demanded under an explicit prohibition (no contract): %q", ask)
+		}
+	}
+	// The contract still governs ordinary work: this must NOT be weakened.
+	for _, ask := range []string{
+		"add a median() function to stats.py",
+		"fix the off-by-one in chunks()",
+	} {
+		if d := decideActionDemand(work, ask, Tier2Medium, true); !d.Required {
+			t.Errorf("a work contract must still demand action for: %q", ask)
+		}
+	}
+}
+
+// Running a test that imports the fix must count as verifying the fix.
+//
+// Measured on 6 of 28 benchmark sessions: the run edited the deliverable,
+// wrote a test beside it, ran the test green -- `python3 test_stats.py`
+// printing "mean() passed / median() passed" -- and was then refused its exit
+// with "nothing in this run verified it does the right thing", because
+// coverage was attributed only to paths typed on the command line. The run had
+// verified its work in the most ordinary way there is.
+func TestRunningATestCoversTheCodeTheTestImports(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork}
+
+	write := func(rel, body string) {
+		args, _ := json.Marshal(map[string]string{"path": rel, "content": body})
+		if res := executeToolCall("write_file", args, ctx); res == nil || !res.Success {
+			t.Fatalf("setup write of %s failed: %+v", rel, res)
+		}
+	}
+	write("stats.py", "def mean(v):\n    return sum(v) / len(v)\n\n\ndef median(v):\n    s = sorted(v)\n    return s[len(s) // 2]\n")
+	write("test_stats.py", "from stats import mean, median\n\nassert mean([1, 2, 3]) == 2\nassert median([3, 1, 2]) == 2\nprint('passed')\n")
+
+	stats := resolveAgentPath(ctx, "stats.py")
+	covered := coverageForGreenCommand(ctx, "python3 test_stats.py")
+	if _, ok := covered[stats]; !ok {
+		t.Fatalf("running the test did not cover the code it imports; covered=%v", covered)
+	}
+
+	// The production decision, not just the helper: with that evidence the
+	// work contract must be settled rather than demanding more.
+	ctx.VerificationEvidence = append(ctx.VerificationEvidence, VerificationRecord{
+		Command: "python3 test_stats.py", Covered: covered, Turn: 1,
+	})
+	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Required && !d.Met {
+		t.Errorf("a green test over the deliverable left verification unmet (missing %q)", d.Missing)
+	}
+
+	// Editing the deliverable afterwards must re-arm the demand: coverage is
+	// bound to bytes, and this fix must not open a verify-then-modify hole.
+	write("stats.py", "def mean(v):\n    return 0\n")
+	if d := decideVerificationDemand(ctx, ctx.TaskContract, nil); d.Met {
+		t.Error("rewriting a covered file after a green run left it verified")
+	}
+}
+
+// Coverage must not spread to code the run never exercised.
+func TestCoverageDoesNotSpreadToUnreferencedFiles(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	write := func(rel, body string) {
+		args, _ := json.Marshal(map[string]string{"path": rel, "content": body})
+		if res := executeToolCall("write_file", args, ctx); res == nil || !res.Success {
+			t.Fatalf("setup write of %s failed: %+v", rel, res)
+		}
+	}
+	// Mentions "stats" as a bare word in prose and in an unrelated identifier,
+	// but imports nothing.
+	write("driver.py", "# prints some stats about a list\nmy_stats = [1, 2, 3]\nprint(sum(my_stats))\n")
+	write("unrelated.py", "def untouched():\n    return 1\n")
+
+	covered := coverageForGreenCommand(ctx, "python3 driver.py")
+	if _, ok := covered[resolveAgentPath(ctx, "unrelated.py")]; ok {
+		t.Errorf("coverage reached a file the run never referenced: %v", covered)
+	}
+	if _, ok := covered[resolveAgentPath(ctx, "driver.py")]; !ok {
+		t.Errorf("the named entry point itself was not covered: %v", covered)
+	}
+}
+
+// A bare module name only counts inside an import.
+func TestModuleReferenceRequiresImportContext(t *testing.T) {
+	for _, c := range []struct {
+		src  string
+		want bool
+		why  string
+	}{
+		{"from stats import median\n", true, "python from-import"},
+		{"import stats\n", true, "python import"},
+		{"const s = require('./stats')\n", true, "js require"},
+		{"# these are the stats we want\n", false, "prose mention"},
+		{"statsd = 1\nimport statsd\n", false, "longer identifier is a different module"},
+		{"print(open('stats.py').read())\n", true, "names the file outright"},
+	} {
+		if got := sourceReferencesPath(c.src, "/w/stats.py"); got != c.want {
+			t.Errorf("%s: sourceReferencesPath=%v want %v for %q", c.why, got, c.want, c.src)
+		}
+	}
+}
+
+// Running a module by importing it counts as having run it.
+//
+// The run-first gate refuses an edit to a file whose warned version "has never
+// been run", so the model reads the real traceback before guessing. Measured
+// on multifile_cli rep2, that became a deadlock: the model wrote a broken
+// store.py, ran it with `python3 -c "import store; ..."` -- which loads the
+// file and raises its SyntaxError, the exact traceback the gate wants read --
+// and every subsequent edit_file was refused for never having run it, while
+// re-sending the run tripped the identical-call detector. Told to do the one
+// thing it had already done and could no longer repeat. For a file that does
+// not parse there is no run that succeeds; the only exit is the edit.
+func TestImportingAModuleCountsAsRunningIt(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		path string
+		want bool
+		why  string
+	}{
+		{`python3 -c "import store; store.complete_todo(1)"`, "store.py", true, "the measured command"},
+		{`python3 -c "from store import add; add('x')"`, "store.py", true, "from-import"},
+		{`python3 store.py`, "store.py", true, "named directly, unchanged"},
+		{`python3 -m pytest test_store.py`, "test_store.py", true, "named via -m, unchanged"},
+		{`./store.py`, "store.py", true, "direct execution, unchanged"},
+		// Must not spread: a different module, prose, or no executor at all.
+		{`python3 -c "import other; other.go()"`, "store.py", false, "a different module"},
+		{`echo "import store"`, "store.py", false, "no executor"},
+		{`python3 -c "print('store is fine')"`, "store.py", false, "mentions the name, imports nothing"},
+		{`cat store.py`, "store.py", false, "reading is not running"},
+	} {
+		if got := executionAttempt(c.cmd, c.path); got != c.want {
+			t.Errorf("%s: executionAttempt(%q, %q) = %v, want %v",
+				c.why, c.cmd, c.path, got, c.want)
+		}
+	}
+}
+
+// A command that never ran anything is not a failed verification.
+//
+// Measured on smallrung_toml rep1: the model had already verified green, then
+// ran `pytest tests/test_syntax_check.py` against a tests/ directory that did
+// not exist (its own find_file returned 0 matches). pytest collected nothing,
+// the verification gate latched on it as a red test, and the session burned
+// the rest of its 570s chasing a directory that was never there — ending
+// work_deadline with a correct edit already on disk.
+func TestACommandThatNeverRanIsNotAFailedVerification(t *testing.T) {
+	neverRan := []struct{ why, payload string }{
+		{"pytest collected nothing", `ERROR: file or directory not found: tests/test_syntax_check.py`},
+		{"pytest ran no tests", `collected 0 items` + "\n" + `no tests ran in 0.01s`},
+		{"python could not open the script", `python3: can't open file '/w/missing.py': [Errno 2] No such file or directory`},
+	}
+	for _, c := range neverRan {
+		if !verificationNeverRan(&ToolResult{Error: c.payload}) {
+			t.Errorf("%s: should be neutral, got latched: %q", c.why, c.payload)
+		}
+	}
+
+	// The other half, and the one that matters: a genuine failure must STILL
+	// latch. A test failing because the program under test did not create a
+	// file says "no such file or directory" too — neutralising that would let
+	// a real failure through, which is the opposite of the point.
+	realFailures := []struct{ why, payload string }{
+		{"assertion failed", `FAILED test_store.py::test_add - assert 0 == 1` + "\n" + `1 failed, 2 passed`},
+		{"program did not create its output", `FileNotFoundError: [Errno 2] No such file or directory: 'todos.json'`},
+		{"traceback from the artifact", `Traceback (most recent call last):` + "\n" + `SyntaxError: invalid syntax`},
+		{"build failure", `# command-line-arguments` + "\n" + `./main.go:7:2: undefined: Chunks`},
+	}
+	for _, c := range realFailures {
+		if verificationNeverRan(&ToolResult{Error: c.payload}) {
+			t.Errorf("%s: a real failure was neutralised: %q", c.why, c.payload)
+		}
+	}
+	if verificationNeverRan(nil) {
+		t.Error("nil result must not be treated as a non-run")
+	}
+}
+
+// A ban must never recommend the tool it just banned.
+//
+// Measured on acceptance task L (f9c89df): the model's structural_edit content
+// was garbled, ATLAS correctly refused to write invalid Python, the model
+// re-sent it unchanged, and structural_edit was banned for pricing.py. The ban
+// note then said: "structural_edit is no longer available for pricing.py ...
+// Use `structural_edit`". Alternatives were chosen by file extension alone and
+// never excluded the banned tool. The session ended repeated_refusal with
+// nothing written.
+func TestAToolBanNeverRecommendsTheBannedTool(t *testing.T) {
+	for _, c := range []struct{ tool, path string }{
+		{"structural_edit", "pricing.py"},
+		{"structural_edit", "index.html"},
+		{"replace_lines", "pricing.py"},
+		{"replace_lines", "data.json"},
+		{"write_file", "pricing.py"},
+		{"edit_file", "notes.txt"},
+	} {
+		note := toolBanNote(c.tool, c.path)
+		if strings.Contains(note, "Use ") {
+			advice := note[strings.Index(note, "Use "):]
+			if strings.Contains(advice, "`"+c.tool+"`") {
+				t.Errorf("ban on %s for %s recommends %s: %q", c.tool, c.path, c.tool, advice)
+			}
+		}
+		// Something actionable must remain.
+		if !strings.Contains(note, "`") {
+			t.Errorf("ban on %s for %s left no alternative: %q", c.tool, c.path, note)
+		}
+	}
+	// A .py ban on structural_edit must still leave a targeted option, not
+	// only "rewrite the whole file".
+	note := toolBanNote("structural_edit", "pricing.py")
+	if !strings.Contains(note, "replace_lines") {
+		t.Errorf("no targeted alternative left for a .py: %q", note)
+	}
+}
+
+// P-guardrails/DEAD#2: the redirect prescribed `curl -I`, a probe the
+// verification rule declines. Any probe a refusal message prescribes has to
+// count as verification.
+func TestTheProbeARedirectPrescribesCountsAsVerification(t *testing.T) {
+	msg := foregroundServerRejection("python3 -m http.server 8000")
+	probes := regexp.MustCompile("`(curl[^`]*)`").FindAllStringSubmatch(msg, -1)
+	if len(probes) == 0 {
+		t.Fatalf("the redirect names no probe: %q", msg)
+	}
+	for _, p := range probes {
+		if !isVerificationCommand(p[1]) {
+			t.Errorf("the redirect prescribes %q, which does not count as verification", p[1])
+		}
+	}
+	for _, sawFailed := range []bool{false, true} {
+		for _, blocked := range []bool{false, true} {
+			rej := verificationRejection(sawFailed, blocked, "job1")
+			for _, p := range regexp.MustCompile("`(curl[^`]*)`").FindAllStringSubmatch(rej, -1) {
+				if !isVerificationCommand(p[1]) {
+					t.Errorf("the verification gate prescribes %q, which does not count", p[1])
+				}
+			}
+		}
+	}
+}
+
+// A completed run that looked into the project and changed nothing says so.
+// A request misread as a question ended completed with the model's "Updated
+// calc.py" as its whole summary, and nothing told the user no file changed.
+func TestACompletedRunThatChangedNothingSaysSo(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier0Conversational)
+	st := &runState{inspectedWorkspace: true}
+	got := withNoChangeNote(ctx, st, TerminalCompleted, "Updated calc.py.")
+	if !strings.HasPrefix(got, "Updated calc.py.") || !strings.HasSuffix(got, noChangeNote) {
+		t.Errorf("summary %q does not keep the prose and add the note", got)
+	}
+	if got := withNoChangeNote(ctx, st, TerminalCompleted, ""); got != noChangeNote {
+		t.Errorf("an empty summary became %q", got)
+	}
+	for name, mutate := range map[string]func(*AgentContext, *runState) TerminalStatus{
+		"never looked at the project": func(_ *AgentContext, s *runState) TerminalStatus {
+			s.inspectedWorkspace = false
+			return TerminalCompleted
+		},
+		"a tool wrote a file": func(_ *AgentContext, s *runState) TerminalStatus {
+			s.madeProductiveChange = true
+			return TerminalCompleted
+		},
+		"the shell wrote a file": func(c *AgentContext, _ *runState) TerminalStatus {
+			c.Ledger = map[string]*DeliverableState{"out.txt": {Generation: 1}}
+			return TerminalCompleted
+		},
+		"the shell removed a file": func(c *AgentContext, _ *runState) TerminalStatus {
+			c.Ledger = map[string]*DeliverableState{"old.txt": {Tombstoned: true}}
+			return TerminalCompleted
+		},
+		"shell effects went unobserved": func(c *AgentContext, _ *runState) TerminalStatus {
+			c.ShellEffectsUnobserved = true
+			return TerminalCompleted
+		},
+		"the run did not complete": func(_ *AgentContext, _ *runState) TerminalStatus {
+			return TerminalIncomplete
+		},
+	} {
+		c := NewAgentContext(t.TempDir(), Tier0Conversational)
+		s := &runState{inspectedWorkspace: true}
+		status := mutate(c, s)
+		if got := withNoChangeNote(c, s, status, "Done."); got != "Done." {
+			t.Errorf("%s: summary became %q", name, got)
+		}
 	}
 }

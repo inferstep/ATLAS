@@ -224,3 +224,49 @@ describe('predictEdit: insert_after', () => {
 		expect(editTargetPath('insert_after', { path: 'f.py' })).toBe('f.py');
 	});
 });
+
+describe('predictEdit: replace_lines', () => {
+	const SRC = 'a\nb\nc\nd\n';
+
+	it('replaces an inclusive range exactly', () => {
+		const p = predictEdit('replace_lines',
+			{ path: 'f.py', start_line: 2, end_line: 3, content: 'X\nY' }, SRC)!;
+		expect(p.right).toBe('a\nX\nY\nd\n');
+		expect(p.approximate).toBe(false);
+		expect(p.note).toBe('replaced lines 2-3');
+	});
+
+	it('replaces a single line', () => {
+		const p = predictEdit('replace_lines',
+			{ path: 'f.py', start_line: 1, end_line: 1, content: 'Z' }, SRC)!;
+		expect(p.right).toBe('Z\nb\nc\nd\n');
+		expect(p.note).toBe('replaced line 1');
+	});
+
+	it('preserves a missing trailing newline', () => {
+		const p = predictEdit('replace_lines',
+			{ path: 'f.py', start_line: 2, end_line: 2, content: 'X' }, 'a\nb')!;
+		expect(p.right).toBe('a\nX');
+	});
+
+	it('declines a range the file cannot satisfy', () => {
+		for (const range of [{ start_line: 0, end_line: 1 }, { start_line: 3, end_line: 2 },
+			{ start_line: 2, end_line: 99 }]) {
+			expect(predictEdit('replace_lines', { path: 'f.py', ...range, content: 'X' }, SRC))
+				.toBeUndefined();
+		}
+	});
+
+	it('declines when a field is missing or not an integer', () => {
+		expect(predictEdit('replace_lines', { path: 'f.py', end_line: 2, content: 'X' }, SRC))
+			.toBeUndefined();
+		expect(predictEdit('replace_lines',
+			{ path: 'f.py', start_line: '1', end_line: 2, content: 'X' }, SRC)).toBeUndefined();
+		expect(predictEdit('replace_lines',
+			{ path: 'f.py', start_line: 1, end_line: 2, content: 'X' }, undefined)).toBeUndefined();
+	});
+
+	it('names the target path', () => {
+		expect(editTargetPath('replace_lines', { path: 'f.py' })).toBe('f.py');
+	});
+});

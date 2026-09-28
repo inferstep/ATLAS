@@ -93,6 +93,8 @@ remove_atlas_services() {
 
     if [[ "$REMOVE_DATA" == true ]]; then
         log_info "Removing persistent volume claims..."
+        # lens-state is only left by installs from before the pattern cache
+        # and its state store were removed.
         kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-state 2>/dev/null || true
         kubectl delete pvc -n "$ATLAS_NAMESPACE" lens-projects 2>/dev/null || true
     fi
@@ -108,7 +110,7 @@ remove_atlas_services() {
 remove_container_images() {
     log_info "Removing container images..."
 
-    local prefix="ghcr.io/${ATLAS_GHCR_OWNER:-itigges22}"
+    local prefix="ghcr.io/${ATLAS_GHCR_OWNER:-inferstep}"
     local tag="${ATLAS_IMAGE_TAG:-latest}"
     for img in atlas-llama atlas-llama-vulkan atlas-lens atlas-proxy atlas-sandbox atlas-v3; do
         k3s ctr images rm "${prefix}/${img}:${tag}" 2>/dev/null || true

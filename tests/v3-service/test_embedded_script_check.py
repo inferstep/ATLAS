@@ -347,3 +347,151 @@ def test_empty_and_malformed_inputs_do_not_raise():
         res = check(path, source)
         assert res["ok"] is True, (path, res)
         assert res["findings"] == [], (path, res)
+
+
+# --- stopped render loop -----------------------------------------------------
+#
+# 2026-08-02 dogfooding: asked to make the snake speed up with the score, the
+# model replaced `setInterval(draw, 100)` with `setTimeout(draw, delay)` at the
+# same top-level spot and never re-armed it inside draw(). The JavaScript
+# parses, `python app.py` starts the server, and the agent reported the change
+# verified — while the game drew exactly one frame.
+
+def _flask_page(script: str) -> str:
+    return (
+        'from flask import Flask, render_template_string\n'
+        'app = Flask(__name__)\n'
+        'HTML_TEMPLATE = """\n'
+        '<html><body><canvas id="c"></canvas>\n'
+        '<script>\n'
+        '        let score = 0;\n'
+        '        function draw() {\n'
+        '            score += 1;\n'
+        '        }\n'
+        f'{script}\n'
+        '</script>\n'
+        '</body></html>\n'
+        '"""\n'
+    )
+
+
+RECURRING = _flask_page('        setInterval(draw, 100);')
+ONE_SHOT = _flask_page('        let delay = Math.max(50, 100 - score * 3);\n'
+                       '        setTimeout(draw, delay);')
+
+
+def test_a_loop_downgraded_to_a_single_shot_is_reported():
+    findings = main.embedded_script_check("app.py", ONE_SHOT, RECURRING)["findings"]
+    assert len(findings) == 1, findings
+    f = findings[0]
+    assert f["defect"] == "stopped_loop"
+    assert "`draw`" in f["message"]
+    assert "setTimeout(draw, delay)" in f["text"]
+
+
+def test_the_same_content_without_the_pre_edit_file_reports_nothing():
+    """The comparison IS the check — one version alone cannot tell a dead loop
+    from a deliberate one-shot."""
+    assert main.embedded_script_check("app.py", ONE_SHOT)["findings"] == []
+
+
+def test_a_loop_that_rearms_itself_is_not_reported():
+    rearmed = _flask_page('        setTimeout(draw, 100);').replace(
+        "            score += 1;",
+        "            score += 1;\n            setTimeout(draw, 100 - score);")
+    assert main.embedded_script_check("app.py", rearmed, RECURRING)["findings"] == []
+
+
+def test_a_new_delayed_one_shot_is_not_reported():
+    added = _flask_page('        setInterval(draw, 100);\n'
+                        '        function banner() { score = 0; }\n'
+                        '        setTimeout(banner, 3000);')
+    assert main.embedded_script_check("app.py", added, RECURRING)["findings"] == []
+
+
+def test_removing_the_loop_outright_is_not_reported():
+    """Deleting a loop is a decision; leaving one scheduled once is a slip."""
+    removed = _flask_page('        // no loop here')
+    assert main.embedded_script_check("app.py", removed, RECURRING)["findings"] == []
+
+
+def test_a_file_that_never_looped_reports_nothing():
+    plain = _flask_page('        setTimeout(draw, 100);')
+    assert main.embedded_script_check("app.py", plain, _flask_page('        draw();'))["findings"] == []
+
+
+# --- duplicate lexical binding ------------------------------------------------
+#
+# 2026-08-02 dogfooding: a replace_lines edit appended a second `let score = 0`
+# to a <script> that already had one. tree-sitter parses it, so the syntax
+# check passed and the edit landed — but a repeated let/const is an early
+# SyntaxError, so the browser threw out the whole script and every handler on
+# the page died. node --check on the extracted block: "SyntaxError: Identifier
+# 'score' has already been declared".
+
+def test_a_repeated_let_in_one_scope_is_reported():
+    dup = _flask_page('        let score = 0;\n        setInterval(draw, 100);')
+    findings = main.embedded_script_check("app.py", dup)["findings"]
+    assert len(findings) == 1, findings
+    assert findings[0]["defect"] == "redeclaration"
+    assert "`score`" in findings[0]["message"]
+
+
+def test_shadowing_in_an_inner_scope_is_legal():
+    shadowed = _flask_page(
+        '        function reset() {\n'
+        '            let score = 0;\n'
+        '            return score;\n'
+        '        }\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", shadowed)["findings"] == []
+
+
+def test_var_and_function_redeclaration_are_left_alone():
+    """Legal JavaScript, however untidy — the check only reports what the
+    engine actually refuses."""
+    loose = _flask_page(
+        '        var score = 1;\n'
+        '        var score = 2;\n'
+        '        function draw() {}\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", loose)["findings"] == []
+
+
+def test_the_same_name_in_two_sibling_blocks_is_legal():
+    siblings = _flask_page(
+        '        if (true) { let n = 1; }\n'
+        '        if (true) { let n = 2; }\n'
+        '        setInterval(draw, 100);')
+    assert main.embedded_script_check("app.py", siblings)["findings"] == []
+
+
+def test_a_missing_brace_names_the_block_that_was_left_open():
+    """tree-sitter reports the absence where the parser gave up — past the end
+    of the construct. Observed live: "line 202: a `}` is missing" against an
+    untouched `setInterval(draw, 100);`, which the model then tried to fix
+    twice before the breaker stopped the run."""
+    src = _flask_page(
+        '        function draw() {\n'
+        '            if (x) {\n'
+        '                go();\n'
+        '        }\n'
+        '\n'
+        '        setInterval(draw, 100);')
+    findings = main.embedded_script_check("app.py", src)["findings"]
+    assert len(findings) == 1, findings
+    f = findings[0]
+    assert f["message"] == "a `}` is missing"
+    assert "function draw() {" in f["opened_text"]
+    # The parser's stopping point is a line the edit never touched.
+    assert "setInterval" in f["text"]
+    assert f["opened_line"] < f["line"], f
+
+
+def test_a_stray_closer_carries_no_opener():
+    """It is reported exactly where it sits, so there is no second line to
+    point at."""
+    src = _flask_page("        if (a && b) go());")
+    findings = main.embedded_script_check("app.py", src)["findings"]
+    assert len(findings) == 1, findings
+    assert "opened_line" not in findings[0], findings[0]

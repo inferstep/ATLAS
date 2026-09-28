@@ -187,7 +187,7 @@ func walkPythonFiles(root string) map[string]string {
 
 // symbolGraphNode mirrors one entry of the v3-service symbol_index "graph"
 // field (issue #39 Phase 3): a matched symbol's call-graph neighborhood.
-// Present only when ATLAS_CALL_GRAPH is on; omitted otherwise.
+// Omitted when the service found no neighborhood.
 type symbolGraphNode struct {
 	Symbol  string   `json:"symbol"`
 	Callers []string `json:"callers"`
@@ -520,7 +520,11 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	info.TestCommand = "python -m pytest"
-	info.BuildCommand = "python -m py_compile *.py"
+	// No build command. "python -m py_compile *.py" was invented here and
+	// forwarded to V3 as the project's build: it compiles only top-level
+	// files (passing a candidate in src/ that it never compiled), fails on
+	// every project with none, and V3 recorded it as a passed build. The
+	// syntax check V3 already runs on the candidate itself covers the file.
 
 	return info
 }
@@ -543,9 +547,11 @@ func detectGo(files map[string]bool) *ProjectInfo {
 		return nil
 	}
 	return &ProjectInfo{
-		Language:     "go",
-		ConfigFiles:  []string{"go.mod"},
-		BuildCommand: "go build .",
+		Language:    "go",
+		ConfigFiles: []string{"go.mod"},
+		// ./... builds every package; "." failed with no Go files at the
+		// root and skipped the subpackages.
+		BuildCommand: "go build ./...",
 		DevCommand:   "go run .",
 		TestCommand:  "go test ./...",
 	}
@@ -584,11 +590,11 @@ func detectShell(projectDir string, files map[string]bool) *ProjectInfo {
 		return nil
 	}
 
+	// No build or test command: "bash -n *.sh" checks only the first file
+	// (the rest become its arguments), and a syntax check is not a test.
 	return &ProjectInfo{
-		Language:     "shell",
-		ConfigFiles:  []string{},
-		BuildCommand: "bash -n *.sh",
-		TestCommand:  "bash -n *.sh",
+		Language:    "shell",
+		ConfigFiles: []string{},
 	}
 }
 
@@ -696,25 +702,36 @@ func readWorkspaceDir(ctx *AgentContext, path string) ([]os.DirEntry, error) {
 // validateToolWorkspacePaths applies workspace containment before any tool
 // handler can touch the filesystem. It is used by both the agent loop and the
 // shared dispatcher so parallel and direct dispatch paths follow one policy.
+// workspacePathFields is the single registry of which arguments each tool
+// treats as a workspace path. Package-scoped so a test can enumerate the real
+// owner instead of maintaining a second copy that drifts.
+var workspacePathFields = map[string][]string{
+	"read_file":       {"path"},
+	"outline_file":    {"path"},
+	"write_file":      {"path"},
+	"edit_file":       {"path"},
+	"structural_edit": {"path"},
+	// Both were absent, so the workspace-containment pre-check never ran on
+	// them even though their doc comments claim "same gates as every other
+	// write". Mitigated transitively by the read-first requirement, but the
+	// explicit gate belongs here.
+	"insert_after":   {"path"},
+	"replace_lines":  {"path"},
+	"delete_file":    {"path"},
+	"move_file":      {"source", "destination"},
+	"search_files":   {"path"},
+	"find_file":      {"path"},
+	"list_directory": {"path"},
+	"run_command":    {"cwd"},
+	"run_background": {"cwd"},
+}
+
 func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentContext) string {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(args, &fields); err != nil {
 		return ""
 	}
-	keys := map[string][]string{
-		"read_file":       {"path"},
-		"outline_file":    {"path"},
-		"write_file":      {"path"},
-		"edit_file":       {"path"},
-		"structural_edit": {"path"},
-		"delete_file":     {"path"},
-		"move_file":       {"source", "destination"},
-		"search_files":    {"path"},
-		"find_file":       {"path"},
-		"list_directory":  {"path"},
-		"run_command":     {"cwd"},
-		"run_background":  {"cwd"},
-	}
+	keys := workspacePathFields
 	for _, key := range keys[name] {
 		raw, ok := fields[key]
 		if !ok {

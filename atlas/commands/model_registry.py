@@ -129,11 +129,16 @@ class Model:
     # trained on Qwen residuals won't steer Llama correctly).
     #
     # asa_status values:
-    #   "supported"    — vector exists + validated against this base
+    #   "supported"    — vector exists + an A/B measurement on this base
+    #                    showed its effect
     #   "no-artifacts" — no vector trained yet
-    #   "unverified"   — a structurally-applicable vector exists (e.g.
-    #                    different quant of same model family) but the
-    #                    exact combo hasn't been end-to-end checked
+    #   "unverified"   — a vector exists for this base (or a quant of the
+    #                    same family) but its effect is not measured
+    #
+    # The status labels evidence; it does not switch steering. Steering is
+    # always on: install-artifacts writes the model marker for a
+    # "supported" or "unverified" vector, and the entrypoint loads any
+    # vector marked for the served model.
     asa_status: str = "no-artifacts"
     # Files that must exist for the asa_status claim to be honest. Today
     # this is just `ast_edit_steering.gguf`; the list keeps the door
@@ -152,12 +157,18 @@ class Model:
     # are relative to the model gguf).
     asa_artifact_url_base: Optional[str] = None
     notes: str = ""
+    # How the proxy constrains this model's tool-call JSON (ATLAS_GRAMMAR_MODE).
+    # A property of the model, written by the installer, so an install
+    # runs the configuration the model was measured with. "strict" sends the
+    # full tool-call schema as a grammar; "loose" sends plain JSON mode.
+    grammar_mode: str = "strict"
 
     def env_vars(self) -> Dict[str, str]:
         """The .env keys the wizard / installer would write for this model."""
         return {
             "ATLAS_MODEL_FILE": self.model_file,
             "ATLAS_MODEL_NAME": self.model_file.rsplit(".", 1)[0],
+            "ATLAS_GRAMMAR_MODE": self.grammar_mode,
         }
 
     @property
@@ -193,10 +204,12 @@ def _unsloth_qwen35_url(repo: str, file: str) -> str:
 # Truthful state today:
 #   - 9B Q6_K: SUPPORTED. Public unsloth/Qwen3.5-9B-GGUF, trained metric
 #     tensor + embeddings in geometric-lens/geometric_lens/models/.
-#   - 9B Q4_K_M / Q8_0: UNVERIFIED. Same model family, different quant —
-#     embedding space is structurally similar so the metric tensor
-#     should transfer, but the exact (model, quant) combo hasn't been
-#     validated against pass/fail labels. PC-058 will close this.
+#   - 9B Q4_K_M / Q8_0: NO-ARTIFACTS. Same model family as Q6_K, but the
+#     lens loads a bundle only for the model it was built for (same model
+#     name and embedding size: identity_matches in
+#     geometric_lens/identity.py), so the Q6_K bundle does not load for
+#     them. Each quant needs its own bundle: `atlas bench`, then
+#     `atlas lens build --from-results`.
 #   - 7B / 14B / 32B: NO-ARTIFACTS. Upstream repos return HTTP 401
 #     (gated). Setting HF_TOKEN may unlock the download path; even then,
 #     no Lens artifacts trained. Listed so users know what's missing.
@@ -219,10 +232,11 @@ REGISTRY: List[Model] = [
         requires_hf_token=True,
         notes="Upstream repo unsloth/Qwen3.5-7B-GGUF is gated "
               "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. Even with auth, no Lens "
-              "artifacts trained for this model — will install as raw "
-              "llama.cpp model only and G(x) verification will silently "
-              "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
+              "and unlock the download path. Even with auth, there are no "
+              "Lens artifacts for this model: the lens cannot score it, "
+              "so ATLAS stops agent work on it until you build a bundle "
+              "(install with --no-lens, then `atlas bench` and "
+              "`atlas lens build --from-results`).",
     ),
     Model(
         name="Qwen3.5-9B-Q4_K_M",
@@ -231,7 +245,7 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 9B (Q4_K_M)",
         # PC-056.1 verified 2026-05-01: Content-Length = 5680522464 bytes.
         model_size_gb=5.29,
-        lens_status="unverified",
+        lens_status="no-artifacts",
         download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
                                           "Qwen3.5-9B-Q4_K_M.gguf"),
         sha256="03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
@@ -241,13 +255,14 @@ REGISTRY: List[Model] = [
         # not validated for this exact combo. Same logic as lens_status.
         asa_status="unverified",
         asa_artifact_files=["ast_edit_steering.gguf"],
-        notes="Smaller-than-Q6 9B variant. Uses the same Lens artifacts "
-              "as the Q6 (different quant of the same model family — "
-              "embedding space is structurally similar). Quality is "
-              "lower than Q6_K; should be measurably degraded but "
-              "still functional. Marked `unverified` because the "
-              "exact (Q4_K_M, Lens) combo hasn't been validated end-"
-              "to-end. PC-058 will close this.",
+        notes="Smaller-than-Q6 9B variant. No Lens artifacts for this "
+              "exact quant: the lens loads a bundle only for the model "
+              "it was built for, so the Q6_K bundle does not load here. "
+              "Until this quant has its own bundle, the lens cannot score "
+              "it, and ATLAS stops agent work on it and says why. Build "
+              "one: install with --no-lens, then run `atlas bench` and "
+              "`atlas lens build --from-results`. The steering vector is "
+              "shared with Q6_K and marked unverified.",
     ),
     Model(
         name="Qwen3.5-9B-Q6_K",
@@ -314,7 +329,7 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 9B (Q8_0)",
         # PC-056.1 verified 2026-05-01: Content-Length = 9527502048 bytes.
         model_size_gb=8.87,
-        lens_status="unverified",
+        lens_status="no-artifacts",
         download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
                                           "Qwen3.5-9B-Q8_0.gguf"),
         sha256="809626574d0cb43d4becfa56169980da2bb448f2299270f7be443cb89d0a6ae4",
@@ -323,11 +338,15 @@ REGISTRY: List[Model] = [
         # but not validated for this exact quant.
         asa_status="unverified",
         asa_artifact_files=["ast_edit_steering.gguf"],
-        notes="Higher-quality 9B variant for hosts with 24+ GB VRAM. "
-              "Uses the same Lens artifacts as Q6_K (different quant "
-              "of the same model family). Quality is higher than Q6_K "
-              "but the exact (Q8_0, Lens) combo hasn't been validated "
-              "end-to-end. Marked `unverified` until PC-058 closes that.",
+        notes="Higher-quality 9B variant for hosts with 24+ GB VRAM. No "
+              "Lens artifacts for this exact quant: the lens loads a "
+              "bundle only for the model it was built for, so the Q6_K "
+              "bundle does not load here. Until this quant has its own "
+              "bundle, the lens cannot score it, and ATLAS stops agent "
+              "work on it and says why. Build one: install with "
+              "--no-lens, then run `atlas bench` and "
+              "`atlas lens build --from-results`. The steering vector is "
+              "shared with Q6_K and marked unverified.",
     ),
     Model(
         name="Qwen3.5-14B-Q5_K_M",
@@ -343,11 +362,12 @@ REGISTRY: List[Model] = [
         requires_hf_token=True,
         notes="Upstream repo unsloth/Qwen3.5-14B-GGUF is gated "
               "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. Tested in past ATLAS work "
-              "but the trained Lens artifacts have been removed from the "
-              "repo. Even with auth, will install as raw llama.cpp model "
-              "only — G(x) verification will silently no-op (--no-lens "
-              "to acknowledge). See PC-058 roadmap to retrain.",
+              "and unlock the download path. Tested in past ATLAS work, "
+              "but its Lens artifacts were removed from the repo, so it "
+              "has no Lens artifacts now: the lens cannot score it, and "
+              "ATLAS stops agent work on it until you build a bundle "
+              "(install with --no-lens, then `atlas bench` and "
+              "`atlas lens build --from-results`).",
     ),
     Model(
         name="Qwen3.5-32B-Q5_K_M",
@@ -363,10 +383,11 @@ REGISTRY: List[Model] = [
         requires_hf_token=True,
         notes="Upstream repo unsloth/Qwen3.5-32B-GGUF is gated "
               "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. No Lens artifacts trained "
-              "for this model. Even with auth, will install as raw "
-              "llama.cpp model only — G(x) verification will silently "
-              "no-op (--no-lens to acknowledge). See PC-058 roadmap.",
+              "and unlock the download path. No Lens artifacts for this "
+              "model: the lens cannot score it, so ATLAS stops agent "
+              "work on it until you build a bundle (install with "
+              "--no-lens, then `atlas bench` and "
+              "`atlas lens build --from-results`).",
     ),
     Model(
         name="gemma-4-12b-it-Q4_K_M",
@@ -404,9 +425,18 @@ REGISTRY: List[Model] = [
               "(3840-dim) at https://huggingface.co/itigges22/atlas-lens-gemma4-12b. "
               "download_url not captured at publish time; maintainers "
               "can fill it in for `atlas model install` support.",
-        asa_status="supported",
+        # Unverified: built from contrast prompts that named the tool
+        # ast_edit (now structural_edit) and never A/B measured on gemma.
+        # It is installed and active all the same (steering is always on);
+        # the label says only what has been shown. Rebuild with `atlas asa
+        # build`, measure, then promote.
+        asa_status="unverified",
         asa_artifact_files=["ast_edit_steering.gguf"],
         asa_hf_repo="itigges22/atlas-asa-gemma4-12b",
+        # Gemma under the strict schema grammar emits `done` instead of
+        # calling tools (docs/CONFIGURATION.md, ADR 0008); every recorded
+        # gemma measurement ran loose. Not A/B measured against strict.
+        grammar_mode="loose",
         asa_artifact_url_base=(
             "https://huggingface.co/itigges22/atlas-asa-gemma4-12b/"
             "resolve/main/"
@@ -493,7 +523,9 @@ def artifact_download_hint(model_name: str, kind: str) -> str:
     if m is None:
         return ""
     status = getattr(m, f"{kind}_status", "")
-    if (status == "supported"
+    # The same set install-artifacts downloads: an unverified vector or
+    # bundle is still published and hash-pinned.
+    if (status in ("supported", "unverified")
             and getattr(m, f"{kind}_artifact_url_base", None)
             and getattr(m, f"{kind}_artifact_files", None)):
         return (f" Published artifacts for this model exist: "

@@ -1,0 +1,68 @@
+{
+  "scheme": "atlas/proxy-lens-invocation/v1",
+  "header": "X-ATLAS-V3-Invocation-ID",
+  "header_note": "the historical header name carries the general model-bound invocation identity; for proxy-owned direct Lens calls the value is a proxy-Lens request scope, never a V3 generation invocation",
+  "prefix": "proxy-lens:",
+  "derivation": "prefix + lowercase hex of sha256(scheme + \"\\n\" + request_id), truncated to 32 hex characters",
+  "request_id_pattern": "^[A-Za-z0-9._:-]{1,128}$",
+  "invocation_id_pattern": "^proxy-lens:[0-9a-f]{32}$",
+  "invocation_id_length": 43,
+  "absent_when": "request_id is empty or does not match request_id_pattern; then no invocation identity is sent",
+  "vectors": [
+    {
+      "request_id": "req-0011223344556677",
+      "invocation_id": "proxy-lens:edc6e8608453d1ae71323a0d1f15ad23",
+      "note": "minted proxy request id"
+    },
+    {
+      "request_id": "req-9e7d1c4b2a6f0358",
+      "invocation_id": "proxy-lens:7cdaec4b83ae19166a3d9bdfbc13a3eb",
+      "note": "a second client-supplied id in the minted shape"
+    },
+    {
+      "request_id": "svc-probe.0a1b:2c3d",
+      "invocation_id": "proxy-lens:b9ae65e471626a626e34ac34a803b725",
+      "note": "an opaque id exercising the dot, colon and hyphen of the closed alphabet"
+    },
+    {
+      "request_id": "a",
+      "invocation_id": "proxy-lens:c5d4fc0015529964ae7b2f10b97bdfe0",
+      "note": "shortest valid"
+    },
+    {
+      "request_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "invocation_id": "proxy-lens:4096c30d50b77c5712270ddd458ef8f2",
+      "note": "longest valid"
+    },
+    {
+      "request_id": "",
+      "invocation_id": null,
+      "note": "empty: no identity"
+    },
+    {
+      "request_id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "invocation_id": null,
+      "note": "too long: no identity"
+    },
+    {
+      "request_id": "bad id",
+      "invocation_id": null,
+      "note": "whitespace: no identity"
+    },
+    {
+      "request_id": "req\n1",
+      "invocation_id": null,
+      "note": "control character: no identity"
+    },
+    {
+      "request_id": "id/with/slash",
+      "invocation_id": null,
+      "note": "slash outside the closed alphabet: no identity"
+    },
+    {
+      "request_id": "proxy-lens:deadbeef",
+      "invocation_id": "proxy-lens:46bb8e04bb0f2e885e865d082262c3c3",
+      "note": "a request id may look like an invocation id; the derivation still hashes it"
+    }
+  ]
+}

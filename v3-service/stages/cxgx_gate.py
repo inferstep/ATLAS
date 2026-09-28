@@ -19,11 +19,11 @@ rather than the task, and it handed k=1 to 60% of tasks whose probe had
 just FAILED the sandbox — it starved generation on exactly the tasks that
 needed candidates. With the floor, the allocator can only ADD candidates
 to today's pinned k=3, never remove them, so its worst case equals current
-behavior. The G(x) escalation is what makes the added compute land on the
-right tasks: at n=175/arm the gate measured 66.9% against 64.6% for fixed
-k=3 and 61.7% for a shuffled-assignment arm carrying the SAME tier mix, so
-5.1 pp of the gain comes from where the compute goes rather than how much
-of it is spent.
+behavior. The G(x) escalation is meant to put the added compute on the
+right tasks. That is unmeasured: an earlier comparison (Qwen3.5-9B, a
+patched out-of-tree runner, thinking enabled on escalation, on tasks the
+G(x) head was trained on) found the gated, fixed-k=3 and shuffled arms
+within noise of each other at n=175/arm.
 
 Both orchestrators call `allocate()`: the bench runner (no wall-clock cap,
 `remaining_ms=None`) and the live V3 service (capped by ATLAS_V3_TIMEOUT,
@@ -75,7 +75,11 @@ GX_DEEP_RATIO = 0.75
 
 # Verdicts that mean G(x) has no calibration for the served model — its
 # score scale is unknown, so no escalation may be inferred from it.
-_UNCALIBRATED_VERDICTS = frozenset(("uncalibrated", "unavailable", "error"))
+# "unscored" is the probe the Lens could not score at all (its input
+# exceeded the embedding server's physical batch, the Lens was unreachable):
+# there is no score to read, calibrated or not.
+_UNCALIBRATED_VERDICTS = frozenset(("uncalibrated", "unavailable", "error",
+                                    "unscored"))
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +92,18 @@ _UNCALIBRATED_VERDICTS = frozenset(("uncalibrated", "unavailable", "error"))
 # clock could have produced. Same failure the refinement budget gate fixed
 # for phase 3, so the cap is built from the same helpers.
 
-# One extra candidate costs one generation LLM call plus the per-candidate
+# One extra candidate costs its generation LLM calls plus the per-candidate
 # verification tail the pipeline runs on everything it generates: per-step
 # lens scoring (~3-7s on this hardware tier) and one sandbox execution.
 CANDIDATE_VERIFY_MS = 10_000.0
+
+# PlanSearch, the generator this k feeds, spends TWO calls per candidate: one
+# to construct the plan from its constraint set, one to turn that plan into
+# code. Pricing a candidate at a single call halved the estimate and is why
+# the budget cap never fired. Measured across 43 pipeline runs: a median of 7
+# LLM calls per session, which is exactly PlanSearch's 1 + 2k at k=3, against
+# a model that predicted 3.
+CANDIDATE_LLM_CALLS = 2
 
 # Conservative floor when no per-call latency has been observed: one call's
 # share of the refinement loop's own no-observation floor.
@@ -116,7 +128,8 @@ def estimate_candidate_ms(observed_llm_call_ms: float) -> float:
     tier. ``observed_llm_call_ms`` is the average per-call latency measured
     on this task so far (0 / falsy before any observation)."""
     if observed_llm_call_ms and observed_llm_call_ms > 0:
-        return observed_llm_call_ms + CANDIDATE_VERIFY_MS
+        return (CANDIDATE_LLM_CALLS * observed_llm_call_ms
+                + CANDIDATE_VERIFY_MS)
     return MIN_CANDIDATE_MS
 
 
@@ -162,7 +175,7 @@ def base_tier(cx_normalized: float, cx_calibrated: bool) -> str:
     An uncalibrated C(x) carries no comparable scale, so it selects the
     floor tier instead of a table row.
     """
-    if not cx_calibrated:
+    if not cx_calibrated or cx_normalized is None:
         return FLOOR_TIER
     return select_tier(normalized_energy=cx_normalized,
                        default_tier=FLOOR_TIER)
@@ -177,7 +190,7 @@ def gx_escalation(gx_score: float, gx_available: bool,
     and 0 whenever G(x) is missing or uncalibrated for this model, since
     the boundary the bands are measured against would not exist.
     """
-    if not gx_available:
+    if not gx_available or gx_score is None:
         return 0
     if gx_verdict and gx_verdict in _UNCALIBRATED_VERDICTS:
         return 0
@@ -189,23 +202,46 @@ def gx_escalation(gx_score: float, gx_available: bool,
     return 0
 
 
+def estimate_tier_ms(tier: str, observed_llm_call_ms: float) -> float:
+    """Wall-clock ALL of a tier's candidates cost, not just the surcharge.
+
+    estimate_escalation_ms prices only what a tier adds beyond k=3, so it
+    returns 0.0 at the floor and the budget check could never see the cost
+    of the floor itself. That is the largest single cost in the pipeline:
+    at the observed ~22s per call, k=3 is six calls and 132s of a 180s
+    budget, before the probe and the self-test that precede it.
+    """
+    k = TIER_MIN_K.get(tier, K_FLOOR)
+    return k * estimate_candidate_ms(observed_llm_call_ms) * tier_token_ratio(tier)
+
+
 def budget_capped_tier(tier: str, remaining_ms: Optional[float],
                        observed_llm_call_ms: float = 0.0) -> str:
-    """Lower `tier` until the candidates it adds beyond the floor fit the
-    remaining wall-clock. Returns `tier` unchanged when there is no cap.
+    """Lower `tier` until its candidates fit the remaining wall-clock.
+    Returns `tier` unchanged when there is no cap.
 
-    The affordability test reserves one refinement iteration: adding
-    candidates must not, by itself, consume the budget that the phase-3
-    repair gate needs to enter the loop at all. Buying a fourth candidate
-    by making repair impossible is not a trade this gate is allowed to
-    make — its whole safety property is that it can only improve on k=3.
+    The affordability test reserves one refinement iteration: generating
+    candidates must not consume the budget the phase-3 repair gate needs to
+    enter the loop at all. Buying breadth by making repair impossible is not
+    a trade this gate is allowed to make.
+
+    Measured across 43 pipeline runs: that reservation never once held. The
+    cap priced tiers with estimate_escalation_ms, which is 0.0 at the floor,
+    so the first affordability test always passed and the walk stopped
+    immediately — capped_from was empty in all 33 allocations while sessions
+    spent a median 207s of a 180s budget on generation alone. Refinement was
+    then reached with 7-9s left and skipped 19 times.
+    The floor's purpose is to stop the LENS lowering quality below the old
+    fixed k=3; `allocate` still applies it before calling this. It was never
+    meant to stop the clock, so the walk here runs to the bottom of the
+    ladder, where `nothink` already provides k=1.
     """
     if remaining_ms is None:
         return tier
     idx = TIER_ORDER.index(tier) if tier in TIER_ORDER else FLOOR_TIER_IDX
     usable_ms = remaining_ms - estimate_iteration_ms(observed_llm_call_ms)
-    while idx > FLOOR_TIER_IDX:
-        cost = estimate_escalation_ms(TIER_ORDER[idx], observed_llm_call_ms)
+    while idx > 0:
+        cost = estimate_tier_ms(TIER_ORDER[idx], observed_llm_call_ms)
         if can_afford_iteration(usable_ms, cost):
             break
         idx -= 1
@@ -247,12 +283,22 @@ def allocate(cx_normalized: float = 0.5,
     if capped_from:
         reason = "budget_capped"
     elif not cx_calibrated and not escalation:
-        reason = "uncalibrated"
+        # An unscored probe is named as such: the floor was allocated
+        # because there was no score, not because the score had no scale.
+        reason = "unscored" if gx_verdict == "unscored" else "uncalibrated"
     else:
         reason = "gated"
 
+    # K_FLOOR stops the LENS starving generation: its C(x)-only predecessor
+    # handed k=1 to 60% of tasks whose probe had just failed, which is what
+    # the floor exists to prevent. It must not also override the CLOCK. When
+    # the budget cap lowered the tier, the smaller k IS the finding — holding
+    # k at 3 there spends the whole budget on candidates and leaves the
+    # phase-3 repair the reservation was made for unable to run at all,
+    # measured as 19 refinement skips with 7-9s remaining of 180s.
+    capped_k = TIER_MIN_K[capped]
     return Allocation(
-        k=max(K_FLOOR, TIER_MIN_K[capped]),
+        k=capped_k if capped_from else max(K_FLOOR, capped_k),
         tier=capped,
         base_tier=base,
         gx_escalation=escalation,

@@ -75,18 +75,25 @@ def test_yes_skip_download_writes_env_and_keys(tmp_path, monkeypatch, capsys):
                 "ATLAS_LLAMA_PORT", "ATLAS_PARALLEL_SLOTS",
                 "ATLAS_KV_TYPE_K", "ATLAS_KV_TYPE_V",
                 "ATLAS_BACKEND", "ATLAS_GPU_VENDOR", "ATLAS_GPU_INDEX",
-                "ATLAS_PROXY_UID", "ATLAS_PROXY_GID"):
+                "ATLAS_PROXY_UID", "ATLAS_PROXY_GID", "ATLAS_GRAMMAR_MODE"):
         assert f"{key}=" in body, f"missing {key} in .env"
+    # The grammar mode is the chosen model's, from the registry.
+    model_file = next(line.split("=", 1)[1] for line in body.splitlines()
+                      if line.startswith("ATLAS_MODEL_FILE="))
+    from atlas.commands import model_registry
+    chosen = model_registry.by_model_file(model_file)
+    assert chosen is not None
+    assert f"ATLAS_GRAMMAR_MODE={chosen.grammar_mode}" in body
 
-    # Proxy runs as the invoking user so it can write the /workspace and
-    # lens_training bind mounts (the image's baked-in uid 1001 can't).
+    # Proxy runs as the invoking user so it can write the /workspace bind
+    # mount (the image's baked-in uid 1001 can't).
     assert f"ATLAS_PROXY_UID={os.getuid()}" in body
     assert f"ATLAS_PROXY_GID={os.getgid()}" in body
 
     # Default models_dir is ./models when it equals atlas_root/models.
     assert "ATLAS_MODELS_DIR=./models" in body
     assert "ATLAS_IMAGE_TAG=latest" in body
-    assert "ATLAS_GHCR_OWNER=itigges22" in body
+    assert "ATLAS_GHCR_OWNER=inferstep" in body
     assert "ATLAS_MACOS_PREFIX=~/.atlas/macos" in body
 
 

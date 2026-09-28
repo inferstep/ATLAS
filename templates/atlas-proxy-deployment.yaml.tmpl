@@ -61,12 +61,6 @@ spec:
         - name: models
           mountPath: /models
           readOnly: true
-        # Lens training-data corpus (per-file accept/deny + pass thumbs).
-        # Host path so `atlas lens retrain` on the node reads the same
-        # corpus the proxy writes. Matches the compose /data/lens_training
-        # mount.
-        - name: lens-training
-          mountPath: /data/lens_training
         readinessProbe:
           httpGet:
             path: /ready          # /ready is the strict probe (lens scoring degraded → 503).
@@ -99,10 +93,6 @@ spec:
         hostPath:
           path: ${ATLAS_MODELS_DIR}
           type: Directory
-      - name: lens-training
-        hostPath:
-          path: ${ATLAS_LENS_TRAINING_DIR}
-          type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service

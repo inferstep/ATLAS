@@ -22,7 +22,7 @@ jobs:
       - name: Scan ${{ matrix.image }}:dev
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
         with:
-          image-ref: ghcr.io/itigges22/${{ matrix.image }}:dev
+          image-ref: ghcr.io/inferstep/${{ matrix.image }}:dev
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
@@ -48,11 +48,11 @@ jobs:
         # BuildKit SBOM + provenance are actually attached.
         run: |
           set -euo pipefail
-          REF="ghcr.io/itigges22/${{ matrix.image }}:dev"
+          REF="ghcr.io/inferstep/${{ matrix.image }}:dev"
           echo "Verifying cosign signature on $REF"
           cosign verify \
             --certificate-identity-regexp \
-              "https://github.com/itigges22/ATLAS/.github/workflows/build-images.yml@.*" \
+              "https://github.com/inferstep/ATLAS/.github/workflows/build-images.yml@.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "$REF" > /dev/null
           echo "Checking BuildKit attestations on $REF"

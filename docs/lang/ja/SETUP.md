@@ -430,11 +430,10 @@ atlas doctor -v           # verbose: show detail for each check
 | スタック | health/llama, lens, v3, sandbox, proxy | 5 つの `/health` エンドポイントすべてが ok を返す |
 | スタック | internal_auth | 内部サービス認証: トークンファイルが厳格なパーミッションで存在し、実際の強制が双方向でプローブされる（誤ったトークン → 401、有効なトークンは受理）。認証が無効（`secrets/service-token` なし）の場合は警告 |
 | スタック | status_dimensions | 情報提供のみ: プロキシの `/v1/calibration/status` から得られる 7 つの lens/ASA ステータスディメンション（TUI のバッジが読むのと同じソース）。この行が実行を失敗させることはない |
-| スタック | sqlite_state | lens の `/health` が SQLite ステートストアの利用可能性を報告する（`subsystems.sqlite`） |
 | スタック | image_skew | 5 つの `atlas-*` イメージすべてが同じタグ |
 | エンドツーエンド | e2e_smoke | llama-server への実際の `/v1/chat/completions` ラウンドトリップ（`--quick` でスキップ） |
 
-`vulkan` と `metal-native` の行は設定されたバックエンドに応じた条件付きです。health、`internal_auth`、`status_dimensions`、`sqlite_state` の行は少なくとも 1 つのコンテナが起動している場合にのみ実行され、`e2e_smoke` は `--quick` でスキップされます。残りのチェックは常に実行されます。
+`vulkan` と `metal-native` の行は設定されたバックエンドに応じた条件付きです。health、`internal_auth`、`status_dimensions` の行は少なくとも 1 つのコンテナが起動している場合にのみ実行され、`e2e_smoke` は `--quick` でスキップされます。残りのチェックは常に実行されます。
 
 手動で確認したい場合:
 
@@ -668,7 +667,7 @@ K3s は設定に `.env` ではなく `atlas.conf` を使用します。HTTP コ�
 | サービス公開 | ホストポート (`8090`, `8080`, `8099`, `8070`, `30820`) | NodePorts (`30080`, `32735`, `31144`, `30070`, `30820`) |
 | プロジェクトワークスペース | バインドマウント (`ATLAS_PROJECT_DIR` → `/workspace`) | `hostPath`（`ATLAS_PROJECTS_DIR` → 必要な各 Pod の `/workspace`） |
 | モデルファイル | バインドマウント (`ATLAS_MODELS_DIR` → `/models:ro`) | GPU ノード上の `hostPath`（`ATLAS_MODELS_DIR`、`Directory`、読み取り専用） |
-| ステートフルストレージ | 名前付きボリューム (`lens-state`, `v3-telemetry`) | PVC（`lens-projects` のサイズは `ATLAS_PVC_PROJECTS_SIZE` で指定） |
+| ステートフルストレージ | 名前付きボリューム (`v3-telemetry`) | PVC `lens-projects`（サイズは `ATLAS_PVC_PROJECTS_SIZE` で指定。マウントはされるが、プロジェクトインデクサの削除以降は未使用） |
 | GPU 割り当て | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1`（GPU Operator またはデバイスプラグインが必要） |
 | サンドボックスのツールチェーンキャッシュ | 言語ごとの `tmpfs` マウント | 言語ごとの `sizeLimit` 付き `emptyDir`（共通パターン、同一セット） |
 

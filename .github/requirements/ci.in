@@ -1,0 +1,8 @@
+# Tools the CI jobs install, locked with hashes in ci.txt (Scorecard
+# Pinned-Dependencies). Regenerate ci.txt with scripts/ci-lock.sh.
+# ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
+pytest
+pyyaml
+ruff==0.16.9
+mypy==2.3.1
+yamllint

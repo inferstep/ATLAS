@@ -9,6 +9,8 @@ stream, so a detector cannot pass by flagging everything.
 No live stack: streams are literals and the workspace is a tmp_path.
 """
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,12 +38,16 @@ def _call(name, **args):
     return {"type": "tool_call", "data": {"name": name, "args": args}}
 
 
-def _ok():
-    return {"type": "tool_result", "data": {"success": True, "error": ""}}
+def _ok(tool="read_file"):
+    # Real tool_result events carry the tool name (data keys: data, elapsed,
+    # error, success, tool). The detectors read it from the RESULT rather than
+    # pairing positionally with the calls, because one unanswered call — a
+    # client timeout mid-stream — shifted every pair after it.
+    return {"type": "tool_result", "data": {"tool": tool, "success": True, "error": ""}}
 
 
-def _fail(error):
-    return {"type": "tool_result", "data": {"success": False, "error": error}}
+def _fail(error, tool="read_file"):
+    return {"type": "tool_result", "data": {"tool": tool, "success": False, "error": error}}
 
 
 # --- H1 protocol ----------------------------------------------------------
@@ -58,6 +64,36 @@ def test_h1_flags_event_the_tui_cannot_render(rel, tmp_path):
                        {"type": "done", "data": {"summary": "x"}}], tmp_path)
     found = rel.h1_protocol(s, {"done"})
     assert any("cannot render" in d and "brand_new_event" in d for d in found)
+
+
+def test_h1_does_not_charge_the_runner_cap_to_the_proxy(rel, tmp_path):
+    """This runner stops reading at --timeout and appends its own error
+    event. The proxy never got to send `done` and the socket closed
+    mid-stream, so counting those as two protocol violations scores our
+    deadline as its defect."""
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    s = _session(rel, [_call("read_file", path="a.py"), _ok(), cap],
+                 tmp_path, stream_ok=False)
+    found = rel.h1_protocol(s, {"tool_call", "tool_result", "done", "error"})
+    assert not any("protocol" in d for d in found)
+    assert any("timeout" in d and "cap" in d for d in found)
+
+
+def test_h1_capped_session_tolerates_only_the_in_flight_call(rel, tmp_path):
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    known = {"tool_call", "tool_result", "done", "error"}
+
+    one = _session(rel, [_call("read_file", path="a.py"), _ok(),
+                         _call("edit_file", path="a.py"), cap],
+                   tmp_path, stream_ok=False)
+    assert not any("orphaned" in d for d in rel.h1_protocol(one, known))
+
+    two = _session(rel, [_call("read_file", path="a.py"),
+                         _call("edit_file", path="a.py"), cap],
+                   tmp_path, stream_ok=False)
+    assert any("orphaned" in d for d in rel.h1_protocol(two, known))
 
 
 def test_h1_clean_stream_is_clean(rel, tmp_path):
@@ -146,7 +182,7 @@ def test_h4_silent_when_the_breaker_ended_honestly(rel, tmp_path):
 
 
 def test_h4_silent_when_a_write_landed(rel, tmp_path):
-    s = _session(rel, [_call("edit_file", path="app.py"), _ok(),
+    s = _session(rel, [_call("edit_file", path="app.py"), _ok("edit_file"),
                        {"type": "done", "data": {"summary": "Added the toggle."}}],
                  tmp_path)
     assert rel.h4_gate_escape(s) == []
@@ -282,7 +318,7 @@ def test_h9_flags_a_question_that_edited_files(rel, tmp_path):
     task = rel.Task(name="ask", prompt="what does f do?", files={},
                     check=lambda p, s=None: (True, ""), conversational=True)
     s = _session(rel, [
-        _call("edit_file", path="orders.py"), _ok(),
+        _call("edit_file", path="orders.py"), _ok("edit_file"),
         {"type": "done", "data": {"summary": "done"}},
     ], tmp_path)
     found = rel.h9_tier_misapplied(s, task)
@@ -365,3 +401,239 @@ def test_bugfind_accepts_the_actual_comparison(rel, tmp_path):
         {"type": "done", "data": {"summary": ""}}], tmp_path)
     passed, _ = task.check(tmp_path, s)
     assert passed
+
+
+# --- H6 service fault ------------------------------------------------------
+
+def test_h6_does_not_charge_the_runner_cap_to_the_proxy(rel, tmp_path):
+    """The cap event is this runner's own, appended when it stops reading at
+    --timeout. h1_protocol already reports it as the timeout it is; counting
+    it again here charged one deadline as two separate proxy defects."""
+    cap = {"type": "error",
+           "data": {"error": "harness cap: session exceeded 900s"}}
+    s = _session(rel, [_call("read_file", path="a.py"), _ok(), cap],
+                 tmp_path, stream_ok=False)
+    assert rel.h6_service_fault(s) == []
+
+
+def test_h6_still_reports_a_real_service_fault(rel, tmp_path):
+    boom = {"type": "error", "data": {"error": "v3 service: connection refused"}}
+    s = _session(rel, [boom], tmp_path, stream_ok=False)
+    found = rel.h6_service_fault(s)
+    assert any("connection refused" in d for d in found)
+
+
+def test_h6_ignores_a_parse_failure_the_session_recovered_from(rel, tmp_path):
+    """flask_pause rep2, 2026-08-03: the model emitted a 20 KB tool call that
+    ran out of tokens mid-JSON, the proxy classified it and told the model,
+    and the session went on to pass the task — scored a harness defect for
+    it. Recovered model behaviour is the proxy working."""
+    err = {"type": "error", "data": {"category": "truncated_tool",
+                                     "error": "failed to parse model response"}}
+    s = _session(rel, [_call("edit_file", path="app.py"), err,
+                       _call("replace_lines", path="app.py"), _ok("replace_lines"),
+                       {"type": "done", "data": {"summary": "added the toggle"}}],
+                 tmp_path)
+    assert rel.h6_service_fault(s) == []
+
+
+def test_h6_still_reports_a_parse_failure_the_session_died_on(rel, tmp_path):
+    err = {"type": "error", "data": {"error": "failed to parse model response"}}
+    s = _session(rel, [_call("edit_file", path="app.py"), err], tmp_path,
+                 stream_ok=False)
+    assert any("parse model response" in d for d in rel.h6_service_fault(s))
+
+
+def test_h6_does_not_count_a_model_output_guard(rel, tmp_path):
+    """Smoke run 2026-09-27 (smallrung_toml): the only error event was the
+    swallowed_content guard, which caught a tool call cut by an unescaped
+    quote and told the model. The run still showed "1 harness defect". A
+    guard that worked is not a service fault, even when the session later
+    fails; it is counted for the summary instead."""
+    guard = {"type": "error", "data": {
+        "category": "swallowed_content",
+        "error": "tool call content was truncated by an unescaped quote"}}
+    s = _session(rel, [_call("read_file", path="x.py"), _ok(), guard,
+                       {"type": "done", "data": {"status": "incomplete",
+                                                 "reason": "text_instead_of_work"}}],
+                 tmp_path)
+    assert rel.h6_service_fault(s) == []
+    assert rel.model_output_guards(s) == ["swallowed_content"]
+
+
+def test_h6_does_not_charge_the_work_deadline_to_a_service(rel, tmp_path):
+    """Smoke run 2026-09-28 (multifile_cli rep 2): the session's own work
+    deadline cut an LLM stream; the terminal status already says timed_out."""
+    cut = {"type": "error",
+           "data": {"error": "read LLM stream: context deadline exceeded"}}
+    done = {"type": "done", "data": {"status": "timed_out", "reason": "work_deadline"}}
+    s = _session(rel, [_call("read_file", path="x.py"), _ok(), cut, done], tmp_path)
+    assert rel.h6_service_fault(s) == []
+    # The same cut in a session that did not end on its deadline still counts.
+    s = _session(rel, [cut], tmp_path, stream_ok=False)
+    assert any("context deadline exceeded" in d for d in rel.h6_service_fault(s))
+
+
+# --- V3 is always on -------------------------------------------------------
+#
+# The runners measure the shipped system. No request field turns V3 off: the
+# proxy refuses bypass_v3, v3_mode and feasibility_mode when they ask for a
+# different system, so a V3-free comparison takes a research build, never a
+# flag on the product.
+
+
+def _capture_body(rel, monkeypatch, **kwargs):
+    """Run one session against a stubbed transport and return the request."""
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __iter__(self):
+            return iter([b'data: {"type":"done"}\n\n'])
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["body"] = json.loads(req.data.decode())
+        return _Resp()
+
+    monkeypatch.setattr(rel.urllib.request, "urlopen", fake_urlopen)
+    return seen
+
+
+def test_the_runner_sends_no_removed_switch(rel, monkeypatch, tmp_path):
+    import json as _json
+    globals()["json"] = _json
+    seen = _capture_body(rel, monkeypatch)
+    task = rel.Task(name="t", prompt="do it", files={}, check=lambda ws, s=None: (True, ""))
+    rel.run_session(task, 0, "http://proxy", tmp_path, "e2e", 30)
+    assert seen["body"]["message"] == "do it"
+    for field in ("bypass_v3", "v3_mode", "feasibility_mode"):
+        assert field not in seen["body"], f"the runner still sends {field}"
+
+
+# Names that once read a switch turning V3, its gates or its generation off.
+_REMOVED_SWITCHES = ("BypassV3", "V3Mode", "effectiveV3Mode", "V3Bypassed",
+                     "V3GenerationEnabled", "V3PlanningEnabled",
+                     "FeasibilityEnforce", "generationSkipped")
+
+# The gate implementations, and the v3-service route each one must still reach.
+_MUTATION_GATES = {
+    "checkStructuralUnresolved": "/internal/structural_check",
+    "embeddedScriptOutcome": "/internal/embedded_script_check",
+}
+
+
+def _go_funcs(src):
+    """{name: body} for every top-level func in a gofmt-formatted Go file.
+
+    gofmt puts `func` in column 0 and closes a top-level declaration with a
+    lone `}` in column 0, so this needs no brace matching and cannot be misled
+    by a brace inside a string literal or a comment.
+    """
+    funcs, lines = {}, src.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("func "):
+            continue
+        sig = line[len("func "):]
+        if sig.startswith("("):                     # method receiver
+            sig = sig[sig.index(")") + 1:].lstrip()
+        name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", sig)
+        if not name:
+            continue
+        for j in range(i + 1, len(lines)):
+            if lines[j] == "}":
+                funcs[name.group(0)] = "\n".join(lines[i:j + 1])
+                break
+    return funcs
+
+
+def test_the_mutation_gates_depend_on_no_switch():
+    """Every mutation gate runs on every request.
+
+    The gates still reach the v3-service routes they check with, and no
+    production source names a switch that could turn V3, a gate or candidate
+    generation off: the three the proxy had are gone.
+    """
+    sources = {p.name: p.read_text()
+               for p in (REPO / "proxy").glob("*.go")
+               if not p.name.endswith("_test.go")}
+    gates = _go_funcs(sources["gates.go"])
+    for fn, route in _MUTATION_GATES.items():
+        body = gates.get(fn)
+        assert body, f"{fn} is gone; repoint this test at its replacement"
+        assert route in body, f"{fn} no longer reaches {route}"
+    for name, src in sorted(sources.items()):
+        for symbol in _REMOVED_SWITCHES:
+            assert not re.search(rf"\b{symbol}\b", src), (
+                f"{name} names the removed switch {symbol}")
+
+
+# --- what a run records about itself --------------------------------------
+
+def test_the_harness_declares_question_for_its_conversational_probes(rel):
+    """Declaring work for a question sent it to the work tier and its
+    planner, and the H9 detector then blamed ATLAS for running V3 on it."""
+    for task in rel.TASKS.values():
+        want = "question" if task.conversational else "work"
+        assert rel.task_contract(task) == {"task_mode": want}, task.name
+    assert any(t.conversational for t in rel.TASKS.values()), \
+        "no conversational probe left to test the question contract"
+
+
+def test_v3_counts_generation_and_delivery_per_write(rel, tmp_path):
+    """A run labelled as measuring ATLAS with zero V3 generations measured
+    the agent loop alone; the session has to say how much V3 did."""
+    delivered = {"type": "tool_result", "data": {
+        "tool": "write_file", "success": True, "error": "",
+        "data": json.dumps({"bytes_written": 10, "v3_used": True})}}
+    events = [
+        {"type": "v3_plan", "data": {}},
+        _call("write_file", path="a.py"), {"type": "v3_probe", "data": {}},
+        {"type": "v3_select", "data": {}}, delivered,
+        _call("write_file", path="b.py"), _ok("write_file"),
+        # V3 events outside a write are not a generation for it.
+        _call("read_file", path="a.py"), {"type": "v3_progress", "data": {}}, _ok(),
+    ]
+    got = _session(rel, events, tmp_path).v3
+    assert got == {"planner_events": 1, "write_calls": 2, "generated": 1, "delivered": 1}, got
+
+
+def test_stack_identity_records_what_the_proxy_reports(rel):
+    """Every recorded dev-server run was steered and ran loose, and nothing
+    in the evidence said so."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            body = {"/version": {"api_version": "1.0.0", "grammar_mode": "loose"},
+                    "/v1/calibration/status": {
+                        "lens": {"verdict": "supported"},
+                        "asa": {"verdict": "active", "hint": "control vector active for m"}},
+                    }.get(self.path)
+            raw = json.dumps(body or {}).encode()
+            self.send_response(200 if body else 404)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        got = rel.stack_identity(f"http://127.0.0.1:{srv.server_port}")
+    finally:
+        srv.shutdown()
+    assert got["grammar_mode"] == "loose"
+    assert got["asa"] == "active" and got["lens"] == "supported"
+    assert got["errors"] == {}
+    # Unreachable: recorded as such, never a crash.
+    down = rel.stack_identity("http://127.0.0.1:9")
+    assert down["grammar_mode"] is None and set(down["errors"]) == {"version", "calibration"}

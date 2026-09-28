@@ -42,11 +42,13 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
 import signal
 import tempfile
+import asyncio
 import subprocess
 import logging
 import re
@@ -56,7 +58,7 @@ import uuid
 from collections import deque
 from typing import Dict, Optional, List
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
@@ -88,35 +90,103 @@ def _load_service_token() -> str:
 SERVICE_TOKEN = _load_service_token()
 
 
-@app.middleware("http")
-async def _require_service_token(request, call_next):
-    if SERVICE_TOKEN and request.url.path not in ("/health", "/languages"):
+# Pure ASGI middleware, not BaseHTTPMiddleware, and the reason is cancellation.
+#
+# `@app.middleware("http")` builds a BaseHTTPMiddleware, which interposes on
+# the receive channel: it consumes the ASGI messages itself and hands the
+# endpoint a substitute. `http.disconnect` never arrives, so
+# `Request.is_disconnected()` inside the handler returns False forever and a
+# caller that went away is invisible. Measured directly -- the same probe
+# reports "disconnected at 1.0s" without a middleware and "never disconnected"
+# with one.
+#
+# These two do nothing that needs the body, so they operate on the scope and
+# wrap `send`, leaving `receive` untouched for whoever is downstream.
+
+
+class _ServiceTokenMiddleware:
+    """Reject unauthenticated calls before they reach a route."""
+
+    _OPEN_PATHS = ("/health", "/languages")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not SERVICE_TOKEN:
+            await self.app(scope, receive, send)
+            return
+        if scope.get("path") in self._OPEN_PATHS:
+            await self.app(scope, receive, send)
+            return
         import hmac
-        got = request.headers.get("authorization", "")
+        got = ""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"authorization":
+                got = value.decode("latin-1")
+                break
         if not hmac.compare_digest(got, f"Bearer {SERVICE_TOKEN}"):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(status_code=401, content={
+            body = json.dumps({
                 "error": "unauthorized",
                 "detail": "internal service auth is enabled; send "
                           "Authorization: Bearer <service-token> "
-                          "(secrets/service-token)"})
-    return await call_next(request)
+                          "(secrets/service-token)"}).encode()
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"content-length",
+                                     str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
 
 
-# Registered AFTER the token middleware: Starlette wraps in reverse
-# registration order (last = outermost), and the correlation ID must be
-# set/echoed even on requests the auth middleware rejects with 401.
-@app.middleware("http")
-async def _correlation_id(request, call_next):
-    rid = request.headers.get("x-atlas-request-id", "")
-    _set_rid(rid)
-    resp = await call_next(request)
-    if rid:
-        resp.headers["X-ATLAS-Request-ID"] = rid
-    return resp
+class _CorrelationIDMiddleware:
+    """Carry the caller's request id into the logs and back out again."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        rid = ""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"x-atlas-request-id":
+                rid = value.decode("latin-1")
+                break
+        _set_rid(rid)
+
+        async def _send(message):
+            if rid and message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                message["headers"] = list(message["headers"]) + [
+                    (b"x-atlas-request-id", rid.encode("latin-1"))]
+            await send(message)
+
+        await self.app(scope, receive, _send)
 
 
-MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "60"))
+# Added in this order so the correlation id is outermost: it must be set and
+# echoed even on a request the token middleware rejects.
+app.add_middleware(_ServiceTokenMiddleware)
+app.add_middleware(_CorrelationIDMiddleware)
+
+
+from html.parser import HTMLParser  # noqa: E402
+
+from resource_contract import (  # noqa: E402
+    OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
+    OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
+    OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
+    contract_from_env, outcome_is_complete, run_bounded,
+    EXEC_TOKEN_VAR, _apply_child_limits, _kill_token)
+
+# THE resource contract for every untrusted command, validated here at import.
+# A malformed operator budget stops the executor from starting rather than
+# being clamped into something plausible at the moment a command runs.
+EXEC_CONTRACT = contract_from_env()
+MAX_EXECUTION_TIME = EXEC_CONTRACT.wall_seconds
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
 
 SUPPORTED_LANGUAGES = {
@@ -230,9 +300,13 @@ def list_languages():
         "bash": ["bash", "--version"],
     }
     for lang, cmd in checks.items():
+        # Through the same owner as everything else. The argv here is fixed and
+        # not workspace-controlled, so this is not the case the ceilings exist
+        # for -- but a second spawning path is a second place a future edit can
+        # put an untrusted argument, and one owner is the point.
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            versions[lang] = result.stdout.strip().split("\n")[0]
+            result = _run_cmd(cmd, timeout=5)
+            versions[lang] = result["stdout"].strip().split("\n")[0]
         except Exception:
             versions[lang] = "not installed"
     return {"languages": versions}
@@ -269,6 +343,31 @@ class ShellRequest(BaseModel):
     # deletes the snapshot. This lets V3 test a candidate without
     # writing it into the real bind-mounted project.
     files: Optional[Dict[str, str]] = None
+    # Optional bounded observation, used by candidate staging. When present,
+    # /shell hashes these relative paths and the snapshot as a whole BEFORE
+    # and AFTER the command, and returns both. It reports facts and draws no
+    # conclusion: whether a change is permitted is the caller's judgement, and
+    # this endpoint has no way to know what the caller declared.
+    observe_paths: Optional[List[str]] = None
+
+
+class ShellObservation(BaseModel):
+    """What the workspace looked like either side of one command.
+
+    Hashes and counts only. No path contents, no command text, no output --
+    a staging observation that carried any of those would put candidate bytes
+    into the caller's telemetry, which is the one thing staging exists to
+    avoid.
+    """
+    target_before: Dict[str, str] = {}
+    target_after: Dict[str, str] = {}
+    workspace_before: str = ""
+    workspace_after: str = ""
+    workspace_files: int = 0
+    # True when the digest hit its own cap and therefore describes only part
+    # of the workspace. A caller that needs an exact answer must treat this as
+    # unobservable rather than as "unchanged".
+    digest_truncated: bool = False
 
 
 class ShellResponse(BaseModel):
@@ -277,6 +376,17 @@ class ShellResponse(BaseModel):
     stderr: str
     exit_code: int
     elapsed_ms: int
+    # Present only when the request asked for it.
+    timed_out: bool = False
+    # How the command ended, from the closed vocabulary in resource_contract.
+    # `completed` is the only member that means the command reached its own
+    # end; every other one means it was stopped, and a stopped command
+    # demonstrates nothing about the code it was pointed at. Defaulted so an
+    # older executor answering a newer proxy is read as unclassified rather
+    # than as success.
+    outcome: str = "internal_unclassified"
+    peak_memory_bytes: int = 0
+    observation: Optional[ShellObservation] = None
 
 
 # The bind-mounted project root. /workspace in every container
@@ -430,7 +540,15 @@ def _contained_path(base: Path, *parts: str) -> Path:
     if not resolved.startswith(str(base) + os.sep):
         raise HTTPException(status_code=400,
                             detail=f"unsafe file path: {'/'.join(parts)!r}")
-    return Path(resolved)
+    path = Path(resolved)
+    # Every caller writes a check/source file under a fresh temp workspace, and
+    # the filename may carry a subdirectory ("src/app.py", "static/app.js").
+    # Create the parent so the write does not raise FileNotFoundError -- which
+    # would make the syntax check report a valid file as unparseable, and (once
+    # the proxy started sending real file paths) refuse a legitimate write of
+    # any gated source file that lives in a subdirectory.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _write_overlay_files(root: Path, files: Dict[str, str]):
@@ -470,6 +588,71 @@ def _write_overlay_files(root: Path, files: Dict[str, str]):
         finally:
             os.close(parent_fd)
             os.close(root_fd)
+
+
+# The observation digest has its own cap, separate from the snapshot's. A
+# workspace big enough to blow it is one this endpoint cannot describe
+# exactly, and saying so is the only honest answer.
+SHELL_OBSERVE_MAX_FILES = int(os.getenv("ATLAS_SHELL_OBSERVE_MAX_FILES", "5000"))
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _observe_paths(root: Path, names: List[str]) -> Dict[str, str]:
+    """sha256 of each named relative path, or "" where it is absent.
+
+    Absence is a real answer and is reported as the empty string rather than
+    omitted, so a caller can tell "the file is not there" from "we did not
+    look".
+    """
+    out: Dict[str, str] = {}
+    for name in names or []:
+        try:
+            rel = _safe_overlay_path(name)
+        except HTTPException:
+            out[name] = ""
+            continue
+        out[name] = _hash_file(root / rel)
+    return out
+
+
+def _workspace_digest(root: Path) -> Dict[str, object]:
+    """One digest over every file in the snapshot, plus the count.
+
+    Names and hashes, never contents. Sorted so the same tree always digests
+    the same way, and capped so an unbounded workspace reports truncation
+    instead of a number that describes some of it.
+    """
+    entries: List[str] = []
+    truncated = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _skip_shell_snapshot_path(Path(d))]
+        for name in sorted(filenames):
+            src = Path(dirpath) / name
+            if _skip_shell_snapshot_path(src):
+                continue
+            if len(entries) >= SHELL_OBSERVE_MAX_FILES:
+                truncated = True
+                break
+            try:
+                rel = src.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            entries.append(rel + "\x00" + _hash_file(src))
+        if truncated:
+            break
+    entries.sort()
+    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+    return {"digest": digest, "files": len(entries), "truncated": truncated}
 
 
 def _snapshot_workspace_with_overlay(files: Dict[str, str]) -> Path:
@@ -630,6 +813,17 @@ class BackgroundOutputResponse(BaseModel):
     command: str
 
 
+class BackgroundJobSummary(BaseModel):
+    job_id: str
+    command: str
+    started_at: float
+    running: bool
+
+
+class BackgroundJobListResponse(BaseModel):
+    jobs: List[BackgroundJobSummary]
+
+
 class BackgroundStopResponse(BaseModel):
     job_id: str
     killed: bool
@@ -674,6 +868,12 @@ def background_start(request: BackgroundStartRequest):
     if request.env:
         env.update(request.env)
     try:
+        # The same ceilings the foreground path installs. A background job is
+        # untrusted code with a longer life, not a different trust class, and
+        # before this it was the one execution site with no memory bound at
+        # all. setsid comes from the shared owner's preexec, which is also
+        # what /jobs/stop's killpg depends on.
+        env[EXEC_TOKEN_VAR] = uuid.uuid4().hex
         proc = subprocess.Popen(
             ["bash", "-c", request.command],
             cwd=str(cwd),
@@ -682,7 +882,7 @@ def background_start(request: BackgroundStartRequest):
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            start_new_session=True,  # so /jobs/stop can kill the whole group
+            preexec_fn=_apply_child_limits(EXEC_CONTRACT),
         )
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=500, detail=f"spawn failed: {e}")
@@ -699,6 +899,30 @@ def background_start(request: BackgroundStartRequest):
     threading.Thread(target=_bg_drain_stream, args=(job_id, "stdout", proc.stdout), daemon=True).start()
     threading.Thread(target=_bg_drain_stream, args=(job_id, "stderr", proc.stderr), daemon=True).start()
     return BackgroundStartResponse(job_id=job_id, pid=proc.pid, started_at=job["started_at"])
+
+
+@app.get("/jobs", response_model=BackgroundJobListResponse)
+def background_list():
+    """Every job this sandbox is holding, whoever started it.
+
+    The registry is process-wide and has no session concept, so a server left
+    running by an earlier session keeps its port and the next session cannot
+    name it: `/jobs/{id}` needs an id it never saw. Without this the agent
+    gets "Address already in use" and the advice to "identify and stop that
+    program" with no way to do either.
+    """
+    with _bg_lock:
+        items = [
+            BackgroundJobSummary(
+                job_id=job_id,
+                command=job["command"],
+                started_at=job["started_at"],
+                running=job["proc"].poll() is None,
+            )
+            for job_id, job in _bg_jobs.items()
+        ]
+    items.sort(key=lambda j: j.started_at)
+    return BackgroundJobListResponse(jobs=items)
 
 
 @app.get("/jobs/{job_id}/output", response_model=BackgroundOutputResponse)
@@ -761,12 +985,45 @@ def background_stop(job_id: str):
 
 
 @app.post("/shell", response_model=ShellResponse)
-def run_shell(request: ShellRequest):
-    """Run a shell command against the bind-mounted workspace."""
+async def run_shell(request: ShellRequest, http: Request):
+    """Run a shell command against the bind-mounted workspace.
+
+    Async, and the reason is cancellation. A caller that goes away -- a reset
+    connection, a closed one, an aborted request, a shutdown -- used to leave
+    the command running to its own deadline, holding a CPU and a memory budget
+    for an answer nobody would read, and producing evidence about a request
+    that no longer existed. A synchronous handler cannot notice: it is already
+    blocked in the threadpool when the socket dies.
+
+    So the work runs in a worker and this coroutine watches the connection.
+    Starlette's is_disconnected is the supported way to ask; the executor's own
+    cancellation callback is the supported way to tell. Nothing here touches a
+    socket directly, and the bounded runner still owns every ceiling and every
+    kill -- cancellation is one more reason it already knows how to stop for,
+    and it stays distinct from a timeout and from resource exhaustion in the
+    outcome it reports.
+    """
     if not request.command or not request.command.strip():
         raise HTTPException(status_code=400, detail="command is required")
 
     timeout = min(max(1, request.timeout), MAX_EXECUTION_TIME)
+
+    # One flag per request, never shared. A flag reused across requests is how
+    # a closed descriptor cancels whoever inherits its number next.
+    gone = threading.Event()
+
+    async def _watch_downstream():
+        """Set the flag when the caller stops waiting for the answer."""
+        try:
+            while not gone.is_set():
+                if await http.is_disconnected():
+                    gone.set()
+                    return
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # a transport that cannot be asked is not a cancel
+            return
 
     snapshot = None
     root = WORKSPACE_ROOT
@@ -780,10 +1037,40 @@ def run_shell(request: ShellRequest):
         cwd = _resolve_shell_cwd(request.cwd, root)
         command = _translate_workspace_command(request.command, root)
 
+        observation = None
+        before_paths = {}
+        before_digest = {}
+        if request.observe_paths is not None:
+            before_paths = _observe_paths(root, request.observe_paths)
+            before_digest = _workspace_digest(root)
+
         start = time.time()
-        result = _run_cmd(["bash", "-c", command],
-                          timeout=timeout, cwd=cwd, env=request.env)
+        watcher = asyncio.ensure_future(_watch_downstream())
+        try:
+            result = await asyncio.to_thread(
+                _run_cmd, ["bash", "-c", command], timeout, cwd, request.env,
+                None, gone.is_set)
+        except asyncio.CancelledError:
+            # An explicit cancellation or a shutdown. The worker is told to
+            # stop by the same flag the watcher uses, and it takes the process
+            # tree with it before this returns.
+            gone.set()
+            raise
+        finally:
+            watcher.cancel()
         elapsed_ms = int((time.time() - start) * 1000)
+
+        if request.observe_paths is not None:
+            after_digest = _workspace_digest(root)
+            observation = ShellObservation(
+                target_before=before_paths,
+                target_after=_observe_paths(root, request.observe_paths),
+                workspace_before=str(before_digest.get("digest", "")),
+                workspace_after=str(after_digest.get("digest", "")),
+                workspace_files=int(after_digest.get("files", 0)),
+                digest_truncated=bool(before_digest.get("truncated"))
+                or bool(after_digest.get("truncated")),
+            )
 
         return ShellResponse(
             success=result["success"],
@@ -791,6 +1078,14 @@ def run_shell(request: ShellRequest):
             stderr=result["stderr"],
             exit_code=result["returncode"],
             elapsed_ms=elapsed_ms,
+            timed_out=bool(result.get("timed_out")),
+            # HOW it ended, not merely whether it exited zero. A command
+            # stopped at a resource ceiling exits non-zero exactly like a
+            # failing test, and the caller has to be able to tell them apart
+            # without reading stderr for a phrase.
+            outcome=str(result.get("outcome", OUTCOME_UNCLASSIFIED)),
+            peak_memory_bytes=int(result.get("peak_memory_bytes", 0)),
+            observation=observation,
         )
     finally:
         if snapshot is not None:
@@ -870,6 +1165,14 @@ class SyntaxCheckResponse(BaseModel):
     errors: List[str]
     language: str
     check_time_ms: int
+    # "checked": the checker ran to its own conclusion and `valid` is its
+    # verdict. "not_run": the resource contract stopped it, or it never
+    # started, so there is no verdict; `valid` is false and `outcome` says how
+    # it ended. A stopped checker exits non-zero with empty stderr, and every
+    # branch below builds its errors from stderr, so it used to read as a clean
+    # parse (valid: true).
+    status: str = "checked"
+    outcome: str = OUTCOME_COMPLETED
 
 
 @app.post("/syntax-check", response_model=SyntaxCheckResponse)
@@ -887,6 +1190,16 @@ def syntax_check(request: SyntaxCheckRequest):
             errors=errors,
             language=lang,
             check_time_ms=elapsed,
+        )
+    except _CheckNotFinished as stopped:
+        elapsed = int((time.time() - start) * 1000)
+        return SyntaxCheckResponse(
+            valid=False,
+            errors=[f"syntax verification unavailable: the checker ended {stopped.outcome}"],
+            language=lang,
+            check_time_ms=elapsed,
+            status="not_run",
+            outcome=stopped.outcome,
         )
     except HTTPException:
         raise
@@ -931,6 +1244,165 @@ def _extract_java_classname(code: str) -> str:
     return "Main"
 
 
+def _looks_like_jinja_template(filename: Optional[str]) -> bool:
+    """True only for files that are Jinja templates by convention: under a
+    templates/ directory, or a .jinja/.jinja2 name. Vue/Angular/Handlebars HTML
+    shares `{{ }}` but is NOT Jinja and lives elsewhere, so it is never handed
+    to a Jinja parser."""
+    if not filename:
+        return False
+    f = filename.replace("\\", "/").lower()
+    return ("templates/" in f) or f.endswith((".jinja", ".jinja2"))
+
+
+def _jinja_template_errors(code: str, filename: Optional[str]) -> List[str]:
+    """Jinja syntax errors for a file that is actually a Jinja template, else
+    []. Requires a statement tag `{%` to be present -- `{{ }}` interpolation
+    alone is too widely shared to attribute to Jinja. Unknown-tag/filter/test
+    errors are dropped: those signal a third-party extension this parser has
+    not loaded, not a typo. Never raises."""
+    if not _looks_like_jinja_template(filename):
+        return []
+    if "{%" not in code:
+        return []
+    try:
+        import jinja2
+    except Exception:
+        return []  # fail open: no Jinja available here
+    try:
+        jinja2.Environment().parse(code)
+        return []
+    except jinja2.TemplateSyntaxError as e:
+        msg = (getattr(e, "message", "") or "").lower()
+        if any(s in msg for s in ("unknown tag", "no filter named",
+                                  "no test named", "not registered")):
+            return []
+        loc = f" (line {e.lineno})" if getattr(e, "lineno", None) else ""
+        return [f"TemplateSyntaxError: {e.message}{loc}"]
+    except Exception:
+        return []  # not a confident syntax verdict -- stay silent
+
+
+class _CheckNotFinished(Exception):
+    """A syntax checker stopped before it reached a verdict."""
+
+    def __init__(self, outcome: str):
+        super().__init__(outcome)
+        self.outcome = outcome
+
+
+def _run_check(cmd: List[str], timeout: int, cwd: Path) -> Dict:
+    """Run one syntax checker to a verdict, or raise _CheckNotFinished.
+
+    A checker killed at its wall clock or memory ceiling, or one that never
+    started, exits non-zero with empty stderr. Every branch of
+    _syntax_check_impl reads errors out of stderr, so such a run used to come
+    back with no errors -- valid -- for python, typescript, go, java, kotlin,
+    rust, c/cpp, ruby and php alike.
+    """
+    result = _run_cmd(cmd, timeout=timeout, cwd=cwd)
+    if not outcome_is_complete(result["outcome"]):
+        raise _CheckNotFinished(result["outcome"])
+    return result
+
+
+# What a CommonJS parse says about code that is wrong only because it is an
+# ES module.
+_ESM_ONLY_ERRORS = (
+    "Cannot use import statement outside a module",
+    "Unexpected token 'export'",
+    "Cannot use 'import.meta' outside a module",
+    "await is only valid in async functions and the top level bodies of modules",
+)
+
+
+def _javascript_syntax_errors(code: str, workspace: Path, filename: Optional[str]) -> List[str]:
+    """`node --check` JavaScript as the module type its name fixes.
+
+    Checking a typeless .js name left the module type to Node. From Node
+    20.19, a file with import/export is detected as a module and `--check`
+    then compiles nothing, so garbage or a truncated module exited 0; before
+    20.19 every valid module was rejected. A .cjs name is always CommonJS and
+    a .mjs name always a module, on every Node version: a .js file is checked
+    as CommonJS, and again as a module when that parse failed only on module
+    syntax.
+    """
+    name = filename or "check.js"
+    reported = _contained_path(workspace, name)
+    suffix = reported.suffix.lower()
+    order = [suffix] if suffix in (".cjs", ".mjs") else [".cjs", ".mjs"]
+    for i, ext in enumerate(order):
+        path = reported.with_suffix(ext)
+        path.write_text(code)
+        result = _run_check(["node", "--check", str(path)], timeout=5, cwd=workspace)
+        if result["returncode"] == 0:
+            return []
+        stderr = result.get("stderr", "").strip()
+        if i + 1 < len(order) and any(m in stderr for m in _ESM_ONLY_ERRORS):
+            continue
+        return [stderr.replace(str(path), str(reported)) or "SyntaxError"]
+    return []
+
+
+# tsc's diagnostic codes 1000-1999 are syntax and grammar errors. Everything
+# else it reports about one file checked alone is about what that file refers
+# to: a sibling module or a package it cannot see (TS2307), types (TS2322),
+# strictness (TS7006). A few 1xxx codes are about compiler options, not the
+# text, and are left out too.
+_TS_ERROR_RE = re.compile(r"error TS(\d+)")
+_TS_OPTION_CODES = {1208, 1259, 1343, 1375, 1378, 1470, 1479}
+
+
+def _is_ts_syntax_code(code: int) -> bool:
+    return 1000 <= code < 2000 and code not in _TS_OPTION_CODES
+
+
+class _StructureParser(HTMLParser):
+    """Counts the markup html.parser saw."""
+
+    def __init__(self):
+        super().__init__()
+        self.markup = 0
+
+    def handle_starttag(self, tag, attrs):
+        self.markup += 1
+
+    def handle_startendtag(self, tag, attrs):
+        self.markup += 1
+
+    def handle_decl(self, decl):
+        self.markup += 1
+
+
+def _html_structure_errors(code: str) -> List[str]:
+    """What can be said of HTML without rejecting what HTML allows.
+
+    html.parser accepts any text -- JavaScript, Python, an empty string, a
+    page cut off inside its <script> -- so a clean parse proved nothing, and
+    it was counted as a syntax pass for completion. Two checks can fail: the
+    text has markup at all (a template made only of {% %} or {{ }} blocks is
+    exempt), and it does not end inside a tag, a comment, or a <script> or
+    <style> element, which is what a cut-off generation leaves. Unclosed
+    ordinary elements, fragments and Vue or Angular templates still pass.
+    """
+    parser = _StructureParser()
+    try:
+        parser.feed(code)
+    except Exception as e:
+        return [str(e)]
+    errors = []
+    unclosed = getattr(parser, "cdata_elem", None)
+    leftover = getattr(parser, "rawdata", "")
+    if unclosed:
+        errors.append(f"the document ends inside an unclosed <{unclosed}> element")
+    elif re.match(r"<[!/?A-Za-z]", leftover.lstrip()):
+        errors.append("the document ends inside an unfinished tag or comment: "
+                      + leftover.lstrip()[:60])
+    if parser.markup == 0 and "{%" not in code and "{{" not in code:
+        errors.append("no HTML markup: the text has no tags")
+    return errors
+
+
 def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:
     """Language-specific syntax checking. Returns list of error strings."""
     # Reject path-traversal filenames (absolute, .., backslash escapes)
@@ -943,40 +1415,64 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         # Use py_compile for fast AST parse
         fpath = _contained_path(workspace, filename or "check.py")
         fpath.write_text(code)
-        result = _run_cmd(["python3", "-m", "py_compile", str(fpath)], timeout=5, cwd=workspace)
+        result = _run_check(["python3", "-m", "py_compile", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
-            # Extract just the error line from py_compile output
+            # py_compile reports the location and the error on separate lines:
+            #
+            #   File "/w/check.py", line 5
+            #     def __init__(,filename="todos.json"):
+            #                  ^
+            #   SyntaxError: invalid syntax
+            #
+            # Keeping only the SyntaxError line drops the one fact that makes
+            # the error actionable. The caller quotes the offending source line
+            # back to the model, but it locates that line by finding "line N"
+            # in this string, so discarding the File frame left it with nothing
+            # to match and the model got a generic guess instead of its own
+            # broken line. Measured: a model dropped `self` from a method
+            # signature, was told the likely cause was nested quotes in an
+            # f-string, and re-sent the same signature four times.
             stderr = result.get("stderr", "")
+            lineno = None
             for line in stderr.splitlines():
                 line = line.strip()
+                if line.startswith('File "'):
+                    match = re.search(r"line (\d+)", line)
+                    if match:
+                        lineno = match.group(1)
+                    continue
                 if line and any(kind in line for kind in ("SyntaxError", "IndentationError", "TabError")):
+                    if lineno and "line " not in line:
+                        line = f"{line} (line {lineno})"
                     errors.append(line)
             if not errors and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "javascript":
-        fpath = _contained_path(workspace, filename or "check.js")
-        fpath.write_text(code)
-        result = _run_cmd(["node", "--check", str(fpath)], timeout=5, cwd=workspace)
-        if result["returncode"] != 0:
-            errors.append(result.get("stderr", "").strip())
+        errors.extend(_javascript_syntax_errors(code, workspace, filename))
 
     elif lang == "typescript":
         fpath = _contained_path(workspace, filename or "check.ts")
         fpath.write_text(code)
-        # tsc --noEmit for type checking; fall back to tsx parse
-        result = _run_cmd(["tsc", "--noEmit", "--strict", str(fpath)], timeout=10, cwd=workspace)
+        # tsc on the one file; only its syntax diagnostics count (see
+        # _is_ts_syntax_code). A lone-file check cannot see the modules the
+        # file imports, so its other errors are about the check, not the code.
+        result = _run_check(["tsc", "--noEmit", "--strict", str(fpath)], timeout=10, cwd=workspace)
         if result["returncode"] != 0:
-            for line in result.get("stderr", "").splitlines() + result.get("stdout", "").splitlines():
-                line = line.strip()
-                if line and ("error TS" in line or "Error" in line):
-                    errors.append(line)
+            output = result.get("stdout", "") + "\n" + result.get("stderr", "")
+            for line in output.splitlines():
+                match = _TS_ERROR_RE.search(line)
+                if match and _is_ts_syntax_code(int(match.group(1))):
+                    errors.append(line.strip())
+            # tsc failed without a diagnostic of its own: say what it said.
+            if not errors and not _TS_ERROR_RE.search(output) and output.strip():
+                errors.append(output.strip().splitlines()[-1])
 
     elif lang == "go":
         fpath = _contained_path(workspace, filename or "main.go")
         fpath.write_text(code)
         # Use gofmt -e for fast syntax-only checking (no compilation, no go.mod needed)
-        result = _run_cmd(["gofmt", "-e", str(fpath)], timeout=5, cwd=workspace)
+        result = _run_check(["gofmt", "-e", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             stderr = result.get("stderr", "")
             for line in stderr.splitlines():
@@ -989,16 +1485,20 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         package = _extract_java_package(code) 
 
         if package:
-            # com.exampe => com/example
+            # com.exampe => com/example (the package dir is created by
+            # _contained_path, which makes the parent for every check file)
             fpath = _contained_path(workspace, *package.split('.'),
                                     f"{class_name}.java")
-            fpath.parent.mkdir(parents=True, exist_ok=True)
         else:
             fpath = _contained_path(workspace, f"{class_name}.java")
 
         fpath.write_text(code)
-        result = _run_cmd(
-            ["javac", "-d", str(workspace), str(fpath)],
+        # Parse only (-XDshould-stop.ifNoError=PARSE): compiling the file alone
+        # reported every reference to a sibling class or a package it could
+        # not see ("cannot find symbol", "package ... does not exist") as a
+        # syntax error, so valid multi-file code was refused.
+        result = _run_check(
+            ["javac", "-XDshould-stop.ifNoError=PARSE", "-d", str(workspace), str(fpath)],
             timeout=10, cwd=workspace
         )
         if result["returncode"] != 0:
@@ -1011,34 +1511,41 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 
     elif lang == "kotlin":
         fpath = _contained_path(workspace, filename or "Source.kt")
-        fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_text(code)
         classes_dir = workspace / "synccheck_out"
         classes_dir.mkdir(exist_ok=True)
 
         # No syntax-only check in kotlinc. Full compile to temp
         # output dir is the check, same approach as Java
-        result = _run_cmd(
+        result = _run_check(
             ["kotlinc", "-d", str(classes_dir), str(fpath)],
             timeout=30, cwd=workspace
         )
         if result["returncode"] != 0:
             stderr = result.get("stderr", "")
+            diagnosed = False
             for line in stderr.splitlines():
                 # kotlinc emits errors as either an `e:`-prefixed line or a
                 # `file.kt:L:C: error:` line. Match both — but NOT a bare
                 # "error" substring, which also hits `w:` warning lines that
                 # merely mention the word (false-positive syntax failures).
                 if line.strip().startswith("e:") or ": error:" in line:
-                    errors.append(line.strip())
-            if not errors and stderr.strip():
+                    diagnosed = True
+                    # Only parse errors, which Kotlin 2 labels "syntax
+                    # error:". kotlinc has no parse-only mode; compiling the
+                    # file alone makes every sibling class and library an
+                    # "unresolved reference", and a type mismatch is not a
+                    # syntax error either.
+                    if "syntax error" in line.lower():
+                        errors.append(line.strip())
+            if not diagnosed and stderr.strip():
                 errors.append(stderr.strip().split("\n")[-1])
 
     elif lang == "rust":
         fpath = _contained_path(workspace, filename or "check.rs")
         fpath.write_text(code)
         # rustc --edition 2021 with no codegen for syntax-only
-        result = _run_cmd(
+        result = _run_check(
             ["rustc", "--edition", "2021", "--crate-type", "bin", str(fpath), "-o", "/dev/null"],
             timeout=10, cwd=workspace
         )
@@ -1057,7 +1564,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         compiler = "gcc" if lang == "c" else "g++"
         flags = ["-std=c17"] if lang == "c" else ["-std=c++17"]
         # -fsyntax-only: parse and type-check only, no codegen
-        result = _run_cmd(
+        result = _run_check(
             [compiler] + flags + ["-fsyntax-only", str(fpath)],
             timeout=10, cwd=workspace
         )
@@ -1073,7 +1580,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         fpath = _contained_path(workspace, filename or "main.rb")
         fpath.write_text(code)
         # Use ruby -c for syntax-only checking (no execution)
-        result = _run_cmd(["ruby", "-c", str(fpath)], timeout=5, cwd=workspace)
+        result = _run_check(["ruby", "-c", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             stderr = result.get("stderr", "")
             for line in stderr.splitlines():
@@ -1086,7 +1593,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
         fpath = _contained_path(workspace, filename or "main.php")
         fpath.write_text(code)
         # Use php -l for lint/syntax-only checking (no execution)
-        result = _run_cmd(["php", "-l", str(fpath)], timeout=5, cwd=workspace)
+        result = _run_check(["php", "-l", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             # The real "PHP Parse error: ..." detail goes to stderr (with
             # display_errors=Off, the Debian CLI default); stdout carries
@@ -1106,7 +1613,7 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
     elif lang == "bash":
         fpath = _contained_path(workspace, filename or "check.sh")
         fpath.write_text(code)
-        result = _run_cmd(["bash", "-n", str(fpath)], timeout=5, cwd=workspace)
+        result = _run_check(["bash", "-n", str(fpath)], timeout=5, cwd=workspace)
         if result["returncode"] != 0:
             errors.append(result.get("stderr", "").strip())
 
@@ -1131,13 +1638,13 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
             errors.append(str(e))
 
     elif lang in ("html", "htm"):
-        from html.parser import HTMLParser
-        try:
-            parser = HTMLParser()
-            parser.feed(code)
-            parser.close()
-        except Exception as e:
-            errors.append(str(e))
+        errors.extend(_html_structure_errors(code))
+        # A Jinja template can parse cleanly as HTML and still 500 on EVERY
+        # render: `{% for x in xs %)` closes the tag with `)` instead of `}`.
+        # html.parser sees only text and passes it; Flask compiles the template
+        # on first render, so the server starts, the file imports and the page
+        # returns 500 with a TemplateSyntaxError nothing upstream caught.
+        errors.extend(_jinja_template_errors(code, filename))
 
     elif lang == "xml":
         from defusedxml import ElementTree as ET
@@ -1158,71 +1665,28 @@ def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional
 # ---------------------------------------------------------------------------
 
 def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
-             stdin: Optional[str] = None) -> Dict:
-    """Run a command with timeout and return structured result.
+             stdin: Optional[str] = None, cancelled=None) -> Dict:
+    """Run one untrusted command through the one resource owner.
 
-    start_new_session + killpg mirrors the /jobs path: on timeout the whole
-    process group dies, so children the command spawned can't outlive it and
-    leak against the container's pids_limit. `stdin` (when not None) is piped
-    to the process as its standard input.
+    Every limit -- time, memory, process count, output bytes -- is installed
+    before the command starts and applies to everything it spawns, however it
+    spawns it. The answer carries HOW the command ended, because a command
+    stopped at a ceiling exits non-zero exactly like a failing test and nothing
+    downstream may confuse the two.
     """
-    run_env = os.environ.copy()
-    if env:
-        run_env.update(env)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE if stdin is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(cwd) if cwd else None,
-            env=run_env,
-            start_new_session=True,
-        )
-    except Exception as e:
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": -1,
-        }
-    try:
-        stdout, stderr = proc.communicate(input=stdin, timeout=timeout)
-        return {
-            "success": proc.returncode == 0,
-            "stdout": stdout[-4000:],
-            "stderr": stderr[-2000:],
-            "returncode": proc.returncode,
-        }
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            # best-effort: swallow on failure (caller continues)
-            pass
-        try:
-            proc.communicate(timeout=5)  # reap + close pipes
-        except Exception:
-            proc.kill()
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": f"Execution timed out after {timeout}s",
-            "returncode": -1,
-        }
-    except Exception as e:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            # best-effort: swallow on failure (caller continues)
-            pass
-        return {
-            "success": False,
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": -1,
-        }
+    result = run_bounded(cmd, EXEC_CONTRACT.for_request(timeout),
+                         cwd=cwd, env=env, stdin=stdin, cancelled=cancelled)
+    return {
+        "success": result.success,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-2000:],
+        "returncode": result.returncode,
+        "timed_out": result.outcome == OUTCOME_TIMED_OUT,
+        "outcome": result.outcome,
+        "peak_memory_bytes": result.peak_memory_bytes,
+        "peak_processes": result.peak_processes,
+        "survivors": result.survivors,
+    }
 
 
 def _classify_error(stderr: str) -> Optional[str]:
@@ -1285,11 +1749,12 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
     # Lint
     lint_score = None
     try:
-        lr = subprocess.run(
+        # Through the owner: pylint parses model-authored code, which makes
+        # this an untrusted execution however fixed its argv looks.
+        lr = _run_cmd(
             ["python", "-m", "pylint", "--score=y", "--exit-zero", str(main_file)],
-            capture_output=True, text=True, timeout=15
-        )
-        m = re.search(r"rated at ([\d.]+)/10", lr.stdout)
+            timeout=15)
+        m = re.search(r"rated at ([\d.]+)/10", lr["stdout"])
         if m:
             lint_score = float(m.group(1))
     except Exception:
@@ -1305,9 +1770,16 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
         failed = int(m.group(1)) if (m := re.search(r"(\d+) failed", r["stdout"])) else 0
         total = passed + failed or 1
     else:
+        # cwd=workspace, like the pytest branch above. Without it the process
+        # ran from the image WORKDIR, which is read-only in a `read_only:
+        # true` container: a candidate told to read `input.txt` could not see
+        # the file this same request had just staged for it, and any relative
+        # write raised `[Errno 30] Read-only file system` before the candidate
+        # did anything. The workspace is the only directory this request may
+        # write to, and it is removed when the request is answered.
         r = _run_cmd(
             ["python", "-c", f"import sys; sys.path.insert(0,'{workspace}'); import solution"],
-            timeout, stdin=stdin
+            timeout, cwd=workspace, stdin=stdin
         )
         passed = 1 if r["success"] else 0
         total = 1

@@ -1,0 +1,22 @@
+name: staging promotion
+
+# Records a deployment to the `staging` environment each time staging is
+# fast-forwarded from dev, so the time from "merged to dev" to "promoted
+# to staging" is measurable. build-images doesn't run on staging pushes:
+# the commit was already built and tested on dev. Nothing is built or
+# published here.
+on:
+  push:
+    branches: [staging]
+
+permissions: {}
+
+jobs:
+  record:
+    name: record staging promotion
+    if: github.repository == 'inferstep/ATLAS'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Record
+        run: echo "staging is at ${GITHUB_SHA}"

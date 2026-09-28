@@ -80,25 +80,61 @@ const subscriberBuffer = 256 // events buffered per slow subscriber before drops
 type broker struct {
 	mu          sync.Mutex
 	subscribers map[chan Envelope]struct{}
+	// draining is set once the process is shutting down. The TUI keeps
+	// /events open for the life of the session, so a shutdown that waited for
+	// subscribers to leave on their own would wait forever; closing their
+	// channels is what lets every handler return. After that no new
+	// subscriber is accepted, because the stream it would join is over.
+	draining bool
 }
 
 var defaultBroker = &broker{
 	subscribers: map[chan Envelope]struct{}{},
 }
 
+// subscribe returns a channel of envelopes, or nil once the broker is
+// draining. A nil channel tells handleEvents there is nothing to serve.
 func (b *broker) subscribe() chan Envelope {
-	ch := make(chan Envelope, subscriberBuffer)
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.draining {
+		return nil
+	}
+	ch := make(chan Envelope, subscriberBuffer)
 	b.subscribers[ch] = struct{}{}
-	b.mu.Unlock()
 	return ch
 }
 
+// unsubscribe closes the channel only while it is still registered, so a
+// handler's deferred unsubscribe after a drain is a no-op rather than a second
+// close. Registration IS the ownership token for closing.
 func (b *broker) unsubscribe(ch chan Envelope) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, registered := b.subscribers[ch]; !registered {
+		return
+	}
 	delete(b.subscribers, ch)
-	b.mu.Unlock()
 	close(ch)
+}
+
+// drain ends every subscription so shutdown is not held open by a stream that
+// was never going to end on its own. Each channel is closed exactly once,
+// under the lock that owns the registry.
+func (b *broker) drain() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.draining = true
+	for ch := range b.subscribers {
+		delete(b.subscribers, ch)
+		close(ch)
+	}
+}
+
+func (b *broker) isDraining() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.draining
 }
 
 func (b *broker) emit(ev Envelope) {
@@ -149,6 +185,9 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ch := defaultBroker.subscribe()
+	if ch == nil {
+		return // draining: the stream this would join is already over
+	}
 	defer defaultBroker.unsubscribe(ch)
 
 	// Heartbeat ticker — keeps proxies / load balancers from idling out

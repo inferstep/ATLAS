@@ -9,31 +9,81 @@ Provides four selection strategies for choosing among passing candidates:
 Strategy is chosen by the caller (bench: --selection-strategy; product: lens)
 """
 
+import math
 import random
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+# The failure kind V3 records when a Lens answer carries a score that is
+# not a finite number (NaN, an infinity, a string, a bool): the same name
+# the Lens service uses when its own forward produces one.
+NONFINITE_SCORE = "nonfinite_score"
+
+
+def finite_score(value) -> Optional[float]:
+    """`value` as a float when it is a finite number, else None.
+
+    The one rule for what counts as a score on the consumer side: a bool
+    is not one, a string is not one, NaN and the infinities are not one.
+    `json.loads` accepts the tokens NaN / Infinity and reads 1e999 as an
+    infinity, so a Lens answer must pass through here before any field of
+    it is ranked, allocated on, or reported as a number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    out = float(value)
+    return out if math.isfinite(out) else None
 
 
 @dataclass
 class CandidateInfo:
-    """Minimal candidate info needed for selection."""
+    """Minimal candidate info needed for selection.
+
+    `energy` is None for a candidate the Lens did not score (the input
+    exceeded the embedding server's physical batch, the Lens was
+    unreachable). It is not a low energy and never ranks as one.
+    """
     index: int
     code: str
-    energy: float
+    energy: Optional[float]
     passed: bool
     logprobs: Optional[List[float]] = None
+
+
+def energy_rank_key(candidate) -> Tuple[int, float]:
+    """Sort key for the min-energy rule: scored candidates by ascending C(x)
+    energy, then every unscored candidate by index. Accepts a candidate
+    dict or a CandidateInfo.
+
+    Unscored is anything that is not a finite number: None, absent, NaN,
+    an infinity, a string, a bool. The typed Lens boundary
+    (scoring.score_candidate_combined) is where such a value becomes a
+    recorded failure; this key is the last line, so that whatever reaches
+    a sort cannot poison the comparison or land first. The order among
+    unscored candidates is by index, so a sort is deterministic.
+    """
+    if isinstance(candidate, dict):
+        energy, index = candidate.get("energy"), candidate.get("index")
+    else:
+        energy = getattr(candidate, "energy", None)
+        index = getattr(candidate, "index", None)
+    scored = finite_score(energy)
+    if scored is None:
+        return (1, finite_score(index) or 0.0)
+    return (0, scored)
 
 
 def select_lens(candidates: List[CandidateInfo]) -> Optional[CandidateInfo]:
     """Select the passing candidate with lowest C(x) energy.
 
     This is the default V3 strategy — the Geometric Lens picks the
-    candidate it believes is most likely correct.
+    candidate it believes is most likely correct. A passing candidate the
+    Lens did not score is chosen only when no scored candidate passed.
     """
     passing = [c for c in candidates if c.passed]
     if not passing:
         return None
-    return min(passing, key=lambda c: c.energy)
+    return min(passing, key=energy_rank_key)
 
 
 def select_random(candidates: List[CandidateInfo],

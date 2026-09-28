@@ -3,7 +3,7 @@
 Verifies an ATLAS install is healthy end-to-end. Runs ~20 checks across
 the host environment, the docker stack, and a live request through the
 proxy: individual checks (docker, compose, nvidia, model_file,
-lens_weights, sqlite_state, workspace_mounts, image_skew, tier_match
+lens_weights, workspace_mounts, image_skew, tier_match
 (PC-055), tier_constraints (PC-055.1), asa_steering (BiasBusters #4),
 e2e_smoke), five per-container state checks (one per service in
 `EXPECTED_SERVICES`), and five per-endpoint health checks. Designed to
@@ -588,9 +588,10 @@ def check_internal_auth(atlas_root: str) -> List[CheckResult]:
 def check_status_dimensions() -> List[CheckResult]:
     """Render the canonical seven-dimension lens/ASA status from the
     proxy's /v1/calibration/status endpoint — the SAME source the TUI
-    badge reads, so doctor and the TUI cannot disagree. Emits one
-    informational result carrying all seven rows; never fails the run
-    (it's a status view, not a health gate).
+    badge reads, so doctor and the TUI cannot disagree. Emits one result
+    carrying all seven rows. It fails when the agent is blocked: the lens
+    is required (docs/adr/0011), and the proxy refuses every request while
+    it cannot score, sending the user here.
     """
     ok, body = _http_get(f"{PROXY_URL}/v1/calibration/status", timeout=5)
     if not ok:
@@ -607,11 +608,16 @@ def check_status_dimensions() -> List[CheckResult]:
         return [CheckResult("status_dimensions", "skip",
                             "no dimensions in calibration status "
                             "(older proxy image?)")]
-    # A disabled/uncalibrated lens is expected on a fresh install, so
-    # this is informational (pass) — the per-dimension status is the
-    # signal, printed in the detail.
+    # An uncalibrated lens still scores, so it is informational (pass),
+    # with the per-dimension status in the detail. A blocked agent is not:
+    # no request runs until the lens can score.
     lines = [f"{d.get('name')}: {d.get('status')} — {d.get('detail')}"
              for d in dims]
+    blocked = [d for d in dims if d.get("status") == "blocked"]
+    if blocked:
+        return [CheckResult("status_dimensions", "fail",
+                            "requests are refused: " + str(blocked[0].get("detail")),
+                            detail="\n".join(lines))]
     return [CheckResult("status_dimensions", "pass",
                         "lens/ASA status by dimension",
                         detail="\n".join(lines))]
@@ -735,41 +741,30 @@ def check_asa_steering(atlas_root: str) -> CheckResult:
     return CheckResult("asa_steering", status, message, verdict.reason)
 
 
-def check_sqlite_state() -> CheckResult:
-    """State store (SQLite inside the lens container) availability.
+def check_grammar_mode(atlas_root: Optional[str] = None) -> CheckResult:
+    """Does ATLAS_GRAMMAR_MODE match the registry's profile for the model?
 
-    The lens owns the state file (SQLITE_DB_PATH on the lens-state
-    volume) and reports it in its /health payload under
-    `subsystems.sqlite` — read that instead of probing the file, since
-    only the container can see it. When the store is unavailable the
-    pattern cache/router degrade to neutral and the task queue returns
-    503, so this fails loudly while scoring itself keeps answering.
+    The mode is a property of the model: gemma under the strict schema
+    grammar emits `done` instead of calling tools. `atlas init` writes the
+    registry's value; a .env edited by hand, or written before the registry
+    carried it, can disagree, and then the install runs a configuration the
+    model was not measured with.
     """
-    ok, body = _http_get(f"{LENS_URL}/health")
-    if not ok:
-        return CheckResult("sqlite_state", "skip",
-            "lens /health unreachable (see health/lens)", body[:200])
-    try:
-        subsystems = json.loads(body).get("subsystems", {})
-    except json.JSONDecodeError:
-        return CheckResult("sqlite_state", "skip",
-            "lens /health returned non-JSON")
-    st = subsystems.get("sqlite")
-    if not isinstance(st, dict):
-        return CheckResult("sqlite_state", "warn",
-            "lens /health reports no sqlite subsystem",
-            "lens image predates the SQLite state store — "
-            "docker compose up -d geometric-lens with a current image")
-    healthy = st.get("connected")
-    if healthy is None:
-        healthy = st.get("ok", st.get("available"))
-    if healthy:
-        return CheckResult("sqlite_state", "pass", "state store available",
-                           json.dumps(st)[:200])
-    return CheckResult("sqlite_state", "fail",
-        "state store unavailable — pattern cache/router run neutral, "
-        "task queue returns 503",
-        (st.get("error") or json.dumps(st))[:200])
+    from atlas.commands import model_registry
+    values = compose_config.read_env_file(atlas_root) if atlas_root else _ENV
+    model = (values.get("ATLAS_MODEL_FILE") or values.get("ATLAS_MODEL_NAME") or "")
+    m = (model_registry.by_model_file(model) or model_registry.by_name(model)) if model else None
+    if m is None:
+        return CheckResult("grammar_mode", "skip",
+                           "model not in the registry; no grammar profile to compare")
+    effective = (values.get("ATLAS_GRAMMAR_MODE") or "strict").strip().lower()
+    if effective != m.grammar_mode:
+        return CheckResult(
+            "grammar_mode", "warn",
+            f"ATLAS_GRAMMAR_MODE is {effective}; {m.name} is measured with {m.grammar_mode}",
+            f"set ATLAS_GRAMMAR_MODE={m.grammar_mode} in .env and restart the proxy")
+    return CheckResult("grammar_mode", "pass",
+                       f"ATLAS_GRAMMAR_MODE={effective} matches {m.name}")
 
 
 def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
@@ -849,7 +844,8 @@ def check_tier_match() -> CheckResult:
         # PC-056.1: even on exact tier match, cross-check that the
         # claimed Lens artifacts actually exist on disk. Registry can
         # say "supported" while the .pt files are missing — config
-        # drift that would otherwise hide G(x) silently no-opping.
+        # drift that leaves the lens unable to score, which stops agent
+        # work at run time.
         try:
             from atlas.commands import model_registry
             atlas_root = _find_atlas_root()
@@ -862,8 +858,9 @@ def check_tier_match() -> CheckResult:
                     f"file(s) missing: "
                     f"{', '.join(artifact_state['missing_files'])}",
                     f"Expected in {artifact_state['expected_dir']}. "
-                    f"Without these files G(x) will silently no-op even "
-                    f"though the registry says it should work. Either "
+                    f"Without these files the lens cannot score, and ATLAS "
+                    f"stops agent work, although the registry says it "
+                    f"should work. Either "
                     f"download the artifacts (see "
                     f"geometric-lens/geometric_lens/models/README.md) "
                     f"or set ATLAS_LENS_MODELS to point at a dir that "
@@ -911,11 +908,11 @@ def check_tier_match() -> CheckResult:
                 actual_model_record.lens_status != "supported":
             return CheckResult("tier_match", "warn",
                 f"configured model `{actual_model}` has Lens status "
-                f"`{actual_model_record.lens_status}` — G(x) will silently "
-                f"no-op",
-                "ATLAS will run llama-server but C(x)/G(x) verification is "
-                "missing. See PC-058 roadmap. To switch: "
-                "`atlas model recommend` for a Lens-supported alternative.")
+                f"`{actual_model_record.lens_status}`: the lens cannot score "
+                f"it, so ATLAS stops agent work on it",
+                "Build a Lens bundle for it (`atlas bench`, then "
+                "`atlas lens build --from-results`), or run "
+                "`atlas model recommend` for a model that has one.")
         # PC-056.1: model claims supported — verify artifact files actually
         # exist where the registry says they should.
         if actual_model_record is not None and \
@@ -930,8 +927,9 @@ def check_tier_match() -> CheckResult:
                     f"file(s) missing: "
                     f"{', '.join(artifact_state['missing_files'])}",
                     f"Expected in {artifact_state['expected_dir']}. "
-                    f"Without these files G(x) will silently no-op even "
-                    f"though the registry says it should work. Either "
+                    f"Without these files the lens cannot score, and ATLAS "
+                    f"stops agent work, although the registry says it "
+                    f"should work. Either "
                     f"download the artifacts (see "
                     f"geometric-lens/geometric_lens/models/README.md) "
                     f"or set ATLAS_LENS_MODELS to point at a dir that "
@@ -1307,11 +1305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # but on by default when present; sits next to lens_weights since both
     # are host-side artifact checks.
     _add(check_asa_steering(atlas_root))
-
-    # 9. SQLite state store (via lens /health) — only meaningful when
-    # the lens container answered above; skips cleanly otherwise.
-    if any(r.status == "pass" for r in container_results):
-        _add(check_sqlite_state())
+    _add(check_grammar_mode(atlas_root))
 
     # 9.5. Workspace mount alignment — proxy file tools and sandbox
     # run_command must see the same host directory as /workspace, or the
