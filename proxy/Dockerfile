@@ -1,5 +1,5 @@
 # golang:1.24-alpine — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
+FROM docker.io/golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
 WORKDIR /build
 COPY go.mod ./
 COPY *.go ./
@@ -7,7 +7,7 @@ COPY *.go ./
 RUN go build -o atlas-proxy-v2 .
 
 # alpine:3.24 — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM docker.io/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 # Runtime packages, version-pinned for reproducible builds. Only two are
 # needed:
 #   curl — the compose/K8s healthcheck (curl -sf localhost:8090/health)
