@@ -27,7 +27,7 @@ train = [
     # Floor at the newest torch published to default PyPI — 2.13.x exists
     # only on the pytorch CPU index, which plain `pip install atlas[train]`
     # never consults (the audit found the old >=2.13.0 floor unsatisfiable).
-    "torch>=2.12",
+    "torch>=2.14.0",
     "numpy>=1.24",
     "gguf",
     "huggingface_hub",
