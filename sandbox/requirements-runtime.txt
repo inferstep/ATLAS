@@ -1,7 +1,7 @@
 # Sandbox executor API runtime. Pinned to the versions the current
 # image resolves so builds are reproducible. Shared between the
 # container and the unit-test environment so the two cannot drift.
-fastapi==0.139.2
+fastapi==0.141.1
 defusedxml==0.7.1
-pydantic==2.13.4
-uvicorn==0.51.0
+pydantic==2.13.5
+uvicorn==0.53.0

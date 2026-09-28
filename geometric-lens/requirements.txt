@@ -3,13 +3,13 @@ numpy==2.4.6
 # package now pulls NCCL even on arm64; Lens never executes GPU algorithms.
 xgboost-cpu==3.2.0; sys_platform == "linux"
 xgboost==3.2.0; sys_platform != "linux"
-fastapi==0.139.2
-uvicorn==0.51.0
-pydantic==2.13.4
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
 httpx==0.28.1
 # tiktoken: unused in V2 (was used for V1 chunking token counting). Retained as
 # it is a transitive dependency that may be needed by future features.
-tiktoken==0.13.0
+tiktoken==0.14.0
 # gguf: writes ASA steering vectors in llama.cpp's control-vector format
 # (asa_calibration/build_steering_vector.py runs inside this container).
 gguf==0.19.0

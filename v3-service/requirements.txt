@@ -16,5 +16,5 @@ tree-sitter-javascript==0.25.0
 # Go and TypeScript back structural_edit for those languages. Measured
 # across 168 sessions, the only ATLAS-side wall a session hit was
 # `unsupported file type for structural_edit` on a .go file (12 times).
-tree-sitter-go==0.23.4
+tree-sitter-go==0.25.0
 tree-sitter-typescript==0.23.2
