@@ -105,6 +105,29 @@ def test_dockerfile_copy_sources_all_exist():
         f"dockerfile-sources gate failed:\n{proc.stdout}\n{proc.stderr}")
 
 
+def test_dockerfile_gate_keeps_the_dot_of_a_hidden_context(tmp_path, monkeypatch):
+    """#277: the Dockerfile path was cleaned with `lstrip("./")`, which also
+    ate the dot of a hidden directory, so `.ci/Dockerfile` was keyed as
+    `ci/Dockerfile` and its declared context was never found."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "check_dockerfile_sources", ROOT / "scripts" / "check_dockerfile_sources.py")
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(
+        "services:\n"
+        "  ci:\n"
+        "    build:\n"
+        "      context: ./.ci\n"
+        "  app:\n"
+        "    build:\n"
+        "      context: .\n"
+        "      dockerfile: ./app/Dockerfile\n")
+    monkeypatch.setattr(gate, "COMPOSE", compose)
+    assert gate.compose_contexts() == {".ci/Dockerfile": "./.ci", "app/Dockerfile": "."}
+
+
 def test_dockerfile_gate_detects_a_missing_source(tmp_path, monkeypatch):
     """The gate must fail on a missing source, not merely always pass."""
     import subprocess

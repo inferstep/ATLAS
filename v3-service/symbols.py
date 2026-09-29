@@ -1378,7 +1378,7 @@ def _project_module_names(project_files) -> set:
     """
     names = set()
     for path in project_files or ():
-        p = str(path).replace("\\", "/").lstrip("./")
+        p = re.sub(r"^(?:\./)+", "", str(path).replace("\\", "/"))
         if not p.endswith(".py"):
             continue
         dotted = p[:-3].replace("/", ".")

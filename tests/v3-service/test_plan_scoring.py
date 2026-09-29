@@ -122,6 +122,37 @@ def test_the_existing_file_set_is_the_proxy_listing_and_the_context():
     assert found == {"ctx_only.py", "input.txt", "sub/mod.py"}
 
 
+# #277: the paths were cleaned with `lstrip("./")`, which strips a set of
+# characters rather than a prefix, so the dot of a hidden name went too and
+# `.env` was recorded as `env`.
+def test_the_existing_file_set_keeps_the_dot_of_hidden_files():
+    found = v3main._known_files({".github/x.yml": ""}, [".env", "./.env", "./a.py", "././a.py"])
+    assert found == {".github/x.yml", ".env", "a.py"}
+
+
+def _create_plan(target):
+    return {
+        "steps": [
+            {"id": "s1", "action": "write_file", "target": target, "why": "create it"},
+            {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
+        ],
+        "verify_step": "s2", "rationale": "create then verify",
+    }
+
+
+def test_creating_env_is_not_flagged_when_only_dot_env_exists():
+    existing = v3main._known_files({}, [".env"])
+    _, reasons = v3main._score_plan(_create_plan("env"), "write the env file", existing)
+    assert not any("already exist" in r for r in reasons), reasons
+
+
+def test_creating_dot_env_is_flagged_when_dot_env_exists():
+    existing = v3main._known_files({}, [".env"])
+    for target in (".env", "./.env"):
+        _, reasons = v3main._score_plan(_create_plan(target), "write the env file", existing)
+        assert any("already exist" in r and ".env" in r for r in reasons), (target, reasons)
+
+
 def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them():
     """Scoring a bad plan down only helps if some candidate is better. All
     three aoc_sonar candidates opened with `write_file input.txt` and scored

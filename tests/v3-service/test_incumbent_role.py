@@ -110,6 +110,13 @@ def test_a_project_name_defined_locally_instead_is_dropped():
         "mean (imported from stats)"]
 
 
+def test_project_module_names_drop_only_a_leading_dot_slash():
+    """#277: `lstrip("./")` also ate the dot of a hidden directory."""
+    names = symbols._project_module_names(["./pkg/util.py", "././pkg/helpers.py", ".hidden/x.py"])
+    assert {"pkg.util", "util", "pkg.helpers", "helpers"} <= names
+    assert "hidden.x" not in names
+
+
 def test_project_modules_resolve_through_packages_and_relative_imports():
     before = ("import pkg.util\nfrom .helpers import tidy\n"
               "from pkg.util import parse as p\n")

@@ -191,10 +191,17 @@ def _verify_step_verifies(action: str) -> bool:
 _CREATE_ACTIONS = ("write_file", "create", "generate")
 
 
+def _strip_dot_slash(path: str) -> str:
+    """`path` without its leading `./`, repeated, and nothing else. Not
+    `lstrip("./")`, which strips a set of characters and so also ate the dot
+    of a hidden name: `.env` became `env` (#277)."""
+    return re.sub(r"^(?:\./)+", "", path)
+
+
 def _known_files(project_context: Dict[str, str], existing_files: Optional[List[str]]) -> set:
     """Relative paths already present: the proxy's listing and the context it
     shipped. This service has no workspace mount, so it lists no directory."""
-    return {f.lstrip("./") for f in [*(project_context or {}), *(existing_files or [])]}
+    return {_strip_dot_slash(f) for f in [*(project_context or {}), *(existing_files or [])]}
 
 
 
@@ -389,7 +396,7 @@ def _score_plan(plan: dict, user_message: str,
         if not isinstance(st, dict):
             continue
         action = (st.get("action") or "").lower()
-        target = (st.get("target") or "").strip().lstrip("./")
+        target = _strip_dot_slash((st.get("target") or "").strip())
         if not target or not any(a in action for a in _CREATE_ACTIONS):
             continue
         if target in existing_files:
