@@ -10,8 +10,11 @@ No live stack: streams are literals and the workspace is a tmp_path.
 """
 import importlib.util
 import json
+import os
 import re
+import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -812,3 +815,70 @@ def test_the_identity_is_kept_with_every_result(rel, tmp_path):
     assert row["stack"]["commit"] == "b0e6013"
     assert row["stack"]["images"]["atlas-proxy"] == "sha256:eee"
     assert row["stack"]["identity_verified"] is True
+
+
+# --- A stopped run keeps what it has (#222) -------------------------------
+
+_DETECTORS = ("h1_protocol", "h2_false_rejection", "h3_dead_end_steering", "h4_gate_escape",
+              "h5_corrupt_write", "h8_anchored_on_injected_text", "h9_tier_misapplied",
+              "h7_background_leak")
+
+
+def _recorded(task, rep, workspace):
+    """A finished session, as run_session returns it."""
+    return {"task": task.name, "rep": rep, "workspace": workspace, "wall_s": 1.0,
+            "stream_ok": True, "events": [{"type": "turn_start", "data": {}},
+                                          {"type": "done", "data": {"summary": "x"}}]}
+
+
+def _sigterm(task, rep, workspace):
+    """The operator stops the run while this session is in flight."""
+    if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+        raise AssertionError("no SIGTERM handler: the run would die with nothing written")
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(5)
+    raise AssertionError("SIGTERM did not stop the run")
+
+
+def _run_main(rel, tmp_path, monkeypatch, sessions, reps):
+    """main() over recorded sessions, one H6 defect each, results in out.json."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    out = tmp_path / "out.json"
+    monkeypatch.setattr(rel, "stack_identity", lambda url: {})
+    for name in _DETECTORS:
+        monkeypatch.setattr(rel, name, lambda *a: [])
+    monkeypatch.setattr(rel, "h6_service_fault", lambda s: ["H6 service fault: sandbox answered 500"])
+    queue = iter(sessions)
+    monkeypatch.setattr(rel, "run_session",
+                        lambda task, rep, *a: rel.Session(**next(queue)(task, rep, ws)))
+    monkeypatch.setattr(sys, "argv", ["e2e-reliability.py", "--workspace", str(ws),
+                                      "--deploy-dir", str(tmp_path / "none"),
+                                      "--compose-project", "", "--sandbox-container", "",
+                                      "--tasks", "offbyone", "--reps", str(reps),
+                                      "--json", str(out)])
+    return rel.main(), out
+
+
+def test_a_stopped_run_keeps_its_defects_and_a_partial_summary(rel, tmp_path, monkeypatch):
+    before = signal.getsignal(signal.SIGTERM)
+    code, out = _run_main(rel, tmp_path, monkeypatch, [_recorded, _sigterm, _recorded], reps=3)
+    assert code == 128 + signal.SIGTERM
+    logged = [json.loads(line)
+              for line in out.with_suffix(".defects.jsonl").read_text().splitlines()]
+    assert logged == [{"task": "offbyone", "rep": 1,
+                       "defect": "H6 service fault: sandbox answered 500"}]
+    assert [row["rep"] for row in json.loads(out.read_text())] == [1]
+    summary = out.with_suffix(".summary.txt").read_text()
+    assert "Harness Integrity Rate   0/1" in summary
+    assert "H6 service fault" in summary
+    assert "stopped by SIGTERM after 1 session(s)" in summary
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_a_full_run_logs_each_defect_and_writes_no_partial_summary(rel, tmp_path, monkeypatch):
+    code, out = _run_main(rel, tmp_path, monkeypatch, [_recorded, _recorded], reps=2)
+    assert code == 1
+    assert [row["rep"] for row in json.loads(out.read_text())] == [1, 2]
+    assert len(out.with_suffix(".defects.jsonl").read_text().splitlines()) == 2
+    assert not out.with_suffix(".summary.txt").exists()

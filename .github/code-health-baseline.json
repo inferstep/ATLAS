@@ -69,7 +69,7 @@
   "sandbox/resource_contract.py:run_bounded": 144,
   "scripts/code_quality.py:analyze": 105,
   "scripts/derive_ablation.py:derive_condition": 112,
-  "scripts/e2e-reliability.py:main": 136,
+  "scripts/e2e-reliability.py:main": 105,
   "scripts/e2e-reliability.py:run_session": 163,
   "scripts/novel-atlas.py:main": 172,
   "scripts/production-readiness.py:_gates": 180,
@@ -102,7 +102,7 @@
   "proxy/tools.go": 6706,
   "proxy/types.go": 2080,
   "sandbox/executor_server.py": 2171,
-  "scripts/e2e-reliability.py": 2164,
+  "scripts/e2e-reliability.py": 2106,
   "tui/model.go": 1714,
   "v3-service/pipeline.py": 2964,
   "v3-service/symbols.py": 2130
