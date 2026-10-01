@@ -4,7 +4,7 @@ numpy==2.4.6
 xgboost-cpu==3.2.0; sys_platform == "linux"
 xgboost==3.2.0; sys_platform != "linux"
 fastapi==0.141.1
-uvicorn==0.53.0
+uvicorn==0.54.0
 pydantic==2.13.5
 httpx==0.28.1
 # tiktoken: unused in V2 (was used for V1 chunking token counting). Retained as
