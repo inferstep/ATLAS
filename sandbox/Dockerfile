@@ -3,7 +3,7 @@
 # agent output, so a Python older than the one models write for turns valid
 # code into a rejection. On 3.11 a model burned a whole session re-emitting
 # f"{d["k"]}" — a SyntaxError there, valid from 3.12 (PEP 701).
-FROM docker.io/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+FROM docker.io/python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
 WORKDIR /app
 
 # Install system dependencies and language runtimes
