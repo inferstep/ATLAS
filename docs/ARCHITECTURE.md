@@ -85,23 +85,66 @@ The K3s deployment path (`scripts/install.sh`, manifests in `templates/`) is CUD
 
 The proxy is the entry point for chat front-ends. It accepts user messages on `/v1/agent` (typed event stream — what the TUI uses) and runs an internal agent loop that calls llama-server, parses tool calls, executes them, and streams events back. The `/v1/chat/completions` endpoint is a transparent passthrough to llama-server; it is kept for SDK compatibility and does not run the agent loop. See [API.md](API.md) for the full event-type catalogue.
 
-The main proxy files, one concern each (not the full list):
+Every non-test Go file directly under `proxy/`, with its area of ownership:
 
 | File | Owns |
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
 | `agent.go` | The agent loop: turn state, LLM calls, plan generation, stuck-loop breakers |
-| `tools.go` | The 14 tool definitions + executors, tier classification, tool-call grammar |
+| `tools.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
 | `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
 | `lens.go` | Lens scoring calls, the `VerificationRecord` the loop keeps for each verification run (passing or failed, with its evidence kind), calibration status |
+| `lens_identity.go` | Creates and attaches the proxy-owned invocation identity used for direct Lens service calls |
+| `lens_required.go` | Enforces that the geometric Lens is available, tracks Lens failures, and stops runs when scoring is unavailable |
+| `logsafe.go` | Builds privacy-safe tool argument summaries for logs, allowing only approved fields and redacting sensitive content |
+| `memory_envelope.go` | Validates declared deployment memory budgets against the operator-stated host capacity and reports unenforced budget overruns |
+| `object_handle_linux.go` | Holds Linux filesystem objects open during deletion approval so the approved object cannot be replaced before removal |
+| `object_handle_other.go` | Refuses deletion approval on non-Linux platforms because a filesystem object cannot be safely pinned and verified |
+| `mutation_scope.go` | Derives the exact file and edit scope from model tool calls so candidates cannot modify anything outside the requested target |
+| `obligation_kinds.go` | Defines the closed obligation types, required evidence strength, and how each obligation is satisfied |
+| `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
 | `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
 | `guardrails.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
 | `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |
 | `types.go` | Shared types, tiers, turn caps |
+| `advisory_policy.go` | Decides whether to keep the model’s proposal or deliver a candidate, applying hard vetoes before verification and selection rules |
+| `authorization_decision.go` | Checks whether candidate evidence satisfies the task’s authorization requirements, including target scope and preservation of the existing file’s verified behavior |
+| `authorization_grant.go` | Creates, consumes, and retires one-use permissions bound to an exact candidate, target, and workspace state |
+| `automatic_attribution.go` | Records why automatic candidate delivery succeeded or was refused, using the decisions already made by the route, authorization, policy, and delivery owners |
+| `automatic_delivery.go` | Checks whether the exact V3-selected candidate meets the safety and identity requirements for automatic delivery |
+| `candidate_capture_only.go` | Prevents candidate delivery during capture-only measurement runs and records the suppression |
+| `candidate_delivery.go` | Authorizes candidate delivery, consumes its one-use permission, rechecks current workspace state, and writes the approved bytes |
+| `candidate_policy.go` | Defines the fixed candidate policy, its possible outcomes, and the private record of each decision |
+| `candidate_provenance.go` | Reports where delivered content came from and which policy allowed it to reach disk |
+| `candidate_reachability.go` | Determines and records why a mutation bypassed candidate generation, including eligibility and remaining time |
+| `candidate_staging.go` | Runs client-declared verification commands against candidate files in an isolated sandbox copy and checks the returned observations |
+| `cut_call.go` | Builds recovery guidance from complete fields in a truncated tool call and the current file, without executing the incomplete call |
+| `delivered_handoff.go` | Updates the model’s file context and tool feedback when the delivered content differs from what it submitted |
+| `delivery_settlement.go` | Records completed candidate deliveries and checks that the authorized artifact still exists with matching bytes and ledger state |
+| `edit_route_delivery.go` | Carries edit-tool candidates through authorization and delivery, preserving the originating tool’s result format and fallback content |
+| `evidence_wiring.go` | Connects syntax and declared-command evidence producers to candidate routes, assigns candidate identities, and records available or missing evidence |
+| `execution_outcome.go` | Classifies command completion, interruption, and resource exhaustion so an incomplete run cannot count as successful verification |
+| `exploration_budget.go` | Prompts a run to act or answer after repeated read-only calls, according to what the request requires |
+| `feasibility_decision.go` | Assesses whether available evidence producers could satisfy the task before generation and records the assessment without controlling generation |
+| `fenced_framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
+| `old_str_watch.go` | Stops runaway edit text while it streams when it can no longer match the target file, and supplies recovery guidance |
+| `repair.go` | Tracks syntax repairs left open by session writes, blocks premature completion, and reports unresolved repairs at handoff |
+| `reply_lead_ins.go` | Normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
+| `route_disposition.go` | Tracks how each candidate route ended and whether its delivery permission resulted in content reaching disk |
+| `route_entry.go` | Creates a unique identity for each candidate-generation attempt so its evidence, authorization, and delivery records can be linked |
+| `staged_command_evidence.go` | Credits staged verification toward completion only while its candidate bytes, workspace, and delivery remain current |
+| `staging_contract.go` | Defines and validates sandbox staging requests, observations, execution budgets, and their identity bindings |
+| `structured_mutation_target.go` | Checks whether a parsed mutation call grounds candidate delivery to its exact target when the client has not declared output paths |
+| `syntax_evidence.go` | Turns proxy syntax-check observations into evidence bound to exact candidate bytes and structural obligations |
+| `v3_delivery_registry.go` | Lists the production routes and originating tools allowed to deliver service-authored candidate content |
+| `v3_fallback_note.go` | Tracks files written after V3 failed or timed out and discloses still-current unchecked content in the final summary |
+| `verification_evidence.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
+| `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
+| `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
 
 ### Agent Loop Flow
 
