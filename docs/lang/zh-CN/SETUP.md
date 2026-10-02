@@ -1,4 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: 4f1be83 -->
+<!-- source: docs/SETUP.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
 > **[English](../../SETUP.md)** | **简体中文** | **[日本語](../ja/SETUP.md)** | **[한국어](../ko/SETUP.md)**
 
 > ℹ️ **译者注：** ATLAS 没有固定的默认模型 —— 请通过 `atlas init` 选择注册表模型，或自带兼容的 GGUF。若本译文与英文原版 ([SETUP.md](../../SETUP.md)) 有出入，以英文原版为准。
@@ -19,7 +19,7 @@
 | NVIDIA RTX 50 系列 / Blackwell（B100、GB10） | Linux | [方式 0：bootstrap](#方式-0一键-bootstrap) 或[方式 1：Docker](#方式-1docker-compose推荐) | 支持 (Supported) —— 发布的 CUDA 镜像面向 Blackwell |
 | NVIDIA RTX 20/30/40、GTX 10xx、数据中心卡（V100/A100/H100/T4/L4） | Linux | [方式 1：Docker](#方式-1docker-compose推荐) + 一次性[本地重建](#cuda-计算能力-dockerfilev31) | 预览 (Preview) —— 需要本地重建 |
 | NVIDIA GPU | Windows (WSL2) | [方式 1：Docker - NVIDIA 部分](#方式-1docker-compose推荐) | 不支持 (Unsupported) —— 未测试，不做任何承诺；欢迎反馈报告 |
-| AMD GPU（RX 6000/7000、MI200+） | Linux | [方式 1：Docker - AMD ROCm](#amd-rocm-的差异) | 社区验证 (Community-tested)（[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
+| AMD GPU（RX 6000/7000、MI200+） | Linux | [方式 1：Docker - AMD ROCm](#amd-rocm-的差异) | 社区验证 (Community-tested)（[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
 | **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（专门指南 - 原生 Metal + Docker 混合方案） | 支持（维护者已验证，M2 Pro） |
 | Intel Arc / Iris Xe | Linux | [方式 1：Docker - Vulkan](#vulkan跨厂商回退) | 预览 —— Vulkan 仅在 lavapipe 上做过冒烟测试；尚无真实 GPU 验证 |
 | Snapdragon X Elite（笔记本） | Linux | [Vulkan](#vulkan跨厂商回退) + [arm64 部分](#arm64) | 预览（Linux arm64）。Windows on ARM 为不支持 |
@@ -55,7 +55,7 @@
 > 完整架构表：[CUDA 计算能力](#cuda-计算能力-dockerfilev31)。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 或者从已有的检出中运行：
@@ -105,10 +105,10 @@ atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns
 ```bash
 # Run as your normal user; sudo elevates as needed (Docker install, etc).
 # Install ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 
 # Run via sudo. SUDO_USER is detected, install still ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
 
 # Real root login (no sudo) — install owned by root. Only do this if there's
 # no human user on the box (CI runner, container, etc).
@@ -120,11 +120,11 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 # Pinned to a release: fetch the script AT the tag and install that tag.
 # The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
 # pinned to the matching cosign-signed images.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
   | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
 
 # Review before running: download, read, then execute the same bytes.
-curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
 less atlas-bootstrap.sh
 bash atlas-bootstrap.sh
 ```
@@ -143,12 +143,12 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | 把安装固定到某个 git 标签/sha 而不是跟踪 `main`；`vX.Y.Z` 形式的值还会把 `ATLAS_IMAGE_TAG` 固定到对应的镜像 |
 | `ATLAS_INSTALL_DIR=/path` | 克隆到哪里（默认 `/opt/atlas` —— 见下文） |
 | `ATLAS_REPO_URL=https://...` | 替代的仓库 URL |
-| `ATLAS_GO_VERSION=1.26.2` | 为构建 TUI 安装的 Go 工具链版本（TUI 需要 1.26.2+；已安装的更老工具链会自动拉取它） |
+| `ATLAS_GO_VERSION=1.26.6` | 为构建 TUI 安装的 Go 工具链版本（TUI 需要 1.26.6+；已安装的更老工具链会自动拉取它） |
 
 **为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及，还能让同一台机器上的多个用户共享一份安装。如果你更希望装进自己的家目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
@@ -219,7 +219,7 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 
 ```bash
 # 1. Clone
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 
 # 2. Install the ATLAS CLI (puts `atlas` in ~/.local/bin)
@@ -234,13 +234,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.2+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.6+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.6.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.6.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -341,7 +341,7 @@ ATLAS 面向两种 CPU 架构：`x86_64`（默认，所有后端可用）和 `aa
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）—— 通过 sbsa 基础镜像启用 CUDA，计算能力 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** —— 通过 l4t 基础镜像启用 CUDA，计算能力 8.7
-- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；原生 Metal 安装在 [#32](https://github.com/itigges22/ATLAS/issues/32) 跟踪（快速路径）
+- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；原生 Metal 安装在 [#32](https://github.com/inferstep/ATLAS/issues/32) 跟踪（快速路径）
 - **Snapdragon X Elite**（Windows on ARM 笔记本）—— 通过 Adreno 驱动走 Vulkan
 - **Raspberry Pi 5** —— 通过 Mesa V3D 驱动走 Vulkan，预期 CPU 级性能
 - **Ampere Altra / AWS Graviton 工作站** —— 通过 lavapipe 走 Vulkan（CPU 回退，因为目前还没有消费级 arm64 独显）
@@ -372,11 +372,11 @@ Jetson 则在两个 build arg 中换成 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`（l
 
 - GHCR 上还没有预构建的 arm64 镜像 —— arm64 用户需按上面的配方本地构建。至少一台 arm64 设备完成端到端验证后，预构建的多架构镜像就会落地。
 - bootstrap 安装器（`scripts/atlas-bootstrap.sh`）尚未针对 arm64 路径审计过。
-- 五种目标设备的硬件测试矩阵目前是空的 —— 拥有其中任一设备的早期使用者，请把你的 `atlas doctor` 输出和 `vulkaninfo --summary` 贴到 [#115](https://github.com/itigges22/ATLAS/issues/115)。
+- 五种目标设备的硬件测试矩阵目前是空的 —— 拥有其中任一设备的早期使用者，请把你的 `atlas doctor` 输出和 `vulkaninfo --summary` 贴到 [#115](https://github.com/inferstep/ATLAS/issues/115)。
 
 ### 首次运行会发生什么
 
-1. Docker 从 `ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,sandbox}` 拉取 5 个预构建容器镜像（网络快时约 3 分钟）。若想改为从源码构建（开发路径），在 `up` 之前运行 `docker compose build` —— 见下方"镜像来源"。
+1. Docker 从 `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` 拉取 5 个预构建容器镜像（网络快时约 3 分钟）。若想改为从源码构建（开发路径），在 `up` 之前运行 `docker compose build` —— 见下方"镜像来源"。
 2. llama-server 把 7GB 模型加载进 GPU 显存（约 1-2 分钟）
 3. 所有服务开始健康检查
 4. 当全部 5 个服务（llama-server、geometric-lens、v3-service、sandbox、atlas-proxy）报告健康后，`atlas` 连接并启动 Bubbletea TUI
@@ -402,7 +402,7 @@ ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
 
-可用标签列在 <https://github.com/itigges22/ATLAS/pkgs/container/atlas-proxy>（把 `atlas-proxy` 换成其他服务名：`atlas-v3`、`atlas-lens`、`atlas-llama`、`atlas-sandbox`）。
+可用标签列在 <https://github.com/inferstep/ATLAS/pkgs/container/atlas-proxy>（把 `atlas-proxy` 换成其他服务名：`atlas-v3`、`atlas-lens`、`atlas-llama`、`atlas-sandbox`）。
 
 边缘情形：对 GHCR 上仍为私有的包，`compose pull` 会以 `unauthorized` 失败 —— 用带 `read:packages` 的 token 认证，或改为从源码构建。`compose pull` 也会覆盖共享同一标签的本地构建镜像；迭代某个服务时，跳过 pull 或设置 `ATLAS_IMAGE_TAG=dev-local`，让本地镜像和注册表镜像各用各的标签。要拉取某个 fork 的镜像，在 `.env` 中设置 `ATLAS_GHCR_OWNER=<your-username>`。
 
@@ -517,7 +517,7 @@ K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选�
 
 | 要求 | 详情 |
 |-------------|---------|
-| **Go 1.26.2+** | 用于构建 atlas-proxy 和 atlas-tui 客户端（更老的 Go 工具链会自动拉取它） |
+| **Go 1.26.6+** | 用于构建 atlas-proxy 和 atlas-tui 客户端（更老的 Go 工具链会自动拉取它） |
 | **llama.cpp** | 从源码编译并启用 CUDA（参见 [llama.cpp 构建说明](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)） |
 | **Node.js 20+** | 沙箱执行 JavaScript/TypeScript 所需 |
 | **Rust** | 沙箱执行 Rust 所需 |
@@ -526,7 +526,7 @@ K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选�
 
 ```bash
 # 1. Clone and install Python CLI
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 pip install -e .
 
@@ -559,13 +559,16 @@ llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
-  --embeddings --pooling mean --flash-attn on --fit off
+  --embeddings --pooling none --flash-attn on --fit off
+# --pooling none: the lens's per-step path needs per-token vectors, and it
+# pools and normalizes them itself for the whole-text path (the compose
+# default, ATLAS_EMBED_POOLING=none).
 
-# Terminal 2: Geometric Lens
+# Terminal 2: Geometric Lens (required: the proxy refuses requests while it
+# cannot score)
 cd geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
-GEOMETRIC_LENS_ENABLED=true \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # Terminal 3: V3 Pipeline
@@ -601,7 +604,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-如果 `atlas-tui` 二进制缺失或比检出代码旧，`atlas` 会自动从 `tui/` 构建它（需要 PATH 中有 Go 1.26.2+），并在移交给 TUI 之前验证 localhost:8090 上的代理。
+如果 `atlas-tui` 二进制缺失或比检出代码旧，`atlas` 会自动从 `tui/` 构建它（需要 PATH 中有 Go 1.26.6+），并在移交给 TUI 之前验证 localhost:8090 上的代理。
 
 ---
 
@@ -736,8 +739,8 @@ medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用�
 |---|---|---|---|---|
 | NVIDIA（Blackwell —— RTX 50xx、B100、GB10） | CUDA | 支持 (Supported)（已发布镜像） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要开发用） |
 | NVIDIA（前 Blackwell —— RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4） | CUDA | 预览 (Preview) —— 需要一次性[本地重建](#cuda-计算能力-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上游 llama.cpp 支持这些卡；维护者未在 ATLAS 上验证） |
-| AMD | ROCm / HIP | 社区验证 (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
-| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/itigges22/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
+| AMD | ROCm / HIP | 社区验证 (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
+| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
 | 任意（跨厂商回退） | Vulkan | 预览 | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）已冒烟测试；尚无真实 GPU 验证 |
 | Intel Arc | SYCL | 路线图 (Roadmap) —— Intel Arc 目前走 Vulkan | 待定 | Arc A770 16GB（目标） |
 
@@ -813,17 +816,17 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ---
 
-## Geometric Lens 权重（可选）
+## Geometric Lens 权重（必需）
 
-ATLAS 在没有 Geometric Lens 权重的情况下也能正常工作 —— 服务会优雅降级，返回中性分数。V3 pipeline 回退到仅沙箱验证。
+ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。lens 需要所服务模型的 C(x) 与 G(x) 权重。缺少它们时，代理会以 HTTP 503 `dependency_down` 拒绝每个请求并说明原因，`atlas doctor` 也会失败。有权重但尚未校准的 lens 是可接受的：它能打分，其阈值干预会等待校准。
 
-要启用 C(x)/G(x) 评分，你需要训练好的模型权重。预训练权重和训练数据可在 HuggingFace 上获取：
+在 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
 
 **[ATLAS 数据集（HuggingFace）](https://huggingface.co/datasets/itigges22/ATLAS)** —— 包含嵌入向量、训练数据和权重文件。
 
 将权重文件放在 `geometric-lens/geometric_lens/models/` 目录中（或通过 Docker Compose 中的 `ATLAS_LENS_MODELS` 挂载）。服务启动时会自动加载。
 
-如果你希望使用自己的基准测试数据进行训练，整个流程都由 CLI 驱动：
+对于没有权重的模型，用你自己的基准数据构建它们。`atlas bench` 直接运行 V3 各阶段而不经过代理，因此在 lens 拥有权重之前它也能工作。整个流程都由 CLI 驱动：
 
 ```bash
 atlas bench --run-id mymodel_lens --tasks 200    # 生成候选并自标注
@@ -831,6 +834,41 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 ```
 
 `atlas lens build` 会训练 lens 的两个部分、校准阈值，并在激活的 bundle 中写入 `provenance.json` 清单。参见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
+
+### 自带 llama-server
+
+想自己运行推理 —— 宿主机原生构建、远程机器，或 router 模式下的 llama.cpp —— 就让四个消费服务指向它，并把随附容器替换为占位。创建 `docker-compose.override.yml`：
+
+```yaml
+services:
+  llama-server:                      # stub the bundled one out
+    command: ["sleep", "infinity"]
+    entrypoint: []
+    healthcheck:
+      test: ["CMD", "true"]
+    deploy: {}
+  geometric-lens:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  v3-service:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  atlas-proxy:
+    environment:
+      ATLAS_LLAMA_URL: http://host.docker.internal:8080
+```
+
+`host.docker.internal` 在 Linux 与 macOS 上都能解析：compose 文件在每个需要它的服务上通过 `extra_hosts: host.docker.internal:host-gateway` 做了映射。你不需要直接使用 docker0 网关地址（`172.17.0.1`），尽管该映射解析到的正是它。
+
+**Router 模式。** `llama-server --models-preset` 会拒绝任何不带 `model` 字段的请求（`model name is missing from the request`）。在 `.env` 中把 `ATLAS_MODEL_NAME` 设为所服务模型的名称 —— `atlas doctor` 的冒烟测试会发送它，单模型服务器会忽略它。
+
+**首次 `docker compose up` 之前，** 确保 secrets 目录存在 —— 没有它 bind 挂载会失败：
+
+```bash
+mkdir -p secrets     # or set ATLAS_SECRETS_DIR
+```
+
+`atlas init` 会替你创建它；只有手动 compose-first 流程需要这一步。
 
 ### 自带模型
 
