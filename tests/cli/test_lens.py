@@ -934,3 +934,30 @@ def test_the_fingerprint_is_scored_under_the_bundles_embedding_contract(
     for ref in lens_drift.load_fingerprint(str(tmp_path))["references"]:
         assert abs(ref["expected_energy"] - want) < 1e-5
     assert ee._EMBEDDING_CONTRACT is None
+
+
+def test_model_card_provenance_names_the_loss_the_bundle_was_trained_with(tmp_path):
+    """A bundle from `atlas lens build` records the ranking margin; a bundle
+    without that record must not be described as contrastive-trained."""
+    built = tmp_path / "built"
+    built.mkdir()
+    (built / "provenance.json").write_text(json.dumps(
+        {"hyperparameters": {"epochs": 100, "lr": 1e-3, "margin": 5.0}}))
+    text = lens._model_card_provenance(str(built), "test-model", 4096)
+    assert "atlas lens build" in text
+    assert "Contrastive ranking loss" in text
+    assert "MSE" not in text
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    for d in (legacy, tmp_path / "missing"):
+        text = lens._model_card_provenance(str(d), "test-model", 4096)
+        assert "class-weighted" in text and "MSE" in text
+        assert "Trained locally via `atlas lens build`" not in text
+
+
+def test_model_card_embeds_the_provenance_paragraph():
+    card = lens._render_model_card_md(
+        "test-model", "test-model", 4096, "0" * 64, 1024, "apache-2.0",
+        ["cost_field.pt"], provenance="PROVENANCE PARAGRAPH")
+    assert "## Provenance\n\nPROVENANCE PARAGRAPH\n\n## License" in card
