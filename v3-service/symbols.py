@@ -4,6 +4,7 @@ checking, traceback frame parsing, and cyclomatic complexity."""
 
 import re
 
+import node_splice
 
 # --- structural_edit (GH #39 v1) ----------------------------------------------------
 #
@@ -902,11 +903,10 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     # the old ones stay, double-decorating the function.
     if language == "python" and target.parent is not None and target.parent.type == "decorated_definition":
         target = target.parent
-    try:
-        new_bytes = source[:target.start_byte] + content.encode("utf-8") + source[target.end_byte:]
-        new_content = new_bytes.decode("utf-8")
-    except UnicodeDecodeError as e:
-        return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
+    content, new_bytes, splice_error = node_splice.splice(source, target, content, path, language)
+    if splice_error:
+        return {"success": False, "error": splice_error}
+    new_content = new_bytes.decode("utf-8")
 
     # Node-size precondition. A replacement many times the size of the node is
     # not an edit of that node — it is the whole file wearing a selector.

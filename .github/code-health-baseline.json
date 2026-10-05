@@ -92,10 +92,10 @@
   "v3-service/stages/plan_search.py:PlanSearch.generate": 128,
   "v3-service/stages/refinement_loop.py:RefinementLoop.run": 162,
   "v3-service/symbols.py:_ast_selector_to_query": 125,
-  "v3-service/symbols.py:structural_edit": 298
+  "v3-service/symbols.py:structural_edit": 297
  },
  "files": {
-  "atlas/commands/lens.py": 1555,
+  "atlas/commands/lens.py": 1554,
   "proxy/agent.go": 9963,
   "proxy/gates.go": 4067,
   "proxy/guardrails.go": 3813,

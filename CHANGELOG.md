@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Fixed: structural_edit refused a Python method unless its first line was bare
+
+structural_edit splices a replacement in at the node's first byte. For a
+method that is after its line's indentation, so the replacement parsed only
+in one shape: first line bare, later lines at their columns in the file. A
+method sent at column 0, or with its original indentation on every line, was
+refused with an indentation error.
+- A Python replacement is now placed at the node's column whatever
+  indentation it arrives with. One that already fits is used as sent.
+- A column-0 method that began with a blank line or a comment compiled, but
+  landed outside its class. It now stays in the class.
+- Lines inside a multi-line string are never shifted.
+- A replacement whose indentation mixes tabs and spaces with the file's is
+  refused, and the refusal says which to use.
+
 ### Added: a driver for the held-out evaluation, with a bare-model baseline
 
 `scripts/eval/` runs a frozen suite through two arms, grades each finished
