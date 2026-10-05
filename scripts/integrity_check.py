@@ -48,7 +48,7 @@ TEST_DEF = re.compile(r"^\s*(?:func (Test\w+)\(|(?:async )?def (test_\w+)\(|(?:i
 # inside a string are data.
 SKIP = re.compile(r"^\s*(?:\w+\s*=\s*)?(?:@?pytest\.mark\.(?:skip|xfail)|pytest\.skip\(|@?unittest\.skip"
                   r"|t\.Skip(?:f|Now)?\(|(?:it|test|describe)\.(?:skip|todo)\(|xit\()")
-ASSERTION = re.compile(r"^\s*assert\b|\bt\.(?:Error|Errorf|Fatal|Fatalf)\(|\b(?:require|assert)\.\w+\(|\bexpect\(")
+ASSERTION = re.compile(r"(?:^\s*assert\b)|\bt\.(?:Error|Errorf|Fatal|Fatalf)\(|\b(?:require|assert)\.\w+\(|\bexpect\(")
 SUPPRESSION = re.compile(r"\bnolint\b|\bnoqa\b|\bNOSONAR\b|type:\s*ignore|eslint-disable|\bnosec\b"
                          r"|shellcheck disable=|@ts-ignore|@ts-expect-error|pragma:\s*no cover")
 HISTORY = (
@@ -57,7 +57,7 @@ HISTORY = (
     ("a run name", re.compile(r"\b(?:cycle|smoke|block|stabilization)[ -]?\d+\b|\bseed-\d+\b", re.I)),
 )
 NEW_DEPENDENCY = {
-    "go.mod": re.compile(r"^\s*(?:require\s+)?([\w.\-/]+\.[\w.\-/]+)\s+v\d"),
+    "go.mod": re.compile(r"^\s*(?:require\s+)?(\S+)\s+v\d"),
     "package.json": re.compile(r"^\s*\"(@?[\w.\-/]+)\":\s*\"[\^~]?\d"),
     "requirements": re.compile(r"^([A-Za-z][\w.\-\[\]]*)\s*(?:[=<>~!]=|$)"),
 }
@@ -151,66 +151,85 @@ def task_names(source: Path = ROOT / TASK_SOURCE) -> set[str]:
         sys.modules.pop(spec.name, None)
 
 
+TEST_WHY = ("A test that is removed, skipped or loosened in the same change as the code it "
+            "covers can hide a regression.")
+
+
 def check_tests(changes: list[FileChange]) -> list[Finding]:
-    why = ("A test that is removed, skipped or loosened in the same change as the code it "
-           "covers can hide a regression.")
     added_names = {test_name(text) for c in changes for _, _, text in c.added} - {""}
     product_changed = any(is_product(c.path) for c in changes)
     out = []
-    for c in (c for c in changes if is_test(c.path)):
-        if c.status == "deleted":
-            out.append(Finding("warning", c.path, 0, "test file deleted", why,
-                               "Keep the file, or say in the pull request why its tests no longer apply."))
+    for c in changes:
+        if not is_test(c.path):
             continue
-        for _, text in c.removed:
-            name = test_name(text)
-            if name and name not in added_names:
-                out.append(Finding("warning", c.path, 0, f"test removed: {name}", why,
-                                   "Keep the test, or say in the pull request why it no longer applies."))
-        for _, line_no, text in c.added:
-            if SKIP.search(text):
-                out.append(Finding("warning", c.path, line_no, "new skip or todo marker in a test", why,
-                                   "Make the test run. If it cannot run here, say why next to the skip."))
-        removed = [h for h, text in c.removed if ASSERTION.search(text)]
-        added = [h for h, _, text in c.added if ASSERTION.search(text)]
-        if len(removed) > len(added):
-            out.append(Finding("warning", c.path, 0,
-                               f"{len(removed)} assertion(s) removed, {len(added)} added", why,
-                               "Keep the assertions, or say in the pull request why they were wrong."))
-        elif product_changed and set(removed) & set(added):
-            out.append(Finding("warning", c.path, 0,
-                               f"{len(set(removed) & set(added))} assertion(s) rewritten while product code changed",
-                               why, "Confirm in the pull request that the old expectation was wrong, not the new code."))
+        if c.status == "deleted":
+            out.append(Finding("warning", c.path, 0, "test file deleted", TEST_WHY,
+                               "Keep the file, or say in the pull request why its tests no longer apply."))
+        else:
+            out += removed_and_skipped_tests(c, added_names) + changed_assertions(c, product_changed)
     return out
 
 
+def removed_and_skipped_tests(c: FileChange, added_names: set[str]) -> list[Finding]:
+    removed = {test_name(text) for _, text in c.removed} - {""} - added_names
+    out = [Finding("warning", c.path, 0, f"test removed: {name}", TEST_WHY,
+                   "Keep the test, or say in the pull request why it no longer applies.")
+           for name in sorted(removed)]
+    out += [Finding("warning", c.path, line_no, "new skip or todo marker in a test", TEST_WHY,
+                    "Make the test run. If it cannot run here, say why next to the skip.")
+            for _, line_no, text in c.added if SKIP.search(text)]
+    return out
+
+
+def changed_assertions(c: FileChange, product_changed: bool) -> list[Finding]:
+    removed = [hunk for hunk, text in c.removed if ASSERTION.search(text)]
+    added = [hunk for hunk, _, text in c.added if ASSERTION.search(text)]
+    rewritten = set(removed) & set(added)
+    if len(removed) > len(added):
+        return [Finding("warning", c.path, 0, f"{len(removed)} assertion(s) removed, {len(added)} added",
+                        TEST_WHY, "Keep the assertions, or say in the pull request why they were wrong.")]
+    if product_changed and rewritten:
+        return [Finding("warning", c.path, 0,
+                        f"{len(rewritten)} assertion(s) rewritten while product code changed", TEST_WHY,
+                        "Confirm in the pull request that the old expectation was wrong, not the new code.")]
+    return []
+
+
 def check_comments_and_names(changes: list[FileChange], tasks: set[str]) -> list[Finding]:
-    out = []
     task_re = re.compile(r"\b(" + "|".join(sorted(map(re.escape, tasks))) + r")\b") if tasks else None
-    for c in (c for c in changes if c.path.endswith(CODE_EXTENSIONS)):
+    out = []
+    for c in changes:
+        if not c.path.endswith(CODE_EXTENSIONS):
+            continue
+        product = is_product(c.path)
         for _, line_no, text in c.added:
-            comment = comment_text(c.path, text)
-            for label, pattern in HISTORY:
-                found = pattern.search(comment)
-                if found:
-                    out.append(Finding(
-                        "warning", c.path, line_no, f"{label} in a new comment: {found.group(0)!r}",
-                        "A comment describes the code as it is. History goes stale in the code and "
-                        "is already kept by the commit, the pull request and the issue.",
-                        "Say what the code does and why. Move dates, IDs and run names to the commit message."))
-            if SUPPRESSION.search(comment):
-                out.append(Finding(
-                    "approval", c.path, line_no, "new suppression marker",
-                    "A suppression turns a check off for this line, and it stays after the reason is gone.",
-                    "Fix what the check reports. If it is a false alarm, say why next to the marker; "
-                    "a maintainer has to approve it."))
-            named = task_re.search(text) if task_re and is_product(c.path) else None
+            out += comment_findings(c.path, line_no, comment_text(c.path, text))
+            named = task_re.search(text) if task_re and product else None
             if named:
                 out.append(Finding(
                     "warning", c.path, line_no, f"evaluation task named in product code: {named.group(0)!r}",
                     "Product code that names a task from the evaluation suite is fitted to the suite, "
                     "not to the kind of problem.",
                     "State the general condition the code handles. Keep task names in the runner and its tests."))
+    return out
+
+
+def comment_findings(path: str, line_no: int, comment: str) -> list[Finding]:
+    out = []
+    for label, pattern in HISTORY:
+        found = pattern.search(comment)
+        if found:
+            out.append(Finding(
+                "warning", path, line_no, f"{label} in a new comment: {found.group(0)!r}",
+                "A comment describes the code as it is. History goes stale in the code and "
+                "is already kept by the commit, the pull request and the issue.",
+                "Say what the code does and why. Move dates, IDs and run names to the commit message."))
+    if SUPPRESSION.search(comment):
+        out.append(Finding(
+            "approval", path, line_no, "new suppression marker",
+            "A suppression turns a check off for this line, and it stays after the reason is gone.",
+            "Fix what the check reports. If it is a false alarm, say why next to the marker; "
+            "a maintainer has to approve it."))
     return out
 
 
@@ -243,7 +262,7 @@ def check_notes(changes: list[FileChange]) -> list[Finding]:
             continue
         for _, line_no, text in c.added:
             dep = NEW_DEPENDENCY[kind].match(text)
-            if dep and dep.group(1) != "version":
+            if dep and dep.group(1) != "version" and (kind != "go.mod" or "." in dep.group(1)):
                 out.append(Finding("note", c.path, line_no, f"new or changed dependency: {dep.group(1)}",
                                    "Every dependency is code the project runs without having written it.",
                                    "Check that the package is the intended one and is maintained."))
@@ -261,23 +280,32 @@ def check(diff_text: str, tasks: set[str]) -> list[Finding]:
             + check_files(changes) + check_notes(changes))
 
 
-def report(findings: list[Finding], github: bool) -> None:
-    titles = {"approval": "Needs a maintainer's approval", "warning": "Needs action", "note": "For information"}
+LEVEL_TITLES = {"approval": "Needs a maintainer's approval", "warning": "Needs action",
+                "note": "For information"}
+
+
+def report_lines(findings: list[Finding]) -> list[str]:
     lines = []
-    for level, title in titles.items():
+    for level, title in LEVEL_TITLES.items():
         group = [f for f in findings if f.level == level]
-        if not group:
-            continue
-        lines.append(f"{title} ({len(group)})")
+        if group:
+            lines.append(f"{title} ({len(group)})")
         for f in group:
             where = f"{f.path}:{f.line}" if f.line else f.path or "(whole change)"
             lines += [f"  {where}: {f.what}", f"    why: {f.why}", f"    fix: {f.fix}"]
-            if github and level != "note":
-                location = f"file={f.path},line={f.line or 1}," if f.path else ""
-                print(f"::warning {location}title=integrity: {f.what}::{f.why} {f.fix}")
-    text = "\n".join(lines) if lines else "integrity check: nothing found"
+    return lines or ["integrity check: nothing found"]
+
+
+def report(findings: list[Finding], github: bool) -> None:
+    text = "\n".join(report_lines(findings))
     print(text)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY") if github else None
+    if not github:
+        return
+    for f in findings:
+        if f.level != "note":
+            location = f"file={f.path},line={f.line or 1}," if f.path else ""
+            print(f"::warning {location}title=integrity: {f.what}::{f.why} {f.fix}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as handle:
             handle.write("### integrity check\n\n```\n" + text + "\n```\n")
@@ -294,7 +322,8 @@ def main() -> int:
                         help="the checkout to read (default: the one this script is in)")
     args = parser.parse_args()
     diff = subprocess.run(
-        ["git", "diff", "--no-color", "--unified=0", "--no-renames", f"{args.base}...HEAD"],
+        ["git", "diff", "--no-color", "--unified=0", "--no-renames",
+         "--end-of-options", f"{args.base}...HEAD", "--"],
         cwd=args.root, capture_output=True, text=True)
     if diff.returncode != 0:
         print(f"integrity check: cannot read the diff against {args.base!r}: {diff.stderr.strip()}\n"

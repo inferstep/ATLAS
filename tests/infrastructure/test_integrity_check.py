@@ -5,6 +5,7 @@ Each rule gets a change that must be reported and a near miss that must not.
 import importlib.util
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -104,7 +105,8 @@ def test_a_rewritten_assertion_is_reported_only_with_a_product_change(ic):
 ])
 def test_history_in_a_new_comment_is_reported(ic, comment, label):
     found = whats(ic, diff("proxy/retry.go", added=[f"\t{SLASHES} {comment}"]))
-    assert len(found) == 1 and found[0].startswith(f"{label} in a new comment")
+    assert len(found) == 1
+    assert found[0].startswith(f"{label} in a new comment")
     assert whats(ic, diff("atlas/cli.py", added=[f"x = 1  {HASH} {comment}"]))[0].startswith(label)
 
 
@@ -173,7 +175,8 @@ def test_every_finding_says_why_and_how_to_fix(ic):
     findings = ic.check(change, TASKS)
     assert {f.level for f in findings} == {"approval", "warning", "note"}
     for f in findings:
-        assert f.why.strip() and f.fix.strip(), f.what
+        assert f.why.strip(), f.what
+        assert f.fix.strip(), f.what
 
 
 def test_the_task_names_come_from_the_runner(ic):
@@ -186,7 +189,27 @@ def test_the_report_exits_zero_unless_strict(ic):
         return subprocess.run([sys.executable, str(SCRIPT), "--base", "HEAD", *args],
                               capture_output=True, text=True)
     plain, strict = run(), run("--strict")
-    assert plain.returncode == 0 and strict.returncode == 0, plain.stderr + strict.stderr
+    assert plain.returncode == 0, plain.stderr
+    assert strict.returncode == 0, strict.stderr
     assert "nothing found" in plain.stdout
     missing = run("--base", "no-such-ref")
-    assert missing.returncode == 2 and "fix:" in missing.stderr
+    assert missing.returncode == 2
+    assert "fix:" in missing.stderr
+
+
+def test_a_very_long_line_is_read_in_linear_time(ic):
+    # A pattern that backtracks takes seconds on this line; a linear one, milliseconds.
+    line = "\t" + "a." * 20_000 + " x"
+    started = time.monotonic()
+    assert whats(ic, diff("proxy/go.mod", added=[line])) == []
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_base_that_looks_like_an_option_is_not_one(ic, tmp_path):
+    target = tmp_path / "written-by-git"
+    result = subprocess.run([sys.executable, str(SCRIPT), f"--base=--output={target}"],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "cannot read the diff" in result.stderr
+    assert not target.exists()
+    assert not Path(f"{target}...HEAD").exists()
