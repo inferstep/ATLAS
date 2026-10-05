@@ -84,16 +84,6 @@ CI runs the same gates, so a green run here usually means a green pull
 request. An optional tool you haven't installed shows as `unavailable`,
 not as a pass. More on tests is in [Testing](#testing).
 
-One more check reads your change, not the code: it looks for removed or
-skipped tests, history in new comments, new documents, and changes to the
-files that configure the checks. It says what it found, why it matters and
-what to do, and it does not fail:
-
-```bash
-python scripts/integrity_check.py                 # your branch against origin/dev
-python scripts/integrity_check.py --base <commit>
-```
-
 ## 5. Find an issue
 
 Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).
@@ -275,6 +265,16 @@ pytest tests/e2e -v
   values through the subprocess environment.
 - `tests/validate_tests.py` (the `test-integrity` gate) rejects weakened
   tests, e.g. `assert True` or a swallowed exception.
+
+One more check reads your change, not the code. It looks for removed or
+skipped tests, history in new comments, new documents, and changes to the
+files that configure the checks. It says what it found, why it matters and
+what to do, and it does not fail:
+
+```bash
+python scripts/integrity_check.py                 # your branch against origin/dev
+python scripts/integrity_check.py --base <commit>
+```
 
 ## License
 

@@ -4,21 +4,6 @@
 
 ## [Unreleased]
 
-### Added: a check that reads the change, not the code
-
-`scripts/integrity_check.py` reads a change's diff for the ways it can weaken
-the project's own checks, and a new `integrity` job runs it on every pull
-request. It reports and does not fail the job.
-- Tests that are deleted, skipped or lose assertions, and assertions
-  rewritten in the same change as product code.
-- History in new comments: dates, commit IDs, run names.
-- Names of evaluation tasks in product code.
-- New documentation files, changes to the files that configure the checks,
-  and new suppression markers. These need a maintainer's approval.
-- New dependencies and large changes are listed.
-
-Each finding says what was found, why it matters and what to do.
-
 ### Added: a driver for the held-out evaluation, with a bare-model baseline
 
 `scripts/eval/` runs a frozen suite through two arms, grades each finished
@@ -52,6 +37,21 @@ is refused, and each difference is named. Every result keeps the commit, the
 five image ids and whether the identity was verified. A stack with no deploy
 record, such as one on a contributor's machine, runs, but is marked
 unverified.
+
+### Added: a check that reads the change, not the code
+
+`scripts/integrity_check.py` reads a change's diff for the ways it can weaken
+the project's own checks, and a new `integrity` job runs it on every pull
+request. It reports and does not fail the job.
+- Tests that are deleted, skipped or lose assertions, and assertions
+  rewritten in the same change as product code.
+- History in new comments: dates, commit IDs, run names.
+- Names of evaluation tasks in product code.
+- New documentation files, changes to the files that configure the checks,
+  and new suppression markers. These need a maintainer's approval.
+- New dependencies and large changes are listed.
+
+Each finding says what was found, why it matters and what to do.
 
 ### Fixed: a question was told to stop reading and write a file
 
