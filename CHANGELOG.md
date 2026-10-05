@@ -124,6 +124,20 @@ manifest, is kept by `atlas artifact` snapshot and rollback, and is shipped
 by `atlas lens publish`. When a reference cannot be scored, the bundle gets
 no fingerprint (the check enforces nothing) rather than a wrong one.
 
+### Added: a check that fails when another check did not run
+
+A workflow that fails to start shows no check on a pull request, and a job
+that is skipped reports success, so a change could look green with a check
+missing. The new `checks ran` job (`scripts/checks_ran.py`) waits for the
+other workflows of the same commit, on pull requests and in the merge queue.
+It reads the workflow files of the change to know what must start, GitHub's
+record of the runs and jobs of the commit, and the checks the base branch
+requires. It fails when a workflow has no run or failed to start, when a job
+with no `if:` condition was skipped, was cancelled or reported nothing, and
+when a required check was skipped or was reported by no job. Jobs skipped by
+their own `if:` condition are listed, not judged. The job is not a required
+check.
+
 ### Added: the reliability runner records container restarts and OOM kills
 
 `scripts/e2e-reliability.py` now snapshots each container of the compose

@@ -1,0 +1,58 @@
+name: checks ran
+
+# A workflow that fails to start shows no check at all on a pull request, and
+# a job that is skipped reports success, so a change can look green with a
+# check missing. This job waits for the other workflows of the same commit
+# and fails when one did not start, when a job with no condition was skipped
+# or cancelled, or when a check the branch requires was skipped or is absent.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
+
+permissions:
+  contents: read
+  # To list the workflow runs of this commit and their jobs.
+  actions: read
+
+concurrency:
+  group: checks-ran-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks-ran:
+    name: checks ran
+    runs-on: ubuntu-24.04
+    # The script waits up to 60 minutes for the other workflows to end.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The path filters of a workflow are judged against the changed
+          # files, and that diff needs the base commit as well as the head.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: every check of this commit ran
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pip install --require-hashes -r .github/requirements/ci.txt
+          # The base branch's copy of the script judges the change, so a
+          # change cannot rewrite its own judge. The change's copy runs only
+          # while the base has none.
+          if git cat-file -e "$BASE:scripts/checks_ran.py" 2>/dev/null; then
+            git show "$BASE:scripts/checks_ran.py" > "$RUNNER_TEMP/checks_ran.py"
+          else
+            cp scripts/checks_ran.py "$RUNNER_TEMP/checks_ran.py"
+          fi
+          python "$RUNNER_TEMP/checks_ran.py" --root "$GITHUB_WORKSPACE" --github \
+            --own-workflow .github/workflows/checks-ran.yml

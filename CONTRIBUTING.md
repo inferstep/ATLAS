@@ -160,6 +160,13 @@ before you click **Create pull request**.
 CI for a pull request from outside the org waits until a maintainer
 approves the run. CI on a fork never gets the repository's secrets.
 
+One check, **checks ran**, tests nothing itself. It waits for the other
+workflows of your commit and fails when one of them did not start, when a
+job that has no `if:` condition was skipped or cancelled, or when a required
+check was skipped. Each of these would otherwise look like a pass. Its
+output names what did not run and how to fix it; after you re-run a
+cancelled workflow, re-run this check too.
+
 ## 9. Review
 
 - A maintainer responds within **5 business days**.
