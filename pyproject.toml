@@ -50,6 +50,14 @@ atlas = "atlas.__main__:main"
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
 
+[tool.coverage.run]
+# The Python code the suites are measured against. A file no test imports
+# still counts, at 0%. Paths are stored relative to the repo root, so a
+# report reads the same on any machine.
+source = ["atlas", "v3-service", "geometric-lens", "sandbox", "scripts"]
+omit = ["geometric-lens/tests/*"]
+relative_files = true
+
 [build-system]
 # >=77 because the SPDX-string `license` form (PEP 639) fails the build
 # on older setuptools ("license should be a table").

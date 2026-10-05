@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
 
@@ -59,6 +59,36 @@ class Result:
     command: list[str]
     output: str = ""
     reason: str = ""
+
+
+# Set to a directory to make the test gates write coverage reports into it.
+# CI sets it; without it a run is unchanged.
+COVERAGE_DIR_ENV = "ATLAS_COVERAGE_DIR"
+
+
+def _with_coverage(gates: dict[str, Gate]) -> dict[str, Gate]:
+    """Add coverage output to the test gates when ATLAS_COVERAGE_DIR is set.
+
+    Go gates write a cover profile. pytest gates need pytest-cov; they write
+    an LCOV report, whose paths are relative to the repo root, and keep the
+    raw data file beside it so that the reports of several runs can be
+    combined.
+    """
+    out_dir = os.environ.get(COVERAGE_DIR_ENV, "").strip()
+    if not out_dir:
+        return gates
+    out = Path(out_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    for name in ("go-proxy-test", "go-tui-test"):
+        gate, label = gates[name], name[: -len("-test")]
+        flags = (f"-coverprofile={out / (label + '.out')}", "-covermode=atomic")
+        gates[name] = replace(gate, command=gate.command[:-1] + flags + gate.command[-1:])
+    for name, label in (("python-tests", "python"), ("python-tests-lens", "python-lens")):
+        gate = gates[name]
+        flags = ("--cov", f"--cov-report=lcov:{out / (label + '.lcov')}")
+        env = dict(gate.env or {}, COVERAGE_FILE=str(out / f".coverage.{label}"))
+        gates[name] = replace(gate, command=gate.command + flags, env=env)
+    return gates
 
 
 def _module_available(name: str) -> bool:
@@ -397,7 +427,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    gates = _gates(args.pytest_path or PYTEST_PATHS)
+    gates = _with_coverage(_gates(args.pytest_path or PYTEST_PATHS))
     if args.list:
         for name, gate in gates.items():
             print(f"{name}\t{'required' if gate.required else 'optional'}")

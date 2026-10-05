@@ -84,6 +84,13 @@ CI runs the same gates, so a green run here usually means a green pull
 request. An optional tool you haven't installed shows as `unavailable`,
 not as a pass. More on tests is in [Testing](#testing).
 
+To measure test coverage as CI does, name a directory for the reports
+(the pytest gates need `pytest-cov`):
+
+```bash
+ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python-tests
+```
+
 ## 5. Find an issue
 
 Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).

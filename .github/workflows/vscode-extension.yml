@@ -50,7 +50,16 @@ jobs:
         run: npm run lint
 
       - name: test
-        run: npm test
+        run: npm run test:coverage
+
+      - name: upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-typescript
+          path: extensions/vscode/coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 14
 
       - name: bundle (production)
         run: node esbuild.js --production

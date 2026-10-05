@@ -42,7 +42,27 @@ jobs:
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: go test -race
+        env:
+          # Makes the test gate write a cover profile there.
+          ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-test
+
+      - name: coverage total
+        if: ${{ !cancelled() }}
+        working-directory: ${{ matrix.module }}
+        run: |
+          go tool cover -func="$RUNNER_TEMP/coverage/go-${{ matrix.module }}.out" | tail -1 \
+            | sed 's/^/go ${{ matrix.module }}: /' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-go-${{ matrix.module }}
+          path: ${{ runner.temp }}/coverage/
+          # No report means the tests did not run as expected: fail, do not skip.
+          if-no-files-found: error
+          retention-days: 14
 
       - name: go vet
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-vet
@@ -127,7 +147,28 @@ jobs:
           pip install -r geometric-lens/requirements.txt
 
       - name: pytest
+        env:
+          # Makes the test gate write an LCOV report and the raw data there.
+          ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+
+      - name: coverage total
+        if: ${{ !cancelled() }}
+        run: |
+          python -m coverage report --data-file="$RUNNER_TEMP/coverage/.coverage.python" | tail -1 \
+            | sed 's|^|python ${{ matrix.subset }}: |' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          # The subset has a slash, which an artifact name may not have.
+          name: coverage-python-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/coverage/
+          # The raw data file is a dotfile; it is needed to combine subsets.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   perf-gate:
     name: perf budget gate

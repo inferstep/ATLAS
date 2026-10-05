@@ -2,6 +2,9 @@
 # Pinned-Dependencies). Regenerate ci.txt with scripts/ci-lock.sh.
 # ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
 pytest
+# Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in
+# scripts/production-readiness.py).
+pytest-cov
 pyyaml
 ruff==0.16.9
 mypy==2.3.1
