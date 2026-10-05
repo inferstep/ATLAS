@@ -1,0 +1,49 @@
+name: integrity
+
+# Reads the change for the ways it can weaken the checks themselves: tests
+# removed or loosened, history in new comments, evaluation task names in
+# product code, new documents, changes to the files that configure the checks.
+# It reports as annotations and in the job summary. It does not fail the job.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrity:
+    name: integrity check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The diff needs the base commit as well as the head.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: integrity check
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          # The base branch's copy of the script judges the change, so a
+          # change cannot rewrite its own judge. The change's copy runs only
+          # while the base has none.
+          if git cat-file -e "$BASE:scripts/integrity_check.py" 2>/dev/null; then
+            git show "$BASE:scripts/integrity_check.py" > "$RUNNER_TEMP/integrity_check.py"
+          else
+            cp scripts/integrity_check.py "$RUNNER_TEMP/integrity_check.py"
+          fi
+          python "$RUNNER_TEMP/integrity_check.py" --root "$GITHUB_WORKSPACE" --base "$BASE" --github
