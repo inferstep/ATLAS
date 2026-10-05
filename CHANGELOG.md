@@ -4,14 +4,6 @@
 
 ## [Unreleased]
 
-### Added: the test jobs measure coverage
-
-The Go, Python and TypeScript test jobs write a coverage report and upload it
-with the run. A job that produces no report fails. Until now no job measured
-coverage. Locally, `ATLAS_COVERAGE_DIR=<dir>` makes
-`scripts/production-readiness.py` write the same reports; without it a run
-is unchanged.
-
 ### Added: a driver for the held-out evaluation, with a bare-model baseline
 
 `scripts/eval/` runs a frozen suite through two arms, grades each finished
@@ -33,6 +25,14 @@ of its layers.
   `--budget-s` that differs from it.
 
 The contract is in `docs/EVAL_INTERFACE.md`.
+
+### Added: the test jobs measure coverage
+
+The Go, Python and TypeScript test jobs write a coverage report and upload it
+with the run. A job that produces no report fails. Until now no job measured
+coverage. Locally, `ATLAS_COVERAGE_DIR=<dir>` makes
+`scripts/production-readiness.py` write the same reports; without it a run
+is unchanged.
 
 ### Added: the reliability runner measures only the stack deployed for its commit
 
