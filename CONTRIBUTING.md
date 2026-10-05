@@ -84,22 +84,6 @@ CI runs the same gates, so a green run here usually means a green pull
 request. An optional tool you haven't installed shows as `unavailable`,
 not as a pass. More on tests is in [Testing](#testing).
 
-Go code is also linted with [golangci-lint](https://golangci-lint.run)
-(settings in `.golangci.yml`), on the code your change adds:
-
-```bash
-cd proxy    # or tui
-golangci-lint run ./... --new-from-merge-base=origin/dev
-```
-
-| It reports | What to do |
-|---|---|
-| An error that is returned and not checked, or checked and dropped | Handle it or return it. If ignoring it is right, assign it to `_` and say why in a comment |
-| A new function with a cognitive complexity over 15 | Split it into steps that each do one thing |
-| `os.Getenv` in new code | Read the setting through `envOr`, `envIntOr` or `envDurationSec`, and say in the pull request why a new switch is needed |
-| A `//nolint` with no linter name or no reason | Write `//nolint:<linter> // <reason>` |
-| Code nothing calls | Remove it |
-
 ## 5. Find an issue
 
 Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).
@@ -243,6 +227,22 @@ functions, lines up to 100 characters. `ruff` runs in the gate.
 
 **Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
 for `proxy/` and `tui/`.
+
+New Go code is also linted with [golangci-lint](https://golangci-lint.run)
+(settings in `.golangci.yml`):
+
+```bash
+cd proxy    # or tui
+golangci-lint run ./... --new-from-merge-base=origin/dev
+```
+
+| It reports | What to do |
+|---|---|
+| An error that is returned and not checked, or checked and dropped | Handle it or return it. If ignoring it is right, assign it to `_` and say why in a comment |
+| A new function with a cognitive complexity over 15 | Split it into steps that each do one thing |
+| `os.Getenv` in new code | Read the setting through `envOr`, `envIntOr` or `envDurationSec`, and say in the pull request why a new switch is needed |
+| A `//nolint` with no linter name or no reason | Write `//nolint:<linter> // <reason>` |
+| Code nothing calls | Remove it |
 
 **Bash.** Must pass `shellcheck`. Start with `set -euo pipefail`, quote
 variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
