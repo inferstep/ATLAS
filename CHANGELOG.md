@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added: golangci-lint on new Go code
+
+A `golangci-lint` job lints the proxy and tui modules on the code a pull
+request adds: unchecked and dropped errors, dead code, new functions with a
+cognitive complexity over 15, new `os.Getenv` switches, suppressions without
+a reason, and formatting. It reports and does not fail the job. The settings
+are in `.golangci.yml`; CONTRIBUTING.md says how to run it and what to do
+about each finding.
+
 ### Added: a driver for the held-out evaluation, with a bare-model baseline
 
 `scripts/eval/` runs a frozen suite through two arms, grades each finished
