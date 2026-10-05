@@ -31,7 +31,7 @@ jobs:
   sign:
     name: sign the release's image list
     if: github.repository == 'inferstep/ATLAS'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write   # upload the two files to the release
       id-token: write   # keyless cosign signature

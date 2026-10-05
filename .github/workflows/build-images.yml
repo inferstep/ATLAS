@@ -95,7 +95,7 @@ jobs:
   pr-build:
     name: PR build check (${{ matrix.service.name }})
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +136,7 @@ jobs:
   alias:
     name: alias image tag
     if: github.event_name == 'workflow_dispatch' && inputs.alias_tag != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # An alias can repoint any tag, :latest included, so it takes the same
     # approval as a release. Dispatch it from main (production's branch).
     environment: production
@@ -169,7 +169,7 @@ jobs:
   build:
     name: ${{ matrix.service.name }}
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.alias_tag == '')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -210,7 +210,7 @@ jobs:
         if: matrix.service.name == 'llama' || matrix.service.name == 'llama-vulkan'
         # CUDA devel base (~9 GB) + runtime base (~4 GB) + llama.cpp build
         # artifacts (~5-8 GB) can peak at ~22-25 GB during a llama build.
-        # ubuntu-latest has ~14 GB free out of the box. The community
+        # The hosted runner has ~14 GB free out of the box. The community
         # `jlumbroso/free-disk-space` action reclaims ~30 GB by removing
         # Android SDK, dotnet, Haskell, large hosted-tool caches, etc.
         # That puts us comfortably under the limit.
@@ -346,7 +346,7 @@ jobs:
     # Push events only: workflow_dispatch is deliberately sha-only, and
     # `needs: build` already guarantees all six services published.
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Each promotion is a deployment record (scripts/setup/environments.sh):
     # dev pushes go to `dev`, release-candidate tags (v*-*) to `staging`,
     # and main pushes and release tags to `production`, which waits for

@@ -26,7 +26,7 @@ concurrency:
 jobs:
   analyze:
     name: codeql (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       # Required to write findings to the Security tab.
       security-events: write

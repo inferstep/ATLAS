@@ -19,7 +19,7 @@ jobs:
     if: >-
       github.repository == 'inferstep/ATLAS' && !github.event.issue.pull_request &&
       (startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: bots
       deployment: false

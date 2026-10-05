@@ -27,7 +27,7 @@ permissions:
 jobs:
   build-and-test:
     name: lint + test + build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: extensions/vscode
