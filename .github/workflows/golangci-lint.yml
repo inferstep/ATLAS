@@ -2,6 +2,8 @@ name: golangci-lint
 
 # Lints the Go modules on the code a change adds (settings in .golangci.yml).
 # It reports as annotations and does not fail the job: --issues-exit-code=0.
+# The linter is installed with `go install`, so the job needs no action from
+# outside GitHub and the organisation's allow-list stays as it is.
 
 on:
   pull_request:
@@ -37,10 +39,26 @@ jobs:
           go-version: '1.26.6'
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
-        with:
-          version: v2.14.0
-          working-directory: ${{ matrix.module }}
-          args: >-
-            --new-from-rev=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-            --issues-exit-code=0
+      - name: install golangci-lint
+        # Built from source at a fixed version. Go's checksum database
+        # verifies what it downloads.
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+
+      - name: golangci-lint on new code
+        working-directory: ${{ matrix.module }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          golangci-lint run ./... --new-from-rev="$BASE" --issues-exit-code=0 \
+            --output.text.path=stdout --output.json.path="$RUNNER_TEMP/lint.json"
+
+      - name: annotate the findings
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          # The report names files from the repo root, where .golangci.yml is.
+          jq -r '.Issues // [] | .[]
+            | "::warning file=\(.Pos.Filename),line=\(.Pos.Line),title=golangci-lint (\(.FromLinter))::\(.Text | gsub("\n"; " "))"' \
+            "$RUNNER_TEMP/lint.json"
+          echo "golangci-lint, $MODULE: $(jq '.Issues // [] | length' "$RUNNER_TEMP/lint.json") finding(s) in new code" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
