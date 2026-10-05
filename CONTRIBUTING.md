@@ -74,6 +74,17 @@ working tree in the containers without a rebuild after every edit.
 
 ## 4. Run the quality gate
 
+Before you push, run the checks your change needs:
+
+```bash
+make verify        # fast: the gates that cover the files you changed
+make verify-full   # the same, plus the slow suites CI runs
+```
+
+It prints only what failed, each with how to fix it. To run it on every
+push, install the hook in `.pre-commit-config.yaml` with
+[prek](https://github.com/j178/prek) or pre-commit. The whole gate is:
+
 ```bash
 python scripts/production-readiness.py            # everything
 python scripts/production-readiness.py --list     # the gates

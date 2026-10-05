@@ -81,6 +81,14 @@ place an edit. "Could match" uses edit_file's own tolerance (exact, curly
 quotes, read_file line numbers, whitespace on each line), so an old_str that
 matches is never cut.
 
+### Added: `make verify`, the local gate for one change
+
+`make verify` runs the quality gates that cover the files a change touches,
+through the same script CI uses, and prints only what failed, each with how
+to fix it. `make verify-full` adds the slow suites. A changed test file is
+run itself, and the tests of a changed proxy test file run by name.
+`.pre-commit-config.yaml` holds an optional pre-push hook for it.
+
 ### Changed: V3 ranks the model's own file as a candidate, and keeps its role
 
 V3 used the model's file only as prose in its prompt, never as a candidate,

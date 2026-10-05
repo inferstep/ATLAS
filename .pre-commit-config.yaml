@@ -1,0 +1,12 @@
+# Optional. With prek or pre-commit installed, `prek install --hook-type pre-push`
+# (or `pre-commit install --hook-type pre-push`) runs the local gate before each push.
+repos:
+  - repo: local
+    hooks:
+      - id: verify
+        name: make verify
+        entry: make verify
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
