@@ -12,6 +12,12 @@ on:
   pull_request:
     branches: [main, dev]
     types: [opened, edited, synchronize, reopened]
+  # The merge queue waits for every required check, this one included. A
+  # merge group has no title: the title is checked on the pull request, which
+  # must pass before it can enter the queue.
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
 
 permissions: {}
 
@@ -20,7 +26,12 @@ jobs:
     name: pr title
     runs-on: ubuntu-latest
     steps:
+      - name: Nothing to check in the merge queue
+        if: github.event_name == 'merge_group'
+        run: echo "The title was checked on the pull request. A merge group has no title of its own."
+
       - name: Check the title
+        if: github.event_name == 'pull_request'
         env:
           TITLE: ${{ github.event.pull_request.title }}
           AUTHOR: ${{ github.event.pull_request.user.login }}

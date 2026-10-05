@@ -7,6 +7,14 @@ name: dependency review
 on:
   pull_request:
     branches: [main, dev]
+  # The merge queue runs the required checks on the merged result before it
+  # lands. A workflow without this trigger reports nothing there, and the
+  # queue waits for its checks until it times out.
+  # The review action reads a merge group's base and head commits from the
+  # event, so it compares the same range it would on the pull request.
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
 
 permissions:
   contents: read

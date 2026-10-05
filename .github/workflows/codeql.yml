@@ -11,6 +11,12 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # The merge queue runs the required checks on the merged result before it
+  # lands. A workflow without this trigger reports nothing there, and the
+  # queue waits for its checks until it times out.
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
   # Re-scan weekly even without commits — query packs are updated by
   # GitHub regularly and a stale code base can pick up new findings.
   schedule:
