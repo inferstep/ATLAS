@@ -63,3 +63,45 @@ jobs:
 
       - name: bundle (production)
         run: node esbuild.js --production
+
+  coverage-upload:
+    name: coverage upload (extension)
+    # Sends the extension's coverage report to Codecov, apart from the test
+    # job for the reasons given at the same job in test.yml.
+    needs: [build-and-test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Codecov files a report under the head commit of a pull request
+          # and reads codecov.yml from that commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: settings file is in this commit
+        id: settings
+        run: |
+          if [ -f codecov.yml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=coverage not uploaded::This commit has no codecov.yml, so Codecov would use its own defaults for it (it would comment on the pull request). Nothing is uploaded. Fix: update the branch from dev."
+          fi
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        if: steps.settings.outputs.present == 'true'
+        with:
+          name: coverage-typescript
+          path: ${{ runner.temp }}/reports
+
+      - name: upload typescript
+        if: steps.settings.outputs.present == 'true'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          version: v11.3.1
+          files: ${{ runner.temp }}/reports/lcov.info
+          flags: typescript
+          disable_search: true
+          disable_telem: true
+          fail_ci_if_error: true

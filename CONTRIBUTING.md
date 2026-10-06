@@ -91,6 +91,12 @@ To measure test coverage as CI does, name a directory for the reports
 ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python-tests
 ```
 
+CI sends its coverage reports to [Codecov](https://app.codecov.io/gh/inferstep/ATLAS).
+On a pull request it adds two statuses: the coverage of the whole project,
+and of the lines you changed. They show numbers and do not fail the pull
+request. Codecov does not comment. A branch that does not have `codecov.yml`
+yet uploads nothing; update it from `dev`.
+
 ## 5. Find an issue
 
 Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).

@@ -49,6 +49,18 @@ coverage. Locally, `ATLAS_COVERAGE_DIR=<dir>` makes
 `scripts/production-readiness.py` write the same reports; without it a run
 is unchanged.
 
+### Added: CI sends the coverage reports to Codecov
+
+A new `coverage upload` job sends the Go, Python and TypeScript reports of
+the test jobs to Codecov, one flag each (`go-proxy`, `go-tui`, `python`,
+`typescript`). It is a job of its own, so no test job depends on a service
+outside GitHub, and it runs only when the test jobs passed. The action is
+pinned by commit and its uploader by version. `codecov.yml` sets `dev` as the
+branch Codecov compares with, turns its pull-request comment and its line
+notes off, and makes its two statuses report without failing. A commit that
+has no `codecov.yml` uploads nothing, because Codecov would use its own
+defaults for it.
+
 ### Added: the reliability runner measures only the stack deployed for its commit
 
 A result is evidence only for the stack that produced it. Before its first
