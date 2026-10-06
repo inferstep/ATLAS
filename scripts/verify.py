@@ -22,28 +22,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_GATES = ("compose", "compose-rocm", "compose-vulkan", "compose-cpu", "compose-macos")
+PROXY = "proxy/"
+INFRASTRUCTURE_SUITE = "tests/infrastructure"
 
 # Which gates of scripts/production-readiness.py cover which changed files.
 # The two under "always" take a fraction of a second and guard the tree as a whole.
 GATES_BY_PATH = (
     (lambda p: True, ("test-integrity", "dockerfile-sources")),
-    (lambda p: p.startswith("proxy/"), ("go-proxy-vet", "go-proxy-staticcheck")),
+    (lambda p: p.startswith(PROXY), ("go-proxy-vet", "go-proxy-staticcheck")),
     (lambda p: p.startswith("tui/"), ("go-tui-vet", "go-tui-staticcheck", "go-tui-test")),
     (lambda p: p.endswith(".py"), ("python-compile", "min-python", "ruff")),
     (lambda p: p.endswith(".sh"), ("shellcheck",)),
     (lambda p: p.startswith(".github/workflows/"), ("workflow-yaml",)),
     (lambda p: "docker-compose" in p, COMPOSE_GATES),
 )
-SLOW_GATES_BY_PATH = ((lambda p: p.startswith("proxy/"), ("go-proxy-test",)),)
+SLOW_GATES_BY_PATH = ((lambda p: p.startswith(PROXY), ("go-proxy-test",)),)
 # The pytest suites that cover a source folder. Slow suites run with --full.
 SUITES_BY_PATH = (
     ("atlas/", ("tests/cli", "tests/contracts")),
     ("v3-service/", ("tests/v3-service", "tests/v3")),
-    ("sandbox/", ("tests/infrastructure",)),
-    ("scripts/", ("tests/infrastructure",)),
-    ("proxy/", ("tests/e2e",)),
+    ("sandbox/", (INFRASTRUCTURE_SUITE,)),
+    ("scripts/", (INFRASTRUCTURE_SUITE,)),
+    (PROXY, ("tests/e2e",)),
 )
-SLOW_SUITES = ("tests/infrastructure", "tests/e2e")
+SLOW_SUITES = (INFRASTRUCTURE_SUITE, "tests/e2e")
 
 FIXES = {
     "go-proxy-vet": "Fix the line `go vet` names (run it in proxy/).",
@@ -64,8 +66,8 @@ FIXES = {
     "dockerfile-sources": "A Dockerfile copies a path that is not there. Fix the COPY line or add the file.",
     "code-health": "Split the function or file it names (docs/CODE_STYLE.md). If something got smaller, run `python scripts/code_health.py --update` and commit the baseline.",
 }
-FIXES.update({name: "Run `docker compose -f <files> config` and fix the key it rejects." for name in COMPOSE_GATES})
-FAILING_LINE = re.compile(r"FAIL|[Ee]rror|panic:|\.(?:go|py|sh|yml|ts):\d+|^E  ")
+FIXES.update(dict.fromkeys(COMPOSE_GATES, "Run `docker compose -f <files> config` and fix the key it rejects."))
+FAILING_LINE = re.compile(r"FAIL|[Ee]rror|panic:|\.(?:go|py|sh|yml|ts):\d+|^E {2}")
 
 
 def load_gates_module():
@@ -77,7 +79,7 @@ def load_gates_module():
 
 
 def git(*args: str) -> str:
-    done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=False)
     if done.returncode != 0:
         raise RuntimeError(done.stderr.strip() or f"git {args[0]} failed")
     return done.stdout
@@ -108,7 +110,7 @@ def changed_go_tests(changed: list[str]) -> str:
     """A -run pattern for the tests defined in the proxy test files that changed."""
     names = []
     for path in changed:
-        if path.startswith("proxy/") and path.endswith("_test.go") and (ROOT / path).is_file():
+        if path.startswith(PROXY) and path.endswith("_test.go") and (ROOT / path).is_file():
             names += re.findall(r"^func (Test\w+)\(", (ROOT / path).read_text(encoding="utf-8"), re.M)
     return "^(" + "|".join(sorted(set(names))) + ")$" if names else ""
 
@@ -127,7 +129,7 @@ def advisory(changed: list[str], base: str) -> list[str]:
     out = []
     script = ROOT / "scripts" / "integrity_check.py"
     if script.is_file():
-        done = subprocess.run([sys.executable, str(script), "--base", base], cwd=ROOT, capture_output=True, text=True)
+        done = subprocess.run([sys.executable, str(script), "--base", base], cwd=ROOT, capture_output=True, text=True, check=False)
         if "nothing found" not in done.stdout:
             out += ["note integrity check (reports, does not fail):"] + ["  " + line for line in done.stdout.splitlines()]
     modules = [m for m in ("proxy", "tui") if any(p.startswith(m + "/") for p in changed)]
@@ -137,7 +139,7 @@ def advisory(changed: list[str], base: str) -> list[str]:
         return out + ["skip golangci-lint: it is not installed (https://golangci-lint.run/welcome/install/)"]
     for module in modules:
         done = subprocess.run(["golangci-lint", "run", "./...", f"--new-from-merge-base={base}", "--issues-exit-code=0"],
-                              cwd=ROOT / module, capture_output=True, text=True)
+                              cwd=ROOT / module, capture_output=True, text=True, check=False)
         if "0 issues" not in done.stdout:
             out += [f"note golangci-lint in {module}/ (reports, does not fail):"]
             out += ["  " + line for line in done.stdout.splitlines()]

@@ -100,7 +100,27 @@ def test_a_short_output_is_shown_whole_and_a_long_one_by_its_failing_lines(verif
     assert len(verify.failing_lines("\n".join(f"Error {i}" for i in range(500)))) == 40
 
 
+def test_the_base_reaches_git_as_a_revision_and_never_as_an_option(verify, monkeypatch):
+    calls = []
+
+    def record(argv, **_):
+        calls.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="0000000\n", stderr="")
+
+    monkeypatch.setattr(verify.subprocess, "run", record)
+    verify.changed_files("--not-a-branch")
+    merge_base = calls[0]
+    assert merge_base[merge_base.index("--not-a-branch") - 1] == "--end-of-options"
+
+
+def test_a_base_that_reads_as_an_option_is_refused():
+    done = subprocess.run([sys.executable, str(SCRIPT), "--base=--not-a-branch"], capture_output=True, text=True, check=False)
+    assert done.returncode == 2
+    assert "Not a valid object name" in done.stderr
+    assert "fix:" in done.stderr
+
+
 def test_a_base_it_cannot_read_is_an_error_with_a_fix(verify):
-    done = subprocess.run([sys.executable, str(SCRIPT), "--base", "no-such-branch"], capture_output=True, text=True)
+    done = subprocess.run([sys.executable, str(SCRIPT), "--base", "no-such-branch"], capture_output=True, text=True, check=False)
     assert done.returncode == 2
     assert "fix:" in done.stderr
