@@ -110,6 +110,11 @@ and of the lines you changed. They show numbers and do not fail the pull
 request. Codecov does not comment. A branch that does not have `codecov.yml`
 yet uploads nothing; update it from `dev`.
 
+CI also runs the SonarQube Cloud analysis (`sonar-project.properties`), and
+Sonar adds its result to the pull request as a check of its own. The
+analysis needs a secret, so it is skipped for a pull request from a fork;
+a maintainer sees Sonar's result after the merge.
+
 ## 5. Find an issue
 
 Open [Start Here](https://github.com/orgs/inferstep/projects/1/views/1).

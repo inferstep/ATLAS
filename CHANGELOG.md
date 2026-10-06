@@ -62,6 +62,17 @@ notes off, and makes its two statuses report without failing. A commit that
 has no `codecov.yml` uploads nothing, because Codecov would use its own
 defaults for it.
 
+### Changed: the SonarQube Cloud analysis runs from CI
+
+Sonar analysed only the default branch by itself. A new `sonar scan` job
+runs the analysis on pushes to `dev` and `main` and on pull requests, with
+the settings in `sonar-project.properties`: the whole repository is
+analysed, test code is named as test code, and coverage is left out (the
+test jobs measure it and Codecov shows it). The action is pinned by commit
+and its scanner by version. The job is skipped for pull requests from forks
+and from Dependabot, which get no secret, and it does not run in the merge
+queue.
+
 ### Added: the reliability runner measures only the stack deployed for its commit
 
 A result is evidence only for the stack that produced it. Before its first
