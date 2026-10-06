@@ -246,6 +246,40 @@ def test_a_workflow_that_never_gets_a_run_ends_the_wait_after_the_grace_time(ran
     assert ran.GRACE_SECONDS <= clock.now < ran.GRACE_SECONDS + ran.POLL_SECONDS
 
 
+def test_a_run_an_earlier_listing_showed_is_not_missing_when_a_later_listing_leaves_it_out(ran, capsys):
+    clock = Clock()
+    answers = [{TESTS: run(TESTS, None, status="in_progress")}] * 4 + [{}, {TESTS: run(TESTS)}]
+    runs, running = ran.settle(lambda: answers.pop(0) if len(answers) > 1 else answers[0], [TESTS], limit=3600,
+                               pause=clock.pause, clock=clock)
+    assert (runs[TESTS]["status"], running) == ("completed", [])
+    assert clock.now == 5 * ran.POLL_SECONDS
+    assert "left out 1 run(s) that an earlier listing showed" in capsys.readouterr().out
+
+
+def test_a_listing_with_only_an_older_run_does_not_replace_the_newer_one(ran):
+    clock = Clock()
+    newer = run(TESTS, None, status="in_progress", created="2000-01-02T00:00:00Z", run_id=2)
+    answers = [{TESTS: newer}, {TESTS: run(TESTS)}, {TESTS: dict(newer, status="completed", conclusion="failure")}]
+    runs, _ = ran.settle(lambda: answers.pop(0) if len(answers) > 1 else answers[0], [TESTS], limit=3600,
+                         pause=clock.pause, clock=clock)
+    assert (runs[TESTS]["id"], runs[TESTS]["conclusion"]) == (2, "failure")
+
+
+def test_a_new_attempt_of_a_run_is_read_from_the_newest_listing(ran):
+    seen = ran.merge_runs({TESTS: run(TESTS, "failure")}, {TESTS: run(TESTS, None, status="in_progress")})
+    assert seen[TESTS]["status"] == "in_progress"
+
+
+def test_each_listing_is_put_in_the_log(ran, capsys):
+    clock, answers = Clock(), [{}, {TESTS: run(TESTS, None, status="in_progress")}, {TESTS: run(TESTS)}]
+    ran.settle(lambda: answers.pop(0) if len(answers) > 1 else answers[0], [TESTS], limit=3600,
+               pause=clock.pause, clock=clock)
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("note listing")]
+    assert lines == ["note listing 1 after 0s: 0 of 1 expected workflow(s) listed, 0 running, 1 not listed",
+                     "note listing 2 after 60s: 1 of 1 expected workflow(s) listed, 1 running, 0 not listed",
+                     "note listing 3 after 120s: 1 of 1 expected workflow(s) listed, 0 running, 0 not listed"]
+
+
 def test_a_run_that_does_not_end_is_named_when_the_time_is_up(ran):
     clock = Clock()
     _, running = ran.settle(lambda: {TESTS: run(TESTS, None, status="in_progress")}, [TESTS], limit=600,

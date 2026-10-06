@@ -219,15 +219,33 @@ def required_names(rules: list[dict], own_workflow: dict) -> list[str]:
     return [name for name in names if not any(regex.fullmatch(name) for regex in own)]
 
 
+def merge_runs(seen: dict[str, dict], listed: dict[str, dict]) -> dict[str, dict]:
+    """The runs the listings showed so far: a run once shown is kept, and the newer run of a workflow counts."""
+    merged = dict(seen)
+    for path, run in listed.items():
+        known = merged.get(path)
+        if known is None or (run["created_at"], run["id"]) >= (known["created_at"], known["id"]):
+            merged[path] = run
+    return merged
+
+
 def settle(read_runs: Callable[[], dict], expected: list[str], limit: float,
            pause: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> tuple[dict, list[str]]:
     """Poll until every expected workflow has a finished run. Returns the runs and the workflows still running."""
-    start = clock()
+    start, runs, listings = clock(), {}, 0
     while True:
-        runs = read_runs()
-        waited = clock() - start
+        listed = read_runs()
+        # A listing can leave out a run that exists. One that an earlier
+        # listing showed is not missing, so its last known state is kept.
+        left_out = [path for path in expected if path in runs and path not in listed]
+        runs, listings, waited = merge_runs(runs, listed), listings + 1, clock() - start
         missing = [path for path in expected if path not in runs]
         running = [path for path in expected if path in runs and runs[path].get("status") != "completed"]
+        print(f"note listing {listings} after {waited:.0f}s: {len(expected) - len(missing)} of {len(expected)} expected "
+              f"workflow(s) listed, {len(running)} running, {len(missing)} not listed", flush=True)
+        if left_out:
+            print(f"note listing {listings} left out {len(left_out)} run(s) that an earlier listing showed "
+                  f"({', '.join(left_out)}); their last known state is kept", flush=True)
         if not running and (not missing or waited >= GRACE_SECONDS):
             return runs, []
         if waited >= limit:
