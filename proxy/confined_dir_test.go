@@ -161,10 +161,11 @@ func TestProjectScanStaysInsideTheWorkspace(t *testing.T) {
 	}
 }
 
-func TestProjectDetectionStaysInsideTheWorkspace(t *testing.T) {
-	t.Run("node", func(t *testing.T) {
+func TestNodeDetectionStaysInsideTheWorkspace(t *testing.T) {
+	const manifest = `{"scripts": {"build": "placeholder-build"}}`
+	t.Run("a manifest outside the workspace", func(t *testing.T) {
 		workspace := t.TempDir()
-		linkOutOfWorkspace(t, workspace, "package.json", `{"scripts": {"build": "placeholder-build"}}`)
+		linkOutOfWorkspace(t, workspace, "package.json", manifest)
 		info := detectProjectInfo(workspace)
 		if info == nil || info.Language != "nodejs" {
 			t.Fatalf("detectProjectInfo = %+v, want a nodejs project (the name is in the workspace)", info)
@@ -173,14 +174,17 @@ func TestProjectDetectionStaysInsideTheWorkspace(t *testing.T) {
 			t.Errorf("build command %q was taken from a file outside the workspace", info.BuildCommand)
 		}
 	})
-	t.Run("node, regular file", func(t *testing.T) {
+	t.Run("a regular manifest", func(t *testing.T) {
 		workspace := t.TempDir()
-		writeInWorkspace(t, workspace, "package.json", `{"scripts": {"build": "placeholder-build"}}`)
+		writeInWorkspace(t, workspace, "package.json", manifest)
 		if info := detectProjectInfo(workspace); info == nil || info.BuildCommand == "" {
 			t.Errorf("detectProjectInfo = %+v, want the build command of the regular file", info)
 		}
 	})
-	t.Run("python", func(t *testing.T) {
+}
+
+func TestPythonDetectionStaysInsideTheWorkspace(t *testing.T) {
+	t.Run("a requirements file outside the workspace", func(t *testing.T) {
 		workspace := t.TempDir()
 		linkOutOfWorkspace(t, workspace, "requirements.txt", "flask\n")
 		info := detectProjectInfo(workspace)
@@ -191,7 +195,7 @@ func TestProjectDetectionStaysInsideTheWorkspace(t *testing.T) {
 			t.Errorf("framework %q was taken from a file outside the workspace", info.Framework)
 		}
 	})
-	t.Run("python, regular file", func(t *testing.T) {
+	t.Run("a regular requirements file", func(t *testing.T) {
 		workspace := t.TempDir()
 		writeInWorkspace(t, workspace, "requirements.txt", "flask\n")
 		if info := detectProjectInfo(workspace); info == nil || info.Framework != "flask" {
