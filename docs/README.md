@@ -92,6 +92,9 @@ map of the repository itself, see [MAP.md](MAP.md).
   gate (`scripts/production-readiness.py`).
 - [DEVELOPMENT.md](DEVELOPMENT.md) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
+- [quality/gates.md](quality/gates.md) — the checks on a pull request,
+  which of them are required, how the outside tools are set, and the
+  measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
 - [TRIAGE.md](TRIAGE.md) — how new issues become Ready work.

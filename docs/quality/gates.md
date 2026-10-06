@@ -1,0 +1,101 @@
+# Quality gates
+
+What runs on every change, which checks can stop a merge, how the outside
+tools are set, and where the numbers stood when this page was last measured.
+
+A number on this page is a starting point, not a target. When a setting of a
+tool changes, change this page too, so that a difference between the page and
+the tool is a mistake and not a mystery.
+
+## How a change reaches `dev`
+
+- Every change is a pull request. A direct push to `dev`, `staging` or `main`
+  is refused for every account, and no account can skip a required check.
+  The one exception is the release step, which moves `main` forward and
+  merges it back into `dev`, each time with the owner's approval.
+- A pull request merges through the merge queue, which runs the required
+  checks again on the merged result and then squashes it into one commit.
+- `main` and `staging` require the same checks as `dev`, except
+  `code health (size)`, whose job is not on `main` yet.
+
+## Checks on a pull request
+
+### Required (24)
+
+| Check | What it does |
+|---|---|
+| `go test (proxy)`, `go test (tui)` | The Go suites, with the race detector. A gate that ran no test fails |
+| `pytest (tests/v3)`, `pytest (tests/v3-service)`, `pytest (tests/cli)`, `pytest (tests/contracts)`, `pytest (tests/infrastructure)`, `pytest (geometric-lens/tests)` | The Python suites |
+| `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
+| `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |
+| `docker compose config` | Every compose file and overlay parses |
+| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows |
+| `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
+| `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
+| `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
+| `dependency review` | No new dependency with a known advisory |
+| `pr title` | The title is a conventional commit; it becomes the commit on `dev` |
+
+### Not required (they report, and a red one is a reason to look)
+
+| Check | What it does |
+|---|---|
+| `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
+| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
+| `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
+| `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
+| `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses |
+| `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
+| the four `sandbox smoke` jobs | The sandbox image runs Java, Kotlin, PHP and Ruby |
+| `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
+| the `PR build check` jobs | Each service image builds |
+
+## Tool settings
+
+| Tool | Where the setting is | Setting |
+|---|---|---|
+| Size check | `scripts/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Entries on the baseline may shrink and may not grow |
+| Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only |
+| Coverage | `pyproject.toml` (`[tool.coverage.run]`), `scripts/production-readiness.py` | Go statement coverage per module; Python line coverage over `atlas`, `v3-service`, `geometric-lens`, `sandbox`, `scripts`; TypeScript line coverage of the extension |
+| Codecov | `codecov.yml`; default branch set to `dev` on Codecov | No comment on pull requests, no notes on diff lines. Two statuses that show numbers and always pass. One flag per report (`go-proxy`, `go-tui`, `python`, `typescript`); a flag that a commit does not upload keeps its parent's result |
+| SonarQube Cloud | `sonar-project.properties`, `.github/workflows/sonar.yml`; rule sets and gate on SonarQube Cloud | Analysis runs from CI on `dev`, `main` and pull requests. Test code is named as test code. Coverage is left out. Rule sets: "Sonar way comprehensive", with `pythonsecurity:S8705` off for Python and `githubactions:S8545` and `githubactions:S8541` off for workflows; each raised mostly false alarms on this repository's own scripts and workflows |
+| SonarQube Cloud, gate | on SonarQube Cloud | Today: the built-in "Sonar way" gate. Decided, not live yet: a gate on new code that fails on any new issue, on duplication over 3%, and on security hotspots not reviewed; and for Go, the function-length rule at 100 lines |
+| CodeScene | on CodeScene | Analyses `dev` |
+
+## Baselines on `dev`
+
+Measured 2026-10-06 on commit `a413df4`, unless a row says otherwise.
+
+| Measure | Value |
+|---|---|
+| Coverage, Go proxy | 86.7% of statements (12,187 of 14,052) |
+| Coverage, Go tui | 51.7% of statements (1,466 of 2,837) |
+| Coverage, Python, the 8 suites together | 59.8% of lines (12,553 of 20,996). By folder: `v3-service` 84.0%, `sandbox` 68.1%, `geometric-lens` 67.2%, `atlas` 49.5%, `scripts` 30.0% |
+| Coverage, TypeScript (VS Code extension) | 51.5% of lines (943 of 1,831), from the extension's last run |
+| Coverage on Codecov | 67.91% of lines, all flags together (30,948 of 45,567). `go-proxy` 83.07%, `go-tui` 47.13%, `python` 59.78%, `typescript` 50.3% |
+| Size baseline | 88 functions over 100 lines (longest: `runAgentLoop`, 2,112); 11 files over 1,500 lines (longest: `proxy/agent.go`, 9,929) |
+| Go lint, all code, with the repository's settings | proxy 220 (gocognit 121, errcheck 52, forbidigo 23, nilerr 22, gofmt 2); tui 48 (gocognit 21, errcheck 16, forbidigo 9, nilerr 2) |
+| SonarQube Cloud | 72,195 lines of code in 275 files, test code not counted. As the tool reports them, not as confirmed defects: 204 security findings, 7 bugs, 1,386 code smells. Duplication 0.9%. Cognitive complexity 19,810 |
+| CodeScene, first analysis of `dev`, 2026-10-05 | 165,035 lines of code. Hotspot code health 2.8, average code health 6.6 (scale 1 to 10) |
+
+How to read the coverage rows:
+
+- In: `go test` for the proxy and the tui, the eight pytest jobs, and the
+  extension's tests. Out: the end-to-end job, the sandbox smoke jobs, the
+  installer tests and the performance gate. So the proxy number is unit-test
+  coverage only.
+- The Python number merges the eight suites by file and line: a line counts
+  when any suite ran it.
+- Codecov counts lines and counts a partly covered line as not covered.
+  `go tool cover` counts statements. The two Go numbers differ for that
+  reason alone. For Python the two agree exactly.
+
+## Keeping the baselines honest
+
+- The size and lint counts may go down and may not go up. When something on
+  the size baseline shrinks, run `python scripts/code_health.py --update` and
+  commit the baseline with the change.
+- Measure the table again when a group of changes has landed, and write the
+  date and the commit above it.
+- A check that raises mostly false alarms is switched off or changed, and the
+  change is written in the tool settings table with its reason.

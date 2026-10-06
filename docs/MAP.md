@@ -57,6 +57,7 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [SOURCES.md](SOURCES.md) | Research papers bucketed by status relative to the current release |
 | [STORY.md](STORY.md) | Project background |
 | [MAP.md](MAP.md) | This file |
+| [quality/gates.md](quality/gates.md) | The checks on a pull request, which are required, tool settings, and the measured baselines |
 | [adr/](adr/) | Architecture Decision Records (trust model, per-model bundles, the retired SQLite state store, harness mechanisms, …) |
 | [schemas/](schemas/) | Machine-readable contracts: proxy OpenAPI spec, SSE envelope and error-envelope JSON Schemas |
 | [lang/](lang/) | Translated documentation (zh-CN, ja, ko) |

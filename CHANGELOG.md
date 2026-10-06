@@ -222,6 +222,14 @@ when a required check was skipped or was reported by no job. Jobs skipped by
 their own `if:` condition are listed, not judged. The job is not a required
 check.
 
+### Added: a page for the quality gates and their baselines
+
+`docs/quality/gates.md` lists the checks on a pull request and which of them
+are required, how the size check, the linters, Codecov, SonarQube Cloud and
+CodeScene are set, and the numbers measured on `dev`: coverage, the size and
+lint counts, and what the outside tools report. The numbers are starting
+points, not targets.
+
 ### Added: the reliability runner records container restarts and OOM kills
 
 `scripts/e2e-reliability.py` now snapshots each container of the compose
