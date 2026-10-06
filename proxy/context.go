@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -152,32 +153,32 @@ func walkPythonFiles(root string) map[string]string {
 		"dist": true, "build": true, ".mypy_cache": true,
 		".pytest_cache": true, ".idea": true, ".vscode": true,
 	}
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	// The walk and every read go through the folder, so a name in it that
+	// points somewhere else is skipped like an unreadable entry.
+	dir := openConfinedDir(root)
+	defer dir.Close()
+	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
+		if entry.IsDir() {
+			if skipDirs[entry.Name()] {
+				return fs.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(strings.ToLower(info.Name()), ".py") {
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".py") {
 			return nil
 		}
 		if len(result) >= projectScanMaxFiles || totalBytes >= projectScanMaxBytes {
-			return filepath.SkipAll
+			return fs.SkipAll
 		}
-		data, err := os.ReadFile(path)
+		data, err := dir.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
 		if totalBytes+len(data) > projectScanMaxBytes {
-			return filepath.SkipAll
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
+			return fs.SkipAll
 		}
 		result[rel] = string(data)
 		totalBytes += len(data)
@@ -374,7 +375,7 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Parse package.json for framework detection
-	data, err := os.ReadFile(filepath.Join(projectDir, "package.json"))
+	data, err := readConfined(projectDir, "package.json")
 	if err != nil {
 		return info
 	}
@@ -506,7 +507,7 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Detect framework from requirements or pyproject
-	if data, err := os.ReadFile(filepath.Join(projectDir, "requirements.txt")); err == nil {
+	if data, err := readConfined(projectDir, "requirements.txt"); err == nil {
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "flask") {
 			info.Framework = "flask"

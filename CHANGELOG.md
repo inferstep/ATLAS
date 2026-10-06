@@ -163,6 +163,26 @@ read. Both now show the status and the reason at the end of every run, even
 with no summary. Each status has its own color. A missing status reads as
 incomplete, as docs/API.md says.
 
+### Changed: project reads in the proxy go through one confined reader
+
+Eight places in the proxy read project files with plain file calls: the
+context sample for the plan, the Python project scan, the Node and Python
+project detection, the web-asset check, and the per-project execution
+setting. They now read through one helper (`proxy/confined_dir.go`) that
+opens the workspace folder once and reads inside it, as the file tools
+already do. A name that resolves outside the workspace is skipped like a
+file that cannot be read.
+
+Two behaviours change with it:
+
+- A link whose target is an absolute path is not followed by these reads,
+  also when it points inside the workspace. A relative link that stays
+  inside the workspace is followed.
+- The Python project scan and the web-asset check no longer look at the
+  name of the workspace folder itself. Before, a workspace whose own folder
+  was named `build`, `dist` or `env`, or for the web-asset check had a name
+  that starts with a dot, was not scanned at all.
+
 ### Fixed: the lens drift check never ran, because no bundle had a fingerprint
 
 The lens re-scores fixed reference texts at boot and fails `/ready` when an

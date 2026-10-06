@@ -89,7 +89,7 @@ func resolveVerifyTarget(workingDir string) string {
 	if workingDir == "" {
 		return target
 	}
-	cfg, err := os.ReadFile(filepath.Join(workingDir, ".atlas", "config.toml"))
+	cfg, err := readConfined(workingDir, filepath.Join(".atlas", "config.toml"))
 	if err != nil {
 		return target
 	}

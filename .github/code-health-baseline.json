@@ -35,7 +35,6 @@
   "proxy/agent.go:handleAgent": 267,
   "proxy/agent.go:runAgentLoop": 2112,
   "proxy/agent.go:runState.exitGates": 338,
-  "proxy/agent.go:samplePlanContext": 130,
   "proxy/agent.go:validateTaskContract": 107,
   "proxy/authorization_decision.go:decideAuthorization": 191,
   "proxy/authorization_grant.go:grantFor": 155,
@@ -96,8 +95,8 @@
  },
  "files": {
   "atlas/commands/lens.py": 1554,
-  "proxy/agent.go": 9963,
-  "proxy/gates.go": 4067,
+  "proxy/agent.go": 9929,
+  "proxy/gates.go": 4066,
   "proxy/guardrails.go": 3813,
   "proxy/tools.go": 6706,
   "proxy/types.go": 2080,

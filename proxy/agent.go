@@ -7350,28 +7350,18 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 		"requirements.txt", "pyproject.toml", "setup.py",
 		"README.md",
 	}
+	// Every read goes through the workspace folder, so a name in it that
+	// points somewhere else is skipped like a file that cannot be read.
+	dir := openConfinedDir(workingDir)
+	defer dir.Close()
 	for _, rel := range priority {
 		if len(out) >= maxFiles {
 			break
 		}
-		full := filepath.Join(workingDir, rel)
-		info, err := os.Stat(full)
-		if err != nil || info.IsDir() {
-			continue
+		// Oversized files are skipped: the planner doesn't need a 50KB README.
+		if s, ok := dir.readCapped(rel, maxBytes); ok {
+			out[rel] = s
 		}
-		// Skip oversized files — the planner doesn't need a 50KB README.
-		if info.Size() > int64(maxBytes)*4 {
-			continue
-		}
-		data, err := os.ReadFile(full)
-		if err != nil {
-			continue
-		}
-		s := string(data)
-		if len(s) > maxBytes {
-			s = s[:maxBytes] + "\n... (truncated)"
-		}
-		out[rel] = s
 	}
 	// If priority files yielded nothing at the workspace root, the
 	// project may live one level down — common when the user's
@@ -7381,7 +7371,7 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 	// this, the May 2026 user-session planner saw zero context and
 	// the agent wasted 3 turns finding `snake/app.py`.
 	if len(out) == 0 {
-		entries, err := os.ReadDir(workingDir)
+		entries, err := dir.ReadDir()
 		if err != nil {
 			return nil
 		}
@@ -7402,25 +7392,11 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 				if len(out) >= maxFiles {
 					break
 				}
-				full := filepath.Join(workingDir, name, rel)
-				info, err := os.Stat(full)
-				if err != nil || info.IsDir() {
-					continue
-				}
-				if info.Size() > int64(maxBytes)*4 {
-					continue
-				}
-				data, err := os.ReadFile(full)
-				if err != nil {
-					continue
-				}
-				s := string(data)
-				if len(s) > maxBytes {
-					s = s[:maxBytes] + "\n... (truncated)"
-				}
 				// Key uses subdir/filename so the planner sees the
 				// path the agent will need to use in tool calls.
-				out[filepath.Join(name, rel)] = s
+				if s, ok := dir.readCapped(filepath.Join(name, rel), maxBytes); ok {
+					out[filepath.Join(name, rel)] = s
+				}
 			}
 			if len(out) >= maxFiles {
 				break
@@ -7446,19 +7422,9 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 				default:
 					continue
 				}
-				info, err := e.Info()
-				if err != nil || info.Size() > int64(maxBytes)*4 {
-					continue
+				if s, ok := dir.readCapped(name, maxBytes); ok {
+					out[name] = s
 				}
-				data, err := os.ReadFile(filepath.Join(workingDir, name))
-				if err != nil {
-					continue
-				}
-				s := string(data)
-				if len(s) > maxBytes {
-					s = s[:maxBytes] + "\n... (truncated)"
-				}
-				out[name] = s
 			}
 		}
 	}
