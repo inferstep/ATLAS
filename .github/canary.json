@@ -1,0 +1,276 @@
+{
+  "branch": "canary/must-stay-red",
+  "title": "canary: this pull request must stay red",
+  "max_age_days": 14,
+  "plants": [
+    {
+      "id": "pytest (tests/v3)",
+      "red": [
+        "pytest (tests/v3)"
+      ],
+      "what": "a failing test in tests/v3/test_canary_v3.py",
+      "action": "write",
+      "path": "tests/v3/test_canary_v3.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "pytest (tests/v3-service)",
+      "red": [
+        "pytest (tests/v3-service)"
+      ],
+      "what": "a failing test in tests/v3-service/test_canary_v3_service.py",
+      "action": "write",
+      "path": "tests/v3-service/test_canary_v3_service.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "pytest (tests/cli)",
+      "red": [
+        "pytest (tests/cli)"
+      ],
+      "what": "a failing test in tests/cli/test_canary_cli.py",
+      "action": "write",
+      "path": "tests/cli/test_canary_cli.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "pytest (tests/infrastructure)",
+      "red": [
+        "pytest (tests/infrastructure)"
+      ],
+      "what": "a failing test in tests/infrastructure/test_canary_infrastructure.py",
+      "action": "write",
+      "path": "tests/infrastructure/test_canary_infrastructure.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "pytest (tests/contracts)",
+      "red": [
+        "pytest (tests/contracts)"
+      ],
+      "what": "a failing test in tests/contracts/test_canary_contracts.py",
+      "action": "write",
+      "path": "tests/contracts/test_canary_contracts.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "pytest (geometric-lens/tests)",
+      "red": [
+        "pytest (geometric-lens/tests)"
+      ],
+      "what": "a failing test in geometric-lens/tests/test_canary_lens.py",
+      "action": "write",
+      "path": "geometric-lens/tests/test_canary_lens.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "e2e acceptance (proxy + sandbox + fake llama)",
+      "red": [
+        "e2e acceptance (proxy + sandbox + fake llama)"
+      ],
+      "what": "a failing test in tests/e2e/test_canary_e2e.py",
+      "action": "write",
+      "path": "tests/e2e/test_canary_e2e.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "go test (proxy)",
+      "red": [
+        "go test (proxy)"
+      ],
+      "reports": [
+        "golangci-lint (proxy)"
+      ],
+      "what": "a failing test, with a function that nothing calls, in proxy/canary_test.go",
+      "action": "write",
+      "path": "proxy/canary_test.go",
+      "lines": [
+        "package main",
+        "",
+        "import \"testing\"",
+        "",
+        "// Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "func TestCanaryMustFail(t *testing.T) {",
+        "\tt.Fatal(\"canary: this test fails on purpose\")",
+        "}",
+        "",
+        "// canaryNeverCalled is for the linter to report: nothing calls it.",
+        "func canaryNeverCalled() {}"
+      ]
+    },
+    {
+      "id": "go test (tui)",
+      "red": [
+        "go test (tui)"
+      ],
+      "reports": [
+        "golangci-lint (tui)"
+      ],
+      "what": "a failing test, with a function that nothing calls, in tui/canary_test.go",
+      "action": "write",
+      "path": "tui/canary_test.go",
+      "lines": [
+        "package main",
+        "",
+        "import \"testing\"",
+        "",
+        "// Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "func TestCanaryMustFail(t *testing.T) {",
+        "\tt.Fatal(\"canary: this test fails on purpose\")",
+        "}",
+        "",
+        "// canaryNeverCalled is for the linter to report: nothing calls it.",
+        "func canaryNeverCalled() {}"
+      ]
+    },
+    {
+      "id": "ruff (python lint)",
+      "red": [
+        "ruff (python lint)"
+      ],
+      "what": "an undefined name in tests/canary_ruff.py",
+      "action": "write",
+      "path": "tests/canary_ruff.py",
+      "lines": [
+        "\"\"\"Planted by scripts/canary.py for the canary pull request. Never merge it.\"\"\"",
+        "",
+        "print(canary_undefined_name)"
+      ]
+    },
+    {
+      "id": "shellcheck",
+      "red": [
+        "shellcheck"
+      ],
+      "what": "an unused variable in scripts/canary_shellcheck.sh",
+      "action": "write",
+      "path": "scripts/canary_shellcheck.sh",
+      "lines": [
+        "#!/usr/bin/env bash",
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "canary_unused=\"never read\""
+      ]
+    },
+    {
+      "id": "yamllint (workflows)",
+      "red": [
+        "yamllint (workflows)"
+      ],
+      "what": "a file that is not valid YAML in .github/workflows/canary/ (a folder GitHub does not read workflows from)",
+      "action": "write",
+      "path": ".github/workflows/canary/not-yaml.yml",
+      "lines": [
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "canary: [this list is never closed"
+      ]
+    },
+    {
+      "id": "code health (size)",
+      "red": [
+        "code health (size)"
+      ],
+      "what": "a function of 120 lines in scripts/canary_long_function.py",
+      "action": "long_function",
+      "path": "scripts/canary_long_function.py",
+      "length": 120
+    },
+    {
+      "id": "docker compose config",
+      "red": [
+        "docker compose config"
+      ],
+      "what": "a top-level key that Compose does not know, at the end of docker-compose.yml",
+      "action": "append",
+      "path": "docker-compose.yml",
+      "lines": [
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "canary_must_fail: true"
+      ]
+    },
+    {
+      "id": "llama.cpp patches apply to pinned SHA",
+      "red": [
+        "llama.cpp patches apply to pinned SHA"
+      ],
+      "what": "a llama.cpp revision in inference/Dockerfile.vulkan that differs from the other Dockerfiles",
+      "action": "replace",
+      "path": "inference/Dockerfile.vulkan",
+      "pattern": "^ARG LLAMA_CPP_REV=[a-f0-9]+$",
+      "lines": [
+        "ARG LLAMA_CPP_REV=0000000000000000000000000000000000000000"
+      ]
+    },
+    {
+      "id": "bootstrap",
+      "red": [
+        "bootstrap on debian-12",
+        "bootstrap on rockylinux-9",
+        "bootstrap on ubuntu-22.04",
+        "bootstrap on ubuntu-24.04",
+        "bootstrap via sudo for a regular user"
+      ],
+      "what": "a line that stops scripts/atlas-bootstrap.sh with an error before it does anything",
+      "action": "insert_after_first_line",
+      "path": "scripts/atlas-bootstrap.sh",
+      "lines": [
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "echo \"canary: the bootstrap stops here on purpose\" >&2; exit 97"
+      ]
+    },
+    {
+      "id": "pr title",
+      "red": [
+        "pr title"
+      ],
+      "what": "the title of the canary pull request, which has no type and no scope",
+      "action": "title"
+    }
+  ],
+  "not_covered": {
+    "codeql (go)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "dependency review": "It turns red only for a dependency with a published advisory. None is planted."
+  }
+}

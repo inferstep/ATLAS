@@ -101,3 +101,40 @@ How to read the coverage rows:
   date and the commit above it.
 - A check that raises mostly false alarms is switched off or changed, and the
   change is written in the tool settings table with its reason.
+
+## The canary
+
+A check that silently stops checking looks the same as a check that passes.
+The canary shows the difference. It is one draft pull request that is never
+merged. Its branch is a copy of `dev` plus one harmless violation for each
+check: a failing test in each test job, a lint error, a function that is too
+long, a line that stops the installer. Every listed check must be red on it.
+
+- The list is `.github/canary.json`: each violation, the checks it must turn
+  red, and the required checks the canary does not cover, with the reason.
+- `python3 scripts/canary.py check --pr <number>` reads the checks of the
+  canary pull request and names each thing that is not as the list says: a
+  listed check that passed, did not run, was skipped or has not finished, a
+  required check the list does not know, and a canary older than 14 days.
+  It needs the packages of `.github/requirements/ci.txt` and a GitHub token
+  (`GITHUB_TOKEN`, or a `gh` sign-in). It changes nothing.
+
+A maintainer renews the canary once a week, and after a change to a workflow
+or to a file that configures a check:
+
+```bash
+git fetch origin
+git checkout -B canary/must-stay-red origin/dev
+python3 scripts/canary.py plant
+git commit -m "canary: planted violations, never merge"
+git push --force-with-lease origin canary/must-stay-red
+```
+
+When the checks of the canary pull request have ended, run the check. A check
+that it names has stopped catching its violation: repair the check, not the
+list. Change the list only when a job is renamed, a required check is added,
+or a file that a violation edits has moved.
+
+Not covered: `codeql (go)` and `codeql (python)` report that the analysis
+ran, and a finding does not turn them red. `dependency review` turns red only
+for a dependency with a published advisory, and none is planted.

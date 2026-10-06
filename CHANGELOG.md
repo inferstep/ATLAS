@@ -284,6 +284,20 @@ workflows that never started and failed, though every one of them ran.
   listed, how many are running and how many are not listed. A listing that
   leaves out a known run is named in the log.
 
+### Added: a canary that shows each check still turns red
+
+A check that silently stops checking looks the same as a check that passes.
+The canary is one draft pull request that is never merged: a copy of `dev`
+plus one harmless violation for each check. `.github/canary.json` lists each
+violation and the checks it must turn red: 21 of the 24 required checks, and
+the two report-only Go lint jobs. `scripts/canary.py plant` writes the
+violations on the canary branch and nowhere else. `scripts/canary.py check`
+reads the checks of the canary pull request and names a listed check that
+passed, did not run or did not finish, a required check the list does not
+know, and a canary that was not renewed in 14 days. The two required CodeQL
+jobs and `dependency review` are not covered; the list says why. The renewal
+is by hand, once a week (`docs/quality/gates.md`).
+
 ### Added: a page for the quality gates and their baselines
 
 `docs/quality/gates.md` lists the checks on a pull request and which of them

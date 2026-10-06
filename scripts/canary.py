@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Plant the canary's violations, and check that each one still turns its check red.
+
+A check that silently stops checking looks the same as a check that passes.
+The canary is one draft pull request that is never merged. Its branch is a
+copy of `dev` plus one harmless violation for each check: a failing test, a
+lint error, a function that is too long, and so on (.github/canary.json).
+Every listed check must be red on it. One that is green has stopped checking.
+
+  scripts/canary.py plant            write the violations into this checkout
+  scripts/canary.py check --pr N     compare the checks of pull request N with the list
+
+`plant` runs only on the canary branch. `check` reads GitHub and changes
+nothing. Its exit status: 0 when every listed check is as the list says, 1
+when one is not, 2 when the pull request or its checks cannot be read.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import NamedTuple
+
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = Path(".github") / "canary.json"
+RENEW = "Renew the canary (docs/quality/gates.md, section \"The canary\")."
+
+
+class Finding(NamedTuple):
+    check: str
+    message: str
+
+
+class PlantError(Exception):
+    """A violation could not be written the way the list describes it."""
+
+
+def load_manifest(root: Path) -> dict:
+    return json.loads((root / MANIFEST).read_text(encoding="utf-8"))
+
+
+def load_checks_ran():
+    """scripts/checks_ran.py, for its GitHub reader and its reading of the branch rules."""
+    spec = importlib.util.spec_from_file_location("atlas_checks_ran", Path(__file__).with_name("checks_ran.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+# --- plant ---------------------------------------------------------------------
+
+def target(root: Path, relative: str) -> Path:
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise PlantError(f"{relative} is outside the checkout. Fix: use a path inside the repository in {MANIFEST}.")
+    return path
+
+
+def long_function(length: int) -> list[str]:
+    body = [f"    total += {number}" for number in range(length)]
+    return ['"""Planted for the canary pull request. Never merge it."""', "", "",
+            "def canary_long_function():", "    total = 0", *body, "    return total"]
+
+
+def existing_text(path: Path, plant: dict) -> str:
+    if not path.is_file():
+        raise PlantError(f"{plant['path']} does not exist, so `{plant['id']}` cannot be planted. "
+                         f"Fix: point the entry in {MANIFEST} at the file that took its place.")
+    return path.read_text(encoding="utf-8")
+
+
+def planted_text(path: Path, plant: dict) -> str:
+    """The whole new content of the file this plant writes."""
+    action, block = plant["action"], "\n".join(plant.get("lines", [])) + "\n"
+    if action in ("write", "long_function"):
+        if path.exists():
+            raise PlantError(f"{plant['path']} exists already. Fix: start the canary branch from a clean copy of "
+                             "`dev`; the violations are written once.")
+        return "\n".join(long_function(plant["length"])) + "\n" if action == "long_function" else block
+    text = existing_text(path, plant)
+    if action == "append":
+        return text + ("" if text.endswith("\n") else "\n") + block
+    if action == "insert_after_first_line":
+        first, _, rest = text.partition("\n")
+        return first + "\n" + block + rest
+    if action == "replace":
+        changed, count = re.subn(plant["pattern"], block.rstrip("\n"), text, flags=re.MULTILINE)
+        if count != 1:
+            raise PlantError(f"the pattern of `{plant['id']}` matches {count} time(s) in {plant['path']}, and it "
+                             f"must match once. Fix: change the pattern in {MANIFEST} to fit the file as it is now.")
+        return changed
+    raise PlantError(f"`{plant['id']}` has the unknown action `{action}`. Fix: use write, append, "
+                     f"insert_after_first_line, replace, long_function or title in {MANIFEST}.")
+
+
+def apply_plants(root: Path, manifest: dict) -> list[str]:
+    """Write every violation into the checkout at root. Returns the paths written."""
+    contents = {}
+    for plant in manifest["plants"]:
+        if plant["action"] == "title":
+            continue
+        path = target(root, plant["path"])
+        contents[path] = planted_text(path, plant)
+    for path, text in contents.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return [str(path.relative_to(root.resolve())) for path in contents]
+
+
+def current_branch(root: Path) -> str:
+    done = subprocess.run(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"],
+                          capture_output=True, text=True, check=False)
+    return done.stdout.strip()
+
+
+def plant(root: Path) -> int:
+    manifest = load_manifest(root)
+    branch = current_branch(root)
+    if branch != manifest["branch"]:
+        print(f"canary: this checkout is on `{branch}`, and the violations belong only on `{manifest['branch']}`.\n"
+              f"  fix: git checkout -B {manifest['branch']} origin/dev, then run this again.", file=sys.stderr)
+        return 2
+    try:
+        written = apply_plants(root, manifest)
+    except (PlantError, OSError, KeyError) as error:
+        print(f"canary: nothing was planted: {error}", file=sys.stderr)
+        return 2
+    subprocess.run(["git", "-C", str(root), "add", "--", *written], check=False)
+    for path in written:
+        print(f"planted {path}")
+    print(f"canary: {len(written)} file(s) written and staged. Commit them, push the branch, and give the pull "
+          f"request the title `{manifest['title']}`.")
+    return 0
+
+
+# --- check ---------------------------------------------------------------------
+
+def latest_checks(check_runs: list[dict]) -> dict[str, dict]:
+    """The newest check run of each name."""
+    latest = {}
+    for run in sorted(check_runs, key=lambda r: (r.get("started_at") or "", r["id"])):
+        latest[run["name"]] = run
+    return latest
+
+
+def state_finding(name: str, run: dict | None, what: str) -> Finding | None:
+    """Why a check that must have run to an end on the canary did not, or None."""
+    if run is None:
+        return Finding(name, f"check `{name}` did not run on the canary, so nothing shows that it still catches {what}. "
+                             f"Fix: open the checks of the canary pull request. If the job was renamed, change the "
+                             f"name in {MANIFEST}. If its workflow did not start, fix the workflow.")
+    if run.get("status") != "completed":
+        return Finding(name, f"check `{name}` has not finished on the canary. Fix: run this again when the checks "
+                             "of the canary pull request have ended.")
+    return None
+
+
+def red_finding(name: str, run: dict | None, what: str) -> Finding | None:
+    problem = state_finding(name, run, what)
+    if problem or run.get("conclusion") == "failure":
+        return problem
+    if run.get("conclusion") == "success":
+        return Finding(name, f"check `{name}` passed on the canary, where {what} is planted for it. The check no "
+                             f"longer catches that. Fix: find what changed in the job `{name}` (its workflow, its "
+                             "script or its settings) and restore the check. Then renew the canary and run this again.")
+    return Finding(name, f"check `{name}` ended as `{run.get('conclusion')}` on the canary, so it judged nothing. "
+                         f"Fix: open the job `{name}` on the canary pull request, remove the cause, and run it again.")
+
+
+def report_finding(name: str, run: dict | None, plant_entry: dict) -> Finding | None:
+    """A check that reports and does not fail must have a note on the planted file. Any other note does not count."""
+    problem = state_finding(name, run, plant_entry["what"])
+    if problem or plant_entry["path"] in run.get("annotation_paths", ()):
+        return problem
+    return Finding(name, f"check `{name}` reported nothing for {plant_entry['path']} on the canary, where "
+                         f"{plant_entry['what']} is planted for it. The check no longer reports that. Fix: find what "
+                         f"changed in the job `{name}` and restore the report.")
+
+
+def pull_findings(manifest: dict, pull: dict) -> list[Finding]:
+    """The canary pull request itself: the right branch, open, a draft, with the title the list names."""
+    out, name = [], "the canary pull request"
+    if pull["head"]["ref"] != manifest["branch"]:
+        out.append(Finding(name, f"pull request #{pull['number']} is on branch `{pull['head']['ref']}`, and the canary "
+                                 f"is `{manifest['branch']}`. Fix: pass the number of the canary pull request."))
+    if pull["state"] != "open":
+        out.append(Finding(name, f"pull request #{pull['number']} is {pull['state']}, so its checks no longer run. "
+                                 f"Fix: open a new draft pull request from `{manifest['branch']}`. {RENEW}"))
+    elif not pull.get("draft"):
+        out.append(Finding(name, f"pull request #{pull['number']} is not a draft. It must never be merged. "
+                                 "Fix: set it back to draft."))
+    if pull["title"] != manifest["title"]:
+        out.append(Finding(name, f"its title is `{pull['title']}`, and the list expects `{manifest['title']}`, the "
+                                 "title that turns `pr title` red. Fix: set the title back."))
+    return out
+
+
+def coverage_findings(manifest: dict, required: list[str]) -> list[Finding]:
+    """Every required check is either made red by a plant or listed with the reason it is not."""
+    listed = {name for plant in manifest["plants"] for name in plant.get("red", [])} | set(manifest["not_covered"])
+    return [Finding(name, f"required check `{name}` is not in the canary list, so nothing shows that it can turn red. "
+                          f"Fix: add a violation for it to {MANIFEST}, or add it under `not_covered` with the reason.")
+            for name in required if name not in listed]
+
+
+def age_finding(manifest: dict, base_date: str, now: datetime) -> list[Finding]:
+    age = (now - datetime.fromisoformat(base_date.replace("Z", "+00:00"))).days
+    if age <= manifest["max_age_days"]:
+        return []
+    return [Finding("the canary branch", f"the canary was last renewed from `dev` {age} days ago (limit "
+                                         f"{manifest['max_age_days']}), so it shows the checks of that day and not "
+                                         f"today's. Fix: {RENEW}")]
+
+
+def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str], base_date: str,
+          now: datetime) -> list[Finding]:
+    """Every difference between the canary pull request and the list."""
+    runs, findings = latest_checks(check_runs), pull_findings(manifest, pull)
+    for plant_entry in manifest["plants"]:
+        for name in plant_entry.get("red", []):
+            findings.append(red_finding(name, runs.get(name), plant_entry["what"]))
+        for name in plant_entry.get("reports", []):
+            findings.append(report_finding(name, runs.get(name), plant_entry))
+    findings += coverage_findings(manifest, required) + age_finding(manifest, base_date, now)
+    return [finding for finding in findings if finding]
+
+
+def token() -> str:
+    found = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if found:
+        return found
+    try:
+        done = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=False)
+    except OSError:
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def repository(root: Path) -> str:
+    """owner/name, from GITHUB_REPOSITORY or the `origin` remote."""
+    if os.environ.get("GITHUB_REPOSITORY"):
+        return os.environ["GITHUB_REPOSITORY"]
+    done = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                          capture_output=True, text=True, check=False)
+    found = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", done.stdout.strip())
+    if not found:
+        raise RuntimeError("the repository is not known: set GITHUB_REPOSITORY to owner/name")
+    return found.group(1)
+
+
+def gather(root: Path, number: int, manifest: dict):
+    """Read the pull request, its check runs, the required checks of its base and the date of its base commit."""
+    checks, key, repo = load_checks_ran(), token(), repository(root)
+    if not key:
+        raise RuntimeError("no GitHub token: set GITHUB_TOKEN, or sign in with `gh auth login`")
+    pull = checks.api(f"repos/{repo}/pulls/{number}", key)[0]
+    sha, base = pull["head"]["sha"], pull["base"]["ref"]
+    check_runs = [run for page in checks.api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key)
+                  for run in page["check_runs"]]
+    reporting = {name for entry in manifest["plants"] for name in entry.get("reports", [])}
+    for run in check_runs:
+        if run["name"] in reporting:
+            notes = checks.api(f"repos/{repo}/check-runs/{run['id']}/annotations?per_page=100", key)
+            run["annotation_paths"] = [note["path"] for page in notes for note in page]
+    rules = [rule for page in checks.api(f"repos/{repo}/rules/branches/{base}?per_page=100", key) for rule in page]
+    compared = checks.api(f"repos/{repo}/compare/{base}...{sha}", key)[0]
+    return pull, check_runs, checks.required_names(rules, {}), compared["merge_base_commit"]["commit"]["committer"]["date"]
+
+
+def check(root: Path, number: int) -> int:
+    manifest = load_manifest(root)
+    try:
+        pull, check_runs, required, base_date = gather(root, number, manifest)
+        findings = judge(manifest, pull, check_runs, required, base_date, datetime.now(timezone.utc))
+    except (KeyError, ValueError, OSError, RuntimeError) as error:
+        print(f"canary: cannot read pull request #{number} or its checks: {error!r}\n"
+              "  fix: pass the number of the canary pull request, with a token that can read the repository "
+              "(GITHUB_TOKEN, or `gh auth login`).", file=sys.stderr)
+        return 2
+    red = sum(len(entry.get("red", [])) for entry in manifest["plants"])
+    reports = sum(len(entry.get("reports", [])) for entry in manifest["plants"])
+    print(f"note pull request #{number} at {pull['head']['sha'][:7]}: {red} check(s) must be red, {reports} must "
+          f"report the planted file, {len(manifest['not_covered'])} required check(s) are not covered")
+    for finding in findings:
+        print(f"FAIL {finding.message}")
+    print(f"canary: {len(findings)} thing(s) are not as the list says" if findings
+          else "canary: every listed check is red, and every listed report is there")
+    return int(bool(findings))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--root", type=Path, default=ROOT, help="the checkout to read or to plant in")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("plant", help="write the violations into this checkout (canary branch only)")
+    checker = commands.add_parser("check", help="compare the checks of the canary pull request with the list")
+    checker.add_argument("--pr", type=int, required=True, help="number of the canary pull request")
+    args = parser.parse_args()
+    return plant(args.root) if args.command == "plant" else check(args.root, args.pr)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
