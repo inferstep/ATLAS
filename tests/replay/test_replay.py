@@ -49,6 +49,11 @@ def test_a_recording_says_where_it_came_from(name):
 
 
 @pytest.mark.parametrize("name", recording.names())
+def test_the_request_of_a_recording_declares_its_task_mode(name):
+    assert recording.load(name)["request"]["task_contract"]["task_mode"] in ("work", "question")
+
+
+@pytest.mark.parametrize("name", recording.names())
 def test_a_recording_holds_no_path_of_a_machine_and_no_credential(name):
     text = (recording.RECORDINGS / f"{name}.json").read_text(encoding="utf-8")
     found = re.findall(r"/Users/|/home/|/private/|/var/folders/|/tmp/|Bearer |Authorization|service-token", text)

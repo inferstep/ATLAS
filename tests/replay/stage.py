@@ -176,7 +176,12 @@ def start_proxy(binary: Path, ports: dict[str, int], home: Path):
 
 
 def drive(port: int, body: dict, cap: float = 120.0) -> list[dict]:
-    """Send one request to POST /v1/agent, answer each permission prompt with yes, and return the events."""
+    """Send one request to POST /v1/agent, answer each permission prompt with yes, and return the events.
+
+    Like every sender this repository owns, it declares a task mode: the one
+    the recording holds, and work when a recording holds none.
+    """
+    body = {**body, "task_contract": body.get("task_contract") or {"task_mode": "work"}}
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
                "Authorization": "Bearer replay-placeholder-token"}
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=cap)

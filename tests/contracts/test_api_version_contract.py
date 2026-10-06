@@ -110,7 +110,10 @@ def test_owned_python_senders_are_inventoried():
                          # Sends through agent_request_body, and reads the 503
                          # a request gets while the lens cannot score, which
                          # the streaming helper cannot return.
-                         "tests/e2e/test_v3_lens_acceptance.py"}
+                         "tests/e2e/test_v3_lens_acceptance.py",
+                         # Sends the request a recording holds, and work when
+                         # a recording holds no mode.
+                         "tests/replay/stage.py"}
     # Auth probes: deliberately malformed bodies rejected at 401 before the
     # handler ever decodes them. Adding a contract would change what they test.
     auth_probes = {"tests/e2e/test_service_auth.py"}
