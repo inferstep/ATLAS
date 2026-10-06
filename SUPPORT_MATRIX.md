@@ -193,7 +193,9 @@ fails fast at llama-server startup (fit is off).
 ## Version compatibility policy
 
 - **Supported versions:** the latest release (N) fully; N−1 receives
-  security fixes and critical-bug fixes for 90 days after N ships.
+  security fixes and critical-bug fixes for 90 days after N ships. This
+  applies from 3.2.0 on. Until then no further 3.1.x release is planned;
+  see [SECURITY.md](SECURITY.md).
 - **Registry / artifact bundle schemas:** additive changes only within
   a minor release; consumers ignore unknown fields; identity
   (`model_identity.json`) is mandatory in every bundle from V3.1.2 on.

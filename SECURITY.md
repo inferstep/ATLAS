@@ -17,8 +17,16 @@ Two current limits of that boundary, so reports can be calibrated against what i
 
 | Version | Supported |
 | ------- | --------- |
-| 3.1.x   | Yes       |
+| 3.1.x   | Experimental. Reports are accepted; fixes ship with 3.2.0 (see below) |
 | < 3.1   | No        |
+
+**Until 3.2.0.** The 3.1 line is experimental (see the status note in the
+[README](README.md)). No further 3.1.x release is planned. Fixes for
+confirmed vulnerabilities land on `dev` and ship with 3.2.0, and their
+advisories are published with that release. The fix targets and the
+backport rule further down describe the policy from 3.2.0 on; they do not
+apply to 3.1.x. A finding that puts users at immediate risk is decided
+case by case. Until 3.2.0, use ATLAS only on project folders you trust.
 
 ## Command-execution trust modes
 
