@@ -123,9 +123,11 @@ func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *Tool
 			Error:   missingArgsHint(name),
 		}
 	}
-	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
-		return &ToolResult{Success: false, Error: reason}
+	canonical, rejection := canonicalToolArgs(name, args, ctx)
+	if rejection != "" {
+		return &ToolResult{Success: false, Error: rejection}
 	}
+	args = canonical
 	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
 	// destructive shell patterns) are refused in every permission mode.
 	if denied, reason := shouldDenyToolCall(name, args); denied {

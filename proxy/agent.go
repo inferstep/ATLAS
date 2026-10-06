@@ -833,7 +833,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 
 			// Enforce the workspace boundary before any pre-execution gate reads
 			// a path. executeToolCall repeats this check for parallel dispatch.
-			if rejection := validateToolWorkspacePaths(parsed.Name, parsed.Args, ctx); rejection != "" {
+			if rejection := enforceWorkspacePaths(&parsed, ctx); rejection != "" {
 				st.bounceToolCall(ctx, parsed.Name, rejection)
 				consecutiveErrors++
 				continue

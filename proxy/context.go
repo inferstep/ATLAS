@@ -695,46 +695,24 @@ func readWorkspaceDir(ctx *AgentContext, path string) ([]os.DirEntry, error) {
 	return dir.ReadDir(-1)
 }
 
-// validateToolWorkspacePaths applies workspace containment before any tool
-// handler can touch the filesystem. It is used by both the agent loop and the
-// shared dispatcher so parallel and direct dispatch paths follow one policy.
-func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentContext) string {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(args, &fields); err != nil {
-		return ""
-	}
-	if k := nonCanonicalArgName(fields); k != "" {
-		return fmt.Sprintf("%s: argument names are lowercase, as the tool lists them; %q is not", name, k)
-	}
-	keys := map[string][]string{
-		"read_file":       {"path"},
-		"outline_file":    {"path"},
-		"write_file":      {"path"},
-		"edit_file":       {"path"},
-		"structural_edit": {"path"},
-		"insert_after":    {"path"},
-		"delete_file":     {"path"},
-		"move_file":       {"source", "destination"},
-		"search_files":    {"path"},
-		"find_file":       {"path"},
-		"list_directory":  {"path"},
-		"run_command":     {"cwd"},
-		"run_background":  {"cwd"},
-	}
-	for _, key := range keys[name] {
-		raw, ok := fields[key]
-		if !ok {
-			continue
-		}
-		var value string
-		if json.Unmarshal(raw, &value) != nil || strings.TrimSpace(value) == "" {
-			continue
-		}
-		if _, err := resolveWorkspacePath(ctx, value); err != nil {
-			return fmt.Sprintf("%s: %v", name, err)
-		}
-	}
-	return ""
+// workspacePathFields is the single registry of which arguments each tool
+// treats as a workspace path. Package-scoped so a test can enumerate the real
+// owner instead of maintaining a second copy that drifts. canonicalToolArgs
+// judges these fields before any handler runs; see tool_args.go.
+var workspacePathFields = map[string][]string{
+	"read_file":       {"path"},
+	"outline_file":    {"path"},
+	"write_file":      {"path"},
+	"edit_file":       {"path"},
+	"structural_edit": {"path"},
+	"insert_after":    {"path"},
+	"delete_file":     {"path"},
+	"move_file":       {"source", "destination"},
+	"search_files":    {"path"},
+	"find_file":       {"path"},
+	"list_directory":  {"path"},
+	"run_command":     {"cwd"},
+	"run_background":  {"cwd"},
 }
 
 // nonCanonicalArgName is an argument name that is not lowercase ASCII. Every
