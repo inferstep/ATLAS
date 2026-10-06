@@ -228,6 +228,29 @@ and the user and the model read "permission denied by user".
   system without the hold, each with the reason printed (`go test -v`). On
   Linux they run as before. The proxy suite now passes on macOS.
 
+### Changed: a call that was not allowed says why, unless a user denied it
+
+Every call that was not allowed read "permission denied by user", to the user
+and to the model, whether or not a user had denied anything. Now only a
+denial by the user reads so. The other cases give their own reason, in the
+`tool_result` event, in the message the model reads and in the `reason` field
+of the `permission_denied` event, on every system:
+
+- A `delete_file` that the proxy refuses before it asks: a path outside the
+  workspace, a target on the deny list, a file that does not exist, a
+  directory that is not empty, a file type that is not supported, an empty
+  path, arguments that cannot be read. The text is the refusal the tool
+  itself gives, followed by "Nobody was asked, and nothing was deleted."
+- A call that needs approval in a request with no `session_id`: nobody could
+  be asked.
+- A request that ended before the prompt was answered.
+- A prompt that nobody answered in time. The text tells the model not to
+  send the same call again in the turn, because it would wait for the same
+  prompt.
+
+This changes text that the model reads on Linux too. Who is asked, when, and
+what is deleted do not change.
+
 ### Fixed: a question was told to stop reading and write a file
 
 After four read-only calls in a row, the agent loop told the model "Do not read

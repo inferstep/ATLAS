@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -94,27 +96,148 @@ func TestADeletionTheUserDeniedReadsAsItDidBefore(t *testing.T) {
 	}
 }
 
-func TestOnlyTheMissingHoldChangesWhatADeniedCallReads(t *testing.T) {
-	ctx := &AgentContext{PassID: "refusal-reason"}
-	if got := permissionDenial(ctx, "call_none"); got != userDenied {
-		t.Errorf("a call with no recorded refusal reads %q, want %q", got, userDenied)
+// holdStandIn lets a test reach the refusals that come after the hold on a
+// system that has none. Where the hold exists the real one is used.
+func holdStandIn(t *testing.T) {
+	t.Helper()
+	if objectHoldSupported {
+		return
 	}
-	noteMissingHold(ctx, "call_other", "delete_file: file not found: gone.py")
-	if got := permissionDenial(ctx, "call_other"); got != userDenied {
-		t.Errorf("another refusal reads %q, want %q for now", got, userDenied)
+	previous := pinObjectFn
+	pinObjectFn = func(string) (*objectHandle, error) { return &objectHandle{}, nil }
+	t.Cleanup(func() { pinObjectFn = previous })
+}
+
+// notAllowed runs the approval for one call and returns what the call then
+// reads as, and how many prompts were shown.
+func notAllowed(t *testing.T, ctx *AgentContext, tool, args string) (string, int) {
+	t.Helper()
+	prompts := 0
+	ctx.StreamFn = func(kind string, _ interface{}) {
+		if kind == "permission_request" {
+			prompts++
+		}
 	}
-	noteMissingHold(ctx, "call_hold", "delete_file: "+errObjectIdentityUnavailable.Error())
-	first, second := permissionDenial(ctx, "call_hold"), permissionDenial(ctx, "call_hold")
-	if !strings.Contains(first, errObjectIdentityUnavailable.Error()) || !strings.Contains(first, "Nobody was asked") {
-		t.Errorf("the missing hold reads %q, want the reason and that nobody was asked", first)
+	if awaitPermission(ctx, tool, "call_reason", json.RawMessage(args)) {
+		t.Fatalf("%s %s was allowed", tool, args)
 	}
-	if second != userDenied {
-		t.Errorf("the reason was read twice: %q", second)
+	return permissionDenial(ctx, "call_reason"), prompts
+}
+
+func TestADeletionRefusedBeforeAskingReadsAsItsOwnReason(t *testing.T) {
+	holdStandIn(t)
+	dir := t.TempDir()
+	writeInWorkspace(t, dir, "pkg/mod.py", "A = 1\n")
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
+		t.Fatalf("make a file of a type that is not supported: %v", err)
+	}
+	for _, c := range []struct{ name, args, reason string }{
+		{"a path outside the workspace", `{"path":"../outside.py"}`, "is outside the workspace"},
+		{"a target on the deny list", `{"path":".env"}`, "blocked by safety rule: writing .env"},
+		{"a missing file", `{"path":"gone.py"}`, "file not found: gone.py"},
+		{"a directory that is not empty", `{"path":"pkg"}`, "directory not empty: pkg (1 entries)"},
+		{"a file type that is not supported", `{"path":"pipe"}`, "unsupported target type"},
+		{"an empty path", `{"path":""}`, "path cannot be empty"},
+		{"arguments that cannot be read", `{"path":123}`, "arguments are not usable"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := deletePermCtx(t, "sess-reason", dir)
+			defer cancel()
+			denial, prompts := notAllowed(t, ctx, "delete_file", c.args)
+			if prompts != 0 {
+				t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", prompts)
+			}
+			if !strings.Contains(denial, c.reason) || !strings.Contains(denial, "Nobody was asked, and nothing was deleted.") {
+				t.Errorf("the call reads %q, want the reason %q and that nobody was asked", denial, c.reason)
+			}
+			if strings.Contains(denial, userDenied) {
+				t.Errorf("the call reads as denied by the user: %q", denial)
+			}
+			if again := permissionDenial(ctx, "call_reason"); again != userDenied {
+				t.Errorf("the reason was kept for a later call: %q", again)
+			}
+		})
+	}
+}
+
+func TestACallNobodyCouldBeAskedAboutSaysSo(t *testing.T) {
+	ctx, cancel := permCtx("")
+	defer cancel()
+	denial, prompts := notAllowed(t, ctx, "run_command", `{"command":"ls"}`)
+	if prompts != 0 {
+		t.Errorf("%d prompt(s) were shown in a request with no session", prompts)
+	}
+	for _, want := range []string{"run_command needs the user's approval", "no session id", "nobody could be asked"} {
+		if !strings.Contains(denial, want) {
+			t.Errorf("the call reads %q, want %q in it", denial, want)
+		}
+	}
+	other, cancelOther := permCtx("")
+	defer cancelOther()
+	if got := permissionDenial(other, "call_reason"); got != userDenied {
+		t.Errorf("another request with no session read this one's reason: %q", got)
+	}
+}
+
+func TestAPromptNobodyAnsweredInTimeSaysSo(t *testing.T) {
+	t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
+	ctx, cancel := permCtx("sess-reason-timeout")
+	defer cancel()
+	denial, prompts := notAllowed(t, ctx, "run_command", `{"command":"ls"}`)
+	if prompts != 1 {
+		t.Errorf("%d prompt(s) were shown, want 1", prompts)
+	}
+	for _, want := range []string{"nobody answered the approval prompt for run_command", "within 1s", "Do not send the same call again"} {
+		if !strings.Contains(denial, want) {
+			t.Errorf("the call reads %q, want %q in it", denial, want)
+		}
+	}
+}
+
+func TestARequestThatEndedBeforeTheAnswerSaysSo(t *testing.T) {
+	ctx, cancel := permCtx("sess-reason-ended")
+	go func() {
+		waitForPending(t, "sess-reason-ended", "call_reason")
+		cancel()
+	}()
+	denial, _ := notAllowed(t, ctx, "run_command", `{"command":"ls"}`)
+	if !strings.Contains(denial, "the request ended before the approval prompt for run_command was answered") {
+		t.Errorf("the call reads %q, want that the request ended first", denial)
+	}
+}
+
+func TestADenialByTheUserStillReadsAsADenial(t *testing.T) {
+	ctx, cancel := permCtx("sess-reason-denied")
+	defer cancel()
+	go func() {
+		waitForPending(t, "sess-reason-denied", "call_reason")
+		postDecision(t, `{"session_id":"sess-reason-denied","tool_call_id":"call_reason","decision":"deny"}`)
+	}()
+	if denial, _ := notAllowed(t, ctx, "run_command", `{"command":"ls"}`); denial != userDenied {
+		t.Errorf("a denial by the user reads %q, want %q", denial, userDenied)
 	}
 	if got := deniedToolMessage(userDenied); got != `{"success":false,"error":"permission denied by user"}` {
 		t.Errorf("deniedToolMessage(%q) = %s", userDenied, got)
 	}
 	if got := permissionDeniedEvent("delete_file", userDenied); len(got) != 1 || got["tool"] != "delete_file" {
 		t.Errorf("the event of a user denial = %v, want the tool name only", got)
+	}
+}
+
+func TestAMissingFileReachesTheUserAndTheModelAsItsReason(t *testing.T) {
+	r := delLoopFixture(t, map[string]string{"a.py": delSeed}, "Delete gone.py.", func(turn int) map[string]interface{} {
+		if turn == 0 {
+			return dlDel("gone.py")
+		}
+		return map[string]interface{}{"type": "done", "summary": "gone.py is not there"}
+	})
+	for where, texts := range map[string][]string{
+		"the permission_denied event": r.eventsOf("permission_denied"),
+		"the tool_result event":       r.eventsOf("tool_result"),
+		"the message to the model":    r.toolMessages("delete_file"),
+	} {
+		if len(texts) != 1 || !strings.Contains(texts[0], "file not found: gone.py") || strings.Contains(texts[0], userDenied) {
+			t.Errorf("%s = %q, want one text with the reason and no denial by the user", where, texts)
+		}
 	}
 }
