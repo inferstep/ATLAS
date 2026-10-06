@@ -4,18 +4,6 @@
 
 ## [Unreleased]
 
-### Fixed: the `checks ran` job called every workflow missing after one listing without them
-
-The job reads GitHub's list of the runs of a commit once a minute. On one
-pull request the last listing held none of the nine runs that the earlier
-listings had shown, one of them still running. The job read that as nine
-workflows that never started and failed, though every one of them ran.
-- A run that an earlier listing showed is kept with its last known state. A
-  later listing without it no longer makes it missing.
-- Each listing prints one line: how many of the expected workflows are
-  listed, how many are running and how many are not listed. A listing that
-  leaves out a known run is named in the log.
-
 ### Fixed: structural_edit refused a Python method unless its first line was bare
 
 structural_edit splices a replacement in at the node's first byte. For a
@@ -242,6 +230,18 @@ with no `if:` condition was skipped, was cancelled or reported nothing, and
 when a required check was skipped or was reported by no job. Jobs skipped by
 their own `if:` condition are listed, not judged. The job is not a required
 check.
+
+### Fixed: the `checks ran` job called every workflow missing after one listing without them
+
+The job reads GitHub's list of the runs of a commit once a minute. On one
+pull request the last listing held none of the nine runs that the earlier
+listings had shown, one of them still running. The job read that as nine
+workflows that never started and failed, though every one of them ran.
+- A run that an earlier listing showed is kept with its last known state. A
+  later listing without it no longer makes it missing.
+- Each listing prints one line: how many of the expected workflows are
+  listed, how many are running and how many are not listed. A listing that
+  leaves out a known run is named in the log.
 
 ### Added: a page for the quality gates and their baselines
 
