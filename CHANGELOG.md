@@ -141,6 +141,25 @@ request. It reports and does not fail the job.
 
 Each finding says what was found, why it matters and what to do.
 
+### Fixed: a deletion the proxy cannot ask about no longer reads as denied by the user
+
+Before a deletion is approved the proxy holds the file, so that the approval
+is bound to the thing the user saw. That hold exists on Linux only. A proxy
+built for another system refuses every `delete_file` before anyone is asked,
+and the user and the model read "permission denied by user".
+- That refusal now gives its reason: the file could not be held, nobody was
+  asked, nothing was deleted. The reason is in the `tool_result` event, in
+  the message the model reads, and in a new `reason` field of the
+  `permission_denied` event. The terminal client shows it in place of
+  "permission denied".
+- Every other call that is not allowed reads as before, byte for byte: a
+  deletion the user denied, a prompt that timed out, a cancelled request and
+  the other refusals before asking. Those other refusals still read as a
+  denial; that is a separate change.
+- The proxy tests that go through the deletion approval are skipped on a
+  system without the hold, each with the reason printed (`go test -v`). On
+  Linux they run as before. The proxy suite now passes on macOS.
+
 ### Fixed: a question was told to stop reading and write a file
 
 After four read-only calls in a row, the agent loop told the model "Do not read

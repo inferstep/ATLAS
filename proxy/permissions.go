@@ -253,6 +253,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		t, refusal := inspectDeleteTarget(ctx, args)
 		if refusal != "" {
 			log.Printf("[permission] not asking about %s: %s", toolName, refusal)
+			noteMissingHold(ctx, callID, refusal)
 			return false
 		}
 		target = t
@@ -310,6 +311,51 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		target.release()
 		return false
 	}
+}
+
+// userDenied is what a call reads as when the user said no, when nobody
+// answered in time, and when the request ended first.
+const userDenied = "permission denied by user"
+
+// refusedUnasked keeps, for a call the proxy refused before it asked anyone,
+// the reason that the call reads next.
+var refusedUnasked sync.Map
+
+// noteMissingHold records the refusal of a deletion whose object could not be
+// held. No user denied that call, so it must not read as a denial.
+func noteMissingHold(ctx *AgentContext, callID, refusal string) {
+	if refusal == "delete_file: "+errObjectIdentityUnavailable.Error() {
+		refusedUnasked.Store(permKey(ctx.PassID, callID), refusal+". Nobody was asked, and nothing was deleted.")
+	}
+}
+
+// permissionDenial is the reason a call that was not allowed reads as: the
+// recorded reason of a refusal before asking, once, and a denial otherwise.
+func permissionDenial(ctx *AgentContext, callID string) string {
+	if reason, recorded := refusedUnasked.LoadAndDelete(permKey(ctx.PassID, callID)); recorded {
+		return reason.(string)
+	}
+	return userDenied
+}
+
+// permissionDeniedEvent is the stream event of a call that was not allowed.
+// It carries a reason only when no user denied the call.
+func permissionDeniedEvent(tool, denial string) map[string]string {
+	event := map[string]string{"tool": tool}
+	if denial != userDenied {
+		event["reason"] = denial
+	}
+	return event
+}
+
+// deniedToolMessage is what the model reads back for a call that was not
+// allowed.
+func deniedToolMessage(denial string) string {
+	body, _ := json.Marshal(struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}{false, denial})
+	return string(body)
 }
 
 // handlePermission receives a client's approve/deny decision and signals the

@@ -156,6 +156,7 @@ func TestAwaitPermissionAllow(t *testing.T) {
 // The target has to be real: a deletion is now confirmed against an inspected
 // object, so a path that does not exist is refused before anyone is asked.
 func TestAwaitPermissionDeny(t *testing.T) {
+	needsObjectHold(t)
 	ctx, cancel := permCtx("sess-deny")
 	defer cancel()
 	ctx.WorkingDir = t.TempDir()
@@ -412,6 +413,7 @@ func captureRequest(t *testing.T, ctx *AgentContext, callID, args string,
 
 // 1: the prompt must name the exact target, not the tool.
 func TestDeletePermissionNamesTheTarget(t *testing.T) {
+	needsObjectHold(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "obsolete.py"), []byte("A = 1\n"), 0o644)
 	ctx, cancel := deletePermCtx(t, "sess-name", dir)
@@ -474,6 +476,7 @@ func TestDeletePermissionPreflightAndBinding(t *testing.T) {
 				}
 				return
 			}
+			needsObjectHold(t)
 			done := make(chan bool, 1)
 			go func() {
 				done <- awaitPermission(ctx, "delete_file", "call_pf", json.RawMessage(c.args))
@@ -490,6 +493,7 @@ func TestDeletePermissionPreflightAndBinding(t *testing.T) {
 
 // 4/8/17/18: one answer must never authorise a second deletion.
 func TestDeleteApprovalIsNeverSessionWide(t *testing.T) {
+	needsObjectHold(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A = 1\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "b.py"), []byte("B = 2\n"), 0o644)
@@ -513,6 +517,7 @@ func TestDeleteApprovalIsNeverSessionWide(t *testing.T) {
 
 // 12/14/15/16: the target changing while the prompt is open must invalidate it.
 func TestDeleteApprovalGoesStaleWhenTheTargetChanges(t *testing.T) {
+	needsObjectHold(t)
 	for _, c := range []struct {
 		name  string
 		setup func(dir string) string // returns the path argument
@@ -564,6 +569,7 @@ func TestDeleteApprovalGoesStaleWhenTheTargetChanges(t *testing.T) {
 
 // The outcome matrix, driven through the real endpoint and the real tool.
 func TestDeleteConfirmationOutcomeMatrix(t *testing.T) {
+	needsObjectHold(t)
 	type step struct {
 		rel      string
 		decision string // "allow", "deny", "" = never answered
@@ -690,6 +696,7 @@ func TestDeleteConfirmationOutcomeMatrix(t *testing.T) {
 
 // 4/22: no pending state survives a cancel, and an unknown id deletes nothing.
 func TestDeleteConfirmationLeavesNoPendingState(t *testing.T) {
+	needsObjectHold(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "f.py"), []byte("A\n"), 0o644)
 	ctx, cancel := deletePermCtx(t, "sess-clean", dir)
@@ -809,6 +816,7 @@ func TestAbsoluteSymlinkIsRefusedByContainment(t *testing.T) {
 	if refusal == "" {
 		t.Error("an absolute symlink was accepted for confirmation")
 	}
+	needsObjectHold(t)
 	// A relative link inside the workspace is the supported shape.
 	os.Symlink("real.py", filepath.Join(dir, "rel.py"))
 	target, refusal2 := inspectDeleteTarget(ctx, json.RawMessage(`{"path":"rel.py"}`))
@@ -907,6 +915,7 @@ func TestDeleteConfirmationStructure(t *testing.T) {
 // Completion behaviour is deliberately untouched by this slice: an APPROVED,
 // successful deletion still cannot finish a run.
 func TestApprovedDeletionStillCannotComplete(t *testing.T) {
+	needsObjectHold(t)
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
 	ctx, cancel := deletePermCtx(t, "sess-complete", dir)
@@ -1020,6 +1029,7 @@ func TestNoBroadModeAuthorisesDeletion(t *testing.T) {
 
 // With a client, every mode asks exactly once — including the broad ones.
 func TestEveryModeAsksExactlyOnceForADeletion(t *testing.T) {
+	needsObjectHold(t)
 	for _, c := range deleteModes {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1069,6 +1079,7 @@ func TestDeletePromptCounts(t *testing.T) {
 	}
 	for _, c := range answered {
 		t.Run(c.name, func(t *testing.T) {
+			needsObjectHold(t)
 			d := t.TempDir()
 			os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
 			sess := "sess-count-" + c.name
@@ -1093,6 +1104,7 @@ func TestDeletePromptCounts(t *testing.T) {
 		})
 	}
 	t.Run("timeout", func(t *testing.T) {
+		needsObjectHold(t)
 		d := t.TempDir()
 		os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
 		ctx, cancel := deletePermCtx(t, "sess-count-timeout", d)
@@ -1112,6 +1124,7 @@ func TestDeletePromptCounts(t *testing.T) {
 		}
 	})
 	t.Run("cancel", func(t *testing.T) {
+		needsObjectHold(t)
 		d := t.TempDir()
 		os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
 		ctx, cancel := deletePermCtx(t, "sess-count-cancel", d)
@@ -1183,6 +1196,7 @@ func TestPreauthorizedDeleteDoesNotCarryToAnotherPath(t *testing.T) {
 // A different file with the same contents is a different thing to delete.
 
 func TestApprovalBindsToTheFilesystemObject(t *testing.T) {
+	needsObjectHold(t)
 	for _, c := range []struct {
 		name     string
 		setup    func(dir string) string
@@ -1277,6 +1291,7 @@ func approveAndDelete(t *testing.T, ctx *AgentContext, sess, callID, rel string,
 }
 
 func TestFulfilledDeletionRecord(t *testing.T) {
+	needsObjectHold(t)
 	for _, c := range []struct {
 		name     string
 		setup    func(dir string) string
@@ -1377,6 +1392,7 @@ func TestUnapprovedAbsenceIsNotFulfilled(t *testing.T) {
 // Capacity is reserved before the mutation, so an untrackable deletion never
 // happens.
 func TestDeletionTrackingCapacity(t *testing.T) {
+	needsObjectHold(t)
 	dir := t.TempDir()
 	ctx := &AgentContext{WorkingDir: dir, fulfilledDeletions: map[string]*fulfilledDeletion{}}
 	for i := 0; i < maxTrackedDeletions; i++ {

@@ -1924,9 +1924,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						allowed = awaitPermission(ctx, parsed.Name, permCallID(turn), parsed.Args)
 					}
 					if !allowed {
-						ctx.Stream("permission_denied", map[string]string{
-							"tool": parsed.Name,
-						})
+						denial := permissionDenial(ctx, permCallID(turn))
+						ctx.Stream("permission_denied",
+							permissionDeniedEvent(parsed.Name, denial))
 						// A refusal here is a failed call like any other, and this
 						// branch returned before everything that counts one. It
 						// matters more now that a deletion always reaches the
@@ -1935,7 +1935,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// accounting it repeats until the turn cap -- measured at
 						// 21 turns with no terminal of ATLAS's own.
 						if stop := accountRefusedCall(parsed.Name, intentArgs,
-							"permission denied by user",
+							denial,
 							workspaceRefusalPath(ctx, parsed.Name, parsed.Args)); stop {
 							return 2
 						}
@@ -1951,7 +1951,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							"tool":    parsed.Name,
 							"success": false,
 							"data":    json.RawMessage("null"),
-							"error":   "permission denied by user",
+							"error":   denial,
 							"elapsed": "0s",
 						})
 						// Bespoke bounce: the permission flow keys its tool-call
@@ -1962,7 +1962,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						})
 						ctx.Messages = append(ctx.Messages, AgentMessage{
 							Role:       "tool",
-							Content:    `{"success":false,"error":"permission denied by user"}`,
+							Content:    deniedToolMessage(denial),
 							ToolCallID: permCallID(turn),
 							ToolName:   parsed.Name,
 						})
