@@ -304,6 +304,22 @@ workflows that never started and failed, though every one of them ran.
   listed, how many are running and how many are not listed. A listing that
   leaves out a known run is named in the log.
 
+### Added: replay tests that run the proxy against a recorded session
+
+The proxy is about to be restructured in many small steps. Unit tests check
+pieces; a replay shows that the whole loop still does the same on a recorded
+session, with no model and in seconds. `tests/replay` runs the proxy as a
+binary built from the change. Its four services (the model, the sandbox, V3
+and the lens) are stand-ins that play a recording, and each request the proxy
+sends them is compared, whole, with the recorded one. The events to the
+client and the files at the end are compared too. A test of this kind does
+not know how the proxy is built inside, so moving code does not touch it; a
+change in what the proxy sends, says or writes fails it at the first place
+the run differs. The first recording is a normal session (read, edit, run,
+done). The job `replay (proxy)` runs on pull requests that touch `proxy/` or
+`tests/replay/` and in the merge queue, and is not a required check
+(`docs/quality/gates.md`).
+
 ### Added: a canary that shows each check still turns red
 
 A check that silently stops checking looks the same as a check that passes.

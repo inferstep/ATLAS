@@ -43,6 +43,7 @@ the tool is a mistake and not a mystery.
 | Check | What it does |
 |---|---|
 | `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
+| `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue |
 | `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
 | `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
 | `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
@@ -101,6 +102,39 @@ How to read the coverage rows:
   date and the commit above it.
 - A check that raises mostly false alarms is switched off or changed, and the
   change is written in the tool settings table with its reason.
+
+## The replay tests
+
+The proxy is tested from outside on recorded sessions (`tests/replay`). It
+runs as a binary built from the change. Its four services (the model, the
+sandbox, V3 and the lens) are stand-ins that play a recording. Each request
+the proxy sends to one of them is compared, whole, with the recorded request,
+in the order of that service. The events the proxy sends to the client and
+the files it leaves are compared too.
+
+- A recording is one JSON file in `tests/replay/recordings/`. It says where
+  it came from: the task, the set the task belongs to (e2e, smoke or
+  development, and no other), the commit, and whether the model replies were
+  written by hand or captured from a model.
+- Left out of the comparison, by name, are the fields of an event that
+  differ from run to run: six times and one estimate that depends on how
+  long the path of the workspace is (`VARIES_IN_EVENTS` in
+  `tests/replay/recording.py`). A field that is added later is compared.
+- A test here does not know how the proxy is built inside, so a change that
+  only moves code does not touch it. A change in what the proxy sends, says
+  or writes on a recorded session fails it, at the first place the run
+  differs.
+- A green replay means the same behaviour on these recorded sessions. It
+  does not mean correct. It cannot show how a real model reacts to a changed
+  message, because the replies are fixed.
+- A recording is an expected value. When a change is meant to alter what the
+  proxy does on a recorded session (a text the model reads, the order of two
+  calls), the recording is made again in the same pull request
+  (`python -m tests.replay.record <case>`), the pull request says which
+  behaviour changed and why, and a maintainer approves it.
+
+Run them with `python -m pytest tests/replay`. The tests build the proxy
+themselves and need Go.
 
 ## The canary
 

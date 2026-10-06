@@ -1,0 +1,51 @@
+name: replay
+
+# Replays recorded sessions against the proxy built from the change
+# (tests/replay). The proxy runs as a binary, its four services are stand-ins
+# that play a recording, and each request the proxy sends them is compared
+# with the recorded one. A change in what the proxy sends, says or writes on
+# a recorded session fails here. Not a required check.
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'proxy/**'
+      - 'tests/replay/**'
+      - '.github/workflows/replay.yml'
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
+
+concurrency:
+  group: replay-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    name: replay (proxy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: '1.26.6'
+          # The proxy has no dependencies and so no go.sum to key a cache on.
+          cache: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: install
+        run: pip install --require-hashes -r .github/requirements/ci.txt
+
+      - name: replay the recorded sessions
+        # The tests build the proxy from this checkout themselves. The gate
+        # fails when pytest ran no test.
+        run: python scripts/production-readiness.py --only python-tests --pytest-path tests/replay
