@@ -123,6 +123,11 @@ func allTools() []*ToolDef {
 // Nothing here reads Success. Classification is never inferred from it.
 func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
 	tool := getTool(name)
+	canonical, rejection := canonicalToolArgs(name, args, ctx) // one reading for every reader below
+	if rejection != "" {
+		return &ToolResult{Success: false, Error: rejection, MutationStatus: MutationNone, ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
+	}
+	args = canonical
 	// What a shell command changes is observed around it (applyShellChanges):
 	// the ledger otherwise sees only paths it already tracked. A background
 	// job's later writes are measured from the walk after the call that
@@ -209,11 +214,6 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 			MutationStatus: MutationNone,
 			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
 		}
-	}
-	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
-		return &ToolResult{Success: false, Error: reason,
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
 	}
 	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
 	// destructive shell patterns) are refused in every permission mode.

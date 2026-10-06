@@ -740,33 +740,8 @@ var workspacePathFields = map[string][]string{
 }
 
 func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentContext) string {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(args, &fields); err != nil {
-		return ""
-	}
-	keys := workspacePathFields
-	if k := nonCanonicalArgName(fields); k != "" {
-		return fmt.Sprintf("%s: argument names are lowercase, as the tool lists them; %q is not", name, k)
-	}
-	for _, key := range keys[name] {
-		raw, ok := fields[key]
-		if !ok {
-			continue
-		}
-		var value string
-		if json.Unmarshal(raw, &value) != nil || strings.TrimSpace(value) == "" {
-			continue
-		}
-		// The ledger trims a path and the handler does not, so a padded
-		// path would be checked in one form and recorded in another.
-		if value != strings.TrimSpace(value) {
-			return fmt.Sprintf("%s: %s %q starts or ends with whitespace", name, key, value)
-		}
-		if _, err := resolveWorkspacePath(ctx, value); err != nil {
-			return fmt.Sprintf("%s: %v", name, err)
-		}
-	}
-	return ""
+	_, rejection := canonicalToolArgs(name, args, ctx)
+	return rejection
 }
 
 // nonCanonicalArgName is an argument name that is not lowercase ASCII. Every
