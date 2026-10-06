@@ -55,7 +55,8 @@ A new `coverage upload` job sends the Go, Python and TypeScript reports of
 the test jobs to Codecov, one flag each (`go-proxy`, `go-tui`, `python`,
 `typescript`). It is a job of its own, so no test job depends on a service
 outside GitHub, and it runs only when the test jobs passed. The action is
-pinned by commit and its uploader by version. `codecov.yml` sets `dev` as the
+pinned by commit and its uploader by version. No secret is stored: Codecov
+checks the identity token GitHub signs for the run. `codecov.yml` sets `dev` as the
 branch Codecov compares with, turns its pull-request comment and its line
 notes off, and makes its two statuses report without failing. A commit that
 has no `codecov.yml` uploads nothing, because Codecov would use its own

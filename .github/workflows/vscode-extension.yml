@@ -72,6 +72,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      # For the identity token Codecov checks; see the same job in test.yml.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -105,3 +107,4 @@ jobs:
           disable_search: true
           disable_telem: true
           fail_ci_if_error: true
+          use_oidc: true

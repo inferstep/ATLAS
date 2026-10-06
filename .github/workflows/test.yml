@@ -496,6 +496,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      # Lets this job ask GitHub for a short-lived token that says which
+      # repository and run it is. Codecov checks it; see the upload steps.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -527,9 +530,11 @@ jobs:
           echo "files=$(ls "$RUNNER_TEMP"/reports/coverage-python-*/python.lcov | paste -sd, -)" >> "$GITHUB_OUTPUT"
 
       # The action is pinned by commit and its uploader by version; the
-      # action checks the uploader's signature before it runs it. No token:
-      # Codecov accepts reports for a public repository without one. A
-      # refused upload fails this job, so it cannot pass unseen.
+      # action checks the uploader's signature before it runs it. No secret
+      # is stored: Codecov accepts the identity token GitHub signs for this
+      # run. A pull request from a fork gets no such token, and the action
+      # then uploads the way Codecov allows for forks. A refused upload
+      # fails this job, so it cannot pass unseen.
       - name: upload go-proxy
         if: steps.settings.outputs.present == 'true'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
@@ -540,6 +545,7 @@ jobs:
           disable_search: true
           disable_telem: true
           fail_ci_if_error: true
+          use_oidc: true
 
       - name: upload go-tui
         if: steps.settings.outputs.present == 'true'
@@ -551,6 +557,7 @@ jobs:
           disable_search: true
           disable_telem: true
           fail_ci_if_error: true
+          use_oidc: true
 
       - name: upload python
         if: steps.settings.outputs.present == 'true'
@@ -562,3 +569,4 @@ jobs:
           disable_search: true
           disable_telem: true
           fail_ci_if_error: true
+          use_oidc: true
