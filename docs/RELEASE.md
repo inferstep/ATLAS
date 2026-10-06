@@ -147,9 +147,9 @@ hash status, backend, context size, and service image digests.
 
 | Branch | Job | Gets code by | Artifacts |
 |---|---|---|---|
-| `dev` | Integration | Merged pull requests, maintainer pushes | `:dev` and an immutable `:sha-<commit>` image per push |
-| `staging` | Release candidate | Fast-forward from `dev` | `vX.Y.Z-rc.N` tag, RC images |
-| `main` | Released | Fast-forward from `staging` after qualification | Signed `vX.Y.Z` tag, `:latest`, version images |
+| `dev` | Integration | Pull requests, merged by the merge queue | `:dev` and an immutable `:sha-<commit>` image per push |
+| `staging` | Release candidate | Fast-forward from `dev`, by the release step | `vX.Y.Z-rc.N` tag, RC images |
+| `main` | Released | Fast-forward from `staging` after qualification, by the release step | Signed `vX.Y.Z` tag, `:latest`, version images |
 
 Contributors always target `dev`. Commits get no version: each one gets an
 immutable `sha-*` image and moves `:dev`. A version is decided at release
@@ -177,6 +177,48 @@ Patch and security releases ship whenever they're needed. A release
 candidate stays on `staging` for **at least 3 days** before it becomes a
 release.
 
+## The release step
+
+No account can push to `dev`, `staging` or `main`, and no account can skip
+a required check ([GOVERNANCE](../GOVERNANCE.md#change-flow)). The merge
+button of a pull request squashes or rebases, so it makes new commits. A
+release needs the commit itself to land in two cases:
+
+- `staging` and `main` move forward by fast-forward, so that the released
+  commit is the one that was tested and built;
+- after a hotfix, `main` is merged back into `dev` with a merge commit.
+
+`scripts/setup/release_step.py` does both. It makes one push:
+
+1. Open a pull request from the commit's branch into the target branch.
+   Do not use its merge button. The pull request ties the push to a
+   reviewable change, and on `main` and `dev` it runs the required checks.
+2. Wait until every required check is green on the head commit.
+3. Check, changing nothing:
+   `python scripts/setup/release_step.py main <full commit id>`.
+   It stops unless the commit is the head of an open pull request to that
+   branch, every required check is green on it, the push is a
+   fast-forward, and the rulesets are in their normal state.
+4. Push: the same command with `--apply`. It opens the rules that stop the
+   push, pushes the commit, and closes the rules again, also when the push
+   fails. GitHub then shows the pull request as merged.
+
+What the step opens: on `staging` and `main` the review rule, because
+nobody can approve the release owner's own pull request, and the
+linear-history rule when the range holds a merge commit. On `dev` the rule
+that holds the merge queue. The required checks are never opened: GitHub
+refuses a commit that has not passed them, even while the step runs.
+
+The step needs admin rights on the repository, and each use needs the
+release owner's approval. Hold other merges into the target branch until
+it is done, so that the pull request's head stays the commit that was
+checked. Every use is on record under **Settings → Rules** (the ruleset
+history and the rule insights).
+
+**Status:** the step has merged `main` back into `dev` on this repository.
+A fast-forward of `main` by the step was run on a test repository with the
+same rulesets, and not yet on this one.
+
 ## Release process
 
 Publishing is gated by the `production` environment
@@ -188,18 +230,24 @@ without approval. Each promotion leaves a timestamped deployment record.
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
    [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) and write the
    `CHANGELOG.md` entry.
-2. **Candidate.** Fast-forward `staging` to that `dev` commit
-   (`git push origin dev:staging`). Check out `staging` and run
-   `scripts/release-tag.sh vX.Y.Z-rc.1`. It warns that you're not on
-   `main`; answer `y`, since candidates are tagged on `staging`. Push the
-   tag. See [Signed release tags](#signed-release-tags).
+2. **Candidate.** Fast-forward `staging` to that `dev` commit with
+   [the release step](#the-release-step): open a pull request from `dev`
+   into `staging`, then run `release_step.py staging <commit>`. No
+   workflow runs for a pull request into `staging`. The checks are the
+   ones the commit passed in the merge queue on `dev`. Check out
+   `staging` and run `scripts/release-tag.sh vX.Y.Z-rc.1`. It warns that
+   you're not on `main`; answer `y`, since candidates are tagged on
+   `staging`. Push the tag. See
+   [Signed release tags](#signed-release-tags).
 3. **Test.** Keep the candidate on `staging` for at least 3 days. Qualify
    it per the verification levels above, on release hardware. A fix found
    now lands on `dev` and is promoted again as `-rc.2`.
-4. **Release.** Fast-forward `main` to `staging`
-   (`git push origin staging:main`). In the build run for that push,
-   approve the waiting `production` deployment: **Actions → the run →
-   Review deployments → production → Approve**. This moves `:latest`.
+4. **Release.** Fast-forward `main` to `staging` with the release step:
+   open a pull request from `staging` into `main`, wait for its checks,
+   then run `release_step.py main <commit>`. In the build run for that
+   push, approve the waiting `production` deployment: **Actions → the
+   run → Review deployments → production → Approve**. This moves
+   `:latest`.
 5. **Tag.** Check out `main`, cut and push the signed `vX.Y.Z` tag, then
    approve the tag build's `production` deployment the same way. This
    publishes `:X.Y.Z`, `:vX.Y.Z` and `:X.Y`, and `verify-tags` checks the
@@ -219,14 +267,19 @@ service's tag at an earlier one, e.g. `alias_tag: 3.2.0=latest` puts
 When `dev` isn't releasable and a released version needs a fix:
 
 1. A maintainer branches `hotfix/X.Y.Z` from `main` (only maintainers can
-   create branches) and lands the fix there through a pull request.
-2. Fast-forward `main` to the hotfix branch, approve `production`, and tag
-   `vX.Y.Z` (a patch).
+   create branches), puts the fix on it, and opens a pull request from it
+   into `main`.
+2. When the pull request's checks are green, fast-forward `main` to the
+   hotfix commit with [the release step](#the-release-step), approve
+   `production`, and tag `vX.Y.Z` (a patch).
 3. Merge `main` back into `dev` so the next promotion stays a
-   fast-forward. This is the one merge commit `dev` accepts, and the lead
-   makes it as a logged ruleset bypass.
+   fast-forward: make the merge commit on a branch, open a pull request
+   from it into `dev`, and when its checks are green run
+   `release_step.py dev <commit>`. This is the one merge commit `dev`
+   accepts.
 
-`hotfix/*` is the only branch besides `dev`, `staging` and `main`.
+Besides `dev`, `staging` and `main`, the repository holds only short-lived
+branches: a maintainer's pull request, a hotfix, a merge-back.
 
 ## Signed release tags
 

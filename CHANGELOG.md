@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Changed: the setup script writes the branch rules that are in force, and the release step is a script
+
+`scripts/setup/rulesets.sh` still wrote the rules from before the merge
+queue: an admin bypass for pushes, also on the required checks, and no queue
+on `dev`. Running it would have brought those rules back.
+- It now writes the nine rulesets that are in force. No account can push to
+  `dev`, `staging` or `main` or skip a required check, and `dev` takes
+  changes through the merge queue.
+- A ruleset that is already the same is left alone. `--dry-run` says for
+  each one whether the live ruleset is the same, and what an update would
+  change.
+- `scripts/setup/release_step.py` is the one way a commit itself reaches a
+  protected branch: the fast-forward of `staging` and `main`, and the merge
+  of `main` back into `dev`. It checks first, opens only the rule that
+  stops the push, and closes it again, also when the push fails.
+- `docs/RELEASE.md` and `GOVERNANCE.md` describe these rules and the
+  release step.
+- The settings audit (`scripts/setup/audit.py`) fails when a required check
+  can be skipped, and reads the review rule correctly when two rulesets
+  hold one.
+
 ### Fixed: structural_edit refused a Python method unless its first line was bare
 
 structural_edit splices a replacement in at the node's first byte. For a

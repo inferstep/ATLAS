@@ -8,7 +8,7 @@ level. It does not pretend a committee exists.
 ## Decision making
 
 - Day-to-day decisions (bug fixes, refactors, docs) are made by
-  maintainers merging to `dev`.
+  maintainers merging pull requests into `dev`.
 - Significant decisions go through an RFC and are recorded as an ADR
   under `docs/adr/` (see [Proposals](#proposals-rfc--adr--epic)). They
   include architecture changes, new dependencies, security-model
@@ -26,20 +26,27 @@ the CI pipeline (immutable `sha-*` images, tag promotion gated on the
 tests workflow).
 
 The rules are enforced by repository rulesets, created by
-`scripts/setup/rulesets.sh`:
+`scripts/setup/rulesets.sh`. Its dry run shows whether the live rulesets
+are still the ones it writes.
 
 - **`dev`, `staging` and `main`**
-  - Nobody can force-push or delete them, including admins.
+  - Nobody can push to them, force-push or delete them, including admins.
+    Every change is a pull request.
   - History must be linear.
-  - The required checks must pass. On `staging` and `main` the branch
-    must also be up to date. On `dev` it need not be, because `dev` moves
-    often and CI runs again on `dev` after every merge.
-  - A pull request needs a code-owner approval. New commits dismiss old
-    approvals, the last push needs someone else's approval, and all
-    conversations must be resolved. Only maintainers can dismiss a
-    review.
+  - The required checks must pass, and no account can skip one. On
+    `staging` and `main` the branch must also be up to date.
+  - All conversations on a pull request must be resolved.
+- **`dev`.** A pull request merges through the merge queue, which runs
+  the required checks again on the merged result. No approval is
+  required yet (see below).
+- **`staging` and `main`.** A pull request needs a code-owner approval.
+  New commits dismiss old approvals, the last push needs someone else's
+  approval, and only maintainers can dismiss a review. An admin's own
+  pull request merges without the approval, which is logged. The two
+  branches move forward by the release step in
+  [docs/RELEASE.md](docs/RELEASE.md#the-release-step).
 - **Branches.** Only admins, the `maintainers` team, and Dependabot can
-  create, push or delete branches. Everyone else works from a fork.
+  create, push or delete other branches. Everyone else works from a fork.
   Anyone with write access could otherwise push a branch with a new
   workflow and run it with the repository's permissions. The
   `star-history` asset branch is the one exception, because its
@@ -47,9 +54,11 @@ The rules are enforced by repository rulesets, created by
 - **Release tags** (`v*`). Only admins and maintainers can create one,
   and nobody can move or delete one once it exists.
 
-The lead maintainer pushes directly to `dev` as a ruleset bypass, which is
-logged. External pull requests meet every rule. Human review of the lead's
-own pushes waits until a second person holds the Reviewer role.
+The lead maintainer's changes are pull requests like everyone else's and
+meet the same required checks. Human review of the lead's pull requests
+waits until a second person holds the Reviewer role: the merge queue
+cannot merge a pull request that needs a bypass, so an approval rule on
+`dev` would stop every merge while one person maintains the project.
 
 ## Trust ladder
 
@@ -115,7 +124,9 @@ ADR statuses and format are in [docs/adr/README.md](docs/adr/README.md).
 Maintainers can promote `dev` to `staging`. A stable release (`main`, a
 `vX.Y.Z` tag, `:latest`) needs the lead's approval in the `production`
 environment and a tag signed by a key in `allowed_signers`. The checklist
-is in [docs/RELEASE.md](docs/RELEASE.md).
+is in [docs/RELEASE.md](docs/RELEASE.md). Today each promotion is a
+release step, which needs admin rights on the repository, so the lead
+runs it.
 
 **Bus-factor status: 1.** Growing to a second release-capable maintainer
 is an explicit project goal and a precondition for calling the project

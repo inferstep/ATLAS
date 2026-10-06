@@ -71,8 +71,13 @@ class Audit:
         return any(not self.rulesets[r["ruleset_id"]]["bypass_actors"] for r in self.rule(kind))
 
     def pr_param(self, key: str):
-        vals = [r["parameters"].get(key) for r in self.rule("pull_request")]
-        return max(vals) if vals and not isinstance(vals[0], dict) else (vals[0] if vals else None)
+        """The strictest value on the branch: more than one ruleset can hold a pull-request rule."""
+        vals = [v for v in (r["parameters"].get(key) for r in self.rule("pull_request")) if v is not None]
+        if not vals:
+            return None
+        if isinstance(vals[0], dict):
+            return next((v for v in vals if v.get("enabled")), vals[0])
+        return max(vals)
 
     def _workflows(self) -> dict:
         out = {}
@@ -152,7 +157,7 @@ class Audit:
                  FAIL if wf_perm["can_approve_pull_request_reviews"] else PASS, "same setting as CI/CD")
         reviews = self.pr_param("required_approving_review_count") or 0
         self.add("Repo", "Default branch requires code review", PASS if reviews >= 1 else FAIL,
-                 f"{reviews} approval(s) on {self.default}; the lead's direct pushes are a logged bypass")
+                 f"{reviews} approval(s) on {self.default}; an admin's own pull request merges without one, logged")
         self.add("Repo", "Linear history", PASS if self.rule("required_linear_history") else FAIL,
                  f"required_linear_history on {self.default}")
         self.add("Repo", "Workflow token read-only", PASS if wf_perm["default_workflow_permissions"] == "read" else FAIL,
@@ -161,7 +166,7 @@ class Audit:
         self.add("Repo", "Two reviewers required", EXC if reviews < 2 else PASS,
                  "Exception until 3+ people hold Reviewer or above (GOVERNANCE)")
         checks = [c for r in self.rule("required_status_checks") for c in r["parameters"]["required_status_checks"]]
-        self.add("Repo", "All checks pass before merge", PASS if checks else FAIL, f"{len(checks)} required checks")
+        self._checks_row(checks)
         strict = any(r["parameters"].get("strict_required_status_checks_policy") for r in self.rule("required_status_checks"))
         self.add("Repo", "Branch up to date before merge", PASS if strict else FAIL, f"strict={strict}")
         self.add("Repo", "No force pushes", PASS if self.rule_without_bypass("non_fast_forward") else FAIL,
@@ -222,6 +227,11 @@ class Audit:
                  f"scorecard.yml and scripts/setup/audit.py on {self.default}: {tooling}")
         self.add("Ops", "API tools instead of elevated privileges", MANUAL, "scripts/setup/* and the scoped atlas-bot app")
         self.add("Ops", "Audit logs and policies reviewed", MANUAL, "quarterly: org Settings → Logs → Audit log")
+
+    def _checks_row(self, checks: list) -> None:
+        unskippable = self.rule_without_bypass("required_status_checks")
+        self.add("Repo", "All checks pass before merge", PASS if checks and unskippable else FAIL,
+                 f"{len(checks)} required checks, in a ruleset with no bypass: {unskippable}")
 
     def _scorecard(self) -> None:
         url = f"https://api.scorecard.dev/projects/github.com/{self.full}"
