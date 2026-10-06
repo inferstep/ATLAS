@@ -182,6 +182,21 @@ a reason, and formatting. It reports and does not fail the job. The settings
 are in `.golangci.yml`; CONTRIBUTING.md says how to run it and what to do
 about each finding.
 
+### Added: size and complexity limits for the VS Code extension
+
+The Go and Python code have a size check; the extension's TypeScript had none.
+Its lint now fails for a function over 100 lines, or with more than 15
+decision points, where a switch counts once however many cases it has. Two
+files hold a larger function and are listed in `extensions/vscode/eslint.config.mjs`
+with its size: `ChatViewProvider.dispatch` (188 lines, 33 decision points) and
+`predictEdit` (17 decision points). A listed number may go down and may not go
+up. ESLint sets a limit for a whole file, so another function in a listed file
+can reach the listed size before the lint fails.
+
+A test in the extension's suite writes a function one over each limit and
+expects the error, and fails when a listed number is larger than its file
+needs.
+
 ### Fixed: an edit_file old_str that stopped matching its file ran on to the token cap
 
 An old_str is text copied from the target file, so it can be checked while it
