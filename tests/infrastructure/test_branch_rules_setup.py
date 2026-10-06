@@ -115,7 +115,7 @@ def first_run(tmp_path_factory):
     return DryRun(root / "run", live)
 
 
-@pytest.fixture()
+@pytest.fixture
 def live_copy(first_run, tmp_path):
     """A 'live' folder that holds exactly what the script wants."""
     live = tmp_path / "live"
@@ -168,7 +168,8 @@ def test_no_account_can_get_around_the_rules_on_dev_staging_and_main(first_run, 
 
 def test_a_bypass_never_lets_anyone_push_to_staging_or_main(first_run):
     review = [r for r in first_run.rulesets if r["name"] == "Release branches: review"]
-    assert review and review[0]["bypass_actors"]
+    assert review
+    assert review[0]["bypass_actors"]
     assert {actor["bypass_mode"] for actor in review[0]["bypass_actors"]} == {"pull_request"}
 
 
@@ -179,7 +180,8 @@ def test_dev_takes_changes_only_through_the_merge_queue(first_run):
     for ruleset in first_run.rulesets:
         if ruleset["target"] == "branch" and "update" in rule_kinds(ruleset):
             excluded = ruleset["conditions"]["ref_name"]["exclude"]
-            assert "refs/heads/dev" in excluded and "refs/heads/gh-readonly-queue/**/*" in excluded
+            assert "refs/heads/dev" in excluded
+            assert "refs/heads/gh-readonly-queue/**/*" in excluded
 
 
 def test_every_check_required_on_dev_is_reported_by_a_job(first_run):

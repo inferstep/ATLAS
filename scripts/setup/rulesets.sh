@@ -204,10 +204,14 @@ EOF
     done
 }
 
-ruleset_name() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$1"; }
+ruleset_name() {  # print the name in a ruleset file
+    local file="$1"
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"])' "$file"
+}
 
 ruleset_id() {  # print the id of the ruleset with this exact name, or nothing
-    gh api "repos/$REPO/rulesets" --paginate --jq ".[] | select(.name == \"$1\") | .id"
+    local name="$1"
+    gh api "repos/$REPO/rulesets" --paginate --jq ".[] | select(.name == \"$name\") | .id"
 }
 
 step_teams() {

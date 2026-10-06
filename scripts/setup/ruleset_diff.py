@@ -57,7 +57,8 @@ def parameter_differences(kind: str, wanted: dict, live: dict) -> list:
     return out
 
 
-def differences(wanted: dict, live: dict) -> list:
+def scope_differences(wanted: dict, live: dict) -> list:
+    """Differences in what the ruleset is, where it applies, and who can bypass it."""
     out = []
     for key in ("name", "target", "enforcement"):
         if wanted.get(key) != live.get(key):
@@ -69,6 +70,11 @@ def differences(wanted: dict, live: dict) -> list:
             out.append(f"branches or tags, {side}: wants {want}, live has {have}")
     if actors(wanted) != actors(live):
         out.append(f"bypass: wants {actors(wanted) or 'nobody'}, live has {actors(live) or 'nobody'}")
+    return out
+
+
+def rule_differences(wanted: dict, live: dict) -> list:
+    out = []
     want_rules = {r["type"]: r.get("parameters") or {} for r in wanted["rules"]}
     live_rules = {r["type"]: r.get("parameters") or {} for r in live["rules"]}
     for kind in sorted(set(want_rules) - set(live_rules)):
@@ -78,6 +84,10 @@ def differences(wanted: dict, live: dict) -> list:
     for kind in sorted(set(want_rules) & set(live_rules)):
         out.extend(parameter_differences(kind, want_rules[kind], live_rules[kind]))
     return out
+
+
+def differences(wanted: dict, live: dict) -> list:
+    return scope_differences(wanted, live) + rule_differences(wanted, live)
 
 
 def main() -> int:

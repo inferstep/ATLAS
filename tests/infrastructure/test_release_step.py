@@ -148,7 +148,8 @@ def test_the_rules_are_closed_again_after_the_push():
 def test_the_required_checks_are_never_opened():
     gh = StandInGitHub("staging", merge_commits=1)
     step.apply(gh, step.make_plan(gh, "staging", SHA), lambda: True)
-    assert gh.writes and 4 not in {ruleset_id for ruleset_id, _modes in gh.writes}
+    assert gh.writes
+    assert 4 not in {ruleset_id for ruleset_id, _modes in gh.writes}
 
 
 def test_the_rules_are_closed_when_github_refuses_the_push():
@@ -163,8 +164,9 @@ def test_the_rules_are_closed_when_the_push_breaks():
     def push():
         raise RuntimeError("the network went away")
 
+    plan = step.make_plan(gh, "main", SHA)
     with pytest.raises(RuntimeError):
-        step.apply(gh, step.make_plan(gh, "main", SHA), push)
+        step.apply(gh, plan, push)
     assert gh.open_now() == []
 
 
