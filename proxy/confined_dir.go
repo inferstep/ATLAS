@@ -82,6 +82,33 @@ func (c confinedDir) Walk(fn func(rel string, entry fs.DirEntry, err error) erro
 	})
 }
 
+// WriteNewFile creates rel, a path relative to the folder, and writes data to
+// it. A name that is already taken is an error, whatever holds it, so nothing
+// that exists is written over and no link is written through.
+func (c confinedDir) WriteNewFile(rel string, data []byte, perm os.FileMode) error {
+	if c.root == nil {
+		return errConfinedDirClosed
+	}
+	file, err := c.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	if closeErr := file.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	return writeErr
+}
+
+// Remove deletes the name rel itself. For a link that is the link, never the
+// file it points at.
+func (c confinedDir) Remove(rel string) error {
+	if c.root == nil {
+		return errConfinedDirClosed
+	}
+	return c.root.Remove(rel)
+}
+
 // readCapped returns the text of rel, cut to maxBytes. It reports false for
 // a folder, for a file over four times maxBytes, and for anything that
 // cannot be read.
@@ -107,4 +134,24 @@ func readConfined(dir, rel string) ([]byte, error) {
 	folder := openConfinedDir(dir)
 	defer folder.Close()
 	return folder.ReadFile(rel)
+}
+
+// mountProbeName is the file the alignment check writes in the workspace and
+// asks the sandbox to read back.
+const mountProbeName = ".atlas-mount-probe"
+
+// writeMountProbe puts the probe in the folder dir and returns the call that
+// removes it again. The name is cleared first and then created new, so a link
+// with that name is removed and never written through.
+func writeMountProbe(dir, token string) (func(), error) {
+	folder := openConfinedDir(dir)
+	_ = folder.Remove(mountProbeName)
+	if err := folder.WriteNewFile(mountProbeName, []byte(token), 0o644); err != nil {
+		folder.Close()
+		return nil, err
+	}
+	return func() {
+		_ = folder.Remove(mountProbeName)
+		folder.Close()
+	}, nil
 }

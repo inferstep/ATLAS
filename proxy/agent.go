@@ -3433,7 +3433,7 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 
 	_, target := stepExclusionTarget(ctx)
 	var source string
-	if b, rerr := os.ReadFile(resolveAgentPath(ctx, target)); rerr == nil {
+	if b, _, rerr := readWorkspaceFile(ctx, target); rerr == nil {
 		source = string(b)
 	}
 	note := fmt.Sprintf(

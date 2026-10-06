@@ -215,6 +215,26 @@ read. Both now show the status and the reason at the end of every run, even
 with no summary. Each status has its own color. A missing status reads as
 incomplete, as docs/API.md says.
 
+### Changed: the step note, the mount probe and the deliverable check stay inside the workspace
+
+Three more places in the proxy used plain file calls on a path in the
+workspace. They now go through the confined helpers, like the other project
+reads.
+
+- The note that follows a refused `write_file` names the selectors of the
+  file. It now reads that file through the workspace reader. A name that
+  resolves outside the workspace adds no selectors to the note.
+- The check that the proxy and the sandbox share one folder writes a probe
+  file in the workspace. The probe name is now cleared and created new,
+  inside the folder. A link with that name is removed, and nothing is
+  written through it.
+- A declared deliverable counts as valid only when it is read inside the
+  workspace. One that resolves outside it does not count, and its content is
+  not sent to the syntax check.
+
+The folder helper (`proxy/confined_dir.go`) gains two calls for this: write
+a new file under a free name, and remove a name.
+
 ### Changed: the steering status reads its workspace place through the confined reader
 
 The proxy's steering status looks for the control vector in three places.

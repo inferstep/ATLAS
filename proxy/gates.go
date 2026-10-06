@@ -2797,11 +2797,11 @@ func verifyWorkspaceAlignment(ctx *AgentContext) string {
 	wsAlignMu.Unlock()
 
 	token := fmt.Sprintf("atlas-mount-probe-%d", time.Now().UnixNano())
-	probe := filepath.Join(ctx.WorkingDir, ".atlas-mount-probe")
-	if err := os.WriteFile(probe, []byte(token), 0644); err != nil {
+	removeProbe, err := writeMountProbe(ctx.WorkingDir, token)
+	if err != nil {
 		return "" // can't probe; not evidence of a split
 	}
-	defer os.Remove(probe)
+	defer removeProbe()
 
 	problem := ""
 	if got, ok := sandboxReadProbe(ctx); !ok {
@@ -2829,7 +2829,7 @@ func sandboxReadProbe(ctx *AgentContext) (string, bool) {
 	// identical on both sides — but only if the subdirectory is carried
 	// across. Hardcoding /workspace made every session with a sandbox_subdir
 	// look split, which refused 28 of 28 benchmark sessions before they ran.
-	probe := filepath.Join(ctx.WorkingDir, ".atlas-mount-probe")
+	probe := filepath.Join(ctx.WorkingDir, mountProbeName)
 	body, err := json.Marshal(map[string]interface{}{
 		"code":     fmt.Sprintf("print(open(%q).read())", probe),
 		"language": "python",

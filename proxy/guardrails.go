@@ -3270,8 +3270,8 @@ func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
 		return false
 	}
 	for _, rel := range expected {
-		resolved := resolveAgentPath(ctx, rel)
-		content, err := os.ReadFile(resolved)
+		// A deliverable that resolves outside the workspace demonstrates nothing.
+		content, resolved, err := readWorkspaceFile(ctx, rel)
 		if err != nil {
 			return false
 		}
