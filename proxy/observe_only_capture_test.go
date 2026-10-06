@@ -260,56 +260,67 @@ func TestTheObserversAreSilentWithNoSink(t *testing.T) {
 // queue can hold, and a larger burst is checked against the footer's own
 // count of what it dropped. Neither depends on how fast the writer is.
 func TestTheCaptureHelperLosesNoRecord(t *testing.T) {
-	for _, c := range []struct {
-		name      string
-		submitted int
-	}{
-		{"a burst the queue can hold survives whole", shadowQueueDepth},
-		{"a larger burst is accounted for in full", 5 * shadowQueueDepth},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			recs := captureShadow(t, func() {
-				sink := activeShadowSink.Load()
-				for i := 0; i < c.submitted; i++ {
-					sink.submit(map[string]interface{}{
-						"record_kind": "capture_probe", "seq": i,
-						"influences_live_decision": false,
-					})
-				}
+	t.Run("a burst the queue can hold survives whole", func(t *testing.T) {
+		survived, footer := captureBurst(t, shadowQueueDepth)
+		checkCaptureBalances(t, shadowQueueDepth, survived, footer)
+		if survived != shadowQueueDepth {
+			t.Errorf("%d of %d records survived a burst the queue can hold (%v dropped)",
+				survived, shadowQueueDepth, footer["dropped"])
+		}
+	})
+	t.Run("a larger burst is accounted for in full", func(t *testing.T) {
+		survived, footer := captureBurst(t, 5*shadowQueueDepth)
+		checkCaptureBalances(t, 5*shadowQueueDepth, survived, footer)
+	})
+}
+
+// captureBurst hands the sink count records in one burst. It returns how many
+// of them are in the capture, and the capture's footer.
+func captureBurst(t *testing.T, count int) (int, map[string]interface{}) {
+	t.Helper()
+	recs := captureShadow(t, func() {
+		sink := activeShadowSink.Load()
+		for i := 0; i < count; i++ {
+			sink.submit(map[string]interface{}{
+				"record_kind": "capture_probe", "seq": i,
+				"influences_live_decision": false,
 			})
-			footers := recordsOfKind(recs, "task_contract_shadow_footer")
-			if len(footers) != 1 {
-				t.Fatalf("%d footers, want exactly one: a capture without one is incomplete",
-					len(footers))
-			}
-			f := footers[0]
-			accepted, _ := f["accepted"].(float64)
-			written, _ := f["written"].(float64)
-			dropped, _ := f["dropped"].(float64)
-			errs, _ := f["errors"].(float64)
-			survived := len(recordsOfKind(recs, "capture_probe"))
-			if int(accepted) != c.submitted {
-				t.Errorf("the sink accepted %.0f of %d records", accepted, c.submitted)
-			}
-			if accepted != written+dropped {
-				t.Errorf("the sink accepted %.0f records and accounted for %.0f "+
-					"(%.0f written, %.0f dropped)", accepted, written+dropped, written, dropped)
-			}
-			if survived != int(written) {
-				t.Errorf("%d records are in the capture and the sink wrote %.0f: "+
-					"the capture lost what the writer had", survived, written)
-			}
-			if c.submitted <= shadowQueueDepth && survived != c.submitted {
-				t.Errorf("%d of %d records survived a burst the queue can hold (%.0f dropped)",
-					survived, c.submitted, dropped)
-			}
-			if survived < shadowQueueDepth {
-				t.Errorf("%d records survived, fewer than the %d the queue holds",
-					survived, shadowQueueDepth)
-			}
-			if errs != 0 {
-				t.Errorf("%.0f capture write errors: the descriptor closed under the writer", errs)
-			}
-		})
+		}
+	})
+	footers := recordsOfKind(recs, "task_contract_shadow_footer")
+	if len(footers) != 1 {
+		t.Fatalf("%d footers, want exactly one: a capture without one is incomplete",
+			len(footers))
+	}
+	return len(recordsOfKind(recs, "capture_probe")), footers[0]
+}
+
+// checkCaptureBalances holds a capture to what the sink promises for any
+// burst: it accepted what it was handed, it accounts for every accepted
+// record as written or dropped, the capture holds exactly what it wrote, at
+// least a full queue survived, and no write failed.
+func checkCaptureBalances(t *testing.T, submitted, survived int, footer map[string]interface{}) {
+	t.Helper()
+	accepted, _ := footer["accepted"].(float64)
+	written, _ := footer["written"].(float64)
+	dropped, _ := footer["dropped"].(float64)
+	errs, _ := footer["errors"].(float64)
+	if int(accepted) != submitted {
+		t.Errorf("the sink accepted %.0f of %d records", accepted, submitted)
+	}
+	if accepted != written+dropped {
+		t.Errorf("the sink accepted %.0f records and accounted for %.0f "+
+			"(%.0f written, %.0f dropped)", accepted, written+dropped, written, dropped)
+	}
+	if survived != int(written) {
+		t.Errorf("%d records are in the capture and the sink wrote %.0f: "+
+			"the capture lost what the writer had", survived, written)
+	}
+	if survived < shadowQueueDepth {
+		t.Errorf("%d records survived, fewer than the %d the queue holds",
+			survived, shadowQueueDepth)
+	}
+	if errs != 0 {
+		t.Errorf("%.0f capture write errors: the descriptor closed under the writer", errs)
 	}
 }
