@@ -75,6 +75,12 @@ def changed(runs, name, **fields):
     return [{**run, **fields} if run["name"] == name else run for run in runs]
 
 
+def only(found):
+    """The one finding of a canary that differs from the list in one thing."""
+    assert len(found) == 1, found
+    return found[0]
+
+
 # --- the list ------------------------------------------------------------------
 
 def test_every_listed_check_is_a_job_of_a_workflow(manifest):
@@ -90,7 +96,8 @@ def test_no_check_is_listed_twice_and_every_entry_says_what_it_plants(manifest):
     listed = names(manifest, "red") + list(manifest["not_covered"])
     assert len(listed) == len(set(listed))
     for plant in manifest["plants"]:
-        assert plant["what"].strip() and (plant.get("red") or plant.get("reports")), plant["id"]
+        assert plant["what"].strip(), plant["id"]
+        assert plant.get("red") or plant.get("reports"), plant["id"]
     assert all(reason.strip() for reason in manifest["not_covered"].values())
 
 
@@ -104,7 +111,7 @@ def test_the_title_of_the_canary_fails_the_title_check(manifest):
 def checkout(tmp_path, manifest):
     """A copy of the files the list edits, as they are in the repository."""
     for plant in manifest["plants"]:
-        if plant["action"] in ("append", "insert_after_first_line", "replace"):
+        if plant["action"] in ("append", "insert_after_first_line", "replace_line"):
             (tmp_path / plant["path"]).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / plant["path"], tmp_path / plant["path"])
     return tmp_path
@@ -122,8 +129,9 @@ def test_the_edits_land_where_they_take_effect(canary, manifest, checkout):
     canary.apply_plants(checkout, manifest)
     by_action = {plant["action"]: plant for plant in manifest["plants"]}
     inserted = (checkout / by_action["insert_after_first_line"]["path"]).read_text(encoding="utf-8").splitlines()
-    assert inserted[0].startswith("#!") and inserted[2] == by_action["insert_after_first_line"]["lines"][-1]
-    replaced = by_action["replace"]
+    assert inserted[0].startswith("#!")
+    assert inserted[2] == by_action["insert_after_first_line"]["lines"][-1]
+    replaced = by_action["replace_line"]
     before = (ROOT / replaced["path"]).read_text(encoding="utf-8").splitlines()
     after = (checkout / replaced["path"]).read_text(encoding="utf-8").splitlines()
     assert [line for line in after if line not in before] == replaced["lines"]
@@ -147,11 +155,21 @@ def test_planting_twice_is_refused_and_writes_nothing(canary, manifest, checkout
 
 
 def test_an_edit_that_no_longer_fits_its_file_is_refused_with_a_fix(canary, manifest, checkout):
-    replaced = next(plant for plant in manifest["plants"] if plant["action"] == "replace")
-    (checkout / replaced["path"]).write_text("FROM scratch\n", encoding="utf-8")
-    with pytest.raises(canary.PlantError, match="matches 0 time.*Fix:"):
-        canary.apply_plants(checkout, manifest)
-    assert not (checkout / "tests").exists()
+    replaced = next(plant for plant in manifest["plants"] if plant["action"] == "replace_line")
+    line = (replaced["starts_with"] + "0" * 40 + "\n")
+    for text, count in (("FROM scratch\n", 0), (line + line, 2)):
+        (checkout / replaced["path"]).write_text(text, encoding="utf-8")
+        with pytest.raises(canary.PlantError, match=f"{count} line.*needs exactly one. Fix:"):
+            canary.apply_plants(checkout, manifest)
+        assert not (checkout / "tests").exists()
+
+
+@pytest.mark.parametrize("length", [100, 1001, "120", None])
+def test_a_planted_function_length_outside_its_range_is_refused(canary, tmp_path, length):
+    plant = {"id": "size", "action": "long_function", "path": "scripts/long.py", "length": length}
+    with pytest.raises(canary.PlantError, match="must have 101 to 1000 lines.*Fix:"):
+        canary.apply_plants(tmp_path, {"plants": [plant]})
+    assert not (tmp_path / "scripts").exists()
 
 
 def test_a_path_outside_the_checkout_is_refused(canary, tmp_path):
@@ -166,7 +184,8 @@ def test_planting_is_refused_on_any_other_branch(tmp_path):
     done = subprocess.run([sys.executable, str(SCRIPT), "--root", str(tmp_path), "plant"], capture_output=True,
                           text=True, check=False)
     assert done.returncode == 2
-    assert "belong only on" in done.stderr and "fix:" in done.stderr
+    assert "belong only on" in done.stderr
+    assert "fix:" in done.stderr
     assert [path.name for path in tmp_path.iterdir() if path.name != ".git"] == [".github"]
 
 
@@ -177,9 +196,10 @@ def test_a_canary_that_is_as_listed_has_no_finding(canary, manifest):
 
 
 def test_a_listed_check_that_passed_is_named_with_what_it_no_longer_catches(canary, manifest):
-    found = judged(canary, manifest, changed(runs_as_listed(manifest), "shellcheck", conclusion="success"))
-    assert len(found) == 1
-    assert "`shellcheck` passed on the canary" in found[0] and "an unused variable" in found[0] and "Fix:" in found[0]
+    message = only(judged(canary, manifest, changed(runs_as_listed(manifest), "shellcheck", conclusion="success")))
+    assert "`shellcheck` passed on the canary" in message
+    assert "an unused variable" in message
+    assert "Fix:" in message
 
 
 @pytest.mark.parametrize("fields, words", [
@@ -188,14 +208,14 @@ def test_a_listed_check_that_passed_is_named_with_what_it_no_longer_catches(cana
     ({"status": "in_progress", "conclusion": None}, "has not finished"),
 ])
 def test_a_listed_check_that_did_not_judge_is_named(canary, manifest, fields, words):
-    found = judged(canary, manifest, changed(runs_as_listed(manifest), "pr title", **fields))
-    assert len(found) == 1 and "`pr title`" in found[0] and words in found[0]
+    message = only(judged(canary, manifest, changed(runs_as_listed(manifest), "pr title", **fields)))
+    assert "`pr title`" in message
+    assert words in message
 
 
 def test_a_listed_check_that_did_not_run_is_named(canary, manifest):
     runs = [run for run in runs_as_listed(manifest) if run["name"] != "go test (proxy)"]
-    found = judged(canary, manifest, runs)
-    assert len(found) == 1 and "`go test (proxy)` did not run" in found[0]
+    assert "`go test (proxy)` did not run" in only(judged(canary, manifest, runs))
 
 
 def test_the_newest_run_of_a_check_counts(canary, manifest):
@@ -209,13 +229,13 @@ def test_the_newest_run_of_a_check_counts(canary, manifest):
 @pytest.mark.parametrize("paths", [[], [".github"]])
 def test_a_report_only_check_with_no_note_on_the_planted_file_is_named(canary, manifest, paths):
     name = names(manifest, "reports")[0]
-    found = judged(canary, manifest, changed(runs_as_listed(manifest), name, annotation_paths=paths))
-    assert len(found) == 1 and f"`{name}` reported nothing for" in found[0]
+    message = only(judged(canary, manifest, changed(runs_as_listed(manifest), name, annotation_paths=paths)))
+    assert f"`{name}` reported nothing for" in message
 
 
 def test_a_required_check_that_the_list_does_not_know_is_named(canary, manifest):
-    found = judged(canary, manifest, required_names=required(manifest) + ["a new required check"])
-    assert len(found) == 1 and "`a new required check` is not in the canary list" in found[0]
+    message = only(judged(canary, manifest, required_names=required(manifest) + ["a new required check"]))
+    assert "`a new required check` is not in the canary list" in message
 
 
 @pytest.mark.parametrize("changes, words", [
@@ -225,14 +245,15 @@ def test_a_required_check_that_the_list_does_not_know_is_named(canary, manifest)
     ({"head": {"ref": "fix/something", "sha": "0" * 40}}, "is on branch `fix/something`"),
 ])
 def test_a_pull_request_that_is_not_the_canary_as_listed_is_named(canary, manifest, changes, words):
-    found = judged(canary, manifest, **changes)
-    assert len(found) == 1 and words in found[0] and "Fix:" in found[0]
+    message = only(judged(canary, manifest, **changes))
+    assert words in message
+    assert "Fix:" in message
 
 
 def test_a_canary_that_was_not_renewed_in_time_is_named(canary, manifest):
     late = datetime(2000, 1, 5 + manifest["max_age_days"] + 1, tzinfo=timezone.utc)
     found = canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), BASE_DATE, late)
-    assert len(found) == 1 and "days ago" in found[0].message
+    assert "days ago" in only(found).message
     in_time = datetime(2000, 1, 5 + manifest["max_age_days"], tzinfo=timezone.utc)
     assert canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), BASE_DATE, in_time) == []
 
@@ -242,7 +263,8 @@ def test_without_a_token_it_stops_with_a_fix(tmp_path):
     done = subprocess.run([sys.executable, str(SCRIPT), "check", "--pr", "1"], capture_output=True, text=True, env=env,
                           check=False)
     assert done.returncode == 2
-    assert "no GitHub token" in done.stderr and "fix:" in done.stderr
+    assert "no GitHub token" in done.stderr
+    assert "fix:" in done.stderr
 
 
 def test_the_list_is_plain_json_with_the_keys_the_script_reads():

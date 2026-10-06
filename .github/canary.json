@@ -235,12 +235,12 @@
         "llama.cpp patches apply to pinned SHA"
       ],
       "what": "a llama.cpp revision in inference/Dockerfile.vulkan that differs from the other Dockerfiles",
-      "action": "replace",
+      "action": "replace_line",
       "path": "inference/Dockerfile.vulkan",
-      "pattern": "^ARG LLAMA_CPP_REV=[a-f0-9]+$",
       "lines": [
         "ARG LLAMA_CPP_REV=0000000000000000000000000000000000000000"
-      ]
+      ],
+      "starts_with": "ARG LLAMA_CPP_REV="
     },
     {
       "id": "bootstrap",

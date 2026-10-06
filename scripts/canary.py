@@ -64,7 +64,14 @@ def target(root: Path, relative: str) -> Path:
     return path
 
 
+LONG_FUNCTION_LINES = (101, 1000)
+
+
 def long_function(length: int) -> list[str]:
+    low, high = LONG_FUNCTION_LINES
+    if not isinstance(length, int) or not low <= length <= high:
+        raise PlantError(f"the planted function must have {low} to {high} lines, and the list asks for {length!r}. "
+                         f"Fix: set `length` in {MANIFEST} to a number in that range.")
     body = [f"    total += {number}" for number in range(length)]
     return ['"""Planted for the canary pull request. Never merge it."""', "", "",
             "def canary_long_function():", "    total = 0", *body, "    return total"]
@@ -91,14 +98,17 @@ def planted_text(path: Path, plant: dict) -> str:
     if action == "insert_after_first_line":
         first, _, rest = text.partition("\n")
         return first + "\n" + block + rest
-    if action == "replace":
-        changed, count = re.subn(plant["pattern"], block.rstrip("\n"), text, flags=re.MULTILINE)
-        if count != 1:
-            raise PlantError(f"the pattern of `{plant['id']}` matches {count} time(s) in {plant['path']}, and it "
-                             f"must match once. Fix: change the pattern in {MANIFEST} to fit the file as it is now.")
-        return changed
+    if action == "replace_line":
+        lines = text.split("\n")
+        found = [number for number, line in enumerate(lines) if line.startswith(plant["starts_with"])]
+        if len(found) != 1:
+            raise PlantError(f"{len(found)} line(s) of {plant['path']} start with `{plant['starts_with']}`, and "
+                             f"`{plant['id']}` needs exactly one. Fix: change `starts_with` in {MANIFEST} to fit the "
+                             "file as it is now.")
+        lines[found[0]] = block.rstrip("\n")
+        return "\n".join(lines)
     raise PlantError(f"`{plant['id']}` has the unknown action `{action}`. Fix: use write, append, "
-                     f"insert_after_first_line, replace, long_function or title in {MANIFEST}.")
+                     f"insert_after_first_line, replace_line, long_function or title in {MANIFEST}.")
 
 
 def apply_plants(root: Path, manifest: dict) -> list[str]:
