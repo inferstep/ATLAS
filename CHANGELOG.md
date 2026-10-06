@@ -176,6 +176,16 @@ longer creates or mounts it, and `ATLAS_PVC_PROJECTS_SIZE` is gone from
 `atlas.conf.example` (an old value is ignored). `uninstall.sh --data` still
 deletes a `lens-projects` claim that an older install left behind.
 
+### Fixed: the TUI tests wrote session files into the real cache folder on macOS
+
+The session tests set `XDG_CACHE_HOME` to keep their files in a temporary
+folder. Go reads that variable on Linux only; on macOS the cache folder comes
+from `HOME`. So on a Mac every run of `go test` in `tui/` wrote session files
+into `~/Library/Caches/atlas-tui/sessions`, the tests saw each other's files
+and the leftovers of earlier runs, and two of them failed. The whole test run
+now uses a temporary folder for both variables, and a test that asks for its
+own folder gets one on both systems. No product code changed.
+
 ### Added: each fenced fetch attempt is recorded in a `fenced_fetch` event
 
 A file body sent through the fenced channel is fetched in up to two
