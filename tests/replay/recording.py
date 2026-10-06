@@ -68,21 +68,24 @@ def plain_events(events: list[dict], st: stage.Stage) -> list[dict]:
     return out
 
 
-def run(recording: dict, binary: Path, root: Path, upstreams=None) -> dict:
+def run(recording: dict, binary: Path, root: Path, upstreams=None, accept=False, more_env=None) -> dict:
     """Run the proxy once on the recording's files and request.
 
     With upstreams the services are those functions and the exchanges are
-    kept (recording). Without, the services play the recording (replay).
-    Returns the exchanges, the events, the end files and the first mismatch.
+    kept (recording). Without, the services play the recording (replay); with
+    accept, a request that differs only in its text is taken into the
+    recording. Returns the exchanges, the events, the end files, the first
+    mismatch, and how many requests were accepted.
     """
     workspace, home = root / "workspace", root / "home"
     workspace.mkdir(parents=True)
     home.mkdir()
     workspace = workspace.resolve()
     lay_files(workspace, recording["files"])
-    st = stage.Stage(upstreams=upstreams, recording=None if upstreams else recording, workspace=workspace)
+    st = stage.Stage(upstreams=upstreams, recording=None if upstreams else recording, workspace=workspace,
+                     accept=accept)
     ports = st.start()
-    port, process = stage.start_proxy(binary, ports, home)
+    port, process = stage.start_proxy(binary, ports, home, more_env)
     try:
         request = json.loads(json.dumps(recording["request"]).replace(stage.WORKSPACE, str(workspace)))
         events = stage.drive(port, request)
@@ -91,7 +94,7 @@ def run(recording: dict, binary: Path, root: Path, upstreams=None) -> dict:
         process.communicate(timeout=20)
         st.stop()
     return {"exchanges": st.exchanges, "events": plain_events(events, st), "files": files_of(workspace),
-            "mismatch": st.mismatch, "not_asked": {s: len(left) for s, left in st.waiting.items() if left}}
+            "mismatch": st.mismatch, "not_asked": st.not_asked(), "accepted": st.accepted}
 
 
 def first_difference(expected: str, got: str) -> str:
@@ -111,9 +114,13 @@ def differences(recording: dict, result: dict) -> list[str]:
                    f"{got['method']} {got['path']} {got['request'][:300]}")
     elif mismatch:
         expected, got = mismatch["expected"], mismatch["got"]
-        number = len([e for e in result["exchanges"] if e["service"] == mismatch["service"]]) + 1
-        where = f"request {number} to the {mismatch['service']} ({expected['method']} {expected['path']})"
-        if (expected["method"], expected["path"]) != (got["method"], got["path"]):
+        number = len([e for e in result["exchanges"] if e["service"] == expected["service"]]) + 1
+        where = f"request {number} to the {expected['service']} ({expected['method']} {expected['path']})"
+        if expected["service"] != got["service"]:
+            out.append(f"the proxy called the {got['service']} ({got['method']} {got['path']}) where the recording "
+                       f"has a call to the {expected['service']} ({expected['method']} {expected['path']}): the order "
+                       "of its calls changed")
+        elif (expected["method"], expected["path"]) != (got["method"], got["path"]):
             out.append(f"{where} is now {got['method']} {got['path']}")
         else:
             out.append(f"{where} differs from the recording; " + first_difference(expected["request"], got["request"]))

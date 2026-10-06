@@ -45,6 +45,7 @@ def test_a_recording_says_where_it_came_from(name):
     assert source["kind"] in recording.KINDS, "recordings come from e2e, smoke and development tasks only"
     assert source["model_replies"] in recording.REPLIES
     assert source["task"].strip()
+    assert source["what"].strip()
     assert re.fullmatch(r"[0-9a-f]{7,40}", source["commit"])
 
 
@@ -64,6 +65,21 @@ def test_there_is_a_recording_of_a_normal_session():
     made = recording.load("normal_edit")
     assert made["expected"]["events"][-1]["data"]["status"] == "completed"
     assert {exchange["service"] for exchange in made["exchanges"]} == set(stage.SERVICES)
+
+
+def test_the_three_bad_replies_are_recorded_with_what_the_proxy_does_about_each():
+    def events(name, kind):
+        return [event["data"] for event in recording.load(name)["expected"]["events"] if event["type"] == kind]
+
+    refused = [result["error"] for result in events("malformed_tool_call", "tool_result") if not result["success"]]
+    assert len(refused) == 2
+    assert "no arguments provided" in refused[0]
+    assert "invalid input" in refused[1]
+    assert events("malformed_tool_call", "done")[-1]["status"] == "completed"
+    assert [error["category"] for error in events("cut_off_reply", "error")] == ["truncated_tool"]
+    assert events("cut_off_reply", "done")[-1]["status"] == "completed"
+    assert events("looping_reply", "done")[-1]["reason"] == "repeat_detector"
+    assert events("looping_reply", "done")[-1]["status"] == "stopped"
 
 
 # --- the harness: a recording changed in one place is reported at that place --------
@@ -97,13 +113,25 @@ def test_a_request_that_differs_from_the_recording_is_named_with_its_service(nor
     assert "differs from the recording" in problems[0]
 
 
-def test_a_request_the_recording_does_not_have_is_named(normal, proxy_binary, tmp_path):
+def test_two_calls_in_the_other_order_are_named_unless_the_recording_holds_the_order_per_service(normal, proxy_binary, tmp_path):
     made = copy.deepcopy(normal)
-    last_model = max(i for i, exchange in enumerate(made["exchanges"]) if exchange["service"] == "model")
-    del made["exchanges"][last_model]
+    first, second = made["exchanges"][0], made["exchanges"][1]
+    assert first["service"] != second["service"]
+    made["exchanges"][0], made["exchanges"][1] = second, first
     problems = replay(made, proxy_binary, tmp_path)
     assert problems
-    assert "a request to the model that the recording does not have" in problems[0]
+    assert f"the proxy called the {first['service']}" in problems[0]
+    assert "the order of its calls changed" in problems[0]
+    made["order"] = "per service"
+    assert replay(made, proxy_binary, tmp_path / "per-service") == []
+
+
+def test_a_request_the_recording_does_not_have_is_named(normal, proxy_binary, tmp_path):
+    made = copy.deepcopy(normal)
+    last = made["exchanges"].pop()
+    problems = replay(made, proxy_binary, tmp_path)
+    assert problems
+    assert f"a request to the {last['service']} that the recording does not have" in problems[0]
 
 
 def test_a_recorded_request_the_proxy_does_not_send_is_named(normal, proxy_binary, tmp_path):
@@ -126,6 +154,26 @@ def test_a_file_that_differs_at_the_end_is_named(normal, proxy_binary, tmp_path)
     made = copy.deepcopy(normal)
     made["expected"]["files"]["app.py"] += "# one more line\n"
     assert replay(made, proxy_binary, tmp_path) == ["the files at the end differ from the recording: app.py"]
+
+
+def test_the_expected_side_can_be_written_again_and_the_answers_stay(normal, proxy_binary, tmp_path):
+    from tests.replay import rewrite
+    stale = changed_request(normal, "model", "You are ATLAS", "You were ATLAS")
+    stale["expected"]["events"][-1]["data"]["reason"] = "an_old_reason"
+    stale["expected"]["files"]["app.py"] = "old content\n"
+    new, problem = rewrite.rewritten(stale, proxy_binary, tmp_path)
+    assert problem is None
+    assert new == normal
+    assert [exchange["response"] for exchange in new["exchanges"]] == [e["response"] for e in stale["exchanges"]]
+
+
+def test_a_change_in_the_order_of_calls_cannot_be_written_again(normal, proxy_binary, tmp_path):
+    from tests.replay import rewrite
+    made = copy.deepcopy(normal)
+    made["exchanges"][0], made["exchanges"][1] = made["exchanges"][1], made["exchanges"][0]
+    new, problem = rewrite.rewritten(made, proxy_binary, tmp_path)
+    assert problem and "the order of its calls changed" in problem
+    assert new["expected"] == made["expected"]
 
 
 def test_what_varies_between_runs_is_left_out_and_nothing_else(normal):

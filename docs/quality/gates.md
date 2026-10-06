@@ -114,14 +114,18 @@ How to read the coverage rows:
 The proxy is tested from outside on recorded sessions (`tests/replay`). It
 runs as a binary built from the change. Its four services (the model, the
 sandbox, V3 and the lens) are stand-ins that play a recording. Each request
-the proxy sends to one of them is compared, whole, with the recorded request,
-in the order of that service. The events the proxy sends to the client and
-the files it leaves are compared too.
+the proxy sends to one of them is compared, whole, with the next recorded
+request. The events the proxy sends to the client and the files it leaves are
+compared too.
 
 - A recording is one JSON file in `tests/replay/recordings/`. It says where
   it came from: the task, the set the task belongs to (e2e, smoke or
-  development, and no other), the commit, and whether the model replies were
-  written by hand or captured from a model.
+  development, and no other), the commit, whether the model replies were
+  written by hand or captured from a model, and what the case is for.
+- The proxy makes its calls one after another, so the order is held across
+  all four services: a call to the sandbox where the recording has a call to
+  V3 fails the case. A recording of a session in which the proxy calls two
+  services at the same time says `"order": "per service"`.
 - Left out of the comparison, by name, are the fields of an event that
   differ from run to run: six times and one estimate that depends on how
   long the path of the workspace is (`VARIES_IN_EVENTS` in
@@ -133,14 +137,35 @@ the files it leaves are compared too.
 - A green replay means the same behaviour on these recorded sessions. It
   does not mean correct. It cannot show how a real model reacts to a changed
   message, because the replies are fixed.
-- A recording is an expected value. When a change is meant to alter what the
-  proxy does on a recorded session (a text the model reads, the order of two
-  calls), the recording is made again in the same pull request
-  (`python -m tests.replay.record <case>`), the pull request says which
-  behaviour changed and why, and a maintainer approves it.
 
-Run them with `python -m pytest tests/replay`. The tests build the proxy
-themselves and need Go.
+The cases: a normal session; a tool call that is not well formed; a reply
+that is cut off; the same call again and again until the proxy stops the
+session; an edit that would leave the file unparseable; a write of a whole
+existing file, which is refused and redirected; and a `done` before anything
+was run.
+
+| Command | What it does |
+|---|---|
+| `python -m pytest tests/replay` | Replays every recording. The tests build the proxy themselves and need Go. `make verify` runs them when a file of the proxy changed |
+| `python -m tests.replay.record <case>` | Makes a recording from a scripted case, with the real sandbox executor of the checkout. Needs the packages of `sandbox/requirements-runtime.txt` |
+| `python -m tests.replay.rewrite <case>` | Writes the expected side of a recording again from the proxy of the checkout: the text of each request, the events, the end files. The recorded answers stay |
+| `python -m tests.replay.reach [--checks]` | Says how much of the proxy the recordings run through, by file, and which check functions no case reaches |
+
+A recording is an expected value. When a change is meant to alter what the
+proxy does on a recorded session (a text the model reads, a field of a
+request), the expected side is written again in the same pull request with
+the rewrite command, so the diff of the recording shows exactly what changed.
+The pull request says which behaviour changed and why, and a maintainer
+approves it. When the change alters which calls the proxy makes or their
+order, the recorded answers no longer fit and the session is recorded again.
+
+What a replay cannot reach today: at a replay no command really runs, so a
+file that a command would make does not exist. Every check that reads such a
+file (a deliverable written by a script, the output of a build) is outside
+the replays, and a session whose command changes a file that the proxy reads
+later cannot be recorded; the recording step refuses it. The way to lift
+this: the recording keeps, for each call to the sandbox, the files that call
+changed, and the stand-in puts them into the workspace at a replay.
 
 ## The canary
 

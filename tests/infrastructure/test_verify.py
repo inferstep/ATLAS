@@ -33,11 +33,18 @@ def test_a_document_change_runs_only_the_checks_of_the_whole_tree(verify):
 def test_a_proxy_change_runs_the_go_gates_and_leaves_the_slow_suite_to_full(verify):
     gates, suites, lens = verify.select(["proxy/agent.go"], full=False)
     assert gates == ALWAYS + ["go-proxy-vet", "go-proxy-staticcheck"]
-    assert suites == []
+    assert suites == ["tests/replay"]
     assert not lens
     gates, suites, _ = verify.select(["proxy/agent.go"], full=True)
     assert "go-proxy-test" in gates
-    assert suites == ["tests/e2e"]
+    assert suites == ["tests/replay", "tests/e2e"]
+
+
+def test_a_file_that_sends_to_the_agent_runs_the_test_that_lists_the_senders(verify):
+    contract = "tests/contracts/test_api_version_contract.py"
+    assert contract in verify.select(["tests/replay/stage.py"], full=False)[1]
+    assert contract not in verify.select(["tests/replay/recording.py"], full=False)[1]
+    assert verify.select(["atlas/cli.py", "tests/replay/stage.py"], full=False)[1].count(contract) == 0
 
 
 def test_a_tui_change_runs_its_tests_too(verify):

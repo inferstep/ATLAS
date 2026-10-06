@@ -2,10 +2,16 @@
 
 A Stage runs one HTTP server per service. In record mode each request is
 answered by a function and the exchange is kept. In play mode each request is
-compared with the next recorded request of that service and answered with the
-recorded answer; the first request that differs is kept as the mismatch, and
-from then on the stage answers with an error, because the rest of the
-recording no longer fits.
+compared with the next recorded request and answered with the recorded
+answer; the first request that differs is kept as the mismatch, and from then
+on the stage answers with an error, because the rest of the recording no
+longer fits.
+
+The proxy makes its calls one after another, so the next recorded request is
+the next one of the whole recording, whichever service it goes to: a call to
+the sandbox where the recording has a call to V3 is a mismatch. A recording
+of a session in which the proxy calls two services at the same time says
+`"order": "per service"`, and then the next request of each service counts.
 """
 from __future__ import annotations
 
@@ -57,12 +63,15 @@ def clocked_answer(service: str, method: str, path: str):
 
 
 class Stage:
-    def __init__(self, upstreams=None, recording=None, workspace=""):
+    def __init__(self, upstreams=None, recording=None, workspace="", accept=False):
         self.upstreams, self.recording, self.workspace = upstreams, recording, str(workspace)
+        # With accept, a request that differs only in its text takes the place
+        # of the recorded one (to write the expected side of a recording again).
+        self.accept, self.accepted = accept, 0
         self.lock = threading.Lock()
         self.exchanges, self.mismatch, self.servers, self.ports = [], None, [], {}
-        self.waiting = {service: [e for e in (recording or {}).get("exchanges", []) if e["service"] == service]
-                        for service in SERVICES}
+        self.waiting = list((recording or {}).get("exchanges", []))
+        self.per_service = (recording or {}).get("order") == "per service"
 
     def start(self) -> dict[str, int]:
         for service in SERVICES:
@@ -107,17 +116,32 @@ class Stage:
                 return status, content_type, text
             if self.mismatch:
                 return 599, "text/plain", "the replay stopped at an earlier request that differs from the recording"
-            if not self.waiting[service]:
+            expected = self.next_recorded(service)
+            if expected is None:
                 self.mismatch = {"service": service, "expected": None, "got": request}
                 return 599, "text/plain", "the recording has no more requests to this service"
-            expected = self.waiting[service].pop(0)
-            if {k: expected[k] for k in ("method", "path", "request")} != {k: request[k] for k in ("method", "path", "request")}:
+            same_call = all(expected[k] == request[k] for k in ("service", "method", "path"))
+            if same_call and self.accept and expected["request"] != request["request"]:
+                expected["request"], self.accepted = request["request"], self.accepted + 1
+            if {k: expected[k] for k in ("service", "method", "path", "request")} != request:
                 self.mismatch = {"service": service, "expected": expected, "got": request}
                 return 599, "text/plain", "this request differs from the recorded one"
+            self.waiting.remove(expected)
             self.exchanges.append(expected)
             response = expected["response"]
             body = response["body"].replace(WORKSPACE, self.workspace).replace(PROBE, self.probe_value())
             return response["status"], response["content_type"], body
+
+    def next_recorded(self, service: str):
+        """The recorded request this one is held against, or None when the recording has none left for it."""
+        if self.per_service:
+            return next((exchange for exchange in self.waiting if exchange["service"] == service), None)
+        return self.waiting[0] if self.waiting else None
+
+    def not_asked(self) -> dict[str, int]:
+        """How many recorded requests to each service the proxy did not send."""
+        return {service: count for service in SERVICES
+                if (count := sum(1 for exchange in self.waiting if exchange["service"] == service))}
 
     def _handler(self, service: str):
         stage = self
@@ -151,7 +175,7 @@ def build_proxy(target: Path) -> Path:
     return binary
 
 
-def start_proxy(binary: Path, ports: dict[str, int], home: Path):
+def start_proxy(binary: Path, ports: dict[str, int], home: Path, more_env=None):
     """Start the proxy against the stand-ins with a fixed, small environment. Returns its port and process."""
     port = free_port()
     token = home / "service-token"
@@ -159,7 +183,7 @@ def start_proxy(binary: Path, ports: dict[str, int], home: Path):
     token.chmod(0o600)
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "ATLAS_PROXY_PORT": str(port),
            "ATLAS_KEEP_LLAMA_WARM": "0", "ATLAS_PERMISSION_TIMEOUT_SEC": "30", "ATLAS_SERVICE_TOKEN_FILE": str(token),
-           "ATLAS_MODEL_NAME": "replay-model"}
+           "ATLAS_MODEL_NAME": "replay-model", **(more_env or {})}
     for service, names in SERVICE_ENV.items():
         for name in names:
             env[name] = f"http://127.0.0.1:{ports[service]}"

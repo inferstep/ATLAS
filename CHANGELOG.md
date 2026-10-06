@@ -354,6 +354,25 @@ done). The job `replay (proxy)` runs on pull requests that touch `proxy/` or
 `tests/replay/` and in the merge queue, and is not a required check
 (`docs/quality/gates.md`).
 
+### Added: six more replay cases, the order of calls, and three commands
+
+The replay tests (`tests/replay`) now hold seven recorded sessions: a normal
+one, a tool call that is not well formed, a reply that is cut off, the same
+call again and again until the proxy stops the session, an edit that would
+leave the file unparseable, a write of a whole existing file that is refused
+and redirected, and a `done` before anything was run.
+- The order of the proxy's calls is held across all four services, not only
+  within each one. A recording of a session with calls at the same time can
+  say `"order": "per service"`.
+- `python -m tests.replay.rewrite` writes the expected side of a recording
+  again from the proxy of the checkout and keeps the recorded answers, for a
+  change that is meant to alter what the proxy does.
+- `python -m tests.replay.reach` says how much of the proxy the recordings
+  run through: 26.0% of its statements, and 66 of 131 check functions.
+- `make verify` runs the replay when a file of the proxy changed, and runs
+  the test that lists the senders of agent requests when a changed file
+  sends one.
+
 ### Added: a canary that shows each check still turns red
 
 A check that silently stops checking looks the same as a check that passes.

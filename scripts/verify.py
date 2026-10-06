@@ -43,9 +43,13 @@ SUITES_BY_PATH = (
     ("v3-service/", ("tests/v3-service", "tests/v3")),
     ("sandbox/", (INFRASTRUCTURE_SUITE,)),
     ("scripts/", (INFRASTRUCTURE_SUITE,)),
-    (PROXY, ("tests/e2e",)),
+    (PROXY, ("tests/replay", "tests/e2e")),
 )
 SLOW_SUITES = (INFRASTRUCTURE_SUITE, "tests/e2e")
+# A file that sends a request to the agent must be on this test's list of
+# senders, with the task mode it declares.
+AGENT_ENDPOINT = "/v1/agent"
+SENDER_CONTRACT = "tests/contracts/test_api_version_contract.py"
 
 FIXES = {
     "go-proxy-vet": "Fix the line `go vet` names (run it in proxy/).",
@@ -102,8 +106,16 @@ def select(changed: list[str], full: bool) -> tuple[list[str], list[str], bool]:
     # A changed test file is run itself, whatever its suite.
     suites += [p for p in changed if p.startswith("tests/") and Path(p).name.startswith("test_")
                and (ROOT / p).is_file() and not p.startswith(tuple(suites))]
+    if any(sends_to_the_agent(p) for p in changed) and not SENDER_CONTRACT.startswith(tuple(suites)):
+        suites.append(SENDER_CONTRACT)
     lens = any(p.startswith("geometric-lens/") for p in changed)
     return list(dict.fromkeys(gates)), list(dict.fromkeys(suites)), lens
+
+
+def sends_to_the_agent(path: str) -> bool:
+    """Whether a changed Python file names the agent endpoint, as a sender of requests does."""
+    file = ROOT / path
+    return path.endswith(".py") and file.is_file() and AGENT_ENDPOINT in file.read_text(encoding="utf-8", errors="replace")
 
 
 def changed_go_tests(changed: list[str]) -> str:
