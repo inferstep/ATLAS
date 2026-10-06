@@ -174,6 +174,15 @@ read. Both now show the status and the reason at the end of every run, even
 with no summary. Each status has its own color. A missing status reads as
 incomplete, as docs/API.md says.
 
+### Changed: the steering status reads its workspace place through the confined reader
+
+The proxy's steering status looks for the control vector in three places.
+One of them is inside the workspace (`models/` under the workspace folder).
+That place, and the marker file beside the vector, are now read through the
+confined folder helper, like the other project reads. A name there that
+resolves outside the workspace counts as absent. The two other places are
+fixed service paths and are read as before.
+
 ### Changed: project reads in the proxy go through one confined reader
 
 Eight places in the proxy read project files with plain file calls: the

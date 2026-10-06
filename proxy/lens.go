@@ -29,6 +29,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -676,27 +677,23 @@ func probeASAStatus() ASAStatus {
 	out := ASAStatus{VectorPath: configured, Verdict: "unverified"}
 
 	// Candidate paths to probe, in order.
-	candidates := []string{configured}
+	candidates := []vectorCandidate{{path: configured}}
 	if strings.HasPrefix(configured, "/models/") {
 		base := strings.TrimPrefix(configured, "/models/")
 		workspace := envOr("ATLAS_WORKSPACE_DIR", "/workspace")
-		candidates = append(candidates,
-			workspace+"/models/"+base)
+		candidates = append(candidates, vectorCandidate{
+			path: workspace + "/models/" + base, root: workspace, rel: filepath.Join("models", base)})
 		if mdir := os.Getenv("ATLAS_MODELS_DIR"); mdir != "" {
-			candidates = append(candidates, mdir+"/"+base)
+			candidates = append(candidates, vectorCandidate{path: mdir + "/" + base})
 		}
 	}
 
-	for _, p := range candidates {
-		if info, err := os.Stat(p); err == nil {
+	for _, c := range candidates {
+		if bytes, markedFor, found := lookAtVector(c); found {
 			out.VectorPresent = true
-			out.VectorPath = p
+			out.VectorPath = c.path
 			expected := os.Getenv("ATLAS_MODEL_NAME")
-			markedFor := ""
-			if raw, readErr := os.ReadFile(p + ".model"); readErr == nil {
-				markedFor = strings.TrimSpace(string(raw))
-			}
-			size := strconv.FormatInt(info.Size(), 10)
+			size := strconv.FormatInt(bytes, 10)
 			switch {
 			case expected != "" && sameModelIdentity(markedFor, expected):
 				// Active, not "supported": the marker says which model the
@@ -725,6 +722,38 @@ func probeASAStatus() ASAStatus {
 		"build one via `atlas asa build` " +
 		"or see geometric-lens/asa_calibration/README.md"
 	return out
+}
+
+// vectorCandidate is one place the control vector can be. root and rel are
+// set for the place inside the workspace: the workspace folder, and the
+// path below it.
+type vectorCandidate struct {
+	path string
+	root string
+	rel  string
+}
+
+// lookAtVector returns the size of the vector at a candidate and the text of
+// the marker file beside it. The place inside the workspace is read through
+// the workspace folder, so a name there that resolves somewhere else counts
+// as absent, like a file that is not there.
+func lookAtVector(c vectorCandidate) (size int64, marker string, found bool) {
+	if c.root == "" {
+		info, err := os.Stat(c.path)
+		if err != nil {
+			return 0, "", false
+		}
+		raw, _ := os.ReadFile(c.path + ".model")
+		return info.Size(), strings.TrimSpace(string(raw)), true
+	}
+	dir := openConfinedDir(c.root)
+	defer dir.Close()
+	info, err := dir.Stat(c.rel)
+	if err != nil {
+		return 0, "", false
+	}
+	raw, _ := dir.ReadFile(c.rel + ".model")
+	return info.Size(), strings.TrimSpace(string(raw)), true
 }
 
 func sameModelIdentity(a, b string) bool {
