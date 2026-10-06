@@ -59,6 +59,9 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ matrix.module }}
         run: |
+          # The last command of a pipe decides the step. pipefail makes a
+          # report that cannot be read fail the step.
+          set -o pipefail
           go tool cover -func="$RUNNER_TEMP/coverage/go-${{ matrix.module }}.out" | tail -1 \
             | sed 's/^/go ${{ matrix.module }}: /' | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -163,6 +166,8 @@ jobs:
       - name: coverage total
         if: ${{ !cancelled() }}
         run: |
+          # See the Go job: without pipefail a missing report passes.
+          set -o pipefail
           python -m coverage report --data-file="$RUNNER_TEMP/coverage/.coverage.python" | tail -1 \
             | sed 's|^|python ${{ matrix.subset }}: |' | tee -a "$GITHUB_STEP_SUMMARY"
 

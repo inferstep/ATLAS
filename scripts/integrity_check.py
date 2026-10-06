@@ -38,7 +38,7 @@ GATE_FILES = (
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json",
     "scripts/integrity_check.py", "scripts/code_health.py",
-    "scripts/production-readiness.py",
+    "scripts/production-readiness.py", "scripts/checks_ran.py",
 )
 LOCK_FILES = ("package-lock.json", "go.sum", ".github/requirements/ci.txt")
 LARGE_CHANGE_LINES = 400

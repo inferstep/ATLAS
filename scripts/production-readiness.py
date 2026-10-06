@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -340,6 +341,26 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     }
 
 
+def _ran_no_test(command: Sequence[str], output: str) -> str:
+    """Why a test command that exited 0 proves nothing; empty when it ran a test.
+
+    pytest exits 0 when every collected test was skipped, and `go test` exits
+    0 for packages with no test files and for a -run pattern that matches
+    nothing. Each would report a pass with no test behind it.
+    """
+    if "pytest" in command:
+        summary = [line for line in output.splitlines() if re.search(r" in \d+(\.\d+)?s\b", line)]
+        if not summary:
+            return "pytest printed no summary line, so it is not known that a test ran"
+        if not re.search(r"\b[1-9]\d* passed\b", summary[-1]):
+            return f"pytest passed no test ({summary[-1].strip(' =')}): every test was skipped"
+    if tuple(command[:2]) == ("go", "test"):
+        ran = [line for line in output.splitlines() if line.startswith("ok ") and "[no tests to run]" not in line]
+        if not ran:
+            return "go test ran no test: no package has test files, or -run matched nothing"
+    return ""
+
+
 def _run_gate(gate: Gate, force_required: bool) -> Result:
     required = gate.required or force_required
     if not gate.available():
@@ -367,14 +388,18 @@ def _run_gate(gate: Gate, force_required: bool) -> Result:
     )
     duration = time.monotonic() - start
     output = completed.stdout.rstrip()
+    if completed.returncode != 0:
+        reason = f"exit code {completed.returncode}"
+    else:
+        reason = _ran_no_test(gate.command, output)
     return Result(
         name=gate.name,
-        status="passed" if completed.returncode == 0 else "failed",
+        status="failed" if reason else "passed",
         required=required,
         duration_seconds=round(duration, 3),
         command=list(gate.command),
         output=output,
-        reason="" if completed.returncode == 0 else f"exit code {completed.returncode}",
+        reason=reason,
     )
 
 

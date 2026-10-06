@@ -82,7 +82,9 @@ python scripts/production-readiness.py --only ruff
 
 CI runs the same gates, so a green run here usually means a green pull
 request. An optional tool you haven't installed shows as `unavailable`,
-not as a pass. More on tests is in [Testing](#testing).
+not as a pass. A test gate that ran no test fails, also when its command
+exited 0: every test skipped, a Go package with no test files, or a `-run`
+pattern that matches nothing. More on tests is in [Testing](#testing).
 
 To measure test coverage as CI does, name a directory for the reports
 (the pytest gates need `pytest-cov`):

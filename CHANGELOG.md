@@ -167,6 +167,21 @@ the run log, and in a summary line. The outcome of such a session was
 measured over an unstable stack. When docker cannot be asked, nothing is
 claimed.
 
+### Fixed: a test gate passed when it ran no test
+
+`scripts/production-readiness.py` judged a test gate by its exit code alone.
+pytest exits 0 when every collected test was skipped, and `go test` exits 0
+for a package with no test files and for a `-run` pattern that matches
+nothing, so such a run was reported as a pass. A pytest gate now passes only
+when its summary line counts at least one passed test, and a Go gate only
+when at least one package ran its tests. The reason is printed with the
+failure. Go prints no count of skipped tests without `-v`, so a Go package
+whose tests were all skipped still passes.
+
+The two "coverage total" steps in CI now fail when the report cannot be
+read. Each ended in a pipe, and the last command of the pipe decided the
+step.
+
 ### Removed: the unused lens-projects volume on Kubernetes
 
 The geometric-lens deployment created and mounted a `lens-projects`

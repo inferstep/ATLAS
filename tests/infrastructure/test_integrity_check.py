@@ -132,7 +132,7 @@ def test_a_new_document_needs_approval_outside_the_allowed_folders(ic):
 
 def test_a_change_to_a_gate_file_needs_approval(ic):
     for path in (".github/workflows/test.yml", ".github/code-health-baseline.json",
-                 "scripts/integrity_check.py", "codecov.yml"):
+                 "scripts/integrity_check.py", "scripts/checks_ran.py", "codecov.yml"):
         assert whats(ic, diff(path, added=["x: 1"])) == ["change to a file that configures the checks"], path
     assert whats(ic, diff(".github/requirements/ci.txt", added=["pytest==9.0.0"])) == []
 
