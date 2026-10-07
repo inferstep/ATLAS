@@ -294,13 +294,13 @@ the mark to every test of the files it lists and to every test under
 
 | File | Tests | What it needs | The job that runs it |
 |---|---|---|---|
-| `tests/infrastructure/test_llm.py` | 32 | a running model server | none until the nightly (#314) |
-| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | none until the nightly (#314) |
-| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | none until the nightly (#314) |
-| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | none until the nightly (#314) |
-| `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | none until the nightly (#314) |
-| `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | none until the nightly (#314) |
-| `tests/infrastructure/test_control_plane.py` | 5 | a running stack | none until the nightly (#314) |
+| `tests/infrastructure/test_llm.py` | 32 | a running model server | the nightly run, on the development server |
+| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | the nightly run, on the development server |
+| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the nightly run, on the development server |
+| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the nightly run, on the development server |
+| `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the nightly run, on the development server |
+| `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the nightly run, on the development server |
+| `tests/infrastructure/test_control_plane.py` | 5 | a running stack | the nightly run, on the development server |
 
 - That is 125 tests in 7 files. No workflow selects the mark, so no CI job
   runs them today. `tests/integration/` holds no test.
@@ -313,6 +313,54 @@ the mark to every test of the files it lists and to every test under
   to say how many tests it collected against the 125.
 - To run them: `pytest -m integration tests/infrastructure`, on a host with
   the stack up.
+
+## The nightly run
+
+`scripts/nightly_run.py` is one run for the development server, in a folder
+of its own. A timer starts it each night. It is not a CI job: a check on a
+pull request cannot see a real model that got slower, and it has no stack
+for the tests above.
+
+Each night it:
+
+1. takes the head of `dev`, and pulls the `dev` images;
+2. compares the commit that each image was built from with that head;
+3. starts a stack under the name `atlas-nightly`, on loopback ports of its
+   own, so that it stands beside a stack on the usual ports;
+4. runs the driver `scripts/e2e-reliability.py` with three fixed small
+   tasks, once each, and keeps the seconds of each;
+5. runs the tests that the plain jobs leave out, and counts how many it
+   collected against the 125 of the table above;
+6. writes one report: the commit, the digest of each image, the seconds of
+   each task, and the tests collected, passed, failed and skipped;
+7. stops its stack, also when a step failed or the time ran out.
+
+The first line of the report is its result:
+
+| Result | When |
+|---|---|
+| `passed` | No fault below was found |
+| `stale: ...` | An image was not built from the head of `dev`. Nothing more is run: the numbers would be those of another commit |
+| `failed: ...` | A step did not end, the time limit of the whole run was reached, the driver found a defect of the harness, a test failed, or the tests collected were not 125 (a missing package skips whole files without another sign) |
+| `not run: the card was in use` | Another run held the lock of the graphics card |
+
+- A task whose change did not land is in the report and does not fail the
+  run. That number moves with the model and with chance; one night says
+  little.
+- The run takes a lock file before it uses the graphics card. A run of
+  another kind that needs the card takes the same file:
+  `flock <lock file> <command>`.
+- The run writes only inside its own folder, and it stops and removes only
+  the containers of its own compose project.
+- With a token in `ATLAS_NIGHTLY_TOKEN` and `--issue N` it puts the report
+  into the text of that one issue. The text is replaced; no comment is
+  added. With no token it only writes the file.
+
+What it needs on the server: a folder for the run; Docker for the user that
+runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
+folder, with the settings of the model for that server; a timer at a fixed
+hour; and the graphics card free for the run, which has a time limit of 30
+minutes.
 
 The integrity check names a change that takes a test out of the plain jobs
 this way: the mark on a test or a file that was there before, a file added to
