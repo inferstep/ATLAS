@@ -547,6 +547,32 @@ workflows that never started and failed, though every one of them ran.
   listed, how many are running and how many are not listed. A listing that
   leaves out a known run is named in the log.
 
+### Changed: `checks ran` does not repeat the red of a failed job
+
+One fault in a job gave a second red in `checks ran` when another job with no
+condition needed that job and was skipped. A job that was skipped because a
+job up its `needs` chain failed is now a note that names the failed job, and
+the note is always printed. One case stays a finding: a required check that
+was skipped behind a failed job that is not required. The rules count a
+skipped required check as passed, so that check would never have run. A job
+skipped with no failed job above it is a finding as before.
+
+A job whose name is an expression alone fitted every reported name, so it
+could count as present because some other job reported. It is now known only
+by the name GitHub gives it when it is skipped. No workflow was judged wrong
+by this; the one such job has a condition.
+
+The gates page says what `checks ran` judges: every job definition with no
+condition of its own, which 16 it does not judge and why, and that one leg of
+a matrix job is enough.
+
+On the canary, `checks ran` was red through the extension's violation. It
+passes there now, so it moves in the canary's list from the checks that are
+red through another check to the checks with no violation. The canary also
+names a check with no violation that timed out or was cancelled, not only one
+that failed, and its note for a red through another check no longer says
+"with no violation of its own" twice.
+
 ### Added: replay tests that run the proxy against a recorded session
 
 The proxy is about to be restructured in many small steps. Unit tests check

@@ -6,6 +6,7 @@ to have run for a change, and that each way of not running is reported.
 """
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -140,13 +141,22 @@ def test_the_newest_run_of_a_workflow_for_the_event_counts(ran):
 
 
 def test_a_job_is_found_under_each_name_form(ran):
-    # A name that is all expression fits every job, so it gets only what no other job claims.
+    # A name that is all expression fits every name, so a name proves nothing for it: it gets only the one
+    # name GitHub gives it when it is skipped, the text of the expression.
     jobs = {"go": {"name": "go test (${{ matrix.module }})"}, "trivy": {"strategy": {"matrix": {}}}, "lint": {},
             "zz-any": {"name": "${{ matrix.service }}"}}
-    reported = [job("go test (proxy)"), job("go test (tui)"), job("trivy (proxy)"), job("lint"), job("sandbox")]
+    reported = [job("go test (proxy)"), job("go test (tui)"), job("trivy (proxy)"), job("lint"), job("sandbox"),
+                job("matrix.service", "skipped")]
     found = {job_id: [r["name"] for r in mine] for job_id, mine in ran.jobs_by_definition(jobs, reported).items()}
     assert found == {"go": ["go test (proxy)", "go test (tui)"], "trivy": ["trivy (proxy)"], "lint": ["lint"],
-                     "zz-any": ["sandbox"]}
+                     "zz-any": ["matrix.service"]}
+
+
+def test_a_job_named_by_an_expression_alone_is_not_present_because_some_other_job_reported(ran, change):
+    workflows = {TESTS: workflow(lint={}, **{"zz-any": {"name": "${{ matrix.service }}"}})}
+    reported = [job("lint"), job("a job that no definition fits")]
+    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: reported, [], change)
+    assert "1 job(s) in .github/workflows/tests.yml reported nothing: `${{ matrix.service }}`" in messages(findings)
 
 
 def test_a_job_may_skip_only_by_a_condition_of_its_own_or_of_a_job_it_needs(ran):
@@ -161,7 +171,7 @@ def test_a_change_whose_checks_all_ran_has_no_finding(ran, change):
     workflows = {TESTS: workflow(go={"name": "go test (${{ matrix.module }})"}, lint={"name": "lint"},
                                  publish={"name": "publish", "if": "github.event_name == 'push'"})}
     reported = [job("go test (proxy)"), job("go test (tui)", "failure"), job("lint"), job("publish", "skipped")]
-    findings, by_condition, count = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: reported,
+    findings, by_condition, count, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: reported,
                                               ["go test (proxy)", "go test (tui)", "lint"], change)
     assert findings == []
     assert by_condition == ["publish"]
@@ -169,14 +179,14 @@ def test_a_change_whose_checks_all_ran_has_no_finding(ran, change):
 
 
 def test_a_workflow_with_no_run_is_reported(ran, change):
-    findings, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], {}, lambda _: [], [], change)
+    findings, _, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], {}, lambda _: [], [], change)
     assert "has no run for this commit" in messages(findings)
     assert "Fix:" in messages(findings)
 
 
 def test_a_workflow_that_failed_to_start_is_reported_with_its_run(ran, change):
     runs = {TESTS: run(TESTS, "startup_failure", run_id=7)}
-    findings, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], runs, lambda _: [], [], change)
+    findings, _, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], runs, lambda _: [], [], change)
     assert "failed to start" in messages(findings)
     assert "https://example.invalid/runs/7" in messages(findings)
     assert findings[0].path == TESTS
@@ -188,7 +198,7 @@ def test_a_workflow_that_failed_to_start_is_reported_with_its_run(ran, change):
     ([job("lint", "cancelled")], "were cancelled: `lint`"),
 ])
 def test_a_job_with_no_condition_that_did_not_run_is_reported(ran, change, reported, words):
-    findings, by_condition, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], {TESTS: run(TESTS)},
+    findings, by_condition, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], {TESTS: run(TESTS)},
                                           lambda _: reported, [], change)
     assert words in messages(findings)
     assert "Fix:" in messages(findings)
@@ -198,14 +208,14 @@ def test_a_job_with_no_condition_that_did_not_run_is_reported(ran, change, repor
 def test_the_jobs_of_one_workflow_share_one_finding(ran, change):
     workflows = {TESTS: workflow(go={"name": "go test (${{ matrix.module }})"}, lint={})}
     reported = [job("go test (proxy)", "cancelled"), job("go test (tui)", "cancelled"), job("lint", "cancelled")]
-    findings, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS, "cancelled")}, lambda _: reported, [], change)
+    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS, "cancelled")}, lambda _: reported, [], change)
     assert len(findings) == 1
     assert "3 job(s)" in findings[0].message
 
 
 def test_a_required_check_that_was_skipped_is_reported_even_when_its_job_has_a_condition(ran, change):
     workflows = {TESTS: workflow(lint={"name": "lint", "if": "github.event_name == 'push'"})}
-    findings, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("lint", "skipped")],
+    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("lint", "skipped")],
                                ["lint"], change)
     assert "1 required check(s) were skipped: `lint`" in messages(findings)
     assert "count a skipped job as passed" in messages(findings)
@@ -213,7 +223,7 @@ def test_a_required_check_that_was_skipped_is_reported_even_when_its_job_has_a_c
 
 def test_a_required_check_that_no_job_reported_is_reported(ran, change):
     workflows = {TESTS: workflow(lint={"name": "python lint"})}
-    findings, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("python lint")],
+    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("python lint")],
                                ["lint", "python lint"], change)
     assert "1 required check(s) were reported by no job: `lint`" in messages(findings)
 
@@ -331,7 +341,7 @@ def test_a_run_that_waits_for_approval_is_named_as_waiting_and_not_as_a_job_that
     workflows = {TESTS: workflow(unit={"name": "unit"}), TITLE: workflow(title={"name": "pr title"})}
     runs = {TESTS: run(TESTS), TITLE: waiting_run(TITLE)}
     jobs = {TESTS: [job("unit")], TITLE: []}
-    findings, waiting, _, ran_to_an_end = ran.judge(workflows, [TESTS, TITLE], runs, [],
+    findings, waiting, _, ran_to_an_end, _ = ran.judge(workflows, [TESTS, TITLE], runs, [],
                                                     lambda r: jobs[r["path"]], ["unit", "pr title"], change)
     assert waiting == [TITLE]
     assert messages(findings) == ""
@@ -340,7 +350,7 @@ def test_a_run_that_waits_for_approval_is_named_as_waiting_and_not_as_a_job_that
 
 def test_without_the_rule_the_same_run_reads_as_a_job_that_reported_nothing(ran, change):
     workflows = {TITLE: workflow(title={"name": "pr title"})}
-    findings, _, _ = ran.check(workflows, [TITLE], {TITLE: waiting_run(TITLE)}, lambda r: [], ["pr title"], change)
+    findings, _, _, _ = ran.check(workflows, [TITLE], {TITLE: waiting_run(TITLE)}, lambda r: [], ["pr title"], change)
     assert "reported nothing: `pr title`" in messages(findings)
 
 
@@ -350,7 +360,7 @@ def test_no_required_check_is_judged_while_a_run_waits(ran, change):
     jobs = {TESTS: [job("unit", "skipped")], TITLE: []}
     asked = []
 
-    def required_spy(required, reported, branch):
+    def required_spy(required, reported, branch, explained=()):
         asked.append(list(required))
         return []
     original, ran.required_findings = ran.required_findings, required_spy
@@ -400,3 +410,122 @@ def test_a_run_that_starts_after_its_approval_is_waited_for_like_any_other(ran):
     assert running == []
     assert runs[TITLE]["conclusion"] == "success"
 
+
+# --- a job that was skipped behind a failed job ----------------------------------------
+
+BEHIND = workflow(a={}, b={"needs": "a"})
+
+
+def skips(ran, change, jobs, reported, required=()):
+    """The findings and the jobs skipped behind a failure, for one workflow."""
+    findings, by_condition, _, behind = ran.check({TESTS: workflow(**jobs)}, [TESTS], {TESTS: run(TESTS)},
+                                                  lambda _: reported, list(required), change)
+    return messages(findings), behind, by_condition
+
+
+def test_a_job_that_is_not_required_and_was_skipped_behind_a_failed_job_is_a_note(ran, change):
+    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")])
+    assert found == ""
+    assert behind == {"b": ["a"]}
+    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")], required=["a"])
+    assert (found, behind) == ("", {"b": ["a"]})
+
+
+@pytest.mark.parametrize("needed", ["success", "cancelled", "skipped"])
+def test_a_job_skipped_with_no_failed_job_above_it_is_a_finding(ran, change, needed):
+    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", needed), job("b", "skipped")])
+    assert "were skipped: `b`" in found or "were skipped: `a`, `b`" in found
+    assert "No failed job that it `needs` explains the skip" in found
+    assert behind == {}
+
+
+def test_a_required_check_skipped_behind_a_failed_job_that_is_not_required_is_a_finding(ran, change):
+    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")], required=["b"])
+    assert "1 job(s) in .github/workflows/tests.yml were skipped: `b`" in found
+    assert "1 required check(s) were skipped: `b`" in found
+    assert behind == {}
+
+
+def test_a_required_check_skipped_behind_a_failed_required_check_is_a_note(ran, change):
+    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")],
+                             required=["a", "b"])
+    assert found == ""
+    assert behind == {"b": ["a"]}
+
+
+CHAIN = {"a": {}, "b": {"needs": "a"}, "c": {"needs": ["b"]}}
+CHAIN_RUN = [job("a", "failure"), job("b", "skipped"), job("c", "skipped")]
+
+
+def test_a_chain_of_skipped_jobs_is_explained_by_the_job_that_failed_at_its_root(ran, change):
+    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN)
+    assert found == ""
+    assert behind == {"b": ["a"], "c": ["a"]}
+
+
+def test_a_required_check_down_a_chain_is_a_finding_unless_the_root_that_failed_is_required(ran, change):
+    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN, required=["c"])
+    assert "were skipped: `c`" in found and "1 required check(s) were skipped: `c`" in found
+    assert behind == {"b": ["a"]}
+    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN, required=["a", "c"])
+    assert (found, behind) == ("", {"b": ["a"], "c": ["a"]})
+
+
+def test_with_two_failed_jobs_above_a_required_check_one_required_one_is_enough(ran, change):
+    jobs = {"a": {}, "d": {}, "c": {"needs": ["a", "d"]}}
+    reported = [job("a", "failure"), job("d", "failure"), job("c", "skipped")]
+    found, behind, _ = skips(ran, change, jobs, reported, required=["c", "d"])
+    assert (found, behind) == ("", {"c": ["a", "d"]})
+    found, behind, _ = skips(ran, change, jobs, reported, required=["c"])
+    assert "1 required check(s) were skipped: `c`" in found
+    assert behind == {}
+
+
+def test_a_job_behind_one_that_its_own_condition_skipped_is_not_explained_by_a_failure(ran, change):
+    jobs = {"a": {}, "b": {"needs": "a", "if": "github.event_name == 'push'"}, "c": {"needs": "b"}}
+    reported = [job("a", "failure"), job("b", "skipped"), job("c", "skipped")]
+    found, behind, by_condition = skips(ran, change, jobs, reported)
+    assert behind == {}
+    assert sorted(by_condition) == ["b", "c"]
+    assert found == ""
+    # The rules count a skipped required check as passed, so that one is named whatever skipped it.
+    found, behind, _ = skips(ran, change, jobs, reported, required=["c"])
+    assert "1 required check(s) were skipped: `c`" in found
+    assert behind == {}
+
+
+def test_one_fault_in_the_extensions_job_is_one_red_and_not_one_more_from_this_check(ran, change):
+    path = ".github/workflows/vscode-extension.yml"
+    workflows = ran.read_workflows(ROOT)
+    reported = [job("lint + test + build", "failure"), job("coverage upload (extension)", "skipped"),
+                job("test results upload (extension)", "failure")]
+    findings, _, _, behind = ran.check(workflows, [path], {path: run(path)}, lambda _: reported, [], change)
+    assert messages(findings) == ""
+    assert behind == {"coverage upload (extension)": ["lint + test + build"]}
+
+
+def test_the_jobs_skipped_behind_a_failure_are_always_printed(ran):
+    lines = ran.skip_notes(["publish"], {"c": ["a"], "b": ["a", "d"]})
+    assert lines == ["skipped by their own `if:` condition (not judged): publish",
+                     "2 job(s) skipped because a job they need failed (the failed job holds the result): "
+                     "`b` behind `a`, `d`; `c` behind `a`"]
+    assert ran.skip_notes([], {}) == []
+
+
+def test_the_gates_page_names_the_jobs_this_check_does_not_judge(ran):
+    with_a_condition = {}
+    for path, workflow in ran.read_workflows(ROOT).items():
+        jobs = workflow.get("jobs") or {}
+        mine = sorted(job_id for job_id in jobs if ran.conditional(job_id, jobs))
+        if mine:
+            with_a_condition[Path(path).name] = mine
+    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    section = page.split("### What `checks ran` judges", 1)[1].split("\n## ", 1)[0]
+    table = {name: sorted(re.findall(r"`([^`]+)`", listed))
+             for name, listed in re.findall(r"^\| `([\w.-]+\.ya?ml)` \| (.+) \|$", section, re.MULTILINE)}
+    assert table == with_a_condition, (
+        "the gates page names other jobs with an `if:` of their own than the workflow files have. Fix: bring the "
+        "table under \"What `checks ran` judges\" in docs/quality/gates.md in line with the workflow files, and the "
+        "number in the text above it.")
+    count = sum(len(jobs) for jobs in with_a_condition.values())
+    assert f"- {count} job definitions have an `if:` of their own" in " ".join(section.split())

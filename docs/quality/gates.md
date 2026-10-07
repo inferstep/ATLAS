@@ -44,6 +44,48 @@ the tool is a mistake and not a mystery.
   not pass, and it does not call the waiting jobs missing. A maintainer
   approves the runs and starts it again.
 
+### What `checks ran` judges
+
+`checks ran` looks at the jobs of each workflow that had to start.
+
+- A job with no condition must have run. That holds for every job definition
+  in the workflow files that has no `if:` of its own.
+- 16 job definitions have an `if:` of their own, so they may be skipped by
+  design, and `checks ran` does not report one of them as missing. Every
+  other job is judged for absence. The table below names the 16. On a pull
+  request five of them count: Sonar's scan, the `PR build check`, `coverage upload`,
+  `test results upload` and `test results upload (extension)`. If one of
+  these does not start at all, nothing says so. The rest run only on other
+  events: the four bot jobs, the three image jobs of a push, the release
+  file job, the scorecard, the staging record and the star chart.
+- For a job with a matrix, one reported leg is enough. The required checks
+  cover the required legs by name. A leg that is not required can be missing
+  unseen.
+- A job that was skipped because a job it needs failed repeats that failure.
+  It is a note that names the failed job, and no finding. One case stays a
+  finding: a required check that was skipped behind a failed job that is not
+  required. The rules count a skipped required check as passed, and a job
+  that is not required holds no merge.
+- A job whose name is an expression alone is known only by the name GitHub
+  gives it when it is skipped.
+
+The job definitions with an `if:` of their own, by workflow file and job id:
+
+| Workflow file | Jobs with a condition |
+|---|---|
+| `bot-claim.yml` | `claim` |
+| `bot-new-issue.yml` | `new-issue` |
+| `bot-stale-claims.yml` | `stale` |
+| `bot-sync.yml` | `sync` |
+| `build-images.yml` | `pr-build`, `alias`, `build`, `promote` |
+| `release-files.yml` | `sign` |
+| `scorecard.yml` | `analysis` |
+| `sonar.yml` | `scan` |
+| `staging-promotion.yml` | `record` |
+| `star-chart.yml` | `render` |
+| `test.yml` | `coverage-upload`, `test-results-upload` |
+| `vscode-extension.yml` | `test-results-upload` |
+
 ## Checks on a pull request
 
 ### Required (24)
@@ -332,15 +374,14 @@ Checks with no violation, and why:
 | `dependency review` | It turns red only for a dependency with a published advisory, and none is planted |
 | the four `PR build check` jobs | A build that fails makes other jobs red for the wrong reason |
 | `integrity check` | It reports and does not fail |
+| `checks ran` | Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing on the canary. It passes there, with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build` |
 | `coverage upload`, `coverage upload (extension)`, `test results upload`, `test results upload (extension)` | They send numbers to Codecov and judge nothing. On the canary the extension's coverage upload is skipped, because the job it needs is red, and the extension's results upload has nothing to send and says so |
 | `dev results lookup (sends nothing)` | It reads what the merge queue's run of a commit of `dev` kept. No planted file changes that. It runs only on a pull request that changes the files of the push-to-dev results |
 | the image jobs of a push (`alias image tag`, `promote moving tags`) | They are skipped on a pull request |
 
-Checks with no violation of their own that are red on the canary, and by which path:
-
-| Check | Why it is red |
-|---|---|
-| `checks ran` | Through the extension's violation. `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and `checks ran` names a skipped job |
+No check with no violation of its own is red on the canary today. When one
+is red through the violation of another check, it stands under `side_effects`
+in the list with the path, and this page names it here.
 
 A violation must fail every time. The time measures of the performance gate
 have none for that reason: a planted slowdown fails only on some runs. The

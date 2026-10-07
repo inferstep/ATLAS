@@ -135,14 +135,38 @@ def name_regex(job_id: str, job: dict) -> tuple[re.Pattern, int]:
 
 
 def jobs_by_definition(jobs: dict, reported: list[dict]) -> dict[str, list[dict]]:
-    """Each reported job under the job that defines it: the one whose name fixes most of it."""
+    """Each reported job under the job that defines it: the one whose name fixes most of it.
+
+    A job whose name is an expression alone fits every name, so a name proves
+    nothing for it. It gets only the one name GitHub gives it when it is
+    skipped: the text of the expression. Else a reported job that no
+    definition fits would count as this job, and this job as present.
+    """
     patterns = {job_id: name_regex(job_id, job or {}) for job_id, job in jobs.items()}
     out = {job_id: [] for job_id in jobs}
     for record in reported:
-        owners = [(fixed, job_id) for job_id, (regex, fixed) in patterns.items() if regex.fullmatch(record["name"])]
+        owners = [(fixed, job_id) for job_id, (regex, fixed) in patterns.items()
+                  if (regex.fullmatch(record["name"]) if fixed
+                      else record["name"] == str((jobs[job_id] or {}).get("name", "")).strip("${} "))]
         if owners:
             out[max(owners)[1]].append(record)
     return out
+
+
+def failed_above(job_id: str, jobs: dict, records: dict[str, list[dict]], seen: tuple = ()) -> list[str]:
+    """The names of the jobs up the `needs` chain of a job that ended as a failure.
+
+    The walk stops at a job that failed: that one explains every skip below
+    it. It goes on through a job that did not fail, so a chain of skipped
+    jobs leads to its root.
+    """
+    found = []
+    for needed in as_list((jobs.get(job_id) or {}).get("needs")):
+        if needed in seen:
+            continue
+        failed = [record["name"] for record in records.get(needed, []) if record.get("conclusion") == "failure"]
+        found += failed or failed_above(needed, jobs, records, seen + (job_id,))
+    return found
 
 
 def latest_runs(runs: list[dict], event: str, own_id: int) -> dict[str, dict]:
@@ -170,17 +194,33 @@ def quoted(names) -> str:
     return ", ".join(f"`{name}`" for name in sorted(set(names)))
 
 
-def job_findings(path: str, workflow: dict, reported: list[dict]) -> tuple[list[Finding], list[str]]:
-    """Findings for the jobs with no condition, and the names of the jobs skipped by their own condition."""
+def job_findings(path: str, workflow: dict, reported: list[dict],
+                 required: tuple | list = ()) -> tuple[list[Finding], list[str], dict[str, list[str]]]:
+    """Findings for the jobs with no condition, the names of the jobs skipped by their own condition, and the
+    jobs skipped behind a failed job: name -> the jobs that failed.
+
+    A job with no condition that was skipped because a job up its `needs`
+    chain failed repeats that failure and adds nothing, so it is a note. One
+    case stays a finding: the skipped job is a required check and no failed
+    job above it is one. The rules count a skipped required check as passed,
+    and a failed job that is not required holds no merge, so the change could
+    merge with that check never run.
+    """
     jobs = workflow.get("jobs") or {}
-    absent, skipped, cancelled, by_condition = [], [], [], []
-    for job_id, mine in jobs_by_definition(jobs, reported).items():
+    absent, skipped, cancelled, by_condition, behind = [], [], [], [], {}
+    records = jobs_by_definition(jobs, reported)
+    for job_id, mine in records.items():
         if conditional(job_id, jobs):
             by_condition += [record["name"] for record in mine if record.get("conclusion") == "skipped"]
             continue
         if not mine:
             absent.append((jobs[job_id] or {}).get("name") or job_id)
-        skipped += [record["name"] for record in mine if record.get("conclusion") == "skipped"]
+        failed = failed_above(job_id, jobs, records)
+        for name in [record["name"] for record in mine if record.get("conclusion") == "skipped"]:
+            if failed and (name not in required or any(root in required for root in failed)):
+                behind[name] = failed
+            else:
+                skipped.append(name)
         cancelled += [record["name"] for record in mine if record.get("conclusion") == "cancelled"]
     rule = "A job with no `if:` condition must run on every change."
     findings = []
@@ -188,19 +228,25 @@ def job_findings(path: str, workflow: dict, reported: list[dict]) -> tuple[list[
         findings.append(Finding(path, f"{len(absent)} job(s) in {path} reported nothing: {quoted(absent)}. {rule} "
                                       "Fix: open the run and see why the job did not start."))
     if skipped:
-        findings.append(Finding(path, f"{len(skipped)} job(s) in {path} were skipped: {quoted(skipped)}. {rule} Such a "
-                                      "job is skipped when a job it `needs` did not pass. Fix: make that job pass, "
-                                      "then run this check again."))
+        findings.append(Finding(path, f"{len(skipped)} job(s) in {path} were skipped: {quoted(skipped)}. {rule} No "
+                                      "failed job that it `needs` explains the skip, or the job is a required check "
+                                      "behind a failed job that is not required. Fix: open the run and see why the job "
+                                      "was skipped (a needed job was cancelled, or failed and holds no merge); make "
+                                      "that job pass, then run this check again."))
     if cancelled:
         findings.append(Finding(path, f"{len(cancelled)} job(s) in {path} were cancelled: {quoted(cancelled)}. {rule} "
                                       "Fix: run the workflow again, then run this check again."))
-    return findings, by_condition
+    return findings, by_condition, behind
 
 
-def required_findings(required: list[str], reported: list[dict], branch: str) -> list[Finding]:
-    """A required check that was skipped, or that no job reported. The branch rules do not stop either."""
+def required_findings(required: list[str], reported: list[dict], branch: str, explained: tuple | list = ()) -> list[Finding]:
+    """A required check that was skipped, or that no job reported. The branch rules do not stop either.
+
+    `explained` holds the skipped checks that stand behind a failed required
+    check: that one holds the merge, so the skip is no finding.
+    """
     states = {name: {record.get("conclusion") for record in reported if record["name"] == name} for name in required}
-    skipped = [name for name, seen in states.items() if seen and seen <= {"skipped"}]
+    skipped = [name for name, seen in states.items() if seen and seen <= {"skipped"} and name not in explained]
     absent = [name for name, seen in states.items() if not seen]
     findings = []
     if skipped:
@@ -307,9 +353,10 @@ def expected_workflows(workflows: dict[str, dict], change: Change, changed: list
 
 
 def check(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict], jobs_of: Callable[[dict], list[dict]],
-          required: list[str], change: Change) -> tuple[list[Finding], list[str], int]:
-    """Every finding, the jobs skipped by their own condition, and the number of jobs that ran to an end."""
-    findings, by_condition, reported = [], [], []
+          required: list[str], change: Change) -> tuple[list[Finding], list[str], int, dict[str, list[str]]]:
+    """Every finding, the jobs skipped by their own condition, the number of jobs that ran to an end, and the
+    jobs skipped behind a failed job (name -> the jobs that failed)."""
+    findings, by_condition, reported, behind = [], [], [], {}
     for path in expected:
         run = runs.get(path)
         problems = workflow_findings(path, run, change.event)
@@ -318,17 +365,19 @@ def check(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict]
             continue
         jobs = jobs_of(run)
         reported += jobs
-        found, skipped = job_findings(path, workflows[path], jobs)
+        found, skipped, explained = job_findings(path, workflows[path], jobs, required)
         findings += found
         by_condition += skipped
-    findings += required_findings(required, reported, change.branch)
-    return findings, by_condition, sum(1 for job in reported if job.get("conclusion") in RAN_TO_AN_END)
+        behind.update(explained)
+    findings += required_findings(required, reported, change.branch, list(behind))
+    return findings, by_condition, sum(1 for job in reported if job.get("conclusion") in RAN_TO_AN_END), behind
 
 
 def judge(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict], running: list[str],
-          jobs_of: Callable[[dict], list[dict]], required: list[str], change: Change) -> tuple[list[Finding], list[str], list[str], int]:
-    """The findings, the workflows that wait for approval, the jobs skipped by their own condition, and the
-    number of jobs that ran to an end.
+          jobs_of: Callable[[dict], list[dict]], required: list[str],
+          change: Change) -> tuple[list[Finding], list[str], list[str], int, dict[str, list[str]]]:
+    """The findings, the workflows that wait for approval, the jobs skipped by their own condition, the number
+    of jobs that ran to an end, and the jobs skipped behind a failed job.
 
     A workflow that is still running has reported only some of its jobs, and
     one that waits for a maintainer's approval has reported none. Neither its
@@ -336,8 +385,9 @@ def judge(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict]
     """
     waiting = [path for path in expected if (runs.get(path) or {}).get("conclusion") == WAITS_FOR_APPROVAL]
     settled = [path for path in expected if path not in running and path not in waiting]
-    findings, by_condition, ran = check(workflows, settled, runs, jobs_of, [] if running or waiting else required, change)
-    return findings, waiting, by_condition, ran
+    findings, by_condition, ran, behind = check(workflows, settled, runs, jobs_of,
+                                                [] if running or waiting else required, change)
+    return findings, waiting, by_condition, ran, behind
 
 
 def waiting_message(path: str) -> str:
@@ -374,6 +424,17 @@ def report(findings: list[Finding], notes: list[str], github: bool, waiting: tup
     status, line = outcome(findings, list(waiting))
     print(line)
     return status
+
+
+def skip_notes(by_condition: list[str], behind: dict[str, list[str]]) -> list[str]:
+    """One line for the jobs that their own condition skipped, and one for the jobs skipped behind a failed job."""
+    notes = []
+    if by_condition:
+        notes.append(f"skipped by their own `if:` condition (not judged): {', '.join(sorted(set(by_condition)))}")
+    if behind:
+        notes.append(f"{len(behind)} job(s) skipped because a job they need failed (the failed job holds the result): "
+                     + "; ".join(f"`{name}` behind {quoted(failed)}" for name, failed in sorted(behind.items())))
+    return notes
 
 
 def comparison_base() -> str:
@@ -423,7 +484,8 @@ def main() -> int:
     try:
         change, workflows, expected, unread, runs, running, jobs_of, required = gather(
             args.root, args.own_workflow, args.wait_minutes * 60)
-        findings, waiting, by_condition, ran = judge(workflows, expected, runs, running, jobs_of, required, change)
+        findings, waiting, by_condition, ran, behind = judge(workflows, expected, runs, running, jobs_of, required,
+                                                             change)
     except (KeyError, ValueError, OSError, RuntimeError, yaml.YAMLError) as error:
         print(f"checks ran: cannot read the change, its workflows or its runs: {error!r}\n"
               "  fix: this check runs in a pull_request or merge_group job, in a checkout with the full history, "
@@ -435,8 +497,7 @@ def main() -> int:
                  for path in running]
     notes = [(f"{len(expected)} workflow(s) expected for {change.event} on `{change.branch}`; {ran} job(s) ran to an "
               f"end; {len(required)} required check(s)")]
-    if by_condition:
-        notes.append(f"skipped by their own `if:` condition (not judged): {', '.join(sorted(set(by_condition)))}")
+    notes += skip_notes(by_condition, behind)
     notes += [f"{path} is not judged: its `on:` filters use a form this check does not read" for path in unread]
     return report(findings, notes, args.github, waiting)
 

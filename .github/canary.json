@@ -458,6 +458,7 @@
     "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
+    "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
     "integrity check": "It reports and does not fail for a finding.",
     "coverage upload": "It sends numbers to Codecov and judges nothing.",
@@ -479,7 +480,5 @@
     "SonarCloud Code Analysis": "The service's quality gate. The planted files do not fail it.",
     "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary."
   },
-  "side_effects": {
-    "checks ran": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and this check names a skipped job."
-  }
+  "side_effects": {}
 }

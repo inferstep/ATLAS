@@ -263,6 +263,14 @@ def is_red(run: dict) -> bool:
     return run.get("status") == "completed" and run.get("conclusion") == "failure"
 
 
+# How a check ends when it ran and did not pass, or could not start.
+NOT_PASSED = ("failure", "timed_out", "cancelled", "startup_failure")
+
+
+def did_not_pass(run: dict) -> bool:
+    return run.get("status") == "completed" and run.get("conclusion") in NOT_PASSED
+
+
 def side_effect_findings(manifest: dict, runs: dict[str, dict]) -> list[Finding]:
     """A check with no violation of its own is red only where the list says so, and the list says so only where it is."""
     out = []
@@ -273,18 +281,19 @@ def side_effect_findings(manifest: dict, runs: dict[str, dict]) -> list[Finding]
                                          f"violation, and it ended as `{run.get('conclusion')}`. Fix: if that is how "
                                          f"it is now, move it in {MANIFEST} from `side_effects` to `not_covered`, "
                                          "with its reason."))
-        elif is_red(run) and (name in manifest["not_covered"] or name in manifest["other_checks"]):
-            out.append(Finding(name, f"check `{name}` is red on the canary, and the list gives it no violation and no "
-                                     "side effect. A red with no cause on the list can hide a fault. Fix: open the "
-                                     f"job `{name}` on the canary pull request and read why it failed. If the "
-                                     f"violation of another check makes it red, add it to `side_effects` in "
-                                     f"{MANIFEST} and say by which path. Else repair the job."))
+        elif did_not_pass(run) and (name in manifest["not_covered"] or name in manifest["other_checks"]):
+            out.append(Finding(name, f"check `{name}` ended as `{run.get('conclusion')}` on the canary, and the list "
+                                     "gives it no violation and no side effect. A check that does not pass with no "
+                                     f"cause on the list can hide a fault. Fix: open the job `{name}` on the canary "
+                                     "pull request and read why it did not pass. If the violation of another check "
+                                     f"makes it red, add it to `side_effects` in {MANIFEST} and say by which path. "
+                                     "Else repair the job."))
     return out
 
 
 def notes(manifest: dict, runs: dict[str, dict]) -> list[str]:
-    """What is as the list says and still worth a line: a red with no violation of its own, and a listed check that is not there."""
-    out = [f"red, with no violation of its own: `{name}`. {reason}"
+    """What is as the list says and still worth a line: a red through another check's violation, and a listed check that is not there."""
+    out = [f"red through another check's violation, as listed: `{name}`. {reason}"
            for name, reason in sorted(manifest["side_effects"].items()) if name in runs and is_red(runs[name])]
     listed = {**manifest["not_covered"], **manifest["other_checks"], **manifest["side_effects"]}
     return out + [f"listed, and not there in this run: `{name}`. {reason}"

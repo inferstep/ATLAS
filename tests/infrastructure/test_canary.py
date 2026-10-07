@@ -356,38 +356,63 @@ def test_a_check_that_ran_and_that_the_list_does_not_know_is_named(canary, manif
         assert judged(canary, manifest, runs_as_listed(manifest) + [{**new, "name": name}]) == [], name
 
 
-def test_a_check_with_no_plant_that_is_red_is_named_unless_the_list_says_why(canary, manifest):
-    red = {"id": 901, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z"}
-    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
-        message = only(judged(canary, manifest, runs_as_listed(manifest) + [{**red, "name": name}]))
-        assert f"`{name}` is red on the canary, and the list gives it no violation and no side effect" in message
+SIDE = "a check that another makes red"
+SIDE_REASON = "It has no violation of its own. It is red through the violation of `ruff`."
+
+
+def with_a_side_effect(manifest):
+    """The list with one side effect made for the test, so the rule is tested whatever the real list holds."""
+    return {**manifest, "side_effects": {SIDE: SIDE_REASON}}
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled", "startup_failure"])
+def test_a_check_with_no_plant_that_does_not_pass_is_named_unless_the_list_says_why(canary, manifest, conclusion):
+    listed = with_a_side_effect(manifest)
+    ended = {"id": 901, "status": "completed", "conclusion": conclusion, "started_at": "2000-01-09T00:00:00Z"}
+    for name in [*listed["not_covered"], *listed["other_checks"]]:
+        message = only(judged(canary, listed, runs_as_listed(listed) + [{**ended, "name": name}]))
+        assert f"`{name}` ended as `{conclusion}` on the canary, and the list gives it no violation and no side effect" in message
         assert "`side_effects`" in message and "Fix:" in message
-    for name in manifest["side_effects"]:
-        assert judged(canary, manifest, runs_as_listed(manifest) + [{**red, "name": name}]) == [], name
+    assert judged(canary, listed, runs_as_listed(listed) + [{**ended, "name": SIDE, "conclusion": "failure"}]) == []
+
+
+@pytest.mark.parametrize("conclusion", ["success", "skipped", "neutral"])
+def test_a_check_with_no_plant_that_passed_or_did_not_run_is_not_named(canary, manifest, conclusion):
+    ended = {"id": 904, "status": "completed", "conclusion": conclusion, "started_at": "2000-01-09T00:00:00Z"}
+    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
+        assert judged(canary, manifest, runs_as_listed(manifest) + [{**ended, "name": name}]) == [], name
 
 
 def test_a_check_listed_as_red_through_another_violation_that_is_not_red_is_named(canary, manifest):
-    done = {"id": 902, "status": "completed", "conclusion": "success", "started_at": "2000-01-09T00:00:00Z"}
-    for name in manifest["side_effects"]:
-        message = only(judged(canary, manifest, runs_as_listed(manifest) + [{**done, "name": name}]))
-        assert f"`{name}` is listed as red on the canary through another check's violation, and it ended as `success`" in message
-        assert "`not_covered`" in message
-        running = {**done, "name": name, "status": "in_progress", "conclusion": None}
-        assert judged(canary, manifest, runs_as_listed(manifest) + [running]) == []
+    listed = with_a_side_effect(manifest)
+    done = {"id": 902, "name": SIDE, "status": "completed", "conclusion": "success", "started_at": "2000-01-09T00:00:00Z"}
+    message = only(judged(canary, listed, runs_as_listed(listed) + [done]))
+    assert f"`{SIDE}` is listed as red on the canary through another check's violation, and it ended as `success`" in message
+    assert "`not_covered`" in message
+    running = {**done, "status": "in_progress", "conclusion": None}
+    assert judged(canary, listed, runs_as_listed(listed) + [running]) == []
 
 
-def test_a_red_with_no_violation_of_its_own_and_a_listed_check_that_is_not_there_get_a_line(canary, manifest):
+def test_a_red_through_another_violation_and_a_listed_check_that_is_not_there_get_a_line(canary, manifest):
+    listed = with_a_side_effect(manifest)
     red = {"id": 903, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z"}
-    side = sorted(manifest["side_effects"])
-    runs = canary.latest_checks(runs_as_listed(manifest) + [{**red, "name": side[0]}])
-    lines = canary.notes(manifest, runs)
-    assert lines[0].startswith(f"red, with no violation of its own: `{side[0]}`. ")
+    lines = canary.notes(listed, canary.latest_checks(runs_as_listed(listed) + [{**red, "name": SIDE}]))
+    assert lines[0] == f"red through another check's violation, as listed: `{SIDE}`. {SIDE_REASON}"
+    assert lines[0].count("no violation of its own") == 1
     absent = [line for line in lines if line.startswith("listed, and not there in this run: ")]
-    listed = [*manifest["not_covered"], *manifest["other_checks"], *side[1:]]
-    assert sorted(line.split("`")[1] for line in absent) == sorted(listed)
-    assert len(lines) == 1 + len(listed)
-    everything = runs_as_listed(manifest) + [{**red, "name": name, "conclusion": "success"} for name in [*listed, side[0]]]
-    assert canary.notes(manifest, canary.latest_checks(everything)) == []
+    others = [*listed["not_covered"], *listed["other_checks"]]
+    assert sorted(line.split("`")[1] for line in absent) == sorted(others)
+    assert len(lines) == 1 + len(others)
+    everything = runs_as_listed(listed) + [{**red, "name": name, "conclusion": "success"} for name in [*others, SIDE]]
+    assert canary.notes(listed, canary.latest_checks(everything)) == []
+    assert [line for line in canary.notes(listed, canary.latest_checks(runs_as_listed(listed)))
+            if SIDE in line] == [f"listed, and not there in this run: `{SIDE}`. {SIDE_REASON}"]
+
+
+def test_the_rule_for_side_effects_holds_with_none_on_the_list(canary, manifest):
+    none = {**manifest, "side_effects": {}}
+    assert judged(canary, none, runs_as_listed(none)) == []
+    assert not [line for line in canary.notes(none, canary.latest_checks(runs_as_listed(none))) if line.startswith("red ")]
 
 
 def test_a_side_effect_names_the_violation_it_comes_from(manifest):
