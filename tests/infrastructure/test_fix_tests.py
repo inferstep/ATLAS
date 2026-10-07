@@ -233,6 +233,31 @@ def test_a_file_outside_the_repository_is_not_called_product_code(fix, frames, s
     assert fix.place(frames, is_test) == said
 
 
+def test_a_file_of_the_tree_that_pytest_names_by_its_whole_path_is_still_a_file_of_the_repository(fix, tmp_path):
+    tree = tmp_path / "tree"
+    (tree / "tests").mkdir(parents=True)
+    output = (f"_________ test_a _________\n{tree}/tests/test_x.py:9: in test_a\n    assert f() == 1\n"
+              f"_________ test_b _________\n{tree}/tests/test_x.py:14: in test_b\n    g()\n{tree}/proxy/calc.py:3: in g\n"
+              f"_________ test_c _________\ntests/test_x.py:20: in test_c\n    h()\n/usr/lib/python3.12/shutil.py:5: in h\n")
+
+    def is_test(path):
+        return "/tests/" in f"/{path}"
+    assert fix.raised_where(output, is_test, tree) == {
+        "test_a": "in the test", "test_b": "in product code (proxy/calc.py)",
+        "test_c": "in the standard library (shutil.py), called from the test"}
+    assert fix.from_the_root(str(tree) + "-other/tests/test_x.py", tree) == str(tree) + "-other/tests/test_x.py"
+
+
+def test_a_test_that_changes_its_folder_and_fails_is_still_said_to_fail_in_the_test(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_adds_from_another_folder(tmp_path, monkeypatch):\n    monkeypatch.chdir(tmp_path)\n"
+        "    assert calc.add(2, 3) == 5\n")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_adds_from_another_folder": "fails on the base"}
+    assert "an assertion, raised in the test: " in rows[0][2]
+    assert "standard library" not in rows[0][2]
+
+
 def test_an_error_raised_in_the_standard_library_names_it_and_the_file_that_called_it(fix, repo, tools):
     faulty = "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"
     fixed = "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n        shutil.copyfile(src, dst)\n"

@@ -263,8 +263,22 @@ def place(frames: list[str], is_test) -> str:
     return f"in {kind} ({Path(last).name})" + (f", called from {caller}" if caller else "")
 
 
-def raised_where(output: str, is_test) -> dict[str, str]:
-    """For each failed pytest function: where its error was raised (see `place`)."""
+def from_the_root(path: str, tree: Path) -> str:
+    """A file of a traceback, named from the root of the tree when it lies in the tree.
+
+    pytest names a file of the tree by its whole path when the test has
+    changed the folder it runs in. Such a file is still a file of the
+    repository.
+    """
+    if os.path.isabs(path):
+        for root in dict.fromkeys((str(tree), os.path.realpath(tree))):
+            if path.startswith(root.rstrip("/") + "/"):
+                return path[len(root.rstrip("/")) + 1:]
+    return path
+
+
+def raised_where(output: str, is_test, tree: Path) -> dict[str, str]:
+    """For each failed pytest function of a run in `tree`: where its error was raised (see `place`)."""
     frames: dict[str, list[str]] = {}
     name = ""
     for line in output.splitlines():
@@ -273,7 +287,7 @@ def raised_where(output: str, is_test) -> dict[str, str]:
             name = heading.group(1).split("[")[0].split(".")[-1].split(" ")[-1]
         frame = FRAME.match(line)
         if frame and name:
-            frames.setdefault(name, []).append(frame.group(1))
+            frames.setdefault(name, []).append(from_the_root(frame.group(1), tree))
     return {name: place(files, is_test) for name, files in frames.items()}
 
 
@@ -299,7 +313,7 @@ def run_python(tree: Path, tests: list[Test], python: str, limit: int, is_test,
             results.setdefault(found.group(2), []).append((found.group(1), message))
         elif skipped:
             skips.append((skipped.group(1), int(skipped.group(2)), skipped.group(3)))
-    where = raised_where(output, is_test)
+    where = raised_where(output, is_test, tree)
     # The first line pytest marks as the error itself, for a file it could not collect.
     stopped = next((line[1:].strip() for line in output.splitlines() if line.startswith("E ")), "")
     out = {}
