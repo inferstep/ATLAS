@@ -38,6 +38,9 @@ WORKFLOW_DIR = ".github/workflows"
 DEFAULT_TYPES = {"pull_request": ("opened", "synchronize", "reopened"), "merge_group": ("checks_requested",)}
 FILTER_KEYS = ("branches", "branches-ignore", "paths", "paths-ignore")
 RAN_TO_AN_END = ("success", "failure", "timed_out")
+# What GitHub gives a run of a pull request from a fork until a maintainer
+# approves it. Such a run has no job yet.
+WAITS_FOR_APPROVAL = "action_required"
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
 POLL_SECONDS = 60
 # Runs of one commit are created within seconds of each other. A workflow
@@ -322,15 +325,55 @@ def check(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict]
     return findings, by_condition, sum(1 for job in reported if job.get("conclusion") in RAN_TO_AN_END)
 
 
-def report(findings: list[Finding], notes: list[str], github: bool) -> None:
+def judge(workflows: dict[str, dict], expected: list[str], runs: dict[str, dict], running: list[str],
+          jobs_of: Callable[[dict], list[dict]], required: list[str], change: Change) -> tuple[list[Finding], list[str], list[str], int]:
+    """The findings, the workflows that wait for approval, the jobs skipped by their own condition, and the
+    number of jobs that ran to an end.
+
+    A workflow that is still running has reported only some of its jobs, and
+    one that waits for a maintainer's approval has reported none. Neither its
+    jobs nor the required checks can be judged then, so they are not.
+    """
+    waiting = [path for path in expected if (runs.get(path) or {}).get("conclusion") == WAITS_FOR_APPROVAL]
+    settled = [path for path in expected if path not in running and path not in waiting]
+    findings, by_condition, ran = check(workflows, settled, runs, jobs_of, [] if running or waiting else required, change)
+    return findings, waiting, by_condition, ran
+
+
+def waiting_message(path: str) -> str:
+    return (f"workflow {path} waits for a maintainer's approval, so none of its jobs has run and its checks have no "
+            "result yet. Nothing in the change causes this: GitHub holds the runs of a pull request from a fork "
+            "until a maintainer lets them start. If you opened the pull request, there is nothing for you to do. "
+            "A maintainer: approve the waiting runs on the pull request (\"Approve and run\"), then run this "
+            "check again. It gives its verdict then.")
+
+
+def outcome(findings: list[Finding], waiting: list[str]) -> tuple[int, str]:
+    """The exit status and the last line. The check passes only when every check ran; a run that waits is no pass."""
+    if findings and waiting:
+        return 1, (f"checks ran: {len(findings)} check(s) did not run, and {len(waiting)} workflow(s) wait for a "
+                   "maintainer's approval")
+    if waiting:
+        return 1, f"checks ran: no verdict yet, {len(waiting)} workflow(s) wait for a maintainer's approval"
+    return int(bool(findings)), (f"checks ran: {len(findings)} check(s) did not run" if findings
+                                 else "checks ran: every check ran")
+
+
+def report(findings: list[Finding], notes: list[str], github: bool, waiting: tuple | list = ()) -> int:
     for note in notes:
         print(f"note {note}")
+    for path in waiting:
+        print(f"WAIT {waiting_message(path)}")
+        if github:
+            print(f"::warning file={path},title=waiting for a maintainer's approval::{waiting_message(path)}")
     for finding in findings:
         print(f"FAIL {finding.message}")
         if github:
             where = f"file={finding.path}," if finding.path else ""
             print(f"::error {where}title=a check did not run::{finding.message}")
-    print(f"checks ran: {len(findings)} check(s) did not run" if findings else "checks ran: every check ran")
+    status, line = outcome(findings, list(waiting))
+    print(line)
+    return status
 
 
 def gather(root: Path, own_workflow: str, limit: float):
@@ -366,10 +409,7 @@ def main() -> int:
     try:
         change, workflows, expected, unread, runs, running, jobs_of, required = gather(
             args.root, args.own_workflow, args.wait_minutes * 60)
-        # A workflow that is still running has reported only some of its jobs,
-        # so neither its jobs nor the required checks can be judged yet.
-        findings, by_condition, ran = check(workflows, [path for path in expected if path not in running], runs,
-                                            jobs_of, [] if running else required, change)
+        findings, waiting, by_condition, ran = judge(workflows, expected, runs, running, jobs_of, required, change)
     except (KeyError, ValueError, OSError, RuntimeError, yaml.YAMLError) as error:
         print(f"checks ran: cannot read the change, its workflows or its runs: {error!r}\n"
               "  fix: this check runs in a pull_request or merge_group job, in a checkout with the full history, "
@@ -383,8 +423,7 @@ def main() -> int:
     if by_condition:
         notes.append(f"skipped by their own `if:` condition (not judged): {', '.join(sorted(set(by_condition)))}")
     notes += [f"{path} is not judged: its `on:` filters use a form this check does not read" for path in unread]
-    report(findings, notes, args.github)
-    return int(bool(findings))
+    return report(findings, notes, args.github, waiting)
 
 
 if __name__ == "__main__":

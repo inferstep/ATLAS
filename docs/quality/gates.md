@@ -19,6 +19,13 @@ the tool is a mistake and not a mystery.
   checks again on the merged result and then squashes it into one commit.
 - `main` and `staging` require the same checks as `dev`, except
   `code health (size)`, whose job is not on `main` yet.
+- On a pull request from a fork, GitHub holds every run until a maintainer
+  approves it ("Approve and run"). Until then the checks have no result, and
+  nothing is wrong with the change; the contributor has nothing to do. If
+  `checks ran` runs while a run still waits, it says "waiting for a
+  maintainer's approval", names the workflow and gives no verdict: it does
+  not pass, and it does not call the waiting jobs missing. A maintainer
+  approves the runs and starts it again.
 
 ## Checks on a pull request
 
