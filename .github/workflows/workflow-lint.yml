@@ -51,13 +51,15 @@ jobs:
           tar -xzf "$RUNNER_TEMP/zizmor.tar.gz" -C "$RUNNER_TEMP/bin" zizmor
           "$RUNNER_TEMP/bin/zizmor" --version
 
-      - name: zizmor on the workflow files
+      - name: zizmor on the workflow files and the actions of this repository
         env:
           # Read-only. zizmor uses it to look up the actions the workflows pin.
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          # The actions of this repository too: a workflow runs their steps as its own.
+          # actionlint reads workflow files only.
+          files=(.github/workflows/*.yml .github/workflows/*.yaml .github/actions/*/action.yml)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::No workflow file was found in .github/workflows, so zizmor checked nothing. Fix: run this job from a checkout of the repository."
             exit 1
@@ -67,7 +69,7 @@ jobs:
             echo "::error::zizmor found a mistake in a workflow file, or could not read one. The lines above name the file, the line and the rule. Fix: correct the step it names. If the step must stay as it is, write '# zizmor: ignore[<rule>]' on its line with the reason beside it, and say so in the pull request."
             exit 1
           fi
-          echo "zizmor: no finding in ${#files[@]} workflow file(s)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "zizmor: no finding in ${#files[@]} workflow and action file(s)" | tee -a "$GITHUB_STEP_SUMMARY"
 
   actionlint:
     name: actionlint (workflows)

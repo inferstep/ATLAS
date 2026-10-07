@@ -131,6 +131,33 @@ On a pull request a newer commit still cancels the run of the older one. The
 other workflows that start on a push keep cancelling: the result for the
 newest commit takes the place of the older ones.
 
+### Changed: a push to `dev` sends the merge queue's results and does not run the tests again
+
+A commit reaches `dev` through the merge queue, which runs the `tests`
+workflow on it. The push of that same commit ran the same 24 jobs again, at
+the time when runners are short. What the second run added was the coverage
+upload, the test results upload and the saved build cache.
+
+- The `tests` workflow no longer starts on a push to `dev`. It starts on a
+  pull request, in the merge queue, on a push to `main`, and by hand.
+- A new workflow, `dev results`, runs on a push to `dev`. One job finds the
+  merge queue's run of the commit (`scripts/queue_run.py`), waits until it
+  has ended, takes the reports it kept and sends them. One job fills the Go
+  build cache: it builds the tests with the test gate's own command and runs
+  none (`scripts/go_test_build.py`).
+- A commit that did not come through the queue has no such run. The job
+  fails for it and says to start `tests` by hand. A run that kept no report
+  fails the job too.
+- The upload steps are in two actions of this repository
+  (`.github/actions/`), which the `tests` workflow and `dev results` both
+  use.
+- The image workflow moves the `dev` tags when the `tests` run of the commit
+  passed. That run is now the queue's.
+- On a pull request that changes this path, a job tries the lookup and the
+  download and sends nothing.
+- The extension's test results job no longer turns red when the job before
+  it stopped ahead of its tests: it says that there is nothing to send.
+
 ### Changed: the SonarQube Cloud analysis runs from CI
 
 Sonar analysed only the default branch by itself. A new `sonar scan` job

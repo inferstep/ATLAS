@@ -1,0 +1,80 @@
+name: upload test results
+description: >-
+  Sends the result of each test of the Go and Python test jobs to Codecov.
+  The result files are in a folder, one sub-folder for each downloaded
+  artifact. A test job that left no result file is named and left out. The
+  job that uses this needs `id-token: write` and a checkout of the commit.
+
+inputs:
+  reports:
+    description: The folder that holds the downloaded coverage artifacts.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # A test job that stopped before its tests ran left no result file.
+    # Its upload step is then left out, and this step says which.
+    - name: list the result files
+      id: results
+      shell: bash
+      env:
+        REPORTS: ${{ inputs.reports }}
+      run: |
+        shopt -s nullglob
+        for flag in go-proxy go-tui; do
+          file="$REPORTS/coverage-$flag/$flag.junit.xml"
+          if [ -f "$file" ]; then
+            echo "${flag//-/_}=$file" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=no test results for $flag::The job go test (${flag#go-}) left no result file, so nothing is sent for it. Fix: read that job; it stopped before its tests ran."
+          fi
+        done
+        python=("$REPORTS"/coverage-python-*/python*.junit.xml)
+        if [ "${#python[@]}" -gt 0 ]; then
+          (IFS=,; echo "python=${python[*]}" >> "$GITHUB_OUTPUT")
+        else
+          echo "::notice title=no test results for python::No pytest job left a result file, so nothing is sent for Python. Fix: read the pytest jobs; they stopped before their tests ran."
+        fi
+
+    # The same action, version and identity token as the coverage job. No
+    # secret is stored, and a pull request from a fork uploads the way
+    # Codecov allows for forks.
+    - name: upload go-proxy results
+      if: steps.results.outputs.go_proxy != ''
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        report_type: test_results
+        files: ${{ steps.results.outputs.go_proxy }}
+        flags: go-proxy
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true
+
+    - name: upload go-tui results
+      if: steps.results.outputs.go_tui != ''
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        report_type: test_results
+        files: ${{ steps.results.outputs.go_tui }}
+        flags: go-tui
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true
+
+    - name: upload python results
+      if: steps.results.outputs.python != ''
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        report_type: test_results
+        files: ${{ steps.results.outputs.python }}
+        flags: python
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true

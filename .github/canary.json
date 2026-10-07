@@ -469,7 +469,9 @@
     "PR build check (v3)": "A build that fails makes other jobs red for the wrong reason, so none is planted.",
     "alias image tag": "It runs only for a push. On a pull request it is skipped.",
     "promote moving tags": "It runs only for a push. On a pull request it is skipped.",
-    "matrix.service.name": "The name GitHub gives the image build jobs of a push when they are skipped on a pull request."
+    "matrix.service.name": "The name GitHub gives the image build jobs of a push when they are skipped on a pull request.",
+    "test results upload (extension)": "It sends numbers to Codecov and judges nothing. On the canary it has nothing to send and says so: the job before it, `lint + test + build`, stops at its lint step, so no test ran.",
+    "dev results lookup (sends nothing)": "It reads the merge queue's run of a commit of dev and what that run kept. No planted file changes that. It runs only on a pull request that changes the files of the push-to-dev results."
   },
   "other_checks": {
     "CodeQL": "The result of the code scanning service. A finding of the planted files does not turn it red.",
@@ -478,7 +480,6 @@
     "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary."
   },
   "side_effects": {
-    "checks ran": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and this check names a skipped job.",
-    "test results upload (extension)": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` stops at its lint step, so no test ran and the file of results that this job sends was not made."
+    "checks ran": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and this check names a skipped job."
   }
 }

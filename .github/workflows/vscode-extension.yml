@@ -137,7 +137,12 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: coverage-typescript
+          # By pattern, and not by name: a name that is not there fails the
+          # step. When the job before stopped ahead of its tests there is no
+          # file to send, and the next step says so; that is no fault of
+          # this job.
+          pattern: coverage-typescript
+          merge-multiple: true
           path: ${{ runner.temp }}/reports
 
       - name: result file is there

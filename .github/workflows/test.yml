@@ -1,7 +1,10 @@
 name: tests
 
-# Runs on every push to main/dev and every PR. All jobs run on the free
-# GitHub-hosted Ubuntu runner — no GPU, no large model downloads, no real
+# Runs on every pull request, in the merge queue, and on every push to main.
+# A commit reaches dev through the merge queue, which runs these jobs on it.
+# The push of that same commit to dev does not run them again: the workflow
+# dev-results.yml sends the results that the queue's run kept. All jobs run
+# on the free GitHub-hosted Ubuntu runner — no GPU, no large model downloads, no real
 # Docker compose stack. Every workflow names the runner image (ubuntu-24.04)
 # and not `ubuntu-latest`, so the image changes when a pull request changes
 # it and its checks pass, not on the day GitHub moves the label. The install-test.yml workflow handles the
@@ -10,7 +13,7 @@ name: tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main, dev]
   # The merge queue runs the required checks on the merged result before it
@@ -19,10 +22,14 @@ on:
   merge_group:
     types: [checks_requested]
     branches: [main, dev]
+  # For a commit that reached a branch without the merge queue, as the
+  # release step's merge-back into dev does. Started by hand, a run does what
+  # a push run does: the tests, both uploads and the cache.
+  workflow_dispatch:
 
 # A newer commit on a pull request cancels the run of the older one. A push
-# to dev or main is not cancelled by the next push: each pushed commit has a
-# group of its own, so its coverage and its test results reach the branch.
+# to main is not cancelled by the next push: each pushed commit has a group
+# of its own, so its coverage and its test results reach the branch.
 concurrency:
   group: tests-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
@@ -569,69 +576,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - name: settings file is in this commit
-        id: settings
-        run: |
-          if [ -f codecov.yml ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice title=coverage not uploaded::This commit has no codecov.yml, so Codecov would use its own defaults for it (it would comment on the pull request). Nothing is uploaded. Fix: update the branch from dev."
-          fi
-
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        if: steps.settings.outputs.present == 'true'
         with:
           pattern: coverage-*
           path: ${{ runner.temp }}/reports
 
-      - name: list the python reports
-        id: python
-        if: steps.settings.outputs.present == 'true'
-        run: |
-          set -o pipefail
-          echo "files=$(ls "$RUNNER_TEMP"/reports/coverage-python-*/python.lcov | paste -sd, -)" >> "$GITHUB_OUTPUT"
-
-      # The action is pinned by commit and its uploader by version; the
-      # action checks the uploader's signature before it runs it. No secret
-      # is stored: Codecov accepts the identity token GitHub signs for this
-      # run. A pull request from a fork gets no such token, and the action
-      # then uploads the way Codecov allows for forks. A refused upload
-      # fails this job, so it cannot pass unseen.
-      - name: upload go-proxy
-        if: steps.settings.outputs.present == 'true'
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      # The upload steps are in an action of this repository, so that the
+      # push to dev, which takes the merge queue's reports, sends them the
+      # same way (.github/workflows/dev-results.yml).
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/upload-coverage  # zizmor: ignore[self-repository]
         with:
-          version: v11.3.1
-          files: ${{ runner.temp }}/reports/coverage-go-proxy/go-proxy.out
-          flags: go-proxy
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
-
-      - name: upload go-tui
-        if: steps.settings.outputs.present == 'true'
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-        with:
-          version: v11.3.1
-          files: ${{ runner.temp }}/reports/coverage-go-tui/go-tui.out
-          flags: go-tui
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
-
-      - name: upload python
-        if: steps.settings.outputs.present == 'true'
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-        with:
-          version: v11.3.1
-          files: ${{ steps.python.outputs.files }}
-          flags: python
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
+          reports: ${{ runner.temp }}/reports
 
   test-results-upload:
     name: test results upload
@@ -660,65 +617,8 @@ jobs:
           pattern: coverage-*
           path: ${{ runner.temp }}/reports
 
-      - name: list the result files
-        id: results
-        # A test job that stopped before its tests ran left no result file.
-        # Its upload step is then left out, and this step says which.
-        run: |
-          shopt -s nullglob
-          for flag in go-proxy go-tui; do
-            file="$RUNNER_TEMP/reports/coverage-$flag/$flag.junit.xml"
-            if [ -f "$file" ]; then
-              echo "${flag//-/_}=$file" >> "$GITHUB_OUTPUT"
-            else
-              echo "::notice title=no test results for $flag::The job go test (${flag#go-}) left no result file, so nothing is sent for it. Fix: read that job; it stopped before its tests ran."
-            fi
-          done
-          python=("$RUNNER_TEMP"/reports/coverage-python-*/python*.junit.xml)
-          if [ "${#python[@]}" -gt 0 ]; then
-            (IFS=,; echo "python=${python[*]}" >> "$GITHUB_OUTPUT")
-          else
-            echo "::notice title=no test results for python::No pytest job left a result file, so nothing is sent for Python. Fix: read the pytest jobs; they stopped before their tests ran."
-          fi
-
-      # The same action, version and identity token as the coverage job. No
-      # secret is stored, and a pull request from a fork uploads the way
-      # Codecov allows for forks.
-      - name: upload go-proxy results
-        if: steps.results.outputs.go_proxy != ''
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/upload-test-results  # zizmor: ignore[self-repository]
         with:
-          version: v11.3.1
-          report_type: test_results
-          files: ${{ steps.results.outputs.go_proxy }}
-          flags: go-proxy
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
-
-      - name: upload go-tui results
-        if: steps.results.outputs.go_tui != ''
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-        with:
-          version: v11.3.1
-          report_type: test_results
-          files: ${{ steps.results.outputs.go_tui }}
-          flags: go-tui
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
-
-      - name: upload python results
-        if: steps.results.outputs.python != ''
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
-        with:
-          version: v11.3.1
-          report_type: test_results
-          files: ${{ steps.results.outputs.python }}
-          flags: python
-          disable_search: true
-          disable_telem: true
-          fail_ci_if_error: true
-          use_oidc: true
+          reports: ${{ runner.temp }}/reports

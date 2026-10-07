@@ -95,7 +95,20 @@ def test_a_finding_fails_each_job():
 
 def test_the_jobs_read_the_workflow_files_and_no_folder_below_them():
     text = LINT.read_text(encoding="utf-8")
-    assert text.count("files=(.github/workflows/*.yml .github/workflows/*.yaml)") == 2
+    assert text.count("files=(.github/workflows/*.yml .github/workflows/*.yaml)") == 1
+    assert text.count("files=(.github/workflows/*.yml .github/workflows/*.yaml .github/actions/*/action.yml)") == 1
+
+
+def test_zizmor_reads_the_actions_of_this_repository_too():
+    """A workflow runs the steps of a local action as its own, so the same rules hold for them.
+
+    actionlint reads workflow files only. What it would check in an action
+    file is held by zizmor and by tests/infrastructure/test_dev_results.py.
+    """
+    jobs = yaml.safe_load(LINT.read_text(encoding="utf-8"))["jobs"]
+    assert ".github/actions/*/action.yml" in jobs["zizmor"]["steps"][-1]["run"]
+    assert ".github/actions" not in jobs["actionlint"]["steps"][-1]["run"]
+    assert sorted((ROOT / ".github" / "actions").glob("*/action.yml")), "no action file is there to read"
 
 
 def test_the_lint_jobs_have_a_read_only_token():

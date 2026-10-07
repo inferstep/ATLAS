@@ -1,0 +1,157 @@
+name: dev results
+
+# A commit reaches dev through the merge queue, which runs the `tests`
+# workflow on it. The push of that same commit does not run the tests again.
+# This workflow does the three things that only a run on dev can do: it sends
+# the coverage reports and the test results that the queue's run kept, for
+# the commit that is now on dev, and it fills the Go build cache that pull
+# request jobs read.
+#
+# The upload is here and not in the queue's run because a group in the queue
+# can be thrown away after its checks passed, and the results of a commit
+# that never reached dev must not count as dev's. The cache is here because
+# no other run can read a cache that a queue run saved.
+#
+# A commit that did not come through the queue (the release step's
+# merge-back) has no such run. The first job fails for it and says so; the
+# `tests` workflow is then started by hand for that commit.
+
+on:
+  push:
+    branches: [dev]
+
+# Each pushed commit has a group of its own: the next push does not cancel
+# the upload of this one.
+concurrency:
+  group: dev-results-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  queue-results:
+    name: results of the merge queue's run
+    runs-on: ubuntu-24.04
+    # The lookup waits up to 30 minutes for the queue's run to end.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # To find the queue's run of this commit and to take its artifacts.
+      actions: read
+      # Lets this job ask GitHub for a short-lived token that says which
+      # repository and run it is. Codecov checks it; see the upload actions.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: the merge queue's run of this commit
+        id: run
+        # Finds the run of `tests` that the merge queue started for this
+        # commit and waits until it has ended: the queue merges when the
+        # required checks passed, and other jobs of the run may go on. For a
+        # commit with no such run it fails and says what to do.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/queue_run.py --commit "$GITHUB_SHA" --wait-minutes 30
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/reports
+          run-id: ${{ steps.run.outputs.run-id }}
+          github-token: ${{ github.token }}
+
+      - name: the reports of that run are here
+        # The download step passes when it finds nothing. No report is a
+        # fault, and must not read as "nothing to send".
+        env:
+          RUN: ${{ steps.run.outputs.run-id }}
+        run: |
+          shopt -s nullglob
+          found=("$RUNNER_TEMP"/reports/coverage-*)
+          if [ "${#found[@]}" -eq 0 ]; then
+            echo "::error title=no reports to send::Run $RUN of the merge queue kept no coverage artifact for this commit, so nothing can be sent for it. Artifacts are kept for 14 days. Fix: open that run and see whether its test jobs made their reports; if the run is too old, start the workflow tests by hand for this branch."
+            exit 1
+          fi
+          printf '%s\n' "${found[@]##*/}"
+
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/upload-coverage  # zizmor: ignore[self-repository]
+        # Only when the test jobs of that run passed: a report from a failed
+        # run would show coverage that is not real.
+        if: steps.run.outputs.tests-passed == 'true'
+        with:
+          reports: ${{ runner.temp }}/reports
+
+      - name: coverage is not sent
+        # A notice, and no red of this job's own: the failed job is on this
+        # commit already, with its red. This job is red only when there is
+        # no queue run, when that run did not end in time, or when it kept no
+        # report.
+        if: steps.run.outputs.tests-passed != 'true'
+        env:
+          NOT_PASSED: ${{ steps.run.outputs.not-passed }}
+        run: echo "::notice title=coverage not uploaded::In the merge queue's run of this commit these did not pass - $NOT_PASSED. A report from a failed run would show coverage that is not real, so the coverage is not sent. The test results are sent."
+
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/upload-test-results  # zizmor: ignore[self-repository]
+        with:
+          reports: ${{ runner.temp }}/reports
+
+  go-cache:
+    name: Go build cache for pull requests (${{ matrix.module }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [proxy, tui]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        id: go
+        with:
+          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
+          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # GOTOOLCHAIN=local, so the version here must satisfy every
+          # module — no auto-fetch.
+          go-version: '1.26.6'
+          # The step below keeps the caches, under a key of this job's own.
+          cache: false
+
+      - name: point the gates at Go's own build cache folder
+        # The gate script builds in a folder of its own unless GOCACHE is
+        # set. The step below keeps Go's own folder, so the gates use that.
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
+      - name: Go module and build cache
+        # The key is the module, the Go version and the module's go.mod and
+        # go.sum (proxy has no go.sum). The cache makes the build faster and
+        # never decides a result: Go takes an object from it only for the same
+        # source, and the test gate runs with -count=1, so no test result
+        # comes from it.
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # The number after "go-test" starts a new cache when it is raised:
+          # a saved cache is never written again under the same key.
+          key: go-test-2-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
+
+      - name: build the tests and run none
+        # A cache that was found is not saved again, so there is nothing to
+        # build then. The command is the test gate's own, with a pattern that
+        # fits no test, so the cache holds what a pull request job builds.
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          MODULE: ${{ matrix.module }}
+        run: python3 scripts/go_test_build.py "$MODULE"

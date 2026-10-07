@@ -1,0 +1,102 @@
+name: dev results check
+
+# The workflow dev-results.yml runs only on a push to dev, so a change to it,
+# to its lookup script or to the upload actions could be seen only after a
+# merge. On a pull request that changes one of them, this does the lookup and
+# the download for the newest commit of the base branch that came through the
+# merge queue. It sends nothing.
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/dev-results.yml'
+      - '.github/workflows/dev-results-check.yml'
+      - '.github/actions/**'
+      - 'scripts/queue_run.py'
+
+concurrency:
+  group: dev-results-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    name: dev results lookup (sends nothing)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # To find the queue's run of a commit and to take its artifacts.
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The base branch's newest commits have to be here.
+          fetch-depth: 20
+          persist-credentials: false
+
+      - name: the base to compare with
+        id: base
+        # The base branch as it is now, not as it was when the event was
+        # made; see scripts/change_base.py. The base branch's copy of that
+        # script gives the answer, so a change cannot choose its own base.
+        # The change's copy runs only when the parent commit is here and has
+        # no copy, as on a pull request into a branch that has none yet.
+        run: |
+          if ! git rev-parse --verify --quiet "HEAD^1" >/dev/null; then
+            echo "::error::The parent of the checked-out commit is not in this checkout, so the base cannot be read and no script was run. Fix: give the checkout step of this job fetch-depth 0 (or 2 or more) and no ref."
+            exit 1
+          fi
+          if git cat-file -e "HEAD^1:scripts/change_base.py" 2>/dev/null; then
+            git show "HEAD^1:scripts/change_base.py" > "$RUNNER_TEMP/change_base.py"
+          else
+            cp scripts/change_base.py "$RUNNER_TEMP/change_base.py"
+          fi
+          sha=$(python3 "$RUNNER_TEMP/change_base.py")
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: the merge queue's run of a commit of the base branch
+        id: run
+        # The newest commit of the base branch may be one that did not come
+        # through the queue (a merge-back). Then the one before it is taken,
+        # up to five back.
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          for commit in $(git rev-list --first-parent -n 5 "$BASE"); do
+            if python3 scripts/queue_run.py --commit "$commit" --wait-minutes 30 --plain; then
+              exit 0
+            fi
+          done
+          echo "::error title=no run to try the lookup on::None of the 5 newest commits of the base branch has a run of the merge queue. Fix: read the lines above; each says why."
+          exit 1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/reports
+          run-id: ${{ steps.run.outputs.run-id }}
+          github-token: ${{ github.token }}
+
+      - name: the reports of that run are here
+        env:
+          RUN: ${{ steps.run.outputs.run-id }}
+        run: |
+          shopt -s nullglob
+          missing=0
+          for file in coverage-go-proxy/go-proxy.out coverage-go-tui/go-tui.out coverage-go-proxy/go-proxy.junit.xml coverage-go-tui/go-tui.junit.xml; do
+            if [ ! -f "$RUNNER_TEMP/reports/$file" ]; then
+              echo "::error title=a report is missing::Run $RUN of the merge queue has no $file. Fix: see whether the test job of that run made it; the upload on dev needs it."
+              missing=1
+            fi
+          done
+          python=("$RUNNER_TEMP"/reports/coverage-python-*/python.lcov)
+          if [ "${#python[@]}" -eq 0 ]; then
+            echo "::error title=a report is missing::Run $RUN of the merge queue has no Python coverage report. Fix: see whether the pytest jobs of that run made theirs."
+            missing=1
+          fi
+          echo "run $RUN: ${#python[@]} Python report(s), and the Go reports as listed above"
+          exit "$missing"

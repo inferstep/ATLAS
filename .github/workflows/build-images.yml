@@ -369,6 +369,9 @@ jobs:
         # to a branch, so a tests run for this SHA exists — we find it by
         # commit, not by ref. If none exists (tag on a never-pushed
         # commit), fail loudly rather than promote untested images.
+        # For a commit of dev that run is the merge queue's: a push to dev
+        # starts no tests run of its own. The lookup is by commit and names
+        # no event, so it finds the queue's run, or one started by hand.
         run: |
           echo "Looking for 'tests' workflow run on ${GITHUB_SHA}..."
           for i in $(seq 1 60); do
@@ -385,11 +388,11 @@ jobs:
                   echo "tests passed on ${GITHUB_SHA} — promoting."
                   exit 0
                 fi
-                echo "::error::tests workflow concluded '$conclusion' on ${GITHUB_SHA} — refusing to promote moving tags. The :sha-* images are published for debugging."
+                echo "::error::tests workflow concluded '$conclusion' on ${GITHUB_SHA} — refusing to promote moving tags. The :sha-* images are published for debugging. Fix: open that tests run. When the job that failed is not a required check and its fault is not in the change, run that job again, then run this job again."
                 exit 1
                 ;;
               absent)
-                echo "::error::no tests workflow run found for ${GITHUB_SHA}. Push the commit to dev/main first (tests must pass before tags are promoted)."
+                echo "::error::no tests workflow run found for ${GITHUB_SHA}. A commit that came through the merge queue has the queue's run. A commit that did not (the release step's merge-back into dev, or a commit that was never pushed) has none. Fix: start the workflow tests by hand for the branch, then run this job again (tests must pass before tags are promoted)."
                 exit 1
                 ;;
               *)

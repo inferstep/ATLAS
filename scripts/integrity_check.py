@@ -45,12 +45,14 @@ DOC_DIRS_ALLOWED = (".github/",)
 # Files that decide what a check accepts: workflows, settings, baselines,
 # expected values, and the scripts whose result is a check's result.
 GATE_FILES = (
-    ".github/workflows/", ".github/requirements/", ".github/code-health-baseline.json", ".github/canary.json",
+    ".github/workflows/", ".github/actions/", ".github/requirements/", ".github/code-health-baseline.json",
+    ".github/canary.json",
     ".golangci.yml", ".golangci.yaml", ".codescene/", "codecov.yml",
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json", "tests/replay/recordings/",
     "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py",
-    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/verify.py", "scripts/canary.py",
+    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/queue_run.py", "scripts/go_test_build.py",
+    "scripts/verify.py", "scripts/canary.py",
     "scripts/dockerfile_lint.py", "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py",
     "scripts/staging-integration.py",
     "scripts/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
