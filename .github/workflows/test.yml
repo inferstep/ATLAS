@@ -51,6 +51,11 @@ jobs:
           # The step below keeps the caches, under a key of this job's own.
           cache: false
 
+      - name: point the gates at Go's own build cache folder
+        # The gate script builds in a folder of its own unless GOCACHE is
+        # set. The step below keeps Go's own folder, so the gates use that.
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
       - name: Go module and build cache
         # The key is the module, the Go version and the module's go.mod and
         # go.sum (proxy has no go.sum). The cache makes the build faster and
