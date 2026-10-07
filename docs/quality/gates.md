@@ -69,7 +69,8 @@ the tool is a mistake and not a mystery.
 - A job whose name is an expression alone is known only by the name GitHub
   gives it when it is skipped.
 
-The job definitions with an `if:` of their own, by workflow file and job id:
+The job definitions with an `if:` of their own, by workflow file and job id. A
+job on this list that does not start gives no red:
 
 | Workflow file | Jobs with a condition |
 |---|---|
