@@ -326,6 +326,16 @@ when a required check was skipped or was reported by no job. Jobs skipped by
 their own `if:` condition are listed, not judged. The job is not a required
 check.
 
+### Fixed: `checks ran` called a run that waits for approval a job that reported nothing
+
+GitHub holds the runs of a pull request from a fork until a maintainer
+approves them. Such a run has no job, and `checks ran` read that as "1 job(s)
+reported nothing" and turned red on a pull request with nothing wrong. It now
+says that the workflow waits for a maintainer's approval, what the
+contributor does (nothing) and what the maintainer does, and gives no
+verdict: it does not pass while a run waits, and it judges no required check
+until the run has run.
+
 ### Fixed: the `checks ran` job called every workflow missing after one listing without them
 
 The job reads GitHub's list of the runs of a commit once a minute. On one
@@ -353,16 +363,6 @@ the run differs. The first recording is a normal session (read, edit, run,
 done). The job `replay (proxy)` runs on pull requests that touch `proxy/` or
 `tests/replay/` and in the merge queue, and is not a required check
 (`docs/quality/gates.md`).
-
-### Fixed: `checks ran` called a run that waits for approval a job that reported nothing
-
-GitHub holds the runs of a pull request from a fork until a maintainer
-approves them. Such a run has no job, and `checks ran` read that as "1 job(s)
-reported nothing" and turned red on a pull request with nothing wrong. It now
-says that the workflow waits for a maintainer's approval, what the
-contributor does (nothing) and what the maintainer does, and gives no
-verdict: it does not pass while a run waits, and it judges no required check
-until the run has run.
 
 ### Added: a canary that shows each check still turns red
 
