@@ -340,6 +340,9 @@ pytest tests/e2e -v
 - A test of a limit must be harmless when the limit fails. A command that
   the limit has to stop ends by itself a little above that limit: build it
   with `tests/infrastructure/bounded_commands.py`.
+- More rules that a review or a failure has taught us, each with the check
+  or test that holds it:
+  [the gates page](docs/quality/gates.md#rules-learned-from-review-and-from-failures).
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression

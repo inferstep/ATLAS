@@ -7,6 +7,9 @@ A number on this page is a starting point, not a target. When a setting of a
 tool changes, change this page too, so that a difference between the page and
 the tool is a mistake and not a mystery.
 
+The rules that reviews and failures have taught us are in one section of
+this page: [Rules learned from review and from failures](#rules-learned-from-review-and-from-failures).
+
 ## How a change reaches `dev`
 
 - Every change is a pull request. A direct push to `dev`, `staging` or `main`
@@ -17,6 +20,10 @@ the tool is a mistake and not a mystery.
   approval.
 - A pull request merges through the merge queue, which runs the required
   checks again on the merged result and then squashes it into one commit.
+- After two red CI rounds on the same pull request, stop and rethink the
+  change before a third push. A third round that only tries again costs the
+  runners of every other pull request, and two reds say that the cause is
+  not yet known.
 - The push of that commit to `dev` runs no test again. The workflow
   `dev results` takes the coverage reports and the test results that the
   queue's run of the commit kept, and sends them for the commit. It also
@@ -214,6 +221,122 @@ How to read the coverage rows:
   root, and no other folder. The two upload actions there pin the Codecov
   action: when Dependabot moves that pin in a workflow file, move it in the
   two action files in the same pull request.
+
+## What the checks found so far
+
+For each check that reports, or that blocks by another rule: how often it
+was red or made a finding, and how many of those were right. A check
+becomes required, or is switched off, on these numbers.
+
+- **Right:** a change was the right answer to the red or the finding.
+- **False alarm:** no change was needed.
+- **Outside:** the cause was not in the change (the network, the runner, a
+  cancelled run).
+- The maintainers keep the count. This is its state on 2026-10-07. A week of
+  counts, in which every red of every pull request is sorted, runs from
+  2026-10-07 to 2026-10-14; the table gets its next state then.
+
+| Check | Mode | Counted on | Reds or findings | Right | False alarm | Outside |
+|---|---|---|---|---|---|---|
+| Sonar's gate on a pull request | reports | every pull request into `dev` since 2026-10-06 | 4 red pull requests | 4 | 0 | 0 |
+| Sonar's security findings that opened a review thread | blocks: every thread must be resolved | the trial of 2026-10-05 and 2026-10-06 | 8 threads | 1 | 7 | 0 |
+| Code scanning (CodeQL) alerts on a pull request | blocks: every thread must be resolved | 2026-10-07 | 3 alerts | 0 | 3 | 0 |
+| `integrity check`, lines that ask for action or approval | reports | the 30 commits of ordinary work before the pipeline | 8 lines in 7 commits | 8 | 0 | 0 |
+| `integrity check`, in the week of counts | reports | pull requests since 2026-10-07 | 14 lines on one pull request | 14 | 0 | 0 |
+| `checks ran` | reports | every pull request and merge group since #303 | 2 red | 0 | 2 | 0 |
+| golangci-lint on new Go code | reports | the 12 commits that touch Go among the last 50 before the pipeline | 3 findings in 2 commits | 2 | 1 | 0 |
+| zizmor | reports | every workflow file, at the first sorting | 25 findings | 25 | 0 | 0 |
+| actionlint | reports | every workflow file | 0 with the pinned version | 0 | 0 | 0 |
+| hadolint | reports | 8 Dockerfiles | 37 findings, none at the level "error" | not sorted yet | not sorted yet | 0 |
+| The two upload jobs of `tests` | reports | pull requests since 2026-10-07 | 1 red | 0 | 1 | 0 |
+| A required check that was red for another reason than the change | required | merge groups and pull requests since 2026-10-07 | 2 (the install matrix) | 0 | 0 | 2 |
+| A merge group that failed | required | every merge group on `dev` | 1 | 1 | 0 | 0 |
+
+- Sonar's seven false alarms were three rules for workflow files; those
+  rules are off since. The three CodeQL alerts were two texts of a list with
+  no comma between them, and a host name in a test: each was removed by
+  writing the line in another way.
+- Before five repairs of the `integrity check` the same 30 commits gave 29
+  lines, 23 of them false alarms.
+- The two reds of `checks ran` were a fault in its reading of the list of
+  runs (repaired by #344) and a run that waited for a maintainer's approval.
+- The older version of actionlint gave 4 findings, all false; the pinned
+  version reads the same files with none.
+- The red of the upload jobs came from the pipeline itself and not from the
+  pull request it stood on; #415 repaired the cause.
+- The two reds of the install matrix were the network; the installer now
+  tries a failed download again (#406).
+- Not in the table: the replay job (no red so far), and Codecov's statuses
+  and CodeScene, which show numbers and fail nothing.
+
+## Rules learned from review and from failures
+
+One line for each rule that a review or a failure has taught us, with the
+pull request or issue it came from. The same finding should not have to be
+made twice.
+
+- "Held by" names the check or the test that holds the rule. A rule with no
+  check there is held by review: a reviewer looks for it.
+- A rule that is written here can become a check. When it does, name the
+  check in its line.
+- To add a rule: one line, in plain words, with the number of the pull
+  request or issue that showed the need for it. A rule that the
+  [contributor guide](../../CONTRIBUTING.md) states already is not written
+  again: its line points to the guide.
+
+### Tests
+
+| Rule | From | Held by |
+|---|---|---|
+| The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
+| The guide's rule for a skip: it has its reason ([Testing](../../CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
+| A test that stops running in the plain jobs (a skip, a mark, a move to another folder) is named in the change that does it | #391, #397, #404 | `integrity check` |
+| The guide's rule for a test gate that ran no test ([section 4](../../CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
+| A Go test gate does not take a result from the cache | #382 | `scripts/production-readiness.py` |
+| A test writes under the test runner's own folder, never into a folder of the user | #305 | review |
+| A test claims only what the code under test promises | #355 | review |
+| A test of a list of the repository uses an entry made for the test, so that it holds when the real list is empty | #403 | review |
+
+### Checks and workflows
+
+| Rule | From | Held by |
+|---|---|---|
+| A check that stops checking must be seen ([The canary](#the-canary)) | #350, #396 | `scripts/canary.py check` |
+| A change whose checks did not run fails. A job that was skipped behind a failed job is not counted twice | #303, #403 | `checks ran` |
+| The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
+| A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/test_change_base.py` |
+| Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
+| The guide's rule for a checkout step and for a value from the event ([Code style](../../CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
+| A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/test_workflow_concurrency.py` |
+| A push to `dev` runs no test again: it sends what the merge queue's run of the commit kept | #402 | `tests/infrastructure/test_dev_results.py` |
+| The message of a check says what failed, why it matters, and how to fix it | #300 | review |
+| A red that the change did not cause is counted apart, and its cause is repaired where the user meets it too: a failed download is tried again | #406 | `tests/infrastructure/test_bootstrap_download_retry.py` |
+| A job that checks out another commit than the one its workflow file comes from takes no action from that checkout | #415 | `tests/infrastructure/test_workflow_local_actions.py` |
+| A word that ends an issue counts only where it starts a line, outside a fenced block. A sentence that quotes such a line ends nothing | #416 | `tests/infrastructure/test_atlas_bot.py` |
+| A test job installs every package from a lock file with hashes, the product's packages too | #407 | `tests/contracts/test_ci_lock.py` |
+
+### Scripts
+
+| Rule | From | Held by |
+|---|---|---|
+| Every shell script is read by shellcheck at warning level, and no line switches a warning off | #342 | `shellcheck` |
+| A script keeps the downloads and logs of a run in a temporary folder that it makes for that run, and says where they are when the run fails | #409 | `tests/infrastructure/test_bootstrap_run_folder.py` |
+| A script that removes a folder names it first, and refuses a setting that is empty, is not a full path, or is or holds the home folder or the repository | #414 | `tests/infrastructure/test_uninstall_script.py` |
+
+### Product code
+
+| Rule | From | Held by |
+|---|---|---|
+| A path is judged by where it leads, not by its text: a read inside the workspace goes through the confined reader | #309, #338, #348 | the tests of #339 and of those changes |
+| A refusal gives its true reason | #353, #354 | the tests of those changes |
+
+### Documents
+
+| Rule | From | Held by |
+|---|---|---|
+| Every document is on the docs index | #345 | review |
+| Content goes into the document that owns the topic, so that nobody misses a rule because it stands elsewhere. A new documentation file needs a maintainer's approval | #300, #362 | `integrity check` |
+| A number on a quality page is measured, and the page says on what and when | #311, #347 | review |
 
 ## The replay tests
 
