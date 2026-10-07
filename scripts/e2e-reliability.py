@@ -54,6 +54,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from code_quality import analyze as analyze_quality  # noqa: E402
 from reliability_report import (Stopped, log_defects, report, sibling,  # noqa: E402
                                 stop_on_signals, write_summary)
+from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Task suite
@@ -1091,6 +1092,8 @@ class Session:
     # session ran (stack_changes). A measured outcome over an unstable stack
     # says so.
     stack_changes: list[str] = field(default_factory=list)
+    # Each permission prompt of the session and what the runner answered.
+    prompts: list[dict] = field(default_factory=list)
 
     def of_type(self, t: str) -> list[dict]:
         return [e for e in self.events if e.get("type") == t]
@@ -1535,7 +1538,7 @@ def tui_handled_types() -> set[str]:
 # --------------------------------------------------------------------------
 
 def run_session(task: Task, rep: int, url: str, workspace: Path,
-                subdir: str, timeout: int, raw_sink=None) -> Session:
+                subdir: str, timeout: int, raw_sink=None, prompt_policy: str = "deny") -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible
     instead of overwriting its own evidence -- the parsed events beside it are
@@ -1587,6 +1590,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     req = urllib.request.Request(f"{url}/v1/agent", data=body,
                                  headers={"Content-Type": "application/json"})
     events: list[dict] = []
+    prompts: list[dict] = []
     stream_ok = False
     t0 = time.time()
 
@@ -1598,32 +1602,20 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         # withdrawn. Inert to every detector, which read `type` and `data`.
         ev["_t"] = round(time.time() - t0, 3)
         events.append(ev)
+        if ev.get("type") == "permission_request":
+            prompts.append({**answer_prompt(url, payload["session_id"], ev, prompt_policy), "_t": ev["_t"]})
 
     history: list[dict] = [{"role": "user", "content": task.prompt}]
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            for raw in resp:
-                # urlopen's timeout is per-read, so a session that keeps
-                # streaming never trips it. One observed session looped past
-                # 20 minutes against a 900s cap, trying to satisfy a self-test
-                # it had written with the wrong expectation.
-                if time.time() - t0 > timeout:
-                    take({"type": "error", "data": {
-                        "error": f"harness cap: session exceeded {timeout}s"}})
-                    break
-                if raw_sink is not None:
-                    raw_sink.write(raw.decode("utf-8", "replace"))
-                line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    stream_ok = True
-                    break
-                try:
-                    take(json.loads(payload))
-                except json.JSONDecodeError:
-                    take({"type": "__unparseable__", "raw": payload[:200]})
+            ended = read_stream(resp, take, t0 + timeout, raw_sink)
+        stream_ok = ended == "done"
+        if ended == "cap":
+            # One observed session looped past 20 minutes against a 900s cap,
+            # trying to satisfy a self-test it had written with the wrong
+            # expectation.
+            take({"type": "error", "data": {
+                "error": f"harness cap: session exceeded {timeout}s"}})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         take({"type": "error", "data": {"error": f"stream failed: {e}"}})
 
@@ -1648,25 +1640,13 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                                       headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(freq, timeout=timeout) as resp:
-                for raw in resp:
-                    if time.time() - t0 > timeout:
-                        break
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        take(json.loads(payload))
-                    except json.JSONDecodeError:
-                        take({"type": "__unparseable__", "raw": payload[:200]})
+                read_stream(resp, take, t0 + timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             take({"type": "error", "data": {"error": f"followup failed: {e}"}})
     wall = time.time() - t0
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
-                wall_s=wall, stream_ok=stream_ok)
+                wall_s=wall, stream_ok=stream_ok, prompts=prompts)
     # Fixture integrity first. A model that rewrites the input it was given is
     # not solving the task, and without this the symptom surfaces as a
     # confusing "wrong answer" — one session overwrote a single-line puzzle
@@ -1903,12 +1883,13 @@ def result_row(s: Session, evaluator, stack) -> dict:
         "v3": s.v3,
         "quality": s.quality,
         "stack_changes": s.stack_changes,
+        "prompts": s.prompts,
         "evaluator": evaluator,
         "stack": stack,
     }
 
 
-def main() -> int:
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default=os.environ.get("ATLAS_PROXY_URL",
@@ -1940,7 +1921,15 @@ def main() -> int:
                     help="directory to write each session's raw event stream "
                          "to; without it a failure can only be diagnosed from "
                          "container logs, which roll")
-    args = ap.parse_args()
+    ap.add_argument("--prompts", choices=sorted(PROMPT_POLICIES), default="deny",
+                    help="what the runner answers when a session asks for a permission (a deletion "
+                         "always asks): " + "; ".join(f"{k}: {v}" for k, v in sorted(PROMPT_POLICIES.items()))
+                         + ". The policy and each answer are kept in the results")
+    return ap.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args()
 
     if not args.workspace:
         print("error: --workspace (or ATLAS_PROJECT_DIR) must be set — it has "
@@ -1978,7 +1967,7 @@ def main() -> int:
     for line in identity["problems"]:
         print(f"warning: {line}", file=sys.stderr)
     STACK.update(commit=identity["commit"], images=identity["images"],
-                 identity_verified=identity["verified"])
+                 identity_verified=identity["verified"], prompt_policy=args.prompts)
 
     global _SANDBOX_CONTAINER, _SANDBOX_WORKDIR
     _SANDBOX_CONTAINER = args.sandbox_container or ""
@@ -2024,7 +2013,7 @@ def _scored_session(task: Task, rep: int, args, ws: Path, known: set[str],
                        capture_output=True, timeout=30)
     before = container_states(args.compose_project) if args.compose_project else None
     s = run_session(task, rep, args.url, ws,
-                    args.subdir, args.timeout)
+                    args.subdir, args.timeout, prompt_policy=args.prompts)
     if args.compose_project:
         s.stack_changes = stack_changes(before, container_states(args.compose_project))
     s.defects += h1_protocol(s, known)
@@ -2051,6 +2040,9 @@ def _scored_session(task: Task, rep: int, args, ws: Path, known: set[str],
         print(f"      ! {d}", flush=True)
     for c in s.stack_changes:
         print(f"      ! stack: {c}", flush=True)
+    for p in s.prompts:
+        print(f"      ? asked to approve {p['tool']}: answered {p['answer'] or 'nothing'} "
+              f"(policy {p['policy']}, delivered: {p['delivered']})", flush=True)
     return s
 
 

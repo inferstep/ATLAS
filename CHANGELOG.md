@@ -395,6 +395,21 @@ CodeScene are set, and the numbers measured on `dev`: coverage, the size and
 lint counts, and what the outside tools report. The numbers are starting
 points, not targets.
 
+### Changed: the reliability runner answers a permission prompt by a stated policy
+
+A deletion always asks for permission, also in the mode the runner sends, and
+the proxy then waits for an answer for as long as its own limit says (ten
+minutes unless the stack sets another). `scripts/e2e-reliability.py` sent no
+answer, so a session whose model tried to delete a file stood still for that
+whole wait. The runner now answers at once by a policy the run states:
+`--prompts deny` (the default: an unattended run has nobody who could
+approve), `allow`, or `wait` (send nothing, as before). The policy is kept
+with the run (`stack.prompt_policy`), and each prompt with its session
+(`prompts`: the tool, the answer, and whether the proxy took it).
+
+The two loops that read a session's stream are one function now, in
+`scripts/reliability_stream.py`.
+
 ### Added: the reliability runner records container restarts and OOM kills
 
 `scripts/e2e-reliability.py` now snapshots each container of the compose

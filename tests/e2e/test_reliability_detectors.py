@@ -851,7 +851,7 @@ def _run_main(rel, tmp_path, monkeypatch, sessions, reps):
     monkeypatch.setattr(rel, "h6_service_fault", lambda s: ["H6 service fault: sandbox answered 500"])
     queue = iter(sessions)
     monkeypatch.setattr(rel, "run_session",
-                        lambda task, rep, *a: rel.Session(**next(queue)(task, rep, ws)))
+                        lambda task, rep, *a, **k: rel.Session(**next(queue)(task, rep, ws)))
     monkeypatch.setattr(sys, "argv", ["e2e-reliability.py", "--workspace", str(ws),
                                       "--deploy-dir", str(tmp_path / "none"),
                                       "--compose-project", "", "--sandbox-container", "",
