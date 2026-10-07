@@ -529,10 +529,13 @@ pull request whose title has the type `fix`, a new job, `fix tests (fail
 without the fix)`, takes the tests the pull request adds or changes and runs
 them twice: on the base's code with the pull request's test files laid over
 it, and on the pull request (`scripts/fix_tests.py`). For each test it says
-"fails on the base", "needs the fix's code" or "passes on the base too"; only
-the last is a finding. It reports and does not fail the job. A fix with no
-new or changed test gets its own line. The gates page lists what it cannot
-judge.
+"fails on the base", "needs the fix's code" or "passes on the base too". The
+last is a finding when no test of the fix fails on the base; beside one that
+does, it is most likely a control and is listed for information. For the fix
+as a whole it says "guarded", "not shown" (its tests ran on the base and
+none failed), "cannot tell" (none could run there) or "no test". It reports
+and does not fail the job. The gates page lists what it cannot judge, and
+what it said for 16 fixes that are merged.
 
 ### Added: `make verify`, the local gate for one change
 

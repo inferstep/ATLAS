@@ -139,17 +139,32 @@ checkout of one commit: without the parent it cannot read the base branch's
 copy, and it does not run the change's copy in its place.
 
 `fix tests` gives one line for the fix as a whole, the strongest that holds:
-"guarded" (at least one test fails on the base and passes with the fix), "not
-shown" (no test fails on the base, for example because every test needs the
-fix's code), or "no test". Below it, each new or changed test is in one of
-three classes that are not added together: "fails on the base" (it fails
-there for what the code does), "needs the fix's code" (on the base it cannot
-run as written: it does not build or import, names something that is not
-there yet, or calls a function in a way the base's function does not take),
-and "passes on the base too". The last is a finding for a test the fix adds:
-it is a control that holds what the fix must not change, or a test that does
-not test the fix. For a test the fix only changes it is information. It
-cannot judge these, and says so when it meets one:
+
+| The line | What it means |
+|---|---|
+| Guarded | At least one test fails on the base and passes with the fix |
+| Not shown | Tests of the fix ran on the base and none failed. This is a finding about the fix |
+| Cannot tell | No test could run on the base: each needs code or a file the fix adds. This is the limit of the check, not a finding about the fix |
+| No test | The fix adds or changes no test |
+
+Below it, each new or changed test is in one of three classes that are not
+added together: "fails on the base" (it fails there for what the code does),
+"needs the fix's code" (on the base it cannot run as written: it does not
+build or import, names something that is not there yet, or calls a function
+in a way the base's function does not take), and "passes on the base too".
+
+- A test the fix adds that passes on the base too is a finding when no test
+  of the fix fails on the base. Beside a test that does, it is most likely a
+  control that holds what the fix must not change, and it is listed for
+  information. For a test the fix only changes it is information.
+- A test that fails on the base and with the fix reads "not judged here",
+  with the first line of its failure. The cause is often the place it runs
+  in: a test that needs docker gives another result where there is none.
+- A failure says where it was raised: in the test, in product code, or in
+  the standard library or an installed package, with the file of the
+  repository that called it.
+
+It cannot judge these, and says so when it meets one:
 - Go builds the tests of a package together. When a changed test file uses
   code the fix adds, no test of the package builds on the base. Each changed
   test file is then tried alone (up to six); a file that still does not

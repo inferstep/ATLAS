@@ -13,10 +13,19 @@ What it says for each test (three classes, never added together):
                            not build or import, it names something that is
                            not there yet, or it calls a function in a way the
                            base's function does not take
-  passes on the base too   a finding for a test the fix adds: it does not
-                           guard the fix. For a test the fix only changes it
-                           is information
-and, outside the three: fails on the pull request too; could not be judged.
+  passes on the base too   it does not guard the fix. For a test the fix adds
+                           it is a finding when no other test of the fix
+                           fails on the base; beside such a test it is most
+                           likely a control, and is listed for information
+and, outside the three:
+  not judged here          it fails on the base and with the fix (the place
+                           it runs in may lack something it needs), it is
+                           skipped, or a run did not end in its time
+  fails with the fix       it passes on the base and fails on the pull request
+
+For the fix as a whole it says one of: guarded (a test fails on the base),
+not shown (tests ran on the base and none failed), cannot tell (no test could
+run on the base), no test.
 
 It judges only a pull request whose title has the type `fix`. It reports and
 exits 0 for every verdict, and exits 2 when it could not do its work.
@@ -216,7 +225,8 @@ def first_line(text: str) -> str:
 def failure(text: str, where: str = "", added: tuple | list = ()) -> Outcome:
     """A failed test: it cannot run as written on this code, or it fails for what the code does.
 
-    `where` says where the error was raised: in the test, or in product code.
+    `where` says where the error was raised: in the test, in product code, or
+    in a file outside the repository.
     `added` holds the files the fix adds: a test that stops because one of
     them is not there cannot run as written on the base.
     """
@@ -236,18 +246,35 @@ def failure(text: str, where: str = "", added: tuple | list = ()) -> Outcome:
     return Outcome("fail", f"{kind}{', raised ' + where if where else ''}: {message}"[:220])
 
 
+def place(frames: list[str], is_test) -> str:
+    """Where an error was raised, from the files of its traceback in the order pytest prints them.
+
+    pytest names a file of the repository from the folder it runs in, and
+    any other file by its whole path. A file outside the repository is the
+    standard library or an installed package, and not product code: it is
+    named as such, with the last file of the repository that called it.
+    """
+    last = frames[-1]
+    if not os.path.isabs(last):
+        return "in the test" if is_test(last) else f"in product code ({last})"
+    kind = "an installed package" if "-packages/" in last else "the standard library"
+    inside = [path for path in frames if not os.path.isabs(path)]
+    caller = ("the test" if is_test(inside[-1]) else inside[-1]) if inside else ""
+    return f"in {kind} ({Path(last).name})" + (f", called from {caller}" if caller else "")
+
+
 def raised_where(output: str, is_test) -> dict[str, str]:
-    """For each failed pytest function: whether its error was raised in the test or in product code."""
-    where, name = {}, ""
+    """For each failed pytest function: where its error was raised (see `place`)."""
+    frames: dict[str, list[str]] = {}
+    name = ""
     for line in output.splitlines():
         heading = PYTEST_FAILURE.match(line)
         if heading:
             name = heading.group(1).split("[")[0].split(".")[-1].split(" ")[-1]
         frame = FRAME.match(line)
         if frame and name:
-            path = frame.group(1)
-            where[name] = "in the test" if is_test(path) else f"in product code ({path})"
-    return where
+            frames.setdefault(name, []).append(frame.group(1))
+    return {name: place(files, is_test) for name, files in frames.items()}
 
 
 def run_python(tree: Path, tests: list[Test], python: str, limit: int, is_test,
@@ -309,7 +336,8 @@ def go_failure(lines: list[str]) -> Outcome:
     text = "".join(lines)
     if "panic:" not in text:
         said = next((line.split(": ", 1)[1].strip() for line in lines if re.match(r"\s+\S+_test\.go:\d+: ", line)), "")
-        return Outcome("fail", f"an assertion, raised in the test: {said or 'the test reported a failure'}"[:220])
+        none = "the test reported a failure, and its output has no message"
+        return Outcome("fail", f"an assertion, raised in the test: {said or none}"[:220])
     frames = [m.group(1) for m in re.finditer(r"^\s+(\S+\.go):\d+", text, re.MULTILINE)
               if "/runtime/" not in m.group(1) and "/testing/" not in m.group(1)]
     place = Path(frames[0]).name if frames else ""
@@ -342,7 +370,10 @@ def run_go(tree: Path, tests: list[Test], go: str, limit: int) -> dict[Test, Out
             elif event.get("Test") and event.get("Action") in ("pass", "fail", "skip"):
                 ended[event["Test"]] = event["Action"]
         for test in group:
-            out[test] = go_outcome(ended.get(test.name), by_test.get(test.name, []), said, status)
+            # A check that fails inside `t.Run` is reported under the subtest's name: its lines are the test's too.
+            lines = [line for name, printed in by_test.items() if name == test.name or name.startswith(test.name + "/")
+                     for line in printed]
+            out[test] = go_outcome(ended.get(test.name), lines, said, status)
     return out
 
 
@@ -400,21 +431,24 @@ VERDICTS = {
 def verdict(base: Outcome, head: Outcome) -> tuple[str, str]:
     """The class of a test and what to say with it."""
     if head.state in ("fail", "missing"):
-        return "fails on the pull request too", head.detail
+        if base.state == "pass":
+            return "fails with the fix", head.detail
+        # The first line of the failure shows at once when the cause is the place the test runs in.
+        return "not judged here", f"it fails on the base and with the fix: {head.detail}"
     if "none" in (base.state, head.state) or "skip" in (base.state, head.state):
-        return "could not be judged", (base if base.state in ("none", "skip") else head).detail
+        return "not judged here", (base if base.state in ("none", "skip") else head).detail
     name, text = VERDICTS[(base.state, head.state)]
     return name, f"{text}: {base.detail}" if base.detail else text
 
 
-def judge(root: Path, base: str, tools: dict, limit: int) -> tuple[list[tuple[Test, str, str]], list[str], bool]:
-    """A verdict for each new or changed test, what could not be judged, and whether the change touches product code."""
+def judge(root: Path, base: str, tools: dict, limit: int) -> tuple[list[tuple[Test, str, str]], list[str], str]:
+    """A verdict for each new or changed test, what could not be judged, and what the fix changes (a key of CHANGES)."""
     check = integrity()
     touched = changed_lines(root, base)
     added = git(root, "diff", "--name-only", "--diff-filter=A", "--no-renames", "--end-of-options", base, "HEAD", "--")
     tools = {**tools, "is_test": check.is_test, "added": added.split()}
     tests, notes = changed_tests(root, base, touched, check.is_test)
-    product = any(check.is_product(path) for path in touched)
+    product = changes(touched, check)
     if not tests:
         return [], notes, product
     material = [path for path in touched if is_test_material(path, check.is_test) and (root / path).is_file()]
@@ -431,13 +465,31 @@ def judge(root: Path, base: str, tools: dict, limit: int) -> tuple[list[tuple[Te
     return [(test, *verdict(on_base[test], at_head[test])) for test in tests], notes + more, product
 
 
-CLASSES = ("fails on the base", "needs the fix's code", "passes on the base too", "fails on the pull request too",
-           "could not be judged")
+CLASSES = ("fails on the base", "needs the fix's code", "passes on the base too", "not judged here",
+           "fails with the fix")
+# What a fix changes, for the first words of its line: code of the product, a
+# file of a product folder that is not code (a Dockerfile, a settings file),
+# or nothing in a product folder.
+CHANGES = {"code": "a fix of product code",
+           "folder": "a fix in a product folder that changes no code file there (a build or settings file)",
+           "outside": "a fix outside product code (CI, docs or scripts)"}
 
 
-def is_finding(test: Test, name: str) -> bool:
-    """The one finding: a test the fix adds passes without the fix."""
-    return test.new and name == "passes on the base too"
+def changes(touched, check) -> str:
+    """Which of CHANGES a fix is, by the files it touches."""
+    if any(check.is_product(path) for path in touched):
+        return "code"
+    in_a_product_folder = any(path.startswith(check.PRODUCT_DIRS) and not check.is_test(path) for path in touched)
+    return "folder" if in_a_product_folder else "outside"
+
+
+def is_finding(test: Test, name: str, guarded: bool) -> bool:
+    """The one finding: a test the fix adds passes without the fix, and no test of the fix fails without it.
+
+    Beside a test that fails on the base, a new test that passes there is
+    most likely a control: it is listed for information.
+    """
+    return test.new and name == "passes on the base too" and not guarded
 
 
 def counts(rows: list[tuple[Test, str, str]], new: bool) -> str:
@@ -446,26 +498,40 @@ def counts(rows: list[tuple[Test, str, str]], new: bool) -> str:
     return f"{len(mine)} {'new' if new else 'changed'} test(s): {said}." if mine else ""
 
 
-def headline(rows: list[tuple[Test, str, str]], product: bool) -> str:
-    """One line for the fix as a whole: guarded, not shown, or no test. The strongest that holds."""
-    kind = "a fix of product code" if product else "a fix outside product code (CI, docs or scripts)"
+def headline(rows: list[tuple[Test, str, str]], product: str) -> str:
+    """One line for the fix as a whole: guarded, not shown, cannot tell, or no test. The strongest that holds.
+
+    "Not shown" is a finding about the fix: its tests ran on the base and
+    none failed. "Cannot tell" is the limit of this check: no test could run
+    on the base, so nothing is known either way.
+    """
+    kind = CHANGES[product]
     names = [name for _, name, _ in rows]
+    guards, needs, ran = (names.count(name) for name in CLASSES[:3])
     if not rows:
         return f"fix tests: {kind}. No test: this fix adds or changes no test, so there is nothing to run."
-    if "fails on the base" in names:
-        return f"fix tests: {kind}. Guarded: {names.count('fails on the base')} test(s) fail on the base."
-    if "needs the fix's code" in names and set(names) <= {"needs the fix's code"}:
-        return f"fix tests: {kind}. Not shown: every test needs the fix's code, so none could fail on the base."
-    return f"fix tests: {kind}. Not shown: no test fails on the base."
+    if guards:
+        return f"fix tests: {kind}. Guarded: {guards} test(s) fail on the base."
+    if ran:
+        more = f" {needs} more need code or a file the fix adds." if needs else ""
+        return f"fix tests: {kind}. Not shown: {ran} test(s) ran on the base and none failed.{more}"
+    if needs == len(rows):
+        return (f"fix tests: {kind}. Cannot tell: every test needs code or a file the fix adds, so none could run on "
+                "the base.")
+    return f"fix tests: {kind}. Cannot tell: no test of the fix could be judged on the base ({needs} need the fix's code)."
 
 
-def summary(rows: list[tuple[Test, str, str]], notes: list[str], product: bool) -> list[str]:
+def summary(rows: list[tuple[Test, str, str]], notes: list[str], product: str) -> list[str]:
     lines = [headline(rows, product)]
     if not rows:
         return lines + [f"- not judged: {note}" for note in notes]
-    controls = sum(1 for test, name, _ in rows if is_finding(test, name))
-    if controls:
-        lines.append(f"{controls} new test(s) pass on the base too (a control, or a test that does not test the fix).")
+    guarded = any(name == "fails on the base" for _, name, _ in rows)
+    passing = sum(1 for test, name, _ in rows if test.new and name == "passes on the base too")
+    if passing and guarded:
+        lines.append(f"For information: {passing} new test(s) pass on the base too. Beside a test that fails on the base "
+                     "they are most likely controls.")
+    elif passing:
+        lines.append(f"{passing} new test(s) pass on the base too: a control, or a test that does not test the fix.")
     lines += [" ".join(filter(None, (counts(rows, True), counts(rows, False)))),
               "", "| Test | New or changed | It | Detail |", "|---|---|---|---|"]
     lines += [f"| `{test.label}` | {'new' if test.new else 'changed'} | {name} | {detail.replace('|', '/')} |"
@@ -473,13 +539,14 @@ def summary(rows: list[tuple[Test, str, str]], notes: list[str], product: bool) 
     return lines + [f"- not judged: {note}" for note in notes]
 
 
-def report(rows: list[tuple[Test, str, str]], notes: list[str], product: bool, github: bool) -> None:
+def report(rows: list[tuple[Test, str, str]], notes: list[str], product: str, github: bool) -> None:
     lines = summary(rows, notes, product)
     print("\n".join(lines))
     if not github:
         return
+    guarded = any(name == "fails on the base" for _, name, _ in rows)
     for test, name, _ in rows:
-        if is_finding(test, name):
+        if is_finding(test, name, guarded):
             print(f"::warning file={test.path},line={test.line},title=this new test passes without the fix::"
                   f"{test.name} is new and passes on the base's code too, so it does not guard the fix. Fix: make "
                   "the test fail on the fault the pull request fixes. If it is a control that holds what the fix "
