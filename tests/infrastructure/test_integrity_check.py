@@ -297,6 +297,19 @@ def test_a_test_renamed_in_place_is_a_note(ic):
         assert [(f.level, f.what) for f in findings] == [("note", f"test renamed: {was} -> {now}")], path
 
 
+def test_a_renamed_test_that_loses_a_decorator_is_removed(ic):
+    path = "tests/cli/test_doctor.py"
+    cases = "@pytest.mark.parametrize('fault', FAULTS)"
+    lost = diff(path, removed=[cases, "def test_doctor_reports(fault):"], added=["def test_doctor_names_a_fault():"])
+    assert whats(ic, lost) == ["test removed: test_doctor_reports"]
+    kept = diff(path, removed=[cases, "def test_doctor_reports(fault):"],
+                added=[cases, "def test_doctor_names_each_fault(fault):"])
+    assert whats(ic, kept) == ["test renamed: test_doctor_reports -> test_doctor_names_each_fault"]
+    other = diff(path, removed=[cases, "def test_doctor_reports(fault):"],
+                 added=["@pytest.mark.parametrize('fault', FAULTS[:1])", "def test_doctor_names_each_fault(fault):"])
+    assert whats(ic, other) == ["test removed: test_doctor_reports"]
+
+
 def test_a_test_renamed_to_a_name_the_runner_does_not_collect_is_removed(ic):
     for new in ("def _test_doctor_reports():", "def doctor_reports():", "def xtest_doctor_reports():"):
         change = diff("tests/cli/test_doctor.py", removed=["def test_doctor_reports():"], added=[new])
@@ -410,11 +423,16 @@ MARKED = [
     ("extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-ignore"),
     ("extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-expect-error"),
     ("extensions/vscode/eslint.config.mjs", f"  {SLASHES} NOSONAR"),
+    ("extensions/vscode/src/sse.ts", "  /* v8 ignore next */"),
+    ("extensions/vscode/src/sse.ts", "  /* istanbul ignore else */"),
     ("scripts/install.sh", f"{HASH} shellcheck disable=SC2086"),
+    ("scripts/install.sh", f"curl \"$url\"  {HASH} NOSONAR"),
     (".github/workflows/test.yml", f"          persist-credentials: false  {HASH} zizmor: ignore[artipacked]"),
     (".github/workflows/test.yml", f"      {HASH} yamllint disable-line rule:line-length"),
+    (".github/workflows/test.yml", f"        run: curl \"$URL\"  {HASH} NOSONAR"),
     ("sandbox/Dockerfile", f"{HASH} hadolint ignore=DL3008"),
     ("inference/Dockerfile.vulkan", f"{HASH} hadolint global ignore=DL3003"),
+    ("sandbox/Dockerfile", f"RUN curl -fsSL \"$URL\" | sh  {HASH} NOSONAR"),
 ]
 
 
@@ -557,6 +575,9 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
     ("scripts/dockerfile_lint.py", "change to a file that configures the checks"),
     ("scripts/setup/rulesets.sh", "change to a file that configures the checks"),
     (".hadolint.yaml", "change to a file that configures the checks"),
+    (".github/codeql/config.yml", "change to a file that configures the checks"),
+    (".github/codeql-config.yml", "change to a file that configures the checks"),
+    (".github/dependency-review-config.yml", "change to a file that configures the checks"),
     ("scripts/bot/atlas_bot.py", "change to a script that runs with a credential that can write"),
     ("scripts/star-history-chart.py", "change to a script that runs with a credential that can write"),
 ])
@@ -604,7 +625,7 @@ def test_every_script_on_the_third_list_says_why(ic):
 
 # The rows of the gates page's "Tool settings" table, and the linters each row is about.
 SETTINGS_ROWS = {
-    "Size check": (), "Go lint": ("golangci-lint",), "Extension lint": ("ESLint",), "Coverage": (),
+    "Size check": (), "Go lint": ("golangci-lint",), "Extension lint": ("ESLint",), "Coverage": ("vitest coverage",),
     "Codecov": ("Codecov",), "SonarQube Cloud": ("SonarQube",), "CodeScene": ("CodeScene",),
     "Dockerfile lint": ("hadolint",), "Image scan": ("Trivy",), "Workflow lint": ("zizmor", "actionlint"),
     "Integrity check": (),

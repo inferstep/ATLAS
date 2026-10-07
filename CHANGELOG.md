@@ -163,8 +163,9 @@ not see some things at all. Five changes:
   and file, with the number of calls.
 - Suppression markers are read by kind of file: Go, Python, TypeScript and
   JavaScript, shell, workflow files and Dockerfiles each have their own
-  markers, so the markers of zizmor, yamllint, hadolint and staticcheck are
-  seen, and a marker's words in another kind of file are text. In a workflow
+  markers, so the markers of zizmor, yamllint, hadolint, staticcheck and the
+  extension's coverage tool are seen, `NOSONAR` is read in every kind, and a
+  marker's words in a file its linter does not read are text. In a workflow
   file `continue-on-error: true` and `persist-credentials: true` are named.
   More files need approval: the canary's list, the replay recordings, the
   local gate, the scripts whose result is a check's result, and the scripts

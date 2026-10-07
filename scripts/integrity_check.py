@@ -54,7 +54,8 @@ GATE_FILES = (
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",
     ".github/actionlint.yml", ".yamllint", ".yamllint.yml", ".yamllint.yaml", ".shellcheckrc", "ruff.toml",
-    ".ruff.toml", "staticcheck.conf", ".trivyignore",
+    ".ruff.toml", "staticcheck.conf", ".trivyignore", ".github/codeql/", ".github/codeql-config.yml",
+    "codeql-config.yml", ".github/dependency-review-config.yml",
 )
 # Scripts that a workflow runs with a credential that can write: a token with
 # a write permission, an app token, a right to publish.
@@ -69,7 +70,8 @@ RUN_NOT_GATE = {
 LINTER_MARKERS = {
     "golangci-lint": ("go",), "staticcheck": ("go",), "ruff": ("python",), "mypy": ("python",),
     "shellcheck": ("shell",), "yamllint": ("workflow",), "zizmor": ("workflow",), "hadolint": ("dockerfile",),
-    "ESLint": ("script",), "SonarQube": ("go", "python", "script"),
+    "ESLint": ("script",), "vitest coverage": ("script",),
+    "SonarQube": ("go", "python", "script", "shell", "workflow", "dockerfile"),
     "actionlint": "none", "CodeScene": "none", "Codecov": "none", "Trivy": "none", "CodeQL": "none",
 }
 LOCK_FILES = ("package-lock.json", "go.sum", ".github/requirements/ci.txt")
@@ -91,10 +93,11 @@ SKIP_REASON = re.compile(r"(?:\breason\s*=\s*|\bt\.Skipf?\(\s*|\bpytest\.skip\(\
 MARKERS = {
     "go": (r"\bnolint\b", r"\blint:ignore\b", r"\blint:file-ignore\b", r"\bNOSONAR\b", r"\bnosec\b"),
     "python": (r"\bnoqa\b", r"type:\s*ignore", r"\bnosec\b", r"pragma:\s*no cover", r"\bNOSONAR\b"),
-    "script": (r"eslint-disable", r"@ts-ignore", r"@ts-expect-error", r"\bNOSONAR\b"),
-    "shell": (r"shellcheck disable=",),
-    "workflow": (r"zizmor:\s*ignore\[", r"yamllint disable"),
-    "dockerfile": (r"hadolint ignore=", r"hadolint global ignore="),
+    "script": (r"eslint-disable", r"@ts-ignore", r"@ts-expect-error", r"\b(?:v8|c8|istanbul) ignore\b",
+               r"\bNOSONAR\b"),
+    "shell": (r"shellcheck disable=", r"\bNOSONAR\b"),
+    "workflow": (r"zizmor:\s*ignore\[", r"yamllint disable", r"\bNOSONAR\b"),
+    "dockerfile": (r"hadolint ignore=", r"hadolint global ignore=", r"\bNOSONAR\b"),
 }
 # Settings of a workflow that turn a guard off without a marker.
 WORKFLOW_SETTINGS = (
@@ -325,10 +328,12 @@ def renamed_test(c: FileChange, hunk: int, name: str, tree: Tree) -> Finding | N
     The body still runs when it now sits under another name the runner
     collects, or under a helper that a test of the change calls. A test under
     a name the runner does not collect, with no test that calls it, is a
-    removed test.
+    removed test. So is a test that loses a decorator with its name line: a
+    decorator decides how the test runs, and with which cases.
     """
+    added_back = {text.strip() for h, _, text in c.added if h == hunk and text.strip().startswith("@")}
     body_removed = [text for h, text in c.removed
-                    if h == hunk and text.strip() and not text.strip().startswith("@") and not test_name(text)]
+                    if h == hunk and text.strip() and not test_name(text) and text.strip() not in added_back]
     owner = next((text for h, _, text in reversed(c.added)
                   if h == hunk and (test_name(text) or DEFINITION.match(text))), "")
     if body_removed or not owner:
