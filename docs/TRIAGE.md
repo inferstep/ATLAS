@@ -39,6 +39,14 @@ with Status **Triage**, and issue forms add the `needs-triage` label.
 Don't set `status/ready` or `status/blocked` by hand. The bot mirrors them
 from the board's Status every hour.
 
+## When a bug closes
+
+Set **Cause** in the text of the issue to one of the words of the bug form:
+a check was missing, checks ran in the wrong order, parsing, tool protocol,
+documentation, or other. The form sets it to "Not known yet" when the issue
+is opened. The causes of the closed bugs are what tells us which check to
+add next, so a cause is set also when the fix was small.
+
 ## Ready means
 
 - [ ] Acceptance criteria are in the issue: what "done" looks like, and how

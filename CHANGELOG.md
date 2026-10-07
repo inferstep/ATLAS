@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Added: dependency review checks the licence of a new dependency
+
+A pull request that adds a dependency whose licence is not on the allowed
+list now fails `dependency review`. The list is in
+`.github/dependency-review-config.yml`: the licences that a work under
+AGPL-3.0 can take in. GPL-2.0-only is not one of them.
+
+GitHub's review passes a dependency whose licence it cannot name, with a
+note. A step after it (`scripts/licence_names.py`) fails for a new one,
+until the package is read by hand and added to the settings file with its
+licence. GitHub Actions are left out: GitHub's data names no licence for
+any action.
+
+The bug form has a field "Cause", which a maintainer sets when the issue
+closes (docs/TRIAGE.md).
+
 ### Fixed: uninstall.sh --data removed the projects folder without naming it
 
 `scripts/uninstall.sh --data` (and `--all`) removes two folders: the data

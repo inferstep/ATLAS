@@ -1,9 +1,9 @@
 name: dependency review
 
 # Fails a pull request that adds a dependency with a known high or
-# critical vulnerability, before it merges. Reads the dependency graph
-# only; runs no PR code. Fork PRs get the read-only token, which is all
-# this needs.
+# critical vulnerability, or with a licence that is not on the allowed
+# list, before it merges. Reads the dependency graph only; runs no PR
+# code. Fork PRs get the read-only token, which is all this needs.
 on:
   pull_request:
     branches: [main, dev]
@@ -28,6 +28,17 @@ jobs:
         with:
           persist-credentials: false
 
+      # The level of a vulnerability that fails, and the allowed licences,
+      # are in the settings file.
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        id: review
         with:
-          fail-on-severity: high
+          config-file: ./.github/dependency-review-config.yml
+
+      # The action passes a dependency whose licence GitHub cannot name,
+      # with a note. This step fails for one that is new and was not read
+      # by hand.
+      - name: a new dependency with no named licence
+        env:
+          INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
+        run: python3 scripts/licence_names.py
