@@ -1,0 +1,114 @@
+fix(bot): a claim's days count from a new assignment, and the periods are 10 and 14 days (#405)
+
+The contributor bot counts a claim's days from a new assignment, and
+waits 14 days before it releases a claim.
+
+Closes #401
+
+This changes `scripts/bot/atlas_bot.py`, a script that a workflow runs
+with a credential that can write. What changes in what it does is listed
+below. **The bot runs from `main`, so this pull request changes nothing
+for a claim until it is there.** The daily job stays paused until then.
+
+## What was wrong
+
+Seen on #253: claimed on 2026-09-29; the draft pull request #272 into
+`dev`, with `Closes #253`, was opened 13 hours later; the bot reminded
+on 10-04 and released the claim on 10-06; the owner assigned the
+contributor again by hand; the bot released the claim again on 10-07.
+
+Two causes, both established from the code:
+
+1. **On `main` the bot asks only GitHub's own link** between an issue
+and a pull request. GitHub makes that link only for a pull request into
+the default branch. Every contribution here goes into `dev`, so the bot
+on `main` sees no claim as having a pull request.
+- `dev` has had the fix for this since 2026-09-28: an open pull request
+of the claimant, into any branch, that names the issue keeps the claim.
+That change never reached `main`.
+2. **The days counted from the first `/claim` comment.** A new
+assignment by a maintainer did not start them again, so the claim was
+released on the next daily run. This is on `dev` too, and it is what
+this pull request fixes.
+
+Shown on the live board with the bot's own dry-run mode, which prints
+what it would write and writes nothing (2026-10-07, 17:26Z):
+
+| The bot of | What it would do today |
+|---|---|
+| `main` | Release #253 again: take the contributor off, set the card to
+Ready, post "this claim is released: no linked pull request after 7
+days" |
+| this pull request | Nothing |
+
+## What changes
+
+- **The count starts again with a new assignment.** The days run from
+the newest of the `/claim` comment and the last time that person was
+assigned to the issue, by the bot or by hand. The bot reads this from
+the issue's events. An assignment older than the claim changes nothing.
+A reminder from before the new assignment does not count as sent.
+- **The periods:** a reminder after **10** days without a pull request
+(5 before), release after **14** (7 before). They are in
+`.github/atlas-bot.yml`. CONTRIBUTING states them, and now also says "as
+a draft if it is not ready" and `Refs #<issue>` for an issue that must
+stay open. A new test keeps the two numbers in CONTRIBUTING the same as
+the settings.
+- **One more read for the bot:** the events of an issue, and only for a
+claim that is at least 10 days old and has no pull request. No new
+write.
+
+## What does not change
+
+- The rule which pull request keeps a claim: an open one, by the
+claimant, into any branch, that names the issue in its title or text.
+`Closes #N` and `Refs #N` do, and so does any other naming of `#N`. A
+pull request by another person does not, and a closed one does not.
+- This is wider than "only `Closes`, `Fixes`, `Resolves` or `Refs`". A
+narrower rule would release a claim whose pull request says "Part of
+#N", which is the fault of #253 in another form. A wider rule only keeps
+a claim a little longer, and a maintainer can end it.
+- `sync` and `/claim` do not use the link lookup. Only the daily run
+does.
+- GOVERNANCE and the translated pages do not state these two periods, so
+they are not changed. ("7 days" in GOVERNANCE is the comment period of
+an RFC.)
+
+## Proof
+
+- `tests/infrastructure/test_atlas_bot.py`: 79 tests (63 before). Among
+them:
+- the case of #253: a claim, a draft pull request into `dev` with
+`Closes` 13 hours later, the daily run 15 days after the claim: no
+reminder, no release;
+- `Refs`, `Fixes` and `Resolves` keep a claim; a pull request by another
+person does not; a closed pull request does not;
+- a hand assignment 3 or 9 days ago: nothing; 10 or 13 days ago: a new
+reminder; 14 days ago: release;
+- the real API class, with the network replaced: only open pull requests
+are asked for; the newest assignment of that person is read from the
+events, and a removal is not an assignment.
+- The shape of the events was checked against #253's own (five assigned
+and unassigned events, each with the person and the time).
+- 13 planted changes and 2 controls, each tried alone against the tests,
+in a Linux container with a memory limit and a time limit of 90 s for
+each run. The controls stay green; each planted change turns at least
+one test red. Among them: a hand assignment does not start the count
+again; an assignment older than the claim moves the count back; an old
+reminder counts as sent; a pull request of another person keeps the
+claim; closed pull requests are asked for too; the assignment of another
+person counts; a removal counts as an assignment; the old periods come
+back; CONTRIBUTING states another number than the settings.
+- One planted change stayed green at first (a removal counts as an
+assignment). The test of the events now has a removal that is newer than
+the last assignment.
+- `tests/infrastructure` and `tests/contracts`: 816 passed, 30 skipped.
+ruff, the size check, the minimum-Python check and the YAML check pass.
+
+## Known limits
+
+- A claim whose pull request was closed or merged while the issue stays
+open is counted again from the claim or the last assignment. A
+maintainer who wants to keep it assigns the person again.
+- The count restarts for every new assignment of that person, also one
+that the person makes themself where GitHub lets them.

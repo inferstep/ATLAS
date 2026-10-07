@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### Fixed: the bot took a quoted closing line for a closing line
+
+The bot's hourly job closes an issue that a commit or a merged pull request
+on `dev` names with a closing word (`Closes`, `Fixes`, `Resolves`). It took
+such a word before an issue number anywhere in the text. A commit message
+that described another pull request, and quoted that one's closing line in a
+sentence, would have closed the issue of the other pull request.
+
+A closing word now counts only where it starts a line (spaces before it are
+fine), outside a fenced code block. More issues on the same line count as
+", closes #N" or "and fixes #N". A sentence, a quoted line, a list item and
+a line that starts with a code mark close nothing. CONTRIBUTING asks for the
+closing line "on a line of its own".
+
+The fault could not act yet: the bot runs from `main`, which does not have
+this job.
+
 ### Fixed: the two upload jobs failed on a pull request whose branch is older than their action
 
 Since the upload steps moved into two actions of this repository

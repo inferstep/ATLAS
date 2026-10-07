@@ -39,7 +39,9 @@ areas:
   README.md: area/docs
 
 # A fix that lands on this branch closes the issues its commit or pull
-# request names with "Closes #N" (GitHub does that only on main).
+# request names with "Closes #N" (GitHub does that only on main). The words
+# count where they start a line, outside a fenced block; a sentence that
+# quotes them closes nothing.
 done:
   branch: dev
   lookback_days: 3          # how far back each sync looks

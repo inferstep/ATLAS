@@ -544,6 +544,84 @@ def test_only_closing_keywords_close(api, cfg, message):
     assert closed(api) == []
 
 
+def an_open_issue():
+    return {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
+
+
+def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_its_own_issue(api, cfg):
+    # The message of the commit on dev that showed the fault, as it is. Its own closing line names 401. A sentence
+    # further down quotes the closing line of another pull request, which names 253.
+    path = os.path.join(ROOT, "tests", "fixtures", "commit_message_with_a_quoted_closing_line.txt")
+    with open(path, encoding="utf-8") as fh:
+        message = fh.read()
+    assert "\nCloses #401\n" in message and "with `Closes #253`, was opened" in message
+    api.issues[401], api.issues[253] = an_open_issue(), an_open_issue()
+    api.commits = [{"sha": "c445002d11", "message": message}]
+    # GitHub gives the text of a pull request with the line ends of a web form.
+    api.merged = [{"number": 405, "body": message.split("\n", 2)[2].replace("\n", "\r\n")}]
+    run(api, cfg).sync()
+    assert closed(api) == [401]
+    assert api.said(253) == [] and api.issues[253]["state"] == "open"
+
+
+@pytest.mark.parametrize("text", [
+    "This closes #7 for good.",
+    "The pull request #272, with Closes #7 in its text, was opened later.",
+    "with `Closes #7`, was opened 13 hours later",
+    "`Closes #7`",
+    "`Closes` #7",
+    "Closes `#7`",
+    "`x` Closes #7",
+    "``Closes #7",
+    "Closes #8 `x` #7",
+    "> Closes #7",
+    "- Closes #7",
+    "<!-- Closes #7 -->",
+    "```\nCloses #7\n```",
+    "~~~\nCloses #7\n~~~",
+    "  ```text\n  Closes #7\n  ```",
+    "```\nCloses #7",
+    "Refs #7",
+    "Not closed: #7",
+])
+def test_a_closing_word_that_does_not_start_a_line_or_is_inside_code_closes_nothing(api, cfg, text):
+    assert 7 not in bot_mod.closed_by(text)
+    api.commits = [{"sha": "eeeeeee5", "message": f"fix(proxy): x\n\n{text}\n"}]
+    api.merged = [{"number": 246, "body": f"## What changed\r\n\r\n{text}\r\n"}]
+    run(api, cfg).sync()
+    assert 7 not in closed(api) and api.said(7) == []
+
+
+@pytest.mark.parametrize("text, numbers", [
+    ("Closes #7", [7]),
+    ("closes #7", [7]),
+    ("Fixes: #7", [7]),
+    ("Resolved #7", [7]),
+    ("   Closes #7", [7]),
+    ("\tCloses #7", [7]),
+    ("Closes #7.", [7]),
+    ("Closes #7, following the decisions of the review", [7]),
+    ("Closes #7, closes #8", [7, 8]),
+    ("Fixes #7 and resolves #8", [7, 8]),
+    ("Closes #7, #8", [7]),
+    ("Closes #7; the other pull request said Closes #8", [7]),
+    ("Closes #7 and the text `Closes #8` of another pull request", [7]),
+    ("```\nCloses #8\n```\nCloses #7", [7]),
+    ("Closes #7\r\n\r\n## What changed", [7]),
+    ("the first line\n\nCloses #7\nCloses #8\n", [7, 8]),
+])
+def test_a_closing_line_closes_the_issues_it_names(api, cfg, text, numbers):
+    assert bot_mod.closed_by(text) == numbers
+    api.issues[8] = an_open_issue()
+    api.commits = [{"sha": "fffffff6", "message": text}]
+    run(api, cfg).sync()
+    assert closed(api) == numbers
+
+
+def test_a_text_that_is_not_there_closes_nothing():
+    assert bot_mod.closed_by(None) == [] and bot_mod.closed_by("") == []
+
+
 def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
     api.issues[8] = {"state": "closed", "assignees": [], "labels": [], "type": None, "title": "t"}
     api.issues[9] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t",
