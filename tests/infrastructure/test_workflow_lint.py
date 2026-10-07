@@ -89,7 +89,8 @@ def test_a_finding_fails_each_job():
         run = jobs[name]["steps"][-1]["run"]
         assert re.search(rf'if ! "\$RUNNER_TEMP/bin/{binary}" [^\n]*"\$\{{files\[@\]\}}"; then', run)
         assert run.count("exit 1") == 2
-        assert "continue-on-error" not in jobs[name] and "continue-on-error" not in jobs[name]["steps"][-1]
+        assert "continue-on-error" not in jobs[name]
+        assert "continue-on-error" not in jobs[name]["steps"][-1]
 
 
 def test_the_jobs_read_the_workflow_files_and_no_folder_below_them():
