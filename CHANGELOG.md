@@ -143,6 +143,23 @@ five image ids and whether the identity was verified. A stack with no deploy
 record, such as one on a contributor's machine, runs, but is marked
 unverified.
 
+### Fixed: a check that compares with the base counted the base branch's later changes as the pull request's
+
+Four workflows (the integrity check, `checks ran`, golangci-lint and hadolint)
+took the base of their comparison from the base commit of the pull request
+event. The job checks out the merge of the pull request into the base branch
+as it is now, so every change the base branch got in between was read as part
+of the pull request: the integrity check named files the pull request did not
+touch, `checks ran` could expect a workflow that GitHub had no reason to
+start, and a pull request was judged by an old copy of a script.
+
+The base is now the first parent of the checked-out merge commit, read in one
+place, `scripts/change_base.py`. It stops the step when the checkout is not
+that merge, and takes no other base in its place. In the merge queue the base
+is the one parent of the queue's commit, as before. The base branch's copy of
+the script gives the answer, so a change cannot choose its own base, and the
+script is on the integrity check's list of files that configure the checks.
+
 ### Added: a check that reads the change, not the code
 
 `scripts/integrity_check.py` reads a change's diff for the ways it can weaken

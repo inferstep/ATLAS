@@ -48,8 +48,9 @@ GATE_FILES = (
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json", "tests/replay/recordings/",
     "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py",
-    "scripts/checks_ran.py", "scripts/verify.py", "scripts/canary.py", "scripts/dockerfile_lint.py",
-    "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py", "scripts/staging-integration.py",
+    "scripts/checks_ran.py", "scripts/change_base.py", "scripts/verify.py", "scripts/canary.py",
+    "scripts/dockerfile_lint.py", "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py",
+    "scripts/staging-integration.py",
     "scripts/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",

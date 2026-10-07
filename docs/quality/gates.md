@@ -63,6 +63,16 @@ the tool is a mistake and not a mystery.
 | `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
 | the `PR build check` jobs | Each service image builds |
 
+A check that compares a change with its base compares with the base branch
+as it is now: the first parent of the merge commit that the job checks out.
+`scripts/change_base.py` gives that commit to the integrity check, `checks
+ran`, golangci-lint and hadolint, and each takes its script from there. The
+base commit that the event names is the branch as it was when the event was
+made; compared with that one, everything the base branch got since would read
+as part of the pull request. When the checkout is not that merge, the step
+stops and says so. It takes no other base in its place. The base branch's
+copy of the script gives the answer, so a change cannot choose its own base.
+
 ## Tool settings
 
 | Tool | Where the setting is | Setting |
