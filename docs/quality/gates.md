@@ -72,6 +72,9 @@ made; compared with that one, everything the base branch got since would read
 as part of the pull request. When the checkout is not that merge, the step
 stops and says so. It takes no other base in its place. The base branch's
 copy of the script gives the answer, so a change cannot choose its own base.
+The step also stops when the parent commit is not in the checkout, as in a
+checkout of one commit: without the parent it cannot read the base branch's
+copy, and it does not run the change's copy in its place.
 
 ## Tool settings
 

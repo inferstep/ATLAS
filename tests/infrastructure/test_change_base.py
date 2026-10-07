@@ -171,8 +171,8 @@ def base_step():
     return next(step["run"] for step in workflow["jobs"]["integrity"]["steps"] if step.get("id") == "base")
 
 
-def run_base_step(root, payload, tmp_path):
-    """Run that step in a checkout, as a job of a pull request does. Gives its status and what it wrote."""
+def base_step_run(root, payload, tmp_path):
+    """Run that step in a checkout, as a job of a pull request does. Gives the ended command and what it wrote."""
     event, output = tmp_path / "event.json", tmp_path / "output"
     event.write_text(json.dumps(payload), encoding="utf-8")
     output.write_text("", encoding="utf-8")
@@ -181,7 +181,13 @@ def run_base_step(root, payload, tmp_path):
                           env={"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
                                "GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(event),
                                "GITHUB_OUTPUT": str(output), "RUNNER_TEMP": str(tmp_path / "runner")})
-    return done.returncode, output.read_text(encoding="utf-8")
+    return done, output.read_text(encoding="utf-8")
+
+
+def run_base_step(root, payload, tmp_path):
+    """The same, as the status of the step and what it wrote."""
+    done, wrote = base_step_run(root, payload, tmp_path)
+    return done.returncode, wrote
 
 
 def with_the_rule(tmp_path, on_the_base, on_the_branch):
@@ -218,6 +224,35 @@ def test_the_step_stops_and_gives_no_base_when_the_rule_stops(tmp_path):
     assert wrote == ""
 
 
+def test_in_a_checkout_without_the_parent_the_step_stops_and_runs_no_copy_of_the_rule(tmp_path):
+    real = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
+    root, base, head = with_the_rule(tmp_path, real, "print('0' * 40)\n")
+    shallow = tmp_path / "shallow"
+    git(tmp_path, "clone", "-q", "--depth", "1", root.as_uri(), str(shallow))
+    done, wrote = base_step_run(shallow, pull_request(head, base), tmp_path)
+    assert done.returncode == 1
+    assert wrote == ""
+    assert "::error::The parent of the checked-out commit is not in this checkout" in done.stdout
+    assert "Fix: give the checkout step of this job fetch-depth 0 (or 2 or more) and no ref." in done.stdout
+
+
+@pytest.mark.parametrize("name", USERS)
+def test_the_checkout_that_the_base_step_reads_from_has_the_parent_commits(name):
+    workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    for job_name, job in workflow["jobs"].items():
+        steps = job["steps"]
+        if not any(step.get("id") == "base" for step in steps):
+            continue
+        settings = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")).get("with") or {}
+        depth = settings.get("fetch-depth", 1)
+        assert depth == 0 or depth >= 2, (
+            f"{name}, job {job_name}: the checkout has fetch-depth {depth}, so the parent of the checked-out commit is "
+            "not there and the base step stops. Fix: set fetch-depth to 0, or to 2 or more.")
+        assert "ref" not in settings, (
+            f"{name}, job {job_name}: the checkout names a ref, so the checked-out commit is not the merge that the "
+            "base is read from. Fix: let the checkout take the event's own commit.")
+
+
 @pytest.mark.parametrize("name", USERS)
 def test_each_workflow_that_compares_with_the_base_takes_it_from_the_one_rule(name):
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
@@ -229,9 +264,6 @@ def test_each_workflow_that_compares_with_the_base_takes_it_from_the_one_rule(na
         rule_step = next(n for n, step in enumerate(steps) if step.get("id") == "base")
         assert steps[rule_step]["run"] == base_step()
         assert rule_step < min(using)
-        checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@"))
-        assert "ref" not in (checkout.get("with") or {})
-        assert (checkout.get("with") or {}).get("fetch-depth", 1) in (0, 2)
 
 
 def test_no_workflow_takes_the_base_of_a_comparison_from_the_event():

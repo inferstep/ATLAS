@@ -159,6 +159,8 @@ that merge, and takes no other base in its place. In the merge queue the base
 is the one parent of the queue's commit, as before. The base branch's copy of
 the script gives the answer, so a change cannot choose its own base, and the
 script is on the integrity check's list of files that configure the checks.
+The step stops when the parent commit is not in the checkout, and runs no
+copy of the script then.
 
 ### Added: a check that reads the change, not the code
 

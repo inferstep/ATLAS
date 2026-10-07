@@ -39,8 +39,13 @@ jobs:
         # The base branch as it is now, not as it was when the event was
         # made; see scripts/change_base.py. The base branch's copy of that
         # script gives the answer, so a change cannot choose its own base.
-        # The change's copy runs only while the base has none.
+        # The change's copy runs only when the parent commit is here and has
+        # no copy, as on a pull request into a branch that has none yet.
         run: |
+          if ! git rev-parse --verify --quiet "HEAD^1" >/dev/null; then
+            echo "::error::The parent of the checked-out commit is not in this checkout, so the base cannot be read and no script was run. Fix: give the checkout step of this job fetch-depth 0 (or 2 or more) and no ref."
+            exit 1
+          fi
           if git cat-file -e "HEAD^1:scripts/change_base.py" 2>/dev/null; then
             git show "HEAD^1:scripts/change_base.py" > "$RUNNER_TEMP/change_base.py"
           else
