@@ -282,6 +282,12 @@ golangci-lint run ./... --new-from-merge-base=origin/dev
 | A `//nolint` with no linter name or no reason | Write `//nolint:<linter> // <reason>` |
 | Code nothing calls | Remove it |
 
+**Dockerfiles.** [hadolint](https://github.com/hadolint/hadolint) reads every
+Dockerfile. It reports and does not fail for a finding. With hadolint
+installed, `python scripts/dockerfile_lint.py` prints what CI prints. Do not
+add a finding in a Dockerfile you change; if a rule is wrong for a line, say
+why in the pull request and do not switch the rule off in the file.
+
 **Bash.** Must pass `shellcheck`. Start with `set -euo pipefail`, quote
 variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
 logic.
