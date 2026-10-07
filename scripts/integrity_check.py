@@ -258,6 +258,16 @@ class Tree:
                               text=True, check=False)
         return done.stdout if done.returncode == 0 else None
 
+    def tracked(self) -> list[str] | None:
+        """The files that git tracks in the checkout, as paths from the root. None where they cannot be listed."""
+        if self.root is None:
+            return None
+        try:
+            done = subprocess.run(["git", "ls-files", "-z"], cwd=self.root, capture_output=True, text=True, check=False)
+        except OSError:
+            return None
+        return [path for path in done.stdout.split("\0") if path] if done.returncode == 0 else None
+
     def tests_beside(self, path: str) -> list[str]:
         """The test files in the folder of `path`, as paths from the root."""
         if self.root is None:
@@ -417,7 +427,8 @@ def skip_reason(path: str, lines: dict[int, str], line_no: int) -> str:
 
     A reason is `reason=` or the message of the call, on the lines of the
     call, or a comment on the line of the skip or on the line directly above
-    it. An empty text is no reason. `importorskip` with no `reason=` has the
+    it. An empty text is no reason. A reason that is a name is read as the
+    text which the file gives that name at its top level. `importorskip` with no `reason=` has the
     module it needs as its reason, and a comment above it is not read: that
     comment is about the test. `lines` holds the lines that can be read, by
     line number.
@@ -432,9 +443,11 @@ def skip_reason(path: str, lines: dict[int, str], line_no: int) -> str:
         if depth <= 0:
             break
     given = SKIP_REASON.search(call)
-    reason = given.group(1).strip().strip("\"'`").strip() if given else ""
+    written = given.group(1).strip() if given else ""
+    reason = written.strip("\"'`").strip()
     if reason:
-        return reason
+        # A reason with no quotes is a name: the text that the file gives that name is the reason.
+        return reason if written[:1] in "\"'`" else named_text(lines, reason)
     module = IMPORT_OR_SKIP.search(call)
     if module:
         return f"needs the module {module.group(1)}"
@@ -492,6 +505,88 @@ def text_lines(path: str, source: str | None) -> set[int]:
     except (tokenize.TokenError, SyntaxError):
         return set()
     return inside
+
+
+def top_level(source: str | None) -> dict[str, ast.expr] | None:
+    """The names a Python file sets outside every function and class, each with the value it is given last.
+
+    None when the text cannot be read as Python.
+    """
+    try:
+        module = ast.parse(source or "")
+    except SyntaxError:
+        return None
+    found: dict[str, ast.expr] = {}
+
+    def read(body: list) -> None:
+        for node in body:
+            if isinstance(node, ast.Assign):
+                found.update({target.id: node.value for target in node.targets if isinstance(target, ast.Name)})
+            elif isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name):
+                found[node.target.id] = node.value
+            elif isinstance(node, (ast.If, ast.Try, ast.With)):
+                for part in ("body", "orelse", "finalbody"):
+                    read(getattr(node, part, []))
+                for handler in getattr(node, "handlers", []):
+                    read(handler.body)
+
+    read(module.body)
+    return found
+
+
+def imports_of(source: str | None, path: str) -> dict[str, list[tuple[str, str]]]:
+    """What a Python file takes from other modules, by the name the file writes.
+
+    Each name has the places it can come from: (the file of a module, the name
+    there), with "" as the name when the written name is the module itself.
+    """
+    try:
+        module = ast.parse(source or "")
+    except SyntaxError:
+        return {}
+    found: dict[str, list[tuple[str, str]]] = {}
+    for node in module.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found[alias.asname or alias.name] = [(alias.name.replace(".", "/") + ".py", "")]
+        elif isinstance(node, ast.ImportFrom):
+            folder = path.split("/")[:-1]
+            parts = (folder[:len(folder) - node.level + 1] if node.level else []) + (node.module or "").split(".")
+            base = "/".join(part for part in parts if part)
+            for alias in node.names:
+                found[alias.asname or alias.name] = [(base + ".py", alias.name), (base + "/__init__.py", alias.name),
+                                                     (f"{base}/{alias.name}.py", "")]
+    return found
+
+
+def names_in_reach(tree: Tree, path: str, names_of_a_file) -> dict:
+    """What a Python file can name: what `names_of_a_file` finds at its own top level, and what it imports of that.
+
+    `names_of_a_file(source, path)` gives name -> value for one file. A name in
+    a file that this one does not import is not in reach: it is another name.
+    """
+    source = tree.read(path)
+    found = dict(names_of_a_file(source, path))
+    for written, places in imports_of(source, path).items():
+        for module_path, name in places:
+            text = tree.read(module_path)
+            if text is None:
+                continue
+            theirs = names_of_a_file(text, module_path)
+            if name and name in theirs:
+                found.setdefault(written, theirs[name])
+            elif not name:
+                found.update({f"{written}.{key}": value for key, value in theirs.items() if f"{written}.{key}" not in found})
+            break
+    return found
+
+
+def named_text(lines: dict[int, str], name: str) -> str:
+    """The text that a top-level name of the file holds, when `name` is such a name. Else `name` as it is."""
+    if not re.fullmatch(r"[A-Za-z_]\w*", name):
+        return name
+    value = (top_level("\n".join(lines.get(number, "") for number in range(1, max(lines, default=0) + 1))) or {}).get(name)
+    return " ".join(value.value.split()) if isinstance(value, ast.Constant) and isinstance(value.value, str) else name
 
 
 def stop_of(path: str, line: str) -> str:
@@ -570,22 +665,31 @@ def skip_helper_calls(c: FileChange, tree: Tree) -> list[Finding]:
     return out
 
 
-def named_marks(tree: Tree, path: str) -> dict[str, str]:
-    """The skip marks with a name of their own that a test file can use: name -> the reason the mark gives.
+def skip_marks_of(source: str | None, path: str) -> dict[str, str]:
+    """The names a Python file gives to a skip mark at its top level: name -> the reason the mark gives.
 
-    They are looked for in the test files beside `path`, in `path` itself, and
-    in the modules it imports names from.
+    A line inside a function, a class or a string gives no name. Where the
+    file cannot be read as Python, a line with no indent that sets such a
+    name counts.
     """
-    source = tree.read(path) or ""
-    imported = [module.replace(".", "/") + ".py" for module in re.findall(r"^from\s+([\w.]+)\s+import\s", source, re.M)]
-    marks: dict[str, str] = {}
-    for other in dict.fromkeys([path, *tree.tests_beside(path), *imported]):
-        lines = dict(enumerate((tree.read(other) or "").splitlines(), 1))
-        for line_no, line in lines.items():
-            named = NAMED_MARK.match(line)
-            if named and named.group(1) != "pytestmark":
-                marks.setdefault(named.group(1), skip_reason(other, lines, line_no))
-    return marks
+    lines = dict(enumerate((source or "").splitlines(), 1))
+    values = top_level(source)
+    if values is None:
+        found = {NAMED_MARK.match(line).group(1): number for number, line in lines.items()
+                 if NAMED_MARK.match(line) and not line[:1].isspace()}
+    else:
+        found = {name: value.lineno for name, value in values.items() if re.match(SKIP_MARK, ast.unparse(value))}
+    return {name: skip_reason(path, lines, number) for name, number in found.items() if name != "pytestmark"}
+
+
+def named_marks(tree: Tree, path: str) -> dict[str, str]:
+    """The skip marks with a name of their own that a test file can use: the name as the file writes it -> the reason.
+
+    A name counts when the file sets it at its own top level, or takes it
+    from a module by an import. The same name in a file that this one does
+    not import is another name.
+    """
+    return names_in_reach(tree, path, skip_marks_of)
 
 
 def named_mark_uses(c: FileChange, tree: Tree) -> list[Finding]:
@@ -596,8 +700,9 @@ def named_mark_uses(c: FileChange, tree: Tree) -> list[Finding]:
     text_only = text_lines(c.path, source)
     added = [(line_no, text) for _, line_no, text in c.added if line_no not in text_only]
     for name, reason in sorted(named_marks(tree, c.path).items()):
-        use = re.compile(rf"^\s*@{re.escape(name)}\b|\bmarks\s*=\s*[\[(]?\s*{re.escape(name)}\b")
-        whole = re.compile(rf"^pytestmark\s*=.*\b{re.escape(name)}\b")
+        # `pytest.mark.<name>` is an attribute of pytest's own, and never a use of a name of this file.
+        use = re.compile(rf"^\s*@{re.escape(name)}\b(?!\.)|\bmarks\s*=\s*[\[(]?\s*{re.escape(name)}\b(?!\.)")
+        whole = re.compile(rf"^pytestmark\s*=(?:.*[^\w.])?{re.escape(name)}\b(?!\.)")
         lines = [line_no for line_no, text in added if as_code(use, text)]
         files = [line_no for line_no, text in added if as_code(whole, text)]
         if lines:
@@ -627,21 +732,50 @@ def left_out_marks(settings: str | None) -> tuple[str, ...]:
     return tuple(dict.fromkeys(re.findall(r"\bnot\s+(\w+)", selection.group(2)))) if selection else ()
 
 
-def mark_among(nodes: list, marks: tuple[str, ...]) -> tuple[str, int] | None:
-    """The first of `marks` that one of the nodes names as `mark.<name>`, with the line of that node."""
+def mark_in_code(node: ast.AST, marks: tuple[str, ...]) -> str:
+    """The first of `marks` that the code of a node names as `mark.<name>`, or "". The same words in a text are not code."""
+    for part in ast.walk(node):
+        if (isinstance(part, ast.Attribute) and part.attr in marks
+                and "mark" in (getattr(part.value, "attr", ""), getattr(part.value, "id", ""))):
+            return part.attr
+    return ""
+
+
+def mark_names_of(marks: tuple[str, ...]):
+    """A reader for `names_in_reach`: the names a Python file gives, at its top level, to one of `marks`."""
+    def of(source: str | None, _path: str) -> dict[str, str]:
+        found = {name: mark_in_code(value, marks) for name, value in (top_level(source) or {}).items()}
+        return {name: mark for name, mark in found.items() if mark and name != "pytestmark"}
+    return of
+
+
+def mark_among(nodes: list, marks: tuple[str, ...], names: dict[str, str] | None = None) -> tuple[str, int] | None:
+    """The first of `marks` that one of the nodes names, with the line of that node.
+
+    A node names a mark as `mark.<name>`, or by a name that stands for it
+    (`names`: the name as written -> the mark): the node itself, an item of a
+    list, or what a call is given.
+    """
+    names = names or {}
     for node in nodes:
-        text = ast.unparse(node)
-        for mark in marks:
-            if re.search(rf"\bmark\.{re.escape(mark)}\b", text):
-                return mark, node.lineno
+        mark = mark_in_code(node, marks)
+        if mark:
+            return mark, node.lineno
+        for part in [node, *getattr(node, "elts", []), *getattr(node, "args", [])]:
+            written = ast.unparse(part) if isinstance(part, (ast.Name, ast.Attribute)) else ""
+            if names.get(written) in marks:
+                return names[written], node.lineno
     return None
 
 
-def tests_and_marks(source: str | None, marks: tuple[str, ...]) -> tuple[set[str], dict[str, tuple[str, int]]] | None:
+def tests_and_marks(source: str | None, marks: tuple[str, ...],
+                    names: dict[str, str] | None = None) -> tuple[set[str], dict[str, tuple[str, int]]] | None:
     """The tests of a Python file, and those that carry one of `marks`: name -> (the mark, its line).
 
     A test in a class is named `Class::test`. "*" is the whole file, by a
-    `pytestmark`. None when the file cannot be read as Python.
+    `pytestmark`. `names` holds the names that stand for a mark and come from
+    another file; the names the file sets itself are read here. None when the
+    file cannot be read as Python.
     """
     try:
         module = ast.parse(source or "")
@@ -649,18 +783,20 @@ def tests_and_marks(source: str | None, marks: tuple[str, ...]) -> tuple[set[str
         return None
     tests: set[str] = set()
     marked: dict[str, tuple[str, int]] = {}
+    names = {**(names or {}), **mark_names_of(marks)(source, "")}
 
     def file_mark(body: list) -> tuple[str, int] | None:
         return mark_among([node.value for node in body if isinstance(node, ast.Assign)
-                           and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)], marks)
+                           and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)], marks, names)
 
     def read(body: list, prefix: str, inherited: tuple[str, int] | None) -> None:
         for node in body:
             if isinstance(node, ast.ClassDef):
-                read(node.body, f"{node.name}::", mark_among(node.decorator_list, marks) or file_mark(node.body) or inherited)
+                read(node.body, f"{node.name}::",
+                     mark_among(node.decorator_list, marks, names) or file_mark(node.body) or inherited)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
                 tests.add(prefix + node.name)
-                mark = mark_among(node.decorator_list, marks) or inherited
+                mark = mark_among(node.decorator_list, marks, names) or inherited
                 if mark:
                     marked[prefix + node.name] = mark
 
@@ -697,11 +833,12 @@ def newly_marked(c: FileChange, tree: Tree, marks: tuple[str, ...]) -> list[Find
     new in the change never ran in them, and is listed for information.
     """
     source = tree.read(c.path)
-    now = tests_and_marks(source, marks) if file_kind(c.path) == "python" else None
+    names = names_in_reach(tree, c.path, mark_names_of(marks))
+    now = tests_and_marks(source, marks, names) if file_kind(c.path) == "python" else None
     if now is None or not now[1]:
         return []
     base_source = None if c.status == "added" else tree.read_base(c.path)
-    base = tests_and_marks(base_source, marks) if base_source is not None else None
+    base = tests_and_marks(base_source, marks, names) if base_source is not None else None
     before_tests, before_marked = base or (set(), {})
     if "*" in before_marked:
         return []
@@ -727,21 +864,23 @@ def newly_marked(c: FileChange, tree: Tree, marks: tuple[str, ...]) -> list[Find
 def hook_targets(source: str | None, marks: tuple[str, ...]) -> dict[str, tuple[str, int]]:
     """What the hooks of a conftest.py give a left-out mark to: each path text in such a hook -> (the mark, its line).
 
-    A hook here is a function that calls `add_marker(pytest.mark.<mark>)`. A
-    text of it that holds a `/` is a path it picks tests by: a folder when it
-    ends with `/`, else the end of a file's path.
+    A hook here is a function that calls `add_marker(pytest.mark.<mark>)`, or
+    gives it a name that the file sets to that mark. A text of it that holds
+    a `/` is a path it picks tests by: a folder when it ends with `/`, else
+    the end of a file's path.
     """
     try:
         module = ast.parse(source or "")
     except SyntaxError:
         return {}
     targets: dict[str, tuple[str, int]] = {}
+    names = mark_names_of(marks)(source, "")
     for function in ast.walk(module):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         calls = [node for node in ast.walk(function)
                  if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_marker"]
-        mark = mark_among(calls, marks)
+        mark = mark_among(calls, marks, names)
         if not mark:
             continue
         for node in ast.walk(function):
@@ -802,10 +941,79 @@ def placed_under_a_hook(c: FileChange, changes: list[FileChange], tree: Tree, ma
     return []
 
 
+def tests_with(tree: Tree, files: list[str], marks: tuple[str, ...]) -> dict[str, set[str]]:
+    """The tests that carry one of `marks`, for each Python test file among `files` that has such a test.
+
+    A test carries a mark on itself, on its class or on its file, by a name
+    that stands for the mark, or from the hook of a conftest.py above it. It
+    is in the set once, by whichever of these.
+    """
+    if not marks:
+        return {}
+    hooks = {path: hook_targets(tree.read(path), marks) for path in files if path.rsplit("/", 1)[-1] == "conftest.py"}
+    found: dict[str, set[str]] = {}
+    for path in files:
+        if not path.endswith(".py") or not is_test(path) or path in hooks:
+            continue
+        read = tests_and_marks(tree.read(path), marks, names_in_reach(tree, path, mark_names_of(marks)))
+        if read is None:
+            continue
+        tests, marked = read
+        by_hook = any(picked(path, target) for conftest in conftests_above(path) for target in hooks.get(conftest, {}))
+        mine = tests if "*" in marked or by_hook else set(marked)
+        if mine:
+            found[path] = set(mine)
+    return found
+
+
+SETTINGS_FIX = ("Keep these tests in the plain jobs. If they cannot run there, say why in a comment beside the line and "
+                "name the job that runs them.")
+
+
+def more_left_out(changes: list[FileChange], tree: Tree, marks: tuple[str, ...]) -> list[Finding]:
+    """A mark that the runner's settings newly leave out, with the tests that leave the plain test jobs through it.
+
+    A test that a mark of the base's settings had taken out already does not
+    leave now, and is not counted. A mark that comes back gives no finding.
+    """
+    change = next((c for c in changes if c.path == RUNNER_SETTINGS and c.status == "modified"), None)
+    before = tree.read_base(RUNNER_SETTINGS) if change else None
+    if before is None:
+        return []
+    old = left_out_marks(before)
+    lines = dict(enumerate((tree.read(RUNNER_SETTINGS) or "").splitlines(), 1))
+    line_no = next((number for number, line in lines.items() if re.match(r"addopts\s*=", line)), 0)
+    reason = comment_beside(RUNNER_SETTINGS, lines, line_no)
+    files = tree.tracked()
+    out_already = tests_with(tree, files or [], old)
+    out = []
+    for mark in (mark for mark in marks if mark not in old):
+        head = f"the runner's settings leave out one more mark, `{mark}`"
+        carry = tests_with(tree, files or [], (mark,))
+        leaving = {path: tests - out_already.get(path, set()) for path, tests in carry.items()}
+        leaving = {path: tests for path, tests in leaving.items() if tests}
+        if files is None:
+            what = f"{head}: its tests leave the plain test jobs, and they could not be counted (the files could not be listed)"
+        elif leaving:
+            what = (f"{head}: {sum(map(len, leaving.values()))} test(s) in {len(leaving)} file(s) leave the plain test "
+                    f"jobs ({names_of(sorted(leaving))})")
+        else:
+            carried = sum(map(len, carry.values()))
+            said = (f"the {carried} test(s) that carry it are left out already through another mark" if carried
+                    else "no test carries it today")
+            out.append(Finding("note", RUNNER_SETTINGS, line_no, f"{head}: {said}, so none leaves the plain test jobs",
+                               LEFT_OUT_WHY, BORN_LEFT_OUT_FIX))
+            continue
+        out.append(Finding("approval", RUNNER_SETTINGS, line_no, f"{what}, with its reason: {reason}", LEFT_OUT_WHY,
+                           "A maintainer has to approve the reason. There is nothing else to do.") if reason
+                   else Finding("warning", RUNNER_SETTINGS, line_no, what, LEFT_OUT_WHY, SETTINGS_FIX))
+    return out
+
+
 def left_out_tests(changes: list[FileChange], tree: Tree) -> list[Finding]:
     """Every way a change takes a test out of the plain test jobs through a mark that the runner's settings leave out."""
     marks = left_out_marks(tree.read(RUNNER_SETTINGS))
-    out = []
+    out = more_left_out(changes, tree, marks)
     for c in changes:
         if not marks or c.status == "deleted" or not c.path.endswith(".py"):
             continue

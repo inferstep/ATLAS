@@ -91,7 +91,7 @@ copy, and it does not run the change's copy in its place.
 | CodeScene | on CodeScene | Analyses `dev` |
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
 | Image scan | `.github/workflows/container-scan.yml` | Trivy, weekly and by hand, on the six images CI publishes with the tag `dev`: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan. Critical and high findings that have a fix. It reports and does not fail. The ROCm image is built on the user's machine and is not scanned |
-| Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own |
+| Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
 
 ## Baselines on `dev`
 
@@ -251,6 +251,16 @@ this way: the mark on a test or a file that was there before, a file added to
 the hook's list, or a test file moved under a folder the hook names. A test
 that is new with the mark is listed for information. A test in the test
 suite keeps this table and the hook's list the same.
+
+- A name that a file gives to the mark (`live = pytest.mark.integration`,
+  then `@live`) counts as the mark, also when the name comes from another
+  file by an import.
+- When the settings leave out one more mark, the check names the mark and
+  counts the tests that leave the plain jobs through it, in how many files.
+  A test that an older mark had taken out already is not counted again. A
+  mark that comes back gives no finding.
+- A mark is read from code. The same words in a text, as in the cases of a
+  parametrized test, are not a mark.
 
 ## The canary
 

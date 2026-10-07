@@ -269,6 +269,29 @@ Also: a vitest test that gets a modifier in front of its name (`it.only`,
 `it.skipIf(...)`) was reported as removed beside the right finding. It is no
 longer.
 
+### Fixed: the integrity check reads the names of marks from code, and names a mark the settings newly leave out
+
+Three faults and one gap in how the integrity check reads marks:
+
+- A new `pytestmark = pytest.mark.slow` was reported as "the skip marker
+  slow: every test of this file stops running". The check had taken the line
+  `slow = pytest.mark.skip` for a skip marker of that name: the line stands
+  inside a text of another test file. The names of skip markers are now read
+  from what a file sets at its top level, and a name counts only in that
+  file or where it is imported. `pytest.mark.<name>` is never a use of such
+  a name.
+- A test with a parametrized case whose text holds `pytest.mark.integration`
+  was counted as a test with that mark. A mark is now read from code only.
+- A reason given by a name (`reason=NEEDS_PROC_REASON`) was shown as that
+  name. The text of the name is shown.
+- A mark under a name (`live = pytest.mark.integration`, then `@live`) gave
+  no finding. It now counts as the mark, also through an import.
+
+New: when the runner's settings leave out one more mark (`addopts` in
+`pyproject.toml`), the check names the mark and counts the tests that leave
+the plain test jobs through it. A test that an older mark had taken out
+already is not counted again.
+
 ### Fixed: a deletion the proxy cannot ask about no longer reads as denied by the user
 
 Before a deletion is approved the proxy holds the file, so that the approval

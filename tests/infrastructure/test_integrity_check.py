@@ -62,6 +62,9 @@ class Files:
         folder = path.rsplit("/", 1)[0] + "/"
         return sorted(p for p in self.now if p.startswith(folder) and "/" not in p[len(folder):])
 
+    def tracked(self):
+        return sorted(self.now)
+
 
 def whats(ic, *diffs, tree=None):
     return [f.what for f in ic.check("".join(diffs), TASKS, tree)]
@@ -791,6 +794,7 @@ def test_a_form_with_its_reason_asks_for_approval_and_quotes_it(ic, path, lines,
 
 
 MARK_FILE = "import pytest\n\nneeds_proc = pytest.mark.skipif(not PROC, reason='the sandbox reads /proc')\nbare = pytest.mark.skip\n"
+TAKES_BOTH = "from tests.infrastructure.proc_files import bare, needs_proc\n"
 
 
 def test_the_uses_of_a_named_skip_mark_are_one_finding_with_their_number_and_the_reason(ic):
@@ -814,7 +818,7 @@ def test_a_named_skip_mark_from_an_imported_module_in_another_folder_is_found(ic
 
 def test_a_named_skip_mark_with_no_reason_needs_action_and_one_on_the_whole_file_says_so(ic):
     path = "tests/infrastructure/test_x.py"
-    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: ""})
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: TAKES_BOTH})
     findings = ic.check(diff(path, added=["@bare", "pytestmark = needs_proc"]), TASKS, tree)
     assert [(f.level, f.what) for f in findings] == [
         ("warning", "1 new use(s) of the skip marker bare"),
@@ -914,7 +918,7 @@ def test_a_keyword_of_a_skip_call_is_not_its_reason(ic):
     assert [(f.level, f.what) for f in findings] == [("warning", f"new `pytest.skip`: {FILE}")]
 
 
-CLASS_FILE = """import pytest
+CLASS_FILE = """from tests.infrastructure.proc_files import needs_proc
 
 @pytest.mark.skipif(not GPU,
                     reason='the class needs a GPU')
@@ -950,8 +954,103 @@ def test_a_skip_on_a_class_says_that_it_reaches_every_test_of_the_class(ic):
 
 def test_a_decorator_that_is_no_skip_mark_is_not_a_use(ic):
     path = "tests/infrastructure/test_x.py"
-    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: ""})
-    assert whats(ic, diff(path, added=["@needs_procedure", "@pytest.fixture", "@other"]), tree=tree) == []
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: TAKES_BOTH})
+    assert whats(ic, diff(path, added=["@needs_procedure", "@pytest.fixture", "@other", "@needs_proc.with_args"]),
+                 tree=tree) == []
+
+
+SAMPLE_FILE = '''import pytest
+
+SAMPLE = """
+slow = pytest.mark.skip
+"""
+
+
+def helper():
+    quick = pytest.mark.skip
+    return quick
+'''
+
+
+def test_a_name_in_a_text_or_in_a_function_of_another_file_is_not_a_skip_marker(ic):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/test_samples.py": SAMPLE_FILE, path: "import pytest\n"})
+    lines = ["pytestmark = pytest.mark.slow", "pytestmark = [pytest.mark.slow, pytest.mark.quick]", "@pytest.mark.slow",
+             "@slow", "@quick"]
+    assert whats(ic, diff(path, added=lines), tree=tree) == []
+    assert ic.skip_marks_of(SAMPLE_FILE, "tests/infrastructure/test_samples.py") == {}
+
+
+def test_the_same_name_in_a_file_that_is_not_imported_is_another_name(ic):
+    path = "tests/infrastructure/test_x.py"
+    beside = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: "import pytest\n"})
+    assert whats(ic, diff(path, added=["@bare", "pytestmark = needs_proc"]), tree=beside) == []
+    assert ic.named_marks(beside, path) == {}
+
+
+def test_a_pytest_mark_of_the_same_name_is_not_a_use_of_a_name_of_the_file(ic):
+    path = "tests/infrastructure/test_x.py"
+    own = "import pytest\n\nslow = pytest.mark.skip(reason='takes an hour')\n"
+    tree = Files({path: own})
+    assert whats(ic, diff(path, added=["@pytest.mark.slow", "pytestmark = pytest.mark.slow",
+                                       "pytestmark = [pytest.mark.slow]", "    pytest.param(1, marks=pytest.mark.slow),"]),
+                 tree=tree) == []
+    assert whats(ic, diff(path, added=["@slow", "    pytest.param(1, marks=slow),"]), tree=tree) == [
+        "2 new use(s) of the skip marker slow, with its reason: takes an hour"]
+    for line in ("pytestmark = slow", "pytestmark = [pytest.mark.usefixtures('proxy'), slow]"):
+        assert whats(ic, diff(path, added=[line]), tree=tree) == [
+            "new `pytestmark` with the skip marker slow: every test of this file stops running, with its reason: takes an hour"]
+
+
+@pytest.mark.parametrize("taken, use", [
+    ("from tests.infrastructure.proc_files import needs_proc as np", "@np"),
+    ("from .proc_files import needs_proc", "@needs_proc"),
+    ("from . import proc_files", "@proc_files.needs_proc"),
+    ("import tests.infrastructure.proc_files as pf", "@pf.needs_proc"),
+    ("import tests.infrastructure.proc_files", "@tests.infrastructure.proc_files.needs_proc"),
+])
+def test_a_named_skip_mark_is_followed_through_each_form_of_import(ic, taken, use):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: taken + "\n"})
+    name = use.lstrip("@")
+    assert whats(ic, diff(path, added=[use]), tree=tree) == [
+        f"1 new use(s) of the skip marker {name}, with its reason: the sandbox reads /proc"]
+
+
+def test_a_named_skip_mark_in_a_file_that_cannot_be_read_as_python_still_counts(ic):
+    path = "tests/infrastructure/test_x.py"
+    broken = MARK_FILE + "    inside = pytest.mark.skip\ndef broken(:\n"
+    tree = Files({"tests/infrastructure/proc_files.py": broken, path: TAKES_BOTH})
+    assert whats(ic, diff(path, added=["@bare"]), tree=tree) == ["1 new use(s) of the skip marker bare"]
+    assert sorted(ic.skip_marks_of(broken, "tests/infrastructure/proc_files.py")) == ["bare", "needs_proc"]
+
+
+REASON_FILE = ('import pytest\n\nNEEDS_PROC_REASON = ("this system has no /proc, and the sandbox reads its limits "\n'
+               '                     "from there")\n'
+               "needs_proc = pytest.mark.skipif(not PROC, reason=NEEDS_PROC_REASON)\n"
+               "elsewhere = pytest.mark.skipif(not PROC, reason=REASON_FROM_ANOTHER_FILE)\n")
+
+
+def test_a_reason_given_by_a_name_shows_the_text_of_that_name(ic):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/proc_files.py": REASON_FILE,
+                  path: "from tests.infrastructure.proc_files import elsewhere, needs_proc\n"})
+    assert whats(ic, diff(path, added=["@needs_proc", "@elsewhere"]), tree=tree) == [
+        "1 new use(s) of the skip marker elsewhere, with its reason: REASON_FROM_ANOTHER_FILE",
+        "1 new use(s) of the skip marker needs_proc, with its reason: this system has no /proc, and the sandbox reads "
+        "its limits from there"]
+
+
+def test_a_reason_by_name_on_the_skip_itself_shows_the_text_and_a_quoted_reason_stays_as_written(ic):
+    path = "tests/infrastructure/test_x.py"
+    source = "import pytest\n\nWHY = 'needs a GPU'\n\n\n@pytest.mark.skipif(not GPU, reason=WHY)\ndef test_a():\n    pass\n"
+    assert whats(ic, hunks(path, (0, [], 6, ["@pytest.mark.skipif(not GPU, reason=WHY)"])), tree=Files({path: source})) == [
+        ONE + ", with its reason: needs a GPU"]
+    quoted = source.replace("reason=WHY", "reason='WHY'")
+    assert whats(ic, hunks(path, (0, [], 6, ["@pytest.mark.skipif(not GPU, reason='WHY')"])), tree=Files({path: quoted})) == [
+        ONE + ", with its reason: WHY"]
+    assert whats(ic, diff(path, added=["@pytest.mark.skipif(not GPU, reason=WHY)"])) == [
+        ONE + ", with its reason: WHY"]
 
 
 
@@ -1125,6 +1224,183 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     # The gates page lists each of these files, so that the page and the hook say the same.
     page = (root / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     assert [target for target in files if f"`{target.lstrip('/')}`" not in page] == []
+
+
+NAMED = "import pytest\n\nlive = pytest.mark.integration\n\n\ndef test_a():\n    pass\n\n\ndef test_b():\n    pass\n"
+ONE_LEAVES = "1 test(s) leave the plain test jobs through the mark `integration`: test_a"
+
+
+def test_a_name_that_stands_for_the_mark_takes_a_test_out_as_the_mark_does(ic):
+    assert left(ic, LEFT, NAMED.replace("def test_a", "@live\ndef test_a"), NAMED) == [("warning", 6, ONE_LEAVES)]
+    assert left(ic, LEFT, NAMED.replace("\n\n\ndef test_a", "\npytestmark = [live]\n\n\ndef test_a"), NAMED) == [
+        ("warning", 4, "new `pytestmark` with the mark `integration`: every test of this file leaves the plain test jobs")]
+    in_a_class = "import pytest\n\nlive = pytest.mark.integration\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n"
+    assert left(ic, LEFT, in_a_class.replace("class TestLive", "@live\nclass TestLive"), in_a_class) == [
+        ("warning", 6, ONE_LEAVES.replace("test_a", "TestLive::test_a"))]
+
+
+@pytest.mark.parametrize("taken, use", [
+    ("from tests.marks import live", "@live"),
+    ("from tests.marks import live as needs_a_stack", "@needs_a_stack"),
+    ("import tests.marks as marks", "@marks.live"),
+])
+def test_a_name_for_the_mark_is_followed_through_an_import(ic, taken, use):
+    before = taken + "\n\n\ndef test_a():\n    pass\n"
+    files = {"tests/marks.py": "import pytest\n\nlive = pytest.mark.integration\n"}
+    found = left(ic, LEFT, before.replace("def test_a", use + "\ndef test_a"), before, more_now=files, more_before=files)
+    assert found == [("warning", 4, ONE_LEAVES)]
+
+
+def test_a_name_that_does_not_stand_for_the_mark_takes_no_test_out(ic):
+    in_a_function = NAMED.replace("live = pytest.mark.integration\n", "def marks():\n    live = pytest.mark.integration\n")
+    assert left(ic, LEFT, in_a_function.replace("def test_a", "@live\ndef test_a"), in_a_function) == []
+    assert left(ic, LEFT, NAMED.replace("def test_a", "@pytest.mark.live\ndef test_a"), NAMED) == []
+    other = NAMED.replace("live = pytest.mark.integration", "live = pytest.mark.usefixtures('proxy')")
+    assert left(ic, LEFT, other.replace("def test_a", "@live\ndef test_a"), other) == []
+    not_imported = {"tests/marks.py": "import pytest\n\nlive = pytest.mark.integration\n"}
+    assert left(ic, LEFT, TWO_TESTS.replace("def test_a", "@live\ndef test_a"), TWO_TESTS, more_now=not_imported,
+                more_before=not_imported) == []
+
+
+def test_the_words_of_a_mark_in_a_text_of_a_decorator_are_not_the_mark(ic):
+    cases = ('@pytest.mark.parametrize("line", ["@pytest.mark.integration", "pytestmark = pytest.mark.integration"])\n'
+             "def test_a(line):\n    pass\n")
+    before = "import pytest\n\nSAMPLE = 'live = pytest.mark.integration'\n\n\ndef test_a(line):\n    pass\n"
+    now = before.replace("def test_a(line):\n    pass\n", cases)
+    assert left(ic, LEFT, now, before) == []
+    assert ic.tests_and_marks(now, ("integration",)) == ({"test_a"}, {})
+    assert ic.mark_names_of(("integration",))(now, LEFT) == {}
+    one_case = now.replace('"pytestmark = pytest.mark.integration"]',
+                           'pytest.param("x", marks=pytest.mark.integration)]')
+    assert ic.tests_and_marks(one_case, ("integration",))[1] == {"test_a": ("integration", 6)}
+
+
+def test_a_hook_that_gives_the_mark_by_a_name_is_read_too(ic):
+    named = HOOK.replace("import pytest\n", "import pytest\n\nLIVE = pytest.mark.integration\n").replace(
+        "item.add_marker(pytest.mark.integration)", "item.add_marker(LIVE)")
+    assert sorted(ic.hook_targets(named, ("integration",))) == ["/tests/infrastructure/test_llm.py", "/tests/integration/"]
+    assert ic.hook_targets(named.replace("item.add_marker(LIVE)", "item.add_marker(OTHER)"), ("integration",)) == {}
+
+
+# --- the runner's settings leave out one more mark ---
+
+MORE = SETTINGS.replace("not integration", "not integration and not slow")
+SLOW = {
+    "tests/cli/test_a.py": TWO_TESTS.replace("def test_a", "@pytest.mark.slow\ndef test_a"),
+    # test_a carries the mark twice here: on itself and by its file.
+    "tests/cli/test_b.py": TWO_TESTS.replace("import pytest\n", "import pytest\n\npytestmark = pytest.mark.slow\n").replace(
+        "def test_a", "@pytest.mark.slow\ndef test_a"),
+    "tests/cli/test_c.py": TWO_TESTS,
+    "tests/cli/test_d.py": "from tests.marks import takes_long\n\n\n@takes_long\nclass TestLong:\n    def test_a(self):\n"
+                           "        pass\n\n    def test_b(self):\n        pass\n\n\ndef test_c():\n    pass\n",
+    "tests/marks.py": "import pytest\n\ntakes_long = pytest.mark.slow\n",
+    "proxy/agent.py": "import pytest\n\n\n@pytest.mark.slow\ndef test_not_in_a_test_file():\n    pass\n",
+}
+SLOW_LEAVE = ("the runner's settings leave out one more mark, `slow`: 5 test(s) in 3 file(s) leave the plain test jobs "
+              "(tests/cli/test_a.py, tests/cli/test_b.py, tests/cli/test_d.py)")
+
+
+def settings_change(ic, now, before, files, tree=Files):
+    change = diff("pyproject.toml", added=["x"])
+    found = ic.check(change, TASKS, tree({"pyproject.toml": now, **files}, {} if before is None else {"pyproject.toml": before}))
+    return [(f.level, f.line, f.what) for f in found if "plain test jobs" in f.what]
+
+
+def test_a_mark_that_the_settings_newly_leave_out_is_named_with_the_tests_that_leave(ic):
+    assert settings_change(ic, MORE, SETTINGS, SLOW) == [("warning", 3, SLOW_LEAVE)]
+    assert [f.fix for f in ic.check(diff("pyproject.toml", added=["x"]), TASKS, Files({"pyproject.toml": MORE, **SLOW},
+                                                                                 {"pyproject.toml": SETTINGS}))
+            if "one more mark" in f.what] == [ic.SETTINGS_FIX]
+
+
+def test_a_comment_beside_the_settings_line_is_the_reason_and_asks_for_approval(ic):
+    beside = MORE.replace("not slow'\"", "not slow'\"  # the nightly job runs the slow tests")
+    assert settings_change(ic, beside, SETTINGS, SLOW) == [
+        ("approval", 3, SLOW_LEAVE + ", with its reason: the nightly job runs the slow tests")]
+    above = MORE.replace("addopts", f"{HASH} The nightly job runs the slow tests.\naddopts")
+    assert settings_change(ic, above, SETTINGS, SLOW) == [
+        ("approval", 4, SLOW_LEAVE + ", with its reason: The nightly job runs the slow tests.")]
+
+
+def test_a_test_that_an_older_mark_had_taken_out_already_is_not_counted_again(ic):
+    hook = HOOK.replace('"/tests/infrastructure/test_llm.py",', '"/tests/cli/test_b.py",')
+    out_by_its_own_mark = SLOW["tests/cli/test_a.py"].replace("@pytest.mark.slow", "@pytest.mark.slow\n@pytest.mark.integration")
+    files = {**SLOW, CONFTEST: hook, "tests/cli/test_a.py": out_by_its_own_mark}
+    assert settings_change(ic, MORE, SETTINGS, files) == [
+        ("warning", 3, "the runner's settings leave out one more mark, `slow`: 2 test(s) in 1 file(s) leave the plain "
+                       "test jobs (tests/cli/test_d.py)")]
+
+
+def test_a_file_that_a_hook_gives_the_new_mark_to_counts_with_all_its_tests(ic):
+    hook = HOOK.replace("pytest.mark.integration", "pytest.mark.slow").replace('"/tests/infrastructure/test_llm.py",',
+                                                                             '"/tests/cli/test_c.py",')
+    files = {CONFTEST: hook, "tests/cli/test_c.py": TWO_TESTS, "tests/integration/test_e.py": "def test_e():\n    pass\n",
+             "tests/cli/test_f.py": TWO_TESTS}
+    assert settings_change(ic, MORE, SETTINGS, files) == [
+        ("warning", 3, "the runner's settings leave out one more mark, `slow`: 3 test(s) in 2 file(s) leave the plain "
+                       "test jobs (tests/cli/test_c.py, tests/integration/test_e.py)")]
+
+
+def test_a_mark_that_comes_back_and_a_change_that_leaves_the_marks_as_they_were_give_nothing(ic):
+    assert settings_change(ic, SETTINGS, MORE, SLOW) == []
+    assert settings_change(ic, MORE, MORE, SLOW) == []
+    assert settings_change(ic, SETTINGS.replace("tests\"]", "tests\", \"benchmarks\"]"), SETTINGS, SLOW) == []
+    reordered = SETTINGS.replace("not integration", "not slow and not integration")
+    assert settings_change(ic, reordered, MORE, SLOW) == []
+
+
+def test_a_new_mark_that_no_test_carries_is_listed_for_information(ic):
+    assert settings_change(ic, MORE, SETTINGS, {"tests/cli/test_c.py": TWO_TESTS}) == [
+        ("note", 3, "the runner's settings leave out one more mark, `slow`: no test carries it today, so none leaves "
+                    "the plain test jobs")]
+
+
+def test_a_new_mark_whose_tests_were_all_out_already_is_listed_for_information_with_their_number(ic):
+    hook = HOOK.replace('"/tests/infrastructure/test_llm.py",', '"/tests/cli/test_a.py",\n            "/tests/cli/test_b.py",')
+    files = {CONFTEST: hook, "tests/cli/test_a.py": SLOW["tests/cli/test_a.py"], "tests/cli/test_b.py": SLOW["tests/cli/test_b.py"]}
+    assert settings_change(ic, MORE, SETTINGS, files) == [
+        ("note", 3, "the runner's settings leave out one more mark, `slow`: the 3 test(s) that carry it are left out "
+                    "already through another mark, so none leaves the plain test jobs")]
+
+
+def test_each_new_mark_has_a_finding_of_its_own(ic):
+    two = SETTINGS.replace("not integration", "not integration and not slow and not gpu")
+    files = {**SLOW, "tests/cli/test_g.py": TWO_TESTS.replace("def test_b", "@pytest.mark.gpu\ndef test_b")}
+    assert settings_change(ic, two, SETTINGS, files) == [
+        ("warning", 3, SLOW_LEAVE),
+        ("warning", 3, "the runner's settings leave out one more mark, `gpu`: 1 test(s) in 1 file(s) leave the plain "
+                       "test jobs (tests/cli/test_g.py)")]
+
+
+def test_with_no_copy_of_the_base_settings_there_is_nothing_to_compare(ic):
+    assert settings_change(ic, MORE, None, SLOW) == []
+    born = diff("pyproject.toml", added=["x"], status="added")
+    assert [f.what for f in ic.check(born, TASKS, Files({"pyproject.toml": MORE, **SLOW})) if "one more mark" in f.what] == []
+
+
+def test_where_the_files_cannot_be_listed_the_finding_says_that_the_tests_were_not_counted(ic):
+    class NoListing(Files):
+        def tracked(self):
+            return None
+    assert settings_change(ic, MORE, SETTINGS, SLOW, tree=NoListing) == [
+        ("warning", 3, "the runner's settings leave out one more mark, `slow`: its tests leave the plain test jobs, and "
+                       "they could not be counted (the files could not be listed)")]
+
+
+def test_the_checkout_lists_the_files_that_git_tracks_and_no_others(ic, tmp_path):
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                       check=True, capture_output=True)
+    git("init", "-q")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(SETTINGS, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    (tmp_path / "tests" / "test_not_tracked.py").write_text("def test_b():\n    pass\n", encoding="utf-8")
+    assert ic.Tree(tmp_path, "HEAD").tracked() == ["pyproject.toml", "tests/test_a.py"]
+    assert ic.Tree().tracked() is None
+    assert ic.Tree(tmp_path / "tests" / "no-such-folder", "HEAD").tracked() is None
 
 
 @pytest.mark.parametrize("before, after", [
