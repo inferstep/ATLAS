@@ -953,3 +953,187 @@ def test_a_decorator_that_is_no_skip_mark_is_not_a_use(ic):
     tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: ""})
     assert whats(ic, diff(path, added=["@needs_procedure", "@pytest.fixture", "@other"]), tree=tree) == []
 
+
+
+# --- tests that leave the plain test jobs through a mark the runner's settings leave out ---
+
+SETTINGS = '[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "-m \'not integration\'"\n'
+LEFT = "tests/cli/test_doctor.py"
+TWO_TESTS = "import pytest\n\n\ndef test_a():\n    pass\n\n\ndef test_b():\n    pass\n"
+
+
+def left(ic, path, now, before=None, status="modified", more_now=None, more_before=None, more_diff=""):
+    """The findings about left-out tests for one changed file, given as it is now and as it was at the base."""
+    files_now = {"pyproject.toml": SETTINGS, path: now, **(more_now or {})}
+    files_before = {"pyproject.toml": SETTINGS, **({path: before} if before is not None else {}), **(more_before or {})}
+    change = diff(path, added=["x"], status=status) + more_diff
+    return [(f.level, f.line, f.what) for f in ic.check(change, TASKS, Files(files_now, files_before))
+            if "plain test jobs" in f.what]
+
+
+@pytest.mark.parametrize("line, marks", [
+    ("addopts = \"-m 'not integration'\"", ("integration",)),
+    ("addopts = '-m \"not slow and not integration\"'", ("slow", "integration")),
+    ("addopts = [\"-q\", \"-m\", \"not integration\"]", ("integration",)),
+    ("addopts = \"-q --strict-markers\"", ()),
+    ("addopts = \"-m 'integration'\"", ()),
+    ("testpaths = [\"tests\"]", ()),
+])
+def test_the_marks_a_plain_run_leaves_out_are_read_from_the_runners_settings(ic, line, marks):
+    assert ic.left_out_marks(f"[tool.pytest.ini_options]\n{line}\n") == marks
+    assert ic.left_out_marks(None) == ()
+
+
+def test_a_test_that_was_there_and_gets_the_mark_leaves_the_plain_jobs(ic):
+    now = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
+    assert left(ic, LEFT, now, TWO_TESTS) == [
+        ("warning", 4, "1 test(s) leave the plain test jobs through the mark `integration`: test_a")]
+
+
+def test_a_comment_beside_the_mark_is_its_reason_and_asks_for_approval(ic):
+    now = TWO_TESTS.replace("def test_a", f"{HASH} Needs a running sandbox; the e2e job runs it.\n"
+                                          "@pytest.mark.integration\ndef test_a")
+    assert left(ic, LEFT, now, TWO_TESTS) == [
+        ("approval", 5, "1 test(s) leave the plain test jobs through the mark `integration`: test_a, with its reason: "
+                        "Needs a running sandbox; the e2e job runs it.")]
+
+
+def test_the_tests_that_leave_are_one_finding_for_each_reason_with_their_names(ic):
+    now = (TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
+           .replace("def test_b", "@pytest.mark.integration\ndef test_b"))
+    assert left(ic, LEFT, now, TWO_TESTS) == [
+        ("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: test_a, test_b")]
+
+
+def test_a_mark_on_a_class_reaches_every_test_of_the_class(ic):
+    before = "import pytest\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n\n    def test_b(self):\n        pass\n"
+    now = before.replace("class TestLive", "@pytest.mark.integration\nclass TestLive")
+    assert left(ic, LEFT, now, before) == [
+        ("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: TestLive::test_a, "
+                       "TestLive::test_b")]
+
+
+def test_a_test_that_is_new_with_the_mark_is_listed_for_information(ic):
+    now = TWO_TESTS + "\n\n@pytest.mark.integration\ndef test_c():\n    pass\n"
+    assert left(ic, LEFT, now, TWO_TESTS) == [
+        ("note", 12, "1 new test(s) with the mark `integration`: they do not run in the plain test jobs")]
+
+
+def test_a_pytestmark_with_the_mark_takes_the_whole_file_out(ic):
+    now = TWO_TESTS.replace("import pytest\n", "import pytest\n\npytestmark = [pytest.mark.integration]\n")
+    assert left(ic, LEFT, now, TWO_TESTS) == [
+        ("warning", 3, "new `pytestmark` with the mark `integration`: every test of this file leaves the plain test jobs")]
+    assert left(ic, LEFT, now, status="added") == [
+        ("note", 3, "new test file with the mark `integration` on every test: they do not run in the plain test jobs")]
+
+
+def test_a_file_that_was_out_already_is_not_named_again(ic):
+    before = TWO_TESTS.replace("import pytest\n", "import pytest\n\npytestmark = pytest.mark.integration\n")
+    now = before.replace("def test_a", "@pytest.mark.integration\ndef test_a") + "\n\ndef test_c():\n    pass\n"
+    assert left(ic, LEFT, now, before) == []
+    kept = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
+    assert left(ic, LEFT, kept + "\n\ndef test_c():\n    pass\n", kept) == []
+
+
+def test_a_mark_that_the_settings_do_not_leave_out_is_not_named(ic):
+    now = TWO_TESTS.replace("def test_a", "@pytest.mark.slow\ndef test_a")
+    assert left(ic, LEFT, now, TWO_TESTS) == []
+    marked = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
+    no_settings = Files({LEFT: marked}, {LEFT: TWO_TESTS})
+    assert [f.what for f in ic.check(diff(LEFT, added=["x"]), TASKS, no_settings) if "plain test jobs" in f.what] == []
+
+
+def test_with_no_copy_of_the_base_every_marked_test_counts_as_one_that_was_there(ic):
+    now = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
+    assert left(ic, LEFT, now) == [
+        ("warning", 4, "1 test(s) leave the plain test jobs through the mark `integration`: test_a")]
+
+
+HOOK = '''import pytest
+
+
+def pytest_collection_modifyitems(config, items):
+    """Separate the tests that need a running service."""
+    for item in items:
+        path = str(item.fspath).replace("\\\\", "/")
+        live = path.endswith((
+            "/tests/infrastructure/test_llm.py",
+        ))
+        if "/tests/integration/" in path or live:
+            item.add_marker(pytest.mark.integration)
+'''
+CONFTEST = "tests/conftest.py"
+
+
+def test_the_paths_a_hook_gives_the_mark_to_are_read_from_the_hook(ic):
+    assert ic.hook_targets(HOOK, ("integration",)) == {
+        "/tests/infrastructure/test_llm.py": ("integration", 9), "/tests/integration/": ("integration", 11)}
+    assert ic.hook_targets(HOOK, ("slow",)) == {}
+    assert ic.hook_targets(HOOK.replace("item.add_marker(pytest.mark.integration)", "pass"), ("integration",)) == {}
+    assert ic.picked("tests/integration/test_x.py", "/tests/integration/")
+    assert ic.picked("tests/infrastructure/test_llm.py", "/tests/infrastructure/test_llm.py")
+    assert not ic.picked("tests/infrastructure/test_llm_client.py", "/tests/infrastructure/test_llm.py")
+    assert not ic.picked("tests/cli/test_x.py", "/tests/integration/")
+
+
+def test_a_file_added_to_the_hooks_list_leaves_the_plain_jobs(ic):
+    now = HOOK.replace('            "/tests/infrastructure/test_llm.py",\n',
+                       '            "/tests/infrastructure/test_llm.py",\n            "/tests/cli/test_doctor.py",\n')
+    assert left(ic, CONFTEST, now, HOOK) == [
+        ("warning", 10, "the hook gives the mark `integration` to `/tests/cli/test_doctor.py`: the tests there leave "
+                        "the plain test jobs")]
+    reasoned = now.replace('            "/tests/cli/test_doctor.py",', '            "/tests/cli/test_doctor.py",  # needs a GPU')
+    assert left(ic, CONFTEST, reasoned, HOOK) == [
+        ("approval", 10, "the hook gives the mark `integration` to `/tests/cli/test_doctor.py`: the tests there leave "
+                         "the plain test jobs, with its reason: needs a GPU")]
+
+
+def test_a_new_file_on_the_hooks_list_is_listed_for_information(ic):
+    now = HOOK.replace('            "/tests/infrastructure/test_llm.py",\n',
+                       '            "/tests/infrastructure/test_llm.py",\n            "/tests/cli/test_live.py",\n')
+    born = diff("tests/cli/test_live.py", added=["def test_a():"], status="added")
+    assert left(ic, CONFTEST, now, HOOK, more_now={"tests/cli/test_live.py": "def test_a():\n    pass\n"}, more_diff=born) == [
+        ("note", 10, "the hook gives the mark `integration` to the new file `/tests/cli/test_live.py`: its tests do not "
+                     "run in the plain test jobs")]
+
+
+def test_a_hook_that_did_not_change_names_nothing(ic):
+    assert left(ic, CONFTEST, HOOK + "\n\ndef helper():\n    return '/tmp/x'\n", HOOK) == []
+
+
+def test_a_test_file_moved_under_a_folder_the_hook_names_leaves_the_plain_jobs(ic):
+    gone = diff("tests/cli/test_doctor.py", removed=["def test_a():"], status="deleted")
+    files = {CONFTEST: HOOK}
+    found = left(ic, "tests/integration/test_doctor.py", TWO_TESTS, status="added", more_now=files, more_before=files,
+                 more_diff=gone)
+    assert found == [("warning", 0, "test file moved from tests/cli/test_doctor.py to where the hook of "
+                                    "tests/conftest.py gives the mark `integration`: its tests leave the plain test jobs")]
+    assert left(ic, "tests/integration/test_new.py", TWO_TESTS, status="added", more_now=files, more_before=files) == [
+        ("note", 0, "new test file where the hook of tests/conftest.py gives the mark `integration`: its tests do not "
+                    "run in the plain test jobs")]
+    assert left(ic, "tests/cli/test_new.py", TWO_TESTS, status="added", more_now=files, more_before=files) == []
+
+
+def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
+    root = SCRIPT.parents[1]
+    marks = ic.left_out_marks((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert marks == ("integration",)
+    targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)
+    assert "/tests/integration/" in targets
+    files = sorted(target for target in targets if target.endswith(".py"))
+    assert files and all((root / target.lstrip("/")).is_file() for target in files)
+    # The gates page lists each of these files, so that the page and the hook say the same.
+    page = (root / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    assert [target for target in files if f"`{target.lstrip('/')}`" not in page] == []
+
+
+@pytest.mark.parametrize("before, after", [
+    ("  it('parses a frame', () => {", "  it.only('parses a frame', () => {"),
+    ("  it('parses a frame', () => {", "  it.skipIf(isCI)('parses a frame', () => {"),
+    ("  test('parses a frame', () => {", "  test.concurrent.skip('parses a frame', () => {"),
+    ("  it('parses a frame', () => {", "  it.skipIf(os.platform() === 'win32')('parses a frame', () => {"),
+])
+def test_a_test_that_gets_a_modifier_in_front_of_its_name_is_not_a_removed_test(ic, before, after):
+    found = whats(ic, diff("extensions/vscode/test/sse.test.ts", added=[after], removed=[before]))
+    assert [what for what in found if what.startswith("test removed")] == []
+    assert len(found) == 1

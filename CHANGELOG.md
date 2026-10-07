@@ -241,6 +241,23 @@ marker defined below a helper function was read as part of that function, so
 tests that call the helper were named. The tests that carry the marker are
 named now.
 
+### Changed: the integrity check names a test that leaves the plain test jobs
+
+The pytest jobs run with `-m 'not integration'`. A test that gets the
+`integration` mark is no longer run by them, and the check said nothing. It
+now reads the marks that the runner's settings leave out (`addopts` in
+`pyproject.toml`) and names three ways a change takes a test out: the mark
+on a test or a file that was there before, a file added to the list of the
+hook in a `conftest.py`, and a test file moved under a folder that the hook
+names. A test that is new with the mark is listed for information.
+
+The gates page lists the files that are left out today: 125 tests in 7
+files, which no CI job runs until the nightly runs exist.
+
+Also: a vitest test that gets a modifier in front of its name (`it.only`,
+`it.skipIf(...)`) was reported as removed beside the right finding. It is no
+longer.
+
 ### Fixed: a deletion the proxy cannot ask about no longer reads as denied by the user
 
 Before a deletion is approved the proxy holds the file, so that the approval

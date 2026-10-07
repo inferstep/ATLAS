@@ -23,6 +23,7 @@ action or approval.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import io
 import json
@@ -79,9 +80,12 @@ LINTER_MARKERS = {
 }
 LOCK_FILES = ("package-lock.json", "go.sum", ".github/requirements/ci.txt")
 SIZE_BASELINE = ".github/code-health-baseline.json"
+# Where the test runner's own settings are: which marks a plain run leaves out.
+RUNNER_SETTINGS = "pyproject.toml"
 LARGE_CHANGE_LINES = 400
 
-TEST_DEF = re.compile(r"^\s*(?:func (Test\w+)\(|(?:async )?def (test_\w+)\(|(?:it|test)\(\s*['\"`](.+?)['\"`])")
+TEST_DEF = re.compile(r"^\s*(?:func (Test\w+)\(|(?:async )?def (test_\w+)\("
+                      r"|(?:it|test)(?:\.\w+)*(?:\((?:[^()]|\([^()]*\))*\))?\(\s*['\"`](.+?)['\"`])")
 # The forms by which a test stops running, for each runner. Each row: the
 # pattern of a new line, and how far the form reaches: "one" (the test it
 # stands on or in), "named" (a skip mark kept under a name of its own; its
@@ -338,9 +342,9 @@ def check_tests(changes: list[FileChange], tree: Tree) -> list[Finding]:
             out.append(Finding("warning", c.path, 0, "test file deleted", TEST_WHY,
                                "Keep the file, or say in the pull request why its tests no longer apply."))
         else:
-            out += (removed_tests(c, added_names, tree) + new_skips(c, tree) + skip_helper_calls(c, tree) + named_mark_uses(c, tree)
-                    + changed_assertions(c, product_changed))
-    return out
+            out += (removed_tests(c, added_names, tree) + new_skips(c, tree) + skip_helper_calls(c, tree)
+                    + named_mark_uses(c, tree) + changed_assertions(c, product_changed))
+    return out + left_out_tests(changes, tree)
 
 
 def removed_tests(c: FileChange, added_names: set[str], tree: Tree) -> list[Finding]:
@@ -434,11 +438,15 @@ def skip_reason(path: str, lines: dict[int, str], line_no: int) -> str:
     module = IMPORT_OR_SKIP.search(call)
     if module:
         return f"needs the module {module.group(1)}"
+    return comment_beside(path, lines, line_no)
+
+
+def comment_beside(path: str, lines: dict[int, str], line_no: int) -> str:
+    """The comment on a line, or on the line directly above it: what a form with no reason of its own says."""
     above = lines.get(line_no - 1, "").strip()
-    # A build tag is a comment line itself; its own text is the form, not a reason.
-    own = "" if lines[line_no].lstrip().startswith(("//", "#")) else comment_text(path, lines[line_no])
-    comment = own or (above.lstrip("#/ ") if above.startswith(("#", "//")) else "")
-    return comment.strip()
+    # A line that is a comment itself (a build tag) is the form, not a reason.
+    own = "" if lines.get(line_no, "").lstrip().startswith(("//", "#")) else comment_text(path, lines.get(line_no, ""))
+    return (own or (above.lstrip("#/ ") if above.startswith(("#", "//")) else "")).strip()
 
 
 def skip_finding(path: str, line_no: int, what: str, reason: str) -> Finding:
@@ -600,6 +608,213 @@ def named_mark_uses(c: FileChange, tree: Tree) -> list[Finding]:
         if files:
             out.append(skip_finding(c.path, files[0], f"new `pytestmark` with the skip marker {name}: {REACH['file']}",
                                     reason))
+    return out
+
+
+# --- tests that leave the plain test jobs ---------------------------------------
+
+LEFT_OUT_WHY = ("The plain test jobs do not run a test that carries this mark. A fault that the test would catch can "
+                "then pass a pull request.")
+LEFT_OUT_FIX = ("Keep the test in the plain jobs. If it needs a running service, say so in a comment next to the mark "
+                "and name the job that runs it.")
+BORN_LEFT_OUT_FIX = "Check that a job runs it (docs/quality/gates.md, \"Tests that the plain jobs leave out\")."
+
+
+def left_out_marks(settings: str | None) -> tuple[str, ...]:
+    """The marks that the runner's settings leave out of a plain run: each `not <mark>` of `-m` in `addopts`."""
+    line = re.search(r"^addopts\s*=\s*(.+)$", settings or "", re.M)
+    selection = re.search(r"-m[\"']?[\s,=]*([\"'])(.+?)\1", line.group(1)) if line else None
+    return tuple(dict.fromkeys(re.findall(r"\bnot\s+(\w+)", selection.group(2)))) if selection else ()
+
+
+def mark_among(nodes: list, marks: tuple[str, ...]) -> tuple[str, int] | None:
+    """The first of `marks` that one of the nodes names as `mark.<name>`, with the line of that node."""
+    for node in nodes:
+        text = ast.unparse(node)
+        for mark in marks:
+            if re.search(rf"\bmark\.{re.escape(mark)}\b", text):
+                return mark, node.lineno
+    return None
+
+
+def tests_and_marks(source: str | None, marks: tuple[str, ...]) -> tuple[set[str], dict[str, tuple[str, int]]] | None:
+    """The tests of a Python file, and those that carry one of `marks`: name -> (the mark, its line).
+
+    A test in a class is named `Class::test`. "*" is the whole file, by a
+    `pytestmark`. None when the file cannot be read as Python.
+    """
+    try:
+        module = ast.parse(source or "")
+    except SyntaxError:
+        return None
+    tests: set[str] = set()
+    marked: dict[str, tuple[str, int]] = {}
+
+    def file_mark(body: list) -> tuple[str, int] | None:
+        return mark_among([node.value for node in body if isinstance(node, ast.Assign)
+                           and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets)], marks)
+
+    def read(body: list, prefix: str, inherited: tuple[str, int] | None) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                read(node.body, f"{node.name}::", mark_among(node.decorator_list, marks) or file_mark(node.body) or inherited)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                tests.add(prefix + node.name)
+                mark = mark_among(node.decorator_list, marks) or inherited
+                if mark:
+                    marked[prefix + node.name] = mark
+
+    whole = file_mark(module.body)
+    if whole:
+        marked["*"] = whole
+    read(module.body, "", None)
+    return tests, marked
+
+
+def leaves_finding(path: str, line_no: int, what: str, reason: str) -> Finding:
+    if reason:
+        return Finding("approval", path, line_no, f"{what}, with its reason: {reason}", LEFT_OUT_WHY,
+                       "A maintainer has to approve the reason. There is nothing else to do.")
+    return Finding("warning", path, line_no, what, LEFT_OUT_WHY, LEFT_OUT_FIX)
+
+
+def names_of(names: list[str]) -> str:
+    return ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+
+
+def whole_file_finding(c: FileChange, lines: dict[int, str], mark: str, line_no: int) -> Finding:
+    if c.status == "added":
+        return Finding("note", c.path, line_no, f"new test file with the mark `{mark}` on every test: they do not run "
+                       "in the plain test jobs", LEFT_OUT_WHY, BORN_LEFT_OUT_FIX)
+    what = f"new `pytestmark` with the mark `{mark}`: every test of this file leaves the plain test jobs"
+    return leaves_finding(c.path, line_no, what, comment_beside(c.path, lines, line_no))
+
+
+def newly_marked(c: FileChange, tree: Tree, marks: tuple[str, ...]) -> list[Finding]:
+    """The tests of a changed Python test file that carry a left-out mark now and did not at the base.
+
+    A test that was there at the base leaves the plain jobs. A test that is
+    new in the change never ran in them, and is listed for information.
+    """
+    source = tree.read(c.path)
+    now = tests_and_marks(source, marks) if file_kind(c.path) == "python" else None
+    if now is None or not now[1]:
+        return []
+    base_source = None if c.status == "added" else tree.read_base(c.path)
+    base = tests_and_marks(base_source, marks) if base_source is not None else None
+    before_tests, before_marked = base or (set(), {})
+    if "*" in before_marked:
+        return []
+    new = {name: found for name, found in now[1].items() if name not in before_marked}
+    lines = dict(enumerate((source or "").splitlines(), 1))
+    if "*" in new:
+        return [whole_file_finding(c, lines, *new["*"])]
+    # With no copy of the base to compare with, every test counts as one that was there.
+    cannot_compare = base is None and c.status != "added"
+    leave, born = {}, {}
+    for name, (mark, line_no) in sorted(new.items()):
+        if cannot_compare or name in before_tests:
+            leave.setdefault((mark, comment_beside(c.path, lines, line_no)), []).append((line_no, name))
+        else:
+            born.setdefault(mark, []).append((line_no, name))
+    return ([leaves_finding(c.path, found[0][0], f"{len(found)} test(s) leave the plain test jobs through the mark "
+                            f"`{mark}`: {names_of([name for _, name in found])}", reason)
+             for (mark, reason), found in leave.items()]
+            + [Finding("note", c.path, found[0][0], f"{len(found)} new test(s) with the mark `{mark}`: they do not run "
+                       "in the plain test jobs", LEFT_OUT_WHY, BORN_LEFT_OUT_FIX) for mark, found in born.items()])
+
+
+def hook_targets(source: str | None, marks: tuple[str, ...]) -> dict[str, tuple[str, int]]:
+    """What the hooks of a conftest.py give a left-out mark to: each path text in such a hook -> (the mark, its line).
+
+    A hook here is a function that calls `add_marker(pytest.mark.<mark>)`. A
+    text of it that holds a `/` is a path it picks tests by: a folder when it
+    ends with `/`, else the end of a file's path.
+    """
+    try:
+        module = ast.parse(source or "")
+    except SyntaxError:
+        return {}
+    targets: dict[str, tuple[str, int]] = {}
+    for function in ast.walk(module):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        calls = [node for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "add_marker"]
+        mark = mark_among(calls, marks)
+        if not mark:
+            continue
+        for node in ast.walk(function):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str) and "/" in node.value
+                    and " " not in node.value and re.search(r"\w", node.value)):
+                targets.setdefault(node.value, (mark[0], node.lineno))
+    return targets
+
+
+def picked(path: str, target: str) -> bool:
+    """Whether a hook's path text picks the file at `path`."""
+    return target in f"/{path}" if target.endswith("/") else f"/{path}".endswith(target)
+
+
+def hook_list_changes(c: FileChange, added: set[str], tree: Tree, marks: tuple[str, ...]) -> list[Finding]:
+    """A path that a conftest.py's hook newly gives a left-out mark to. `added` holds the files the change adds."""
+    source = tree.read(c.path)
+    now = hook_targets(source, marks)
+    before = hook_targets(None if c.status == "added" else tree.read_base(c.path), marks)
+    lines = dict(enumerate((source or "").splitlines(), 1))
+    out = []
+    for target, (mark, line_no) in sorted(now.items()):
+        if target in before:
+            continue
+        if target.lstrip("/") in added:
+            out.append(Finding("note", c.path, line_no, f"the hook gives the mark `{mark}` to the new file `{target}`: "
+                               "its tests do not run in the plain test jobs", LEFT_OUT_WHY, BORN_LEFT_OUT_FIX))
+        else:
+            what = f"the hook gives the mark `{mark}` to `{target}`: the tests there leave the plain test jobs"
+            out.append(leaves_finding(c.path, line_no, what, comment_beside(c.path, lines, line_no)))
+    return out
+
+
+def conftests_above(path: str) -> list[str]:
+    """The conftest.py files that can hold a hook for the test file at `path`, nearest first."""
+    parts = path.split("/")[:-1]
+    return ["/".join(parts[:depth] + ["conftest.py"]) for depth in range(len(parts), -1, -1)]
+
+
+def placed_under_a_hook(c: FileChange, changes: list[FileChange], tree: Tree, marks: tuple[str, ...]) -> list[Finding]:
+    """A test file that the change puts where a hook gives a left-out mark.
+
+    The hook is read as it was at the base: a path that the change adds to a
+    hook is named by `hook_list_changes`.
+    """
+    for conftest in conftests_above(c.path):
+        for target, (mark, _) in sorted(hook_targets(tree.read_base(conftest) or tree.read(conftest), marks).items()):
+            if not picked(c.path, target):
+                continue
+            name = c.path.rsplit("/", 1)[-1]
+            moved_from = [d.path for d in changes if d.status == "deleted" and d.path.rsplit("/", 1)[-1] == name]
+            if moved_from:
+                return [Finding("warning", c.path, 0, f"test file moved from {moved_from[0]} to where the hook of "
+                                f"{conftest} gives the mark `{mark}`: its tests leave the plain test jobs",
+                                LEFT_OUT_WHY, LEFT_OUT_FIX)]
+            return [Finding("note", c.path, 0, f"new test file where the hook of {conftest} gives the mark `{mark}`: its "
+                            "tests do not run in the plain test jobs", LEFT_OUT_WHY, BORN_LEFT_OUT_FIX)]
+    return []
+
+
+def left_out_tests(changes: list[FileChange], tree: Tree) -> list[Finding]:
+    """Every way a change takes a test out of the plain test jobs through a mark that the runner's settings leave out."""
+    marks = left_out_marks(tree.read(RUNNER_SETTINGS))
+    out = []
+    for c in changes:
+        if not marks or c.status == "deleted" or not c.path.endswith(".py"):
+            continue
+        if c.path.rsplit("/", 1)[-1] == "conftest.py":
+            out += hook_list_changes(c, {d.path for d in changes if d.status == "added"}, tree, marks)
+        elif is_test(c.path):
+            out += newly_marked(c, tree, marks)
+            if c.status == "added":
+                out += placed_under_a_hook(c, changes, tree, marks)
     return out
 
 

@@ -208,6 +208,46 @@ later cannot be recorded; the recording step refuses it. The way to lift
 this: the recording keeps, for each call to the sandbox, the files that call
 changed, and the stand-in puts them into the workspace at a replay.
 
+## Tests that the plain jobs leave out
+
+The pytest jobs run with `-m 'not integration'` (`addopts` in
+`pyproject.toml`). A test that carries the `integration` mark is not run by
+them. Such a test needs a running stack: the model server, the sandbox
+service, or the built TUI with a proxy.
+
+A test gets the mark in two ways: from a mark in its own file, or from the
+hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
+the mark to every test of the files it lists and to every test under
+`tests/integration/`.
+
+| File | Tests | What it needs | The job that runs it |
+|---|---|---|---|
+| `tests/infrastructure/test_llm.py` | 32 | a running model server | none until the nightly (#314) |
+| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | none until the nightly (#314) |
+| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | none until the nightly (#314) |
+| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | none until the nightly (#314) |
+| `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | none until the nightly (#314) |
+| `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | none until the nightly (#314) |
+| `tests/infrastructure/test_control_plane.py` | 5 | a running stack | none until the nightly (#314) |
+
+- That is 125 tests in 7 files. No workflow selects the mark, so no CI job
+  runs them today. `tests/integration/` holds no test.
+- The four `sandbox smoke` jobs send their own requests to the sandbox image.
+  They do not run these files.
+- The four sandbox and model files import `httpx` with `importorskip`. Where
+  that package is not installed they are skipped whole, also when the mark is
+  selected: 13 tests are collected then, not 125. CI does not install
+  `httpx`. A job that runs these tests has to install it, and its report has
+  to say how many tests it collected against the 125.
+- To run them: `pytest -m integration tests/infrastructure`, on a host with
+  the stack up.
+
+The integrity check names a change that takes a test out of the plain jobs
+this way: the mark on a test or a file that was there before, a file added to
+the hook's list, or a test file moved under a folder the hook names. A test
+that is new with the mark is listed for information. A test in the test
+suite keeps this table and the hook's list the same.
+
 ## The canary
 
 A check that silently stops checking looks the same as a check that passes.
