@@ -217,6 +217,27 @@
       "length": 120
     },
     {
+      "id": "workflow lint",
+      "red": [
+        "zizmor (workflows)",
+        "actionlint (workflows)"
+      ],
+      "what": "a workflow with no permissions block and a step that reads the output of a step that is not there, in .github/workflows/canary-workflow-lint.yml",
+      "action": "write",
+      "path": ".github/workflows/canary-workflow-lint.yml",
+      "lines": [
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "name: canary workflow lint",
+        "on:",
+        "  workflow_dispatch: {}",
+        "jobs:",
+        "  planted:",
+        "    runs-on: ubuntu-24.04",
+        "    steps:",
+        "      - run: echo \"${{ steps.no_such_step.outputs.value }}\""
+      ]
+    },
+    {
       "id": "docker compose config",
       "red": [
         "docker compose config"

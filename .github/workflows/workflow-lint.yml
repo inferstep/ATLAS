@@ -1,0 +1,117 @@
+name: workflow lint
+
+# Checks the workflow files themselves. zizmor reads them for security
+# mistakes, actionlint for mistakes GitHub shows only when the workflow runs.
+# The workflows are the checks, so a mistake in one weakens every other check.
+# A finding fails the job. A step that must stay as it is carries
+# `# zizmor: ignore[<rule>]` on its line, with the reason beside it.
+# Both tools are release binaries at a fixed version, held against the
+# checksums recorded below, so the jobs need no action from outside GitHub
+# and the organisation's allow-list stays as it is.
+
+on:
+  pull_request:
+    branches: [main, dev]
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: zizmor (workflows)
+    runs-on: ubuntu-24.04
+    env:
+      # To move to a new version, change both lines in one pull request. The
+      # checksum is the one GitHub shows for
+      # zizmor-x86_64-unknown-linux-gnu.tar.gz on the page of that release.
+      ZIZMOR_VERSION: v1.30.1
+      ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install zizmor
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/zizmor.tar.gz" \
+            "https://github.com/zizmorcore/zizmor/releases/download/${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          if ! echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/zizmor.tar.gz" | sha256sum --check --status; then
+            echo "::error::The zizmor ${ZIZMOR_VERSION} download does not match the checksum this workflow records, so it was not run. Fix: compare the download with the checksum on the page of that release. If the release is right, record its checksum in this workflow; if it is not, do not use the download."
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/zizmor.tar.gz" -C "$RUNNER_TEMP/bin" zizmor
+          "$RUNNER_TEMP/bin/zizmor" --version
+
+      - name: zizmor on the workflow files
+        env:
+          # Read-only. zizmor uses it to look up the actions the workflows pin.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No workflow file was found in .github/workflows, so zizmor checked nothing. Fix: run this job from a checkout of the repository."
+            exit 1
+          fi
+          if ! "$RUNNER_TEMP/bin/zizmor" --no-progress "${files[@]}"; then
+            "$RUNNER_TEMP/bin/zizmor" --no-progress --format github "${files[@]}" || true
+            echo "::error::zizmor found a mistake in a workflow file, or could not read one. The lines above name the file, the line and the rule. Fix: correct the step it names. If the step must stay as it is, write '# zizmor: ignore[<rule>]' on its line with the reason beside it, and say so in the pull request."
+            exit 1
+          fi
+          echo "zizmor: no finding in ${#files[@]} workflow file(s)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-24.04
+    env:
+      # To move to a new version, change both lines in one pull request. The
+      # checksum is the one for actionlint_<version>_linux_amd64.tar.gz in the
+      # checksums file of that release.
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install actionlint
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          if ! echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum --check --status; then
+            echo "::error::The actionlint ${ACTIONLINT_VERSION} download does not match the checksum this workflow records, so it was not run. Fix: compare the download with the checksums file of that release. If the release is right, record its checksum in this workflow; if it is not, do not use the download."
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP/bin" actionlint
+          "$RUNNER_TEMP/bin/actionlint" -version
+
+      - name: actionlint on the workflow files
+        run: |
+          shopt -s nullglob
+          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No workflow file was found in .github/workflows, so actionlint checked nothing. Fix: run this job from a checkout of the repository."
+            exit 1
+          fi
+          # -shellcheck= and -pyflakes=: actionlint would run whichever version
+          # of those tools the runner has, so the result would change with the
+          # runner image. This job judges with the pinned binary alone.
+          if ! "$RUNNER_TEMP/bin/actionlint" -shellcheck= -pyflakes= "${files[@]}"; then
+            "$RUNNER_TEMP/bin/actionlint" -shellcheck= -pyflakes= \
+              -format '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint ({{$err.Kind}})::{{$err.Message}}{{"\n"}}{{end}}' \
+              "${files[@]}" || true
+            echo "::error::actionlint found a mistake in a workflow file. The lines above name the file, the line and what is wrong. Fix: correct the line it names."
+            exit 1
+          fi
+          echo "actionlint: no finding in ${#files[@]} workflow file(s)" | tee -a "$GITHUB_STEP_SUMMARY"

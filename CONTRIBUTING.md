@@ -286,6 +286,16 @@ golangci-lint run ./... --new-from-merge-base=origin/dev
 variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
 logic.
 
+**Workflows.** [zizmor](https://docs.zizmor.sh) and
+[actionlint](https://github.com/rhysd/actionlint) read every file in
+`.github/workflows/`, and a finding fails the job. To run them yourself:
+`zizmor .github/workflows/*.yml` and
+`actionlint -shellcheck= -pyflakes= .github/workflows/*.yml`. Every
+`actions/checkout` step sets `persist-credentials: false`, and a value from
+`${{ }}` reaches a script through `env`, not pasted into the script. If a step
+must stay as zizmor names it, write `# zizmor: ignore[<rule>]` on its line with
+the reason beside it, and say so in the pull request.
+
 **YAML and Kubernetes.** 2-space indentation, resource limits on every
 container, meaningful names and labels.
 

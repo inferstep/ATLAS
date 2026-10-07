@@ -27,9 +27,13 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # The job pushes the rendered files to this branch, so the token stays in this checkout.
+          persist-credentials: true  # zizmor: ignore[artipacked]
           ref: star-history
           path: chart-branch
 

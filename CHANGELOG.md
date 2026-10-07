@@ -297,6 +297,27 @@ manifest, is kept by `atlas artifact` snapshot and rollback, and is shipped
 by `atlas lens publish`. When a reference cannot be scored, the bundle gets
 no fingerprint (the check enforces nothing) rather than a wrong one.
 
+### Added: zizmor and actionlint read the workflow files
+
+The workflows are the checks, and only a syntax check read them. Two jobs now
+do: `zizmor (workflows)` for security mistakes and `actionlint (workflows)` for
+mistakes GitHub shows only when a workflow runs. A finding fails the job. Both
+tools are release binaries at a fixed version, held against checksums the
+workflow records.
+
+What zizmor found is fixed:
+- 19 checkout steps kept the job's token in the checkout's git settings. They
+  set `persist-credentials: false` now. One checkout keeps the token, with its
+  reason on the line: the weekly star chart pushes to its own branch.
+- The job that checks the llama.cpp patches pasted the pinned revision into
+  four shell lines. The value reaches the scripts through `env` now.
+- The comment beside the Trivy pin named no tag. It says `v0.36.0` now; the
+  pinned commit is unchanged.
+
+actionlint 1.7.12 found nothing. A test in `tests/infrastructure` holds every
+checkout step to the same rule, so a new one without the setting fails a
+required check. The canary plants a workflow for the two new jobs.
+
 ### Added: a check that fails when another check did not run
 
 A workflow that fails to start shows no check on a pull request, and a job

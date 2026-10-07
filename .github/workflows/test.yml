@@ -39,6 +39,8 @@ jobs:
         module: [proxy, tui]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
@@ -106,6 +108,8 @@ jobs:
           - geometric-lens/tests
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -188,6 +192,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: '1.26.6'
@@ -208,6 +214,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -250,6 +258,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
@@ -265,6 +275,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
@@ -284,6 +296,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: yamllint
         run: |
@@ -295,6 +309,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: function and file size against the baseline
         # docs/CODE_STYLE.md: no new function over 100 lines or file over
@@ -318,6 +334,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
@@ -376,6 +394,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: extract LLAMA_CPP_REV + check Dockerfiles agree
         id: sha
@@ -405,12 +425,14 @@ jobs:
         # Mirror the production fetch pattern: init + shallow-fetch a
         # specific SHA, not a full clone. GitHub supports
         # uploadpack.allowReachableSHA1InWant so this is cheap (~30s).
+        env:
+          LLAMA_CPP_REV: ${{ steps.sha.outputs.sha }}
         run: |
           git init -q llama.cpp
           cd llama.cpp
           git remote add origin https://github.com/ggml-org/llama.cpp
           git -c http.postBuffer=524288000 \
-              fetch --depth 1 origin ${{ steps.sha.outputs.sha }}
+              fetch --depth 1 origin "$LLAMA_CPP_REV"
           git checkout -q FETCH_HEAD
 
       - name: apply patches dry-run
@@ -423,21 +445,23 @@ jobs:
         #      missing target line would silently no-op... we verify the
         #      target line exists so that doesn't go unnoticed. The sed
         #      IS the patch — there is no separate .patch file for it.
+        env:
+          LLAMA_CPP_REV: ${{ steps.sha.outputs.sha }}
         run: |
           cd llama.cpp
           # 1. PC-202 hidden-states patch
           patch_path=../inference/patches/expose-hidden-states.patch
           if git apply --check "$patch_path" 2>&1; then
-            echo "  OK: expose-hidden-states.patch applies to ${{ steps.sha.outputs.sha }}"
+            echo "  OK: expose-hidden-states.patch applies to $LLAMA_CPP_REV"
           else
-            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
             exit 1
           fi
           # 2. spec-decode embeddings fix (sed target must exist)
           if grep -q 'auto params_dft = params_base;' tools/server/server-context.cpp; then
             echo "  OK: spec-decode sed target present in server-context.cpp"
           else
-            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
+            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=$LLAMA_CPP_REV. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
             exit 1
           fi
           echo "All patch checks passed."
@@ -462,6 +486,8 @@ jobs:
             code: '<?php echo "ok";'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: build sandbox image
         run: docker build -t atlas-sandbox-test ./sandbox
       - name: start sandbox
