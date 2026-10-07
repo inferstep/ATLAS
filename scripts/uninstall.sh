@@ -7,16 +7,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"
 
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 REMOVE_K3S=false
 REMOVE_MODELS=false
 REMOVE_DATA=false
+
+# A setting that the configuration file does not have reads as empty here, so
+# that check_settings can say which one it is.
+ATLAS_MODELS_DIR="${ATLAS_MODELS_DIR:-}"
+ATLAS_DATA_DIR="${ATLAS_DATA_DIR:-}"
+ATLAS_PROJECTS_DIR="${ATLAS_PROJECTS_DIR:-}"
 
 usage() {
     echo "ATLAS Uninstaller"
@@ -24,17 +32,64 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --all          Remove everything (K3s, models, data)"
+    echo "  --all          Remove everything: K3s, the model files, the data folder"
+    echo "                 and the projects folder"
     echo "  --k3s          Also remove K3s"
-    echo "  --models       Also remove downloaded models"
-    echo "  --data         Also remove persistent data (PVCs)"
+    echo "  --models       Also remove the downloaded model files (*.gguf) in the models folder"
+    echo "  --data         Also remove the persistent volume claims, the data folder and"
+    echo "                 the projects folder, each with everything in it. Your own"
+    echo "                 projects are in the projects folder."
     echo "  -h, --help     Show this help"
     echo ""
     echo "Configuration:"
-    echo "  Models dir:  $ATLAS_MODELS_DIR"
-    echo "  Data dir:    $ATLAS_DATA_DIR"
-    echo "  Namespace:   $ATLAS_NAMESPACE"
+    echo "  Models folder:    $ATLAS_MODELS_DIR"
+    echo "  Data folder:      $ATLAS_DATA_DIR"
+    echo "  Projects folder:  $ATLAS_PROJECTS_DIR"
+    echo "  Namespace:        $ATLAS_NAMESPACE"
     echo ""
+}
+
+# What the chosen options remove: one line for each thing, and for each folder
+# its path. remove_data and remove_models remove what this list names.
+print_removals() {
+    echo "This will remove:"
+    echo "  - ATLAS services and deployments"
+    echo "  - Container images"
+    if [[ "$REMOVE_DATA" == true ]]; then
+        echo "  - Persistent volume claims"
+        echo "  - The data folder, with everything in it: $ATLAS_DATA_DIR"
+        echo "  - The projects folder, with everything in it: $ATLAS_PROJECTS_DIR"
+    fi
+    if [[ "$REMOVE_MODELS" == true ]]; then
+        echo "  - The model files (*.gguf) in the models folder: $ATLAS_MODELS_DIR"
+    fi
+    if [[ "$REMOVE_K3S" == true ]]; then
+        echo "  - K3s cluster"
+        echo "  - GPU Operator"
+    fi
+    echo ""
+}
+
+# An option that removes a folder needs the setting that names the folder.
+# With an empty one the script stops here: before its question, and before it
+# removes anything.
+check_settings() {
+    local empty=()
+    if [[ "$REMOVE_DATA" == true ]]; then
+        [[ -n "$ATLAS_DATA_DIR" ]] || empty+=("ATLAS_DATA_DIR")
+        [[ -n "$ATLAS_PROJECTS_DIR" ]] || empty+=("ATLAS_PROJECTS_DIR")
+    fi
+    if [[ "$REMOVE_MODELS" == true ]]; then
+        [[ -n "$ATLAS_MODELS_DIR" ]] || empty+=("ATLAS_MODELS_DIR")
+    fi
+    if [[ ${#empty[@]} -gt 0 ]]; then
+        local name
+        for name in "${empty[@]}"; do
+            log_error "$name is empty, and an option you gave removes the folder that it names. Nothing was removed."
+        done
+        log_error "Fix: set it in ${ATLAS_CONFIG_FILE:-$K8S_DIR/atlas.conf} to the folder to remove, or run without the option (--data needs ATLAS_DATA_DIR and ATLAS_PROJECTS_DIR; --models needs ATLAS_MODELS_DIR)."
+        exit 1
+    fi
 }
 
 parse_args() {
@@ -143,17 +198,17 @@ remove_k3s() {
 remove_models() {
     log_info "Removing models from $ATLAS_MODELS_DIR..."
 
-    rm -f "$ATLAS_MODELS_DIR"/*.gguf
-    rm -f "$ATLAS_MODELS_DIR/default.gguf"
+    rm -f "${ATLAS_MODELS_DIR:?}"/*.gguf
+    rm -f "${ATLAS_MODELS_DIR:?}/default.gguf"
 
     log_info "Models removed"
 }
 
 remove_data() {
-    log_info "Removing data from $ATLAS_DATA_DIR..."
+    log_info "Removing the data folder $ATLAS_DATA_DIR and the projects folder $ATLAS_PROJECTS_DIR..."
 
-    rm -rf "$ATLAS_DATA_DIR"
-    rm -rf "$ATLAS_PROJECTS_DIR"
+    rm -rf "${ATLAS_DATA_DIR:?}"
+    rm -rf "${ATLAS_PROJECTS_DIR:?}"
 
     log_info "Data removed"
 }
@@ -165,15 +220,8 @@ main() {
     echo ""
 
     parse_args "$@"
-
-    echo "This will remove:"
-    echo "  - ATLAS services and deployments"
-    echo "  - Container images"
-    [[ "$REMOVE_DATA" == true ]] && echo "  - Persistent data (PVCs and $ATLAS_DATA_DIR)"
-    [[ "$REMOVE_MODELS" == true ]] && echo "  - Downloaded models ($ATLAS_MODELS_DIR)"
-    [[ "$REMOVE_K3S" == true ]] && echo "  - K3s cluster"
-    [[ "$REMOVE_K3S" == true ]] && echo "  - GPU Operator"
-    echo ""
+    check_settings
+    print_removals
 
     if ! confirm "Are you sure you want to continue?"; then
         echo "Aborted."

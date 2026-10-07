@@ -532,7 +532,10 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 ```
 
 K3s installs use `scripts/uninstall.sh` instead, which tears down the
-manifests and (optionally) the K3s node itself.
+manifests and (optionally) the K3s node itself. With `--data` it also
+removes the data folder and the projects folder, where your own projects
+are; with `--models`, the model files. Before it asks, it lists each folder
+that it will remove, with its path.
 
 ---
 

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### Fixed: uninstall.sh --data removed the projects folder without naming it
+
+`scripts/uninstall.sh --data` (and `--all`) removes two folders: the data
+folder (`ATLAS_DATA_DIR`) and the projects folder (`ATLAS_PROJECTS_DIR`),
+where a user's own projects are. The list before its question named only the
+first. Now the list names every folder that the chosen options remove, each
+with its path, and the help text of `--data` and `--all` says the same. For
+`--models` the list says what is removed: the `*.gguf` files of the models
+folder, not the folder.
+
+A setting that is empty stops the script before its question, with the name
+of the setting, when an option that was given removes the folder it names.
+Each removal in the script is written so that it fails on an empty value.
+
 ### Fixed: the bot took a quoted closing line for a closing line
 
 The bot's hourly job closes an issue that a commit or a merged pull request
