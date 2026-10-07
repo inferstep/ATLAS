@@ -145,9 +145,10 @@ assigns you, moves the card to In Progress, and replies with your Shepherd.
 
 - One person per issue. You can hold **2** open claims, or **1** before
   your first merged pull request.
-- Link a pull request within **5 days** (put `Closes #<issue>` in its
-  description, or the bot reminds you). After **7 days** without one, the
-  claim is released and the issue is Ready again.
+- Open a pull request within **10 days**, as a draft if it is not ready,
+  and put `Closes #<issue>` in its description (`Refs #<issue>` when the
+  issue must stay open). Without one the bot reminds you. After **14 days**
+  without one, the claim is released and the issue is Ready again.
 - Comment `/unclaim` any time to let it go. No hard feelings.
 
 These numbers live in [.github/atlas-bot.yml](.github/atlas-bot.yml).

@@ -60,6 +60,23 @@ on `dev`. Running it would have brought those rules back.
   can be skipped, and reads the review rule correctly when two rulesets
   hold one.
 
+### Fixed: the contributor bot counts a claim's days from a new assignment, and waits 14 days
+
+A claim that a maintainer gave again by hand was released the next day: the
+bot counted the days from the first `/claim` comment. The days now count from
+the newest of that comment and the last time the person was assigned.
+
+The periods are longer: a reminder after 10 days without a pull request (5
+before), release after 14 (7 before). `.github/atlas-bot.yml` holds them, and
+a test keeps the numbers in CONTRIBUTING the same.
+
+A claim is kept by an open pull request of the claimant, into any branch,
+that names the issue (`Closes #N`, `Refs #N`, or any other naming). That rule
+was on `dev` already and is unchanged; its tests now hold the case of a draft
+pull request into `dev`, a closed pull request, and `Refs`.
+
+The bot runs from `main`, so nothing changes for a claim until this is there.
+
 ### Added: a driver for the held-out evaluation, with a bare-model baseline
 
 `scripts/eval/` runs a frozen suite through two arms, grades each finished

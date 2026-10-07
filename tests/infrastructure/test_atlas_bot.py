@@ -35,6 +35,7 @@ class FakeAPI:
         self.pulls = []       # open PRs
         self.files = {}       # PR number -> [path]
         self.linked = {}      # issue number -> [PR author]
+        self.assigned = {}    # (issue number, login) -> when they were last assigned
         self.commits = []     # commits on dev: {sha, message}
         self.merged = []      # PRs merged into dev: {number, body}
         self.assignable = True
@@ -77,7 +78,8 @@ class FakeAPI:
         return self.results.get(q, [])
 
     def open_pulls(self):
-        return self.pulls
+        # As GitHub answers `state=open`: a closed or merged pull request is not in the list.
+        return [p for p in self.pulls if p.get("state", "open") == "open"]
 
     def pull_files(self, n):
         return self.files.get(n, [])
@@ -96,6 +98,9 @@ class FakeAPI:
 
     def linked_open_pr_authors(self, n):
         return self.linked.get(n, [])
+
+    def assigned_at(self, n, login):
+        return self.assigned.get((n, login))
 
     def item(self, cfg, n):
         return self.cards.get(n)
@@ -146,7 +151,7 @@ def claim_event(api, n, body, user="alice", assoc="NONE", pr=False):
 
 
 def test_config_reads_the_repo_settings(cfg):
-    assert cfg["claims"] == {"ping_after_days": 5, "release_after_days": 7,
+    assert cfg["claims"] == {"ping_after_days": 10, "release_after_days": 14,
                              "max_open": 2, "max_open_first_timer": 1}
     assert cfg["project"] == {"owner": "inferstep", "number": 1}
     assert cfg["bot"]["login"] == BOT
@@ -257,7 +262,14 @@ def claimed(api, days_ago, login="alice", by=BOT):
                        "body": bot_mod.marker("claim", login), "created_at": stamp(days_ago)}]
 
 
-@pytest.mark.parametrize("days,action", [(4, None), (5, "ping"), (6, "ping"), (7, "release"), (12, "release")])
+def test_contributing_states_the_periods_of_the_settings(cfg):
+    with open(os.path.join(ROOT, "CONTRIBUTING.md"), encoding="utf-8") as fh:
+        text = " ".join(fh.read().split())
+    assert f"Open a pull request within **{cfg['claims']['ping_after_days']} days**" in text
+    assert f"After **{cfg['claims']['release_after_days']} days** without one, the claim is released" in text
+
+
+@pytest.mark.parametrize("days,action", [(9, None), (10, "ping"), (13, "ping"), (14, "release"), (30, "release")])
 def test_reminder_then_release(api, cfg, days, action):
     claimed(api, days)
     run(api, cfg).stale()
@@ -269,7 +281,7 @@ def test_reminder_then_release(api, cfg, days, action):
 
 
 def test_one_reminder_per_claim(api, cfg):
-    claimed(api, 5)
+    claimed(api, 10)
     run(api, cfg).stale()
     run(api, cfg).stale()
     assert len([b for b in api.said(7) if bot_mod.marker("ping", "alice") in b]) == 1
@@ -284,6 +296,9 @@ def test_a_linked_pull_request_keeps_the_claim(api, cfg):
 
 @pytest.mark.parametrize("author,text,kept", [
     ("alice", "Closes #7", True),              # PR into dev: GitHub makes no link, the mention counts
+    ("alice", "Refs #7", True),                # the issue stays open after the merge; the claim is still worked on
+    ("alice", "Fixes #7", True),
+    ("alice", "Resolves #7", True),
     ("alice", "docs: resync (issue #7)", True),
     ("bob", "Closes #7", False),               # someone else's PR does not keep alice's claim
     ("alice", "Closes #70", False),            # another issue
@@ -296,6 +311,90 @@ def test_an_open_pull_request_that_names_the_issue_keeps_the_claim(api, cfg, aut
                   "user": {"login": author, "type": "User"}}]
     run(api, cfg).stale()
     assert (("unassign", 7, "alice") in api.log) is (not kept)
+
+
+def test_a_claim_with_a_draft_pull_request_into_dev_gets_no_reminder_and_no_release(api, cfg):
+    # The claim, a draft pull request into dev 13 hours later, and the daily run 15 days after the claim.
+    claimed(api, 15)
+    api.pulls = [{"number": 272, "title": "docs(zh-cn): translate the page", "body": "Closes #7", "labels": [],
+                  "draft": True, "base": {"ref": "dev"}, "author_association": "CONTRIBUTOR",
+                  "created_at": stamp(15 - 13 / 24), "user": {"login": "alice", "type": "User"}}]
+    run(api, cfg).stale()
+    assert api.log == []
+    api.pulls = []
+    run(api, cfg).stale()
+    assert ("unassign", 7, "alice") in api.log
+
+
+@pytest.mark.parametrize("state,kept", [("open", True), ("closed", False)])
+def test_a_closed_pull_request_does_not_keep_the_claim(api, cfg, state, kept):
+    claimed(api, 30)
+    api.pulls = [{"number": 272, "title": "t", "body": "Closes #7", "labels": [], "state": state,
+                  "user": {"login": "alice", "type": "User"}}]
+    run(api, cfg).stale()
+    assert (("unassign", 7, "alice") in api.log) is (not kept)
+
+
+@pytest.mark.parametrize("assigned_days_ago,action", [(3, None), (9, None), (10, "ping"), (13, "ping"), (14, "release")])
+def test_a_hand_assignment_after_the_claim_starts_the_count_again(api, cfg, assigned_days_ago, action):
+    # Claimed 30 days ago and reminded on day 10; a maintainer assigned the claimant again later.
+    claimed(api, 30)
+    api.threads[7].append({"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("ping", "alice"),
+                           "created_at": stamp(20)})
+    api.assigned[(7, "alice")] = stamp(assigned_days_ago)
+    run(api, cfg).stale()
+    said = " ".join(api.said(7))
+    assert (bot_mod.marker("ping", "alice") in said) is (action == "ping")
+    assert (("unassign", 7, "alice") in api.log) is (action == "release")
+
+
+def test_an_assignment_older_than_the_claim_does_not_move_the_count_back(api, cfg):
+    claimed(api, 10)
+    api.assigned[(7, "alice")] = stamp(40)
+    run(api, cfg).stale()
+    assert bot_mod.marker("ping", "alice") in " ".join(api.said(7))
+
+
+def test_the_events_are_not_asked_for_a_claim_that_is_young_or_has_a_pull_request(api, cfg):
+    asked = []
+    api.assigned_at = lambda n, login: asked.append((n, login))
+    claimed(api, 9)
+    run(api, cfg).stale()
+    claimed(api, 30)
+    api.pulls = [{"number": 9, "title": "t", "body": "Refs #7", "labels": [], "user": {"login": "alice", "type": "User"}}]
+    run(api, cfg).stale()
+    assert asked == [] and api.log == []
+
+
+class Recorded(bot_mod.API):
+    """The real API class with the network replaced: it records each path and answers from a table."""
+
+    def __init__(self, answers):
+        super().__init__("token", "inferstep/ATLAS")
+        self.answers, self.paths = answers, []
+
+    def _call(self, method, path, body=None, mutate=None):
+        self.paths.append((method, path))
+        return self.answers.get(path.split("?")[0], [])
+
+
+def test_only_open_pull_requests_are_asked_for():
+    api = Recorded({"/repos/inferstep/ATLAS/pulls": [{"number": 272}]})
+    assert api.open_pulls() == [{"number": 272}]
+    assert api.paths == [("GET", "/repos/inferstep/ATLAS/pulls?state=open&per_page=100&page=1")]
+
+
+def test_the_newest_assignment_of_that_person_is_read_from_the_issues_events():
+    events = [{"event": "assigned", "assignee": {"login": "alice"}, "created_at": "2026-09-29T08:00:00Z"},
+              {"event": "unassigned", "assignee": {"login": "alice"}, "created_at": "2026-10-06T06:00:00Z"},
+              {"event": "assigned", "assignee": {"login": "alice"}, "created_at": "2026-10-06T15:00:00Z"},
+              {"event": "unassigned", "assignee": {"login": "alice"}, "created_at": "2026-10-07T08:00:00Z"},
+              {"event": "assigned", "assignee": {"login": "bob"}, "created_at": "2026-10-07T09:00:00Z"},
+              {"event": "labeled", "created_at": "2026-10-07T10:00:00Z"}]
+    api = Recorded({"/repos/inferstep/ATLAS/issues/253/events": events})
+    assert api.assigned_at(253, "alice") == "2026-10-06T15:00:00Z"
+    assert api.assigned_at(253, "carol") is None
+    assert api.paths[0] == ("GET", "/repos/inferstep/ATLAS/issues/253/events?per_page=100&page=1")
 
 
 def test_hand_assignments_are_not_released(api, cfg):

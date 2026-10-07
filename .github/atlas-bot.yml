@@ -6,8 +6,8 @@ bot:
   login: inferstep-atlas-bot[bot]   # only this account's comments count as the bot's
 
 claims:
-  ping_after_days: 5       # no linked PR by then: the claimant gets a reminder
-  release_after_days: 7     # still none: the claim is released and the issue is Ready again
+  ping_after_days: 10      # no open PR of theirs names the issue by then: the claimant gets a reminder
+  release_after_days: 14    # still none: the claim is released and the issue is Ready again
   max_open: 2               # open claims per contributor
   max_open_first_timer: 1   # before their first merged pull request
 

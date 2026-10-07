@@ -4,7 +4,8 @@
 Commands, one per workflow in .github/workflows/bot-*.yml:
 
   claim       `/claim` or `/unclaim` as the first line of an issue comment
-  stale       daily: remind, then release, a /claim with no linked pull request
+  stale       daily: remind, then release, a /claim with no open pull request
+              by the claimant that names the issue
   sync        hourly: mirror Ready/Blocked to labels, area labels on PRs,
               welcome first-time PR authors, close issues whose fix
               reached dev
@@ -189,6 +190,13 @@ class API:
 
     def pull_files(self, number: int) -> list:
         return [f["filename"] for f in self._pages(f"/repos/{self.repo}/pulls/{number}/files")]
+
+    def assigned_at(self, number: int, login: str) -> str | None:
+        """When this person was last assigned to the issue (an ISO time), by
+        the bot or by hand. None when the issue's events show no assignment."""
+        times = [e["created_at"] for e in self._pages(f"/repos/{self.repo}/issues/{number}/events")
+                 if e.get("event") == "assigned" and (e.get("assignee") or {}).get("login") == login]
+        return max(times) if times else None
 
     def linked_open_pr_authors(self, number: int) -> list:
         owner, name = self.repo.split("/")
@@ -394,8 +402,15 @@ class Bot:
                 if not claims:
                     continue  # assigned by hand, not by /claim: not the bot's to release
                 since = parse_time(claims[-1]["created_at"])
+                if (self.now - since).days < int(c["ping_after_days"]):
+                    continue
                 if login in mentions.get(n, ()) or login in self.api.linked_open_pr_authors(n):
                     continue
+                # A maintainer who assigns the claimant again, after a release
+                # or to give more time, starts the count again: the days run
+                # from the newest of the claim and the assignment.
+                assigned = self.api.assigned_at(n, login)
+                since = max(since, parse_time(assigned)) if assigned else since
                 days = (self.now - since).days
                 if days >= int(c["release_after_days"]):
                     self.api.unassign(n, login)
