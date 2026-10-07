@@ -132,6 +132,12 @@ def advisory(changed: list[str], base: str) -> list[str]:
         done = subprocess.run([sys.executable, str(script), "--base", base], cwd=ROOT, capture_output=True, text=True, check=False)
         if "nothing found" not in done.stdout:
             out += ["note integrity check (reports, does not fail):"] + ["  " + line for line in done.stdout.splitlines()]
+    return out + golangci_notes(changed, base) + hadolint_notes(changed)
+
+
+def golangci_notes(changed: list[str], base: str) -> list[str]:
+    """What golangci-lint finds in the Go code this change adds."""
+    out = []
     modules = [m for m in ("proxy", "tui") if any(p.startswith(m + "/") for p in changed)]
     if not modules or not (ROOT / ".golangci.yml").is_file():
         return out
@@ -144,6 +150,20 @@ def advisory(changed: list[str], base: str) -> list[str]:
             out += [f"note golangci-lint in {module}/ (reports, does not fail):"]
             out += ["  " + line for line in done.stdout.splitlines()]
     return out
+
+
+def hadolint_notes(changed: list[str]) -> list[str]:
+    """What hadolint finds in the Dockerfiles this change touches."""
+    files = [p for p in changed if Path(p).name == "Dockerfile" or Path(p).name.startswith("Dockerfile.")]
+    script = ROOT / "scripts" / "dockerfile_lint.py"
+    if not files or not script.is_file():
+        return []
+    if not shutil.which("hadolint"):
+        return ["skip hadolint: it is not installed (https://github.com/hadolint/hadolint/releases)"]
+    done = subprocess.run([sys.executable, str(script)], cwd=ROOT, capture_output=True, text=True, check=False)
+    lines = [line for line in (done.stdout + done.stderr).splitlines()
+             if line.startswith(("FAIL", *(f"{path}:" for path in files)))]
+    return ["note hadolint (reports, does not fail):"] + ["  " + line for line in lines] if lines else []
 
 
 def gates_to_run(pr, changed: list[str], full: bool) -> list:

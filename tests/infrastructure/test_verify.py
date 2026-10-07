@@ -124,3 +124,22 @@ def test_a_base_it_cannot_read_is_an_error_with_a_fix(verify):
     done = subprocess.run([sys.executable, str(SCRIPT), "--base", "no-such-branch"], capture_output=True, text=True, check=False)
     assert done.returncode == 2
     assert "fix:" in done.stderr
+
+
+def test_a_dockerfile_change_asks_for_hadolint_when_it_is_not_installed(verify, monkeypatch):
+    monkeypatch.setattr(verify.shutil, "which", lambda name: None)
+    assert verify.hadolint_notes(["inference/Dockerfile.vulkan"]) == [
+        "skip hadolint: it is not installed (https://github.com/hadolint/hadolint/releases)"]
+
+
+def test_a_dockerfile_change_shows_the_findings_of_its_own_files(verify, monkeypatch):
+    monkeypatch.setattr(verify.shutil, "which", lambda name: "/usr/bin/" + name)
+    listed = "proxy/Dockerfile:2: DL3003 warning: Use WORKDIR\nsandbox/Dockerfile:9: DL3008 warning: Pin\nhadolint: 2 finding(s)\n"
+    monkeypatch.setattr(verify.subprocess, "run", lambda *args, **kwargs: verify.subprocess.CompletedProcess(args, 0, listed, ""))
+    assert verify.hadolint_notes(["proxy/Dockerfile", "docs/API.md"]) == [
+        "note hadolint (reports, does not fail):", "  proxy/Dockerfile:2: DL3003 warning: Use WORKDIR"]
+
+
+def test_a_change_with_no_dockerfile_does_not_run_hadolint(verify):
+    assert verify.hadolint_notes(["proxy/agent.go", "scripts/check_dockerfile_sources.py"]) == []
+

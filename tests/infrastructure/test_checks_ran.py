@@ -116,6 +116,18 @@ def test_every_workflow_of_this_repository_can_be_judged(ran, change):
 
 # --- which run and which jobs --------------------------------------------------
 
+def test_the_replay_workflow_is_expected_only_when_its_paths_changed(ran, change):
+    workflows = ran.read_workflows(ROOT)
+    replay = ".github/workflows/replay.yml"
+    assert replay in ran.expected_workflows(workflows, change, ["proxy/agent.go"], "")[0]
+    assert replay in ran.expected_workflows(workflows, change, ["tests/replay/recordings/normal_edit.json"], "")[0]
+    expected, unread = ran.expected_workflows(workflows, change, ["docs/README.md"], "")
+    assert replay not in expected
+    assert replay not in unread
+    in_the_queue = change._replace(event="merge_group", action="checks_requested")
+    assert replay in ran.expected_workflows(workflows, in_the_queue, ["docs/README.md"], "")[0]
+
+
 def test_the_newest_run_of_a_workflow_for_the_event_counts(ran):
     runs = [run(TESTS, "cancelled", created="2000-01-01T00:00:00Z", run_id=1),
             run(TESTS, "success", created="2000-01-01T00:05:00Z", run_id=2),

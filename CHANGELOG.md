@@ -182,6 +182,21 @@ a reason, and formatting. It reports and does not fail the job. The settings
 are in `.golangci.yml`; CONTRIBUTING.md says how to run it and what to do
 about each finding.
 
+### Added: size and complexity limits for the VS Code extension
+
+The Go and Python code have a size check; the extension's TypeScript had none.
+Its lint now fails for a function over 100 lines, or with more than 15
+decision points, where a switch counts once however many cases it has. Two
+files hold a larger function and are listed in `extensions/vscode/eslint.config.mjs`
+with its size: `ChatViewProvider.dispatch` (188 lines, 33 decision points) and
+`predictEdit` (17 decision points). A listed number may go down and may not go
+up. ESLint sets a limit for a whole file, so another function in a listed file
+can reach the listed size before the lint fails.
+
+A test in the extension's suite writes a function one over each limit and
+expects the error, and fails when a listed number is larger than its file
+needs.
+
 ### Fixed: an edit_file old_str that stopped matching its file ran on to the token cap
 
 An old_str is text copied from the target file, so it can be checked while it
@@ -344,6 +359,22 @@ workflows that never started and failed, though every one of them ran.
   listed, how many are running and how many are not listed. A listing that
   leaves out a known run is named in the log.
 
+### Added: replay tests that run the proxy against a recorded session
+
+The proxy is about to be restructured in many small steps. Unit tests check
+pieces; a replay shows that the whole loop still does the same on a recorded
+session, with no model and in seconds. `tests/replay` runs the proxy as a
+binary built from the change. Its four services (the model, the sandbox, V3
+and the lens) are stand-ins that play a recording, and each request the proxy
+sends them is compared, whole, with the recorded one. The events to the
+client and the files at the end are compared too. A test of this kind does
+not know how the proxy is built inside, so moving code does not touch it; a
+change in what the proxy sends, says or writes fails it at the first place
+the run differs. The first recording is a normal session (read, edit, run,
+done). The job `replay (proxy)` runs on pull requests that touch `proxy/` or
+`tests/replay/` and in the merge queue, and is not a required check
+(`docs/quality/gates.md`).
+
 ### Added: a canary that shows each check still turns red
 
 A check that silently stops checking looks the same as a check that passes.
@@ -357,6 +388,25 @@ passed, did not run or did not finish, a required check the list does not
 know, and a canary that was not renewed in 14 days. The two required CodeQL
 jobs and `dependency review` are not covered; the list says why. The renewal
 is by hand, once a week (`docs/quality/gates.md`).
+
+### Added: hadolint reads every Dockerfile, and the weekly scan reads the inference images
+
+Nothing linted the Dockerfiles, and the inference images were the only
+published images no scanner read.
+
+- A `hadolint (dockerfiles)` job lints every Dockerfile the repository tracks
+  (`scripts/dockerfile_lint.py`). It reports and does not fail for a finding:
+  the counts are in the job summary, and the findings in a Dockerfile a change
+  touches are annotations. It fails when it could not lint: no Dockerfile,
+  hadolint did not run, or hadolint could not read a Dockerfile. hadolint is
+  its release binary at v2.15.1, held against a checksum the workflow records.
+  Today it reports 37 findings in 8 Dockerfiles, none of them an error.
+- `make verify` shows hadolint's findings for the Dockerfiles a change
+  touches, when hadolint is installed.
+- The weekly container scan and its signature check read six images, not
+  four: `atlas-llama` and `atlas-llama-vulkan` are added. The ROCm image is
+  built on the user's machine and never published, so it is not scanned.
+- The canary plants a `RUN cd` line for the new job.
 
 ### Added: a page for the quality gates and their baselines
 

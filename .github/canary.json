@@ -281,6 +281,19 @@
       ]
     },
     {
+      "id": "hadolint (dockerfiles)",
+      "reports": [
+        "hadolint (dockerfiles)"
+      ],
+      "what": "a `RUN cd` line at the end of proxy/Dockerfile",
+      "action": "append",
+      "path": "proxy/Dockerfile",
+      "lines": [
+        "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "RUN cd /tmp"
+      ]
+    },
+    {
       "id": "pr title",
       "red": [
         "pr title"
