@@ -430,6 +430,15 @@ longer creates or mounts it, and `ATLAS_PVC_PROJECTS_SIZE` is gone from
 `atlas.conf.example` (an old value is ignored). `uninstall.sh --data` still
 deletes a `lens-projects` claim that an older install left behind.
 
+### Fixed: ten sandbox tests failed on a system without /proc
+
+The sandbox finds the processes of a command in `/proc`, and some of its
+tests count processes the same way. On a system without `/proc` (macOS) ten
+tests in `test_http_cancellation.py` and `test_execution_resource_contract.py`
+failed for that reason alone. They now skip there, with that cause as the
+reason, through one marker in `tests/infrastructure/proc_files.py`. Where
+`/proc` exists they run as before.
+
 ### Fixed: the TUI tests wrote session files into the real cache folder on macOS
 
 The session tests set `XDG_CACHE_HOME` to keep their files in a temporary

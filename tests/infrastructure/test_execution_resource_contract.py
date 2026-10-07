@@ -22,6 +22,8 @@ import time
 
 import pytest
 
+from tests.infrastructure.proc_files import needs_proc
+
 SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "sandbox")
 sys.path.insert(0, SANDBOX)
@@ -121,6 +123,7 @@ def test_no_caller_can_raise_the_ceiling(small):
 # --- memory -----------------------------------------------------------------
 
 
+@needs_proc
 def test_a_gradual_allocator_is_stopped_and_named(small):
     r = run("python3 -c \"import time\na=[]\nwhile True:\n a.append(bytearray(1<<20))\n"
             " time.sleep(0.001)\"", small)
@@ -143,6 +146,7 @@ def test_a_rapid_allocator_is_stopped_and_named(small):
     assert not r.success
 
 
+@needs_proc
 def test_the_runaway_that_took_the_host_down(small):
     """`stepped(0, 5, -1)` exactly as the frozen family seeds it."""
     r = run("python3 -c \"out=[]\ncurrent=0\nstop=5\nstep=-1\n"
@@ -177,6 +181,7 @@ def test_the_runaway_that_took_the_host_down(small):
         unbounded.wait(timeout=5)
 
 
+@needs_proc
 def test_a_fork_tree_of_allocators_is_stopped(small):
     r = run("for i in 1 2 3 4 5; do python3 -c \"import time;a=bytearray(120<<20);"
             "time.sleep(30)\" & done; wait", small)
@@ -228,6 +233,7 @@ def test_output_overflow_while_allocating(small):
     assert not r.success
 
 
+@needs_proc
 def test_process_limit(small):
     c = rc.ResourceContract(wall_seconds=15, memory_bytes=384 * MiB,
                             max_processes=8, output_bytes=1 * MiB)

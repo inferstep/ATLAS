@@ -25,6 +25,8 @@ import time
 
 import pytest
 
+from tests.infrastructure.proc_files import needs_proc
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SANDBOX = os.path.join(ROOT, "sandbox")
 sys.path.insert(0, SANDBOX)
@@ -134,6 +136,7 @@ def _start_and_drop(port: int, marker: int, how: str) -> None:
         s.close()
 
 
+@needs_proc
 @pytest.mark.parametrize("how,marker", [("rst", MARKER_BASE), ("fin", MARKER_BASE + 1)])
 def test_a_caller_that_goes_away_stops_the_command(executor, how, marker):
     _reap(marker)
@@ -147,6 +150,7 @@ def test_a_caller_that_goes_away_stops_the_command(executor, how, marker):
         f"the command outlived a {how} by more than the watcher's interval")
 
 
+@needs_proc
 def test_repeated_cancellation_is_idempotent(executor):
     marker = MARKER_BASE + 2
     for _ in range(3):
@@ -171,6 +175,7 @@ def _shell(port: int, command: str, timeout: int) -> dict:
         return json.loads(resp.read())
 
 
+@needs_proc
 def test_a_healthy_neighbour_is_unaffected(executor):
     """One caller leaving does not disturb another's command."""
     import threading
@@ -215,6 +220,7 @@ def test_cancellation_is_distinct_from_timeout_and_exhaustion(executor):
     assert got.outcome != rc.OUTCOME_TIMED_OUT
 
 
+@needs_proc
 def test_no_late_evidence_and_no_descendants_survive(executor):
     marker = MARKER_BASE + 4
     _reap(marker)
@@ -229,6 +235,7 @@ def test_no_late_evidence_and_no_descendants_survive(executor):
     assert alive(marker) == 0, "a detached descendant outlived the cancelled request"
 
 
+@needs_proc
 def test_shutdown_drains_within_the_bound(executor):
     """A shutdown does not wait for a long command, and leaves nothing."""
     port = _free_port()
