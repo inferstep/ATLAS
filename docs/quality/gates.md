@@ -159,6 +159,13 @@ The pull request says which behaviour changed and why, and a maintainer
 approves it. When the change alters which calls the proxy makes or their
 order, the recorded answers no longer fit and the session is recorded again.
 
+How far the cases reach today: they run the handlers of 4 of the 16 tools
+(read_file, edit_file, structural_edit, run_command). The other 12 are
+registered at start and never run; their code is not covered by a replay.
+The reach command counts a function as reached when one statement of it ran,
+and a tool's handler sits inside the function that registers the tool, so a
+tool that no case uses still shows 1 to 8%.
+
 What a replay cannot reach today: at a replay no command really runs, so a
 file that a command would make does not exist. Every check that reads such a
 file (a deliverable written by a script, the output of a build) is outside
