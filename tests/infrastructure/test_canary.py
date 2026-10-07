@@ -6,15 +6,19 @@ list itself is tested against the workflow files and the files it edits: a
 renamed job or a moved line must fail here, not on the day the canary is
 renewed.
 """
+import http.server
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "canary.py"
@@ -50,10 +54,17 @@ def pull(manifest, **changes):
     return {**record, **changes}
 
 
+def shown(plant, name):
+    """The text the list says check `name` shows when it is red for this plant."""
+    return plant["shows"][name] if isinstance(plant["shows"], dict) else plant["shows"]
+
+
 def runs_as_listed(manifest):
     """The check runs of a canary on which every check does what the list says."""
-    red = [{"id": n, "name": name, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z"}
-           for n, name in enumerate(names(manifest, "red"))]
+    red = [{"id": n, "name": name, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z",
+            "log": f"a line of the job\n##[error]{shown(plant, name)}\nProcess completed with exit code 1.\n"}
+           for n, (name, plant) in enumerate((name, plant) for plant in manifest["plants"]
+                                             for name in plant.get("red", []))]
     reports = [{"id": 100 + n, "name": name, "status": "completed", "conclusion": "success",
                 "started_at": "2000-01-09T00:00:00Z", "annotation_paths": [plant["path"]]}
                for n, (name, plant) in enumerate((name, plant) for plant in manifest["plants"]
@@ -83,22 +94,67 @@ def only(found):
 
 # --- the list ------------------------------------------------------------------
 
-def test_every_listed_check_is_a_job_of_a_workflow(manifest):
+def job_names(root=ROOT):
+    """Each job of the workflows: the pattern of its names, how many letters of a name it fixes, and its `name:`."""
     checks = load("checks_ran")
-    patterns = [checks.name_regex(job_id, job or {})[0] for workflow in checks.read_workflows(ROOT).values()
-                for job_id, job in (workflow.get("jobs") or {}).items()]
+    return [(*checks.name_regex(job_id, job or {}), str((job or {}).get("name") or ""))
+            for workflow in checks.read_workflows(root).values() for job_id, job in (workflow.get("jobs") or {}).items()]
+
+
+def is_a_job(name, jobs):
+    """Whether a workflow has a job that GitHub reports under this name.
+
+    A job whose name is an expression alone fits every name, so it proves
+    nothing. It counts only for the one name GitHub gives it when it is
+    skipped: the text of the expression.
+    """
+    return any(pattern.fullmatch(name) if fixed else name == written.strip("${} ")
+               for pattern, fixed, written in jobs)
+
+
+def test_every_listed_check_is_a_job_of_a_workflow(manifest):
+    jobs = job_names()
     listed = names(manifest, "red") + names(manifest, "reports") + list(manifest["not_covered"])
-    unknown = [name for name in listed if not any(pattern.fullmatch(name) for pattern in patterns)]
+    unknown = [name for name in listed if not is_a_job(name, jobs)]
     assert not unknown, f"no workflow has a job with these names; change them in .github/canary.json: {unknown}"
 
 
+def test_a_name_that_no_job_has_is_not_taken_for_a_job():
+    jobs = job_names()
+    assert any(fixed == 0 for _, fixed, _ in jobs), "no job is named by an expression alone; this test can go"
+    assert not is_a_job("a job that is not there", jobs)
+    assert not is_a_job("shellchek", jobs)
+    assert is_a_job("shellcheck", jobs)
+    assert is_a_job("bootstrap on debian-12", jobs)
+    assert is_a_job("matrix.service.name", jobs)
+
+
+def test_a_check_of_a_service_is_not_a_job_of_a_workflow(manifest):
+    jobs = job_names()
+    assert [name for name in manifest["other_checks"] if is_a_job(name, jobs)] == []
+
+
 def test_no_check_is_listed_twice_and_every_entry_says_what_it_plants(manifest):
-    listed = names(manifest, "red") + list(manifest["not_covered"])
+    listed = names(manifest, "red") + list(manifest["not_covered"]) + list(manifest["other_checks"])
     assert len(listed) == len(set(listed))
     for plant in manifest["plants"]:
         assert plant["what"].strip(), plant["id"]
         assert plant.get("red") or plant.get("reports"), plant["id"]
-    assert all(reason.strip() for reason in manifest["not_covered"].values())
+    assert all(reason.strip() for reason in [*manifest["not_covered"].values(), *manifest["other_checks"].values()])
+
+
+def test_every_check_that_must_be_red_has_the_text_its_log_shows(manifest):
+    for plant in manifest["plants"]:
+        for name in plant.get("red", []):
+            assert len(shown(plant, name).strip()) >= 8, f"{plant['id']}: `shows` for {name} is too short to mean it"
+        if isinstance(plant.get("shows"), dict):
+            assert sorted(plant["shows"]) == sorted(plant["red"]), plant["id"]
+
+
+def test_a_check_with_no_plant_is_not_one_that_a_plant_turns_red(manifest):
+    planted = set(names(manifest, "red")) | set(names(manifest, "reports"))
+    assert planted.isdisjoint(manifest["not_covered"])
+    assert planted.isdisjoint(manifest["other_checks"])
 
 
 def test_the_title_of_the_canary_fails_the_title_check(manifest):
@@ -119,7 +175,7 @@ def checkout(tmp_path, manifest):
 
 def test_every_violation_can_be_planted_on_the_files_as_they_are(canary, manifest, checkout):
     written = canary.apply_plants(checkout, manifest)
-    assert len(written) == sum(1 for plant in manifest["plants"] if plant["action"] != "title")
+    assert sorted(written) == sorted({plant["path"] for plant in manifest["plants"] if plant["action"] != "title"})
     for plant in manifest["plants"]:
         if plant["action"] in ("write", "append", "insert_after_first_line"):
             assert plant["lines"][-1] in (checkout / plant["path"]).read_text(encoding="utf-8"), plant["id"]
@@ -131,19 +187,73 @@ def test_the_edits_land_where_they_take_effect(canary, manifest, checkout):
     inserted = (checkout / by_action["insert_after_first_line"]["path"]).read_text(encoding="utf-8").splitlines()
     assert inserted[0].startswith("#!")
     assert inserted[2] == by_action["insert_after_first_line"]["lines"][-1]
-    replaced = by_action["replace_line"]
-    before = (ROOT / replaced["path"]).read_text(encoding="utf-8").splitlines()
-    after = (checkout / replaced["path"]).read_text(encoding="utf-8").splitlines()
-    assert [line for line in after if line not in before] == replaced["lines"]
-    assert len(after) == len(before)
+    replaced = {}
+    for plant in manifest["plants"]:
+        if plant["action"] == "replace_line":
+            replaced.setdefault(plant["path"], []).extend(plant["lines"])
+    for path, lines in replaced.items():
+        before = (ROOT / path).read_text(encoding="utf-8").splitlines()
+        after = (checkout / path).read_text(encoding="utf-8").splitlines()
+        assert sorted(line for line in after if line not in before) == sorted(lines), path
+        assert len(after) == len(before), path
+
+
+def test_plants_that_share_a_file_all_land_in_it(canary, manifest, checkout):
+    shared = ".github/workflows/test.yml"
+    plants = [plant for plant in manifest["plants"] if plant.get("path") == shared]
+    assert len(plants) == 4
+    canary.apply_plants(checkout, manifest)
+    text = (checkout / shared).read_text(encoding="utf-8")
+    for plant in plants:
+        assert plant["lines"][0] in text, plant["id"]
+        # The marker the job shows is put together when the sample runs: it is not in the workflow file as one word.
+        assert plant["shows"] not in text, plant["id"]
+    samples = yaml.safe_load(text)["jobs"]["container-smoke"]["strategy"]["matrix"]["include"]
+    assert [sample["language"] for sample in samples] == ["java", "kotlin", "ruby", "php"]
+    assert all("failed" in sample["code"] for sample in samples)
+
+
+def test_a_planted_file_stays_valid_where_its_reader_needs_that(canary, manifest, checkout):
+    canary.apply_plants(checkout, manifest)
+    budgets = json.loads((checkout / "tests/perf/budgets.json").read_text(encoding="utf-8"))
+    assert budgets["deterministic_max"]["proxy_binary_bytes"] == 1
+    changed = [line for line in (checkout / "proxy/agent.go").read_text(encoding="utf-8").splitlines()
+               if "canaryreference" in line]
+    assert len(changed) == 1 and changed[0].startswith("\tsb.WriteString(")
 
 
 def test_the_planted_function_is_over_the_size_limit(canary, manifest, checkout):
     canary.apply_plants(checkout, manifest)
     size_gate = load("code_health")
-    plant = next(plant for plant in manifest["plants"] if plant["action"] == "long_function")
+    plant = next(plant for plant in manifest["plants"]
+                 if plant["action"] == "long_function" and plant.get("language", "python") == "python")
     text = (checkout / plant["path"]).read_text(encoding="utf-8")
     assert max(length for _, length in size_gate.py_functions(text, plant["path"])) > size_gate.FUNC_MAX
+
+
+def test_the_planted_typescript_function_is_over_the_extensions_limit(canary, manifest, checkout):
+    canary.apply_plants(checkout, manifest)
+    plant = next(plant for plant in manifest["plants"] if plant.get("language") == "typescript")
+    lines = (checkout / plant["path"]).read_text(encoding="utf-8").splitlines()
+    start, end = lines.index("export function canaryLongFunction(): number {"), lines.index("}")
+    limit = re.search(r"^const FUNCTION_LINES = (\d+);", (ROOT / "extensions/vscode/eslint.config.mjs")
+                      .read_text(encoding="utf-8"), re.M)
+    assert end - start + 1 > int(limit.group(1))
+    assert plant["path"].startswith("extensions/vscode/src/")
+
+
+def test_a_planted_function_in_a_language_the_script_does_not_write_is_refused(canary, tmp_path):
+    plant = {"id": "size", "action": "long_function", "path": "src/long.rs", "length": 120, "language": "rust"}
+    with pytest.raises(canary.PlantError, match="python or typescript.*Fix:"):
+        canary.apply_plants(tmp_path, {"plants": [plant]})
+    assert not (tmp_path / "src").exists()
+
+
+def test_two_plants_that_write_the_same_new_file_are_refused(canary, tmp_path):
+    plant = {"id": "a", "action": "write", "path": "tests/test_x.py", "lines": ["x = 1"]}
+    with pytest.raises(canary.PlantError, match="exists already"):
+        canary.apply_plants(tmp_path, {"plants": [plant, {**plant, "id": "b"}]})
+    assert not (tmp_path / "tests").exists()
 
 
 def test_planting_twice_is_refused_and_writes_nothing(canary, manifest, checkout):
@@ -161,7 +271,8 @@ def test_an_edit_that_no_longer_fits_its_file_is_refused_with_a_fix(canary, mani
         (checkout / replaced["path"]).write_text(text, encoding="utf-8")
         with pytest.raises(canary.PlantError, match=f"{count} line.*needs exactly one. Fix:"):
             canary.apply_plants(checkout, manifest)
-        assert not (checkout / "tests").exists()
+        written = [plant["path"] for plant in manifest["plants"] if plant["action"] in ("write", "long_function")]
+        assert [path for path in written if (checkout / path).exists()] == []
 
 
 @pytest.mark.parametrize("length", [100, 1001, "120", None])
@@ -211,6 +322,35 @@ def test_a_listed_check_that_did_not_judge_is_named(canary, manifest, fields, wo
     message = only(judged(canary, manifest, changed(runs_as_listed(manifest), "pr title", **fields)))
     assert "`pr title`" in message
     assert words in message
+
+
+def test_a_check_that_is_red_without_the_text_of_its_plant_is_named(canary, manifest):
+    network = "curl: (28) Connection timed out\nProcess completed with exit code 28.\n"
+    message = only(judged(canary, manifest, changed(runs_as_listed(manifest), "shellcheck", log=network)))
+    assert "`shellcheck` is red on the canary, but not for its plant" in message
+    assert "does not hold `canary_unused`" in message
+    assert "run the job again" in message
+    assert "Fix:" in message
+    no_log = [{key: value for key, value in run.items() if key != "log"} if run["name"] == "shellcheck" else run
+              for run in runs_as_listed(manifest)]
+    assert "but not for its plant" in only(judged(canary, manifest, no_log))
+
+
+def test_each_check_of_a_plant_with_two_checks_has_a_text_of_its_own(canary, manifest):
+    plant = next(plant for plant in manifest["plants"] if plant["id"] == "workflow lint")
+    one, other = plant["red"]
+    swapped = changed(runs_as_listed(manifest), one, log=shown(plant, other))
+    assert f"`{one}` is red on the canary, but not for its plant" in only(judged(canary, manifest, swapped))
+
+
+def test_a_check_that_ran_and_that_the_list_does_not_know_is_named(canary, manifest):
+    new = {"id": 900, "name": "a new job", "status": "completed", "conclusion": "success",
+           "started_at": "2000-01-09T00:00:00Z"}
+    message = only(judged(canary, manifest, runs_as_listed(manifest) + [new]))
+    assert "`a new job` ran on the canary and the list does not know it" in message
+    assert "`not_covered` with the reason" in message
+    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
+        assert judged(canary, manifest, runs_as_listed(manifest) + [{**new, "name": name}]) == [], name
 
 
 def test_a_listed_check_that_did_not_run_is_named(canary, manifest):
@@ -269,4 +409,49 @@ def test_without_a_token_it_stops_with_a_fix(tmp_path):
 
 def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     data = json.loads((ROOT / ".github" / "canary.json").read_text(encoding="utf-8"))
-    assert set(data) == {"branch", "title", "max_age_days", "plants", "not_covered"}
+    assert set(data) == {"branch", "title", "max_age_days", "plants", "not_covered", "other_checks"}
+
+
+class _Logs(http.server.BaseHTTPRequestHandler):
+    """A stand-in for GitHub: /direct gives a log, /moved points to another address, and the headers are kept."""
+
+    seen = []
+
+    def do_GET(self):
+        self.seen.append((self.path, self.headers.get("Authorization")))
+        if self.path.endswith("/actions/jobs/1/logs"):
+            body = b"line one\ncanary_unused appears unused\n"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def github():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Logs)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _Logs.seen.clear()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_the_log_of_a_job_is_read_with_the_token(canary, github):
+    assert "canary_unused appears unused" in canary.job_log(github, "o/r", 1, "a-token")
+    assert _Logs.seen == [("/repos/o/r/actions/jobs/1/logs", "Bearer a-token")]
+
+
+def test_a_log_address_that_is_not_https_is_not_followed(canary, github):
+    with pytest.raises(RuntimeError, match="did not give the log of job 2"):
+        canary.job_log(github, "o/r", 2, "a-token")
+    assert [path for path, _ in _Logs.seen] == ["/repos/o/r/actions/jobs/2/logs"]

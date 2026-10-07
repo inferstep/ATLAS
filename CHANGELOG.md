@@ -486,6 +486,25 @@ know, and a canary that was not renewed in 14 days. The two required CodeQL
 jobs and `dependency review` are not covered; the list says why. The renewal
 is by hand, once a week (`docs/quality/gates.md`).
 
+### Changed: a check on the canary must be red for its own violation
+
+`scripts/canary.py check` looked at the color of a check. A job that is red
+from a network fault counted as a check that still works. Each violation in
+`.github/canary.json` now names the text that the log of its check shows
+(`shows`), and the script reads the log of each red check: one that is red
+without that text is named.
+
+Nine more violations: the replay tests (one changed word in a text the model
+reads), the VS Code extension's job (a function over its size limit),
+`pytest (tests/concurrency)`, `pytest (tests/perf)`, the performance gate (a
+budget that every build is over), and the four sandbox smoke jobs (a sample
+that prints a marker and ends with an error). 32 checks must be red now, 23
+before. Two violations can share a file.
+
+Every check that runs on the canary is in the list, with a violation or with
+the reason why it has none. A check that the list does not know is named, so
+a new job cannot run there without a decision.
+
 ### Added: hadolint reads every Dockerfile, and the weekly scan reads the inference images
 
 Nothing linted the Dockerfiles, and the inference images were the only

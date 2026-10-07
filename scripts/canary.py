@@ -24,6 +24,8 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -67,11 +69,18 @@ def target(root: Path, relative: str) -> Path:
 LONG_FUNCTION_LINES = (101, 1000)
 
 
-def long_function(length: int) -> list[str]:
+def long_function(length: int, language: str = "python") -> list[str]:
     low, high = LONG_FUNCTION_LINES
     if not isinstance(length, int) or not low <= length <= high:
         raise PlantError(f"the planted function must have {low} to {high} lines, and the list asks for {length!r}. "
                          f"Fix: set `length` in {MANIFEST} to a number in that range.")
+    if language == "typescript":
+        body = [f"    total += {number};" for number in range(length)]
+        return ["// Planted for the canary pull request. Never merge it.", "",
+                "export function canaryLongFunction(): number {", "    let total = 0;", *body, "    return total;", "}"]
+    if language != "python":
+        raise PlantError(f"the planted function can be written in python or typescript, and the list asks for "
+                         f"{language!r}. Fix: set `language` in {MANIFEST} to one of the two.")
     body = [f"    total += {number}" for number in range(length)]
     return ['"""Planted for the canary pull request. Never merge it."""', "", "",
             "def canary_long_function():", "    total = 0", *body, "    return total"]
@@ -84,15 +93,21 @@ def existing_text(path: Path, plant: dict) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def planted_text(path: Path, plant: dict) -> str:
-    """The whole new content of the file this plant writes."""
+def planted_text(path: Path, plant: dict, planted: str | None = None) -> str:
+    """The whole new content of the file this plant writes.
+
+    `planted` is what an earlier plant of the list made of the same file. An
+    edit goes on from there, so that two plants can share a file.
+    """
     action, block = plant["action"], "\n".join(plant.get("lines", [])) + "\n"
     if action in ("write", "long_function"):
-        if path.exists():
+        if path.exists() or planted is not None:
             raise PlantError(f"{plant['path']} exists already. Fix: start the canary branch from a clean copy of "
                              "`dev`; the violations are written once.")
-        return "\n".join(long_function(plant["length"])) + "\n" if action == "long_function" else block
-    text = existing_text(path, plant)
+        if action == "long_function":
+            return "\n".join(long_function(plant["length"], plant.get("language", "python"))) + "\n"
+        return block
+    text = planted if planted is not None else existing_text(path, plant)
     if action == "append":
         return text + ("" if text.endswith("\n") else "\n") + block
     if action == "insert_after_first_line":
@@ -118,7 +133,7 @@ def apply_plants(root: Path, manifest: dict) -> list[str]:
         if plant["action"] == "title":
             continue
         path = target(root, plant["path"])
-        contents[path] = planted_text(path, plant)
+        contents[path] = planted_text(path, plant, contents.get(path))
     for path, text in contents.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -173,10 +188,26 @@ def state_finding(name: str, run: dict | None, what: str) -> Finding | None:
     return None
 
 
-def red_finding(name: str, run: dict | None, what: str) -> Finding | None:
+def shown_text(plant_entry: dict, name: str) -> str:
+    """The text that the log of check `name` holds when the check is red for this plant."""
+    shows = plant_entry["shows"]
+    return shows[name] if isinstance(shows, dict) else shows
+
+
+def red_finding(name: str, run: dict | None, plant_entry: dict) -> Finding | None:
+    what = plant_entry["what"]
     problem = state_finding(name, run, what)
-    if problem or run.get("conclusion") == "failure":
+    if problem:
         return problem
+    if run.get("conclusion") == "failure":
+        text = shown_text(plant_entry, name)
+        if text in run.get("log", ""):
+            return None
+        return Finding(name, f"check `{name}` is red on the canary, but not for its plant: its log does not hold "
+                             f"`{text}`, which {what} gives. A check that is red for another cause shows nothing. "
+                             f"Fix: open the job `{name}` on the canary pull request and read why it failed. For a "
+                             "fault of the network or the runner, run the job again. If the check words its message "
+                             f"in another way now, change `shows` of this entry in {MANIFEST}.")
     if run.get("conclusion") == "success":
         return Finding(name, f"check `{name}` passed on the canary, where {what} is planted for it. The check no "
                              f"longer catches that. Fix: find what changed in the job `{name}` (its workflow, its "
@@ -213,12 +244,18 @@ def pull_findings(manifest: dict, pull: dict) -> list[Finding]:
     return out
 
 
-def coverage_findings(manifest: dict, required: list[str]) -> list[Finding]:
-    """Every required check is either made red by a plant or listed with the reason it is not."""
-    listed = {name for plant in manifest["plants"] for name in plant.get("red", [])} | set(manifest["not_covered"])
-    return [Finding(name, f"required check `{name}` is not in the canary list, so nothing shows that it can turn red. "
-                          f"Fix: add a violation for it to {MANIFEST}, or add it under `not_covered` with the reason.")
-            for name in required if name not in listed]
+def coverage_findings(manifest: dict, required: list[str], ran: list[str]) -> list[Finding]:
+    """Every required check, and every check that ran on the canary, has a plant or is listed with the reason it has none."""
+    red = {name for plant in manifest["plants"] for name in plant.get("red", [])}
+    reports = {name for plant in manifest["plants"] for name in plant.get("reports", [])}
+    out = [Finding(name, f"required check `{name}` is not in the canary list, so nothing shows that it can turn red. "
+                         f"Fix: add a violation for it to {MANIFEST}, or add it under `not_covered` with the reason.")
+           for name in required if name not in red | set(manifest["not_covered"])]
+    known = red | reports | set(manifest["not_covered"]) | set(manifest["other_checks"]) | set(required)
+    return out + [Finding(name, f"check `{name}` ran on the canary and the list does not know it, so nothing says "
+                                f"whether it can turn red. Fix: add a violation for it to {MANIFEST}, or add it under "
+                                "`not_covered` with the reason why it has none.")
+                  for name in sorted(set(ran)) if name not in known]
 
 
 def age_finding(manifest: dict, base_date: str, now: datetime) -> list[Finding]:
@@ -236,10 +273,10 @@ def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str
     runs, findings = latest_checks(check_runs), pull_findings(manifest, pull)
     for plant_entry in manifest["plants"]:
         for name in plant_entry.get("red", []):
-            findings.append(red_finding(name, runs.get(name), plant_entry["what"]))
+            findings.append(red_finding(name, runs.get(name), plant_entry))
         for name in plant_entry.get("reports", []):
             findings.append(report_finding(name, runs.get(name), plant_entry))
-    findings += coverage_findings(manifest, required) + age_finding(manifest, base_date, now)
+    findings += coverage_findings(manifest, required, list(runs)) + age_finding(manifest, base_date, now)
     return [finding for finding in findings if finding]
 
 
@@ -266,6 +303,33 @@ def repository(root: Path) -> str:
     return found.group(1)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def job_log(api_root: str, repo: str, job: int, key: str) -> str:
+    """The log of one job, as text.
+
+    GitHub answers with the address of the file, on another host. That
+    address is read without the token.
+    """
+    request = urllib.request.Request(f"{api_root}/repos/{repo}/actions/jobs/{job}/logs",
+                                     headers={"Authorization": f"Bearer {key}", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+            return response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        address = error.headers.get("Location", "") if error.code in (301, 302, 303, 307, 308) else ""
+        if not address.startswith("https://"):
+            raise RuntimeError(f"GitHub did not give the log of job {job}: {error}") from error
+    try:
+        with urllib.request.urlopen(address, timeout=60) as response:
+            return response.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise RuntimeError(f"the log of job {job} could not be read: {error}") from error
+
+
 def gather(root: Path, number: int, manifest: dict):
     """Read the pull request, its check runs, the required checks of its base and the date of its base commit."""
     checks, key, repo = load_checks_ran(), token(), repository(root)
@@ -276,10 +340,14 @@ def gather(root: Path, number: int, manifest: dict):
     check_runs = [run for page in checks.api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key)
                   for run in page["check_runs"]]
     reporting = {name for entry in manifest["plants"] for name in entry.get("reports", [])}
+    red = {name for entry in manifest["plants"] for name in entry.get("red", [])}
     for run in check_runs:
         if run["name"] in reporting:
             notes = checks.api(f"repos/{repo}/check-runs/{run['id']}/annotations?per_page=100", key)
             run["annotation_paths"] = [note["path"] for page in notes for note in page]
+        if run["name"] in red and run.get("conclusion") == "failure":
+            # The log says why the check is red. A check run of a workflow job has the job's number.
+            run["log"] = job_log(checks.API, repo, run["id"], key)
     rules = [rule for page in checks.api(f"repos/{repo}/rules/branches/{base}?per_page=100", key) for rule in page]
     compared = checks.api(f"repos/{repo}/compare/{base}...{sha}", key)[0]
     return pull, check_runs, checks.required_names(rules, {}), compared["merge_base_commit"]["commit"]["committer"]["date"]
@@ -297,12 +365,13 @@ def check(root: Path, number: int) -> int:
         return 2
     red = sum(len(entry.get("red", [])) for entry in manifest["plants"])
     reports = sum(len(entry.get("reports", [])) for entry in manifest["plants"])
-    print(f"note pull request #{number} at {pull['head']['sha'][:7]}: {red} check(s) must be red, {reports} must "
-          f"report the planted file, {len(manifest['not_covered'])} required check(s) are not covered")
+    no_plant = len(manifest["not_covered"]) + len(manifest["other_checks"])
+    print(f"note pull request #{number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
+          f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
     for finding in findings:
         print(f"FAIL {finding.message}")
     print(f"canary: {len(findings)} thing(s) are not as the list says" if findings
-          else "canary: every listed check is red, and every listed report is there")
+          else "canary: every listed check is red for its plant, and every listed report is there")
     return int(bool(findings))
 
 
