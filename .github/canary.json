@@ -461,6 +461,7 @@
     "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
     "integrity check": "It reports and does not fail for a finding.",
+    "fix tests (fail without the fix)": "It reports and does not fail for a verdict. It judges only a pull request whose title has the type `fix`, and the canary's has not.",
     "coverage upload": "It sends numbers to Codecov and judges nothing.",
     "coverage upload (extension)": "It sends numbers to Codecov and judges nothing. On the canary it is skipped: the job it needs, `lint + test + build`, is red.",
     "test results upload": "It sends numbers to Codecov and judges nothing.",

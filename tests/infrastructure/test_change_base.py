@@ -16,7 +16,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
-USERS = ("integrity.yml", "checks-ran.yml", "golangci-lint.yml", "hadolint.yml", "dev-results-check.yml")
+USERS = ("integrity.yml", "checks-ran.yml", "golangci-lint.yml", "hadolint.yml", "dev-results-check.yml", "fix-tests.yml")
 
 
 def load(name):

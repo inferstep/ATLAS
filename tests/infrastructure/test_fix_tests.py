@@ -1,0 +1,483 @@
+"""The check that runs a fix's new tests without the fix.
+
+Each case is a small repository made for the test: a base commit with a
+fault, and a head commit with the fix and its tests. Go is a stand-in that
+answers as `go test -json` does, so no Go toolchain is needed here.
+"""
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "fix_tests.py"
+PATH_LINE = "import pathlib, sys\nsys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+FAULTY = "def add(a, b):\n    return a - b\n"
+FIXED = "def add(a, b):\n    return a + b\n\n\ndef double(a):\n    return add(a, a)\n"
+OLD_TEST = PATH_LINE + "import calc\n\n\ndef test_add_takes_two_numbers():\n    assert calc.add(0, 0) == 0\n"
+# Answers as `go test -json` does. Like Go, it builds the tests of a folder
+# together: a test file that calls a function no other file defines stops all.
+GO_STAND_IN = """#!{python}
+import json, pathlib, re, sys
+here = pathlib.Path(".")
+tests = "".join(p.read_text() for p in sorted(here.glob("*_test.go")))
+code = "".join(p.read_text() for p in sorted(here.glob("*.go")) if not p.name.endswith("_test.go"))
+undefined = [name for name in sorted(set(re.findall(r"\\b(new\\w+)\\(", tests))) if "func " + name + "(" not in code]
+if undefined:
+    print(json.dumps({{"Action": "build-output", "Output": "./x_test.go:6:5: undefined: " + undefined[0] + "\\n"}}))
+    print(json.dumps({{"Action": "output", "Package": "p", "Output": "FAIL\\tp [build failed]\\n"}}))
+    sys.exit(1)
+told = json.loads(pathlib.Path("go_answers.json").read_text())
+names = re.search(r"\\^\\((.*)\\)\\$", sys.argv[sys.argv.index("-run") + 1]).group(1).split("|")
+failed = False
+for name in names:
+    action = told.get(name, "pass")
+    failed |= action in ("fail", "panic")
+    said = {{"fail": "    x_test.go:9: want 5, got -1\\n", "skip": "    x_test.go:4: needs a terminal\\n",
+            "panic": "panic: runtime error: index out of range [recovered]\\n\\t/src/runtime/panic.go:1\\n"
+                     "\\t/src/proxy/calc.go:7 +0x1c\\n\\t/src/proxy/x_test.go:9 +0x2\\n"}}.get(action)
+    if said:
+        print(json.dumps({{"Action": "output", "Package": "p", "Test": name, "Output": said}}))
+    print(json.dumps({{"Action": "fail" if action == "panic" else action, "Package": "p", "Test": name, "Elapsed": 0.01}}))
+sys.exit(1 if failed else 0)
+"""
+
+
+@pytest.fixture(scope="module")
+def fix():
+    spec = importlib.util.spec_from_file_location("atlas_fix_tests", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    yield module
+    sys.modules.pop(spec.name, None)
+
+
+@pytest.fixture(autouse=True)
+def no_job_summary(monkeypatch):
+    """A test here does not write into the summary of the job that runs it."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def commit(root, files, message):
+    for path, text in files.items():
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text, encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", message)
+    return git(root, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A repository with a faulty base. Call it with the files of the fix; it returns the root and the base commit."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q")
+    base = commit(root, {"proxy/calc.py": FAULTY, "proxy/tests/test_calc.py": OLD_TEST,
+                         "proxy/go.mod": "module p\n", "proxy/calc.go": "package p\n",
+                         "proxy/go_answers.json": json.dumps({"TestAdds": "fail", "TestOldCode": "fail"})}, "base")
+
+    def with_fix(files):
+        commit(root, files, "fix")
+        return root, base
+    return with_fix
+
+
+@pytest.fixture
+def tools(tmp_path):
+    go = tmp_path / "bin" / "go"
+    go.parent.mkdir()
+    go.write_text(GO_STAND_IN.format(python=sys.executable), encoding="utf-8")
+    go.chmod(0o755)
+    return {"python": sys.executable, "go": str(go)}
+
+
+def new_test(body):
+    return OLD_TEST + "\n\n" + body
+
+
+def verdicts(fix, root, base, tools):
+    rows, notes, product = fix.judge(root, base, tools, 120)
+    return {test.name: name for test, name, _ in rows}, rows, notes, product
+
+
+def test_a_test_that_fails_by_an_assertion_without_the_fix_guards_it(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
+    found, rows, _, product = verdicts(fix, root, base, tools)
+    assert found == {"test_add_adds": "fails on the base"}
+    assert "an assertion" in rows[0][2]
+    assert product
+
+
+def test_a_planted_test_that_passes_without_the_fix_is_the_finding(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")})
+    found, _, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_gives_a_number": "passes on the base too"}
+
+
+def test_a_test_that_stops_on_a_missing_name_needs_the_fixs_code(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_double_doubles():\n    assert calc.double(4) == 8\n")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_double_doubles": "needs the fix's code"}
+    assert "AttributeError" in rows[0][2]
+
+
+def test_a_new_test_file_that_does_not_import_without_the_fix_needs_the_fixs_code(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_double.py":
+                       PATH_LINE + "from calc import double\n\n\ndef test_double_doubles():\n    assert double(4) == 8\n"})
+    found, _, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_double_doubles": "needs the fix's code"}
+
+
+def test_a_test_that_fails_with_the_fix_too_is_said_so(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_is_wrong():\n    assert calc.add(2, 3) == 6\n")})
+    found, _, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_is_wrong": "fails on the pull request too"}
+
+
+def test_only_the_tests_the_change_touches_are_run_and_each_gets_its_own_class(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_adds():\n    assert calc.add(2, 3) == 5\n\n\n"
+        "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n\n\n"
+        "def test_double_doubles():\n    assert calc.double(4) == 8\n")})
+    found, _, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_adds": "fails on the base", "test_add_gives_a_number": "passes on the base too",
+                     "test_double_doubles": "needs the fix's code"}
+
+
+def test_a_parametrized_test_is_one_test_whatever_its_cases_are_called(fix, repo, tools):
+    cases = "@pytest.mark.parametrize('pair', [(2, 3), (4, 1)], ids=['two and three - small', 'four [and] one'])\n"
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+        cases + "def test_add_adds(pair):\n    assert calc.add(*pair) == sum(pair)\n")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_adds": "fails on the base"}
+    assert "an assertion" in rows[0][2]
+
+
+def test_a_test_the_fix_only_changes_is_told_apart_from_a_test_it_adds(fix, repo, tools):
+    changed = OLD_TEST.replace("assert calc.add(0, 0) == 0", "assert calc.add(0, 0) == 0  # zero stays zero")
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": changed + "\n\n"
+                       "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n"})
+    rows, _, _ = fix.judge(root, base, tools, 120)
+    assert {(test.name, test.new, name) for test, name, _ in rows} == {
+        ("test_add_takes_two_numbers", False, "passes on the base too"),
+        ("test_add_gives_a_number", True, "passes on the base too")}
+    assert sorted(fix.is_finding(test, name) for test, name, _ in rows) == [False, True]
+
+
+def test_a_call_that_does_not_fit_the_bases_function_needs_the_fixs_code(fix, repo, tools):
+    fixed = "def add(a, b, round_to=None):\n    return a + b\n"
+    root, base = repo({"proxy/calc.py": fixed, "proxy/tests/test_calc.py": new_test(
+        "def test_add_takes_a_rounding():\n    assert calc.add(2, 3, round_to=0) == 5\n")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_add_takes_a_rounding": "needs the fix's code"}
+    assert "unexpected keyword argument 'round_to'" in rows[0][2]
+
+
+def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind_and_place(fix, repo, tools):
+    faulty = "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS[name]\n"
+    fixed = "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS.get(name, 0)\n"
+    root, _ = repo({"proxy/limits.py": faulty})
+    base = git(root, "rev-parse", "HEAD")
+    commit(root, {"proxy/limits.py": fixed, "proxy/tests/test_limits.py":
+                  PATH_LINE + "import limits\n\n\ndef test_an_unknown_name_has_no_limit():\n"
+                  "    assert limits.limit('x') == 0\n"}, "fix")
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_an_unknown_name_has_no_limit": "fails on the base"}
+    assert "an error (KeyError), raised in product code (proxy/limits.py)" in rows[0][2]
+
+
+LOADS_A_SCRIPT = """import importlib.util, pathlib
+
+
+def load():
+    path = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "tool.py"
+    spec = importlib.util.spec_from_file_location("tool", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_tool_answers():
+    assert load().answer() == 42
+
+
+def test_a_file_that_was_never_there_is_read():
+    assert (pathlib.Path(__file__).resolve().parents[1] / "notes" / "old.txt").read_text() == "x"
+"""
+
+
+def test_a_test_that_stops_on_a_file_the_fix_adds_needs_the_fixs_code(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "scripts/tool.py": "def answer():\n    return 42\n",
+                       "tests/test_tool.py": LOADS_A_SCRIPT})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found["test_the_tool_answers"] == "needs the fix's code"
+    detail = next(detail for test, _, detail in rows if test.name == "test_the_tool_answers")
+    assert "the base has no scripts/tool.py, a file the fix adds" in detail
+    # A file that is missing on the base and on the pull request alike is not something the fix brings.
+    assert found["test_a_file_that_was_never_there_is_read"] == "fails on the pull request too"
+    assert fix.failure("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/notes/old.txt'",
+                       added=["scripts/tool.py"]).state == "fail"
+    assert fix.failure("python3: can't open file '/tmp/base/scripts/tool.py': [Errno 2] No such file or directory",
+                       added=["scripts/tool.py"]).state == "missing"
+    assert fix.failure("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/other_tool.py'",
+                       added=["tool.py"]).state == "fail"
+
+
+def test_a_failed_assertion_is_said_to_be_raised_in_the_test(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
+    _, rows, _, _ = verdicts(fix, root, base, tools)
+    assert rows[0][2].startswith("it guards the fix: an assertion, raised in the test: assert")
+
+
+def test_an_attribute_error_on_a_wrong_value_is_a_failure_and_not_a_missing_name(fix):
+    wrong = fix.failure("AttributeError: 'NoneType' object has no attribute 'name'", "in product code (proxy/x.py)")
+    assert wrong.state == "fail"
+    assert wrong.detail.startswith("an error (AttributeError), raised in product code (proxy/x.py)")
+    for text in ("AttributeError: module 'calc' has no attribute 'double'",
+                 "AttributeError: type object 'Session' has no attribute 'prompts'",
+                 "NameError: name 'double' is not defined", "ImportError: cannot import name 'double' from 'calc'",
+                 "fixture 'tools' not found", "TypeError: add() takes 2 positional arguments but 3 were given",
+                 "TypeError: add() missing 1 required positional argument: 'b'"):
+        assert fix.failure(text).state == "missing", text
+    assert fix.failure("TypeError: unsupported operand type(s) for +: 'int' and 'str'").state == "fail"
+
+
+def test_a_skipped_test_is_not_judged_and_its_reason_is_given(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+        "@pytest.mark.skip(reason='needs a terminal')\ndef test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
+    _, rows, _, _ = verdicts(fix, root, base, tools)
+    assert [(name, detail) for _, name, detail in rows] == [("could not be judged", "skipped (needs a terminal)")]
+
+
+def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
+    root, base = repo({"proxy/calc.py": FIXED})
+    rows, notes, product = fix.judge(root, base, tools, 120)
+    assert (rows, notes, product) == ([], [], True)
+    assert fix.summary(rows, notes, product) == [
+        "fix tests: a fix of product code. No test: this fix adds or changes no test, so there is nothing to run."]
+
+
+def test_a_fix_outside_product_code_is_named_as_such(fix, repo, tools):
+    root, base = repo({"scripts/tool.py": "x = 1\n"})
+    rows, notes, product = fix.judge(root, base, tools, 120)
+    assert not product
+    assert fix.summary(rows, notes, product)[0].startswith("fix tests: a fix outside product code (CI, docs or scripts).")
+
+
+GO_FIXED = {"proxy/calc.go": "package p\n\nfunc newHelper() int { return 5 }\n", "proxy/go_answers.json": "{}"}
+
+
+def go_test(name, body):
+    return f"package p\n\nimport \"testing\"\n\nfunc {name}(t *testing.T) {{\n\t{body}\n}}\n"
+
+
+def test_a_go_test_is_judged_through_go_test(fix, repo, tools):
+    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"TestAdds": "fails on the base"}
+    assert "an assertion" in rows[0][2]
+
+
+def test_a_go_test_that_does_not_build_without_the_fix_needs_the_fixs_code(fix, repo, tools):
+    root, base = repo({**GO_FIXED, "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }")})
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"TestUsesNewCode": "needs the fix's code"}
+    assert "undefined: newHelper" in rows[0][2]
+
+
+def test_a_go_test_file_that_uses_only_old_code_is_judged_alone_when_the_package_does_not_build(fix, repo, tools):
+    root, base = repo({**GO_FIXED,
+                       "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
+                       "proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
+    found, _, notes, _ = verdicts(fix, root, base, tools)
+    assert found == {"TestUsesNewCode": "needs the fix's code", "TestOldCode": "fails on the base"}
+    assert notes == []
+
+
+def test_a_go_panic_is_a_failure_with_the_place_it_was_raised(fix, repo, tools, monkeypatch):
+    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
+    original = fix.run_go
+
+    def panics_on_the_base(tree, tests, go, limit):
+        if tree != root:
+            (tree / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": "panic"}), encoding="utf-8")
+        return original(tree, tests, go, limit)
+    monkeypatch.setattr(fix, "run_go", panics_on_the_base)
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"TestAdds": "fails on the base"}
+    assert "an error (panic), raised in product code (calc.go): panic: runtime error" in rows[0][2]
+
+
+def test_a_skipped_go_test_is_not_judged_and_its_reason_is_given(fix, repo, tools):
+    root, base = repo({**GO_FIXED, "proxy/go_answers.json": json.dumps({"TestAdds": "skip"}),
+                       "proxy/calc_test.go": go_test("TestAdds", "t.Skip()")})
+    _, rows, _, _ = verdicts(fix, root, base, tools)
+    assert [(name, detail) for _, name, detail in rows] == [("could not be judged", "skipped (needs a terminal)")]
+
+
+def test_more_go_test_files_than_the_limit_are_not_tried_one_by_one_and_that_is_said(fix, repo, tools, monkeypatch):
+    monkeypatch.setattr(fix, "ISOLATE_AT_MOST", 1)
+    root, base = repo({**GO_FIXED,
+                       "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
+                       "proxy/old_test.go": go_test("TestOldCode", "if add(2, 3) != 5 { t.Fatal() }")})
+    found, _, notes, _ = verdicts(fix, root, base, tools)
+    assert found == {"TestUsesNewCode": "needs the fix's code", "TestOldCode": "needs the fix's code"}
+    assert notes == [("2 changed Go test files did not build together on the base; they were not tried one by one "
+                      "(the limit is 1)")]
+
+
+def test_a_typescript_test_file_is_named_as_not_judged(fix, repo, tools):
+    root, base = repo({"extensions/vscode/test/sse.test.ts": "it('parses', () => {});\n"})
+    rows, notes, _ = fix.judge(root, base, tools, 120)
+    assert rows == []
+    assert notes == [("extensions/vscode/test/sse.test.ts: a TypeScript or JavaScript test file; this check does not "
+                      "read those yet")]
+
+
+def test_a_test_whose_packages_the_job_does_not_install_is_named_as_not_judged(fix, repo, tools):
+    root, base = repo({"geometric-lens/tests/test_score.py": "def test_scores():\n    assert True\n"})
+    rows, notes, _ = fix.judge(root, base, tools, 120)
+    assert rows == []
+    assert notes == ["geometric-lens/tests/test_score.py: the packages its tests need are not installed in this job"]
+
+
+def test_the_lines_a_change_touches_are_read_from_the_diff(fix, repo):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": OLD_TEST.replace("== 0", "== 0  # same")})
+    touched = fix.changed_lines(root, base)
+    assert touched["proxy/calc.py"] == {2, 3, 4, 5, 6}
+    assert touched["proxy/tests/test_calc.py"] == {7}
+
+
+def test_a_test_that_only_loses_a_line_is_a_changed_test(fix, repo, tools):
+    root, _ = repo({"proxy/tests/test_calc.py": OLD_TEST + "    assert calc.add(2, 3) == 5\n"})
+    base = git(root, "rev-parse", "HEAD")
+    commit(root, {"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": OLD_TEST}, "the fix takes a line out of a test")
+    assert fix.changed_lines(root, base)["proxy/tests/test_calc.py"] == {7, 8}
+    rows, _, _ = fix.judge(root, base, tools, 120)
+    assert [(test.name, test.new, name) for test, name, _ in rows] == [
+        ("test_add_takes_two_numbers", False, "passes on the base too")]
+
+
+def test_python_tests_are_found_by_the_lines_of_their_function_and_its_decorators(fix):
+    source = ("import pytest\n\n\n@pytest.mark.parametrize('n', [1, 2])\ndef test_a(n):\n    assert n\n\n\n"
+              "class TestGroup:\n    def test_b(self):\n        assert True\n\n\ndef helper():\n    return 1\n")
+    def names(lines):
+        return [t.name for t in fix.python_tests("tests/test_x.py", source) if lines & set(range(t.line, t.last + 1))]
+    assert names({4}) == ["test_a"]
+    assert names({6}) == ["test_a"]
+    assert names({11}) == ["TestGroup::test_b"]
+    assert names({15}) == []
+    assert names({1}) == []
+
+
+def test_go_tests_are_found_by_the_lines_of_their_function(fix):
+    source = "package p\n\nfunc TestA(t *testing.T) {\n\tx()\n}\n\nfunc helper() {\n}\n\nfunc TestB(t *testing.T) { y() }\n"
+    def names(lines):
+        return [t.name for t in fix.go_tests("p/x_test.go", source) if lines & set(range(t.line, t.last + 1))]
+    assert names({4}) == ["TestA"]
+    assert names({7}) == []
+    assert names({10}) == ["TestB"]
+
+
+@pytest.mark.parametrize("base, head, name", [
+    ("fail", "pass", "fails on the base"),
+    ("missing", "pass", "needs the fix's code"),
+    ("pass", "pass", "passes on the base too"),
+    ("fail", "fail", "fails on the pull request too"),
+    ("pass", "missing", "fails on the pull request too"),
+    ("none", "pass", "could not be judged"),
+    ("pass", "skip", "could not be judged"),
+])
+def test_each_pair_of_outcomes_has_one_class(fix, base, head, name):
+    assert fix.verdict(fix.Outcome(base, "x"), fix.Outcome(head, "y"))[0] == name
+
+
+def rows_of(fix, *names, new=True):
+    return [(fix.Test("python", "tests/test_x.py", f"test_{n}", n + 1, n + 1, new), name, "detail")
+            for n, name in enumerate(names)]
+
+
+def test_the_summary_counts_each_class_apart_and_new_tests_apart_from_changed_ones(fix):
+    rows = rows_of(fix, "fails on the base", "fails on the base", "needs the fix's code", "passes on the base too")
+    rows += rows_of(fix, "passes on the base too", "fails on the base", new=False)
+    lines = fix.summary(rows, [], True)
+    assert lines[0] == "fix tests: a fix of product code. Guarded: 3 test(s) fail on the base."
+    assert lines[1] == "1 new test(s) pass on the base too (a control, or a test that does not test the fix)."
+    assert lines[2] == ("4 new test(s): 2 fails on the base; 1 needs the fix's code; 1 passes on the base too. "
+                        "2 changed test(s): 1 fails on the base; 1 passes on the base too.")
+    assert lines[6] == "| `tests/test_x.py::test_0` | new | fails on the base | detail |"
+    assert lines[10] == "| `tests/test_x.py::test_0` | changed | passes on the base too | detail |"
+
+
+@pytest.mark.parametrize("names, new, line", [
+    (("fails on the base", "needs the fix's code"), True, "Guarded: 1 test(s) fail on the base."),
+    (("needs the fix's code", "needs the fix's code"), True,
+     "Not shown: every test needs the fix's code, so none could fail on the base."),
+    (("passes on the base too", "needs the fix's code"), True, "Not shown: no test fails on the base."),
+    (("could not be judged",), True, "Not shown: no test fails on the base."),
+    (("passes on the base too",), False, "Not shown: no test fails on the base."),
+    ((), True, "No test: this fix adds or changes no test, so there is nothing to run."),
+])
+def test_the_headline_says_how_far_the_fix_is_shown_to_be_guarded(fix, names, new, line):
+    assert fix.headline(rows_of(fix, *names, new=new), True) == f"fix tests: a fix of product code. {line}"
+
+
+def test_only_a_new_test_that_passes_without_the_fix_is_annotated(fix, capsys):
+    rows = rows_of(fix, "fails on the base", "needs the fix's code", "passes on the base too")
+    rows += rows_of(fix, "passes on the base too", new=False)
+    fix.report(rows, [], True, True)
+    notes = [line for line in capsys.readouterr().out.splitlines() if line.startswith("::")]
+    assert len(notes) == 1
+    assert notes[0].startswith("::warning file=tests/test_x.py,line=3,title=this new test passes without the fix::test_2 ")
+    assert "Fix: make the test fail on the fault the pull request fixes." in notes[0]
+    assert "If it is a control that holds what the fix must not change, say so in the pull request." in notes[0]
+
+
+def test_the_job_summary_gets_the_report(fix, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary.md"))
+    fix.report(rows_of(fix, "fails on the base"), [], True, True)
+    written = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert written.startswith("fix tests: a fix of product code. Guarded: 1 test(s) fail on the base.\n")
+    assert written == capsys.readouterr().out
+
+
+def test_a_finding_is_reported_and_does_not_fail_the_job(fix, repo, capsys):
+    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+        "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")})
+    assert fix.main(["--base", base, "--title", "fix(proxy): add adds", "--root", str(root), "--github"]) == 0
+    out = capsys.readouterr().out
+    assert "1 new test(s) pass on the base too" in out
+    assert "::warning file=proxy/tests/test_calc.py," in out
+
+
+def test_a_pull_request_that_is_not_a_fix_has_nothing_to_check(fix, capsys):
+    for title in ("feat(proxy): a new tool", "docs: fix a typo", "refactor(tui): fix the layout code"):
+        assert fix.main(["--base", "HEAD", "--title", title]) == 0
+        assert "nothing to check" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("title", ["fix: the thing", "fix(proxy): the thing", "fix(proxy)!: the thing"])
+def test_a_fix_title_is_judged(fix, title):
+    assert fix.FIX_TITLE.match(title)
+
+
+def test_a_base_it_cannot_read_ends_with_status_2_and_a_fix(fix, repo, capsys):
+    root, _ = repo({"proxy/calc.py": FIXED})
+    assert fix.main(["--base", "no-such-commit", "--title", "fix: x", "--root", str(root)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("FAIL fix tests: `git diff")
+    assert "Fix: run this in a checkout that holds the base commit" in err
