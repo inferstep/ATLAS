@@ -406,6 +406,21 @@ the run log, and in a summary line. The outcome of such a session was
 measured over an unstable stack. When docker cannot be asked, nothing is
 claimed.
 
+### Changed: the Go test jobs keep a build cache, and a Go test gate never takes a cached result
+
+The two Go test jobs build with a module and build cache of their own
+(`actions/cache`, with a key from the module, the Go version and the module's
+`go.mod` and `go.sum`). The proxy job had none: the cache setting named
+`proxy/go.sum`, which does not exist. A run in the merge queue takes no part:
+it cannot read a cache of `dev`, and what it saved nothing could read again.
+The two small proxy jobs that build once state that they use no cache.
+
+`go test` prints `ok ... (cached)` and runs nothing when a package's earlier
+result is in its test cache. A build cache carries those results, and the
+test gate read such a line as a pass. Both Go test gates now run with
+`-count=1`, and a result that still comes from the cache fails the gate with
+its reason.
+
 ### Fixed: a test gate passed when it ran no test
 
 `scripts/production-readiness.py` judged a test gate by its exit code alone.

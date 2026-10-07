@@ -26,7 +26,7 @@ the tool is a mistake and not a mystery.
 
 | Check | What it does |
 |---|---|
-| `go test (proxy)`, `go test (tui)` | The Go suites, with the race detector. A gate that ran no test fails |
+| `go test (proxy)`, `go test (tui)` | The Go suites, with the race detector. A gate that ran no test fails, and so does one that took a result from Go's test cache. The jobs keep a module and build cache; a run in the merge queue takes no part in it |
 | `pytest (tests/v3)`, `pytest (tests/v3-service)`, `pytest (tests/cli)`, `pytest (tests/contracts)`, `pytest (tests/infrastructure)`, `pytest (geometric-lens/tests)` | The Python suites |
 | `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
 | `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |

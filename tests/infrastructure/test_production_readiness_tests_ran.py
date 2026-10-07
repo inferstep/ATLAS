@@ -68,6 +68,33 @@ def test_go_output_with_no_test_run_is_not_a_pass(gates_module, output):
     assert "go test ran no test" in gates_module._ran_no_test(GO_TEST, output)
 
 
+@pytest.mark.parametrize("output, packages", [
+    ("ok  \texample.invalid/tui\t(cached)", "1 package(s), example.invalid/tui"),
+    ("ok  \texample.invalid/tui\t(cached)\tcoverage: 51.9% of statements", "1 package(s), example.invalid/tui"),
+    ("ok  \texample.invalid/a\t0.142s\nok  \texample.invalid/b\t(cached)", "1 package(s), example.invalid/b"),
+])
+def test_go_output_taken_from_the_test_cache_is_not_a_pass(gates_module, output, packages):
+    reason = gates_module._ran_no_test(GO_TEST, output)
+    assert f"go test ran no test for {packages}" in reason
+    assert reason.endswith("Fix: run go test with -count=1")
+
+
+def test_a_test_that_prints_the_word_cached_is_still_a_pass(gates_module):
+    output = "--- PASS: TestReadsThe(cached)Value (0.00s)\nok  \texample.invalid/proxy\t1.2s"
+    assert gates_module._ran_no_test(GO_TEST, output) == ""
+
+
+@pytest.mark.parametrize("coverage", [False, True])
+def test_the_go_test_gates_never_take_a_result_from_the_test_cache(gates_module, monkeypatch, tmp_path, coverage):
+    if coverage:
+        monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, str(tmp_path))
+    else:
+        monkeypatch.delenv(gates_module.COVERAGE_DIR_ENV, raising=False)
+    gates = gates_module._with_coverage(gates_module._gates(("tests/cli",)))
+    for name in ("go-proxy-test", "go-tui-test"):
+        assert "-count=1" in gates[name].command, name
+
+
 def test_a_command_that_is_not_a_test_run_is_left_alone(gates_module):
     assert gates_module._ran_no_test(("go", "vet", "./..."), "") == ""
     assert gates_module._ran_no_test((sys.executable, "-m", "ruff", "check", "."), "") == ""

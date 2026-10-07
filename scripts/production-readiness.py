@@ -254,7 +254,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             # machine, and it still bounds a real hang inside one job. A CI
             # panic here should be read from its goroutine dump: one young
             # running test means budget, a test stuck for minutes means hang.
-            ("go", "test", "-race", "-timeout", "20m", "./..."),
+            ("go", "test", "-race", "-count=1", "-timeout", "20m", "./..."),
             cwd=ROOT / "proxy",
             available=lambda: _command_available("go"),
             unavailable_reason="Go is not installed",
@@ -262,7 +262,7 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         ),
         "go-tui-test": Gate(
             "go-tui-test",
-            ("go", "test", "-race", "./..."),
+            ("go", "test", "-race", "-count=1", "./..."),
             cwd=ROOT / "tui",
             available=lambda: _command_available("go"),
             unavailable_reason="Go is not installed",
@@ -368,8 +368,9 @@ def _ran_no_test(command: Sequence[str], output: str) -> str:
     """Why a test command that exited 0 proves nothing; empty when it ran a test.
 
     pytest exits 0 when every collected test was skipped, and `go test` exits
-    0 for packages with no test files and for a -run pattern that matches
-    nothing. Each would report a pass with no test behind it.
+    0 for packages with no test files, for a -run pattern that matches
+    nothing, and for a package whose earlier result is in Go's test cache.
+    Each would report a pass with no test behind it.
     """
     if "pytest" in command:
         summary = [line for line in output.splitlines() if re.search(r" in \d+(\.\d+)?s\b", line)]
@@ -381,6 +382,10 @@ def _ran_no_test(command: Sequence[str], output: str) -> str:
         ran = [line for line in output.splitlines() if line.startswith("ok ") and "[no tests to run]" not in line]
         if not ran:
             return "go test ran no test: no package has test files, or -run matched nothing"
+        cached = [line.split()[1] for line in ran if "(cached)" in line.split("\t")]
+        if cached:
+            return (f"go test ran no test for {len(cached)} package(s), {', '.join(cached)}: it took the result of an "
+                    "earlier run from its cache. Fix: run go test with -count=1")
     return ""
 
 

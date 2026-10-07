@@ -41,13 +41,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        id: go
         with:
           # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
           # proxy's 1.24 floor builds fine on it). setup-go v6 pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
           go-version: '1.26.6'
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # The step below keeps the caches, under a key of this job's own.
+          cache: false
+
+      - name: Go module and build cache
+        # The key is the module, the Go version and the module's go.mod and
+        # go.sum (proxy has no go.sum). The cache makes the build faster and
+        # never decides a result: Go takes an object from it only for the same
+        # source, and the test gate runs with -count=1, so no test result
+        # comes from it.
+        # Not in the merge queue: a run there cannot read a cache of dev, and
+        # nothing could read what it saved.
+        if: github.event_name != 'merge_group'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
 
       - name: go test -race
         env:
@@ -191,7 +209,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: proxy/go.sum
+          # No cache: this job builds the proxy once, in about ten seconds,
+          # and restoring a cache takes as long.
+          cache: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
@@ -322,7 +342,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: proxy/go.sum
+          # No cache: this job builds the proxy once, in about ten seconds,
+          # and restoring a cache takes as long.
+          cache: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
