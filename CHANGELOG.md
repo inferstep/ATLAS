@@ -16,7 +16,10 @@ folder, not the folder.
 
 A setting that is empty stops the script before its question, with the name
 of the setting, when an option that was given removes the folder it names.
-Each removal in the script is written so that it fails on an empty value.
+So does a setting that is not a full path or has a `.` or `..` part, and one
+that names the root folder, your home folder, the folder of this repository,
+or a folder that holds one of the two. Each removal in the script is written
+so that it fails on an empty value.
 
 ### Fixed: the bot took a quoted closing line for a closing line
 

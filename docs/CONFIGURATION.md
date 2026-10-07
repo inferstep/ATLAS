@@ -610,7 +610,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 |----------|---------|-------------|
 | `ATLAS_MODELS_DIR` | `/opt/atlas/models` | GGUF model files. Mounted into llama-server at `/models` (read-only) via `hostPath` in `templates/llama-deployment.yaml.tmpl`. |
 | `ATLAS_PROJECTS_DIR` | `/opt/atlas/data/projects` | User project workspace. Bind-mounted at `/workspace` in BOTH atlas-proxy and sandbox pods (`hostPath` with `DirectoryOrCreate`) so the agent sees the same files in both. `uninstall.sh --data` removes this folder too, also when it is not inside `ATLAS_DATA_DIR`; the script lists it with its path before it asks. |
-| `ATLAS_DATA_DIR` | `/opt/atlas/data` | Parent of `ATLAS_PROJECTS_DIR`. Printed at install time; `uninstall.sh` removes it when `--data` is set, and refuses to run with `--data` when this setting or `ATLAS_PROJECTS_DIR` is empty. Not mounted as a volume itself. |
+| `ATLAS_DATA_DIR` | `/opt/atlas/data` | Parent of `ATLAS_PROJECTS_DIR`. Printed at install time; `uninstall.sh` removes it when `--data` is set, and refuses to run with `--data` when this setting or `ATLAS_PROJECTS_DIR` is empty, is not a full path, or names the root folder, your home folder or a folder that holds this repository. Not mounted as a volume itself. |
 
 ### 8.3 Model & Inference
 

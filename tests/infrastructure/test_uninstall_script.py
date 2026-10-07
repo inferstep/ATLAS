@@ -6,7 +6,9 @@ folder that the test made under pytest's own folder. Three things keep a test
 harmless when the script is wrong:
 - the steps that talk to Kubernetes, K3s and helm are stand-ins that only
   write down that they were called;
-- a run stops before `main` when a setting points outside the test's folder;
+- a run stops before `main` when a setting points outside the test's folder
+  (the cases of a setting that the script must refuse name their value, give
+  the answer "no", and use the root folder only as the text "/");
 - `rm` is wrapped: a removal outside the test's folder is refused and written
   down, and every test fails when one was tried.
 """
@@ -20,7 +22,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "uninstall.sh"
 TEXT = SCRIPT.read_text(encoding="utf-8")
 SETTINGS = ("ATLAS_MODELS_DIR", "ATLAS_DATA_DIR", "ATLAS_PROJECTS_DIR")
-OWN = ("usage", "print_removals", "check_settings", "parse_args", "confirm", "remove_models", "remove_data", "main")
+OWN = ("usage", "print_removals", "not_removable", "check_settings", "parse_args", "confirm", "remove_models", "remove_data", "main")
 STAND_INS = ("remove_atlas_services", "remove_container_images", "remove_gpu_operator", "remove_k3s")
 # `rm` as the tests give it to the script: a path outside the folder of the test, or one that leaves it through
 # `..`, is refused and written down. ROOT is the folder of the test.
@@ -70,9 +72,9 @@ class Install:
         return sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*") if path.is_file()
                       and path.name not in ("called", "refused"))
 
-    def run(self, *options, answer="n", **changed):
+    def run(self, *options, answer="n", refused=(), **changed):
         """Run the script's own `main` with these options and this answer. `changed` sets a setting to another value;
-        None takes it away."""
+        None takes it away. `refused` names the values outside the test's folder that the script must refuse."""
         values = {"ATLAS_MODELS_DIR": str(self.models), "ATLAS_DATA_DIR": str(self.data),
                   "ATLAS_PROJECTS_DIR": str(self.projects), **changed}
         settings = "".join(f'{name}="{value}"\n' for name, value in values.items() if value is not None)
@@ -83,10 +85,12 @@ log_info() {{ echo "[INFO] $1"; }}
 log_warn() {{ echo "[WARN] $1"; }}
 log_error() {{ echo "[ERROR] $1" >&2; }}
 K8S_DIR="$ROOT/checkout"
+HOME="$ROOT/home"
 ATLAS_NAMESPACE="atlas"
 {settings}{defaults()}
 for value in "$ATLAS_MODELS_DIR" "$ATLAS_DATA_DIR" "$ATLAS_PROJECTS_DIR"; do
-    [[ -z "$value" || "$value" == "$ROOT"/* ]] || {{ echo "a setting points outside the folder of the test"; exit 99; }}
+    [[ -z "$value" || "$value" == "$ROOT"/* || "|{"|".join(refused)}|" == *"|$value|"* ]] || {{
+        echo "a setting points outside the folder of the test"; exit 99; }}
 done
 """ + "".join(f'{name}() {{ echo "{name}" >> "$ROOT/called"; }}\n' for name in STAND_INS) + "".join(
             function(name) for name in OWN) + 'main "$@"\n'
@@ -220,6 +224,57 @@ def test_two_empty_settings_are_both_named(tmp_path):
     assert "ATLAS_PROJECTS_DIR is empty" not in done.stderr
 
 
+SETTING_OF = [("--data", "ATLAS_DATA_DIR"), ("--data", "ATLAS_PROJECTS_DIR"), ("--models", "ATLAS_MODELS_DIR")]
+
+
+@pytest.mark.parametrize("option, setting", SETTING_OF)
+@pytest.mark.parametrize("value, says", [
+    ("/", "is the root folder (/)"),
+    ("//", "is the root folder (//)"),
+    ("my-code", "is not a full path (my-code)"),
+    ("./my-code", "is not a full path (./my-code)"),
+    ("{root}/install/data/../..", "has a '.' or '..' part"),
+    ("{root}/install/./data", "has a '.' or '..' part"),
+    ("{root}/home", "is, or holds, your home folder"),
+    ("{root}/home/", "is, or holds, your home folder"),
+    ("{root}", "is, or holds, your home folder"),
+    ("{root}/checkout", "is, or holds, the folder of this repository"),
+    ("{root}//checkout/", "is, or holds, the folder of this repository"),
+])
+def test_a_folder_that_must_not_be_removed_stops_the_script_before_its_question(tmp_path, option, setting, value, says):
+    # The home folder and the folder of the repository are stand-ins inside the folder of the test. The answer is
+    # "no" in every case, so a script that does not refuse removes nothing either.
+    install = Install(tmp_path, apart=True)
+    before = install.files()
+    value = value.replace("{root}", str(tmp_path))
+    done = install.run(option, answer="n", refused=(value,), **{setting: value})
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert f"[ERROR] {setting} {says}" in done.stderr, done.stderr
+    assert "Nothing was removed." in done.stderr
+    assert "Fix: set it in " in done.stderr
+    assert "QUESTION" not in done.stdout
+    assert install.files() == before
+    assert install.called() == []
+
+
+@pytest.mark.parametrize("option, setting", SETTING_OF)
+@pytest.mark.parametrize("value", [
+    "{root}/checkout/data",
+    "{root}/home/projects",
+    "{root}/checkout-data",
+    "{root}/homework",
+    "{root}/check",
+    "{root}/hom",
+    "{root}/install/data/",
+    "{root}//install//data",
+])
+def test_a_folder_inside_the_home_folder_or_the_repository_is_not_refused(tmp_path, option, setting, value):
+    install = Install(tmp_path, apart=True)
+    done = install.run(option, answer="n", **{setting: value.replace("{root}", str(tmp_path))})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "QUESTION" in done.stdout
+
+
 def test_an_empty_setting_of_an_option_that_was_not_given_does_not_stop_the_script(tmp_path):
     install = Install(tmp_path, apart=True)
     done = install.run("--models", answer="y", ATLAS_DATA_DIR="", ATLAS_PROJECTS_DIR=None)
@@ -266,9 +321,9 @@ def test_each_setting_that_a_removal_uses_is_in_the_list_and_in_the_check_of_emp
         assert f"${name}" in function("print_removals"), (
             f"the script removes ${{{name}}} and print_removals() does not print it. Fix: add a line to the list "
             "that names the folder and prints its path.")
-        assert f'-n "${name}"' in function("check_settings"), (
-            f"the script removes ${{{name}}} and check_settings() does not refuse it when it is empty. Fix: add it "
-            "under the option that removes it.")
+        assert name in function("check_settings"), (
+            f"the script removes ${{{name}}} and check_settings() does not look at it. Fix: add it under the option "
+            "that removes it.")
     main = function("main")
     assert main.index("check_settings") < main.index("print_removals") < main.index("confirm") < main.index("remove_"), (
         "main() does not run check_settings, print_removals and the question in that order before the first removal.")

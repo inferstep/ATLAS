@@ -70,24 +70,50 @@ print_removals() {
     echo ""
 }
 
-# An option that removes a folder needs the setting that names the folder.
-# With an empty one the script stops here: before its question, and before it
-# removes anything.
+# Why the folder that a setting names must not be removed. Prints nothing for
+# a folder that may be. Refused: an empty setting; a path that is not full, or
+# has a "." or ".." part, because what it names is not sure; the root folder;
+# and a folder that is, or holds, the home folder or this repository.
+not_removable() {
+    local path="$1"
+    if [[ -z "$path" ]]; then
+        echo "is empty"
+    elif [[ "$path" != /* ]]; then
+        echo "is not a full path ($path)"
+    elif [[ "$path/" == */./* || "$path/" == */../* ]]; then
+        echo "has a '.' or '..' part ($path)"
+    else
+        path=$(printf '%s' "$path" | tr -s /)
+        if [[ "${path%/}" == "" ]]; then
+            echo "is the root folder ($1)"
+        elif [[ -n "${HOME:-}" && "${HOME%/}/" == "${path%/}/"* ]]; then
+            echo "is, or holds, your home folder ($HOME)"
+        elif [[ "${K8S_DIR%/}/" == "${path%/}/"* ]]; then
+            echo "is, or holds, the folder of this repository ($K8S_DIR)"
+        fi
+    fi
+}
+
+# An option that removes a folder needs a setting that names a folder which
+# may be removed. With one that does not, the script stops here: before its
+# question, and before it removes anything.
 check_settings() {
-    local empty=()
+    local names="" name why refused=false
     if [[ "$REMOVE_DATA" == true ]]; then
-        [[ -n "$ATLAS_DATA_DIR" ]] || empty+=("ATLAS_DATA_DIR")
-        [[ -n "$ATLAS_PROJECTS_DIR" ]] || empty+=("ATLAS_PROJECTS_DIR")
+        names="ATLAS_DATA_DIR ATLAS_PROJECTS_DIR"
     fi
     if [[ "$REMOVE_MODELS" == true ]]; then
-        [[ -n "$ATLAS_MODELS_DIR" ]] || empty+=("ATLAS_MODELS_DIR")
+        names="$names ATLAS_MODELS_DIR"
     fi
-    if [[ ${#empty[@]} -gt 0 ]]; then
-        local name
-        for name in "${empty[@]}"; do
-            log_error "$name is empty, and an option you gave removes the folder that it names. Nothing was removed."
-        done
-        log_error "Fix: set it in ${ATLAS_CONFIG_FILE:-$K8S_DIR/atlas.conf} to the folder to remove, or run without the option (--data needs ATLAS_DATA_DIR and ATLAS_PROJECTS_DIR; --models needs ATLAS_MODELS_DIR)."
+    for name in $names; do
+        why=$(not_removable "${!name}")
+        if [[ -n "$why" ]]; then
+            log_error "$name $why, and an option you gave removes the folder that it names. Nothing was removed."
+            refused=true
+        fi
+    done
+    if [[ "$refused" == true ]]; then
+        log_error "Fix: set it in ${ATLAS_CONFIG_FILE:-$K8S_DIR/atlas.conf} to the full path of a folder that holds only what ATLAS put there, or run without the option (--data needs ATLAS_DATA_DIR and ATLAS_PROJECTS_DIR; --models needs ATLAS_MODELS_DIR)."
         exit 1
     fi
 }
