@@ -134,6 +134,10 @@ How to read the coverage rows:
   date and the commit above it.
 - A check that raises mostly false alarms is switched off or changed, and the
   change is written in the tool settings table with its reason.
+- Each commit that lands on `dev` gets its own run of the `tests` and
+  `vscode-extension` workflows, and the next push does not cancel it. So the
+  coverage and the result of each test are there for every commit of `dev`.
+  On a pull request a newer commit still cancels the run of the older one.
 - Dependabot updates the actions and the package files. It does not update a
   tool that a workflow installs with a command: golangci-lint, hadolint, zizmor
   and actionlint. The settings table names the version of each. Look for a new

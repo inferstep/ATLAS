@@ -120,6 +120,17 @@ and the output of every failed test) and judges that text as before; the
 result of each test is written beside the cover profile. A run without
 `ATLAS_COVERAGE_DIR` is unchanged.
 
+### Changed: a test run for a commit of `dev` is not cancelled by the next push
+
+The `tests` and `vscode-extension` workflows cancelled a run when a newer
+commit came to the same branch. When pull requests merged one after another,
+the run of every commit but the last was cancelled: of the last 30 pushes to
+`dev`, 13 lost their test run, and with it their coverage and test results.
+A pushed commit now has a concurrency group of its own and runs to the end.
+On a pull request a newer commit still cancels the run of the older one. The
+other workflows that start on a push keep cancelling: the result for the
+newest commit takes the place of the older ones.
+
 ### Changed: the SonarQube Cloud analysis runs from CI
 
 Sonar analysed only the default branch by itself. A new `sonar scan` job

@@ -20,11 +20,12 @@ on:
     types: [checks_requested]
     branches: [main, dev]
 
-# Cancel in-flight runs on the same ref when a newer commit lands —
-# saves runner minutes on rapid-fire pushes.
+# A newer commit on a pull request cancels the run of the older one. A push
+# to dev or main is not cancelled by the next push: each pushed commit has a
+# group of its own, so its coverage and its test results reach the branch.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read

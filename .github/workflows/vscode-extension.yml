@@ -17,9 +17,12 @@ on:
       - 'extensions/vscode/**'
       - '.github/workflows/vscode-extension.yml'
 
+# A newer commit on a pull request cancels the run of the older one. A push
+# to dev or main is not cancelled by the next push: each pushed commit has a
+# group of its own, so its coverage and its test results reach the branch.
 concurrency:
-  group: vscode-extension-${{ github.ref }}
-  cancel-in-progress: true
+  group: vscode-extension-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
