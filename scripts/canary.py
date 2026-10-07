@@ -251,11 +251,44 @@ def coverage_findings(manifest: dict, required: list[str], ran: list[str]) -> li
     out = [Finding(name, f"required check `{name}` is not in the canary list, so nothing shows that it can turn red. "
                          f"Fix: add a violation for it to {MANIFEST}, or add it under `not_covered` with the reason.")
            for name in required if name not in red | set(manifest["not_covered"])]
-    known = red | reports | set(manifest["not_covered"]) | set(manifest["other_checks"]) | set(required)
+    known = (red | reports | set(manifest["not_covered"]) | set(manifest["other_checks"])
+             | set(manifest["side_effects"]) | set(required))
     return out + [Finding(name, f"check `{name}` ran on the canary and the list does not know it, so nothing says "
                                 f"whether it can turn red. Fix: add a violation for it to {MANIFEST}, or add it under "
                                 "`not_covered` with the reason why it has none.")
                   for name in sorted(set(ran)) if name not in known]
+
+
+def is_red(run: dict) -> bool:
+    return run.get("status") == "completed" and run.get("conclusion") == "failure"
+
+
+def side_effect_findings(manifest: dict, runs: dict[str, dict]) -> list[Finding]:
+    """A check with no violation of its own is red only where the list says so, and the list says so only where it is."""
+    out = []
+    for name, run in sorted(runs.items()):
+        if name in manifest["side_effects"]:
+            if run.get("status") == "completed" and not is_red(run):
+                out.append(Finding(name, f"check `{name}` is listed as red on the canary through another check's "
+                                         f"violation, and it ended as `{run.get('conclusion')}`. Fix: if that is how "
+                                         f"it is now, move it in {MANIFEST} from `side_effects` to `not_covered`, "
+                                         "with its reason."))
+        elif is_red(run) and (name in manifest["not_covered"] or name in manifest["other_checks"]):
+            out.append(Finding(name, f"check `{name}` is red on the canary, and the list gives it no violation and no "
+                                     "side effect. A red with no cause on the list can hide a fault. Fix: open the "
+                                     f"job `{name}` on the canary pull request and read why it failed. If the "
+                                     f"violation of another check makes it red, add it to `side_effects` in "
+                                     f"{MANIFEST} and say by which path. Else repair the job."))
+    return out
+
+
+def notes(manifest: dict, runs: dict[str, dict]) -> list[str]:
+    """What is as the list says and still worth a line: a red with no violation of its own, and a listed check that is not there."""
+    out = [f"red, with no violation of its own: `{name}`. {reason}"
+           for name, reason in sorted(manifest["side_effects"].items()) if name in runs and is_red(runs[name])]
+    listed = {**manifest["not_covered"], **manifest["other_checks"], **manifest["side_effects"]}
+    return out + [f"listed, and not there in this run: `{name}`. {reason}"
+                  for name, reason in sorted(listed.items()) if name not in runs]
 
 
 def age_finding(manifest: dict, base_date: str, now: datetime) -> list[Finding]:
@@ -276,7 +309,8 @@ def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str
             findings.append(red_finding(name, runs.get(name), plant_entry))
         for name in plant_entry.get("reports", []):
             findings.append(report_finding(name, runs.get(name), plant_entry))
-    findings += coverage_findings(manifest, required, list(runs)) + age_finding(manifest, base_date, now)
+    findings += (coverage_findings(manifest, required, list(runs)) + side_effect_findings(manifest, runs)
+                 + age_finding(manifest, base_date, now))
     return [finding for finding in findings if finding]
 
 
@@ -368,6 +402,8 @@ def check(root: Path, number: int) -> int:
     no_plant = len(manifest["not_covered"]) + len(manifest["other_checks"])
     print(f"note pull request #{number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
           f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
+    for line in notes(manifest, latest_checks(check_runs)):
+        print(f"note {line}")
     for finding in findings:
         print(f"FAIL {finding.message}")
     print(f"canary: {len(findings)} thing(s) are not as the list says" if findings

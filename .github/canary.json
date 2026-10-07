@@ -459,12 +459,10 @@
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
-    "checks ran": "It fails when a workflow did not run. On the canary every workflow runs, so it passes.",
     "integrity check": "It reports and does not fail for a finding.",
     "coverage upload": "It sends numbers to Codecov and judges nothing.",
-    "coverage upload (extension)": "It sends numbers to Codecov and judges nothing.",
+    "coverage upload (extension)": "It sends numbers to Codecov and judges nothing. On the canary it is skipped: the job it needs, `lint + test + build`, is red.",
     "test results upload": "It sends numbers to Codecov and judges nothing.",
-    "test results upload (extension)": "It sends numbers to Codecov and judges nothing.",
     "PR build check (lens)": "A build that fails makes other jobs red for the wrong reason, so none is planted.",
     "PR build check (proxy)": "A build that fails makes other jobs red for the wrong reason, so none is planted.",
     "PR build check (sandbox)": "A build that fails makes other jobs red for the wrong reason, so none is planted.",
@@ -477,6 +475,10 @@
     "CodeQL": "The result of the code scanning service. A finding of the planted files does not turn it red.",
     "SonarCloud": "The result of the service's own app. A finding of the planted files does not turn it red.",
     "SonarCloud Code Analysis": "The service's quality gate. The planted files do not fail it.",
-    "codecov/patch": "The service's own check of the coverage of the change. It does not fail on the planted files."
+    "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary."
+  },
+  "side_effects": {
+    "checks ran": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and this check names a skipped job.",
+    "test results upload (extension)": "It has no violation of its own. It is red through the extension's violation: `lint + test + build` stops at its lint step, so no test ran and the file of results that this job sends was not made."
   }
 }

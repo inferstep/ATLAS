@@ -57,7 +57,7 @@ the tool is a mistake and not a mystery.
 | `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint |
 | `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
 | `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses |
-| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red |
+| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. The extension's one is red too when its job stops before the tests ran: then there is no file of results to send |
 | `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
 | the four `sandbox smoke` jobs | The sandbox image runs Java, Kotlin, PHP and Ruby |
 | `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
@@ -223,10 +223,15 @@ and red for its own violation.
 - Every check that runs on the canary is in the list: with a violation, or
   under `not_covered` (a job of a workflow) or `other_checks` (the check of
   a service) with the reason why it has none.
+- A check with no violation of its own that is red through the violation of
+  another check is under `side_effects`, with the path. A check with no
+  violation that is red and is not there is named: a red with no cause on the
+  list can hide a fault.
 - `python3 scripts/canary.py check --pr <number>` reads the checks of the
   canary pull request and names each thing that is not as the list says: a
   listed check that passed, did not run, was skipped or has not finished; a
-  check that is red but not for its violation; a check that ran and that the
+  check that is red but not for its violation; a check with no violation
+  that is red where the list does not say why; a check that ran and that the
   list does not know; a required check the list does not know; and a canary
   older than 14 days. It needs the packages of `.github/requirements/ci.txt`
   and a GitHub token (`GITHUB_TOKEN`, or a `gh` sign-in). It changes nothing.
@@ -251,13 +256,20 @@ Checks with no violation, and why:
 
 | Check | Why it has none |
 |---|---|
-| the three `codeql` jobs, `CodeQL`, `sonar scan`, `SonarCloud`, `SonarCloud Code Analysis`, `codecov/patch` | They report findings. A finding in the planted files does not turn them red |
+| the three `codeql` jobs, `CodeQL`, `sonar scan`, `SonarCloud`, `SonarCloud Code Analysis` | They report findings. A finding in the planted files does not turn them red |
+| `codecov/patch` | The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary |
 | `dependency review` | It turns red only for a dependency with a published advisory, and none is planted |
 | the four `PR build check` jobs | A build that fails makes other jobs red for the wrong reason |
-| `checks ran` | It fails when a workflow did not run. On the canary every workflow runs |
 | `integrity check` | It reports and does not fail |
-| the two `coverage upload` and the two `test results upload` jobs | They send numbers to Codecov and judge nothing |
+| `coverage upload`, `coverage upload (extension)`, `test results upload` | They send numbers to Codecov and judge nothing. The extension's coverage upload is skipped on the canary: the job it needs is red |
 | the image jobs of a push (`alias image tag`, `promote moving tags`) | They are skipped on a pull request |
+
+Checks with no violation of their own that are red on the canary, and by which path:
+
+| Check | Why it is red |
+|---|---|
+| `checks ran` | Through the extension's violation. `lint + test + build` fails, so `coverage upload (extension)`, which needs that job and has no condition, is skipped, and `checks ran` names a skipped job |
+| `test results upload (extension)` | Through the same violation. `lint + test + build` stops at its lint step, so no test ran and there is no file of results to send |
 
 A violation must fail every time. The time measures of the performance gate
 have none for that reason: a planted slowdown fails only on some runs. The

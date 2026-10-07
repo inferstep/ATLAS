@@ -503,7 +503,9 @@ before. Two violations can share a file.
 
 Every check that runs on the canary is in the list, with a violation or with
 the reason why it has none. A check that the list does not know is named, so
-a new job cannot run there without a decision.
+a new job cannot run there without a decision. A check with no violation of
+its own that is red through another check's violation is listed with that
+path; one that is red and not listed so is named.
 
 ### Added: hadolint reads every Dockerfile, and the weekly scan reads the inference images
 

@@ -114,7 +114,8 @@ def is_a_job(name, jobs):
 
 def test_every_listed_check_is_a_job_of_a_workflow(manifest):
     jobs = job_names()
-    listed = names(manifest, "red") + names(manifest, "reports") + list(manifest["not_covered"])
+    listed = (names(manifest, "red") + names(manifest, "reports") + list(manifest["not_covered"])
+              + list(manifest["side_effects"]))
     unknown = [name for name in listed if not is_a_job(name, jobs)]
     assert not unknown, f"no workflow has a job with these names; change them in .github/canary.json: {unknown}"
 
@@ -135,12 +136,14 @@ def test_a_check_of_a_service_is_not_a_job_of_a_workflow(manifest):
 
 
 def test_no_check_is_listed_twice_and_every_entry_says_what_it_plants(manifest):
-    listed = names(manifest, "red") + list(manifest["not_covered"]) + list(manifest["other_checks"])
+    listed = (names(manifest, "red") + list(manifest["not_covered"]) + list(manifest["other_checks"])
+              + list(manifest["side_effects"]))
     assert len(listed) == len(set(listed))
     for plant in manifest["plants"]:
         assert plant["what"].strip(), plant["id"]
         assert plant.get("red") or plant.get("reports"), plant["id"]
-    assert all(reason.strip() for reason in [*manifest["not_covered"].values(), *manifest["other_checks"].values()])
+    assert all(reason.strip() for reason in [*manifest["not_covered"].values(), *manifest["other_checks"].values(),
+                                             *manifest["side_effects"].values()])
 
 
 def test_every_check_that_must_be_red_has_the_text_its_log_shows(manifest):
@@ -353,6 +356,47 @@ def test_a_check_that_ran_and_that_the_list_does_not_know_is_named(canary, manif
         assert judged(canary, manifest, runs_as_listed(manifest) + [{**new, "name": name}]) == [], name
 
 
+def test_a_check_with_no_plant_that_is_red_is_named_unless_the_list_says_why(canary, manifest):
+    red = {"id": 901, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z"}
+    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
+        message = only(judged(canary, manifest, runs_as_listed(manifest) + [{**red, "name": name}]))
+        assert f"`{name}` is red on the canary, and the list gives it no violation and no side effect" in message
+        assert "`side_effects`" in message and "Fix:" in message
+    for name in manifest["side_effects"]:
+        assert judged(canary, manifest, runs_as_listed(manifest) + [{**red, "name": name}]) == [], name
+
+
+def test_a_check_listed_as_red_through_another_violation_that_is_not_red_is_named(canary, manifest):
+    done = {"id": 902, "status": "completed", "conclusion": "success", "started_at": "2000-01-09T00:00:00Z"}
+    for name in manifest["side_effects"]:
+        message = only(judged(canary, manifest, runs_as_listed(manifest) + [{**done, "name": name}]))
+        assert f"`{name}` is listed as red on the canary through another check's violation, and it ended as `success`" in message
+        assert "`not_covered`" in message
+        running = {**done, "name": name, "status": "in_progress", "conclusion": None}
+        assert judged(canary, manifest, runs_as_listed(manifest) + [running]) == []
+
+
+def test_a_red_with_no_violation_of_its_own_and_a_listed_check_that_is_not_there_get_a_line(canary, manifest):
+    red = {"id": 903, "status": "completed", "conclusion": "failure", "started_at": "2000-01-09T00:00:00Z"}
+    side = sorted(manifest["side_effects"])
+    runs = canary.latest_checks(runs_as_listed(manifest) + [{**red, "name": side[0]}])
+    lines = canary.notes(manifest, runs)
+    assert lines[0].startswith(f"red, with no violation of its own: `{side[0]}`. ")
+    absent = [line for line in lines if line.startswith("listed, and not there in this run: ")]
+    listed = [*manifest["not_covered"], *manifest["other_checks"], *side[1:]]
+    assert sorted(line.split("`")[1] for line in absent) == sorted(listed)
+    assert len(lines) == 1 + len(listed)
+    everything = runs_as_listed(manifest) + [{**red, "name": name, "conclusion": "success"} for name in [*listed, side[0]]]
+    assert canary.notes(manifest, canary.latest_checks(everything)) == []
+
+
+def test_a_side_effect_names_the_violation_it_comes_from(manifest):
+    planted = set(names(manifest, "red"))
+    for name, reason in manifest["side_effects"].items():
+        assert name not in planted
+        assert any(f"`{check}`" in reason for check in planted), f"{name}: the reason names no check that has a violation"
+
+
 def test_a_listed_check_that_did_not_run_is_named(canary, manifest):
     runs = [run for run in runs_as_listed(manifest) if run["name"] != "go test (proxy)"]
     assert "`go test (proxy)` did not run" in only(judged(canary, manifest, runs))
@@ -409,7 +453,7 @@ def test_without_a_token_it_stops_with_a_fix(tmp_path):
 
 def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     data = json.loads((ROOT / ".github" / "canary.json").read_text(encoding="utf-8"))
-    assert set(data) == {"branch", "title", "max_age_days", "plants", "not_covered", "other_checks"}
+    assert set(data) == {"branch", "title", "max_age_days", "plants", "not_covered", "other_checks", "side_effects"}
 
 
 class _Logs(http.server.BaseHTTPRequestHandler):
