@@ -327,9 +327,17 @@ pytest tests/e2e -v
   tests, e.g. `assert True` or a swallowed exception.
 
 One more check reads your change, not the code. It looks for removed or
-skipped tests, history in new comments, new documents, and changes to the
-files that configure the checks. It says what it found, why it matters and
-what to do, and it does not fail:
+skipped tests, history in new comments, new documents, new suppression
+markers, and changes to the files that configure the checks. It says what it
+found, why it matters and what to do, and it does not fail. Three things keep
+its report short:
+- A skip needs its reason: the message of the skip, or a comment on its line
+  or the line directly above. Then a maintainer approves the reason and you
+  have nothing else to do. A skip with no reason asks you for one.
+- A test you rename in place is listed, not questioned. So is a test whose
+  body becomes a helper that your tests call.
+- An import that must follow the line that sets the import path takes
+  `# noqa: E402` and is not counted as a suppression. Every other marker is.
 
 ```bash
 python scripts/integrity_check.py                 # your branch against origin/dev

@@ -44,7 +44,7 @@ the tool is a mistake and not a mystery.
 |---|---|
 | `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
 | `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue |
-| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
+| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppression markers (each in the kind of file its linter reads), workflow settings that turn a guard off, changes to the files that configure checks and to scripts that run with a credential that can write, new documents |
 | `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
 | `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint |
 | `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |

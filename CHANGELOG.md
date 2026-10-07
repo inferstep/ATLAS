@@ -141,6 +141,39 @@ request. It reports and does not fail the job.
 
 Each finding says what was found, why it matters and what to do.
 
+### Changed: the integrity check flags less noise and reads more kinds of file
+
+A run of the check over 50 past commits of `dev` found that most of what it
+asked a maintainer to look at was noise from three causes, and that it could
+not see some things at all. Five changes:
+
+- An import that follows the line that sets the import path, marked
+  `# noqa: E402`, is no longer a new suppression. A marked line that only
+  moved inside its file is no longer new either.
+- A size baseline whose numbers only go down, or that loses an entry, is
+  listed for information. A raised number, a new entry or a changed limit
+  still needs a maintainer's approval.
+- A test whose name line changed while its body stayed is listed as renamed,
+  or as turned into a helper when tests of the change call that helper. A
+  test removed with its body, or renamed to a name the runner does not
+  collect, is still reported as removed.
+- A skip with its reason now asks for a maintainer's approval and quotes the
+  reason; a skip with no reason still asks the author for one. A call to a
+  function that skips counts as a skip: one finding for each such function
+  and file, with the number of calls.
+- Suppression markers are read by kind of file: Go, Python, TypeScript and
+  JavaScript, shell, workflow files and Dockerfiles each have their own
+  markers, so the markers of zizmor, yamllint, hadolint and staticcheck are
+  seen, and a marker's words in another kind of file are text. In a workflow
+  file `continue-on-error: true` and `persist-credentials: true` are named.
+  More files need approval: the canary's list, the replay recordings, the
+  local gate, the scripts whose result is a check's result, and the scripts
+  a workflow runs with a credential that can write.
+
+On the same 50 commits: 18 marker findings, 7 baseline findings, 1 skip and 1
+removed test are no longer reported as they were; 4 changes to newly listed
+files are reported.
+
 ### Fixed: a deletion the proxy cannot ask about no longer reads as denied by the user
 
 Before a deletion is approved the proxy holds the file, so that the approval
