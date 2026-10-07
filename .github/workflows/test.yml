@@ -70,7 +70,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: go-test-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
+          # The number after "go-test" starts a new cache when it is raised:
+          # a saved cache is never written again under the same key.
+          key: go-test-2-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
 
       - name: go test -race
         env:
