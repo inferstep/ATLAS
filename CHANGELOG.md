@@ -192,6 +192,36 @@ On the same 50 commits: 18 marker findings, 7 baseline findings, 1 skip and 1
 removed test are no longer reported as they were; 4 changes to newly listed
 files are reported.
 
+### Changed: the integrity check knows the forms by which a test stops running
+
+The check read a skip as one line with one pattern. A skip marker with a name
+of its own, put on nine tests, gave one finding, on the line that defines it.
+Some forms gave none. The forms are now one table for each runner:
+
+- pytest: `skip`, `skipif` and `xfail` as a decorator, a call, a marker with
+  a name of its own, or inside `pytest.param`; `pytestmark`; `importorskip`;
+  `__test__ = False`; and in a `conftest.py`: `collect_ignore`,
+  `collect_ignore_glob`, `pytest_ignore_collect`, and a hook that adds a skip
+  marker.
+- unittest: the skip decorators, `expectedFailure`, `self.skipTest` and
+  `SkipTest`.
+- Go: `t.Skip`, and a build tag on a test file.
+- vitest: `.skip`, `.todo`, `.fails`, `.only`, `.skipIf`, `.runIf`, `xit` and
+  `xdescribe`, also after another word, as in `it.concurrent.skip`.
+
+A form that stops more than one test says how far it reaches: every test of
+the class, of the group or of the file, every other test of the file (`.only`),
+whole test files, or the tests a hook picks. The uses of a named skip marker
+are one finding for each marker and file, with the number of uses. So are the
+calls to `importorskip` in the tests of a file, for each module; the module
+is the reason. A `conftest.py` is read as test material. The same words
+inside a string are text.
+
+Nothing that was reported is dropped. One finding changes its cause: a skip
+marker defined below a helper function was read as part of that function, so
+tests that call the helper were named. The tests that carry the marker are
+named now.
+
 ### Fixed: a deletion the proxy cannot ask about no longer reads as denied by the user
 
 Before a deletion is approved the proxy holds the file, so that the approval

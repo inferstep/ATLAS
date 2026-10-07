@@ -101,8 +101,6 @@ def test_a_removed_test_is_reported_unless_it_moved(ic, path, line, name):
     ("proxy/gates_test.go", '\tt.Skip("flaky on a slow disk")', "flaky on a slow disk"),
     ("proxy/gates_test.go", "\tt.Skip(objectHoldSkipReason)", "objectHoldSkipReason"),
     ("tests/cli/test_doctor.py", "@pytest.mark.skip(reason='needs a GPU')", "needs a GPU"),
-    ("tests/cli/test_doctor.py", "pytestmark = pytest.mark.skipif(sys.platform == 'darwin', reason='no cgroups')",
-     "no cgroups"),
     ("tests/cli/test_doctor.py", f"    pytest.skip()  {HASH} the fixture needs Docker", "the fixture needs Docker"),
 ])
 def test_a_new_skip_with_a_reason_needs_approval_and_quotes_it(ic, path, line, reason):
@@ -128,7 +126,7 @@ def test_the_reason_of_a_skip_is_read_from_the_lines_of_its_call(ic):
     lines = ["pytestmark = pytest.mark.skipif(", "    not getattr(main, 'AVAILABLE', False),",
              '    reason="tree-sitter is not installed here",', ")"]
     assert whats(ic, diff("tests/v3-service/test_edit.py", added=lines)) == \
-        ["new skip or todo marker in a test, with its reason: tree-sitter is not installed here"]
+        ["new `pytestmark`: every test of this file stops running, with its reason: tree-sitter is not installed here"]
 
 
 def test_a_comment_is_a_reason_only_on_the_line_of_the_skip_or_directly_above_it(ic):
@@ -656,4 +654,301 @@ def test_the_marker_table_and_the_linter_table_agree(ic):
     for linter, kinds in ic.LINTER_MARKERS.items():
         assert kinds == "none" or (kinds and set(kinds) <= set(ic.MARKERS)), linter
     assert {kind for kinds in ic.LINTER_MARKERS.values() if kinds != "none" for kind in kinds} == set(ic.MARKERS)
+
+
+# --- the forms by which a test stops running, by runner ---
+
+ONE = "new skip or todo marker in a test"
+FILE = "every test of this file stops running"
+CLASS = "every test of this class stops running"
+GROUP = "every test of this group stops running"
+NEEDS_YAML = ", with its reason: needs the module yaml"
+IN_A_TEST = "1 new call(s) to `pytest.importorskip` in a test"
+PY, GO, TS = "tests/cli/test_doctor.py", "proxy/gates_test.go", "extensions/vscode/test/sse.test.ts"
+STOPPED = [
+    (PY, "@pytest.mark.skip", ONE),
+    (PY, "@pytest.mark.skipif(sys.platform == 'darwin')", ONE),
+    (PY, "@pytest.mark.xfail", ONE),
+    (PY, "    pytest.skip()", ONE),
+    (PY, "    pytest.xfail()", ONE),
+    (PY, "    pytest.param(2, marks=pytest.mark.skip),", ONE),
+    (PY, "    pytest.param(2, marks=[pytest.mark.xfail]),", ONE),
+    (PY, "    pytest.param(\"it's\", 'a \"b\"', marks=pytest.mark.skip),", ONE),
+    (PY, "    yaml = pytest.importorskip('yaml')", IN_A_TEST + NEEDS_YAML),
+    (PY, "pytestmark = pytest.mark.skipif(sys.platform == 'darwin')", f"new `pytestmark`: {FILE}"),
+    (PY, "pytestmark = [pytest.mark.slow, pytest.mark.skip]", f"new `pytestmark`: {FILE}"),
+    (PY, "yaml = pytest.importorskip('yaml')", f"new `pytest.importorskip`: {FILE}" + NEEDS_YAML),
+    (PY, "pytest.importorskip('yaml')", f"new `pytest.importorskip`: {FILE}" + NEEDS_YAML),
+    (PY, "needs_gpu = pytest.mark.skipif(not GPU)", "new skip marker with a name of its own: needs_gpu"),
+    (PY, "skip_it = pytest.mark.skip", "new skip marker with a name of its own: skip_it"),
+    (PY, "pytest.skip(allow_module_level=True)", f"new `pytest.skip`: {FILE}"),
+    (PY, "__test__ = False", f"new `__test__`: {FILE}"),
+    (PY, "    __test__ = False", f"new `__test__`: {CLASS}"),
+    ("tests/conftest.py", "collect_ignore = ['test_slow.py']", "new `collect_ignore`: whole test files are left out"),
+    ("tests/conftest.py", "collect_ignore_glob = ['*_slow.py']", "new `collect_ignore_glob`: whole test files are left out"),
+    ("tests/conftest.py", "def pytest_ignore_collect(collection_path, config):",
+     "new `pytest_ignore_collect`: whole test files are left out"),
+    ("tests/conftest.py", "        item.add_marker(pytest.mark.skip)",
+     "new `item.add_marker`: the tests the hook picks stop running"),
+    ("geometric-lens/conftest.py", "collect_ignore = ['tests/test_gpu.py']",
+     "new `collect_ignore`: whole test files are left out"),
+    (PY, "@unittest.skip", ONE),
+    (PY, "@unittest.skipIf(sys.platform == 'darwin', '')", ONE),
+    (PY, "@unittest.skipUnless(HAS_GPU, '')", ONE),
+    (PY, "@unittest.expectedFailure", ONE),
+    (PY, "        self.skipTest()", ONE),
+    (PY, "        raise unittest.SkipTest", ONE),
+    (PY, "        raise SkipTest()", ONE),
+    (PY, "raise unittest.SkipTest", f"new `raise unittest.SkipTest`: {FILE}"),
+    (GO, "\tt.Skip()", ONE),
+    (GO, "\tt.SkipNow()", ONE),
+    (GO, "\ttb.Skip()", ONE),
+    (GO, "//go:build ignore", f"new `//go:build ignore`: {FILE}"),
+    (GO, "//go:build linux", f"new `//go:build linux`: {FILE}"),
+    (GO, "// +build integration", f"new `// +build integration`: {FILE}"),
+    (TS, "  it.skip('parses a frame', () => {", ONE),
+    (TS, "  test.todo('parses a frame')", ONE),
+    (TS, "  it.fails('parses a frame', () => {", ONE),
+    (TS, "  it.concurrent.skip('parses a frame', () => {", ONE),
+    (TS, "  it.skip.each([1, 2])('parses frame %i', () => {", ONE),
+    (TS, "  it.skipIf(isCI)('parses a frame', () => {", ONE),
+    (TS, "  it.runIf(isLinux)('parses a frame', () => {", ONE),
+    (TS, "  xit('parses a frame', () => {", ONE),
+    (TS, "describe.skip('frames', () => {", f"new `describe.skip`: {GROUP}"),
+    (TS, "describe.todo('frames')", f"new `describe.todo`: {GROUP}"),
+    (TS, "describe.skipIf(isCI)('frames', () => {", f"new `describe.skipIf`: {GROUP}"),
+    (TS, "describe.runIf(isLinux)('frames', () => {", f"new `describe.runIf`: {GROUP}"),
+    (TS, "xdescribe('frames', () => {", f"new `xdescribe`: {GROUP}"),
+    (TS, "  it.only('parses a frame', () => {", "new `it.only`: every other test of this file stops running"),
+    (TS, "describe.only('frames', () => {", "new `describe.only`: every other test of this file stops running"),
+    (TS, "  test.concurrent.only('parses a frame', () => {",
+     "new `test.concurrent.only`: every other test of this file stops running"),
+]
+
+
+@pytest.mark.parametrize("path, line, what", STOPPED)
+def test_each_form_by_which_a_test_stops_running_is_named_with_how_far_it_reaches(ic, path, line, what):
+    findings = ic.check(diff(path, added=[line]), TASKS)
+    # `importorskip` names the module it needs, so it has a reason by itself; every other row here has none.
+    level = "approval" if what.endswith(NEEDS_YAML) else "warning"
+    assert [(f.level, f.what) for f in findings] == [(level, what)]
+
+
+def test_every_row_of_the_table_of_forms_has_a_test(ic):
+    def deciding_row(path, line):
+        return next(pattern.pattern for pattern, _ in ic.STOPS[ic.file_kind(path)] if pattern.search(line))
+    tried = {(ic.file_kind(path), deciding_row(path, line)) for path, line, _ in STOPPED}
+    assert tried == {(kind, pattern.pattern) for kind, rows in ic.STOPS.items() for pattern, _ in rows}
+
+
+@pytest.mark.parametrize("path, line", [
+    (PY, "pytestmark = pytest.mark.slow"),
+    (PY, "pytestmark = [pytest.mark.usefixtures('proxy')]"),
+    (PY, "slow = pytest.mark.slow"),
+    (PY, "    pytest.param(2, marks=pytest.mark.slow),"),
+    (PY, "    item.add_marker(pytest.mark.slow)"),
+    (PY, "    __test__ = True"),
+    (PY, "    (PY, \"    pytest.param(2, marks=pytest.mark.skip),\", ONE),"),
+    (PY, "    ('tests/conftest.py', '        item.add_marker(pytest.mark.skip)'),"),
+    (PY, "    result = pytest.skipped"),
+    (PY, "    ('proxy/gates_test.go', '\tt.Skip()'),"),
+    (PY, "    line = 'it.only(\"x\")'"),
+    (PY, "//go:build ignore"),
+    (GO, "\tline := \"@pytest.mark.skip\""),
+    (GO, "\t// go:build is written without a space"),
+    (GO, "\tfmt.Println(\"//go:build ignore\")"),
+    (TS, "  const marker = 'pytest.skip()';"),
+    (TS, "  it('skips only the first frame', () => {"),
+    (TS, "  it.each([1, 2])('parses frame %i', () => {"),
+    (TS, "  it.concurrent('parses a frame', () => {"),
+    (TS, "describe('frames that fail', () => {"),
+    ("proxy/gates.go", "//go:build linux"),
+    ("atlas/cli.py", "collect_ignore = []"),
+    ("docs/SETUP.md", "@pytest.mark.skip"),
+])
+def test_the_same_words_where_they_stop_no_test_are_not_a_finding(ic, path, line):
+    assert not [w for w in whats(ic, diff(path, added=[line])) if "skip" in w or "stops running" in w or "left out" in w]
+
+
+@pytest.mark.parametrize("path, lines, reason", [
+    (PY, [f"{HASH} The suite needs a GPU.", "pytestmark = pytest.mark.skipif(not GPU)"], "The suite needs a GPU."),
+    (PY, ["yaml = pytest.importorskip('yaml', reason='the contract needs PyYAML')"], "'the contract needs PyYAML'"),
+    (PY, ["        self.skipTest('needs a terminal')"], "needs a terminal"),
+    (PY, ["        raise unittest.SkipTest('needs a terminal')"], "needs a terminal"),
+    (PY, ["pytest.skip('the suite needs a GPU', allow_module_level=True)"], "the suite needs a GPU"),
+    (PY, ["pytest.skip(allow_module_level=True, reason='the suite needs a GPU')"], "the suite needs a GPU"),
+    ("tests/conftest.py", [f"{HASH} These files need the model server.", "collect_ignore = ['test_live.py']"],
+     "These files need the model server."),
+    (GO, [f"{SLASHES} The object hold exists on Linux only.", "//go:build linux"], "The object hold exists on Linux only."),
+    (TS, [f"  {SLASHES} One test while the parser is rewritten.", "  it.only('parses a frame', () => {"],
+     "One test while the parser is rewritten."),
+])
+def test_a_form_with_its_reason_asks_for_approval_and_quotes_it(ic, path, lines, reason):
+    findings = ic.check(diff(path, added=lines), TASKS)
+    assert [f.level for f in findings] == ["approval"]
+    assert findings[0].what.endswith(f", with its reason: {reason.strip(chr(39))}")
+
+
+MARK_FILE = "import pytest\n\nneeds_proc = pytest.mark.skipif(not PROC, reason='the sandbox reads /proc')\nbare = pytest.mark.skip\n"
+
+
+def test_the_uses_of_a_named_skip_mark_are_one_finding_with_their_number_and_the_reason(ic):
+    path = "tests/infrastructure/test_http_cancellation.py"
+    source = "from tests.infrastructure.proc_files import needs_proc\n"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: source})
+    change = diff(path, added=["@needs_proc", "def test_a():", "@needs_proc", "def test_b():",
+                               "    pytest.param(1, marks=needs_proc),"])
+    findings = ic.check(change, TASKS, tree)
+    assert [(f.level, f.line, f.what) for f in findings] == [
+        ("approval", 10, "3 new use(s) of the skip marker needs_proc, with its reason: the sandbox reads /proc")]
+
+
+def test_a_named_skip_mark_from_an_imported_module_in_another_folder_is_found(ic):
+    path = "tests/cli/test_doctor.py"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE,
+                  path: "from tests.infrastructure.proc_files import needs_proc\n"})
+    assert whats(ic, diff(path, added=["@needs_proc"]), tree=tree) == [
+        "1 new use(s) of the skip marker needs_proc, with its reason: the sandbox reads /proc"]
+
+
+def test_a_named_skip_mark_with_no_reason_needs_action_and_one_on_the_whole_file_says_so(ic):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: ""})
+    findings = ic.check(diff(path, added=["@bare", "pytestmark = needs_proc"]), TASKS, tree)
+    assert [(f.level, f.what) for f in findings] == [
+        ("warning", "1 new use(s) of the skip marker bare"),
+        ("approval", ("new `pytestmark` with the skip marker needs_proc: every test of this file stops running, "
+                      "with its reason: the sandbox reads /proc"))]
+
+
+def test_a_comment_above_importorskip_is_about_the_test_and_is_not_its_reason(ic):
+    lines = ["def test_a_file_of_two_documents_parses(tmp_path):", f"    {HASH} safe_load rejects such a file.",
+             "    pytest.importorskip('yaml.nodes')"]
+    assert whats(ic, diff(PY, added=lines)) == [IN_A_TEST + ", with its reason: needs the module yaml.nodes"]
+
+
+def test_the_calls_to_importorskip_in_the_tests_of_a_file_are_one_finding_for_each_module(ic):
+    lines = ["def test_a():", "    torch = pytest.importorskip('torch')", "def test_b():", "    pytest.importorskip('torch')",
+             "def test_c():", "    pytest.importorskip('yaml')", "def test_d():",
+             "    pytest.importorskip('torch', reason='the lens needs torch')"]
+    findings = ic.check(diff(PY, added=lines), TASKS)
+    assert [(f.level, f.line, f.what) for f in findings] == [
+        ("approval", 11, "2 new call(s) to `pytest.importorskip` in a test, with its reason: needs the module torch"),
+        ("approval", 15, "1 new call(s) to `pytest.importorskip` in a test, with its reason: needs the module yaml"),
+        ("approval", 17, "1 new call(s) to `pytest.importorskip` in a test, with its reason: the lens needs torch")]
+
+
+HELPER_FILE = """import pytest
+
+
+def _run(cwd):
+    return subprocess.run(
+        ['bash'], cwd=cwd,
+    )
+
+
+needs_bash = pytest.mark.skipif(shutil.which('bash') is None, reason='the tests need bash')
+
+
+@pytest.mark.skip(reason='not yet')
+def test_old():
+    _run('.')
+
+
+def _needs_docker():
+    if not DOCKER:
+        pytest.skip('needs docker')
+
+
+def _marks():
+    slow = pytest.mark.skip
+    return [slow]
+"""
+
+
+def test_a_skip_below_a_function_is_not_in_that_function(ic):
+    path = "tests/cli/test_x.py"
+    tree = Files({path: HELPER_FILE})
+    assert ic.skip_helpers(tree, path) == {"_needs_docker": "needs docker"}
+    assert whats(ic, diff(path, added=["    _run(tmp_path)", "    _needs_docker()", "    _marks()"]), tree=tree) == [
+        "1 new call(s) to the skip helper _needs_docker, with its reason: needs docker"]
+
+
+TEXT_FILE = '''import pytest
+
+CASE = """
+@pytest.mark.skip
+def test_inside_a_string():
+    pytest.skip()
+@needs_proc
+pytestmark = pytest.mark.skip
+"""
+
+
+@pytest.mark.skip
+def test_real():
+    pass
+'''
+
+
+def test_a_form_inside_a_string_of_more_than_one_line_is_text(ic):
+    path = "tests/infrastructure/test_x.py"
+    change = hunks(path, (0, [], 1, TEXT_FILE.splitlines()))
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: TEXT_FILE})
+    assert [(f.line, f.what) for f in ic.check(change, TASKS, tree)] == [(12, ONE)]
+
+
+def test_when_the_file_cannot_be_read_as_python_every_line_counts_as_code(ic):
+    path = "tests/infrastructure/test_x.py"
+    broken = TEXT_FILE + "def test_broken(:\n    x = (\n"
+    change = hunks(path, (0, [], 1, broken.splitlines()))
+    stops = [f.line for f in ic.check(change, TASKS, Files({path: broken})) if "skip" in f.what or "stops" in f.what]
+    assert stops == [4, 6, 8, 12]
+    assert ic.text_lines(path, None) == set()
+    assert ic.text_lines("proxy/gates_test.go", "x := `\nt.Skip()\n`\n") == set()
+
+
+def test_a_keyword_of_a_skip_call_is_not_its_reason(ic):
+    findings = ic.check(diff(PY, added=["pytest.skip(allow_module_level=True)"]), TASKS)
+    assert [(f.level, f.what) for f in findings] == [("warning", f"new `pytest.skip`: {FILE}")]
+
+
+CLASS_FILE = """import pytest
+
+@pytest.mark.skipif(not GPU,
+                    reason='the class needs a GPU')
+@pytest.mark.usefixtures('proxy')
+class TestOnTheGpu:
+    @pytest.mark.skip
+    def test_a(self):
+        pass
+
+@unittest.skip
+class TestOld(unittest.TestCase):
+    pass
+
+@needs_proc
+class TestProc:
+    @needs_proc
+    def test_b(self):
+        pass
+"""
+
+
+def test_a_skip_on_a_class_says_that_it_reaches_every_test_of_the_class(ic):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: CLASS_FILE})
+    findings = ic.check(hunks(path, (0, [], 1, CLASS_FILE.splitlines())), TASKS, tree)
+    assert [(f.line, f.level, f.what) for f in findings] == [
+        (3, "approval", f"new `@pytest.mark.skipif`: {CLASS}, with its reason: the class needs a GPU"),
+        (7, "warning", ONE),
+        (11, "warning", f"new `@unittest.skip`: {CLASS}"),
+        (15, "approval", "2 new use(s) of the skip marker needs_proc, 1 of them on a whole class, "
+                         "with its reason: the sandbox reads /proc")]
+
+
+def test_a_decorator_that_is_no_skip_mark_is_not_a_use(ic):
+    path = "tests/infrastructure/test_x.py"
+    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: ""})
+    assert whats(ic, diff(path, added=["@needs_procedure", "@pytest.fixture", "@other"]), tree=tree) == []
 

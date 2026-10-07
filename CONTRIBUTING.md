@@ -343,7 +343,9 @@ found, why it matters and what to do, and it does not fail. Three things keep
 its report short:
 - A skip needs its reason: the message of the skip, or a comment on its line
   or the line directly above. Then a maintainer approves the reason and you
-  have nothing else to do. A skip with no reason asks you for one.
+  have nothing else to do. A skip with no reason asks you for one. A form
+  that stops more than one test (`pytestmark`, a skip on a class, `.only`, a
+  build tag on a Go test file) is named with how far it reaches.
 - A test you rename in place is listed, not questioned. So is a test whose
   body becomes a helper that your tests call.
 - An import that must follow the line that sets the import path takes

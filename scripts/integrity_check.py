@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tokenize
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,15 +81,70 @@ SIZE_BASELINE = ".github/code-health-baseline.json"
 LARGE_CHANGE_LINES = 400
 
 TEST_DEF = re.compile(r"^\s*(?:func (Test\w+)\(|(?:async )?def (test_\w+)\(|(?:it|test)\(\s*['\"`](.+?)['\"`])")
-# A skip is a statement or a decorator, so it starts its line; the same words
-# inside a string are data.
-SKIP = re.compile(r"^\s*(?:\w+\s*=\s*)?(?:@?pytest\.mark\.(?:skip|xfail)|pytest\.skip\(|@?unittest\.skip"
-                  r"|t\.Skip(?:f|Now)?\(|(?:it|test|describe)\.(?:skip|todo)\(|xit\()")
+# The forms by which a test stops running, for each runner. Each row: the
+# pattern of a new line, and how far the form reaches: "one" (the test it
+# stands on or in), "named" (a skip mark kept under a name of its own; its
+# uses are counted apart), "class" (every test of the class), "group" (every
+# test of the group), "file" (every test of the file), "others" (every other
+# test of the file), "files" (whole test files), "hook" (the tests a hook
+# picks). The first row that fits a line decides, so a form at the start of
+# the line (the whole file) stands above the same form further in. A form is
+# a statement or a decorator, so most patterns start at the start of the
+# line; the same words inside a string are data.
+SKIP_MARK = r"pytest\.mark\.(?:skip|skipif|xfail)\b"
+STOPS = {
+    "python": (
+        (r"^pytestmark\s*=.*\b(?:skip|skipif|xfail)\b", "file"),
+        (rf"^\s*\w+\s*=\s*{SKIP_MARK}", "named"),
+        (rf"^\s*@{SKIP_MARK}", "one"),
+        (r"^pytest\.skip\(", "file"),
+        (r"^\s*pytest\.(?:skip|xfail)\(", "one"),
+        (rf"\bmarks\s*=\s*[\[(]?\s*{SKIP_MARK}", "one"),
+        (r"^(?:\w+\s*=\s*)?pytest\.importorskip\(", "file"),
+        (r"^\s+(?:\w+\s*=\s*)?pytest\.importorskip\(", "one"),
+        (r"^__test__\s*=\s*False\b", "file"),
+        (r"^\s+__test__\s*=\s*False\b", "class"),
+        (r"^collect_ignore(?:_glob)?\b", "files"),
+        (r"^(?:async\s+)?def pytest_ignore_collect\(", "files"),
+        (rf"\.add_marker\(\s*{SKIP_MARK}", "hook"),
+        (r"^\s*@?unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b", "one"),
+        (r"^\s*self\.skipTest\(", "one"),
+        (r"^raise\s+(?:unittest\.)?SkipTest\b", "file"),
+        (r"^\s+raise\s+(?:unittest\.)?SkipTest\b", "one"),
+    ),
+    "go": (
+        (r"^\s*(?:t|tb)\.Skip(?:f|Now)?\(", "one"),
+        (r"^//go:build\b|^// \+build\b", "file"),
+    ),
+    "script": (
+        (r"^\s*(?:it|test|describe)(?:\.\w+)*\.only\b", "others"),
+        (r"^\s*describe(?:\.\w+)*\.(?:skip|todo|skipIf|runIf)\b|^\s*xdescribe\(", "group"),
+        (r"^\s*(?:it|test)(?:\.\w+)*\.(?:skip|todo|fails)\b", "one"),
+        (r"^\s*(?:it|test)(?:\.\w+)*\.(?:skipIf|runIf)\(", "one"),
+        (r"^\s*x(?:it|test)\(", "one"),
+    ),
+}
+STOPS = {kind: tuple((re.compile(pattern), reach) for pattern, reach in rows) for kind, rows in STOPS.items()}
+# What a form that reaches further than one test says of itself.
+REACH = {
+    "class": "every test of this class stops running",
+    "group": "every test of this group stops running",
+    "file": "every test of this file stops running",
+    "others": "every other test of this file stops running",
+    "files": "whole test files are left out",
+    "hook": "the tests the hook picks stop running",
+}
+NAMED_MARK = re.compile(rf"^\s*(\w+)\s*=\s*{SKIP_MARK}")
+# `importorskip` skips when a module is not there: the module it names is its reason.
+IMPORT_OR_SKIP = re.compile(r"\bimportorskip\(\s*['\"]([\w.]+)['\"]")
+# The line that a decorator stands on: a function or a class.
+DECORATED = re.compile(r"^\s*(?:(?:async\s+)?def|class)\s")
 ASSERTION = re.compile(r"(?:^\s*assert\b)|\bt\.(?:Error|Errorf|Fatal|Fatalf)\(|\b(?:require|assert)\.\w+\(|\bexpect\(")
 # The line that starts a function, in the languages the tests are written in.
 DEFINITION = re.compile(r"^\s*(?:(?:async\s+)?def|func|function)\s+(?:\([^)]*\)\s*)?(\w+)\s*[(\[]")
 # What a skip says about itself: `reason=`, or the message of a call that takes one.
-SKIP_REASON = re.compile(r"(?:\breason\s*=\s*|\bt\.Skipf?\(\s*|\bpytest\.skip\(\s*|\bunittest\.skip\(\s*)([^\s),][^),]*)")
+SKIP_REASON = re.compile(r"(?:\breason\s*=\s*|(?:\bt\.Skipf?\(|\bpytest\.(?:skip|xfail)\(|\bunittest\.skip\("
+                         r"|\bself\.skipTest\(|\bSkipTest\()\s*(?!\w+\s*=))([^\s),][^),]*)")
 # The suppression markers of each kind of file. A marker counts in a comment
 # of a file of its kind; the same words in another kind of file are text.
 MARKERS = {
@@ -224,7 +281,7 @@ def file_kind(path: str) -> str:
 
 def is_test(path: str) -> bool:
     name = path.rsplit("/", 1)[-1]
-    return (name.endswith("_test.go") or name.startswith("test_") or name.endswith("_test.py")
+    return (name.endswith("_test.go") or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"
             or ".test." in name or "/tests/" in f"/{path}" or "/test/" in f"/{path}")
 
 
@@ -280,7 +337,7 @@ def check_tests(changes: list[FileChange], tree: Tree) -> list[Finding]:
             out.append(Finding("warning", c.path, 0, "test file deleted", TEST_WHY,
                                "Keep the file, or say in the pull request why its tests no longer apply."))
         else:
-            out += (removed_tests(c, added_names, tree) + new_skips(c, tree) + skip_helper_calls(c, tree)
+            out += (removed_tests(c, added_names, tree) + new_skips(c, tree) + skip_helper_calls(c, tree) + named_mark_uses(c, tree)
                     + changed_assertions(c, product_changed))
     return out
 
@@ -355,8 +412,10 @@ def skip_reason(path: str, lines: dict[int, str], line_no: int) -> str:
 
     A reason is `reason=` or the message of the call, on the lines of the
     call, or a comment on the line of the skip or on the line directly above
-    it. An empty text is no reason. `lines` holds the lines that can be read,
-    by line number.
+    it. An empty text is no reason. `importorskip` with no `reason=` has the
+    module it needs as its reason, and a comment above it is not read: that
+    comment is about the test. `lines` holds the lines that can be read, by
+    line number.
     """
     call, depth = "", 0
     for offset in range(8):
@@ -371,8 +430,13 @@ def skip_reason(path: str, lines: dict[int, str], line_no: int) -> str:
     reason = given.group(1).strip().strip("\"'`").strip() if given else ""
     if reason:
         return reason
+    module = IMPORT_OR_SKIP.search(call)
+    if module:
+        return f"needs the module {module.group(1)}"
     above = lines.get(line_no - 1, "").strip()
-    comment = comment_text(path, lines[line_no]) or (above.lstrip("#/ ") if above.startswith(("#", "//")) else "")
+    # A build tag is a comment line itself; its own text is the form, not a reason.
+    own = "" if lines[line_no].lstrip().startswith(("//", "#")) else comment_text(path, lines[line_no])
+    comment = own or (above.lstrip("#/ ") if above.startswith(("#", "//")) else "")
     return comment.strip()
 
 
@@ -384,13 +448,87 @@ def skip_finding(path: str, line_no: int, what: str, reason: str) -> Finding:
                    "Make the test run. If it cannot run here, say why next to the skip.")
 
 
+def as_code(pattern: re.Pattern, line: str) -> bool:
+    """Whether the pattern is found on the line outside a string. Inside one, the same words are text."""
+    found = pattern.search(line)
+    if not found:
+        return False
+    quote = ""
+    for index, char in enumerate(line[:found.start()]):
+        if quote:
+            quote = "" if char == quote and line[index - 1] != "\\" else quote
+        elif char in "\"'`":
+            quote = char
+    return not quote
+
+
+def text_lines(path: str, source: str | None) -> set[int]:
+    """The lines of a Python file that lie inside a string of more than one line. They are text, not code.
+
+    None when the file cannot be read as Python: then every line counts as code.
+    """
+    inside: set[int] = set()
+    if source is None or file_kind(path) != "python":
+        return inside
+    starts = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            name = tokenize.tok_name[token.type]
+            if name == "FSTRING_START":
+                starts.append(token.start[0])
+            elif name == "FSTRING_END" and starts:
+                inside.update(range(starts.pop() + 1, token.end[0] + 1))
+            elif name == "STRING":
+                inside.update(range(token.start[0] + 1, token.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError):
+        return set()
+    return inside
+
+
+def stop_of(path: str, line: str) -> str:
+    """How far a line reaches when it stops tests from running (a key of the rows of STOPS), or "" when it does not."""
+    return next((reach for pattern, reach in STOPS.get(file_kind(path), ()) if as_code(pattern, line)), "")
+
+
+def stop_text(line: str, reach: str) -> str:
+    """What a finding says for a new line that stops tests from running."""
+    if reach == "one":
+        return "new skip or todo marker in a test"
+    if reach == "named":
+        return f"new skip marker with a name of its own: {NAMED_MARK.match(line).group(1)}"
+    head = re.sub(r"^(?:async\s+)?def\s+", "", line.strip().split("(")[0])
+    name, _, call = head.partition("=")
+    # On a line that gives a name to what `importorskip` returns, the call is the form and not the name.
+    form = re.sub(r"\s+", " ", (call if call.strip().endswith("importorskip") else name).strip())[:40]
+    return f"new `{form}`: {REACH[reach]}"
+
+
+def on_a_class(lines: dict[int, str], line_no: int) -> bool:
+    """Whether the decorator on this line stands on a class. Then it reaches every test of the class."""
+    if not lines.get(line_no, "").lstrip().startswith("@"):
+        return False
+    below = (lines.get(n, "") for n in range(line_no + 1, line_no + 30))
+    return next((line for line in below if DECORATED.match(line)), "").lstrip().startswith("class ")
+
+
 def new_skips(c: FileChange, tree: Tree) -> list[Finding]:
     added = {line_no: text for _, line_no, text in c.added}
     # The whole file when it can be read, so that a comment on an unchanged line above a new skip is seen.
     source = tree.read(c.path)
     lines = dict(enumerate(source.splitlines(), 1)) if source is not None else added
-    return [skip_finding(c.path, line_no, "new skip or todo marker in a test", skip_reason(c.path, lines, line_no))
-            for line_no, text in added.items() if SKIP.search(text)]
+    out, imports, text_only = [], {}, text_lines(c.path, source)
+    for line_no, text in added.items():
+        reach = "" if line_no in text_only else stop_of(c.path, text)
+        if reach == "one" and on_a_class(lines, line_no):
+            reach = "class"
+        reason = skip_reason(c.path, lines, line_no) if reach else ""
+        if reach == "one" and IMPORT_OR_SKIP.search(text):
+            # Many tests of a file often need the same module: one finding for each reason, with the number.
+            imports.setdefault(reason, []).append(line_no)
+        elif reach:
+            out.append(skip_finding(c.path, line_no, stop_text(text, reach), reason))
+    return out + [skip_finding(c.path, found[0], f"{len(found)} new call(s) to `pytest.importorskip` in a test", reason)
+                  for reason, found in imports.items()]
 
 
 def skip_helpers(tree: Tree, path: str) -> dict[str, str]:
@@ -398,12 +536,16 @@ def skip_helpers(tree: Tree, path: str) -> dict[str, str]:
     helpers: dict[str, str] = {}
     for other in tree.tests_beside(path):
         lines = dict(enumerate((tree.read(other) or "").splitlines(), 1))
-        name = ""
+        name, depth = "", 0
         for line_no, line in lines.items():
+            indent = len(line) - len(line.lstrip())
             defined = DEFINITION.match(line)
             if defined:
-                name = "" if test_name(line) else defined.group(1)
-            elif name and SKIP.search(line):
+                name, depth = ("" if test_name(line) else defined.group(1)), indent
+            elif line.strip() and indent <= depth and not line.lstrip().startswith(("#", "//", ")", "}")):
+                # A line no deeper than the `def` line ends the function; a skip from here on is not in it.
+                name = ""
+            elif name and stop_of(other, line) == "one":
                 helpers.setdefault(name, skip_reason(other, lines, line_no))
     return helpers
 
@@ -416,6 +558,47 @@ def skip_helper_calls(c: FileChange, tree: Tree) -> list[Finding]:
         lines = [line_no for _, line_no, text in c.added if call.match(text)]
         if lines:
             out.append(skip_finding(c.path, lines[0], f"{len(lines)} new call(s) to the skip helper {name}", reason))
+    return out
+
+
+def named_marks(tree: Tree, path: str) -> dict[str, str]:
+    """The skip marks with a name of their own that a test file can use: name -> the reason the mark gives.
+
+    They are looked for in the test files beside `path`, in `path` itself, and
+    in the modules it imports names from.
+    """
+    source = tree.read(path) or ""
+    imported = [module.replace(".", "/") + ".py" for module in re.findall(r"^from\s+([\w.]+)\s+import\s", source, re.M)]
+    marks: dict[str, str] = {}
+    for other in dict.fromkeys([path, *tree.tests_beside(path), *imported]):
+        lines = dict(enumerate((tree.read(other) or "").splitlines(), 1))
+        for line_no, line in lines.items():
+            named = NAMED_MARK.match(line)
+            if named and named.group(1) != "pytestmark":
+                marks.setdefault(named.group(1), skip_reason(other, lines, line_no))
+    return marks
+
+
+def named_mark_uses(c: FileChange, tree: Tree) -> list[Finding]:
+    """One finding for each named skip mark the change puts on tests of this file, with the number of uses."""
+    out = []
+    source = tree.read(c.path)
+    whole_file = dict(enumerate((source or "").splitlines(), 1))
+    text_only = text_lines(c.path, source)
+    added = [(line_no, text) for _, line_no, text in c.added if line_no not in text_only]
+    for name, reason in sorted(named_marks(tree, c.path).items()):
+        use = re.compile(rf"^\s*@{re.escape(name)}\b|\bmarks\s*=\s*[\[(]?\s*{re.escape(name)}\b")
+        whole = re.compile(rf"^pytestmark\s*=.*\b{re.escape(name)}\b")
+        lines = [line_no for line_no, text in added if as_code(use, text)]
+        files = [line_no for line_no, text in added if as_code(whole, text)]
+        if lines:
+            classes = sum(on_a_class(whole_file, line_no) for line_no in lines)
+            on_classes = f", {classes} of them on a whole class" if classes else ""
+            out.append(skip_finding(c.path, lines[0], f"{len(lines)} new use(s) of the skip marker {name}{on_classes}",
+                                    reason))
+        if files:
+            out.append(skip_finding(c.path, files[0], f"new `pytestmark` with the skip marker {name}: {REACH['file']}",
+                                    reason))
     return out
 
 
