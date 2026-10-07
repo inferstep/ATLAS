@@ -182,25 +182,6 @@ a reason, and formatting. It reports and does not fail the job. The settings
 are in `.golangci.yml`; CONTRIBUTING.md says how to run it and what to do
 about each finding.
 
-### Added: hadolint reads every Dockerfile, and the weekly scan reads the inference images
-
-Nothing linted the Dockerfiles, and the inference images were the only
-published images no scanner read.
-
-- A `hadolint (dockerfiles)` job lints every Dockerfile the repository tracks
-  (`scripts/dockerfile_lint.py`). It reports and does not fail for a finding:
-  the counts are in the job summary, and the findings in a Dockerfile a change
-  touches are annotations. It fails when it could not lint: no Dockerfile,
-  hadolint did not run, or hadolint could not read a Dockerfile. hadolint is
-  its release binary at v2.15.1, held against a checksum the workflow records.
-  Today it reports 37 findings in 8 Dockerfiles, none of them an error.
-- `make verify` shows hadolint's findings for the Dockerfiles a change
-  touches, when hadolint is installed.
-- The weekly container scan and its signature check read six images, not
-  four: `atlas-llama` and `atlas-llama-vulkan` are added. The ROCm image is
-  built on the user's machine and never published, so it is not scanned.
-- The canary plants a `RUN cd` line for the new job.
-
 ### Fixed: an edit_file old_str that stopped matching its file ran on to the token cap
 
 An old_str is text copied from the target file, so it can be checked while it
@@ -355,6 +336,25 @@ passed, did not run or did not finish, a required check the list does not
 know, and a canary that was not renewed in 14 days. The two required CodeQL
 jobs and `dependency review` are not covered; the list says why. The renewal
 is by hand, once a week (`docs/quality/gates.md`).
+
+### Added: hadolint reads every Dockerfile, and the weekly scan reads the inference images
+
+Nothing linted the Dockerfiles, and the inference images were the only
+published images no scanner read.
+
+- A `hadolint (dockerfiles)` job lints every Dockerfile the repository tracks
+  (`scripts/dockerfile_lint.py`). It reports and does not fail for a finding:
+  the counts are in the job summary, and the findings in a Dockerfile a change
+  touches are annotations. It fails when it could not lint: no Dockerfile,
+  hadolint did not run, or hadolint could not read a Dockerfile. hadolint is
+  its release binary at v2.15.1, held against a checksum the workflow records.
+  Today it reports 37 findings in 8 Dockerfiles, none of them an error.
+- `make verify` shows hadolint's findings for the Dockerfiles a change
+  touches, when hadolint is installed.
+- The weekly container scan and its signature check read six images, not
+  four: `atlas-llama` and `atlas-llama-vulkan` are added. The ROCm image is
+  built on the user's machine and never published, so it is not scanned.
+- The canary plants a `RUN cd` line for the new job.
 
 ### Added: a page for the quality gates and their baselines
 
