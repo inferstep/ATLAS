@@ -156,6 +156,43 @@ def test_with_a_log_file_the_output_goes_there_and_the_retry_line_is_still_print
     assert (tmp_path / "pip.log").read_text().splitlines() == ["downloading, try 1", TIMED_OUT, "downloaded on try 2"]
 
 
+def test_the_helper_keeps_its_two_files_in_a_private_temporary_folder_and_removes_it(tmp_path):
+    # Where the system puts a temporary folder differs from system to system, so the helper's own call says where.
+    notes = 'mktemp() { local made; made=$(command mktemp "$@"); echo "$* $made" >> "%s/made"; echo "$made"; }\n' % tmp_path
+    (tmp_path / "look").write_text(f"""#!/bin/bash
+calls=$(cat "{tmp_path}/look.calls" 2>/dev/null || echo 0)
+calls=$((calls + 1))
+echo "$calls" > "{tmp_path}/look.calls"
+if [ "$calls" = 2 ]; then
+  folder=$(cut -d' ' -f2- "{tmp_path}/made")
+  ls -ld "$folder" | cut -c1-10 > "{tmp_path}/folder.mode"
+  ls "$folder" | sort > "{tmp_path}/folder.files"
+fi
+echo "{TIMED_OUT}" >&2
+exit 7
+""", encoding="utf-8")
+    (tmp_path / "look").chmod(0o755)
+    script = ("set -euo pipefail\n" + LOGS + notes + function("retry_download")
+              + 'retry_download "The package download" -- look || true\n')
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "ATLAS_DOWNLOAD_WAIT_SECONDS": "0"}
+    subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20, check=True)
+    made = (tmp_path / "made").read_text().splitlines()
+    assert len(made) == 1 and made[0].startswith("-d "), made
+    assert (tmp_path / "folder.mode").read_text().strip() == "drwx------"
+    assert (tmp_path / "folder.files").read_text().split() == ["output", "status"]
+    assert not Path(made[0].split(" ", 1)[1]).exists()
+
+
+def test_a_step_that_fails_and_prints_nothing_is_tried_again_and_says_so(tmp_path):
+    (tmp_path / "fetch").write_text(f'#!/bin/bash\necho x >> "{tmp_path}/fetch.calls"\nexit 3\n', encoding="utf-8")
+    (tmp_path / "fetch").chmod(0o755)
+    done = run(tmp_path, 'retry_download "The package download" -- fetch\necho "the install goes on"\n')
+    assert done.returncode == 3 and "the install goes on" not in done.stdout
+    assert (tmp_path / "fetch.calls").read_text().count("x") == 3
+    assert retry_lines(done) == [f"WARN The package download failed (exit 3): no output. Trying it again in 0s (try {n} of 3)…"
+                                 for n in (2, 3)]
+
+
 def test_the_command_is_run_as_it_is_written_with_its_arguments(tmp_path):
     (tmp_path / "show").write_text('#!/bin/bash\nprintf "<%s>" "$@"\n', encoding="utf-8")
     (tmp_path / "show").chmod(0o755)

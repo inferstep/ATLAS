@@ -120,16 +120,19 @@ retry_download() {
     done
     shift
     local tries="${ATLAS_DOWNLOAD_TRIES:-3}" pause="${ATLAS_DOWNLOAD_WAIT_SECONDS:-5}"
-    local n=1 rc=0 out last
-    out=$(mktemp)
+    local n=1 rc=0 dir out last
+    # The output of a try and its status are kept in a folder of their own,
+    # which only this user can read. It is removed when the step ends.
+    dir=$(mktemp -d) || return 1
+    out="$dir/output"
     while true; do
         # The status of the command itself, not of the `tee` beside it.
         if [[ -n "$log" ]]; then
-            { "$@" 2>&1 && echo 0 > "$out.rc" || echo "$?" > "$out.rc"; } | tee "$out" >> "$log"
+            { "$@" 2>&1 && echo 0 > "$dir/status" || echo "$?" > "$dir/status"; } | tee "$out" >> "$log"
         else
-            { "$@" 2>&1 && echo 0 > "$out.rc" || echo "$?" > "$out.rc"; } | tee "$out"
+            { "$@" 2>&1 && echo 0 > "$dir/status" || echo "$?" > "$dir/status"; } | tee "$out"
         fi
-        rc=$(cat "$out.rc" 2>/dev/null || echo 1)
+        rc=$(cat "$dir/status" 2>/dev/null || echo 1)
         if [[ "$rc" -eq 0 || "$n" -ge "$tries" ]]; then
             break
         fi
@@ -139,12 +142,12 @@ retry_download() {
         if [[ -n "$only" ]] && ! grep -Eq -- "$only" "$out"; then
             break
         fi
-        last=$(grep -v '^[[:space:]]*$' "$out" | tail -1 | cut -c1-200)
+        last=$(grep -v '^[[:space:]]*$' "$out" | tail -1 | cut -c1-200) || true
         n=$((n + 1))
         log_warn "$step failed (exit $rc): ${last:-no output}. Trying it again in ${pause}s (try $n of $tries)…"
         sleep "$pause"
     done
-    rm -f "$out" "$out.rc"
+    rm -rf "${dir:?}"
     return "$rc"
 }
 
