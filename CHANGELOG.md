@@ -103,6 +103,23 @@ notes off, and makes its two statuses report without failing. A commit that
 has no `codecov.yml` uploads nothing, because Codecov would use its own
 defaults for it.
 
+### Added: CI sends the result of each test to Codecov
+
+A test that passes only sometimes looks green on the run that matters. The
+test jobs now write the result of each test as a JUnit file, and two new
+jobs, `test results upload` and `test results upload (extension)`, send them
+to Codecov's test report, under the flags of the coverage reports. They run
+also when a test job failed, because a failed test is what the report is
+for, and a refused upload turns only the upload job red. No secret is used.
+The report is the "Tests" tab of the repository on Codecov and blocks
+nothing.
+
+In CI the Go test gates run `go test -json`. `scripts/production-readiness.py`
+turns the events back into the text `go test` prints (what each package said,
+and the output of every failed test) and judges that text as before; the
+result of each test is written beside the cover profile. A run without
+`ATLAS_COVERAGE_DIR` is unchanged.
+
 ### Changed: the SonarQube Cloud analysis runs from CI
 
 Sonar analysed only the default branch by itself. A new `sonar scan` job

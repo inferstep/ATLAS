@@ -51,7 +51,7 @@ jobs:
 
       - name: go test -race
         env:
-          # Makes the test gate write a cover profile there.
+          # Makes the test gate write a cover profile and the test results there.
           ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-test
 
@@ -159,7 +159,8 @@ jobs:
 
       - name: pytest
         env:
-          # Makes the test gate write an LCOV report and the raw data there.
+          # Makes the test gate write an LCOV report, the raw data and the
+          # test results there.
           ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
 
@@ -570,6 +571,96 @@ jobs:
         with:
           version: v11.3.1
           files: ${{ steps.python.outputs.files }}
+          flags: python
+          disable_search: true
+          disable_telem: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+  test-results-upload:
+    name: test results upload
+    # Sends the result of each test of the test jobs to Codecov, so that a
+    # test that fails only sometimes is named over many runs. Unlike the
+    # coverage job it also runs when a test job failed: a failed test is what
+    # the report is for. It is a job of its own for the same reasons as the
+    # coverage job, so a refused upload turns this job red and never a test
+    # job. The merge queue is left out, as for coverage.
+    needs: [go-tests, python-tests]
+    if: ${{ !cancelled() && github.event_name != 'merge_group' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # For the identity token Codecov checks; see the coverage job.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Codecov files a report under the head commit of a pull request.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/reports
+
+      - name: list the result files
+        id: results
+        # A test job that stopped before its tests ran left no result file.
+        # Its upload step is then left out, and this step says which.
+        run: |
+          shopt -s nullglob
+          for flag in go-proxy go-tui; do
+            file="$RUNNER_TEMP/reports/coverage-$flag/$flag.junit.xml"
+            if [ -f "$file" ]; then
+              echo "${flag//-/_}=$file" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice title=no test results for $flag::The job go test (${flag#go-}) left no result file, so nothing is sent for it. Fix: read that job; it stopped before its tests ran."
+            fi
+          done
+          python=("$RUNNER_TEMP"/reports/coverage-python-*/python*.junit.xml)
+          if [ "${#python[@]}" -gt 0 ]; then
+            (IFS=,; echo "python=${python[*]}" >> "$GITHUB_OUTPUT")
+          else
+            echo "::notice title=no test results for python::No pytest job left a result file, so nothing is sent for Python. Fix: read the pytest jobs; they stopped before their tests ran."
+          fi
+
+      # The same action, version and identity token as the coverage job. No
+      # secret is stored, and a pull request from a fork uploads the way
+      # Codecov allows for forks.
+      - name: upload go-proxy results
+        if: steps.results.outputs.go_proxy != ''
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          version: v11.3.1
+          report_type: test_results
+          files: ${{ steps.results.outputs.go_proxy }}
+          flags: go-proxy
+          disable_search: true
+          disable_telem: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+      - name: upload go-tui results
+        if: steps.results.outputs.go_tui != ''
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          version: v11.3.1
+          report_type: test_results
+          files: ${{ steps.results.outputs.go_tui }}
+          flags: go-tui
+          disable_search: true
+          disable_telem: true
+          fail_ci_if_error: true
+          use_oidc: true
+
+      - name: upload python results
+        if: steps.results.outputs.python != ''
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          version: v11.3.1
+          report_type: test_results
+          files: ${{ steps.results.outputs.python }}
           flags: python
           disable_search: true
           disable_telem: true

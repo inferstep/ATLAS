@@ -12,9 +12,11 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence
+from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +51,8 @@ class Gate:
     available: Callable[[], bool] = lambda: True
     unavailable_reason: str = "required tool is not installed"
     env: Optional[Dict[str, str]] = None
+    # Where a `go test -json` gate writes its results as JUnit XML.
+    junit: Optional[Path] = None
 
 
 @dataclass
@@ -62,18 +66,20 @@ class Result:
     reason: str = ""
 
 
-# Set to a directory to make the test gates write coverage reports into it.
-# CI sets it; without it a run is unchanged.
+# Set to a directory to make the test gates write their coverage reports and
+# their test results into it. CI sets it; without it a run is unchanged.
 COVERAGE_DIR_ENV = "ATLAS_COVERAGE_DIR"
 
 
 def _with_coverage(gates: dict[str, Gate]) -> dict[str, Gate]:
-    """Add coverage output to the test gates when ATLAS_COVERAGE_DIR is set.
+    """Add coverage and test-result output to the test gates when ATLAS_COVERAGE_DIR is set.
 
-    Go gates write a cover profile. pytest gates need pytest-cov; they write
-    an LCOV report, whose paths are relative to the repo root, and keep the
-    raw data file beside it so that the reports of several runs can be
-    combined.
+    Go gates write a cover profile, and run with -json so that the result of
+    each test can be written as JUnit XML (see _go_test_report). pytest gates
+    need pytest-cov; they write an LCOV report, whose paths are relative to
+    the repo root, and keep the raw data file beside it so that the reports
+    of several runs can be combined. They write their results as JUnit XML
+    themselves.
     """
     out_dir = os.environ.get(COVERAGE_DIR_ENV, "").strip()
     if not out_dir:
@@ -83,10 +89,12 @@ def _with_coverage(gates: dict[str, Gate]) -> dict[str, Gate]:
     for name in ("go-proxy-test", "go-tui-test"):
         gate, label = gates[name], name[: -len("-test")]
         flags = (f"-coverprofile={out / (label + '.out')}", "-covermode=atomic")
-        gates[name] = replace(gate, command=gate.command[:-1] + flags + gate.command[-1:])
+        command = gate.command[:2] + ("-json",) + gate.command[2:-1] + flags + gate.command[-1:]
+        gates[name] = replace(gate, command=command, junit=out / (label + ".junit.xml"))
     for name, label in (("python-tests", "python"), ("python-tests-lens", "python-lens")):
         gate = gates[name]
-        flags = ("--cov", f"--cov-report=lcov:{out / (label + '.lcov')}")
+        flags = ("--cov", f"--cov-report=lcov:{out / (label + '.lcov')}",
+                 f"--junitxml={out / (label + '.junit.xml')}", "-o", "junit_family=legacy")
         env = dict(gate.env or {}, COVERAGE_FILE=str(out / f".coverage.{label}"))
         gates[name] = replace(gate, command=gate.command + flags, env=env)
     return gates
@@ -364,6 +372,46 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     }
 
 
+def _go_test_report(stream: str) -> tuple[str, str]:
+    """From the output of `go test -json`: what go test prints without -json, and the results as JUnit XML.
+
+    The text is what each package said for itself (its `ok` or `FAIL` line,
+    its coverage, a build error) after the output of every test that failed.
+    A line that is not an event is kept as text, so nothing go test says is
+    lost. Every other judgement reads the text, as it does without -json.
+    """
+    said, by_test, ended = [], defaultdict(list), {}
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict) or "Action" not in event:
+            said.append(line)
+            continue
+        key = (event.get("Package", ""), event.get("Test", ""))
+        if event["Action"] in ("output", "build-output"):
+            (by_test[key] if key[1] else said).append(event.get("Output", "").rstrip("\n"))
+        elif key[1] and event["Action"] in ("pass", "fail", "skip"):
+            ended[key] = (event["Action"], float(event.get("Elapsed") or 0.0))
+    suites = ElementTree.Element("testsuites")
+    for package in sorted({package for package, _ in ended}):
+        cases = {test: result for (pkg, test), result in ended.items() if pkg == package}
+        suite = ElementTree.SubElement(suites, "testsuite", name=package, tests=str(len(cases)),
+                                       failures=str(sum(1 for action, _ in cases.values() if action == "fail")),
+                                       skipped=str(sum(1 for action, _ in cases.values() if action == "skip")))
+        for test, (action, seconds) in sorted(cases.items()):
+            case = ElementTree.SubElement(suite, "testcase", classname=package, name=test, time=f"{seconds:.3f}")
+            if action == "skip":
+                ElementTree.SubElement(case, "skipped")
+            elif action == "fail":
+                text = "\n".join(by_test[(package, test)])
+                ElementTree.SubElement(case, "failure", message="the test failed").text = re.sub(
+                    r"[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd]", "", text)
+    failed = [line for key, (action, _) in ended.items() if action == "fail" for line in by_test[key]]
+    return "\n".join(failed + said), ElementTree.tostring(suites, encoding="unicode")
+
+
 def _ran_no_test(command: Sequence[str], output: str) -> str:
     """Why a test command that exited 0 proves nothing; empty when it ran a test.
 
@@ -411,6 +459,9 @@ def _run_gate(gate: Gate, force_required: bool) -> Result:
     )
     duration = time.monotonic() - start
     output = completed.stdout.rstrip()
+    if gate.junit is not None:
+        output, results = _go_test_report(output)
+        gate.junit.write_text(results, encoding="utf-8")
     if completed.returncode != 0:
         reason = f"exit code {completed.returncode}"
     else:
