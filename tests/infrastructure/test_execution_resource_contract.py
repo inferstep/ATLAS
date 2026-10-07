@@ -22,6 +22,8 @@ import time
 
 import pytest
 
+from tests.infrastructure.bounded_commands import (OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood,
+                                                   with_an_address_space_limit)
 from tests.infrastructure.proc_files import needs_proc
 
 SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -31,6 +33,10 @@ sys.path.insert(0, SANDBOX)
 import resource_contract as rc  # noqa: E402
 
 MiB = 1024 * 1024
+# The loop of the staged verification command, as it was seeded: it appends
+# and never reaches its stop. Its text stays as it is.
+RUNAWAY = ("python3 -c \"out=[]\ncurrent=0\nstop=5\nstep=-1\n"
+           "while current < stop:\n out.append(current)\n current += step\"")
 
 
 @pytest.fixture
@@ -125,8 +131,8 @@ def test_no_caller_can_raise_the_ceiling(small):
 
 @needs_proc
 def test_a_gradual_allocator_is_stopped_and_named(small):
-    r = run("python3 -c \"import time\na=[]\nwhile True:\n a.append(bytearray(1<<20))\n"
-            " time.sleep(0.001)\"", small)
+    r = run(allocator(1, small.memory_bytes, pause=0.001), small)
+    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
     # The sampler is the enforcement now that the address-space rlimit is
@@ -136,12 +142,14 @@ def test_a_gradual_allocator_is_stopped_and_named(small):
     assert r.peak_memory_bytes <= small.memory_bytes * 1.5
 
 
+@needs_proc
 def test_a_rapid_allocator_is_stopped_and_named(small):
     # Large blocks can cross the ceiling between two samples. VmHWM is a
     # high-water mark, so the next sample still sees the peak and stops the
     # tree; what the interval bounds is the overshoot, not whether it is
     # noticed.
-    r = run("python3 -c \"a=[]\nwhile True: a.append(bytearray(64<<20))\"", small)
+    r = run(allocator(64, small.memory_bytes), small)
+    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
 
@@ -149,16 +157,23 @@ def test_a_rapid_allocator_is_stopped_and_named(small):
 @needs_proc
 def test_the_runaway_that_took_the_host_down(small):
     """`stepped(0, 5, -1)` exactly as the frozen family seeds it."""
-    r = run("python3 -c \"out=[]\ncurrent=0\nstop=5\nstep=-1\n"
-            "while current < stop:\n out.append(current)\n current += step\"", small)
+    import subprocess
+    # The loop has no end. Before anything of the sandbox runs it: under a
+    # limit of its own, and nothing else, it ends by itself.
+    alone = subprocess.run(["bash", "-c", with_an_address_space_limit(RUNAWAY, 64 * MiB)],
+                           capture_output=True, timeout=60, check=False)
+    assert alone.returncode == OWN_LIMIT
+    r = run(with_an_address_space_limit(RUNAWAY, small.memory_bytes), small)
+    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
     # And under the previous owner it is not stopped at all: an unbounded
     # Popen with only a timeout reaches whatever the host will give it.
-    import subprocess
+    # Nothing of the sandbox bounds this one, which is the point. It has the
+    # limit of its own all the same, so that it ends when this test cannot
+    # see its growth.
     unbounded = subprocess.Popen(
-        ["bash", "-c", "python3 -c \"out=[]\ncurrent=0\nwhile current < 5:\n"
-         " out.append(current)\n current += -1\""],
+        ["bash", "-c", with_an_address_space_limit(RUNAWAY, small.memory_bytes)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         # Watched for long enough that a loaded machine does not turn a real
@@ -212,14 +227,16 @@ def test_timeout_before_memory(small):
     assert r.elapsed_seconds < 20
 
 
+@needs_proc
 def test_memory_before_timeout(small):
-    r = run("python3 -c \"import time\na=[]\nwhile True:\n a.append(bytearray(4<<20))\"", small)
+    r = run(allocator(4, small.memory_bytes), small)
+    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert r.elapsed_seconds < small.wall_seconds
 
 
 def test_output_overflow_is_named_not_silently_truncated(small):
-    r = run("yes ABCDEFGHIJKLMNOP", small)
+    r = run(flood("ABCDEFGHIJKLMNOP", small.output_bytes), small)
     assert r.outcome == rc.OUTCOME_OUTPUT_LIMIT
     assert r.truncated
     assert not r.success
@@ -227,8 +244,8 @@ def test_output_overflow_is_named_not_silently_truncated(small):
 
 
 def test_output_overflow_while_allocating(small):
-    r = run("python3 -c \"a=[]\nimport sys\nwhile True:\n a.append(bytearray(1<<20))\n"
-            " sys.stdout.write('x'*100000)\"", small)
+    r = run(allocator(1, small.memory_bytes, each_block="sys.stdout.write('x'*100000)"), small)
+    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome in (rc.OUTCOME_OUTPUT_LIMIT, rc.OUTCOME_MEMORY_EXHAUSTED)
     assert not r.success
 
@@ -253,13 +270,13 @@ def test_cancellation_before_execution(small):
 
 def test_cancellation_during_allocation(small):
     started = time.time()
-    r = run("python3 -c \"import time\na=[]\nwhile True:\n a.append(bytearray(1<<20))\n"
-            " time.sleep(0.01)\"", small,
+    r = run(allocator(1, small.memory_bytes, pause=0.01), small,
             cancelled=lambda: time.time() - started > 0.4)
     assert r.outcome == rc.OUTCOME_CANCELLED
     assert not r.success
 
 
+@needs_proc
 def test_a_child_that_ignores_termination_still_dies(small):
     c = rc.ResourceContract(wall_seconds=2, memory_bytes=384 * MiB,
                             max_processes=16, output_bytes=1 * MiB)
@@ -269,6 +286,7 @@ def test_a_child_that_ignores_termination_still_dies(small):
     assert r.survivors == 0
 
 
+@needs_proc
 def test_a_child_that_closes_stdout_and_keeps_running_still_dies(small):
     c = rc.ResourceContract(wall_seconds=2, memory_bytes=384 * MiB,
                             max_processes=16, output_bytes=1 * MiB)
@@ -277,6 +295,7 @@ def test_a_child_that_closes_stdout_and_keeps_running_still_dies(small):
     assert r.survivors == 0
 
 
+@needs_proc
 @pytest.mark.parametrize("name,script,secs", [
     ("subshell background", "(sleep %d &) ; exit 0", 4211),
     ("double fork", "bash -c 'sleep %d &' ; exit 0", 4212),
@@ -293,6 +312,7 @@ def test_nothing_the_command_started_outlives_the_request(small, name, script, s
     assert alive(secs) == 0, name
 
 
+@needs_proc
 def test_a_healthy_sibling_survives_a_memory_kill(small):
     """One command's ceiling is its own. Nothing else on the box is touched."""
     import subprocess
@@ -302,7 +322,8 @@ def test_a_healthy_sibling_survives_a_memory_kill(small):
     try:
         time.sleep(0.6)
         assert sibling.poll() is None
-        r = run("python3 -c \"a=[]\nwhile True: a.append(bytearray(8<<20))\"", small)
+        r = run(allocator(8, small.memory_bytes), small)
+        assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
         assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
         assert sibling.poll() is None, "a sibling died with the memory-killed command"
     finally:
@@ -310,9 +331,11 @@ def test_a_healthy_sibling_survives_a_memory_kill(small):
         sibling.wait(timeout=5)
 
 
+@needs_proc
 def test_repeated_memory_failures_stay_bounded(small):
     for _ in range(4):
-        r = run("python3 -c \"a=[]\nwhile True: a.append(bytearray(8<<20))\"", small)
+        r = run(allocator(8, small.memory_bytes), small)
+        assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
         assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
         assert r.survivors == 0
 
@@ -345,8 +368,16 @@ def test_the_executor_result_carries_the_outcome():
     assert got["outcome"] == rc.OUTCOME_COMPLETED
     assert got["success"] is True
     assert got["survivors"] == 0
-    killed = ex._run_cmd(
-        ["bash", "-c", "python3 -c \"a=[]\nwhile True: a.append(bytearray(64<<20))\""],
-        timeout=30)
+
+
+@needs_proc
+def test_the_executor_result_names_a_command_that_took_too_much_memory(monkeypatch, small):
+    sys.path.insert(0, SANDBOX)
+    import executor_server as ex
+    # The small contract of this file, not the product's own ceiling: the
+    # command's own limit is a multiple of the ceiling it runs under.
+    monkeypatch.setattr(ex, "EXEC_CONTRACT", small)
+    killed = ex._run_cmd(["bash", "-c", allocator(64, small.memory_bytes)], timeout=30)
+    assert killed["returncode"] != OWN_LIMIT, REACHED_OWN_LIMIT
     assert killed["outcome"] == rc.OUTCOME_MEMORY_EXHAUSTED
     assert killed["success"] is False

@@ -335,6 +335,9 @@ pytest tests/e2e -v
   values through the subprocess environment.
 - `tests/validate_tests.py` (the `test-integrity` gate) rejects weakened
   tests, e.g. `assert True` or a swallowed exception.
+- A test of a limit must be harmless when the limit fails. A command that
+  the limit has to stop ends by itself a little above that limit: build it
+  with `tests/infrastructure/bounded_commands.py`.
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression

@@ -12,10 +12,16 @@ READ_PROC = {
     "test_http_cancellation.py": {
         "test_a_caller_that_goes_away_stops_the_command", "test_repeated_cancellation_is_idempotent",
         "test_a_healthy_neighbour_is_unaffected", "test_no_late_evidence_and_no_descendants_survive",
-        "test_shutdown_drains_within_the_bound"},
+        "test_shutdown_drains_within_the_bound", "test_cancellation_is_distinct_from_timeout_and_exhaustion"},
     "test_execution_resource_contract.py": {
         "test_a_gradual_allocator_is_stopped_and_named", "test_the_runaway_that_took_the_host_down",
-        "test_a_fork_tree_of_allocators_is_stopped", "test_process_limit"},
+        "test_a_fork_tree_of_allocators_is_stopped", "test_process_limit",
+        "test_a_rapid_allocator_is_stopped_and_named", "test_memory_before_timeout",
+        "test_a_healthy_sibling_survives_a_memory_kill", "test_repeated_memory_failures_stay_bounded",
+        "test_the_executor_result_names_a_command_that_took_too_much_memory",
+        "test_a_child_that_ignores_termination_still_dies",
+        "test_a_child_that_closes_stdout_and_keeps_running_still_dies",
+        "test_nothing_the_command_started_outlives_the_request"},
 }
 
 

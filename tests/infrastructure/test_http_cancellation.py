@@ -25,6 +25,7 @@ import time
 
 import pytest
 
+from tests.infrastructure.bounded_commands import OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood
 from tests.infrastructure.proc_files import needs_proc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,6 +38,9 @@ import resource_contract as rc  # noqa: E402
 # left a process behind -- and these tests deliberately leave processes
 # running mid-test, so an aborted one always does.
 MARKER_BASE = 7300 + (os.getpid() % 900) * 10
+# The ceilings the private executor of these tests runs under.
+MEMORY_BYTES = 512 * 1024 * 1024
+OUTPUT_BYTES = 8 * 1024 * 1024
 
 
 def _free_port() -> int:
@@ -77,8 +81,8 @@ def executor():
     env = dict(os.environ,
                PORT=str(port),
                ATLAS_SANDBOX_WORKSPACE_ROOT="/tmp",
-               ATLAS_EXEC_MEMORY_BYTES=str(512 * 1024 * 1024),
-               ATLAS_EXEC_OUTPUT_BYTES=str(8 * 1024 * 1024),
+               ATLAS_EXEC_MEMORY_BYTES=str(MEMORY_BYTES),
+               ATLAS_EXEC_OUTPUT_BYTES=str(OUTPUT_BYTES),
                MAX_EXECUTION_TIME="60")
     script = (
         "import importlib.util, os, sys, uvicorn\n"
@@ -199,17 +203,17 @@ def test_a_healthy_neighbour_is_unaffected(executor):
     assert alive(marker) == 0
 
 
+@needs_proc
 def test_cancellation_is_distinct_from_timeout_and_exhaustion(executor):
     """Three different endings, three different names."""
     timed = _shell(executor, "sleep 300", 3)
     assert timed["outcome"] == rc.OUTCOME_TIMED_OUT
 
-    killed = _shell(
-        executor,
-        'python3 -c "a=[]\nwhile True: a.append(bytearray(32<<20))"', 40)
+    killed = _shell(executor, allocator(32, MEMORY_BYTES), 40)
+    assert killed["exit_code"] != OWN_LIMIT, REACHED_OWN_LIMIT
     assert killed["outcome"] == rc.OUTCOME_MEMORY_EXHAUSTED
 
-    flooded = _shell(executor, "yes ABCDEFGHIJKLMNOP", 40)
+    flooded = _shell(executor, flood("ABCDEFGHIJKLMNOP", OUTPUT_BYTES), 40)
     assert flooded["outcome"] == rc.OUTCOME_OUTPUT_LIMIT
 
     # And the contract's own cancellation, which the HTTP path now reaches.

@@ -587,6 +587,26 @@ failed for that reason alone. They now skip there, with that cause as the
 reason, through one marker in `tests/infrastructure/proc_files.py`. Where
 `/proc` exists they run as before.
 
+### Fixed: tests of the sandbox's limits took the host's memory when the limit did not act
+
+The tests of the memory limit start a command that takes memory, and the
+limit has to stop it. The commands had no end of their own. The sandbox reads
+a command's memory from `/proc`; on a system without it the limit never
+acted, and six tests ran such a command until the system refused more memory
+or a time limit of 20 to 40 seconds passed. A fault in the limit would have
+done the same on Linux.
+
+- Each such command now ends by itself at four times the limit under test,
+  with a status of its own (`tests/infrastructure/bounded_commands.py`). A
+  limit that does not act gives a failed test that says so.
+- The tests that need `/proc` to stop the command, or to see whether a
+  process is left, skip where there is none: nine more test functions, with
+  the same marker and reason as before.
+- A test fails when a command of these two test files is written without an
+  end.
+
+No product code changes.
+
 ### Fixed: the TUI tests wrote session files into the real cache folder on macOS
 
 The session tests set `XDG_CACHE_HOME` to keep their files in a temporary
