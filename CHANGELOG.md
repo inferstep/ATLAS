@@ -39,6 +39,24 @@ refused with an indentation error.
 - A replacement whose indentation mixes tabs and spaces with the file's is
   refused, and the refusal says which to use.
 
+### Fixed: the bootstrap script tries a failed download again
+
+One failed download stopped the whole install, though the same download
+passed a few seconds later. The pip downloads and the Go module download of
+`scripts/atlas-bootstrap.sh` are now tried up to 3 times, with 5 seconds
+between the tries (`ATLAS_DOWNLOAD_TRIES`, `ATLAS_DOWNLOAD_WAIT_SECONDS`).
+Each new try prints one line with the step and the error of the try before.
+After the last try the script stops with that error, as before.
+
+Only a download is tried again. The Go modules are now downloaded in a step
+of their own, so a compile error of the TUI is not tried again; a pip error
+that is no network error is not, and a module that fails its checksum is not.
+
+Also fixed in the same lines: the TUI build looked for `go` only under
+`/usr/local/go/bin`, so a Go that was on the path from the system's own
+packages was not found, and the build was skipped with "go: command not
+found".
+
 ### Changed: the setup script writes the branch rules that are in force, and the release step is a script
 
 `scripts/setup/rulesets.sh` still wrote the rules from before the merge

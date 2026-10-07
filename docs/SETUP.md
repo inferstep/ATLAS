@@ -141,6 +141,8 @@ bash atlas-bootstrap.sh
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
 | `ATLAS_GO_VERSION=1.26.6` | Go toolchain version installed for the TUI build (the TUI needs 1.26.6+; older installed toolchains auto-fetch it) |
+| `ATLAS_DOWNLOAD_TRIES=3` | How often a download that fails is tried before the install stops (the pip downloads and the Go module download) |
+| `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | The wait between two tries of a download |
 
 **Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
 

@@ -45,6 +45,8 @@
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
 #   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.6)
+#   ATLAS_DOWNLOAD_TRIES=...          how often a download that fails is tried (default: 3)
+#   ATLAS_DOWNLOAD_WAIT_SECONDS=...   the wait between two tries (default: 5)
 #
 # Exit codes:
 #   0   success
@@ -85,6 +87,72 @@ die() {
     echo -e "${DIM}For help: https://github.com/inferstep/ATLAS/issues${NC}"
     exit 1
 }
+
+# ---------------------------------------------------------------------------
+# A download that fails is tried again
+# ---------------------------------------------------------------------------
+# A network fault is often gone a few seconds later. So a step that downloads
+# is run up to ATLAS_DOWNLOAD_TRIES times (3), with ATLAS_DOWNLOAD_WAIT_SECONDS
+# (5) between the tries. Each new try prints one line: which step it is, and
+# how the try before ended. After the last try the status of that try is
+# returned, and the caller stops as it did before.
+#
+# Only a download is tried again. A build error, or a file that fails its
+# check, is the same on every try, so it stops the step at once:
+#   --only-if <pattern>   try again only when the output shows this pattern
+#                         (for a step that also builds: its network errors)
+#   --not-if <pattern>    never try again when the output shows this pattern
+#                         (for a download that also checks what it got)
+#   --log <file>          put the step's output into this file, not on the
+#                         screen. The line for a new try is always printed.
+#
+#   retry_download <step> [--only-if P] [--not-if P] [--log F] -- <command>...
+retry_download() {
+    local step="$1"; shift
+    local only="" never="" log=""
+    while [[ "${1:-}" != "--" ]]; do
+        case "${1:-}" in
+            --only-if) only="$2"; shift 2 ;;
+            --not-if)  never="$2"; shift 2 ;;
+            --log)     log="$2"; shift 2 ;;
+            *) log_err "retry_download: '${1:-}' is not an option of it. Fix: put '--' before the command."; return 2 ;;
+        esac
+    done
+    shift
+    local tries="${ATLAS_DOWNLOAD_TRIES:-3}" pause="${ATLAS_DOWNLOAD_WAIT_SECONDS:-5}"
+    local n=1 rc=0 out last
+    out=$(mktemp)
+    while true; do
+        # The status of the command itself, not of the `tee` beside it.
+        if [[ -n "$log" ]]; then
+            { "$@" 2>&1 && echo 0 > "$out.rc" || echo "$?" > "$out.rc"; } | tee "$out" >> "$log"
+        else
+            { "$@" 2>&1 && echo 0 > "$out.rc" || echo "$?" > "$out.rc"; } | tee "$out"
+        fi
+        rc=$(cat "$out.rc" 2>/dev/null || echo 1)
+        if [[ "$rc" -eq 0 || "$n" -ge "$tries" ]]; then
+            break
+        fi
+        if [[ -n "$never" ]] && grep -Eq -- "$never" "$out"; then
+            break
+        fi
+        if [[ -n "$only" ]] && ! grep -Eq -- "$only" "$out"; then
+            break
+        fi
+        last=$(grep -v '^[[:space:]]*$' "$out" | tail -1 | cut -c1-200)
+        n=$((n + 1))
+        log_warn "$step failed (exit $rc): ${last:-no output}. Trying it again in ${pause}s (try $n of $tries)…"
+        sleep "$pause"
+    done
+    rm -f "$out" "$out.rc"
+    return "$rc"
+}
+
+# What pip prints when the network, and not the package, is the fault.
+PIP_NETWORK_ERROR='Read timed out|ReadTimeoutError|ConnectTimeoutError|NewConnectionError|Connection reset|Connection aborted|RemoteDisconnected|IncompleteRead|ProtocolError|connection broken by|Temporary failure in name resolution|Name or service not known|Network is unreachable|Could not fetch URL|50[234] Server Error'
+# What `go mod download` prints when the fault is in what it got or in the
+# module file: the same on every try.
+GO_NOT_A_NETWORK_ERROR='checksum mismatch|SECURITY ERROR|errors parsing go\.mod|malformed module path|invalid go version'
 
 # ---------------------------------------------------------------------------
 # sudo wrapper — uses sudo if we're not root, fails fast if blocked
@@ -1061,12 +1129,16 @@ install_atlas_cli() {
     # environment") on Debian 12 / Ubuntu 23.04+ / Fedora 38+. Older pip
     # ignores it as an unknown env var, so it's safe to always set.
     log_info "Upgrading pip + setuptools (PEP 660 editable install support)…"
-    run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user --upgrade --quiet \
-        pip setuptools wheel >>/tmp/atlas-pip.log 2>&1 \
+    retry_download "The pip and setuptools download" --only-if "$PIP_NETWORK_ERROR" --log /tmp/atlas-pip.log -- \
+        run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user --upgrade --quiet \
+        pip setuptools wheel \
         || log_warn "pip self-upgrade failed; continuing with system pip."
 
+    # This step downloads what the build needs and then builds the package.
+    # Only a network error is tried again; a build error stops it at once.
     log_info "Installing ATLAS Python CLI (pip install --user -e .)…"
-    if run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user -e . --quiet 2>&1 | tee -a /tmp/atlas-pip.log; then
+    if retry_download "The download for the ATLAS CLI install" --only-if "$PIP_NETWORK_ERROR" -- \
+        run_as_target env PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip install --user -e . --quiet | tee -a /tmp/atlas-pip.log; then
         log_ok "ATLAS CLI installed"
     else
         log_warn "pip install failed (exit ${PIPESTATUS[0]}). Last 20 lines: /tmp/atlas-pip.log"
@@ -1191,9 +1263,22 @@ build_atlas_tui() {
     # requirement of Go 1.26+ — auto-downloads the newer toolchain even
     # if the installed go is 1.24. PATH includes /usr/local/go/bin from
     # install_go() above.
+    #
+    # The modules are downloaded in a step of their own, which is tried again
+    # when it fails. The build then needs no network, and a compile error is
+    # not tried again.
+    #
+    # The path is set inside double quotes: inside single quotes `$PATH`
+    # stays as that text, and a Go that is on the path, and not under
+    # /usr/local/go, is not found.
     set +e
-    run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH='/usr/local/go/bin:\$PATH' go build -o '$out' ." 2>&1 | tee /tmp/atlas-tui-build.log
+    retry_download "The Go module download" --not-if "$GO_NOT_A_NETWORK_ERROR" -- \
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go mod download" | tee /tmp/atlas-tui-build.log
     local rc=${PIPESTATUS[0]}
+    if [[ $rc -eq 0 ]]; then
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go build -o '$out' ." 2>&1 | tee -a /tmp/atlas-tui-build.log
+        rc=${PIPESTATUS[0]}
+    fi
     set -e
 
     if [[ $rc -eq 0 && -x "$out" ]]; then
