@@ -506,9 +506,9 @@ def test_one_fault_in_the_extensions_job_is_one_red_and_not_one_more_from_this_c
 
 def test_the_jobs_skipped_behind_a_failure_are_always_printed(ran):
     lines = ran.skip_notes(["publish"], {"c": ["a"], "b": ["a", "d"]})
-    assert lines == ["skipped by their own `if:` condition (not judged): publish",
-                     "2 job(s) skipped because a job they need failed (the failed job holds the result): "
-                     "`b` behind `a`, `d`; `c` behind `a`"]
+    behind = ("2 job(s) skipped because a job they need failed (the failed job holds the result): "
+              "`b` behind `a`, `d`; `c` behind `a`")
+    assert lines == ["skipped by their own `if:` condition (not judged): publish", behind]
     assert ran.skip_notes([], {}) == []
 
 
