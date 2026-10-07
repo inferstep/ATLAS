@@ -8,7 +8,9 @@ become annotations, so a pull request shows the findings of its own files.
 The run fails when the check did not check: the repository tracks no
 Dockerfile, hadolint did not run, or hadolint could not read a Dockerfile.
 
-Usage: dockerfile_lint.py [--hadolint PATH] [--changed-from COMMIT] [--changed-only]
+hadolint is taken from PATH.
+
+Usage: dockerfile_lint.py [--changed-from COMMIT] [--changed-only]
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -26,7 +29,7 @@ DOCKERFILE = re.compile(r"(^|/)Dockerfile(\.[^/]+)?$")
 UNREADABLE = "DL1000"
 LEVELS = ("error", "warning", "info", "style")
 INSTALL = ("Fix: install the hadolint version that .github/workflows/hadolint.yml records "
-           "(https://github.com/hadolint/hadolint/releases), or pass its path with --hadolint.")
+           "(https://github.com/hadolint/hadolint/releases) and put it on PATH.")
 
 
 class LintError(Exception):
@@ -43,8 +46,13 @@ def dockerfiles(root: Path) -> list[str]:
 
 
 def changed_files(root: Path, base: str) -> set[str] | None:
-    """The files that differ from `base`, or None when that cannot be read."""
-    done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", f"{base}...HEAD"],
+    """The files that differ from the merge base with `base`, or None when that cannot be read."""
+    # --end-of-options: the base is a revision here, whatever its first character.
+    merged = subprocess.run(["git", "-C", str(root), "merge-base", "--end-of-options", base, "HEAD"],
+                            capture_output=True, text=True, check=False)
+    if merged.returncode != 0:
+        return None
+    done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", merged.stdout.strip(), "HEAD"],
                           capture_output=True, text=True, check=False)
     return set(done.stdout.splitlines()) if done.returncode == 0 else None
 
@@ -98,6 +106,23 @@ def unreadable(findings: list[dict]) -> list[str]:
             for finding in findings if finding["code"] == UNREADABLE]
 
 
+def show(findings: list[dict], touched: set[str] | None, changed_only: bool) -> None:
+    """Print the findings, and on GitHub annotate those in the Dockerfiles the change touches."""
+    in_change = [finding for finding in findings if touched is None or finding["file"] in touched]
+    for finding in in_change if changed_only else findings:
+        print(f"{finding['file']}:{finding['line']}: {finding['code']} {finding['level']}: {finding['message']}")
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        for finding in in_change:
+            print(annotation(finding))
+
+
+def write_summary(lines: list[str]) -> None:
+    print("\n".join(lines))
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+            out.write("\n".join(lines) + "\n")
+
+
 def lint(root: Path, binary: str, base: str, changed_only: bool) -> int:
     files = dockerfiles(root)
     if not files:
@@ -108,18 +133,8 @@ def lint(root: Path, binary: str, base: str, changed_only: bool) -> int:
     if base and touched is None:
         print(f"note commit {base} is not in this checkout, so every finding is shown, not only those in the "
               "Dockerfiles the change touches.")
-    shown = [f for f in findings if not changed_only or touched is None or f["file"] in touched]
-    for finding in shown:
-        print(f"{finding['file']}:{finding['line']}: {finding['code']} {finding['level']}: {finding['message']}")
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        for finding in findings:
-            if touched is None or finding["file"] in touched:
-                print(annotation(finding))
-    lines = summary(findings, files)
-    print("\n".join(lines))
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
-            out.write("\n".join(lines) + "\n")
+    show(findings, touched, changed_only)
+    write_summary(summary(findings, files))
     problems = unreadable(findings)
     for problem in problems:
         print(f"FAIL {problem}", file=sys.stderr)
@@ -128,14 +143,16 @@ def lint(root: Path, binary: str, base: str, changed_only: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--hadolint", default="hadolint", help="the hadolint binary (default: the one on PATH)")
     parser.add_argument("--changed-from", default="", metavar="COMMIT",
                         help="annotate only the Dockerfiles that differ from this commit")
     parser.add_argument("--changed-only", action="store_true",
                         help="print only the findings in the Dockerfiles that differ from --changed-from")
     args = parser.parse_args(argv)
     try:
-        return lint(ROOT, args.hadolint, args.changed_from, args.changed_only)
+        binary = shutil.which("hadolint")
+        if not binary:
+            raise LintError(f"hadolint is not on PATH, so no Dockerfile was linted. {INSTALL}")
+        return lint(ROOT, binary, args.changed_from, args.changed_only)
     except LintError as error:
         print(f"FAIL dockerfile lint: {error}", file=sys.stderr)
         return 2

@@ -106,8 +106,9 @@ def test_no_dockerfile_fails(lint, tmp_path, hadolint):
     empty = tmp_path / "empty"
     empty.mkdir()
     git(empty, "init", "-q")
+    binary = hadolint([])
     with pytest.raises(lint.LintError, match="tracks no file named `Dockerfile`"):
-        lint.lint(empty, hadolint([]), "", False)
+        lint.lint(empty, binary, "", False)
 
 
 def test_hadolint_that_is_not_there_fails(lint, repo):
@@ -116,14 +117,23 @@ def test_hadolint_that_is_not_there_fails(lint, repo):
 
 
 def test_hadolint_that_breaks_fails(lint, repo, hadolint):
+    binary = hadolint([], status=3)
     with pytest.raises(lint.LintError, match="ended with status 3 and no list of findings"):
-        lint.lint(repo, hadolint([], status=3), "", False)
+        lint.lint(repo, binary, "", False)
 
 
-def test_a_failure_to_lint_ends_with_status_2(lint, repo, monkeypatch, capsys):
+def test_hadolint_is_taken_from_the_path(lint, repo, hadolint, monkeypatch, capsys):
     monkeypatch.setattr(lint, "ROOT", repo)
-    assert lint.main(["--hadolint", str(repo / "no-such-binary")]) == 2
-    assert "FAIL dockerfile lint: hadolint did not start" in capsys.readouterr().err
+    monkeypatch.setenv("PATH", str(Path(hadolint([finding("proxy/Dockerfile")])).parent), prepend=":")
+    assert lint.main([]) == 0
+    assert "hadolint: 1 finding(s) in 2 Dockerfile(s)" in capsys.readouterr().out
+
+
+def test_without_hadolint_on_the_path_it_ends_with_status_2(lint, repo, monkeypatch, capsys):
+    monkeypatch.setattr(lint, "ROOT", repo)
+    monkeypatch.setattr(lint.shutil, "which", lambda name: None)
+    assert lint.main([]) == 2
+    assert "FAIL dockerfile lint: hadolint is not on PATH, so no Dockerfile was linted." in capsys.readouterr().err
 
 
 def annotations(out: str) -> list[str]:
@@ -181,4 +191,4 @@ def test_the_workflow_holds_the_binary_against_a_recorded_checksum():
     assert re.search(r"HADOLINT_VERSION: v\d+\.\d+\.\d+\n", text)
     assert re.search(r"HADOLINT_SHA256: [0-9a-f]{64}\n", text)
     assert "sha256sum --check" in text
-    assert re.search(r"^ +run: python scripts/dockerfile_lint\.py --hadolint ", text, re.MULTILINE)
+    assert re.search(r"^ +run: python scripts/dockerfile_lint\.py --changed-from ", text, re.MULTILINE)
