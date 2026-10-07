@@ -1035,10 +1035,10 @@ def test_a_reason_given_by_a_name_shows_the_text_of_that_name(ic):
     path = "tests/infrastructure/test_x.py"
     tree = Files({"tests/infrastructure/proc_files.py": REASON_FILE,
                   path: "from tests.infrastructure.proc_files import elsewhere, needs_proc\n"})
+    with_the_text = ("1 new use(s) of the skip marker needs_proc, with its reason: this system has no /proc, and the "
+                     "sandbox reads its limits from there")
     assert whats(ic, diff(path, added=["@needs_proc", "@elsewhere"]), tree=tree) == [
-        "1 new use(s) of the skip marker elsewhere, with its reason: REASON_FROM_ANOTHER_FILE",
-        "1 new use(s) of the skip marker needs_proc, with its reason: this system has no /proc, and the sandbox reads "
-        "its limits from there"]
+        "1 new use(s) of the skip marker elsewhere, with its reason: REASON_FROM_ANOTHER_FILE", with_the_text]
 
 
 def test_a_reason_by_name_on_the_skip_itself_shows_the_text_and_a_quoted_reason_stays_as_written(ic):
