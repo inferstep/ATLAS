@@ -165,7 +165,7 @@ in a way the base's function does not take), and "passes on the base too".
   repository that called it.
 
 Its reach, measured on 16 fixes that are merged, each against its parent,
-with the script of commit `9f92c12`: guarded 10, cannot tell 4, not
+with the script of commit `c461b30`: guarded 10, cannot tell 4, not
 shown 1, no test 1. Of the 6 proxy fixes among them 3 are guarded and 3 read
 "cannot tell", by the Go limit below.
 
