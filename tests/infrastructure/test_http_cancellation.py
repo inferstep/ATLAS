@@ -16,7 +16,6 @@ Local fixtures only. No model, no deployed service.
 from __future__ import annotations
 
 import contextlib
-import glob
 import os
 import socket
 import subprocess
@@ -26,7 +25,7 @@ import time
 import pytest
 
 from tests.infrastructure.bounded_commands import OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood
-from tests.infrastructure.proc_files import needs_proc
+from tests.infrastructure.proc_files import needs_proc, sleeping
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SANDBOX = os.path.join(ROOT, "sandbox")
@@ -51,27 +50,15 @@ def _free_port() -> int:
 
 def _reap(seconds: int) -> None:
     """Kill any stray marker process, so one test cannot leak into the next."""
-    for d in glob.glob("/proc/[0-9]*"):
-        # Same race, plus a non-numeric /proc entry: both mean "not a process
-        # this cleanup is about", and nothing else is suppressed.
-        with contextlib.suppress(OSError, ValueError):
-            with open(d + "/cmdline", "rb") as fh:
-                if fh.read() == ("sleep\x00%d\x00" % seconds).encode():
-                    os.kill(int(os.path.basename(d)), 9)
+    for pid in sleeping(seconds):
+        # A marker that ends between the look and the kill is gone, which is what this wants.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, 9)
 
 
 def alive(seconds: int) -> int:
-    want = ("sleep\x00%d\x00" % seconds).encode()
-    n = 0
-    for d in glob.glob("/proc/[0-9]*"):
-        # A pid that vanishes between the glob and the open is the ordinary
-        # race in scanning /proc, and skipping it is the whole handling. It is
-        # named rather than swallowed: anything else raises.
-        with contextlib.suppress(OSError):
-            with open(d + "/cmdline", "rb") as fh:
-                if fh.read() == want:
-                    n += 1
-    return n
+    """How many `sleep <seconds>` processes are still running. It fails where it cannot see a process at all."""
+    return len(sleeping(seconds))
 
 
 @pytest.fixture(scope="module")

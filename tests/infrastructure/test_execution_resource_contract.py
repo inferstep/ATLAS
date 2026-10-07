@@ -14,8 +14,6 @@ service, or a container.
 
 from __future__ import annotations
 
-import contextlib
-import glob
 import os
 import sys
 import time
@@ -24,7 +22,7 @@ import pytest
 
 from tests.infrastructure.bounded_commands import (OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood,
                                                    with_an_address_space_limit)
-from tests.infrastructure.proc_files import needs_proc
+from tests.infrastructure.proc_files import needs_proc, sleeping
 
 SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "sandbox")
@@ -52,18 +50,8 @@ def run(script, contract, **kw):
 
 
 def alive(seconds: int) -> int:
-    """How many `sleep <seconds>` processes are still running."""
-    want = ("sleep\x00%d\x00" % seconds).encode()
-    n = 0
-    for d in glob.glob("/proc/[0-9]*"):
-        # A pid that vanishes between the glob and the open is the ordinary
-        # race in scanning /proc, and skipping it is the whole handling. It is
-        # named rather than swallowed: anything else raises.
-        with contextlib.suppress(OSError):
-            with open(d + "/cmdline", "rb") as fh:
-                if fh.read() == want:
-                    n += 1
-    return n
+    """How many `sleep <seconds>` processes are still running. It fails where it cannot see a process at all."""
+    return len(sleeping(seconds))
 
 
 # --- the operator's budget --------------------------------------------------

@@ -668,6 +668,10 @@ done the same on Linux.
   the same marker and reason as before.
 - A test fails when a command of these two test files is written without an
   end.
+- The tests that assert "no process is left" count processes in `/proc`. The
+  count now looks for its own process first, by the same route. Where it
+  cannot see a process that is alive it fails with "cannot look", and does
+  not say 0.
 
 No product code changes.
 
