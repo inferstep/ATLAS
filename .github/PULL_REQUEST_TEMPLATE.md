@@ -2,6 +2,12 @@
 
 <!-- One or two sentences: the behavior before, the behavior after. -->
 
+## What users will notice
+
+<!-- What a user of ATLAS sees differently after this change: plain sentences or a list
+     (no table, no code block, no list inside a list). The changelog of the release is made
+     from this part, so do not edit CHANGELOG.md. If users notice nothing, write only: Nothing. -->
+
 ## Why
 
 <!-- The problem this addresses. -->

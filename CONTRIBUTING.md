@@ -187,6 +187,11 @@ It links you to the issue, lets your Shepherd help early, and keeps your
 claim. Fill in the template: what changed, why, how you verified it, and
 the hardware you ran it on (or "untested on hardware").
 
+Under **What users will notice**, say what a user of ATLAS sees differently
+after your change, in plain sentences or a list. If users notice nothing,
+write only "Nothing." The changelog of a release is made from that part, so
+a pull request does not edit `CHANGELOG.md`.
+
 GitHub sets **base** to `main` on a new pull request. Change it to `dev`
 before you click **Create pull request**.
 
