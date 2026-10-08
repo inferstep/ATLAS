@@ -323,44 +323,71 @@ for the tests above.
 
 Each night it:
 
-1. takes the head of `dev`, and pulls the `dev` images;
-2. compares the commit that each image was built from with that head;
-3. starts a stack under the name `atlas-nightly`, on loopback ports of its
-   own, so that it stands beside a stack on the usual ports;
-4. runs the driver `scripts/e2e-reliability.py` with three fixed small
+1. takes the head of `dev`. When that changes the script itself, the new
+   copy does the run, so a repair of the script acts in the night after its
+   merge;
+2. stops a stack of its own name that an earlier run left: a run that was
+   killed leaves its stack, and Docker starts that stack again;
+3. pulls the `dev` images and compares the commit that each was built from
+   with the head. The images of a push come some minutes after it, so the
+   run looks again every two minutes, for up to twenty, and takes the head
+   again each time;
+4. takes the lock of the graphics card, and reads what the card holds;
+5. starts a stack under the name `atlas-nightly`, on loopback ports of its
+   own, so that it stands beside a stack on the usual ports, and asks the
+   services whether they are whole;
+6. runs the driver `scripts/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
-5. runs the tests that the plain jobs leave out, and counts how many it
+7. runs the tests that the plain jobs leave out, and counts how many it
    collected against the 125 of the table above;
-6. writes one report: the commit, the digest of each image, the seconds of
-   each task, and the tests collected, passed, failed and skipped;
-7. stops its stack, also when a step failed or the time ran out.
+8. asks the services again, and writes one report: the commit, the digest
+   of each image, what the services said, the seconds of each task, and the
+   tests collected, passed, failed and skipped;
+9. stops its stack, also when a step failed or the time ran out.
+
+Steps 1 to 3 need no card. They come before the lock, and the time limit of
+30 minutes does not count them.
 
 The first line of the report is its result:
 
 | Result | When |
 |---|---|
 | `passed` | No fault below was found |
-| `stale: ...` | An image was not built from the head of `dev`. Nothing more is run: the numbers would be those of another commit |
-| `failed: ...` | A step did not end, the time limit of the whole run was reached, the driver found a defect of the harness, a test failed, or the tests collected were not 125 (a missing package skips whole files without another sign) |
-| `not run: the card was in use` | Another run held the lock of the graphics card |
+| `stale: ...` | After the wait an image was still not built from the head of `dev`. Nothing more is run: the numbers would be those of another commit |
+| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, the tests collected were not 125 (a missing package skips whole files without another sign), or the stack could not be stopped |
+| `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 
 - A task whose change did not land is in the report and does not fail the
   run. That number moves with the model and with chance; one night says
   little.
+- Whole: the health check of the lens in the compose file asks whether the
+  process serves, so a stack can be healthy for Docker with a lens that
+  cannot score. The run asks the proxy's `/ready` (the model server, the
+  lens, the sandbox, v3-service) and the lens's own `/ready`, each inside
+  its container. The lens's `/health` goes into the report for the reader:
+  whether its self test passed and whether it has its calibration. A lens
+  with no calibration scores, and does not fail the run.
 - The run takes a lock file before it uses the graphics card. A run of
   another kind that needs the card takes the same file:
-  `flock <lock file> <command>`.
+  `flock <lock file> <command>`. A stack that simply runs takes no lock, so
+  the run also asks `nvidia-smi` which processes compute on the card. Where
+  that tool is missing, the report says that the card was not read.
+- Only one run of a folder goes at a time.
+- The stack of the run has no service token: the driver and the tests above
+  send none. A user's install has a token when `atlas init` was run.
 - The run writes only inside its own folder, and it stops and removes only
   the containers of its own compose project.
 - With a token in `ATLAS_NIGHTLY_TOKEN` and `--issue N` it puts the report
   into the text of that one issue. The text is replaced; no comment is
-  added. With no token it only writes the file.
+  added. The token is read at that one call, no command of the run has it,
+  and it is sent to GitHub's own address only. With no token the run only
+  writes the file.
 
 What it needs on the server: a folder for the run; Docker for the user that
 runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
 folder, with the settings of the model for that server; a timer at a fixed
-hour; and the graphics card free for the run, which has a time limit of 30
-minutes.
+hour; and the graphics card free at that hour for the run, which has a time
+limit of 30 minutes.
 
 The integrity check names a change that takes a test out of the plain jobs
 this way: the mark on a test or a file that was there before, a file added to
