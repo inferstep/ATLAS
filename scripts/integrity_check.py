@@ -53,7 +53,7 @@ GATE_FILES = (
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json", "tests/replay/recordings/",
     "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py",
     "scripts/checks_ran.py", "scripts/change_base.py", "scripts/queue_run.py", "scripts/go_test_build.py",
-    "scripts/verify.py", "scripts/canary.py",
+    "scripts/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
     "scripts/dockerfile_lint.py", "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py",
     "scripts/staging-integration.py",
     "scripts/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
