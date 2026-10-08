@@ -42,7 +42,12 @@ STATUS_LABELS = {"Ready": "status/ready", "Blocked": "status/blocked"}
 # GitHub's closing keywords. They act only on the default branch (main), and
 # work merges into dev, so sync closes the issues itself.
 ISSUE_REF = re.compile(r"(?<![\w/#])#(\d+)\b")
-CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)\b", re.IGNORECASE)
+_CLOSES = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[ \t]+#(\d+)\b"
+CLOSING = re.compile(_CLOSES, re.IGNORECASE)
+# A closing line: the keyword starts the line. More issues follow only as
+# ", closes #N" or "and fixes #N"; other text on the line closes nothing.
+CLOSING_LINE = re.compile(rf"[ \t]*{_CLOSES}(?:[ \t]*(?:,|and)[ \t]*{_CLOSES})*", re.IGNORECASE)
+FENCE = re.compile(r"[ \t]*(?:```|~~~)")
 STOPWORDS = set("""about after again against also allow allows because before being
 between could does doing during each from have into just like make more most need
 needs only other over same should some such than that their them then there these
@@ -277,6 +282,25 @@ class API:
 # --- the bot ------------------------------------------------------------------
 
 
+def closed_by(text: str) -> list:
+    """The issues that a commit message or the text of a pull request closes.
+
+    A closing keyword counts only where it starts a line, outside fenced
+    blocks. So a sentence that quotes the closing line of another change
+    closes nothing, in code marks or not, and neither does a quoted line
+    (`> Closes #7`) or a line that starts with a code mark."""
+    numbers: list = []
+    fenced = False
+    for line in (text or "").splitlines():
+        if FENCE.match(line):
+            fenced = not fenced
+        elif not fenced:
+            found = CLOSING_LINE.match(line)
+            if found:
+                numbers += [int(n) for n in CLOSING.findall(found.group(0))]
+    return numbers
+
+
 def marker(kind: str, login: str = "") -> str:
     return f"<!-- atlas-bot:{kind}{' @' + login if login else ''} -->"
 
@@ -455,17 +479,17 @@ class Bot:
 
     def _close_fixed(self) -> None:
         """Close the open issues that a commit or merged pull request on the
-        work branch names with a closing keyword. The board then marks them
-        Done by itself, and the milestone names the release that ships them."""
+        work branch names in a closing line (see closed_by). The board then marks
+        them Done by itself, and the milestone names the release that ships them."""
         d = self.cfg["done"]
         since = self.now - dt.timedelta(days=int(d["lookback_days"]))
         where: dict = {}
         for c in self.api.branch_commits(d["branch"], since.strftime("%Y-%m-%dT%H:%M:%SZ")):
-            for num in CLOSING.findall(c["message"]):
-                where.setdefault(int(num), c["sha"][:7])
+            for num in closed_by(c["message"]):
+                where.setdefault(num, c["sha"][:7])
         for pr in self.api.merged_pulls(d["branch"], since.strftime("%Y-%m-%d")):
-            for num in CLOSING.findall(pr["body"]):
-                where.setdefault(int(num), f"#{pr['number']}")
+            for num in closed_by(pr["body"]):
+                where.setdefault(num, f"#{pr['number']}")
         for n, ref in sorted(where.items()):
             try:
                 issue = self.api.issue(n)
