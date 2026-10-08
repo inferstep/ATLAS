@@ -374,7 +374,9 @@ The first line of the report is its result:
   TUI is not built in the tree. On a machine with none of these, 41 of the
   125 are skipped. So for a night that passes, the server needs the four
   tools and the built TUI in the run's tree. That is a cost of the tests as
-  they are today.
+  they are today. One more test compares the served model with the name in
+  `ATLAS_MODEL_NAME` and skips without it: the run reads that name from
+  `nightly.env` and gives it to the tests.
 - Whole: the health check of the lens in the compose file asks whether the
   process serves, so a stack can be healthy for Docker with a lens that
   cannot score. The run asks the proxy's `/ready` (the model server, the

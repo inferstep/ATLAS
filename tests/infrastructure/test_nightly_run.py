@@ -65,7 +65,7 @@ args = sys.argv[1:]
 call = " ".join(args)
 with open(home + "/calls.log", "a") as log:
     log.write(json.dumps({{"tool": {name!r}, "args": args, "has_the_token": "ATLAS_NIGHTLY_TOKEN" in os.environ,
-                          "env": {{k: v for k, v in os.environ.items() if k.endswith("_URL") or k == "ATLAS_SERVICE_TOKEN_FILE"}}}}) + "\n")
+                          "env": {{k: v for k, v in os.environ.items() if k.endswith("_URL") or k in ("ATLAS_SERVICE_TOKEN_FILE", "ATLAS_MODEL_NAME")}}}}) + "\n")
 calls = [json.loads(line) for line in open(home + "/calls.log")]
 
 
@@ -299,6 +299,9 @@ def test_the_stack_has_a_name_and_ports_of_its_own_and_the_driver_and_the_tests_
     assert tests["args"][2:5] == ["-m", "integration", "tests/infrastructure"]
     assert tests["env"]["SANDBOX_URL"] == "http://127.0.0.1:18020" and tests["env"]["LLAMA_URL"] == "http://127.0.0.1:18080"
     assert tests["env"]["ATLAS_PROXY_URL"] == "http://127.0.0.1:18090"
+    # One of the tests compares the served model with this name, and skips when it has none.
+    assert tests["env"]["ATLAS_MODEL_NAME"] == "model" and driver["env"]["ATLAS_MODEL_NAME"] == "model"
+    assert [call["env"] for call in calls if call["tool"] in ("git", "docker", "nvidia-smi") and "ATLAS_MODEL_NAME" in call["env"]] == []
 
 
 def test_the_stack_of_the_run_has_no_service_token(tmp_path):
@@ -636,6 +639,31 @@ def test_without_the_servers_settings_file_the_run_fails_before_it_starts_a_stac
     assert night.done.returncode == 1
     assert "nightly.env is not there" in night.report["result"] and "Fix: write it once" in night.report["result"]
     assert "stack up" not in night.did()
+
+
+@pytest.mark.parametrize("settings, name", [
+    ("ATLAS_MODEL_NAME=first\nATLAS_MODEL_FILE=m.gguf\nATLAS_MODEL_NAME=the-last-one\n", "the-last-one"),
+    ('ATLAS_MODEL_FILE=m.gguf\nexport ATLAS_MODEL_NAME = "a quoted name"  \n', "a quoted name"),
+    ("# ATLAS_MODEL_NAME=in-a-comment\nATLAS_MODEL_NAME='single'\n", "single"),
+])
+def test_the_name_of_the_model_is_read_from_the_servers_settings_file(tmp_path, settings, name):
+    night = Night(tmp_path)
+    (night.dir / "nightly.env").write_text(settings)
+    night.run()
+    assert night.report["result"] == "passed", night.report["result"]
+    tests = next(call for call in night.calls() if call["args"][:2] == ["-m", "pytest"])
+    assert tests["env"]["ATLAS_MODEL_NAME"] == name
+
+
+@pytest.mark.parametrize("settings", ["ATLAS_MODEL_FILE=m.gguf\n", "ATLAS_MODEL_NAME=\n", "# ATLAS_MODEL_NAME=model\n", "XATLAS_MODEL_NAME=model\n"])
+def test_a_settings_file_with_no_name_of_the_model_stops_the_run_before_the_stack(tmp_path, settings):
+    # With no name the one test that compares the served model would skip, and a skipped test fails the night.
+    night = Night(tmp_path)
+    (night.dir / "nightly.env").write_text(settings)
+    night.run()
+    assert night.done.returncode == 1
+    assert "nightly.env has no line `ATLAS_MODEL_NAME=<name>`" in night.report["result"] and "Fix: add the line" in night.report["result"]
+    assert "stack up" not in night.did() and "driver" not in night.did()
 
 
 @pytest.mark.parametrize("folder", ["relative/folder", "{root}/not-there"])

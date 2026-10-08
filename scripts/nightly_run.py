@@ -337,13 +337,27 @@ def compose(args) -> list:
     return ["docker", "compose", "-p", PROJECT, "--project-directory", str(tree), "--env-file", str(args.dir / "run.env"), *files]
 
 
-def write_settings(args) -> dict:
-    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
+def model_name(args) -> str:
+    """The name of the model of this server, from <dir>/nightly.env. One of the tests compares the served model with
+    it, and skips without it."""
     base = args.dir / "nightly.env"
     if not base.is_file():
         raise StepFailed(f"{base} is not there. It holds the settings of the model for this server (ATLAS_MODELS_DIR, "
                          "ATLAS_MODEL_FILE, ATLAS_MODEL_NAME and the sizes). Fix: write it once, from the .env of the "
                          "stack that runs on this server.")
+    given = re.findall(r"^[ \t]*(?:export[ \t]+)?ATLAS_MODEL_NAME[ \t]*=[ \t]*(.*?)[ \t]*$", base.read_text(encoding="utf-8"), re.M)
+    name = given[-1].strip("'\"") if given else ""
+    if not name:
+        raise StepFailed(f"{base} has no line `ATLAS_MODEL_NAME=<name>`. The model server does not start without the name "
+                         "of its model, and a test compares the served model with it. Fix: add the line, from the .env "
+                         "of the stack that runs on this server.")
+    return name
+
+
+def write_settings(args) -> dict:
+    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
+    base = args.dir / "nightly.env"
+    model_name(args)
     for name in ("workspace/_reliability", "secrets", "no-deploy-record"):
         (args.dir / name).mkdir(parents=True, exist_ok=True)
     token = args.dir / "secrets" / "service-token"
@@ -444,8 +458,9 @@ def service_urls() -> dict:
             "LENS_URL": f"http://127.0.0.1:{PORTS['ATLAS_LENS_PORT']}"}
 
 
-def run_environment() -> dict:
-    return {**os.environ, **service_urls(), "PYTHONDONTWRITEBYTECODE": "1"}
+def run_environment(args) -> dict:
+    """What the driver and the tests get: where the stack is, and the name of the model that it serves."""
+    return {**os.environ, **service_urls(), "ATLAS_MODEL_NAME": model_name(args), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def smoke(args, head: str, folder: Path) -> list:
@@ -458,7 +473,7 @@ def smoke(args, head: str, folder: Path) -> list:
                     "--deploy-dir", str(args.dir / "no-deploy-record"), "--commit", head,
                     "--tasks", ",".join(TASKS), "--reps", "1", "--timeout", str(args.task_seconds),
                     "--json", str(result)],
-                   args.task_seconds * len(TASKS) + 300, cwd=args.dir / "tree", env=run_environment())
+                   args.task_seconds * len(TASKS) + 300, cwd=args.dir / "tree", env=run_environment(args))
     (folder / "driver.log").write_text(done.stdout, encoding="utf-8")
     try:
         rows = json.loads(result.read_text(encoding="utf-8"))
@@ -476,7 +491,7 @@ def left_out_tests(args, folder: Path) -> dict:
     """Run the tests that the plain jobs leave out. Gives the numbers: collected, passed, failed, skipped."""
     result = folder / "tests.xml"
     done = command([args.python, "-m", "pytest", "-m", "integration", "tests/infrastructure", "-q", "-p", "no:cacheprovider",
-                    f"--junitxml={result}"], args.test_seconds, cwd=args.dir / "tree", env=run_environment())
+                    f"--junitxml={result}"], args.test_seconds, cwd=args.dir / "tree", env=run_environment(args))
     (folder / "tests.log").write_text(done.stdout, encoding="utf-8")
     # Only the numbers in the opening line of each suite are read; the file is not given to an XML parser.
     try:
