@@ -196,10 +196,22 @@ def test_the_tests_the_documents_and_the_lock_files_of_this_repository_do_not_co
     assert rules.labels_for([changed(path, 700, 600), changed("atlas/env.py", 5, 1)], False, SETTINGS) == rules.Labels("size/S", 6, ())
 
 
+def test_every_description_of_a_label_has_at_most_the_100_characters_that_github_takes():
+    # GitHub's page for a label's description: "Must be 100 characters or fewer". The label script stops at a longer one.
+    script = (ROOT / "scripts" / "setup" / "labels.sh").read_text(encoding="utf-8")
+    listed = re.findall(r'^    "([^"|]+)\|[0-9a-f]{6}\|([^"]*)"$', script, re.M)
+    assert len(listed) >= 25, f"only {len(listed)} labels were read from scripts/setup/labels.sh; the form of its list has changed"
+    computed = list(rules.descriptions(SETTINGS).items())
+    too_long = {label: len(said) for label, said in listed + computed if len(said) > 100}
+    assert not too_long, (
+        f"these labels have a description of more than 100 characters, which GitHub refuses (label: length): {too_long}. "
+        "For a size label or the risk label the text is computed from `pull_requests` in .github/atlas-bot.yml: a longer "
+        "word there makes it longer. Fix: shorten the description, or the word in the settings.")
+
+
 def test_the_label_script_gives_each_label_the_description_that_the_settings_give():
     script = (ROOT / "scripts" / "setup" / "labels.sh").read_text(encoding="utf-8")
     for label, said in rules.descriptions(SETTINGS).items():
-        assert len(said) <= 100, f"GitHub takes at most 100 characters for a label's description; `{label}` has {len(said)}"
         assert re.search(rf'^    "{re.escape(label)}\|[0-9a-f]{{6}}\|{re.escape(said)}"$', script, re.M), (
             f"scripts/setup/labels.sh does not give `{label}` the description \"{said}\", which is what "
             ".github/atlas-bot.yml says the label is computed from. Fix: write that text in the label's line of the "
