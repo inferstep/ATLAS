@@ -15,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "tests_counted.py"
-PASSES = "def test_one():\n    assert True\n\n\ndef test_two():\n    assert True\n"
+PASSES = "def test_one():\n    assert 1 + 1 == 2\n\n\ndef test_two():\n    assert 2 + 2 == 4\n"
 MIXED = '''import pytest
 
 
@@ -25,11 +25,11 @@ def broken():
 
 
 def test_passes():
-    assert True
+    assert 1 + 1 == 2
 
 
 def test_passes_too():
-    assert True
+    assert 1 + 1 == 2
 
 
 def test_fails():
@@ -37,7 +37,7 @@ def test_fails():
 
 
 def test_ends_with_an_error(broken):
-    assert True
+    assert 1 + 1 == 2
 
 
 def test_skips():
@@ -50,7 +50,7 @@ def test_skips_for_the_same_reason():
 
 @pytest.mark.skipif(True, reason="a tool is missing & <more>")
 def test_skips_by_a_condition():
-    assert True
+    assert 1 + 1 == 2
 '''
 
 
