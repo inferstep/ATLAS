@@ -132,6 +132,7 @@ job on this list that does not start gives no red:
 | `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
 | `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
 | the four `sandbox smoke` jobs | The sandbox image runs Java, Kotlin, PHP and Ruby |
+| `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) |
 | `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
 | the `PR build check` jobs | Each service image builds |
 
@@ -421,34 +422,57 @@ hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
 the mark to every test of the files it lists and to every test under
 `tests/integration/`.
 
+The marked files are in three groups, by what they need. Each group is run
+in one place.
+
 | File | Tests | What it needs | The job that runs it |
 |---|---|---|---|
+| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
+| `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
+| `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_llm.py` | 32 | a running model server | the nightly run, on the development server |
-| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | the nightly run, on the development server |
-| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the nightly run, on the development server |
-| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the nightly run, on the development server |
-| `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the nightly run, on the development server |
-| `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the nightly run, on the development server |
-| `tests/infrastructure/test_control_plane.py` | 5 | a running stack | the nightly run, on the development server |
 
-- That is 125 tests in 7 files. No workflow selects the mark, so no CI job
-  runs them today. `tests/integration/` holds no test.
+- That is 125 tests in 7 files: 80 for the sandbox, 13 for the proxy and the
+  TUI, 32 for the model. `tests/integration/` holds no test.
+- The groups, their files and their numbers are in one place:
+  `scripts/tests_counted.py`. A test in the test suite holds that list, the
+  hook's list, this table, the two jobs and the number of test functions in
+  the files the same.
+- A run of a group holds only when every one of its tests was collected,
+  none failed and none was skipped. pytest ends with status 0 for a run in
+  which tests were skipped, and a missing package skips a whole file with
+  no other sign: the four sandbox and model files import `httpx` with
+  `importorskip`. So no job reads the status of pytest here.
+  `scripts/tests_counted.py` reads the result file that pytest writes, and
+  the nightly run uses the same judge.
+- `sandbox tests (containerized)` builds the sandbox image from the change,
+  starts it, waits for the service's own health answer, and runs the 80
+  against it. The languages are in the image. No test asks the runner for
+  `javac`, `kotlinc`, `ruby` or `php`: a sandbox that cannot run a language
+  fails its tests.
+- `proxy and TUI tests (no model)` builds the proxy and the TUI from the
+  change and starts the proxy with no service behind it. The 13 ask the
+  proxy's own answers and read the TUI's own screen in a terminal. None
+  needs a model.
+- The 32 need a real model server. No job on GitHub has one; the nightly
+  run has.
+- The two jobs are not required checks.
 - The four `sandbox smoke` jobs send their own requests to the sandbox image.
   They do not run these files.
-- The four sandbox and model files import `httpx` with `importorskip`. Where
-  that package is not installed they are skipped whole, also when the mark is
-  selected: 13 tests are collected then, not 125. CI does not install
-  `httpx`. A job that runs these tests has to install it, and its report has
-  to say how many tests it collected against the 125.
-- To run them: `pytest -m integration tests/infrastructure`, on a host with
-  the stack up.
+- To run a group by hand:
+  `pytest -m integration $(python scripts/tests_counted.py --files sandbox)`
+  with `SANDBOX_URL` set to a running sandbox; `proxy` with
+  `ATLAS_PROXY_URL`; `model` on a host with the stack up.
 
 ## The nightly run
 
 `scripts/nightly_run.py` is one run for the development server, in a folder
 of its own. A timer starts it each night. It is not a CI job: a check on a
-pull request cannot see a real model that got slower, and it has no stack
-for the tests above.
+pull request cannot see a real model that got slower, and it has no model
+server for the 32 tests above that need one.
 
 The nightly run is best effort. The server is one machine at home, and it is
 not always on. A night with no run is not a failure: the server was off, the
@@ -458,9 +482,9 @@ it off (the timer is disabled).
 
 Each night it:
 
-1. takes the head of `dev`. When that changes the script itself, the new
-   copy does the run, so a repair of the script acts in the night after its
-   merge;
+1. takes the head of `dev`. When that changes the script itself or the
+   judge beside it (`scripts/tests_counted.py`), the new copy does the run,
+   so a repair of either acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
    killed leaves its stack, and Docker starts that stack again;
 3. pulls the `dev` images and compares the commit that each was built from
@@ -473,8 +497,9 @@ Each night it:
    services whether they are whole;
 6. runs the driver `scripts/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
-7. runs the tests that the plain jobs leave out, and counts how many it
-   collected against the 125 of the table above;
+7. runs the tests that need a real model, and judges pytest's result file
+   with the judge of such runs: all 32 of them are to be collected and to
+   pass, and none is to be skipped;
 8. asks the services again, and writes one report: the commit, the digest
    of each image, what the services said, the seconds of each task, and the
    tests collected, passed, failed and skipped;
@@ -488,7 +513,7 @@ The first line of the report is its result:
 | Result | When |
 |---|---|
 | `passed` | No fault below was found |
-| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 125 (a missing package skips whole files without another sign), or the stack could not be stopped |
+| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 32 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
 
@@ -496,16 +521,18 @@ The first line of the report is its result:
   run. That number moves with the model and with chance; one night says
   little.
 - A skipped test fails the night, and the result gives the reasons. A
-  skipped test counts as collected, so the number 125 does not show it. The
-  tests above skip by the state of the machine that runs them: the Java,
-  Kotlin, Ruby and PHP tests when it has no `javac`, `kotlinc`, `ruby` or
-  `php` (though the code runs in the sandbox), and the 8 TUI tests when the
-  TUI is not built in the tree. On a machine with none of these, 41 of the
-  125 are skipped. So for a night that passes, the server needs the four
-  tools and the built TUI in the run's tree. That is a cost of the tests as
-  they are today. One more test compares the served model with the name in
+  skipped test counts as collected, so the number 32 does not show it. One
+  of the tests compares the served model with the name in
   `ATLAS_MODEL_NAME` and skips without it: the run reads that name from
-  `nightly.env` and gives it to the tests.
+  `nightly.env` and gives it to the tests. A comment after the value is not
+  part of the name, as compose reads the file.
+- A failed test is named in the result.
+- Counting nights, for a number such as "passed in 9 of 10 nights": a night
+  counts as passed only with the result `passed`, which needs every one of
+  the 32 tests collected, none failed and none skipped. A night that is
+  `not run`, and a night with no report (the server was off), counts
+  neither as passed nor as failed. At most one run counts for a night: the
+  first one whose result is not `not run`.
 - Whole: the health check of the lens in the compose file asks whether the
   process serves, so a stack can be healthy for Docker with a lens that
   cannot score. The run asks the proxy's `/ready` (the model server, the
@@ -533,8 +560,8 @@ What it needs on the server: a folder for the run; Docker for the user that
 runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
 folder, with the settings of the model for that server; a timer at a fixed
 hour; and the graphics card free at that hour for the run, which has a time
-limit of 30 minutes; and, so that no test is skipped, `javac`, `kotlinc`,
-`ruby` and `php` for that user, and the built TUI in the run's tree. The
+limit of 30 minutes. The server needs no `javac`, `kotlinc`, `ruby` or `php`,
+no Go and no built TUI: the tests that needed them run in jobs on GitHub. The
 timer stops the stack of the usual install before the run when that stack
 runs, and after the run it starts again only what it stopped, also when the
 run failed. It stops nothing else: when something else holds the card, the

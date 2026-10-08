@@ -30,3 +30,7 @@ tree-sitter-html==0.23.2
 tree-sitter-javascript==0.25.0
 tree-sitter-go==0.25.0
 tree-sitter-typescript==0.23.2
+# From geometric-lens/requirements.txt: the client with which the tests that
+# need a running service reach it (tests/conftest.py). Without it those test
+# files are skipped as a whole.
+httpx==0.28.1

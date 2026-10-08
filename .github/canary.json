@@ -444,6 +444,40 @@
       ]
     },
     {
+      "id": "sandbox tests (containerized)",
+      "red": [
+        "sandbox tests (containerized)"
+      ],
+      "what": "a failing test at the end of tests/infrastructure/test_sandbox.py, a file that the job runs",
+      "shows": "canary: this test fails on purpose",
+      "action": "append",
+      "path": "tests/infrastructure/test_sandbox.py",
+      "lines": [
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    # Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
+      "id": "proxy and TUI tests (no model)",
+      "red": [
+        "proxy and TUI tests (no model)"
+      ],
+      "what": "a failing test at the end of tests/infrastructure/test_control_plane.py, a file that the job runs",
+      "shows": "canary: this test fails on purpose",
+      "action": "append",
+      "path": "tests/infrastructure/test_control_plane.py",
+      "lines": [
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    # Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
+      ]
+    },
+    {
       "id": "pr title",
       "red": [
         "pr title"

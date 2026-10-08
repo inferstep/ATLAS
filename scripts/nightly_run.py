@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""The nightly run on real hardware: a smoke run of the head of `dev`, and the tests that the plain jobs leave out.
+"""The nightly run on real hardware: a smoke run of the head of `dev`, and the tests that need a real model.
 
 One run, started by a timer on the development server, in a folder of its own
 (--dir). Only one run of a folder goes at a time. It:
 
   1. takes the head of `dev` into <dir>/tree. When that changes this very
-     file (the run was started from the tree), the new copy does the run;
+     file or the judge beside it (the run was started from the tree), the
+     new copy does the run;
   2. stops a stack of its own name that an earlier run left;
   3. pulls the `dev` images and compares the commit each was built from with
      the head. The images of a push come some minutes after it, so the run
@@ -16,8 +17,9 @@ One run, started by a timer on the development server, in a folder of its own
      and asks the services whether they are whole;
   6. runs the driver of the repository (scripts/e2e-reliability.py) with three
      fixed tasks, once each, and keeps the seconds of each;
-  7. runs the test files that the plain jobs leave out (the `integration`
-     mark), and counts how many it collected against the number there are;
+  7. runs the tests that need a real model, and judges the result file with
+     the judge of such runs (scripts/tests_counted.py): every one of them is
+     to be collected, to pass, and not to be skipped;
   8. asks the services again, and writes one report file,
      <dir>/reports/<start time>/report.json;
   9. stops its stack. Always: also when a step failed or the time ran out.
@@ -57,7 +59,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
-import html
+import importlib.util
 import json
 import os
 import re
@@ -77,7 +79,6 @@ IMAGES = {"llama-server": "atlas-llama", "geometric-lens": "atlas-lens", "v3-ser
 # is answered with no change to a file.
 TASKS = ("add_function", "offbyone", "ask_explain")
 # The tests of the seven files that carry the `integration` mark (docs/quality/gates.md).
-EXPECTED_TESTS = 125
 # Loopback ports of this stack's own, so that it stands beside a stack on the usual ports.
 PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 18070,
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
@@ -94,8 +95,23 @@ STARTED_AGAIN = "ATLAS_NIGHTLY_STARTED_AGAIN"
 STAMP = "%Y%m%dT%H%M%SZ"
 NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the run, the run started the new copy in its "
                            "place, and that copy left no report")
-# This file as Python read it when the run started.
-AS_STARTED = Path(__file__).read_bytes()
+# The judge of a run of tests that must all run, and the list of such tests: the file beside this one.
+JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
+
+
+def load_the_judge():
+    spec = importlib.util.spec_from_file_location("atlas_tests_counted", JUDGE)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+counted = load_the_judge()
+# The tests of the run: the group that needs a real model.
+TESTS = counted.GROUPS["model"]
+# This file and the judge as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -222,10 +238,12 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file: the run was started from the tree, and the file holds other bytes now."""
+    """Whether taking the head changed this very file or the judge beside it: the run was started from the tree, and one
+    of the two holds other bytes now."""
     own = Path(__file__).resolve()
     try:
-        return own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve() and own.read_bytes() != AS_STARTED
+        return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
+                and any(path.read_bytes() != was for path, was in AS_STARTED.items()))
     except OSError:
         return False
 
@@ -337,6 +355,15 @@ def compose(args) -> list:
     return ["docker", "compose", "-p", PROJECT, "--project-directory", str(tree), "--env-file", str(args.dir / "run.env"), *files]
 
 
+def as_compose_reads(value: str) -> str:
+    """The value of a line of a settings file as compose reads it: without its quotes, and without a comment after it."""
+    value = value.strip()
+    if value[:1] in ("'", '"'):
+        end = value.find(value[0], 1)
+        return value[1:end] if end > 0 else value[1:]
+    return re.split(r"\s#", value, maxsplit=1)[0].strip()
+
+
 def model_name(args) -> str:
     """The name of the model of this server, from <dir>/nightly.env. One of the tests compares the served model with
     it, and skips without it."""
@@ -345,8 +372,8 @@ def model_name(args) -> str:
         raise StepFailed(f"{base} is not there. It holds the settings of the model for this server (ATLAS_MODELS_DIR, "
                          "ATLAS_MODEL_FILE, ATLAS_MODEL_NAME and the sizes). Fix: write it once, from the .env of the "
                          "stack that runs on this server.")
-    given = re.findall(r"^[ \t]*(?:export[ \t]+)?ATLAS_MODEL_NAME[ \t]*=[ \t]*(.*?)[ \t]*$", base.read_text(encoding="utf-8"), re.M)
-    name = given[-1].strip("'\"") if given else ""
+    given = re.findall(r"^[ \t]*(?:export[ \t]+)?ATLAS_MODEL_NAME[ \t]*=(.*)$", base.read_text(encoding="utf-8"), re.M)
+    name = as_compose_reads(given[-1]) if given else ""
     if not name:
         raise StepFailed(f"{base} has no line `ATLAS_MODEL_NAME=<name>`. The model server does not start without the name "
                          "of its model, and a test compares the served model with it. Fix: add the line, from the .env "
@@ -487,33 +514,17 @@ def smoke(args, head: str, folder: Path) -> list:
     return tasks
 
 
-def left_out_tests(args, folder: Path) -> dict:
-    """Run the tests that the plain jobs leave out. Gives the numbers: collected, passed, failed, skipped."""
+def model_tests(args, folder: Path) -> dict:
+    """Run the tests that need a real model. Gives the numbers of the result file, as the judge of such runs reads them."""
     result = folder / "tests.xml"
-    done = command([args.python, "-m", "pytest", "-m", "integration", "tests/infrastructure", "-q", "-p", "no:cacheprovider",
+    done = command([args.python, "-m", "pytest", "-m", "integration", *TESTS.files, "-q", "-p", "no:cacheprovider",
                     f"--junitxml={result}"], args.test_seconds, cwd=args.dir / "tree", env=run_environment(args))
     (folder / "tests.log").write_text(done.stdout, encoding="utf-8")
-    # Only the numbers in the opening line of each suite are read; the file is not given to an XML parser.
     try:
-        suites = re.findall(r"<testsuite\b[^>]*>", result.read_text(encoding="utf-8"))
-    except OSError:
-        suites = []
-    if not suites:
-        raise StepFailed(f"the tests left no result (status {done.returncode}): {done.stdout.strip()[-400:]}")
-    count = {key: sum(int(number) for suite in suites for number in re.findall(rf'\b{key}="(\d+)"', suite))
-             for key in ("tests", "failures", "errors", "skipped")}
-    failed = count["failures"] + count["errors"]
-    return {"expected": EXPECTED_TESTS, "collected": count["tests"], "passed": count["tests"] - failed - count["skipped"],
-            "failed": failed, "skipped": count["skipped"], "skip_reasons": skip_reasons(result.read_text(encoding="utf-8"))}
-
-
-def skip_reasons(result: str) -> dict:
-    """Why tests were skipped, from the result file: each reason once, with the number of tests it stopped."""
-    reasons: dict = {}
-    for said in re.findall(r'<skipped\b[^>]*?\bmessage="([^"]*)"', result):
-        reason = " ".join(html.unescape(said).split())[:120] or "no reason given"
-        reasons[reason] = reasons.get(reason, 0) + 1
-    return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0])))
+        numbers = counted.read(result.read_text(encoding="utf-8"))
+    except (OSError, counted.Unreadable):
+        raise StepFailed(f"the tests left no result (status {done.returncode}): {done.stdout.strip()[-400:]}") from None
+    return {"expected": TESTS.expected, **numbers}
 
 
 def with_the_card(args, report: dict, folder: Path) -> None:
@@ -528,8 +539,8 @@ def with_the_card(args, report: dict, folder: Path) -> None:
         raise StepFailed("a service was not whole when the stack had started: " + "; ".join(faults))
     now_in(report, "the smoke run")
     report["tasks"] = smoke(args, report["commit"], folder)
-    now_in(report, "the tests that the plain jobs leave out")
-    report["tests"] = left_out_tests(args, folder)
+    now_in(report, "the tests that need a real model")
+    report["tests"] = model_tests(args, folder)
     now_in(report, "ask the services again")
     report["services"]["at the end"], report["not_whole_at_the_end"] = ask_the_services(args, 0)
     now_in(report, "done")
@@ -547,17 +558,7 @@ def judge(report: dict) -> str:
             faults.append(f"{task['task']}: {task['defects']} defect(s) of the harness")
     tests = report.get("tests")
     if tests:
-        if tests["collected"] != tests["expected"]:
-            faults.append(f"{tests['collected']} tests were collected, and there are {tests['expected']}")
-        if tests["failed"]:
-            faults.append(f"{tests['failed']} test(s) failed")
-        if tests["skipped"]:
-            # A skipped test counts as collected, so the number 125 does not show it. It was not run: the night
-            # did not measure what it is there to measure.
-            reasons = list((tests.get("skip_reasons") or {}).items())
-            said = "; ".join(f"{count}: {reason}" for reason, count in reasons[:5]) or "the result file gives no reason"
-            more = f"; and {len(reasons) - 5} more reason(s)" if len(reasons) > 5 else ""
-            faults.append(f"{tests['skipped']} test(s) were skipped ({said}{more})")
+        faults += counted.faults(tests, tests["expected"])
     faults += [f"at the end of the run {fault}" for fault in report.get("not_whole_at_the_end") or []]
     return "failed: " + "; ".join(faults) if faults else "passed"
 
@@ -635,7 +636,7 @@ def as_text(report: dict) -> str:
         lines += [f"| {t['task']} | {t['seconds']} | {'yes' if t['passed'] else 'no'} | {t['defects']} |" for t in report["tasks"]]
     if report.get("tests"):
         t = report["tests"]
-        counts = (f"- Tests that the plain jobs leave out: {t['collected']} collected of {t['expected']}; "
+        counts = (f"- Tests that need a real model: {t['collected']} collected of {t['expected']}; "
                   f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped")
         lines += ["", counts]
     return "\n".join(lines) + "\n"

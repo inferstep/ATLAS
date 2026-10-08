@@ -47,7 +47,7 @@ DOC_DIRS_ALLOWED = (".github/",)
 # expected values, and the scripts whose result is a check's result.
 GATE_FILES = (
     ".github/workflows/", ".github/actions/", ".github/requirements/", ".github/code-health-baseline.json",
-    ".github/canary.json",
+    ".github/canary.json", "scripts/tests_counted.py",
     ".golangci.yml", ".golangci.yaml", ".codescene/", "codecov.yml",
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json", "tests/replay/recordings/",
