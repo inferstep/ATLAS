@@ -13,7 +13,8 @@ commits read. The script stops when they do not.
     long line at 72 columns; the lines of a paragraph and of a list item are
     put together again.
   - Left out: the part is the one sentence "Nothing."
-  - Dependency updates: Dependabot's pull requests, as one line.
+  - Dependency updates: Dependabot's pull requests, as one line. They are
+    known by the address that GitHub gives the bot's commits.
   - Has its entry already: the pull request has no such part and changed
     CHANGELOG.md itself.
   - To decide by hand, each with its reason: no such part; a part that is
@@ -21,8 +22,8 @@ commits read. The script stops when they do not.
     code block, a quoted block, HTML, a heading of its own or a list inside
     a list; the heading more than once; a part and a change of CHANGELOG.md
     in one pull request; a revert, and each pull request that it reverts.
-  - Not a pull request: a commit whose title does not end with "(#number)".
-    Each is listed.
+  - Not a pull request: a commit whose title does not end with "(#number)"
+    and does not start with "Merge pull request #number". Each is listed.
 
 Nothing is guessed: what does not fit goes to the release owner. The entries
 that stand under `[Unreleased]` stay as they are, after the new ones.
@@ -39,6 +40,10 @@ Limits:
     it any more, and the entry is one flat list.
   - The heading counts only as a heading line of its own, outside a fenced
     code block.
+  - A fix that was released from the release line, and not from `dev`, is
+    on `dev` as a commit of its own. That commit is not behind the tag, so
+    its entry comes again in the section of the next release from `dev`.
+    The release owner takes it out or marks it.
 
 It reads git only: no token and no network. The release owner runs it as one
 step of a release, reads the section, and edits it by hand where needed.
@@ -70,13 +75,16 @@ UNRELEASED = "## [Unreleased]"
 # The type of a pull request's title -> the word its entry starts with.
 WORDS = {"feat": "Added", "fix": "Fixed"}
 OTHER = "Changed"
-NUMBER = re.compile(r" \(#(\d+)\)$")
+# The two forms of a title that name a pull request: of a squash, and of a merge commit that GitHub wrote.
+SQUASHED = re.compile(r" \(#(\d+)\)$")
+MERGED = re.compile(r"^Merge pull request #(\d+) ")
+DEPENDABOT = "49699333+dependabot[bot]@users.noreply.github.com"
 TITLE = re.compile(r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?: (?P<summary>.+?)(?: \(#\d+\))?$")
 HEADING_LINE = re.compile(rf"^(#{{1,6}})[ \t]+{re.escape(HEADING)}[ \t]*$")
 ANY_HEADING = re.compile(r"^(#{1,6})[ \t]+\S")
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 # A list mark with its text, or alone on its line: the merge leaves it alone when the first word is a long one.
-LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)])(?:\s+\S|\s*$)")
+LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)")
 INNER_ITEM = re.compile(r"^\s+(?:[-*+]|\d{1,9}[.)])(?:\s|$)")
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 REVERTS = re.compile(r"^(?:Reverts|This reverts commit)\b(.*)$", re.MULTILINE)
@@ -86,7 +94,7 @@ PLACES = {"entries": "gave an entry",
           "dependencies": "dependency updates, put together as one line",
           "has_entry": "have their entry already: no part for users, and the pull request changed CHANGELOG.md itself",
           "by_hand": "TO DECIDE BY HAND",
-          "no_number": "not a pull request (the title ends with no number)"}
+          "no_number": "not a pull request (the title has no number of one)"}
 
 
 class Unusable(Exception):
@@ -95,15 +103,20 @@ class Unusable(Exception):
 
 class Commit(NamedTuple):
     hash: str
-    author: str
+    email: str
     title: str
     body: str
 
     @property
+    def number(self) -> str:
+        """The number of its pull request, or nothing when the title names none."""
+        found = SQUASHED.search(self.title) or MERGED.match(self.title)
+        return found.group(1) if found else ""
+
+    @property
     def name(self) -> str:
         """What the release owner finds it by: the number of its pull request, or the start of its hash."""
-        number = NUMBER.search(self.title)
-        return f"#{number.group(1)}" if number else self.hash[:7]
+        return f"#{self.number}" if self.number else self.hash[:7]
 
 
 def git(root: Path, *args: str) -> str:
@@ -120,12 +133,12 @@ def last_release(root: Path, to: str) -> str:
 
 def commits(root: Path, since: str, to: str) -> list:
     """The commits of the branch between the two, newest first. Of a merge only the commit itself is read."""
-    out = git(root, "log", "--first-parent", "--format=%H%x00%an%x00%s%x00%b%x1e", "--end-of-options", f"{since}..{to}")
+    out = git(root, "log", "--first-parent", "--format=%H%x00%ae%x00%s%x00%b%x1e", "--end-of-options", f"{since}..{to}")
     found = []
     for record in out.split("\x1e"):
         if record.strip():
-            commit, author, title, body = record.strip("\n").split("\x00")
-            found.append(Commit(commit, author, title, body.replace("\r\n", "\n")))
+            commit, email, title, body = record.strip("\n").split("\x00")
+            found.append(Commit(commit, email, title, body.replace("\r\n", "\n")))
     return found
 
 
@@ -144,7 +157,8 @@ def lines_outside_fences(text: str):
             opened = fence.group(1) if fence else ""
             yield line, not fence
             continue
-        closes = fence and fence.group(1)[0] == opened[0] and len(fence.group(1)) >= len(opened) and not fence.group(2).strip()
+        closes = (fence and fence.group(1)[0] == opened[0] and len(fence.group(1)) >= len(opened)
+                  and not line[fence.end():].strip())
         opened = "" if closes else opened
         yield line, False
 
@@ -209,8 +223,7 @@ def joined_again(part: str) -> str:
 
 def named_by(commit: Commit, numbers: list, hashes: list) -> bool:
     """Whether one of these numbers is the commit's pull request, or one of these hashes starts its hash."""
-    number = NUMBER.search(commit.title)
-    return bool(number and number.group(1) in numbers) or any(commit.hash.startswith(start) for start in hashes)
+    return commit.number in numbers or any(commit.hash.startswith(start) for start in hashes)
 
 
 def reverts_among(found: list) -> dict:
@@ -238,11 +251,11 @@ def reverts_among(found: list) -> dict:
 
 def place_of(commit: Commit, in_changelog: bool, revert: str) -> tuple:
     """The one place of a commit, and with it the text of its entry or the reason to decide by hand."""
-    if not NUMBER.search(commit.title):
+    if not commit.number:
         return "no_number", "; ".join(filter(None, [revert, "it changed CHANGELOG.md" if in_changelog else ""]))
     if revert:
         return "by_hand", revert
-    if commit.author.startswith("dependabot"):
+    if commit.email == DEPENDABOT:
         return "dependencies", ""
     count, part = users_part(commit.body)
     if count == 0 and in_changelog:
@@ -289,7 +302,7 @@ def entries_as_text(places: dict) -> str:
         named = TITLE.match(commit.title)
         word = WORDS.get(named["type"], OTHER) if named else OTHER
         word += ", breaking" if named and named["breaking"] else ""
-        summary = named["summary"] if named else NUMBER.sub("", commit.title)
+        summary = named["summary"] if named else SQUASHED.sub("", commit.title)
         parts.append(f"### {word}: {summary} ({commit.name})\n\n{text}\n")
     updates = [commit.name for commit, _ in places["dependencies"]]
     if updates:
@@ -313,19 +326,22 @@ def section(version: str, name: str, date: str, new: str, kept: str) -> str:
     return "\n\n".join(part.strip("\n") for part in (heading, new, kept) if part.strip()) + "\n"
 
 
+def told_about(place: str, called: str, rows: list) -> list:
+    """The lines about one place: its commits by name, or one by one with the reason where the owner has to look."""
+    if place not in ("by_hand", "no_number"):
+        return [f"  {len(rows)} {called}: {', '.join(commit.name for commit, _ in rows)}"]
+    lines = [f"  {len(rows)} {called}:"]
+    for commit, why in rows:
+        lines.append(f"      {commit.name}  {commit.title}" + (f"\n          {why}" if why else ""))
+    return lines
+
+
 def for_the_owner(places: dict, read: int, since: str, to: str) -> str:
     """What the release owner has to know: where each commit went, and that the places add up."""
     lines = [f"release changelog: {read} commit(s) read, the first parents of {to} since {since}"]
     for place, called in PLACES.items():
-        rows = places[place]
-        if not rows:
-            continue
-        if place in ("by_hand", "no_number"):
-            lines.append(f"  {len(rows)} {called}:")
-            for commit, why in rows:
-                lines.append(f"      {commit.name}  {commit.title}" + (f"\n          {why}" if why else ""))
-        else:
-            lines.append(f"  {len(rows)} {called}: {', '.join(commit.name for commit, _ in rows)}")
+        if places[place]:
+            lines += told_about(place, called, places[place])
     if read:
         lines.append(f"  {read} = " + " + ".join(str(len(places[place])) for place in PLACES if places[place]))
     breaking = [commit.name for commit, _ in places["entries"] if (TITLE.match(commit.title) or {"breaking": ""})["breaking"]]
