@@ -62,14 +62,11 @@ jobs:
           python-version: '3.12'
 
       - name: install what the tests need
-        # The same packages as the pytest jobs, without the lens: its tests
-        # are named as not judged.
+        # The same packages as the pytest jobs, from the same hashed lock,
+        # without the lens: its tests are named as not judged.
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
           pip install --no-deps -e .
-          grep -E '^tree-sitter' v3-service/requirements.txt | xargs pip install
-          pip install -r sandbox/requirements-runtime.txt
-          grep -E '^jinja2==' sandbox/requirements-verify.txt | xargs pip install
 
       - name: the new tests of a fix, without the fix and with it
         env:
