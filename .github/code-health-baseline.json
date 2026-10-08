@@ -96,7 +96,7 @@
   "atlas/commands/lens.py": 1554,
   "proxy/agent.go": 9929,
   "proxy/gates.go": 4066,
-  "proxy/guardrails.go": 3813,
+  "proxy/guardrails.go": 3794,
   "proxy/tools.go": 6706,
   "proxy/types.go": 2080,
   "sandbox/executor_server.py": 2171,

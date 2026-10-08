@@ -626,7 +626,7 @@ func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command strin
 	s.verifiedStandalone = false
 	s.verifiedByRedirect = ""
 	s.redRunStreak++
-	s.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
+	s.serverStartBlocked = blockedServerStart(result)
 	recordVerificationEvidence(ctx, turn, command, ev, true)
 	log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 		turn, truncateStr(command, 60), s.serverStartBlocked)
