@@ -101,6 +101,15 @@ def cleanup():
     return THE_SCRIPT
 
 
+@pytest.fixture(autouse=True)
+def no_name_of_a_runner(monkeypatch):
+    """No test reads the environment of the machine it runs on. A job on a runner has names of its own there
+    (`GITHUB_REPOSITORY`, `GITHUB_STEP_SUMMARY`, ...), and a script would take them for the test's. A test that needs
+    such a name sets it."""
+    for name in [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"]:
+        monkeypatch.delenv(name)
+
+
 def git(where, *args):
     done = subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=60, env={**os.environ, **GIT})
     assert done.returncode == 0, done.stdout + done.stderr
@@ -718,8 +727,17 @@ def issue(number, state="open", login="github-actions[bot]", body=None, **more):
     return {"number": number, "state": state, "user": {"login": login, "type": "Bot"}, "body": THE_SCRIPT.MARK + "\nan older text\n" if body is None else body, **more}
 
 
+# What the script asks first, and the second page of that list.
+LIST = "/repos/o/r/issues?state=all&per_page=100&creator=github-actions%5Bbot%5D"
+SECOND_PAGE = LIST + "&page=2"
+
+
 class GitHub(http.server.BaseHTTPRequestHandler):
-    """A stand-in for GitHub: it lists the issues of the plan, takes a new text or a new issue, and keeps every call."""
+    """A stand-in for GitHub: it lists the issues of the plan, takes a new text or a new issue, and keeps every call.
+
+    No header of an answer is made from what a request holds: the address of the next page and the address that a
+    302 points to are fixed texts of this file, with the port of the stand-in.
+    """
 
     seen: list = []
     issues: list = []
@@ -745,9 +763,9 @@ class GitHub(http.server.BaseHTTPRequestHandler):
             elsewhere = f"http://127.0.0.1:{self.server.server_port}/elsewhere" if GitHub.fails[method] == 302 else ""
             return self.answer(GitHub.fails[method], {"message": "a planted failure"}, location=elsewhere)
         if method == "GET":
-            page = int(re.search(r"[?&]page=(\d+)", self.path).group(1)) if "page=" in self.path.split("per_page=100")[-1] else 1
+            page = 2 if self.path == SECOND_PAGE else 1
             share = GitHub.issues[page - 1::GitHub.pages]
-            more = f'<http://127.0.0.1:{self.server.server_port}{self.path.split("&page=")[0]}&page={page + 1}>; rel="next"' if page < GitHub.pages else ""
+            more = f'<http://127.0.0.1:{self.server.server_port}{SECOND_PAGE}>; rel="next"' if page < GitHub.pages else ""
             return self.answer(200, share, GitHub.next_page or more)
         return self.answer(201 if method == "POST" else 200, {"number": 77})
 
@@ -781,6 +799,8 @@ def github():
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
     thread.join(timeout=10)
+    # What a test gave the stand-in does not reach the next test.
+    GitHub.seen, GitHub.issues, GitHub.fails, GitHub.pages, GitHub.next_page = [], [], {}, 1, ""
 
 
 class Written:
@@ -795,7 +815,9 @@ class Written:
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(self.page))
         for name, value in (("GITHUB_TOKEN", token), ("GITHUB_REPOSITORY", repo)):
             monkeypatch.setenv(name, value) if value else monkeypatch.delenv(name, raising=False)
-        self.status = cleanup.main(["write", "--from", str(self.folder), "--api", api])
+        # The stand-in takes the place of GitHub's address inside the test. The script has no option for that.
+        monkeypatch.setattr(cleanup, "GITHUB_API", api)
+        self.status = cleanup.main(["write", "--from", str(self.folder)])
         printed = capsys.readouterr()
         self.printed = printed.out + printed.err
         self.said = self.page.read_text() if self.page.exists() else ""
@@ -808,9 +830,6 @@ class Written:
 @pytest.fixture
 def written(cleanup, tmp_path, monkeypatch, capsys, github):
     return lambda **how: Written(cleanup, tmp_path, monkeypatch, capsys, how.pop("api", github), **how)
-
-
-LIST = "/repos/o/r/issues?state=all&per_page=100&creator=github-actions%5Bbot%5D"
 
 
 def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_changed(written):
@@ -890,7 +909,7 @@ def test_only_an_issue_that_the_jobs_own_account_made_and_that_starts_with_the_m
 def test_every_page_of_the_list_is_read(written):
     GitHub.issues, GitHub.pages = [issue(5, login="a-stranger"), issue(41)], 2
     done = written()
-    assert [path for method, path, _token, _body in GitHub.seen if method == "GET"] == [LIST, LIST + "&page=2"]
+    assert [path for method, path, _token, _body in GitHub.seen if method == "GET"] == [LIST, SECOND_PAGE]
     assert done.writes == [("PATCH", "/repos/o/r/issues/41", {"body": done.text})]
 
 
@@ -936,12 +955,23 @@ def test_when_github_gives_no_answer_nothing_is_judged(written):
     assert "GitHub gave no answer that can be read to GET http://127.0.0.1:9/repos/o/r/issues" in done.printed
 
 
-@pytest.mark.parametrize("api", ["https://api.github.example", "http://example.invalid", "http://127.0.0.1:80/x", "https://api.github.com.example.invalid"])
-def test_the_token_goes_to_githubs_own_address_only(written, api):
-    done = written(api=api)
-    assert done.status == 2
-    assert "the token goes only to https://api.github.com, and --api names another address" in done.printed
+def test_the_script_names_one_address_for_the_token_and_takes_no_option_for_another(tmp_path, capsys):
+    cleanup = load()
+    assert cleanup.GITHUB_API == "https://api.github.com"
+    source = SCRIPT.read_text()
+    # The two addresses of the script: where the token goes, and the usual form of the address of the runs.
+    assert sorted(set(re.findall(r"https?://[^/\"' ]+", source))) == ["https://api.github.com", "https://github\\.com"]
+    assert "http://" not in source
+    with pytest.raises(SystemExit) as stopped:
+        cleanup.main(["write", "--from", str(tmp_path), "--api", "https://api.github.example"])
+    assert stopped.value.code == 2
+    assert "unrecognized arguments: --api" in capsys.readouterr().err
     assert GitHub.seen == []
+
+
+def test_a_test_does_not_see_the_names_that_a_runner_gives_its_jobs():
+    # The fixture above took them out. Where it does not, this test is red on a runner and green on a desk.
+    assert [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"] == []
 
 
 @pytest.mark.parametrize("token, repo", [("", "o/r"), (TOKEN, ""), (TOKEN, "o/r/../x"), (TOKEN, "o r")])
@@ -988,8 +1018,8 @@ def test_no_call_changes_a_state_a_title_a_label_or_writes_a_comment(written, cl
     source = SCRIPT.read_text()
     # The two places that send: the new text of the issue, and a new issue with the title and the text.
     assert re.findall(r'github\("(?:POST|PATCH|PUT|DELETE)",[^\n]*', source) == [
-        'github("PATCH", f"{api}/repos/{repo}/issues/{number}", token, {"body": text})',
-        'github("POST", f"{api}/repos/{repo}/issues", token, {"title": TITLE, "body": text})']
+        'github("PATCH", f"{GITHUB_API}/repos/{repo}/issues/{number}", token, {"body": text})',
+        'github("POST", f"{GITHUB_API}/repos/{repo}/issues", token, {"title": TITLE, "body": text})']
     for word in ('"labels"', '"assignees"', '"milestone"', "/comments", "/labels", '"DELETE"', '"PUT"', '"push"', "/pulls", "/git/"):
         assert word not in source, word
 

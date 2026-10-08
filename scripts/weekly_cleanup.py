@@ -17,8 +17,8 @@ to that commit alone, into <folder>/pieces/. It checks a piece before it offers 
 
 A fixer runs only when it is on a list below. A fixer that a newer Go brings is named in the text and not run.
 
-`write` finds the issue among those that the job's own account made, by the mark in the first line of its text,
-and replaces the text. It changes nothing else of the issue: not its state, its title or its labels. With no
+`write` talks to GitHub's own address and has no option that names another one. It finds the issue among those
+that the job's own account made, by the mark in the first line of its text, and replaces the text. It changes nothing else of the issue: not its state, its title or its labels. With no
 issue it makes one, when there is something to clean. A closed issue stays closed and nothing is written.
 
 In the text, everything that comes from a file or from a tool stands in code marks or in a fenced block, so that
@@ -540,26 +540,24 @@ def github(method: str, address: str, token: str, body: dict | None = None) -> t
                         "Fix: run the job again.") from None
 
 
-def issues_with_the_mark(api: str, repo: str, token: str) -> list:
+def issues_with_the_mark(repo: str, token: str) -> list:
     """The issues that the job's own account made and whose text starts with the mark. A pull request is no issue."""
-    address = f"{api}/repos/{repo}/issues?state=all&per_page=100&creator={urllib.parse.quote(AUTHOR, safe='')}"
+    address = f"{GITHUB_API}/repos/{repo}/issues?state=all&per_page=100&creator={urllib.parse.quote(AUTHOR, safe='')}"
     found = []
     while address:
         listed, address = github("GET", address, token)
-        if address and not address.startswith(api + "/"):
+        if address and not address.startswith(GITHUB_API + "/"):
             raise NotJudged("GitHub named a next page at another address. Fix: run the job again.")
         found += [issue for issue in listed if "pull_request" not in issue and (issue.get("user") or {}).get("login") == AUTHOR
                   and (issue.get("body") or "").startswith(MARK)]
     return found
 
 
-def write(folder: Path, api: str) -> int:
+def write(folder: Path) -> int:
     text, result = (folder / "issue.md").read_text(encoding="utf-8"), json.loads((folder / "result.json").read_text(encoding="utf-8"))
     token, repo = os.environ.get("GITHUB_TOKEN", ""), os.environ.get("GITHUB_REPOSITORY", "")
     if not token or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise NotJudged("GITHUB_TOKEN or GITHUB_REPOSITORY is not set. Fix: this command is for the weekly job, which has both.")
-    if api != GITHUB_API and not re.fullmatch(r"http://127\.0\.0\.1:\d{1,5}", api):
-        raise NotJudged(f"the token goes only to {GITHUB_API}, and --api names another address. Fix: leave --api out.")
     if result.get("one_piece") or not text.startswith(MARK) or len(text) > LIMIT:
         raise NotJudged("the text in the folder is not the weekly text: it is for one piece, has no mark, or is too "
                         "long. Fix: make it with `make --out <folder>` and no --piece.")
@@ -567,7 +565,7 @@ def write(folder: Path, api: str) -> int:
         raise NotJudged("the text in the folder holds an `@` or a `#` with a number outside code marks and fenced "
                         "blocks, where GitHub reads a mention or a link to an issue. Nothing was written. Fix: this is "
                         "a fault of scripts/weekly_cleanup.py; put that part of issue_text into code marks.")
-    found = issues_with_the_mark(api, repo, token)
+    found = issues_with_the_mark(repo, token)
     is_open = [issue for issue in found if issue.get("state") == "open"]
     if len(is_open) > 1:
         numbers = ", ".join(str(int(issue["number"])) for issue in is_open)
@@ -575,13 +573,13 @@ def write(folder: Path, api: str) -> int:
                       "writes one. Nothing was written. Fix: close all but one.")
     if is_open:
         number = int(is_open[0]["number"])
-        github("PATCH", f"{api}/repos/{repo}/issues/{number}", token, {"body": text})
+        github("PATCH", f"{GITHUB_API}/repos/{repo}/issues/{number}", token, {"body": text})
         said = f"The text of issue {number} was replaced."
     elif found:
         said = (f"Issue {int(found[0]['number'])} is closed, so nothing was written. Closing the issue stops the weekly text; "
                 "open it again to start it.")
     elif result.get("anything"):
-        made, _next = github("POST", f"{api}/repos/{repo}/issues", token, {"title": TITLE, "body": text})
+        made, _next = github("POST", f"{GITHUB_API}/repos/{repo}/issues", token, {"title": TITLE, "body": text})
         said = f"There was no issue with the mark, so issue {int(made['number'])} was made."
     else:
         said = "There is nothing to clean and no issue with the mark, so none was made."
@@ -599,14 +597,13 @@ def parse(argv: list | None) -> argparse.Namespace:
     maker.add_argument("--piece", help="make one piece only, for example go/proxy/rangeint")
     writer = commands.add_parser("write", help="put the text into the one issue (the weekly job only)")
     writer.add_argument("--from", dest="folder", type=Path, required=True, help="the folder that `make` wrote")
-    writer.add_argument("--api", default=GITHUB_API, help="the address of GitHub's API; another address gets no token")
     return parser.parse_args(argv)
 
 
 def main(argv: list | None = None) -> int:
     args = parse(argv)
     try:
-        return make(args.root.resolve(), args.out, args.piece) if args.command == "make" else write(args.folder, args.api)
+        return make(args.root.resolve(), args.out, args.piece) if args.command == "make" else write(args.folder)
     except (NotJudged, Finding) as error:
         status = 1 if isinstance(error, Finding) else 2
         print(f"weekly cleanup: {'a finding' if status == 1 else 'not judged'}: {error}", file=sys.stderr)
