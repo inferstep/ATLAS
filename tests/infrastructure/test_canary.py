@@ -9,6 +9,7 @@ renewed.
 import http.server
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -479,11 +480,27 @@ def test_a_canary_on_the_head_of_dev_is_not_old_whatever_the_age_of_its_runs(can
 # --- the check as a job runs it: with no number, against what GitHub answers ---------------------------------------
 
 REPO, HEAD = "o/r", "0" * 40
+
+
+@pytest.fixture(autouse=True)
+def no_name_of_a_runner(monkeypatch):
+    """No test reads the environment of the machine it runs on. A job on a runner has names of its own there
+    (`GITHUB_REPOSITORY`, `GITHUB_STEP_SUMMARY`, ...), and the script would take them for the test's. A test that
+    needs such a name sets it."""
+    for name in [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"]:
+        monkeypatch.delenv(name)
+
+
 SEARCH = "repos/o/r/pulls?state=open&head=o%3Acanary%2Fmust-stay-red&per_page=100"
 
 
 def days_ago(days):
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_test_does_not_see_the_names_that_a_runner_gives_its_jobs():
+    # The fixture above took them out. Where it does not, this test is red on a runner and green on a desk.
+    assert [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"] == []
 
 
 class GitHub:
