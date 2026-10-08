@@ -1016,3 +1016,5 @@ If your issue isn't listed here:
 2. Check the proxy health endpoint: `curl http://localhost:8090/health`
 3. See [CONFIGURATION.md](CONFIGURATION.md) for all environment variables
 4. Open an issue on [GitHub](https://github.com/inferstep/ATLAS/issues)
+
+<!-- One line for a proof of the checks. The pull request that carries it is closed without a merge. -->
