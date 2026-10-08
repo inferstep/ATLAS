@@ -3,7 +3,7 @@ numpy==2.4.6
 # package now pulls NCCL even on arm64; Lens never executes GPU algorithms.
 xgboost-cpu==3.2.0; sys_platform == "linux"
 xgboost==3.2.0; sys_platform != "linux"
-fastapi==0.141.1
+fastapi==0.142.2
 uvicorn==0.54.0
 pydantic==2.13.5
 httpx==0.28.1
