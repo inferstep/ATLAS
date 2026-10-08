@@ -6,8 +6,10 @@ gives it, so the tests pin what the script does with them.
 import importlib.util
 import json
 import re
+import shlex
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -15,8 +17,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "dockerfile_lint.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "hadolint.yml"
-STAND_IN = """#!{python}
-import json, pathlib, sys
+# The stand-in is two files. The first line of the one that is called is fixed: a line that named the path of Python
+# would not start where that path holds a space.
+CALLED = '#!/bin/sh\nexec {python} -S {code} "$@"\n'
+STAND_IN = """import json, pathlib, sys
 told = json.loads(pathlib.Path(__file__).with_name("told.json").read_text())
 print(json.dumps([f for f in told["findings"] if f["file"] in sys.argv[1:]]) if told["status"] == 0 else "it broke")
 sys.exit(told["status"])
@@ -58,18 +62,34 @@ def repo(tmp_path):
     return root
 
 
-@pytest.fixture
-def hadolint(tmp_path):
-    """A stand-in for hadolint. Call it with the findings and the exit status it must give."""
-    binary = tmp_path / "bin" / "hadolint"
+def stand_in(folder, python=sys.executable):
+    """A stand-in for hadolint in this folder, run by this Python. Call it with the findings and the exit status it must give."""
+    binary = folder / "bin" / "hadolint"
     binary.parent.mkdir()
-    binary.write_text(STAND_IN.format(python=sys.executable), encoding="utf-8")
+    code = binary.with_name("hadolint.py")
+    code.write_text(STAND_IN, encoding="utf-8")
+    binary.write_text(CALLED.format(python=shlex.quote(python), code=shlex.quote(str(code))), encoding="utf-8")
     binary.chmod(0o755)
 
     def tell(findings, status=0):
         binary.with_name("told.json").write_text(json.dumps({"findings": findings, "status": status}), encoding="utf-8")
         return str(binary)
     return tell
+
+
+@pytest.fixture
+def hadolint(tmp_path):
+    return stand_in(tmp_path)
+
+
+def test_the_stand_in_starts_where_the_path_of_python_holds_a_space(lint, repo, tmp_path, capsys):
+    folder = tmp_path / "a folder"
+    folder.mkdir()
+    venv.create(folder / "a python", with_pip=False, symlinks=True)
+    hadolint = stand_in(folder, str(folder / "a python" / "bin" / "python"))
+    status = lint.lint(repo, hadolint([finding("proxy/Dockerfile")]), "", False)
+    assert status == 0
+    assert "proxy/Dockerfile" in capsys.readouterr().out
 
 
 def test_it_takes_every_dockerfile_and_nothing_else(lint, repo):
