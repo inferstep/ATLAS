@@ -50,14 +50,15 @@ the tool is a mistake and not a mystery.
 
 - A job with no condition must have run. That holds for every job definition
   in the workflow files that has no `if:` of its own.
-- 16 job definitions have an `if:` of their own, so they may be skipped by
+- 17 job definitions have an `if:` of their own, so they may be skipped by
   design, and `checks ran` does not report one of them as missing. Every
-  other job is judged for absence. The table below names the 16. On a pull
+  other job is judged for absence. The table below names the 17. On a pull
   request five of them count: Sonar's scan, the `PR build check`, `coverage upload`,
   `test results upload` and `test results upload (extension)`. If one of
   these does not start at all, nothing says so. The rest run only on other
   events: the four bot jobs, the three image jobs of a push, the release
-  file job, the scorecard, the staging record and the star chart.
+  file job, the scorecard, the staging record, the star chart and the job
+  that writes the weekly cleanup's issue.
 - For a job with a matrix, one reported leg is enough. The required checks
   cover the required legs by name. A leg that is not required can be missing
   unseen.
@@ -86,6 +87,7 @@ job on this list that does not start gives no red:
 | `star-chart.yml` | `render` |
 | `test.yml` | `coverage-upload`, `test-results-upload` |
 | `vscode-extension.yml` | `test-results-upload` |
+| `weekly-cleanup.yml` | `issue` |
 
 ## Checks on a pull request
 
@@ -116,6 +118,8 @@ job on this list that does not start gives no red:
 | `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
 | `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint |
 | `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
+| `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" |
+| `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" |
 | `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing |
 | `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
 | `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
@@ -352,14 +356,22 @@ and red for its own violation.
   another check is under `side_effects`, with the path. A check with no
   violation that is red and is not there is named: a red with no cause on the
   list can hide a fault.
-- `python3 scripts/canary.py check --pr <number>` reads the checks of the
-  canary pull request and names each thing that is not as the list says: a
+- `python3 scripts/canary.py check` reads the checks of the canary pull
+  request and names each thing that is not as the list says: a
   listed check that passed, did not run, was skipped or has not finished; a
   check that is red but not for its violation; a check with no violation
   that is red where the list does not say why; a check that ran and that the
-  list does not know; a required check the list does not know; and a canary
-  older than 14 days. It needs the packages of `.github/requirements/ci.txt`
-  and a GitHub token (`GITHUB_TOKEN`, or a `gh` sign-in). It changes nothing.
+  list does not know; a required check the list does not know; no open
+  canary pull request, or more than one; and a canary that is old. It needs
+  the packages of `.github/requirements/ci.txt` and a GitHub token
+  (`GITHUB_TOKEN`, or a `gh` sign-in). It changes nothing. With `--pr
+  <number>` it reads that pull request; without, the one open pull request
+  of the canary branch.
+- The canary is old when `dev` has had a commit that the canary does not
+  have for more than 14 days. The date of the commit that the canary stands
+  on does not count. A canary on the head of `dev` is not old, whatever the
+  age of its runs: they ran on the files that `dev` has today. What such a
+  canary does not show is a runner or a service that changed since its runs.
 
 A maintainer renews the canary once a week, and after a change to a workflow
 or to a file that configures a check:
@@ -376,6 +388,33 @@ When the checks of the canary pull request have ended, run the check. A check
 that it names has stopped catching its violation: repair the check, not the
 list. Change the list only when a job is renamed, a required check is added,
 or a file that a violation edits has moved.
+
+### The check once a week
+
+The workflow `canary check` runs `scripts/canary.py check` each Monday at
+02:47 UTC. It only reads: it renews nothing, opens no pull request and no
+issue, and writes no comment. Its job has a token that can read the
+contents, the pull request, the check runs and the logs of the jobs, and
+nothing else.
+
+- A red run is the report. No issue appears. GitHub sends its mail for a
+  failed scheduled run to the account that last changed the `cron` line of
+  the workflow file on the default branch.
+- The page of the run starts with one of three lines. "As listed": every
+  listed check is red for its violation. "A finding": the lines below name
+  each thing and its fix. "Not judged": GitHub could not be read, so nothing
+  is known. "A finding" and "Not judged" both fail the job. "Not judged" is
+  never a pass.
+- While the canary is as listed, that first line also says by which day it
+  has to be renewed. The renew above is a step by hand, once a week, so that
+  the Monday run is not red for age.
+- GitHub starts a scheduled run from the workflow file of the default branch
+  only. So the weekly run starts when `main` has the file. That copy is only
+  the starter: the job checks out `dev` and runs the script and the list of
+  `dev`. Before `main` has the file, a run can be started by hand.
+- On a pull request that changes the workflow file or `scripts/canary.py`,
+  the job runs with the pull request's copy of both. A pull request that
+  also changes the list can be red there until the canary is renewed.
 
 Checks with no violation, and why:
 
@@ -399,3 +438,79 @@ A violation must fail every time. The time measures of the performance gate
 have none for that reason: a planted slowdown fails only on some runs. The
 gate's violation is a budget of 1 byte for the proxy binary, which every
 build is over.
+
+## The weekly cleanup
+
+The workflow `weekly cleanup` runs `scripts/weekly_cleanup.py` each Monday at
+03:17 UTC. It shows what the fixers would change on `dev`, as the text of
+one issue. It changes nothing in the repository: it pushes nothing and opens
+no pull request. A person applies a piece.
+
+A piece is one fixer on one part of the repository, for example
+`go/proxy/rangeint` or `python/W291`. Each piece is a patch that applies
+alone to the commit that the text names.
+
+- Two jobs. The first runs the fixers, the builds and the tests on a copy,
+  with a token that can only read the contents. The second has `issues:
+  write`, runs no fixer, no build and no test, and takes the text that the
+  first made as data. It does not run for a pull request.
+- One issue. The job finds it among the issues that its own account
+  (`github-actions[bot]`) made, by a mark in the first line of the text, and
+  replaces the text. It makes the issue when there is none and there is
+  something to clean. It changes nothing else: not the state, the title or
+  the labels, and it writes no comment.
+- Closing the issue stops the weekly text: the job writes nothing to a
+  closed issue, and says so on the page of its run. To start it again, open
+  the issue. More than one open issue with the mark fails the job, and
+  nothing is written.
+- A week with nothing to clean: the text of the issue says so, with the
+  date. With no issue, none is made.
+- The issue is not for a claim. A maintainer applies a piece, one at a time,
+  as a normal pull request through every check. To make one piece on a
+  checkout: `python3 scripts/weekly_cleanup.py make --piece <piece> --out
+  <folder>`, then `git apply <folder>/pieces/<piece, with - for each
+  />.patch`. With `--piece` the tests of a Go module run with that piece
+  alone.
+- In the text, everything that comes from a file or from a tool stands in
+  code marks or in a fenced block, so nothing in it is read as a mention or
+  as a link to an issue. The job that writes checks that once more.
+- The text of an issue has a size limit. Whole patches go in, as many as
+  fit; each other piece is named, and its patch is in the files of the run
+  (`weekly-cleanup`). Nothing is cut with no word.
+- When the job fails, the run is red and the issue is not touched. The text
+  carries its date, so a text older than 8 days shows that the job did not
+  end or that the issue was closed.
+
+The fixers, by name. A fixer runs only when it is on the list in the script:
+
+| Part | Fixers | How a piece is checked before it is offered |
+|---|---|---|
+| Go: `proxy`, `tui` | `go fix` with `any`, `fmtappendf`, `forvar`, `inline`, `mapsloop`, `minmax`, `newexpr`, `plusbuild`, `rangeint`, `reflecttypefor`, `slicescontains`, `slicessort`, `stditerators`, `stringsbuilder`, `stringscut`, `stringscutprefix`, `stringsseq`, `testingcontext`, `waitgroup` | `gofmt` names no file that it did not name before; `go build` and `go vet` pass; the tests of the module pass with its pieces together, run with the flags of the Go test jobs. A piece that fails one of them is left out and named, with what the tool said |
+| Python | `ruff --fix` (safe fixes) for `W291`, `W292`, `W293`, `W391`, `F401` | In each file the syntax tree is the same as before, and so are the comments. A file where one of the two differs is left out and named |
+
+- The checks of a Go piece are a test result. They are no proof that the
+  code does what it did before. The pull request that applies a piece goes
+  through every check.
+- Not run, with the reason: `omitzero` changes what is encoded; `hostport`
+  changes the address that is dialed; `buildtag` checks and rewrites
+  nothing.
+- `go fix` comes with the Go version that the job pins, the version of the
+  Go test jobs. The list of fixers is read again when that version changes.
+  A fixer that a newer Go brings is named in the text and is not run until
+  it is on the list. `ruff` comes from the hashed lock.
+- A fix of `F401` (an import that is not used) changes the syntax tree, so
+  those files are named and not patched. Taking an import away can change
+  what a program does.
+- A language can be held: its pieces are listed with their numbers and
+  checks and are not offered as a patch, and the text gives the reason. The
+  list `HELD` in the script says which.
+- Left out for now, each a later step: `knip` for the VS Code extension (it
+  is not in the extension's lock, and its fixes take exports and files
+  away, which no cheap check holds), and the report of unused Go code
+  (`deadcode`, one more tool to pin).
+
+GitHub starts a scheduled run from the workflow file of the default branch
+only, so the weekly run starts when `main` has the file. That copy is only
+the starter: both jobs check out `dev` and run the script of `dev`. On a
+pull request that changes the workflow file or the script, the first job
+runs with the pull request's copy and shows the text on the page of its run.

@@ -65,7 +65,7 @@ GATE_FILES = (
 )
 # Scripts that a workflow runs with a credential that can write: a token with
 # a write permission, an app token, a right to publish.
-WRITE_CREDENTIAL_SCRIPTS = ("scripts/bot/", "scripts/star-history-chart.py")
+WRITE_CREDENTIAL_SCRIPTS = ("scripts/bot/", "scripts/star-history-chart.py", "scripts/weekly_cleanup.py")
 # Scripts that a workflow runs and that are neither: the thing under test, in
 # a job that cannot write. Each with its reason.
 RUN_NOT_GATE = {
