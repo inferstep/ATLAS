@@ -546,6 +546,156 @@ jobs:
         if: always()
         run: docker rm -f sandbox-test || true
 
+  sandbox-tests:
+    # The tests that need a running sandbox service: the group `sandbox` of
+    # scripts/tests_counted.py. The image is built from this commit, so the
+    # code of the change runs. The languages are in the image; no test asks
+    # the runner for a tool.
+    name: sandbox tests (containerized)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
+            .github/requirements/ci.txt
+
+      - name: install
+        run: |
+          # pytest, and httpx with which the tests reach the service: from
+          # the hashed lock.
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
+
+      - name: build sandbox image
+        run: docker build -t atlas-sandbox-test ./sandbox
+
+      - name: start the sandbox and wait for its health answer
+        run: |
+          docker run -d --name sandbox-test -p 127.0.0.1:8020:8020 atlas-sandbox-test
+          # The service says itself when it serves. No fixed wait: a slow
+          # start would read as 80 failed tests.
+          for _ in $(seq 1 60); do
+            if curl -sf -m 5 -o /dev/null http://127.0.0.1:8020/health; then
+              echo "The sandbox answers."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; the image is built from ./sandbox of this commit."
+          docker logs sandbox-test 2>&1 | tail -n 80
+          exit 1
+
+      - name: the sandbox tests
+        env:
+          SANDBOX_URL: http://127.0.0.1:8020
+        # The status of pytest is not the verdict: it is 0 for a run in which
+        # tests were skipped. The next step reads the result file.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files sandbox) -q -rs -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/sandbox-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: every sandbox test ran and passed
+        run: python scripts/tests_counted.py sandbox "$RUNNER_TEMP/sandbox-tests.xml"
+
+      - name: the log of the sandbox, when a step failed
+        if: failure()
+        run: docker logs sandbox-test 2>&1 | tail -n 120
+
+      - name: cleanup
+        if: always()
+        run: docker rm -f sandbox-test || true
+
+  proxy-tui-tests:
+    # The tests that need the built TUI and a running proxy: the group
+    # `proxy` of scripts/tests_counted.py. They ask the proxy's own answers
+    # and read the TUI's own screen. None needs a model, so the proxy runs
+    # here with no service behind it.
+    name: proxy and TUI tests (no model)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: '1.26.6'
+          # No cache: the two builds take less time than restoring one.
+          cache: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
+            .github/requirements/ci.txt
+
+      - name: install
+        run: |
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
+
+      - name: build the proxy and the TUI
+        run: |
+          (cd proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
+          # The TUI tests start this file.
+          (cd tui && go build -o atlas-tui .)
+
+      - name: start the proxy and wait for its answer
+        env:
+          ATLAS_PROXY_PORT: "18090"
+          ATLAS_KEEP_LLAMA_WARM: "0"
+          ATLAS_SERVICE_TOKEN_FILE: /nonexistent
+          # No service is behind the proxy: nothing listens on port 9.
+          ATLAS_INFERENCE_URL: http://127.0.0.1:9
+          ATLAS_SANDBOX_URL: http://127.0.0.1:9
+          ATLAS_LENS_URL: http://127.0.0.1:9
+          ATLAS_V3_URL: http://127.0.0.1:9
+        run: |
+          nohup "$RUNNER_TEMP/atlas-proxy" > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          # Any answer shows that the proxy serves. With no service behind it
+          # the answer is "not ready", which is what these tests need.
+          for _ in $(seq 1 30); do
+            if curl -s -m 5 -o /dev/null http://127.0.0.1:18090/ready; then
+              echo "The proxy answers."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The proxy gave no answer in 30 seconds, so no test was run. Fix: read its log below for why it did not start; it is built from ./proxy of this commit."
+          tail -n 80 "$RUNNER_TEMP/proxy.log"
+          exit 1
+
+      - name: the proxy and TUI tests
+        env:
+          ATLAS_PROXY_URL: http://127.0.0.1:18090
+        # The status of pytest is not the verdict; the next step reads the
+        # result file.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files proxy) -q -rs -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/proxy-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: every proxy and TUI test ran and passed
+        run: python scripts/tests_counted.py proxy "$RUNNER_TEMP/proxy-tests.xml"
+
+      - name: the log of the proxy, when a step failed
+        if: failure()
+        run: tail -n 120 "$RUNNER_TEMP/proxy.log"
+
   coverage-upload:
     name: coverage upload
     # Sends the coverage reports of the test jobs to Codecov. It is a job of

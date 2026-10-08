@@ -95,6 +95,8 @@ if args[0] == "clone":
     open(tree + "/docker-compose.yml", "w").write("services: {}\\n")
 elif "checkout" in args and plan.get("checkout_adds"):
     open(args[1] + "/scripts/nightly_run.py", "a").write(plan["checkout_adds"])
+elif "checkout" in args and plan.get("checkout_adds_to_the_judge"):
+    open(args[1] + "/scripts/tests_counted.py", "a").write(plan["checkout_adds_to_the_judge"])
 elif "checkout" in args and plan.get("checkout_asks_for_the_lock"):
     # The new copy of the script first tries to take the lock of the folder through a file that it opens itself, as
     # another run would, and writes down whether it could.
@@ -144,6 +146,8 @@ if args[:2] == ["-m", "pytest"]:
         t = plan["tests"]
         skipped = "".join('<testcase name="t%d"><skipped type="pytest.skip" message="%s">where</skipped></testcase>' % (n, reason)
                           for n, reason in enumerate(t.get("reasons", [])))
+        skipped += "".join('<testcase classname="tests.infrastructure.test_llm" name="%s" time="0.1"><failure message="no">'
+                           'where</failure></testcase>' % name for name in t.get("failed", []))
         open(out, "w").write('<?xml version="1.0"?><testsuites><testsuite name="pytest" errors="%d" failures="%d" skipped="%d" '
                              'tests="%d" time="1.0"><testcase name="tests=9"/>%s</testsuite></testsuites>'
                              % (t.get("errors", 0), t.get("failures", 0), t.get("skipped", 0), t["tests"], skipped))
@@ -185,7 +189,8 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 125}, **plan,
+            shutil.copy(SCRIPT.with_name("tests_counted.py"), tree / "scripts" / "tests_counted.py")
+        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 32}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
         (root / "plan.json").write_text(json.dumps(self.plan))
 
@@ -259,7 +264,8 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
         assert about["image"] == f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev"
         assert about["digest"].startswith("sha256:") and about["commit"] == HEAD
     assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "passed": True, "defects": 0} for n, task in enumerate(nightly.TASKS)]
-    assert report["tests"] == {"expected": 125, "collected": 125, "passed": 125, "failed": 0, "skipped": 0, "skip_reasons": {}}
+    assert report["tests"] == {"expected": 32, "collected": 32, "passed": 32, "failed": 0, "skipped": 0, "failed_tests": [],
+                               "skip_reasons": {}}
     for when in ("at the start", "at the end"):
         assert report["services"][when] == {
             "the proxy's /ready": {"status": 200, "answer": WHOLE["proxy/ready"][1]},
@@ -296,7 +302,7 @@ def test_the_stack_has_a_name_and_ports_of_its_own_and_the_driver_and_the_tests_
     assert said["--compose-project"] == "atlas-nightly" and said["--sandbox-container"] == "atlas-nightly-sandbox-1"
     assert said["--workspace"] == str(night.dir / "workspace" / "_reliability") and said["--commit"] == HEAD
     tests = next(call for call in calls if call["args"][:2] == ["-m", "pytest"])
-    assert tests["args"][2:5] == ["-m", "integration", "tests/infrastructure"]
+    assert tests["args"][2:5] == ["-m", "integration", "tests/infrastructure/test_llm.py"]
     assert tests["env"]["SANDBOX_URL"] == "http://127.0.0.1:18020" and tests["env"]["LLAMA_URL"] == "http://127.0.0.1:18080"
     assert tests["env"]["ATLAS_PROXY_URL"] == "http://127.0.0.1:18090"
     # One of the tests compares the served model with this name, and skips when it has none.
@@ -525,12 +531,12 @@ def test_a_step_that_fails_ends_the_run_with_its_reason_and_the_stack_is_stopped
         assert "stack down" not in did and "stack_stopped" not in night.report
 
 
-def measured(defects=(0, 0, 0), collected=125, failed=0, at_the_end=(), skipped=None):
+def measured(defects=(0, 0, 0), collected=32, failed=0, at_the_end=(), skipped=None):
     """What a run that came to its end holds in its report."""
     skipped = skipped or {}
     return {"stale": [], "tasks": [{"task": task, "seconds": 10.5, "passed": True, "defects": count}
                                    for task, count in zip(nightly.TASKS, defects)],
-            "tests": {"expected": 125, "collected": collected, "passed": collected - failed - sum(skipped.values()), "failed": failed,
+            "tests": {"expected": 32, "collected": collected, "passed": collected - failed - sum(skipped.values()), "failed": failed,
                       "skipped": sum(skipped.values()), "skip_reasons": skipped},
             "not_whole_at_the_end": list(at_the_end)}
 
@@ -538,14 +544,14 @@ def measured(defects=(0, 0, 0), collected=125, failed=0, at_the_end=(), skipped=
 @pytest.mark.parametrize("report, says", [
     (measured(), "passed"),
     (measured(defects=(0, 2, 0)), "failed: offbyone: 2 defect(s) of the harness"),
-    (measured(collected=13), "failed: 13 tests were collected, and there are 125"),
-    (measured(collected=126), "failed: 126 tests were collected, and there are 125"),
+    (measured(collected=13), "failed: 13 tests were collected, and there are 32"),
+    (measured(collected=33), "failed: 33 tests were collected, and there are 32"),
     (measured(failed=3), "failed: 3 test(s) failed"),
-    # A skipped test counts as collected: all 125 are there, and 8 of them were not run.
-    (measured(skipped={"the TUI is not built": 8}), "failed: 8 test(s) were skipped (8: the TUI is not built)"),
-    (measured(skipped={"javac": 9, "kotlinc": 8, "ruby": 8, "php": 8, "the TUI": 8, "one more": 1, "another": 1}),
-     "failed: 43 test(s) were skipped (9: javac; 8: kotlinc; 8: ruby; 8: php; 8: the TUI; and 2 more reason(s))"),
-    ({**measured(), "tests": {"expected": 125, "collected": 125, "passed": 121, "failed": 0, "skipped": 4}},
+    # A skipped test counts as collected: all 32 are there, and 8 of them were not run.
+    (measured(skipped={"the model server gave no answer": 8}), "failed: 8 test(s) were skipped (8: the model server gave no answer)"),
+    (measured(skipped={"one": 3, "two": 2, "three": 2, "four": 2, "five": 2, "one more": 1, "another": 1}),
+     "failed: 13 test(s) were skipped (3: one; 2: two; 2: three; 2: four; 2: five; and 2 more reason(s))"),
+    ({**measured(), "tests": {"expected": 32, "collected": 32, "passed": 28, "failed": 0, "skipped": 4}},
      "failed: 4 test(s) were skipped (the result file gives no reason)"),
     (measured(at_the_end=["the proxy says that the lens is not ready"]),
      "failed: at the end of the run the proxy says that the lens is not ready"),
@@ -558,20 +564,29 @@ def test_a_run_that_measured_faults_fails_and_names_each_fault(tmp_path):
     night = Night(tmp_path, driver_rows=rows(1, 0, 0), tests={"tests": 13, "failures": 1, "errors": 1}).run()
     assert night.done.returncode == 1
     assert night.report["result"] == ("failed: add_function: 1 defect(s) of the harness; 13 tests were collected, and there "
-                                      "are 125; 2 test(s) failed")
+                                      "are 32; 2 test(s) failed")
     assert night.did()[-4:] == ["driver", "tests", "ask", "stack down"]
 
 
+def test_a_night_with_failed_tests_names_them(tmp_path):
+    night = Night(tmp_path, tests={"tests": 32, "failures": 1, "errors": 1, "failed": ["test_the_model_answers", "test_a &amp; b"]}).run()
+    assert night.done.returncode == 1
+    assert night.report["result"] == "failed: 2 test(s) failed (test_the_model_answers; test_a & b)"
+    assert night.report["tests"]["failed_tests"] == ["test_the_model_answers", "test_a & b"]
+
+
 def test_a_night_with_skipped_tests_fails_and_the_result_gives_the_reasons(tmp_path):
-    # The result file says tests="125" all the same: a skipped test counts as collected.
-    reasons = ["javac is not on the path"] * 3 + ["tui/atlas-tui not built (cd tui &amp;&amp; go build -o atlas-tui .)"] * 2 + ["ruby is not on the path"]
-    night = Night(tmp_path, tests={"tests": 125, "skipped": 6, "reasons": reasons}).run()
+    # The result file says tests="32" all the same: a skipped test counts as collected.
+    reasons = (["no configured model name to compare against"] * 3 + ["could not import &apos;httpx&apos;: no module (a &amp; b)"] * 2
+               + ["the model server gave no answer"])
+    night = Night(tmp_path, tests={"tests": 32, "skipped": 6, "reasons": reasons}).run()
     assert night.done.returncode == 1
     assert night.report["tests"]["skip_reasons"] == {
-        "javac is not on the path": 3, "tui/atlas-tui not built (cd tui && go build -o atlas-tui .)": 2, "ruby is not on the path": 1}
-    assert night.report["result"] == ("failed: 6 test(s) were skipped (3: javac is not on the path; 2: tui/atlas-tui not built "
-                                      "(cd tui && go build -o atlas-tui .); 1: ruby is not on the path)")
-    assert night.report["tests"]["passed"] == 119
+        "no configured model name to compare against": 3, "could not import 'httpx': no module (a & b)": 2,
+        "the model server gave no answer": 1}
+    assert night.report["result"] == ("failed: 6 test(s) were skipped (3: no configured model name to compare against; 2: could "
+                                      "not import 'httpx': no module (a & b); 1: the model server gave no answer)")
+    assert night.report["tests"]["passed"] == 26
 
 
 def test_a_task_whose_change_did_not_land_is_reported_and_does_not_fail_the_run(tmp_path):
@@ -583,7 +598,7 @@ def test_a_task_whose_change_did_not_land_is_reported_and_does_not_fail_the_run(
 
 
 @pytest.mark.parametrize("slow, step", [(UP, "start the stack"), (DRIVER, "the smoke run"),
-                                        (TESTS, "the tests that the plain jobs leave out")])
+                                        (TESTS, "the tests that need a real model")])
 def test_at_the_time_limit_the_run_ends_and_the_stack_is_stopped(tmp_path, slow, step):
     night = Night(tmp_path, sleep={slow: 30})
     start = time.monotonic()
@@ -645,6 +660,12 @@ def test_without_the_servers_settings_file_the_run_fails_before_it_starts_a_stac
     ("ATLAS_MODEL_NAME=first\nATLAS_MODEL_FILE=m.gguf\nATLAS_MODEL_NAME=the-last-one\n", "the-last-one"),
     ('ATLAS_MODEL_FILE=m.gguf\nexport ATLAS_MODEL_NAME = "a quoted name"  \n', "a quoted name"),
     ("# ATLAS_MODEL_NAME=in-a-comment\nATLAS_MODEL_NAME='single'\n", "single"),
+    # A comment after the value is not part of the name: compose reads the line the same way.
+    ("ATLAS_MODEL_NAME=name # the model of this server\n", "name"),
+    ('ATLAS_MODEL_NAME="a quoted name" # with a comment\n', "a quoted name"),
+    ("ATLAS_MODEL_NAME='it has a # inside'\n", "it has a # inside"),
+    ("ATLAS_MODEL_NAME=name#3\n", "name#3"),
+    ("ATLAS_MODEL_NAME=name\t# after a tab\n", "name"),
 ])
 def test_the_name_of_the_model_is_read_from_the_servers_settings_file(tmp_path, settings, name):
     night = Night(tmp_path)
@@ -951,6 +972,15 @@ def test_a_start_time_with_a_number_that_is_not_the_kept_lock_file_is_a_run_like
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def test_when_taking_the_head_changes_the_judge_beside_the_script_the_new_copy_does_the_run(tmp_path):
+    # The run read the judge when it started. A repair of the judge acts in the night after its merge, as one of the script.
+    night = Night(tmp_path, from_the_tree=True, checkout_adds_to_the_judge="\n# one more line\n").run()
+    assert night.done.returncode == 0, night.done.stdout + night.done.stderr
+    assert night.did() == ONE_HEAD + ONE_HEAD + THE_REST
+    assert night.report["result"] == "passed"
+    assert night.report["script"] == "the new copy: taking the head changed the script"
+
+
 def test_a_script_that_the_head_did_not_change_is_not_started_again(tmp_path):
     night = Night(tmp_path, from_the_tree=True).run()
     assert night.did() == ONE_HEAD + THE_REST and night.report["script"] == "as it was started"
@@ -991,26 +1021,10 @@ def test_the_three_tasks_are_tasks_of_the_driver():
     assert len(nightly.TASKS) == 3 and set(nightly.TASKS) <= known, (nightly.TASKS, sorted(known))
 
 
-def test_the_number_of_tests_is_the_number_of_test_functions_in_the_marked_files_and_the_gates_page_has_each():
-    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
-    table = dict(re.findall(r"^\| `(tests/infrastructure/test_\w+\.py)` \| (\d+) \|", page, re.M))
-    marked = re.findall(r'"/(tests/infrastructure/test_\w+\.py)"', (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8"))
-    assert len(table) == 7 and sorted(table) == sorted(marked)
-    in_the_files = {}
-    for file in marked:
-        tree = ast.parse((ROOT / file).read_text(encoding="utf-8"))
-        functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test")]
-        many = [node.name for node in functions if any("parametrize" in ast.unparse(mark) for mark in node.decorator_list)]
-        assert not many, (
-            f"{file}: {many} now runs once for each of its values, so the number of its tests is no longer the number "
-            "of its functions. Fix: count its values in this test, then give the new number to the page and to the run.")
-        in_the_files[file] = len(functions)
-    wrong = {file: (count, int(table[file])) for file, count in in_the_files.items() if count != int(table[file])}
-    assert not wrong, (
-        f"these files have another number of tests than their row of docs/quality/gates.md says (in the file, on the page): "
-        f"{wrong}. The nightly run fails a night whose number of collected tests is not EXPECTED_TESTS. Fix: give the "
-        "new number to the row of the page and to EXPECTED_TESTS in scripts/nightly_run.py.")
-    assert sum(in_the_files.values()) == nightly.EXPECTED_TESTS
+def test_the_tests_of_the_run_are_the_group_that_needs_a_real_model_and_the_judge_is_the_one_beside_the_script():
+    assert nightly.JUDGE == SCRIPT.resolve().with_name("tests_counted.py")
+    assert nightly.TESTS is nightly.counted.GROUPS["model"]
+    assert nightly.TESTS.files == ("tests/infrastructure/test_llm.py",)
 
 
 def test_every_port_and_every_image_of_the_compose_file_is_one_the_run_knows():
