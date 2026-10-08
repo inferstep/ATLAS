@@ -154,6 +154,25 @@ def last_lines(printed: str, count: int = SAID_LINES) -> str:
     return "\n".join(printed.strip().splitlines()[-count:])
 
 
+def of_failed_tests(printed: str, limit: int = 60) -> str:
+    """Of what `go test` printed: the lines that say which test failed, and why. The tests of a module write many
+    log lines while they run, and the name of a failed test stands far above the end of the output."""
+    lines, kept = printed.splitlines(), []
+    for n, line in enumerate(lines):
+        if line.lstrip().startswith("--- FAIL"):
+            kept.append(line)
+            for more in lines[n + 1:n + 9]:
+                if not more.startswith((" ", "\t")) or more.lstrip().startswith(("---", "===")):
+                    break
+                kept.append(more)
+        elif line.startswith(("panic:", "WARNING: DATA RACE", "FAIL")):
+            kept.append(line)
+    if not kept:
+        return last_lines(printed)
+    more = [f"and {len(kept) - limit} more line(s) of this kind"] if len(kept) > limit else []
+    return "\n".join(kept[:limit] + more)
+
+
 def git(copy: Path, *args: str) -> str:
     return must(f"git {args[0]}", ["git", "-C", str(copy), *args], copy, 300,
                 "run this in a checkout of the repository, with git on the PATH.")
@@ -264,8 +283,11 @@ def go_piece(copy: Path, module: str, fixer: str, looked_at: int, before: set, b
     return piece
 
 
-def go_tests(copy: Path, module: str, pieces: list) -> None:
-    """Run the tests of a module with these pieces together, and give each of them the result."""
+def go_tests(copy: Path, module: str, pieces: list, kept: dict) -> None:
+    """Run the tests of a module with these pieces together, and give each of them the result.
+
+    Of a run that failed, the first piece gets the lines that name the failed tests, and `kept` gets the whole
+    output, for a file of the run."""
     for piece in pieces:
         apply_fixer(copy, module, piece.name.split("/")[2], first=False)
     done = run(GO_TEST, copy / module, 2400)
@@ -274,14 +296,18 @@ def go_tests(copy: Path, module: str, pieces: list) -> None:
         must(f"the tests of {module} on the files as they are", GO_TEST, copy / module, 2400,
              f"repair the tests of `{module}` on the branch; they fail with no fixer applied.")
     together = "" if len(pieces) == 1 else " with the pieces of the module together"
+    if done.returncode != 0:
+        kept[f"tests-{module}.txt"] = done.stdout
     for piece in pieces:
         piece.checks["tests"] = "passed" if done.returncode == 0 else "failed"
         if done.returncode != 0:
+            said = (f"`go test` ended with status {done.returncode}{together}:\n{of_failed_tests(done.stdout)}\n"
+                    f"The whole output is in the file `tests-{module}.txt` of the run.")
             refuse(piece, f"the tests of the module fail{together}",
-                   f"`go test` ended with status {done.returncode}{together}:\n{last_lines(done.stdout)}")
+                   said if piece is pieces[0] else f"What the tests said stands under {pieces[0].name}.")
 
 
-def go_pieces(copy: Path, wanted: list, bin_dir: Path) -> list:
+def go_pieces(copy: Path, wanted: list, bin_dir: Path, kept: dict) -> list:
     pieces = []
     for module in MODULES:
         fixers = [fixer for fixer in GO_FIXERS if f"go/{module}/{fixer}" in wanted]
@@ -294,7 +320,7 @@ def go_pieces(copy: Path, wanted: list, bin_dir: Path) -> list:
         made = [go_piece(copy, module, fixer, looked_at, before, bin_dir) for fixer in fixers]
         passed = [piece for piece in made if piece.changed]
         if passed:
-            go_tests(copy, module, passed)
+            go_tests(copy, module, passed, kept)
         pieces += made
     return pieces
 
@@ -493,7 +519,8 @@ def make(root: Path, out: Path, only: str | None) -> int:
         copy, commit = make_copy(root, Path(work))
         (Path(work) / "bin").mkdir()
         unlisted = go_fixers_on_no_list() if any(name.startswith("go/") for name in wanted) else []
-        pieces = go_pieces(copy, wanted, Path(work) / "bin") + python_pieces(copy, wanted)
+        outputs = {}
+        pieces = go_pieces(copy, wanted, Path(work) / "bin", outputs) + python_pieces(copy, wanted)
     result = {"date": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"), "commit": commit, "runs": runs_address(),
               "unlisted": unlisted, "title": TITLE, "one_piece": bool(only),
               "anything": any(piece.state != "nothing to change" for piece in pieces)}
@@ -502,6 +529,8 @@ def make(root: Path, out: Path, only: str | None) -> int:
     for piece in pieces:
         if piece.patch:
             (out / "pieces" / piece.file).write_text(piece.patch, encoding="utf-8")
+    for name, printed in outputs.items():
+        (out / name).write_text(printed, encoding="utf-8")
     (out / "issue.md").write_text(text, encoding="utf-8")
     (out / "left-out.txt").write_text(left_out_text(pieces) + "\n", encoding="utf-8")
     kept = [{**asdict(piece), "patch": "", "state": piece.state} for piece in pieces]

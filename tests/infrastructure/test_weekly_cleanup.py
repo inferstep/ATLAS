@@ -61,6 +61,12 @@ else:
     if args[0] == "test":
         with open(home / "tested.log", "a") as log:
             log.write(json.dumps({{"in": Path.cwd().name, "holds": sorted(set(w for f in files for w in f.read_text().split() if w.startswith("new_")))}}) + "\n")
+    if holds(mark) and args[0] == "test":
+        # As go test prints it: the lines that the tests log, the failed test far above the end, then more lines.
+        print("\n".join(["2026/10/08 08:52:47 [info] a line that a test logged"] * 3 + ["--- FAIL: TestMarks (0.00s)",
+              "    marks_test.go:3: said by the test, with @someone and #1 in it"] + ["2026/10/08 08:52:48 [info] a line that a later test logged"] * 30
+              + ["FAIL", "FAIL\texample/%s\t0.01s" % Path.cwd().name, "FAIL"]))
+        sys.exit(1)
     if holds(mark):
         print("%s: ./%s:3:9: said by the tool, with @someone and #1 in it" % (args[0], holds(mark)[0]))
         sys.exit(1)
@@ -389,6 +395,48 @@ def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, clea
     assert "(" + ", ".join(f'"{word}"' for word in cleanup.GO_TEST) + ")," in gates, "the Go test gate runs other flags"
     assert "-race" in cleanup.GO_TEST
     assert "-count=1" in cleanup.GO_TEST
+
+
+def test_of_a_failed_test_run_the_text_names_the_failed_test_and_a_file_of_the_run_holds_the_whole_output(made):
+    run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
+    assert run.status == 0, run.printed
+    assert run.piece("go/proxy/any")["said"] == [
+        "`go test` ended with status 1 with the pieces of the module together:",
+        "--- FAIL: TestMarks (0.00s)",
+        "    marks_test.go:3: said by the test, with @someone and #1 in it",
+        "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
+        "The whole output is in the file `tests-proxy.txt` of the run."]
+    # The lines of the tool stand once in the text, under the first piece of the module.
+    for name in ("go/proxy/forvar", "go/proxy/rangeint"):
+        assert run.piece(name)["said"] == ["What the tests said stands under go/proxy/any."]
+    assert run.text.count("--- FAIL: TestMarks (0.00s)") == 1
+    assert "a line that a later test logged" not in run.text
+    whole = (run.out / "tests-proxy.txt").read_text()
+    assert whole.count("a line that a later test logged") == 30
+    assert "--- FAIL: TestMarks (0.00s)" in whole
+    assert not (run.out / "tests-tui.txt").exists()
+    plain = outside_code(run.cleanup, run.text)
+    assert "@" not in plain
+
+
+@pytest.mark.parametrize("printed, kept", [
+    ("log\n--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nlog\nFAIL\nFAIL\tm\t1.2s\n",
+     "--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nFAIL\nFAIL\tm\t1.2s"),
+    ("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no\nok\n", "--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no"),
+    ("log\nWARNING: DATA RACE\nlog\npanic: boom\nlog\nFAIL\tm\t0.1s\n", "WARNING: DATA RACE\npanic: boom\nFAIL\tm\t0.1s"),
+    ("--- FAIL: TestA (0.01s)\n--- PASS: TestB (0.00s)\n    b_test.go:1: a note\n", "--- FAIL: TestA (0.01s)"),
+    # Nothing names a failed test: then the end of the output is what there is.
+    ("one\ntwo\nexit status 2\n", "one\ntwo\nexit status 2"),
+])
+def test_of_what_go_test_printed_the_lines_about_failed_tests_are_kept(cleanup, printed, kept):
+    assert cleanup.of_failed_tests(printed) == kept
+
+
+def test_very_many_lines_about_failed_tests_are_cut_with_a_word(cleanup):
+    printed = "\n".join(f"--- FAIL: Test{n} (0.00s)" for n in range(75))
+    kept = cleanup.of_failed_tests(printed).splitlines()
+    assert len(kept) == 61
+    assert kept[-1] == "and 15 more line(s) of this kind"
 
 
 def test_a_module_with_nothing_to_change_gets_no_test_run(made):

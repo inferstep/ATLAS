@@ -476,7 +476,9 @@ alone to the commit that the text names.
   as a link to an issue. The job that writes checks that once more.
 - The text of an issue has a size limit. Whole patches go in, as many as
   fit; each other piece is named, and its patch is in the files of the run
-  (`weekly-cleanup`). Nothing is cut with no word.
+  (`weekly-cleanup`). Nothing is cut with no word. Of a test run that
+  failed, the text holds the lines that name the failed tests; the whole
+  output is in a file of the run (`tests-<module>.txt`).
 - When the job fails, the run is red and the issue is not touched. The text
   carries its date, so a text older than 8 days shows that the job did not
   end or that the issue was closed.
