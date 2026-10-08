@@ -6,8 +6,10 @@ answers as `go test -json` does, so no Go toolchain is needed here.
 """
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -19,15 +21,14 @@ FIXED = "def add(a, b):\n    return a + b\n\n\ndef double(a):\n    return add(a,
 OLD_TEST = PATH_LINE + "import calc\n\n\ndef test_add_takes_two_numbers():\n    assert calc.add(0, 0) == 0\n"
 # Answers as `go test -json` does. Like Go, it builds the tests of a folder
 # together: a test file that calls a function no other file defines stops all.
-GO_STAND_IN = """#!{python}
-import json, pathlib, re, sys
+GO_STAND_IN = """import json, pathlib, re, sys
 here = pathlib.Path(".")
 tests = "".join(p.read_text() for p in sorted(here.glob("*_test.go")))
 code = "".join(p.read_text() for p in sorted(here.glob("*.go")) if not p.name.endswith("_test.go"))
 undefined = [name for name in sorted(set(re.findall(r"\\b(new\\w+)\\(", tests))) if "func " + name + "(" not in code]
 if undefined:
-    print(json.dumps({{"Action": "build-output", "Output": "./x_test.go:6:5: undefined: " + undefined[0] + "\\n"}}))
-    print(json.dumps({{"Action": "output", "Package": "p", "Output": "FAIL\\tp [build failed]\\n"}}))
+    print(json.dumps({"Action": "build-output", "Output": "./x_test.go:6:5: undefined: " + undefined[0] + "\\n"}))
+    print(json.dumps({"Action": "output", "Package": "p", "Output": "FAIL\\tp [build failed]\\n"}))
     sys.exit(1)
 told = json.loads(pathlib.Path("go_answers.json").read_text())
 names = re.search(r"\\^\\((.*)\\)\\$", sys.argv[sys.argv.index("-run") + 1]).group(1).split("|")
@@ -36,20 +37,23 @@ for name in names:
     action = told.get(name, "pass")
     failed |= action in ("fail", "panic", "subfail", "silent")
     if action == "subfail":
-        print(json.dumps({{"Action": "output", "Package": "p", "Test": name + "/a_case", "Output": "    x_test.go:12: status = 3, want an active vector\\n"}}))
-        print(json.dumps({{"Action": "fail", "Package": "p", "Test": name + "/a_case", "Elapsed": 0.01}}))
-        print(json.dumps({{"Action": "output", "Package": "p", "Test": name, "Output": "--- FAIL: " + name + " (0.00s)\\n"}}))
+        print(json.dumps({"Action": "output", "Package": "p", "Test": name + "/a_case", "Output": "    x_test.go:12: status = 3, want an active vector\\n"}))
+        print(json.dumps({"Action": "fail", "Package": "p", "Test": name + "/a_case", "Elapsed": 0.01}))
+        print(json.dumps({"Action": "output", "Package": "p", "Test": name, "Output": "--- FAIL: " + name + " (0.00s)\\n"}))
     if action == "silent":
-        print(json.dumps({{"Action": "output", "Package": "p", "Test": name, "Output": "--- FAIL: " + name + " (0.00s)\\n"}}))
-    said = {{"fail": "    x_test.go:9: want 5, got -1\\n", "skip": "    x_test.go:4: needs a terminal\\n",
+        print(json.dumps({"Action": "output", "Package": "p", "Test": name, "Output": "--- FAIL: " + name + " (0.00s)\\n"}))
+    said = {"fail": "    x_test.go:9: want 5, got -1\\n", "skip": "    x_test.go:4: needs a terminal\\n",
             "panic": "panic: runtime error: index out of range [recovered]\\n\\t/src/runtime/panic.go:1\\n"
-                     "\\t/src/proxy/calc.go:7 +0x1c\\n\\t/src/proxy/x_test.go:9 +0x2\\n"}}.get(action)
+                     "\\t/src/proxy/calc.go:7 +0x1c\\n\\t/src/proxy/x_test.go:9 +0x2\\n"}.get(action)
     if said:
-        print(json.dumps({{"Action": "output", "Package": "p", "Test": name, "Output": said}}))
+        print(json.dumps({"Action": "output", "Package": "p", "Test": name, "Output": said}))
     ended = "fail" if action in ("panic", "subfail", "silent") else action
-    print(json.dumps({{"Action": ended, "Package": "p", "Test": name, "Elapsed": 0.01}}))
+    print(json.dumps({"Action": ended, "Package": "p", "Test": name, "Elapsed": 0.01}))
 sys.exit(1 if failed else 0)
 """
+# The stand-in is two files. The first line of the one on the path is fixed: a line that named the path of Python
+# would not start where that path holds a space.
+ON_THE_PATH = '#!/bin/sh\nexec {python} -S {code} "$@"\n'
 
 
 @pytest.fixture(scope="module")
@@ -98,13 +102,21 @@ def repo(tmp_path):
     return with_fix
 
 
+def go_stand_in(folder, python=sys.executable):
+    """A `go` for the tests, in this folder and run by this Python: the path of the file to call."""
+    code = folder / "stand-ins" / "go.py"
+    code.parent.mkdir()
+    code.write_text(GO_STAND_IN, encoding="utf-8")
+    go = folder / "bin" / "go"
+    go.parent.mkdir()
+    go.write_text(ON_THE_PATH.format(python=shlex.quote(python), code=shlex.quote(str(code))), encoding="utf-8")
+    go.chmod(0o755)
+    return str(go)
+
+
 @pytest.fixture
 def tools(tmp_path):
-    go = tmp_path / "bin" / "go"
-    go.parent.mkdir()
-    go.write_text(GO_STAND_IN.format(python=sys.executable), encoding="utf-8")
-    go.chmod(0o755)
-    return {"python": sys.executable, "go": str(go)}
+    return {"python": sys.executable, "go": go_stand_in(tmp_path)}
 
 
 def new_test(body):
@@ -401,6 +413,16 @@ def test_a_go_test_is_judged_through_go_test(fix, repo, tools):
     found, rows, _, _ = verdicts(fix, root, base, tools)
     assert found == {"TestAdds": "fails on the base"}
     assert "an assertion" in rows[0][2]
+
+
+def test_the_go_stand_in_starts_where_the_path_of_python_holds_a_space(fix, repo, tmp_path):
+    folder = tmp_path / "a folder"
+    folder.mkdir()
+    venv.create(folder / "a python", with_pip=False, symlinks=True)
+    go = go_stand_in(folder, str(folder / "a python" / "bin" / "python"))
+    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
+    found, _, _, _ = verdicts(fix, root, base, {"python": sys.executable, "go": go})
+    assert found == {"TestAdds": "fails on the base"}
 
 
 def test_a_go_test_that_does_not_build_without_the_fix_needs_the_fixs_code(fix, repo, tools):
