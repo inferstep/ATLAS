@@ -200,6 +200,22 @@ check was skipped. Each of these would otherwise look like a pass. Its
 output names what did not run and how to fix it; after you re-run a
 cancelled workflow, re-run this check too.
 
+## 9. Review
+
+- A maintainer responds within **5 business days**.
+- To merge, a pull request needs:
+  - an approval from a code owner ([CODEOWNERS](.github/CODEOWNERS))
+  - all required checks green
+  - every conversation resolved
+  - no conflict with `dev` (a maintainer may ask you to click **Update branch**)
+- New commits dismiss earlier approvals, so the last push gets reviewed.
+- Maintainers merge with **squash** (your title becomes the commit) or
+  **rebase**. History on `dev` stays linear.
+
+**Definition of done:** linked issue, tests for new behavior, docs updated
+for behavior changes, conventional title, CI green, and hardware tested (or
+stated as untested).
+
 ### The labels the bot puts on your pull request
 
 Each hour the bot gives every open pull request two kinds of label, beside
@@ -217,22 +233,6 @@ workflow does not get it: the integrity check names such a change on the
 pull request, for a maintainer's approval. Each label says in its own
 description what it is computed from. The numbers and the list of core paths
 are in [.github/atlas-bot.yml](.github/atlas-bot.yml).
-
-## 9. Review
-
-- A maintainer responds within **5 business days**.
-- To merge, a pull request needs:
-  - an approval from a code owner ([CODEOWNERS](.github/CODEOWNERS))
-  - all required checks green
-  - every conversation resolved
-  - no conflict with `dev` (a maintainer may ask you to click **Update branch**)
-- New commits dismiss earlier approvals, so the last push gets reviewed.
-- Maintainers merge with **squash** (your title becomes the commit) or
-  **rebase**. History on `dev` stays linear.
-
-**Definition of done:** linked issue, tests for new behavior, docs updated
-for behavior changes, conventional title, CI green, and hardware tested (or
-stated as untested).
 
 ## 10. After your change merges
 
