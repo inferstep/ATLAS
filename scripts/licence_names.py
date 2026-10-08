@@ -10,11 +10,16 @@ hand, with its licence beside it) or is a GitHub Action.
 
 Reads INVALID_LICENSE_CHANGES: the action's output `invalid-license-changes`.
 
+The workflow runs the base branch's copy of this script, so a change cannot
+rewrite its own judge. The settings file is the change's copy (--settings):
+it is meant to be changed in a pull request, with a maintainer's approval.
+
 Exit status: 0 when no new dependency is without a named licence; 1 when one
 is; 2 when the action's output or the settings file cannot be read.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -50,16 +55,19 @@ def not_named(found: dict, by_hand: set) -> list:
     return out
 
 
-def main() -> int:
+def main(argv: list | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--settings", type=Path, default=SETTINGS, help="the settings file of the review, as the change has it")
+    settings = parser.parse_args(argv).settings
     try:
         found = json.loads(os.environ["INVALID_LICENSE_CHANGES"])
-        by_hand = read_by_hand(SETTINGS.read_text(encoding="utf-8"))
+        by_hand = read_by_hand(settings.read_text(encoding="utf-8"))
         if not isinstance(found, dict):
             raise ValueError("it is not a JSON object")
     except (KeyError, ValueError, OSError) as error:
         print(f"licence names: what the review action found, or the settings file, cannot be read: {error!r}. Fix: the "
               "step must get the action's output `invalid-license-changes` in INVALID_LICENSE_CHANGES, and "
-              f"{SETTINGS.name} must have the list `allow-dependencies-licenses`.", file=sys.stderr)
+              f"{settings} must have the list `allow-dependencies-licenses`.", file=sys.stderr)
         return 2
     missing = not_named(found, by_hand)
     if not missing:

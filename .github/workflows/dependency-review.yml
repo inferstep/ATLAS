@@ -2,8 +2,10 @@ name: dependency review
 
 # Fails a pull request that adds a dependency with a known high or
 # critical vulnerability, or with a licence that is not on the allowed
-# list, before it merges. Reads the dependency graph only; runs no PR
-# code. Fork PRs get the read-only token, which is all this needs.
+# list, before it merges. It reads the dependency graph and the settings
+# file of the change. It runs no code of the change: the one script it runs
+# is the base branch's copy, and the change's copy only while the base has
+# none. Fork PRs get the read-only token, which is all this needs.
 on:
   pull_request:
     branches: [main, dev]
@@ -26,7 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # The base's copy of the script is read from the base commit.
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: the base to compare with
+        id: base
+        # The base branch as it is now, not as it was when the event was
+        # made; see scripts/change_base.py. The base branch's copy of that
+        # script gives the answer, so a change cannot choose its own base.
+        # The change's copy runs only when the parent commit is here and has
+        # no copy, as on a pull request into a branch that has none yet.
+        run: |
+          if ! git rev-parse --verify --quiet "HEAD^1" >/dev/null; then
+            echo "::error::The parent of the checked-out commit is not in this checkout, so the base cannot be read and no script was run. Fix: give the checkout step of this job fetch-depth 0 (or 2 or more) and no ref."
+            exit 1
+          fi
+          if git cat-file -e "HEAD^1:scripts/change_base.py" 2>/dev/null; then
+            git show "HEAD^1:scripts/change_base.py" > "$RUNNER_TEMP/change_base.py"
+          else
+            cp scripts/change_base.py "$RUNNER_TEMP/change_base.py"
+          fi
+          sha=$(python3 "$RUNNER_TEMP/change_base.py")
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       # The level of a vulnerability that fails, and the allowed licences,
       # are in the settings file.
@@ -40,5 +64,15 @@ jobs:
       # by hand.
       - name: a new dependency with no named licence
         env:
+          BASE: ${{ steps.base.outputs.sha }}
           INVALID_LICENSE_CHANGES: ${{ steps.review.outputs.invalid-license-changes }}
-        run: python3 scripts/licence_names.py
+        run: |
+          # The base branch's copy of the script judges the change, so a
+          # change cannot rewrite its own judge. The change's copy runs only
+          # while the base has none. The settings file is the change's copy.
+          if git cat-file -e "$BASE:scripts/licence_names.py" 2>/dev/null; then
+            git show "$BASE:scripts/licence_names.py" > "$RUNNER_TEMP/licence_names.py"
+          else
+            cp scripts/licence_names.py "$RUNNER_TEMP/licence_names.py"
+          fi
+          python3 "$RUNNER_TEMP/licence_names.py" --settings .github/dependency-review-config.yml

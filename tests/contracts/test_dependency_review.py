@@ -69,9 +69,67 @@ def test_the_workflow_gives_the_action_the_settings_file_and_then_runs_the_step_
     at = uses.index("actions/dependency-review-action")
     assert steps[at]["with"] == {"config-file": "./.github/dependency-review-config.yml"}
     after = steps[at + 1]
-    assert after["run"] == "python3 scripts/licence_names.py"
-    assert after["env"] == {"INVALID_LICENSE_CHANGES": "${{ steps.%s.outputs.invalid-license-changes }}" % steps[at]["id"]}
+    assert after["run"].rstrip().endswith('python3 "$RUNNER_TEMP/licence_names.py" --settings .github/dependency-review-config.yml')
+    assert "python3 scripts/" not in after["run"], "the step runs a script from the checkout, which is the change's copy"
+    assert after["env"] == {"BASE": "${{ steps.base.outputs.sha }}",
+                            "INVALID_LICENSE_CHANGES": "${{ steps.%s.outputs.invalid-license-changes }}" % steps[at]["id"]}
     assert "if" not in after and uses.index("actions/checkout") < at
+    assert [step.get("id") for step in steps].index("base") < at + 1
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=test", "-c", "user.email=test@example.invalid", *args],
+                          capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+
+
+def the_step_in_a_merge(tmp_path, on_the_base, on_the_branch, unlicensed):
+    """Run the commands of the step in the merge of a branch into a base, each with its own copy of the script (None: no copy)."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "dependency-review.yml").read_text(encoding="utf-8"))
+    step = next(step for step in workflow["jobs"]["dependency-review"]["steps"] if "licence_names.py" in str(step.get("run")))
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    (root / ".github").mkdir()
+    git(root, "init", "-q", "-b", "dev")
+    (root / ".github" / "dependency-review-config.yml").write_text(SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    if on_the_base is not None:
+        (root / "scripts" / "licence_names.py").write_text(on_the_base, encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "base")
+    base = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "-b", "work")
+    (root / "scripts" / "licence_names.py").write_text(on_the_branch, encoding="utf-8")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "the branch's copy of the script")
+    git(root, "checkout", "-q", "--detach", "dev")
+    git(root, "merge", "-q", "--no-ff", "--no-edit", "work")
+    (tmp_path / "runner").mkdir()
+    return subprocess.run(["bash", "-e", "-c", step["run"]], cwd=root, capture_output=True, text=True, timeout=60, env={
+        "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path / "runner"), "BASE": base,
+        "INVALID_LICENSE_CHANGES": json.dumps({"unlicensed": unlicensed})})
+
+
+A_SCRIPT_THAT_PASSES_ALL = 'print("the copy of the change ran")\n'
+
+
+def test_the_step_runs_the_base_branchs_copy_of_the_script_when_a_change_rewrites_the_script(tmp_path):
+    # The change adds a dependency with no named licence and a script that passes everything.
+    real = SCRIPT.read_text(encoding="utf-8")
+    done = the_step_in_a_merge(tmp_path, real, A_SCRIPT_THAT_PASSES_ALL, [change("pkg:pypi/new-package@1.0.0")])
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "::error title=no named licence::new-package 1.0.0" in done.stdout and "the copy of the change ran" not in done.stdout
+
+
+def test_the_changes_copy_of_the_script_runs_only_while_the_base_has_none(tmp_path):
+    done = the_step_in_a_merge(tmp_path, None, A_SCRIPT_THAT_PASSES_ALL, [])
+    assert done.returncode == 0 and "the copy of the change ran" in done.stdout
+
+
+def test_the_base_branchs_copy_reads_the_settings_file_of_the_change(tmp_path):
+    # The copy of the script lies outside the checkout; the list of the packages read by hand is the checkout's.
+    real = SCRIPT.read_text(encoding="utf-8")
+    done = the_step_in_a_merge(tmp_path, real, real + "# a line of the branch\n", [change("pkg:pypi/torch@2.14.0"), change("pkg:pypi/one@1.0")])
+    assert done.returncode == 1 and done.stdout.count("::error title=no named licence::") == 1
+    assert "::error title=no named licence::one 1.0" in done.stdout
 
 
 def change(purl, kind="added", licence=None):
@@ -121,6 +179,12 @@ def test_the_step_passes_when_nothing_is_without_a_name_and_fails_with_the_fix_f
 def test_what_cannot_be_read_ends_the_step_with_status_2_and_the_fix(found):
     done = run(found)
     assert done.returncode == 2 and "cannot be read" in done.stderr and "Fix: the step must get" in done.stderr
+
+
+def test_a_settings_file_that_is_not_there_ends_the_step_with_status_2(tmp_path):
+    done = subprocess.run([sys.executable, str(SCRIPT), "--settings", str(tmp_path / "not-there.yml")], capture_output=True, text=True,
+                          timeout=30, env={"PATH": os.environ["PATH"], "INVALID_LICENSE_CHANGES": json.dumps({"unlicensed": []})})
+    assert done.returncode == 2 and "cannot be read" in done.stderr and "not-there.yml" in done.stderr
 
 
 def test_without_the_actions_output_the_step_ends_with_status_2():
