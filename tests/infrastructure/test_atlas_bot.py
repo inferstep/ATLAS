@@ -81,8 +81,10 @@ class FakeAPI:
         # As GitHub answers `state=open`: a closed or merged pull request is not in the list.
         return [p for p in self.pulls if p.get("state", "open") == "open"]
 
-    def pull_files(self, n):
-        return self.files.get(n, [])
+    def pull_changes(self, n):
+        # A file is a path with one added line, or (path, lines added, lines removed).
+        changed = [entry if isinstance(entry, tuple) else (entry, 1, 0) for entry in self.files.get(n, [])]
+        return [{"filename": path, "additions": added, "deletions": removed} for path, added, removed in changed]
 
     def branch_commits(self, branch, since):
         assert branch == "dev"
@@ -430,7 +432,88 @@ def test_area_labels_from_changed_paths(api, cfg):
                   "created_at": stamp(1), "user": {"login": "bob"}}]
     api.files[40] = ["proxy/agent.go", "tui/main.go", "docs/SETUP.md", "docker-compose.rocm.yml"]
     run(api, cfg).sync()
-    assert api.log == [("add_labels", 40, ("area/docs", "area/install", "area/proxy"))]
+    assert api.log[0] == ("add_labels", 40, ("area/docs", "area/install", "area/proxy"))
+
+
+# --- the size label and the risk label of a pull request ---------------------------------------------------------
+
+MERGED_BEFORE = "is:pr is:merged author:{}"
+
+
+def pull(number, login="bob", assoc="CONTRIBUTOR", labels=(), user_type="User"):
+    return {"number": number, "labels": [{"name": name} for name in labels], "author_association": assoc,
+            "created_at": stamp(30), "user": {"login": login, "type": user_type}}
+
+
+def label_calls(api, number):
+    return [entry for entry in api.log if entry[0] in ("add_labels", "remove_label") and entry[1] == number]
+
+
+def test_a_small_change_of_a_known_author_gets_its_size_label_and_no_risk_label(api, cfg):
+    api.cards.clear()
+    api.pulls = [pull(50, labels=["area/docs"])]
+    api.files[50] = [("docs/SETUP.md", 30, 12)]
+    api.counts[MERGED_BEFORE.format("bob")] = 3
+    run(api, cfg).sync()
+    assert label_calls(api, 50) == [("add_labels", 50, ("size/S",))]
+
+
+@pytest.mark.parametrize("files, size", [([("docs/a.md", 99, 0)], "size/S"), ([("docs/a.md", 60, 40)], "size/M"),
+                                         ([("docs/a.md", 1, 0), ("go.sum", 5000, 5000)], "size/S")])
+def test_the_size_is_computed_from_the_changed_lines_without_the_lock_files(api, cfg, files, size):
+    api.cards.clear()
+    api.pulls = [pull(51, labels=["area/docs", "area/proxy"])]
+    api.files[51] = files
+    api.counts[MERGED_BEFORE.format("bob")] = 1
+    run(api, cfg).sync()
+    assert label_calls(api, 51) == [("add_labels", 51, (size,))]
+
+
+@pytest.mark.parametrize("files", [[("proxy/agent.go", 2, 1)], [(".github/workflows/test.yml", 1, 1)], [("docs/a.md", 300, 100)]])
+def test_a_change_to_a_core_path_and_a_large_change_get_the_risk_label(api, cfg, files):
+    api.cards.clear()
+    have = ["area/proxy", "area/ci", "area/docs"]
+    api.pulls = [pull(52, labels=have)]
+    api.files[52] = files
+    api.counts[MERGED_BEFORE.format("bob")] = 1
+    run(api, cfg).sync()
+    ((_kind, _number, added),) = label_calls(api, 52)
+    assert "risk:high" in added and len(added) == 2
+
+
+@pytest.mark.parametrize("assoc, user_type, merged, high", [
+    ("NONE", "User", 0, True), ("FIRST_TIME_CONTRIBUTOR", "User", 0, True), ("CONTRIBUTOR", "User", 0, True),
+    ("NONE", "User", 1, False), ("CONTRIBUTOR", "User", 4, False),
+    ("OWNER", "User", 0, False), ("MEMBER", "User", 0, False), ("NONE", "Bot", 0, False),
+])
+def test_a_pull_request_of_an_author_with_no_merged_one_gets_the_risk_label(api, cfg, assoc, user_type, merged, high):
+    api.cards.clear()
+    api.pulls = [pull(53, login="ann", assoc=assoc, labels=["area/docs"], user_type=user_type)]
+    api.files[53] = [("docs/a.md", 3, 0)]
+    api.counts[MERGED_BEFORE.format("ann")] = merged
+    run(api, cfg).sync()
+    assert label_calls(api, 53) == [("add_labels", 53, ("risk:high", "size/S") if high else ("size/S",))]
+
+
+def test_labels_that_no_longer_hold_are_taken_off_and_the_right_ones_are_left_alone(api, cfg):
+    api.cards.clear()
+    api.pulls = [pull(54, labels=["area/docs", "size/L", "risk:high", "status/ready"]),
+                 pull(55, labels=["area/proxy", "size/S", "risk:high"])]
+    api.files[54] = [("docs/a.md", 10, 0)]
+    api.files[55] = [("proxy/agent.go", 10, 0)]
+    api.counts[MERGED_BEFORE.format("bob")] = 2
+    run(api, cfg).sync()
+    assert label_calls(api, 54) == [("add_labels", 54, ("size/S",)), ("remove_label", 54, "risk:high"), ("remove_label", 54, "size/L")]
+    assert label_calls(api, 55) == []
+
+
+def test_without_the_settings_of_the_labels_the_bot_sets_none(api, cfg):
+    api.cards.clear()
+    api.pulls = [pull(56, labels=["area/proxy"])]
+    api.files[56] = [("proxy/agent.go", 900, 0)]
+    del cfg["pull_requests"]
+    run(api, cfg).sync()
+    assert label_calls(api, 56) == []
 
 
 def test_first_pull_requests_are_welcomed_once(api, cfg):

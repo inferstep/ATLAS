@@ -32,6 +32,9 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pr_labels  # noqa: E402
 from typing import Any, Iterable
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "atlas-bot.yml")
@@ -193,8 +196,10 @@ class API:
         self._call("PATCH", f"/repos/{self.repo}/issues/{number}",
                    {"state": "closed", "state_reason": "completed"})
 
-    def pull_files(self, number: int) -> list:
-        return [f["filename"] for f in self._pages(f"/repos/{self.repo}/pulls/{number}/files")]
+    def pull_changes(self, number: int) -> list:
+        """The files a pull request changes, each with its lines added and removed."""
+        return [{"filename": f["filename"], "additions": f.get("additions") or 0, "deletions": f.get("deletions") or 0}
+                for f in self._pages(f"/repos/{self.repo}/pulls/{number}/files")]
 
     def assigned_at(self, number: int, login: str) -> str | None:
         """When this person was last assigned to the issue (an ISO time), by
@@ -466,16 +471,38 @@ class Bot:
         areas = self.cfg.get("areas", {})
         for pr in self.api.open_pulls():
             n = pr["number"]
-            files = self.api.pull_files(n)
+            changes = self.api.pull_changes(n)
+            files = [change["filename"] for change in changes]
             want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
             have = {x["name"] for x in pr.get("labels") or []}
             if want - have:
                 self.api.add_labels(n, sorted(want - have))
+            self._size_and_risk(pr, changes, have)
             if self._first_pr(pr):
                 if not any(self._mine(x) and marker("welcome") in x.get("body", "")
                            for x in self.api.comments(n)):
                     self.api.comment(n, self._welcome_pr(pr["user"]["login"]))
         self._close_fixed()
+
+    def _size_and_risk(self, pr: dict, changes: list, have: set) -> None:
+        """Give an open pull request its size label and, when the rules say so, the risk label (pr_labels.py).
+        Both are computed again each time, so a label that no longer holds is taken off."""
+        settings = self.cfg.get("pull_requests")
+        if not settings:
+            return
+        want = pr_labels.labels_for(changes, self._no_merged_pull_request_yet(pr), settings)
+        add, remove = pr_labels.label_changes(have, want, settings)
+        if add:
+            self.api.add_labels(pr["number"], add)
+        for label in remove:
+            self.api.remove_label(pr["number"], label)
+
+    def _no_merged_pull_request_yet(self, pr: dict) -> bool:
+        """Whether the author has no merged pull request here. A maintainer and a bot are never new."""
+        user = pr.get("user") or {}
+        if user.get("type") == "Bot" or pr.get("author_association") in MAINTAINER:
+            return False
+        return self.api.search_count(f"is:pr is:merged author:{user.get('login')}") == 0
 
     def _close_fixed(self) -> None:
         """Close the open issues that a commit or merged pull request on the

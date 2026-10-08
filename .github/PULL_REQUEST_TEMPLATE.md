@@ -22,3 +22,5 @@ Closes #<!-- the issue this delivers; small fixes under ~50 lines may skip this 
 - [ ] Matching `docs/*.md` updated for any behavior change
 - [ ] New behavior covered by a test, or a note on why not
 - [ ] Works model-agnostically (no model-name/dimension/token assumptions outside Lens/ASA artifacts)
+- [ ] AI tools helped write this change (tick it when they did; it is not held against the change)
+- [ ] I can explain every line of this change
