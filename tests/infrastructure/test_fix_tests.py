@@ -258,6 +258,27 @@ def test_a_test_that_changes_its_folder_and_fails_is_still_said_to_fail_in_the_t
     assert "standard library" not in rows[0][2]
 
 
+def test_a_test_that_asks_the_product_in_a_new_process_gets_the_tree_that_is_tested(fix, repo, tools, monkeypatch):
+    # The job installs the pull request's package for editing. That is the code with the fix, for every Python that
+    # starts in another folder. Here the path of the environment stands for that install.
+    in_a_new_process = (
+        "import subprocess, sys\n\n\n"
+        "def test_the_product_answers_in_a_new_process_in_another_folder(tmp_path):\n"
+        "    done = subprocess.run([sys.executable, '-c', 'import prod; print(prod.answer())'], cwd=tmp_path,\n"
+        "                          capture_output=True, text=True)\n"
+        "    assert done.stdout.strip() == '42', done.stdout + done.stderr\n\n\n"
+        "def test_the_product_answers_in_the_tests_own_process():\n"
+        "    import prod\n"
+        "    assert prod.answer() == 42\n")
+    root, _ = repo({"prod/__init__.py": "def answer():\n    return 41\n"})
+    base = git(root, "rev-parse", "HEAD")
+    commit(root, {"prod/__init__.py": "def answer():\n    return 42\n", "proxy/tests/test_prod.py": in_a_new_process}, "fix")
+    monkeypatch.setenv("PYTHONPATH", str(root))
+    found, rows, _, _ = verdicts(fix, root, base, tools)
+    assert found == {"test_the_product_answers_in_a_new_process_in_another_folder": "fails on the base",
+                     "test_the_product_answers_in_the_tests_own_process": "fails on the base"}, rows
+
+
 def test_an_error_raised_in_the_standard_library_names_it_and_the_file_that_called_it(fix, repo, tools):
     faulty = "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"
     fixed = "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n        shutil.copyfile(src, dst)\n"

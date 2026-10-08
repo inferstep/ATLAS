@@ -297,8 +297,11 @@ def run_python(tree: Path, tests: list[Test], python: str, limit: int, is_test,
     if not tests:
         return {}
     nodes = [f"{t.path}::{t.name}" for t in tests]
+    # The tree that is tested stands first on the path of every Python that a test starts. A new process in another
+    # folder would else take a package that is installed for editing, which is the code of the pull request.
+    first = os.pathsep.join([str(tree), *filter(None, [os.environ.get("PYTHONPATH")])])
     status, output = run([python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rA", "--tb=short", *nodes], tree,
-                         limit, {"COLUMNS": "400"})
+                         limit, {"COLUMNS": "400", "PYTHONPATH": first})
     if status is None:
         return {t: Outcome("none", f"no result in {limit} s") for t in tests}
     results: dict[str, list[tuple[str, str]]] = {}
