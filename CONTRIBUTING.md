@@ -234,9 +234,9 @@ looks and runs it again. A mistake in a check is ours to fix.
   - all required checks green
   - every conversation resolved
   - no conflict with `dev`
-- A maintainer may ask you to click **Update branch**, for one of two
-  reasons: after a conflict with `dev`, or when the results are from an
-  older `dev`.
+- A maintainer may ask you to click **Update branch** when the results are
+  from an older `dev`. That button does not work while the branch conflicts
+  with `dev`; for a conflict see [When a check is red](#when-a-check-is-red).
 - A maintainer adds the pull request to the merge queue. The queue runs the
   required checks again, on your change merged with `dev` as it is at that
   moment, and squashes it into one commit. Your title becomes that commit.
