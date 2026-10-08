@@ -252,8 +252,10 @@ becomes required, or is switched off, on these numbers.
 | A required check that was red for another reason than the change | required | merge groups and pull requests since 2026-10-07 | 2 (the install matrix) | 0 | 0 | 2 |
 | A merge group that failed | required | every merge group on `dev` | 1 | 1 | 0 | 0 |
 
-- Sonar's seven false alarms were three rules for workflow files; those
-  rules are off since. The three CodeQL alerts were two texts of a list with
+- Sonar's seven false alarms came from four rules: two that read a
+  maintainer script's own command-line arguments as input from outside
+  (S8705: 3, S8707: 2), and two for workflow files (S8545: 1, S8541: 1). All
+  four are off since. The three CodeQL alerts were two texts of a list with
   no comma between them, and a host name in a test: each was removed by
   writing the line in another way.
 - Before five repairs of the `integrity check` the same 30 commits gave 29
