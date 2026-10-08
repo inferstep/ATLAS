@@ -32,6 +32,8 @@ ON_THE_PATH = '#!/bin/sh\nexec {python} -S {code} "$@"\n'
 #   old_X        becomes new_X                 twice_X      needs a second run to become new_X
 #   grow_X       grows with each run           breakfix_X   makes the next run of the fixer fail
 #   breakvet_X, breakbuild_X, breaktest_X, unformat_X   make the result fail that check
+#   flaky_X      makes the first test run fail and the later ones pass
+#   othertest_X  makes each test run fail with another test
 GO = r'''"""A stand-in for go: a fixer changes the marks in the Go files, and a check fails for the mark that names it."""
 import json, sys
 from pathlib import Path
@@ -52,7 +54,8 @@ elif args[0] == "fix":
         text = f.read_text()
         for old, new in (("old_" + fixer, "new_" + fixer), ("twice_" + fixer, "old_" + fixer), ("grow_" + fixer, "grow_" + fixer + "x"),
                          ("breakfix_" + fixer, "NOFIX"), ("breakvet_" + fixer, "NOVET"), ("breakbuild_" + fixer, "NOBUILD"),
-                         ("breaktest_" + fixer, "NOTEST"), ("unformat_" + fixer, "UNFORMATTED")):
+                         ("breaktest_" + fixer, "NOTEST"), ("unformat_" + fixer, "UNFORMATTED"),
+                         ("flaky_" + fixer, "FLAKYTEST"), ("othertest_" + fixer, "OTHERTEST")):
             text = text.replace(old, new)
         if text != f.read_text():
             f.write_text(text)
@@ -61,12 +64,19 @@ else:
     if args[0] == "test":
         with open(home / "tested.log", "a") as log:
             log.write(json.dumps({{"in": Path.cwd().name, "holds": sorted(set(w for f in files for w in f.read_text().split() if w.startswith("new_")))}}) + "\n")
-    if holds(mark) and args[0] == "test":
-        # As go test prints it: the lines that the tests log, the failed test far above the end, then more lines.
-        print("\n".join(["2026/10/08 08:52:47 [info] a line that a test logged"] * 3 + ["--- FAIL: TestMarks (0.00s)",
-              "    marks_test.go:3: said by the test, with @someone and #1 in it"] + ["2026/10/08 08:52:48 [info] a line that a later test logged"] * 30
-              + ["FAIL", "FAIL\texample/%s\t0.01s" % Path.cwd().name, "FAIL"]))
-        sys.exit(1)
+    if args[0] == "test":
+        count = home / ("failed-%s.count" % Path.cwd().name)
+        before = int(count.read_text()) if count.exists() else 0
+        failed = ("TestMarks" if holds("NOTEST") else "TestMarks%d" % before if holds("OTHERTEST")
+                  else "TestMarks" if holds("FLAKYTEST") and before == 0 else "")
+        if failed:
+            count.write_text(str(before + 1))
+            # As go test prints it: the lines that the tests log, the failed test far above the end, then more lines.
+            print("\n".join(["2026/10/08 08:52:47 [info] a line that a test logged"] * 3 + ["--- FAIL: %s (0.00s)" % failed,
+                  "    marks_test.go:3: said by the test, with @someone and #1 in it"] + ["2026/10/08 08:52:48 [info] a line that a later test logged"] * 30
+                  + ["FAIL", "FAIL\texample/%s\t0.01s" % Path.cwd().name, "FAIL"]))
+            sys.exit(1)
+        sys.exit(0)
     if holds(mark):
         print("%s: ./%s:3:9: said by the tool, with @someone and #1 in it" % (args[0], holds(mark)[0]))
         sys.exit(1)
@@ -380,12 +390,13 @@ def test_when_the_tests_fail_with_the_pieces_together_none_of_the_module_is_offe
     for name in ("go/proxy/any", "go/proxy/rangeint", "go/proxy/forvar"):
         piece = run.piece(name)
         assert piece["state"] == "left out", name
-        assert piece["checks"]["tests"] == "failed"
+        assert piece["checks"]["tests"] == "failed twice"
         assert set(piece["left_out"].values()) == {"the tests of the module fail with the pieces of the module together"}
         assert not (run.out / "pieces" / (name.replace("/", "-") + ".patch")).exists()
     assert states(run.result)["go/tui/minmax"] == "held"
-    # The tests ran again on the files as they are, to tell a fault of a piece from a fault of the branch.
-    assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], []]
+    # After the first failed run the tests ran on the files as they are, to tell a fault of a piece from a fault of the
+    # branch, and then once more with the pieces, to tell it from a test that fails only sometimes.
+    assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], [], ["new_any", "new_rangeint"]]
 
 
 def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, cleanup):
@@ -397,26 +408,74 @@ def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, clea
     assert "-count=1" in cleanup.GO_TEST
 
 
-def test_of_a_failed_test_run_the_text_names_the_failed_test_and_a_file_of_the_run_holds_the_whole_output(made):
+LATER = "2026/10/08 08:52:48 [info] a line that a later test logged"
+
+
+def test_of_a_test_run_that_failed_twice_the_text_names_the_failed_test_and_files_of_the_run_hold_the_whole_output(made):
     run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
     assert run.status == 0, run.printed
     assert run.piece("go/proxy/any")["said"] == [
-        "`go test` ended with status 1 with the pieces of the module together:",
+        "`go test` failed twice with the pieces of the module together, with the same tests both times, and passed on the files as they are:",
         "--- FAIL: TestMarks (0.00s)",
         "    marks_test.go:3: said by the test, with @someone and #1 in it",
         "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
-        "The whole output is in the file `tests-proxy.txt` of the run."]
+        "The last lines of the output:", *[LATER] * 5, "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
+        "The whole output of both runs is in the files `tests-proxy.txt` and `tests-proxy-second-run.txt` of the run.",
+        "Which piece is the cause is not looked for here. `--piece` runs the tests with one piece alone."]
     # The lines of the tool stand once in the text, under the first piece of the module.
     for name in ("go/proxy/forvar", "go/proxy/rangeint"):
         assert run.piece(name)["said"] == ["What the tests said stands under go/proxy/any."]
     assert run.text.count("--- FAIL: TestMarks (0.00s)") == 1
-    assert "a line that a later test logged" not in run.text
-    whole = (run.out / "tests-proxy.txt").read_text()
-    assert whole.count("a line that a later test logged") == 30
-    assert "--- FAIL: TestMarks (0.00s)" in whole
+    for name in ("tests-proxy.txt", "tests-proxy-second-run.txt"):
+        whole = (run.out / name).read_text()
+        assert whole.count(LATER) == 30, name
+        assert "--- FAIL: TestMarks (0.00s)" in whole, name
     assert not (run.out / "tests-tui.txt").exists()
     plain = outside_code(run.cleanup, run.text)
     assert "@" not in plain
+
+
+def test_with_one_piece_the_text_does_not_send_the_reader_to_the_one_piece_command(made):
+    run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_any\n"}).make("--piece", "go/proxy/any")
+    assert run.status == 0, run.printed
+    said = run.piece("go/proxy/any")["said"]
+    assert said[0] == "`go test` failed twice, with the same tests both times, and passed on the files as they are:"
+    assert said[-1] == "The whole output of both runs is in the files `tests-proxy.txt` and `tests-proxy-second-run.txt` of the run."
+
+
+def test_tests_that_fail_with_the_pieces_once_and_pass_the_second_time_are_not_judged_and_no_piece_is_called_at_fault(made):
+    run = made(files={"proxy/tools.go": "package main\n// old_any flaky_forvar\n"}).make()
+    assert run.status == 2
+    assert ("weekly cleanup: not judged: the tests of `proxy` did not give the same result twice with the pieces of the module "
+            "together. They pass on the files as they are.") in run.printed
+    assert "The first run failed: TestMarks\nThe second run passed\n" in run.printed
+    assert "Fix: a test that fails only sometimes is a fault of the tests of `proxy`, also for its test job" in run.printed
+    assert "left out" not in run.printed
+    assert not (run.out / "issue.md").exists()
+    assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], [], ["new_any", "new_rangeint"]]
+    assert run.page.read_text().splitlines()[2].startswith("**Not judged.**")
+    assert "@" not in outside_code(run.cleanup, run.page.read_text())
+
+
+def test_tests_that_fail_twice_with_the_pieces_but_not_with_the_same_tests_are_not_judged(made):
+    run = made(files={"proxy/tools.go": "package main\n// old_any othertest_forvar\n"}).make()
+    assert run.status == 2
+    assert "did not give the same result twice with the pieces of the module together" in run.printed
+    assert "The first run failed: TestMarks0\nThe second run failed: TestMarks1\n" in run.printed
+    assert not (run.out / "issue.md").exists()
+
+
+@pytest.mark.parametrize("printed, names", [
+    ("log\n--- FAIL: TestB (0.01s)\n    b_test.go:3: no\n--- FAIL: TestA (1.20s)\nFAIL\nFAIL\tm\t1.2s\n", ["TestA", "TestB"]),
+    ("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n--- FAIL: TestA (0.02s)\n", ["TestA", "TestA/part"]),
+    # No test is named: the build failed, or the run did not end. Then the module's own line stands for a name, without its time.
+    ("# m [m.test]\n./a_test.go:3:1: undefined: x\nFAIL\tm [build failed]\nFAIL\n", ["FAIL", "FAIL m"]),
+    ("panic: test timed out after 20m0s\nFAIL\tm\t1200.01s\n", ["FAIL m"]),
+    ("ok  \tm\t1.2s\n", []),
+    ("no end after 2400 s", []),
+])
+def test_the_names_of_the_tests_that_failed_are_read_from_what_go_test_printed(cleanup, printed, names):
+    assert cleanup.failed_tests(printed) == names
 
 
 @pytest.mark.parametrize("printed, kept", [
@@ -425,18 +484,22 @@ def test_of_a_failed_test_run_the_text_names_the_failed_test_and_a_file_of_the_r
     ("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no\nok\n", "--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no"),
     ("log\nWARNING: DATA RACE\nlog\npanic: boom\nlog\nFAIL\tm\t0.1s\n", "WARNING: DATA RACE\npanic: boom\nFAIL\tm\t0.1s"),
     ("--- FAIL: TestA (0.01s)\n--- PASS: TestB (0.00s)\n    b_test.go:1: a note\n", "--- FAIL: TestA (0.01s)"),
-    # Nothing names a failed test: then the end of the output is what there is.
-    ("one\ntwo\nexit status 2\n", "one\ntwo\nexit status 2"),
 ])
-def test_of_what_go_test_printed_the_lines_about_failed_tests_are_kept(cleanup, printed, kept):
-    assert cleanup.of_failed_tests(printed) == kept
+def test_of_what_go_test_printed_the_lines_about_failed_tests_come_first_and_then_its_last_lines(cleanup, printed, kept):
+    tail = "\n".join(printed.strip().splitlines()[-8:])
+    assert cleanup.of_failed_tests(printed) == f"{kept}\nThe last lines of the output:\n{tail}"
+
+
+def test_when_nothing_names_a_failed_test_the_end_of_the_output_is_what_is_kept(cleanup):
+    assert cleanup.of_failed_tests("one\ntwo\nexit status 2\n") == "one\ntwo\nexit status 2"
 
 
 def test_very_many_lines_about_failed_tests_are_cut_with_a_word(cleanup):
     printed = "\n".join(f"--- FAIL: Test{n} (0.00s)" for n in range(75))
     kept = cleanup.of_failed_tests(printed).splitlines()
-    assert len(kept) == 61
-    assert kept[-1] == "and 15 more line(s) of this kind"
+    assert len(kept) == 60 + 1 + 1 + 8
+    assert kept[60] == "and 15 more line(s) of this kind"
+    assert kept[61] == "The last lines of the output:"
 
 
 def test_a_module_with_nothing_to_change_gets_no_test_run(made):

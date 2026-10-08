@@ -487,12 +487,20 @@ The fixers, by name. A fixer runs only when it is on the list in the script:
 
 | Part | Fixers | How a piece is checked before it is offered |
 |---|---|---|
-| Go: `proxy`, `tui` | `go fix` with `any`, `fmtappendf`, `forvar`, `inline`, `mapsloop`, `minmax`, `newexpr`, `plusbuild`, `rangeint`, `reflecttypefor`, `slicescontains`, `slicessort`, `stditerators`, `stringsbuilder`, `stringscut`, `stringscutprefix`, `stringsseq`, `testingcontext`, `waitgroup` | `gofmt` names no file that it did not name before; `go build` and `go vet` pass; the tests of the module pass with its pieces together, run with the flags of the Go test jobs. A piece that fails one of them is left out and named, with what the tool said |
+| Go: `proxy`, `tui` | `go fix` with `any`, `fmtappendf`, `forvar`, `inline`, `mapsloop`, `minmax`, `newexpr`, `plusbuild`, `rangeint`, `reflecttypefor`, `slicescontains`, `slicessort`, `stditerators`, `stringsbuilder`, `stringscut`, `stringscutprefix`, `stringsseq`, `testingcontext`, `waitgroup` | `gofmt` names no file that it did not name before; `go build` and `go vet` pass; the tests of the module pass with its pieces together, run with the flags of the Go test jobs. One failed test run leaves no piece out: the pieces are left out when the tests pass on the files as they are and fail twice with the pieces, with the same tests both times. A piece that fails one of them is left out and named, with what the tool said |
 | Python | `ruff --fix` (safe fixes) for `W291`, `W292`, `W293`, `W391`, `F401` | In each file the syntax tree is the same as before, and so are the comments. A file where one of the two differs is left out and named |
 
 - The checks of a Go piece are a test result. They are no proof that the
   code does what it did before. The pull request that applies a piece goes
   through every check.
+- When the two test runs with the pieces do not agree (one passes, or other
+  tests fail), nothing is judged: the job fails as "not judged" and names
+  the tests. A test that fails only sometimes is a fault of the module's
+  tests, also for its test job.
+- When the tests fail with the pieces of a module together, the job does
+  not look for the piece that is the cause: each look is one more test run.
+  The text names the failed tests, and `--piece` runs the tests with one
+  piece alone.
 - Not run, with the reason: `omitzero` changes what is encoded; `hostport`
   changes the address that is dialed; `buildtag` checks and rewrites
   nothing.

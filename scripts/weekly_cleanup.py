@@ -170,7 +170,14 @@ def of_failed_tests(printed: str, limit: int = 60) -> str:
     if not kept:
         return last_lines(printed)
     more = [f"and {len(kept) - limit} more line(s) of this kind"] if len(kept) > limit else []
-    return "\n".join(kept[:limit] + more)
+    return "\n".join(kept[:limit] + more + ["The last lines of the output:", last_lines(printed, 8)])
+
+
+def failed_tests(printed: str) -> list:
+    """The names of the tests that failed in a run of `go test`. When the run names no test (the build failed, or the
+    run did not end), the lines that say which module failed stand for the names."""
+    names = sorted(set(re.findall(r"^\s*--- FAIL: (\S+)", printed, re.MULTILINE)))
+    return names or sorted({" ".join(line.split()[:2]) for line in printed.splitlines() if line.startswith("FAIL")})
 
 
 def git(copy: Path, *args: str) -> str:
@@ -283,28 +290,48 @@ def go_piece(copy: Path, module: str, fixer: str, looked_at: int, before: set, b
     return piece
 
 
-def go_tests(copy: Path, module: str, pieces: list, kept: dict) -> None:
-    """Run the tests of a module with these pieces together, and give each of them the result.
-
-    Of a run that failed, the first piece gets the lines that name the failed tests, and `kept` gets the whole
-    output, for a file of the run."""
+def tests_with(copy: Path, module: str, pieces: list) -> subprocess.CompletedProcess:
+    """One run of the tests of a module with these pieces applied. The copy is as it was afterwards."""
     for piece in pieces:
         apply_fixer(copy, module, piece.name.split("/")[2], first=False)
     done = run(GO_TEST, copy / module, 2400)
     restore(copy)
-    if done.returncode != 0:
-        must(f"the tests of {module} on the files as they are", GO_TEST, copy / module, 2400,
-             f"repair the tests of `{module}` on the branch; they fail with no fixer applied.")
+    return done
+
+
+def go_tests(copy: Path, module: str, pieces: list, kept: dict) -> None:
+    """Run the tests of a module with these pieces together, and give each of them the result.
+
+    One failed run does not leave a piece out: a test can fail only sometimes. The pieces are left out when the tests
+    pass on the files as they are and fail twice with the pieces, with the same tests both times. When the two runs
+    with the pieces do not agree, nothing is judged. Of the runs that failed, the first piece gets the lines that
+    name the failed tests, and `kept` gets the whole output of both, for files of the run.
+    """
+    first = tests_with(copy, module, pieces)
+    if first.returncode == 0:
+        for piece in pieces:
+            piece.checks["tests"] = "passed"
+        return
+    must(f"the tests of {module} on the files as they are", GO_TEST, copy / module, 2400,
+         f"repair the tests of `{module}` on the branch; they fail with no fixer applied.")
+    second = tests_with(copy, module, pieces)
     together = "" if len(pieces) == 1 else " with the pieces of the module together"
-    if done.returncode != 0:
-        kept[f"tests-{module}.txt"] = done.stdout
+    names, again = failed_tests(first.stdout), failed_tests(second.stdout)
+    if second.returncode == 0 or again != names:
+        raise NotJudged(f"the tests of `{module}` did not give the same result twice{together}. They pass on the files "
+                        f"as they are.\nThe first run failed: {', '.join(names)}\nThe second run "
+                        + (f"failed: {', '.join(again)}" if second.returncode else "passed") + "\nFix: a test that fails "
+                        f"only sometimes is a fault of the tests of `{module}`, also for its test job: repair that "
+                        "test, then run this job again.")
+    kept[f"tests-{module}.txt"], kept[f"tests-{module}-second-run.txt"] = first.stdout, second.stdout
+    files = f"The whole output of both runs is in the files `tests-{module}.txt` and `tests-{module}-second-run.txt` of the run."
+    said = [f"`go test` failed twice{together}, with the same tests both times, and passed on the files as they are:",
+            of_failed_tests(first.stdout), files]
+    said += ["Which piece is the cause is not looked for here. `--piece` runs the tests with one piece alone."] if together else []
     for piece in pieces:
-        piece.checks["tests"] = "passed" if done.returncode == 0 else "failed"
-        if done.returncode != 0:
-            said = (f"`go test` ended with status {done.returncode}{together}:\n{of_failed_tests(done.stdout)}\n"
-                    f"The whole output is in the file `tests-{module}.txt` of the run.")
-            refuse(piece, f"the tests of the module fail{together}",
-                   said if piece is pieces[0] else f"What the tests said stands under {pieces[0].name}.")
+        piece.checks["tests"] = "failed twice"
+        refuse(piece, f"the tests of the module fail{together}",
+               "\n".join(said) if piece is pieces[0] else f"What the tests said stands under {pieces[0].name}.")
 
 
 def go_pieces(copy: Path, wanted: list, bin_dir: Path, kept: dict) -> list:
