@@ -179,7 +179,7 @@ from resource_contract import (  # noqa: E402
     OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
     OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
     OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
-    contract_from_env, outcome_is_complete, run_bounded,
+    contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
     EXEC_TOKEN_VAR, _apply_child_limits, _kill_token)
 
 # THE resource contract for every untrusted command, validated here at import.
@@ -274,6 +274,9 @@ class ExecuteResponse(BaseModel):
     error_type: Optional[str] = None
     error_message: Optional[str] = None
     execution_time_ms: int
+    # HOW the run ended, as /shell says it: a caller need not read stderr for a phrase.
+    timed_out: bool = False
+    outcome: str = OUTCOME_COMPLETED
 
 
 @app.get("/health")
@@ -1681,6 +1684,7 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
         "returncode": result.returncode,
         "timed_out": result.outcome == OUTCOME_TIMED_OUT,
         "outcome": result.outcome,
+        "stopped": stopped_words(result.outcome, EXEC_CONTRACT.for_request(timeout)),
         "peak_memory_bytes": result.peak_memory_bytes,
         "peak_processes": result.peak_processes,
         "survivors": result.survivors,
@@ -1739,8 +1743,7 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
             return ExecuteResponse(
                 success=False, compile_success=True,
                 tests_run=0, tests_passed=0,
-                stdout="", stderr=r["stderr"],
-                error_type="DependencyError", error_message=r["stderr"][:500],
+                stdout="", **why_it_failed(r, "DependencyError", _classify_error),
                 execution_time_ms=int((time.time() - start) * 1000),
             )
 
@@ -1786,9 +1789,7 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
         success=r["success"], compile_success=True,
         tests_run=total, tests_passed=passed,
         lint_score=lint_score,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1806,8 +1807,7 @@ def execute_javascript(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="SyntaxError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "SyntaxError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -1817,9 +1817,7 @@ def execute_javascript(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1844,9 +1842,7 @@ def execute_typescript(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=compile_success,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1867,8 +1863,7 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -1878,9 +1873,7 @@ def execute_go(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1909,8 +1902,7 @@ def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -1919,9 +1911,7 @@ def execute_java(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1943,8 +1933,7 @@ def execute_kotlin(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0, 
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -1953,9 +1942,7 @@ def execute_kotlin(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None, 
-        error_message=r["stderr"][:500] if not r["success"] else None, 
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -1973,8 +1960,7 @@ def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -1984,9 +1970,7 @@ def execute_rust(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -2004,8 +1988,7 @@ def execute_c(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -2014,9 +1997,7 @@ def execute_c(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -2034,8 +2015,7 @@ def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="CompileError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "CompileError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -2044,9 +2024,7 @@ def execute_cpp(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -2064,8 +2042,7 @@ def execute_ruby(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="SyntaxError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "SyntaxError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -2075,9 +2052,7 @@ def execute_ruby(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -2097,8 +2072,7 @@ def execute_php(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=error_output,
-            error_type="SyntaxError", error_message=error_output[:500],
+            stdout="", **why_it_failed({**r, "stderr": error_output}, "SyntaxError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -2108,9 +2082,7 @@ def execute_php(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 
@@ -2129,8 +2101,7 @@ def execute_bash(code, test_code, workspace, timeout, stdin=None, **_):
         return ExecuteResponse(
             success=False, compile_success=False,
             tests_run=0, tests_passed=0,
-            stdout="", stderr=r["stderr"],
-            error_type="SyntaxError", error_message=r["stderr"][:500],
+            stdout="", **why_it_failed(r, "SyntaxError", _classify_error),
             execution_time_ms=int((time.time() - start) * 1000),
         )
 
@@ -2140,9 +2111,7 @@ def execute_bash(code, test_code, workspace, timeout, stdin=None, **_):
     return ExecuteResponse(
         success=r["success"], compile_success=True,
         tests_run=1, tests_passed=1 if r["success"] else 0,
-        stdout=r["stdout"], stderr=r["stderr"],
-        error_type=_classify_error(r["stderr"]) if not r["success"] else None,
-        error_message=r["stderr"][:500] if not r["success"] else None,
+        stdout=r["stdout"], **why_it_failed(r, None, _classify_error),
         execution_time_ms=int((time.time() - start) * 1000),
     )
 

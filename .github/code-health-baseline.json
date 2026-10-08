@@ -99,7 +99,7 @@
   "proxy/guardrails.go": 3813,
   "proxy/tools.go": 6706,
   "proxy/types.go": 2080,
-  "sandbox/executor_server.py": 2171,
+  "sandbox/executor_server.py": 2140,
   "scripts/e2e-reliability.py": 2098,
   "tui/model.go": 1714,
   "v3-service/pipeline.py": 2964,
