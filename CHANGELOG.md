@@ -4,24 +4,6 @@
 
 ## [Unreleased]
 
-### Added: the nightly run on real hardware
-
-`scripts/nightly_run.py` is one run for the development server, started by
-a timer. It takes the head of `dev` and the `dev` images, starts a stack
-under a name and on ports of its own, asks the services whether they are
-whole, runs three fixed tasks of the driver once each, and runs the 125
-tests that the plain jobs leave out. It writes one report with the commit,
-the image digests, what the services said, the seconds of each task and the
-test counts, and then stops its stack, also when a step failed or its time
-limit was reached.
-
-The report is "stale" when an image was still not built from the head of
-`dev` after a wait of twenty minutes. It fails when a service is not whole,
-when the driver finds a defect of the harness, when a test fails, and when
-the tests collected are not 125. The run does not start its stack while
-another run holds the lock file of the graphics card or a process computes
-on the card. With a token it puts the report into the text of one issue.
-
 ### Fixed: uninstall.sh --data removed the projects folder without naming it
 
 `scripts/uninstall.sh --data` (and `--all`) removes two folders: the data

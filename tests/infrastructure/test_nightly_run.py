@@ -323,10 +323,14 @@ def test_beside_a_token_file_in_its_folder_the_run_starts_no_stack_and_says_how_
 
 # --- the images of the head ---------------------------------------------------------------------------------------
 
-def test_an_image_that_was_not_built_from_the_head_makes_the_report_stale_and_nothing_is_run(tmp_path):
+def stale(image, built_from=OLD[:12]):
+    return f"not run: the images are not of the head of the branch yet (ghcr.io/inferstep/{image}:dev was built from {built_from})"
+
+
+def test_with_an_image_that_was_not_built_from_the_head_the_night_is_not_run_and_that_is_no_failure(tmp_path):
     night = Night(tmp_path, built_from={"atlas-sandbox": OLD}).run()
-    assert night.done.returncode == 1
-    assert night.report["result"] == f"stale: ghcr.io/inferstep/atlas-sandbox:dev was built from {OLD[:12]}"
+    assert night.done.returncode == 0
+    assert night.report["result"] == stale("atlas-sandbox")
     did = night.did()
     assert "card" not in did and "stack up" not in did and "driver" not in did and "tests" not in did
     assert "tasks" not in night.report and "tests" not in night.report and "stack_stopped" not in night.report
@@ -339,12 +343,12 @@ def test_each_of_the_five_images_is_compared_with_the_head(service):
     assert nightly.stale_images(images, HEAD) == []
     images[service]["commit"] = OLD
     assert nightly.stale_images(images, HEAD) == [f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev was built from {OLD[:12]}"]
-    assert nightly.judge({"stale": nightly.stale_images(images, HEAD)}).startswith("stale: ghcr.io/inferstep/")
+    assert nightly.judge({"stale": nightly.stale_images(images, HEAD)}) == stale(nightly.IMAGES[service])
 
 
-def test_an_image_that_names_no_commit_is_stale(tmp_path):
+def test_an_image_that_names_no_commit_is_not_of_the_head(tmp_path):
     night = Night(tmp_path, built_from={"atlas-proxy": ""}).run()
-    assert night.report["result"] == "stale: ghcr.io/inferstep/atlas-proxy:dev was built from no named commit"
+    assert night.report["result"] == stale("atlas-proxy", "no named commit")
 
 
 def test_images_that_come_some_minutes_after_the_push_are_waited_for(tmp_path):
@@ -355,10 +359,10 @@ def test_images_that_come_some_minutes_after_the_push_are_waited_for(tmp_path):
     assert night.did() == ["git clone"] + ONE_HEAD + ["look"] + IMAGES + ONE_HEAD + IMAGES + WITH_THE_CARD
 
 
-def test_images_that_do_not_come_in_the_time_of_the_wait_make_the_report_stale(tmp_path):
+def test_images_that_do_not_come_in_the_time_of_the_wait_leave_the_night_not_run(tmp_path):
     night = Night(tmp_path, built_from={"atlas-v3": OLD}).run("--image-wait-minutes", "0.02")
-    assert night.done.returncode == 1
-    assert night.report["result"] == f"stale: ghcr.io/inferstep/atlas-v3:dev was built from {OLD[:12]}"
+    assert night.done.returncode == 0
+    assert night.report["result"] == stale("atlas-v3")
     assert night.report["waited_for_images"] == "1.2 s" and night.did().count("image pull") == 5 * 11
     assert "- Waited for the images of that commit: 1.2 s" in nightly.as_text(night.report)
 
@@ -857,7 +861,7 @@ def test_a_left_stack_that_cannot_be_stopped_fails_the_run_before_anything_is_pu
 
 def test_a_left_stack_is_stopped_also_in_a_night_whose_images_are_stale(tmp_path):
     night = Night(tmp_path, left=["0a1b2c3d4e5f"], built_from={"atlas-proxy": OLD}).run()
-    assert night.report["result"].startswith("stale: ")
+    assert night.report["result"] == stale("atlas-proxy")
     assert night.did()[4:6] == ["look", "stack down"] and "stack up" not in night.did()
 
 
@@ -884,6 +888,15 @@ def test_the_folder_stays_locked_between_the_run_and_the_new_copy_that_it_starts
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
     assert night.report["result"] == "passed" and night.report["script"].startswith("the new copy")
     assert (tmp_path / "the_lock_when_the_new_copy_starts.txt").read_text() == "held\n"
+    with open(night.dir / "run.lock", "a") as other:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.parametrize("given", ["20261008T040000Z 987654", "20261008T040000Z 0", "20261008T040000Z", "not a time 5"])
+def test_a_start_time_with_a_number_that_is_not_the_kept_lock_file_is_a_run_like_any_other(tmp_path, given):
+    # The number names no open file, or a file that is not the lock file: the lock file is opened afresh and taken.
+    night = Night(tmp_path).run(ATLAS_NIGHTLY_STARTED_AGAIN=given)
+    assert night.done.returncode == 0 and night.report["result"] == "passed", night.done.stdout + night.done.stderr
     with open(night.dir / "run.lock", "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 

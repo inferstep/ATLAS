@@ -9,8 +9,8 @@ One run, started by a timer on the development server, in a folder of its own
   2. stops a stack of its own name that an earlier run left;
   3. pulls the `dev` images and compares the commit each was built from with
      the head. The images of a push come some minutes after it, so the run
-     looks again for a while. When one still differs, the result is "stale"
-     and nothing more is run;
+     looks again for a while. When one still differs, the night is "not
+     run" and nothing more is done;
   4. takes the lock of the graphics card, and reads what the card holds;
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
@@ -30,6 +30,10 @@ itself, the report says "not run: the card was in use" and the run ends. A
 run of another kind that uses the card takes the same lock:
 `flock <lock file> <command>`.
 
+The run is best effort. A night with no run (the card was in use, the images
+were not of the head yet, or the server was off) is not a failure: no check
+of the repository waits for it.
+
 The run writes only inside its own folder, and removes nothing: each night
 has a folder of its own under reports/. It stops and removes only the
 containers of its own compose project.
@@ -43,9 +47,9 @@ at that one call. No command of the run has it in its environment, it is sent
 to GitHub's own address only, and it is not written to a file, a log or a
 message.
 
-Exit status: 0 when the run passed, and when it did not run because the card
-was in use or another run of the folder was going; 1 when it failed or the
-images were stale; 2 when its settings cannot be used.
+Exit status: 0 when the run passed, and when it did not run (the card was in
+use, the images were not of the head, another run of the folder was going);
+1 when it failed; 2 when its settings cannot be used.
 """
 from __future__ import annotations
 
@@ -78,6 +82,7 @@ PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 1
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
 REVISION = "org.opencontainers.image.revision"
 NOT_RUN = "not run: the card was in use"
+STALE = "not run: the images are not of the head of the branch yet"
 REPO_URL, BRANCH = "https://github.com/inferstep/ATLAS.git", "dev"
 REGISTRY, TAG = "ghcr.io/inferstep", "dev"
 REPOSITORY, GITHUB_API = "inferstep/ATLAS", "https://api.github.com"
@@ -145,12 +150,14 @@ def must(what: str, argv: list, limit: float, **where) -> str:
 
 def kept_open(path: Path, number: int | None):
     """The open file of this number, when it is the lock file: a run keeps it open for the copy that it starts."""
+    if number is None:
+        return None
     try:
-        if number is not None and os.path.samestat(os.fstat(number), os.stat(path)):
-            return os.fdopen(number, "a", encoding="utf-8")
+        is_the_lock_file = os.path.samestat(os.fstat(number), os.stat(path))
     except OSError:
-        pass
-    return None
+        # The number is no open file of this process, or the lock file is not there: the caller opens the file afresh.
+        return None
+    return os.fdopen(number, "a", encoding="utf-8") if is_the_lock_file else None
 
 
 @contextlib.contextmanager
@@ -508,7 +515,7 @@ def with_the_card(args, report: dict, folder: Path) -> None:
 def judge(report: dict) -> str:
     """The one line of the result, from what the report holds."""
     if report.get("stale"):
-        return "stale: " + "; ".join(report["stale"])
+        return f"{STALE} ({'; '.join(report['stale'])})"
     faults = []
     for task in report.get("tasks") or []:
         if task["defects"]:
@@ -678,7 +685,7 @@ def main(argv: list | None = None) -> int:
         report["sent"] = publish(args, as_text(report))
         (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"nightly run: {report['result']}\nreport: {folder / 'report.json'}\nGitHub: {report['sent']}")
-    return 0 if report["result"] == "passed" or report["result"].startswith(NOT_RUN) else 1
+    return 0 if report["result"] == "passed" or report["result"].startswith("not run: ") else 1
 
 
 if __name__ == "__main__":

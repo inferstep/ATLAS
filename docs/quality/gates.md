@@ -321,6 +321,12 @@ of its own. A timer starts it each night. It is not a CI job: a check on a
 pull request cannot see a real model that got slower, and it has no stack
 for the tests above.
 
+The nightly run is best effort. The server is one machine at home, and it is
+not always on. A night with no run is not a failure: the server was off, the
+card was in use, or the images were not of the head yet. No check and no
+rule of this repository waits for the nightly run, and one command switches
+it off (the timer is disabled).
+
 Each night it:
 
 1. takes the head of `dev`. When that changes the script itself, the new
@@ -353,9 +359,9 @@ The first line of the report is its result:
 | Result | When |
 |---|---|
 | `passed` | No fault below was found |
-| `stale: ...` | After the wait an image was still not built from the head of `dev`. Nothing more is run: the numbers would be those of another commit |
 | `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, the tests collected were not 125 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
+| `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
 
 - A task whose change did not land is in the report and does not fail the
   run. That number moves with the model and with chance; one night says
@@ -387,7 +393,10 @@ What it needs on the server: a folder for the run; Docker for the user that
 runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
 folder, with the settings of the model for that server; a timer at a fixed
 hour; and the graphics card free at that hour for the run, which has a time
-limit of 30 minutes.
+limit of 30 minutes. The timer stops the stack of the usual install before
+the run and starts it again after the run, also when the run failed. It
+stops nothing else: when something else holds the card, the night is "not
+run".
 
 The integrity check names a change that takes a test out of the plain jobs
 this way: the mark on a test or a file that was there before, a file added to
