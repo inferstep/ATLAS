@@ -142,6 +142,8 @@ request without one may be closed with a pointer to do that.
 
 Comment `/claim` (alone, as the first line) on a Ready issue. The bot
 assigns you, moves the card to In Progress, and replies with your Shepherd.
+With more words on that line the bot claims nothing and tells you so: put
+them on the lines below.
 
 - One person per issue. You can hold **2** open claims, or **1** before
   your first merged pull request.

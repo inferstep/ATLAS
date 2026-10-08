@@ -3,7 +3,9 @@
 
 Commands, one per workflow in .github/workflows/bot-*.yml:
 
-  claim       `/claim` or `/unclaim` as the first line of an issue comment
+  claim       `/claim` or `/unclaim` as the first line of an issue comment.
+              A first line that starts with one of them and is not the
+              command alone gets an answer and no action
   stale       daily: remind, then release, a /claim with no open pull request
               by the claimant that names the issue
   sync        hourly: mirror Ready/Blocked to labels, area labels on PRs,
@@ -36,6 +38,10 @@ from typing import Any, Iterable
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "atlas-bot.yml")
 COMMAND = re.compile(r"^/(claim|unclaim)\s*$")
+# A first line that starts like a command. When it is not the command alone,
+# the bot does nothing with it and says so: it does not guess what the rest
+# of the line means.
+STARTS_LIKE_A_COMMAND = re.compile(r"^/(?:un)?claim", re.IGNORECASE)
 MAINTAINER = ("OWNER", "MEMBER")
 FIRST_PR = ("FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER")
 STATUS_LABELS = {"Ready": "status/ready", "Blocked": "status/blocked"}
@@ -338,8 +344,10 @@ class Bot:
         if "pull_request" in issue or (comment.get("user") or {}).get("type") == "Bot":
             return
         lines = (comment.get("body") or "").strip().splitlines()
-        m = COMMAND.match(lines[0].strip()) if lines else None
+        first = lines[0].strip() if lines else ""
+        m = COMMAND.match(first)
         if not m:
+            self._not_alone(issue["number"], (comment.get("user") or {}).get("login"), first)
             return
         user = comment["user"]["login"]
         maintainer = comment.get("author_association") in MAINTAINER
@@ -351,6 +359,25 @@ class Bot:
             self._claim(current, user, maintainer)
         else:
             self._unclaim(current, user)
+
+    def _not_alone(self, n: int, user: str | None, first: str) -> None:
+        """Answer a first line that starts with a command and is not the
+        command alone. Nothing is claimed or released. The answer holds none
+        of the author's words, and the same person gets it once a day for
+        the same command."""
+        near = STARTS_LIKE_A_COMMAND.match(first)
+        if not near or not user:
+            return
+        command = near.group(0).lower()
+        mark = marker(f"not-alone-{command[1:]}", user)
+        for c in self.api.comments(n):
+            if (self._mine(c) and mark in (c.get("body") or "")
+                    and self.now - parse_time(c["created_at"]) < dt.timedelta(days=1)):
+                return
+        self.api.comment(n, f"{mark}\n@{user} your comment did nothing: its first line starts with "
+                         f"`{command}` and is not `{command}` alone. The command works only by itself "
+                         f"on the first line, in small letters. Comment `{command}` again that way, "
+                         f"and put any other words on the lines below it.")
 
     def _claim(self, issue: dict, user: str, maintainer: bool) -> None:
         n, c, links = issue["number"], self.cfg["claims"], self.cfg["links"]

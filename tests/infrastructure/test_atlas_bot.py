@@ -178,10 +178,130 @@ def test_claim_a_ready_issue(api, cfg):
     assert bot_mod.marker("claim", "alice") in reply and "@maint" in reply and "Closes #7" in reply
 
 
-@pytest.mark.parametrize("body", ["/claim please", "I'll /claim this", "/claimed", ""])
-def test_only_an_exact_first_line_is_a_command(api, cfg, body):
+@pytest.mark.parametrize("body", ["I'll /claim this", "", "   ", "> /claim please", "hello\n/claim please", "claim", "/ claim",
+                                  "`/claim` is the command", "please /unclaim"])
+def test_a_first_line_that_does_not_start_with_a_command_is_nothing_for_the_bot(api, cfg, body):
     run(api, cfg).claim(claim_event(api, 7, body))
     assert api.log == []
+
+
+@pytest.mark.parametrize("body", ["/claim", "/claim   ", "/claim\t", "\n\n/claim\nand some words below", "/claim\r\nwords below"])
+def test_the_command_alone_on_the_first_line_claims_and_gets_no_answer_about_its_form(api, cfg, body):
+    api.counts["is:pr is:merged author:alice"] = 1
+    run(api, cfg).claim(claim_event(api, 7, body))
+    assert ("assign", 7, "alice") in api.log
+    assert len(api.said(7)) == 1
+    assert "not-alone" not in api.said(7)[0]
+
+
+NOT_ALONE = [
+    ("/claim — taking this one. I did the ja SETUP + TROUBLESHOOTING resyncs", "/claim"),
+    ("/claim please", "/claim"), ("/Claim", "/claim"), ("/CLAIM", "/claim"), ("/claim.", "/claim"), ("/claimed", "/claim"),
+    ("/claim\tnow", "/claim"), ("/claim this\n/claim", "/claim"), ("/unclaim please", "/unclaim"), ("/Unclaim", "/unclaim"),
+    ("/unclaim, sorry", "/unclaim"),
+]
+
+
+@pytest.mark.parametrize("body, command", NOT_ALONE)
+def test_a_first_line_that_starts_with_a_command_and_is_not_the_command_alone_gets_one_answer_and_no_action(api, cfg, body, command):
+    api.counts["is:pr is:merged author:alice"] = 1
+    api.issues[7]["assignees"] = ["alice"] if command == "/unclaim" else []
+    run(api, cfg).claim(claim_event(api, 7, body))
+    assert [kind for kind, _n, _what in api.log] == ["comment"]
+    assert api.issues[7]["assignees"] == (["alice"] if command == "/unclaim" else [])
+    assert api.cards[7]["status"] == "Ready"
+    (answer,) = api.said(7)
+    assert answer == (f"<!-- atlas-bot:not-alone-{command[1:]} @alice -->\n@alice your comment did nothing: its first line starts with "
+                      f"`{command}` and is not `{command}` alone. The command works only by itself on the first line, in small "
+                      f"letters. Comment `{command}` again that way, and put any other words on the lines below it.")
+
+
+def test_the_answer_holds_none_of_the_words_of_the_comment(api, cfg):
+    run(api, cfg).claim(claim_event(api, 7, "/claim @bob look at #12 ``` and a [link](https://example.invalid)\n@carol"))
+    (answer,) = api.said(7)
+    for part in ("@bob", "@carol", "#12", "```", "example.invalid", "look"):
+        assert part not in answer, part
+    assert answer.count("@") == 2
+
+
+@pytest.mark.parametrize("pr, kind", [(True, "User"), (False, "Bot")])
+def test_a_pull_request_and_a_bot_get_no_answer(api, cfg, pr, kind):
+    event = claim_event(api, 7, "/claim please", pr=pr)
+    event["comment"]["user"]["type"] = kind
+    run(api, cfg).claim(event)
+    assert api.log == []
+
+
+def test_a_comment_whose_author_github_no_longer_names_gets_no_answer_and_stops_nothing(api, cfg):
+    event = claim_event(api, 7, "/claim please")
+    event["comment"]["user"] = None
+    run(api, cfg).claim(event)
+    assert api.log == []
+
+
+def test_the_same_person_gets_the_answer_once_a_day_for_the_same_command(api, cfg):
+    run(api, cfg).claim(claim_event(api, 7, "/claim please"))
+    run(api, cfg).claim(claim_event(api, 7, "/claim — again, with other words"))
+    assert len(api.said(7)) == 1
+    # The same person the next day, another person, and the other command: each is answered.
+    run(api, cfg, NOW + dt.timedelta(hours=25)).claim(claim_event(api, 7, "/claim please"))
+    assert len(api.said(7)) == 2
+    run(api, cfg).claim(claim_event(api, 7, "/claim please", user="bob"))
+    assert len(api.said(7)) == 3
+    assert "@bob your comment did nothing" in api.said(7)[-1]
+    run(api, cfg).claim(claim_event(api, 7, "/unclaim please", user="bob"))
+    assert len(api.said(7)) == 4
+    assert "`/unclaim`" in api.said(7)[-1]
+
+
+def test_an_answer_of_a_day_ago_to_the_minute_does_not_count_any_more(api, cfg):
+    api.threads[7] = [{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(1)}]
+    run(api, cfg).claim(claim_event(api, 7, "/claim please"))
+    assert len(api.said(7)) == 1
+
+
+def test_a_mark_that_the_person_pasted_does_not_keep_the_bot_from_answering(api, cfg):
+    api.threads[7] = [{"user": {"login": "alice", "type": "User"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(0)}]
+    run(api, cfg).claim(claim_event(api, 7, "/claim please"))
+    assert len(api.said(7)) == 1
+
+
+def test_after_the_answer_the_command_alone_claims(api, cfg):
+    api.counts["is:pr is:merged author:alice"] = 1
+    run(api, cfg).claim(claim_event(api, 7, "/claim please"))
+    assert not [x for x in api.log if x[0] == "assign"]
+    run(api, cfg).claim(claim_event(api, 7, "/claim"))
+    assert ("assign", 7, "alice") in api.log
+    assert bot_mod.marker("claim", "alice") in api.said(7)[-1]
+
+
+def test_the_answer_is_no_claim_for_the_daily_look_at_old_claims(api, cfg):
+    # An issue that a maintainer gave by hand, with only the bot's answer about the form: nothing to release.
+    api.issues[7]["assignees"] = ["alice"]
+    api.cards[7]["status"] = "In Progress"
+    api.threads[7] = [{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(40)},
+                      {"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-unclaim", "alice"), "created_at": stamp(40)}]
+    run(api, cfg).stale()
+    assert api.log == []
+
+
+def test_the_guide_says_what_the_bot_does_with_more_words_on_the_line():
+    with open(os.path.join(ROOT, "CONTRIBUTING.md"), encoding="utf-8") as fh:
+        guide = fh.read()
+    assert "Comment `/claim` (alone, as the first line) on a Ready issue." in guide
+    assert "With more words on that line the bot claims nothing and tells you so" in guide
+
+
+def test_the_workflow_starts_for_every_comment_that_the_bot_answers():
+    with open(os.path.join(ROOT, ".github", "workflows", "bot-claim.yml"), encoding="utf-8") as fh:
+        workflow = fh.read()
+    # The workflow starts for a text that starts with a command, in any letter case. The script answers the same texts.
+    assert "startsWith(github.event.comment.body, '/claim') || startsWith(github.event.comment.body, '/unclaim')" in workflow
+    assert "!github.event.issue.pull_request" in workflow
+    for first in ("/claim", "/Claim x", "/UNCLAIM now", "/claimed"):
+        assert bot_mod.STARTS_LIKE_A_COMMAND.match(first), first
+    for first in ("claim", " /claim", "x /claim", "/clam"):
+        assert not bot_mod.STARTS_LIKE_A_COMMAND.match(first), first
 
 
 def test_claim_ignores_pull_request_comments(api, cfg):
