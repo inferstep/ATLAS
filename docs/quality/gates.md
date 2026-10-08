@@ -359,13 +359,22 @@ The first line of the report is its result:
 | Result | When |
 |---|---|
 | `passed` | No fault below was found |
-| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, the tests collected were not 125 (a missing package skips whole files without another sign), or the stack could not be stopped |
+| `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 125 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
 
 - A task whose change did not land is in the report and does not fail the
   run. That number moves with the model and with chance; one night says
   little.
+- A skipped test fails the night, and the result gives the reasons. A
+  skipped test counts as collected, so the number 125 does not show it. The
+  tests above skip by the state of the machine that runs them: the Java,
+  Kotlin, Ruby and PHP tests when it has no `javac`, `kotlinc`, `ruby` or
+  `php` (though the code runs in the sandbox), and the 8 TUI tests when the
+  TUI is not built in the tree. On a machine with none of these, 41 of the
+  125 are skipped. So for a night that passes, the server needs the four
+  tools and the built TUI in the run's tree. That is a cost of the tests as
+  they are today.
 - Whole: the health check of the lens in the compose file asks whether the
   process serves, so a stack can be healthy for Docker with a lens that
   cannot score. The run asks the proxy's `/ready` (the model server, the
@@ -393,10 +402,12 @@ What it needs on the server: a folder for the run; Docker for the user that
 runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
 folder, with the settings of the model for that server; a timer at a fixed
 hour; and the graphics card free at that hour for the run, which has a time
-limit of 30 minutes. The timer stops the stack of the usual install before
-the run and starts it again after the run, also when the run failed. It
-stops nothing else: when something else holds the card, the night is "not
-run".
+limit of 30 minutes; and, so that no test is skipped, `javac`, `kotlinc`,
+`ruby` and `php` for that user, and the built TUI in the run's tree. The
+timer stops the stack of the usual install before the run when that stack
+runs, and after the run it starts again only what it stopped, also when the
+run failed. It stops nothing else: when something else holds the card, the
+night is "not run".
 
 The integrity check names a change that takes a test out of the plain jobs
 this way: the mark on a test or a file that was there before, a file added to

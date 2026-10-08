@@ -57,6 +57,7 @@ import argparse
 import contextlib
 import datetime as dt
 import fcntl
+import html
 import json
 import os
 import re
@@ -488,7 +489,16 @@ def left_out_tests(args, folder: Path) -> dict:
              for key in ("tests", "failures", "errors", "skipped")}
     failed = count["failures"] + count["errors"]
     return {"expected": EXPECTED_TESTS, "collected": count["tests"], "passed": count["tests"] - failed - count["skipped"],
-            "failed": failed, "skipped": count["skipped"]}
+            "failed": failed, "skipped": count["skipped"], "skip_reasons": skip_reasons(result.read_text(encoding="utf-8"))}
+
+
+def skip_reasons(result: str) -> dict:
+    """Why tests were skipped, from the result file: each reason once, with the number of tests it stopped."""
+    reasons: dict = {}
+    for said in re.findall(r'<skipped\b[^>]*?\bmessage="([^"]*)"', result):
+        reason = " ".join(html.unescape(said).split())[:120] or "no reason given"
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0])))
 
 
 def with_the_card(args, report: dict, folder: Path) -> None:
@@ -526,6 +536,13 @@ def judge(report: dict) -> str:
             faults.append(f"{tests['collected']} tests were collected, and there are {tests['expected']}")
         if tests["failed"]:
             faults.append(f"{tests['failed']} test(s) failed")
+        if tests["skipped"]:
+            # A skipped test counts as collected, so the number 125 does not show it. It was not run: the night
+            # did not measure what it is there to measure.
+            reasons = list((tests.get("skip_reasons") or {}).items())
+            said = "; ".join(f"{count}: {reason}" for reason, count in reasons[:5]) or "the result file gives no reason"
+            more = f"; and {len(reasons) - 5} more reason(s)" if len(reasons) > 5 else ""
+            faults.append(f"{tests['skipped']} test(s) were skipped ({said}{more})")
     faults += [f"at the end of the run {fault}" for fault in report.get("not_whole_at_the_end") or []]
     return "failed: " + "; ".join(faults) if faults else "passed"
 

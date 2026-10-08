@@ -142,9 +142,11 @@ if args[:2] == ["-m", "pytest"]:
     if plan.get("tests") is not None:
         out = [a for a in args if a.startswith("--junitxml=")][0].split("=", 1)[1]
         t = plan["tests"]
+        skipped = "".join('<testcase name="t%d"><skipped type="pytest.skip" message="%s">where</skipped></testcase>' % (n, reason)
+                          for n, reason in enumerate(t.get("reasons", [])))
         open(out, "w").write('<?xml version="1.0"?><testsuites><testsuite name="pytest" errors="%d" failures="%d" skipped="%d" '
-                             'tests="%d" time="1.0"><testcase name="tests=9"/></testsuite></testsuites>'
-                             % (t.get("errors", 0), t.get("failures", 0), t.get("skipped", 0), t["tests"]))
+                             'tests="%d" time="1.0"><testcase name="tests=9"/>%s</testsuite></testsuites>'
+                             % (t.get("errors", 0), t.get("failures", 0), t.get("skipped", 0), t["tests"], skipped))
     print("the tests ran")
     sys.exit(plan.get("tests_status", 0))
 '''
@@ -183,7 +185,7 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 125, "skipped": 4}, **plan,
+        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 125}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
         (root / "plan.json").write_text(json.dumps(self.plan))
 
@@ -257,7 +259,7 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
         assert about["image"] == f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev"
         assert about["digest"].startswith("sha256:") and about["commit"] == HEAD
     assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "passed": True, "defects": 0} for n, task in enumerate(nightly.TASKS)]
-    assert report["tests"] == {"expected": 125, "collected": 125, "passed": 121, "failed": 0, "skipped": 4}
+    assert report["tests"] == {"expected": 125, "collected": 125, "passed": 125, "failed": 0, "skipped": 0, "skip_reasons": {}}
     for when in ("at the start", "at the end"):
         assert report["services"][when] == {
             "the proxy's /ready": {"status": 200, "answer": WHOLE["proxy/ready"][1]},
@@ -520,11 +522,13 @@ def test_a_step_that_fails_ends_the_run_with_its_reason_and_the_stack_is_stopped
         assert "stack down" not in did and "stack_stopped" not in night.report
 
 
-def measured(defects=(0, 0, 0), collected=125, failed=0, at_the_end=()):
+def measured(defects=(0, 0, 0), collected=125, failed=0, at_the_end=(), skipped=None):
     """What a run that came to its end holds in its report."""
+    skipped = skipped or {}
     return {"stale": [], "tasks": [{"task": task, "seconds": 10.5, "passed": True, "defects": count}
                                    for task, count in zip(nightly.TASKS, defects)],
-            "tests": {"expected": 125, "collected": collected, "passed": collected - failed, "failed": failed, "skipped": 0},
+            "tests": {"expected": 125, "collected": collected, "passed": collected - failed - sum(skipped.values()), "failed": failed,
+                      "skipped": sum(skipped.values()), "skip_reasons": skipped},
             "not_whole_at_the_end": list(at_the_end)}
 
 
@@ -534,6 +538,12 @@ def measured(defects=(0, 0, 0), collected=125, failed=0, at_the_end=()):
     (measured(collected=13), "failed: 13 tests were collected, and there are 125"),
     (measured(collected=126), "failed: 126 tests were collected, and there are 125"),
     (measured(failed=3), "failed: 3 test(s) failed"),
+    # A skipped test counts as collected: all 125 are there, and 8 of them were not run.
+    (measured(skipped={"the TUI is not built": 8}), "failed: 8 test(s) were skipped (8: the TUI is not built)"),
+    (measured(skipped={"javac": 9, "kotlinc": 8, "ruby": 8, "php": 8, "the TUI": 8, "one more": 1, "another": 1}),
+     "failed: 43 test(s) were skipped (9: javac; 8: kotlinc; 8: ruby; 8: php; 8: the TUI; and 2 more reason(s))"),
+    ({**measured(), "tests": {"expected": 125, "collected": 125, "passed": 121, "failed": 0, "skipped": 4}},
+     "failed: 4 test(s) were skipped (the result file gives no reason)"),
     (measured(at_the_end=["the proxy says that the lens is not ready"]),
      "failed: at the end of the run the proxy says that the lens is not ready"),
 ])
@@ -547,6 +557,18 @@ def test_a_run_that_measured_faults_fails_and_names_each_fault(tmp_path):
     assert night.report["result"] == ("failed: add_function: 1 defect(s) of the harness; 13 tests were collected, and there "
                                       "are 125; 2 test(s) failed")
     assert night.did()[-4:] == ["driver", "tests", "ask", "stack down"]
+
+
+def test_a_night_with_skipped_tests_fails_and_the_result_gives_the_reasons(tmp_path):
+    # The result file says tests="125" all the same: a skipped test counts as collected.
+    reasons = ["javac is not on the path"] * 3 + ["tui/atlas-tui not built (cd tui &amp;&amp; go build -o atlas-tui .)"] * 2 + ["ruby is not on the path"]
+    night = Night(tmp_path, tests={"tests": 125, "skipped": 6, "reasons": reasons}).run()
+    assert night.done.returncode == 1
+    assert night.report["tests"]["skip_reasons"] == {
+        "javac is not on the path": 3, "tui/atlas-tui not built (cd tui && go build -o atlas-tui .)": 2, "ruby is not on the path": 1}
+    assert night.report["result"] == ("failed: 6 test(s) were skipped (3: javac is not on the path; 2: tui/atlas-tui not built "
+                                      "(cd tui && go build -o atlas-tui .); 1: ruby is not on the path)")
+    assert night.report["tests"]["passed"] == 119
 
 
 def test_a_task_whose_change_did_not_land_is_reported_and_does_not_fail_the_run(tmp_path):
