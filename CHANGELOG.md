@@ -7,12 +7,14 @@
 ### Added: the bot gives a pull request a size label and a risk label
 
 Each hour the bot gives every open pull request a size label (`size/S` to
-`size/XL`, by the lines it adds and removes, without the lock files) and,
-when the rules say so, `risk:high`: the change touches a core path (the
-agent loop, the tool handlers, the guards, the workflows), has 400 changed
+`size/XL`, by the lines it adds and removes, without lock files, tests and
+documents) and, when the rules say so, `risk:high`: the change touches a
+core path (the agent loop, the tool handlers, the guards), has 400 counted
 lines or more, or is the author's first pull request here. A label that no
 longer holds is taken off. The numbers and the core paths are in
-`.github/atlas-bot.yml`, and CONTRIBUTING says what the labels mean.
+`.github/atlas-bot.yml`; each label says in its description what it is
+computed from (`scripts/setup/labels.sh` sets it), and CONTRIBUTING says
+what the labels mean.
 
 The pull request template has two more boxes: "AI tools helped write this
 change" and "I can explain every line of this change".

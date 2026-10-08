@@ -458,8 +458,9 @@ def test_a_small_change_of_a_known_author_gets_its_size_label_and_no_risk_label(
     assert label_calls(api, 50) == [("add_labels", 50, ("size/S",))]
 
 
-@pytest.mark.parametrize("files, size", [([("docs/a.md", 99, 0)], "size/S"), ([("docs/a.md", 60, 40)], "size/M"),
-                                         ([("docs/a.md", 1, 0), ("go.sum", 5000, 5000)], "size/S")])
+@pytest.mark.parametrize("files, size", [([("proxy/x.go", 99, 0)], "size/S"), ([("proxy/x.go", 60, 40)], "size/M"),
+                                         ([("proxy/x.go", 1, 0), ("go.sum", 5000, 5000)], "size/S"),
+                                         ([("proxy/x.go", 9, 0), ("proxy/x_test.go", 900, 0), ("docs/a.md", 900, 0)], "size/S")])
 def test_the_size_is_computed_from_the_changed_lines_without_the_lock_files(api, cfg, files, size):
     api.cards.clear()
     api.pulls = [pull(51, labels=["area/docs", "area/proxy"])]
@@ -469,7 +470,7 @@ def test_the_size_is_computed_from_the_changed_lines_without_the_lock_files(api,
     assert label_calls(api, 51) == [("add_labels", 51, (size,))]
 
 
-@pytest.mark.parametrize("files", [[("proxy/agent.go", 2, 1)], [(".github/workflows/test.yml", 1, 1)], [("docs/a.md", 300, 100)]])
+@pytest.mark.parametrize("files", [[("proxy/agent.go", 2, 1)], [("proxy/x.go", 300, 100)]])
 def test_a_change_to_a_core_path_and_a_large_change_get_the_risk_label(api, cfg, files):
     api.cards.clear()
     have = ["area/proxy", "area/ci", "area/docs"]
@@ -479,6 +480,16 @@ def test_a_change_to_a_core_path_and_a_large_change_get_the_risk_label(api, cfg,
     run(api, cfg).sync()
     ((_kind, _number, added),) = label_calls(api, 52)
     assert "risk:high" in added and len(added) == 2
+
+
+@pytest.mark.parametrize("files", [[(".github/workflows/test.yml", 30, 30)], [("docs/a.md", 300, 100), ("proxy/x_test.go", 900, 0)]])
+def test_a_change_to_a_workflow_and_a_large_change_of_tests_and_documents_get_no_risk_label(api, cfg, files):
+    api.cards.clear()
+    api.pulls = [pull(57, labels=["area/proxy", "area/ci", "area/docs"])]
+    api.files[57] = files
+    api.counts[MERGED_BEFORE.format("bob")] = 1
+    run(api, cfg).sync()
+    assert label_calls(api, 57) == [("add_labels", 57, ("size/S",))]
 
 
 @pytest.mark.parametrize("assoc, user_type, merged, high", [
