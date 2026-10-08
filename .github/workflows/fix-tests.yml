@@ -16,8 +16,12 @@ on:
 permissions:
   contents: read
 
+# A newer commit cancels the run of the older one. A run for an edit of the
+# title or the text has a group of its own: it cancels no run, and no run
+# cancels it. An edit says nothing about the code, and a cancelled run of a
+# commit reads as a job that did not run (`checks ran`).
 concurrency:
-  group: fix-tests-${{ github.ref }}
+  group: fix-tests-${{ github.ref }}-${{ github.event.action == 'edited' && github.run_id || 'commits' }}
   cancel-in-progress: true
 
 jobs:

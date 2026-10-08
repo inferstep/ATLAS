@@ -13,6 +13,7 @@ import venv
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "fix_tests.py"
 PATH_LINE = "import pathlib, sys\nsys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
@@ -289,6 +290,30 @@ def test_a_test_that_asks_the_product_in_a_new_process_gets_the_tree_that_is_tes
     found, rows, _, _ = verdicts(fix, root, base, tools)
     assert found == {"test_the_product_answers_in_a_new_process_in_another_folder": "fails on the base",
                      "test_the_product_answers_in_the_tests_own_process": "fails on the base"}, rows
+
+
+def test_a_run_for_an_edit_of_a_pull_request_cancels_no_run_in_any_workflow():
+    # An edit of the text can come while the run of a push is in progress. A workflow that starts for an edit and
+    # cancels runs in progress would end that run, and `checks ran` reads a cancelled run as a job that did not run.
+    workflows = sorted((SCRIPT.parents[1] / ".github" / "workflows").glob("*.yml"))
+    starts_for_an_edit = []
+    for path in workflows:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        triggers = workflow.get("on", workflow.get(True)) or {}
+        on_a_pull_request = triggers.get("pull_request") if isinstance(triggers, dict) else None
+        if "edited" not in ((on_a_pull_request or {}).get("types") or []):
+            continue
+        starts_for_an_edit.append(path.name)
+        groups = [workflow.get("concurrency")] + [job.get("concurrency") for job in workflow["jobs"].values()]
+        for concurrency in filter(None, groups):
+            group = concurrency if isinstance(concurrency, str) else concurrency.get("group", "")
+            cancels = isinstance(concurrency, dict) and concurrency.get("cancel-in-progress") not in (None, False)
+            assert not cancels or "github.event.action == 'edited' && github.run_id ||" in group, (
+                f"{path.name} starts for an edit of a pull request and cancels runs in progress, and the run of an edit is "
+                f"in the group of the others (`{group}`). An edit of the text would cancel the run of a push, and `checks "
+                "ran` then says that a job did not run. Fix: give the run of an edit a group of its own, as "
+                "fix-tests.yml does, or take the cancelling out.")
+    assert "fix-tests.yml" in starts_for_an_edit, "this test no longer finds the workflows that start for an edit"
 
 
 def test_an_error_raised_in_the_standard_library_names_it_and_the_file_that_called_it(fix, repo, tools):
