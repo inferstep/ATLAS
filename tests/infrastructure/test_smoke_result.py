@@ -22,9 +22,17 @@ _spec.loader.exec_module(smoke)
 
 def recording(system="You are a coding assistant. Tools: read_file, write_file.", grammar="root ::= call", schema="object",
               task="add a function", note="a note that the proxy writes in one situation"):
-    """A recording as the replay tests keep it, with two requests to the model after one to another service."""
-    first = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": task}],
-             "grammar": grammar, "response_format": {"schema": {"type": schema}}, "temperature": 0.3}
+    """A recording as the replay tests keep it, with two requests to the model after one to another service.
+
+    With None for the system prompt, the grammar or the schema, no request of the recording carries that part.
+    """
+    first = {"messages": [{"role": "user", "content": task}], "temperature": 0.3}
+    if system is not None:
+        first["messages"].insert(0, {"role": "system", "content": system})
+    if grammar is not None:
+        first["grammar"] = grammar
+    if schema is not None:
+        first["response_format"] = {"schema": {"type": schema}}
     second = {**first, "messages": first["messages"] + [{"role": "user", "content": note}]}
     return {"source": {"kind": "smoke"}, "exchanges": [
         {"service": "sandbox", "method": "GET", "path": "/health", "request": "", "response": "{}"},
@@ -124,6 +132,55 @@ def test_a_change_of_text_that_every_request_carries_is_red_until_the_result_lin
     assert "after two red smoke runs the change stops and is thought over" in done.stdout
 
 
+@pytest.mark.parametrize("gone, what", [
+    ({"grammar": None}, "the grammar"),
+    ({"schema": None}, "the schema of the reply"),
+    ({"system": None}, "the system prompt"),
+    ({"system": None, "grammar": None, "schema": None}, "the system prompt and the grammar and the schema of the reply"),
+])
+def test_a_part_that_no_request_carries_any_more_is_a_change_of_every_request(repo, gone, what):
+    head = repo.commit(one=recording(**gone), two=recording(task="repair a fault", **gone))
+    done = repo.check(repo.base, head, "A pull request with no result line.")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert f"this pull request changes {what}, which every request to the model carries" in done.stdout
+    # The line of a run with the text of this head makes it green, as for any other change.
+    assert repo.check(repo.base, head, line(head, repo.mark(head))).returncode == 0
+
+
+@pytest.mark.parametrize("new", [{"grammar": None}, {"schema": None}, {"system": None}])
+def test_a_part_that_is_new_in_every_request_is_a_change_of_every_request(tmp_path, new):
+    made = Repo(tmp_path)
+    base = made.commit(one=recording(**new), two=recording(task="repair a fault", **new))
+    head = made.commit(one=recording(), two=recording(task="repair a fault"))
+    done = made.check(base, head, "A pull request with no result line.")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "has no result line of a smoke run" in done.stdout
+
+
+def test_a_part_that_one_recording_loses_and_the_others_keep_is_asked_for_nothing(repo):
+    done = repo.check(repo.base, repo.commit(one=recording(grammar=None)))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the smoke run is not asked for" in done.stdout
+
+
+def test_a_part_that_no_request_carries_on_either_side_is_no_change(tmp_path):
+    # The recordings of this repository are such a case: no request of them carries a grammar.
+    made = Repo(tmp_path)
+    base = made.commit(one=recording(grammar=None), two=recording(grammar=None, task="repair a fault"))
+    head = made.commit(one=recording(grammar=None, note="another note in the same situation"))
+    done = made.check(base, head)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the smoke run is not asked for" in done.stdout
+
+
+def test_the_first_recordings_of_a_branch_are_a_change_of_every_request(tmp_path):
+    made = Repo(tmp_path)
+    base = made.commit()
+    head = made.commit(one=recording(), two=recording(task="repair a fault"))
+    assert made.check(base, head, "no line").returncode == 1
+    assert made.check(base, head, line(head, made.mark(head))).returncode == 0
+
+
 def test_a_new_recording_beside_changed_ones_does_not_hide_the_change(repo):
     head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"), three=recording(system=NEW))
     assert repo.check(repo.base, head).returncode == 1
@@ -166,7 +223,7 @@ def test_the_line_no_longer_holds_when_the_text_changes_again(repo):
 
 
 def no_server(mark):
-    return ("No smoke run: the server is not available; the replay tests are the check, and the first nightly run after "
+    return ("No smoke run: the server is not available. Not tried with a real model; the first nightly run after "
             f"the server is back covers this text (text {mark}).")
 
 
@@ -178,7 +235,8 @@ def test_when_the_server_is_not_available_one_line_says_so_and_the_check_is_gree
     done = repo.check(repo.base, head, "Some text.\n\n" + no_server(repo.mark(head)) + "\n")
     assert done.returncode == 0, done.stdout + done.stderr
     assert "no smoke run was made for this change of the system prompt: the server was not available" in done.stdout
-    assert "The recorded replay tests are the check" in done.stdout
+    assert "The change was not tried with a real model" in done.stdout
+    assert "replay tests are the check" not in red.stdout + done.stdout
 
 
 def test_the_line_for_a_server_that_is_not_available_holds_only_for_the_text_it_names(repo):
@@ -188,6 +246,22 @@ def test_the_line_for_a_server_that_is_not_available_holds_only_for_the_text_it_
     head = repo.commit(one=recording(system=again), two=recording(system=again, task="repair a fault"))
     assert repo.check(repo.base, head, text).returncode == 1
     assert repo.check(repo.base, head, "No smoke run: the server is not available.").returncode == 1
+    earlier_words = ("No smoke run: the server is not available; the replay tests are the check, and the first nightly run after "
+                     f"the server is back covers this text (text {repo.mark(head)}).")
+    assert repo.check(repo.base, head, earlier_words).returncode == 1
+
+
+def test_an_older_result_line_beside_the_line_for_the_server_is_red_and_the_message_says_the_way_out(repo):
+    first = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
+    older = line(first, repo.mark(first))
+    again = NEW + " Use them with care."
+    head = repo.commit(one=recording(system=again), two=recording(system=again, task="repair a fault"))
+    done = repo.check(repo.base, head, older + "\n" + no_server(repo.mark(head)))
+    assert done.returncode == 1
+    assert f"a result line of a smoke run for another text (text {repo.mark(first)})" in done.stdout
+    assert "Fix: delete the result line of the other text and leave the line for the server." in done.stdout
+    # With the older line deleted the line for the server holds.
+    assert repo.check(repo.base, head, no_server(repo.mark(head))).returncode == 0
 
 
 def test_a_red_smoke_run_is_not_set_aside_by_the_line_for_a_server_that_is_not_available(repo):
@@ -240,6 +314,17 @@ def test_a_recording_that_cannot_be_read_ends_the_check_with_status_2_and_nothin
     assert "one.json" in done.stderr
 
 
+def test_a_head_with_no_recording_at_all_ends_the_check_with_status_2(repo):
+    head = repo.commit(one=None, two=None)
+    done = repo.check(repo.base, head, line(head, "0" * 12))
+    assert done.returncode == 2
+    assert "has no recording under tests/replay/recordings/, so nothing shows what its requests carry" in done.stderr
+    assert "Fix: keep the recordings." in done.stderr
+    assert "changes no text" not in done.stdout + done.stderr
+    marked = subprocess.run([sys.executable, str(SCRIPT), "--mark", head], cwd=repo.root, capture_output=True, text=True, timeout=60)
+    assert marked.returncode == 2
+
+
 def test_a_commit_that_is_not_there_ends_the_check_with_status_2(repo):
     done = repo.check(repo.base, "0" * 40)
     assert done.returncode == 2
@@ -258,6 +343,16 @@ def test_every_recording_of_this_repository_has_the_parts_that_the_check_reads()
             assert parts[part], (
                 f"{path.name}: the first request to the model has no value for {part}, so the check would not see a "
                 "change of it. Fix: PARTS and `carried_by_every_request` in scripts/smoke_result.py.")
+
+
+def test_the_recordings_of_this_repository_against_themselves_are_no_change():
+    texts = {part: set() for part in smoke.PARTS}
+    for path in sorted((ROOT / "tests" / "replay" / "recordings").glob("*.json")):
+        for part, value in smoke.carried_by_every_request(json.loads(path.read_text(encoding="utf-8"))).items():
+            if value is not None:
+                texts[part].add(json.dumps(value, sort_keys=True))
+    as_read = {part: sorted(values) for part, values in texts.items()}
+    assert smoke.changed_for_every_request(as_read, as_read) == []
 
 
 def step(name):
@@ -323,8 +418,11 @@ def test_the_gates_page_has_the_words_of_the_rule():
         ("The three tasks are fixed and are the driver's own. They are never taken from held-out data, and no product text "
          "names them."),
         "No text is changed to make the smoke pass. After two red smoke runs the change stops and is thought over.",
-        ("When the server is not available, the pull request says so in one line; the recorded replay tests are the check; "
-         "the first nightly run after the server is back covers it."),
+        ("When the server is not available, the pull request says so in one line. The change is then not tried with a real "
+         "model before it merges; the first nightly run after the server is back covers it."),
+        ("The replay tests are no check of such a change: its recordings are written again from the new text, so they "
+         "pass."),
+        "Not tried with a real model; the first nightly run after the server is back covers this text",
         "the changed text is part of every request",
     ):
         assert sentence in page, f"docs/quality/gates.md no longer has: {sentence!r}"

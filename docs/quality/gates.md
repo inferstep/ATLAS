@@ -292,8 +292,10 @@ and a changed recording marks such a pull request. Two things follow:
   descriptions, the grammar, the schema of the reply): the job
   `smoke result` is red until the text of the pull request has the result
   line of a smoke run that was made with that text. The job sees such a
-  change from the recordings themselves: of that part, no value that the
-  base's recordings had is left.
+  change from the recordings themselves: the part has other values than
+  on the base, and none that the base's recordings had. A part that no
+  request carries any more counts, and so does a part that is new in every
+  request.
 - **Any other text** (a note, a refusal or a steer that the proxy writes in
   one situation): the pull request adds or changes a recording that shows
   the text in its situation. The recording is the proof, and no smoke run is
@@ -324,10 +326,12 @@ What the result says, and what it does not say:
   from held-out data, and no product text names them.
 - No text is changed to make the smoke pass. After two red smoke runs the
   change stops and is thought over.
-- When the server is not available, the pull request says so in one line;
-  the recorded replay tests are the check; the first nightly run after the
-  server is back covers it. The line, with the mark of the text:
-  `No smoke run: the server is not available; the replay tests are the check, and the first nightly run after the server is back covers this text (text <mark>).`
+- When the server is not available, the pull request says so in one line.
+  The change is then not tried with a real model before it merges; the
+  first nightly run after the server is back covers it. The replay tests
+  are no check of such a change: its recordings are written again from the
+  new text, so they pass. The line, with the mark of the text:
+  `No smoke run: the server is not available. Not tried with a real model; the first nightly run after the server is back covers this text (text <mark>).`
 
 The limits of the job:
 
@@ -335,6 +339,10 @@ The limits of the job:
   that it says 3 of 3, and that it is for the text of this head.
 - It is not a required check. A red `smoke result` is for the maintainer
   who merges.
+- Anybody who can edit the text of the pull request can write either line.
+  A maintainer reads the text before the merge. If the job is ever made a
+  required check, the line for a server that is not available needs a sign
+  that only a maintainer can give.
 - v3-service builds prompts of its own, and no recording looks inside it.
   For a change to one of them no smoke run is asked for: nothing can show
   today that the three tasks send the changed text.
