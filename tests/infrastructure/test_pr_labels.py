@@ -1,4 +1,5 @@
 """The size label and the risk label of a pull request are what the rules and the settings say."""
+import ast
 import importlib.util
 import re
 import subprocess
@@ -28,7 +29,9 @@ MADE = {"sizes": {"S": 0, "M": 10, "L": 40, "XL": 100}, "high_risk_from": "L", "
         "not_counted": {"go.sum": "lock files", "locks/ci.txt": "lock files", "checks/": "tests", "_check.go": "tests",
                         ".note": "documents"},
         "core_paths": {"core/loop.go": "the loop", "core/guard_*": "the guards", "flows/": "the workflows",
-                       "core/gate.go": "the guards"}}
+                       "core/gate.go": "the guards"},
+        "model_text_paths": {"svc/plan.py": "a prompt of the service", "svc/stages/": "a prompt of the service",
+                             "svc/send.py": "the request of the service"}}
 
 
 def changed(path, added=1, removed=0):
@@ -72,9 +75,11 @@ def test_each_label_says_what_it_is_computed_from_in_its_description():
         "size/M": "10 to 39 changed lines, without lock files, tests and documents",
         "size/L": "40 to 99 changed lines, without lock files, tests and documents",
         "size/XL": "100 or more changed lines, without lock files, tests and documents",
-        "risk:high": "A core path (loop, guards, workflows), 40 or more counted lines, or a first pull request"}
-    plain = rules.descriptions({**MADE, "not_counted": {}, "sizes": {"S": 0, "M": 1000}, "high_risk_from": "M"})
+        "risk:high": "A core path, a v3-service prompt file, 40 or more counted lines, or a first pull request"}
+    plain = rules.descriptions({**MADE, "not_counted": {}, "sizes": {"S": 0, "M": 1000}, "high_risk_from": "M", "model_text_paths": {}})
     assert plain["size/S"] == "Under 1,000 changed lines" and plain["size/M"] == "1,000 or more changed lines"
+    # With no list of such files the description does not speak of one.
+    assert plain["risk:high"] == "A core path, 1,000 or more counted lines, or a first pull request"
 
 
 def test_a_change_with_no_reason_is_not_high_risk():
@@ -109,6 +114,33 @@ def test_each_core_part_is_named_once_with_its_first_file_and_in_the_order_of_th
     assert rules.labels_for(files, False, MADE).reasons == (
         "it changes the loop (core/loop.go)", "it changes the guards (core/guard_b.go)",
         "it changes the workflows (flows/b.yml)")
+
+
+@pytest.mark.parametrize("path, what", [
+    ("svc/plan.py", "a prompt of the service"),
+    ("svc/stages/a.py", "a prompt of the service"),
+    ("svc/stages/deep/er/b.py", "a prompt of the service"),
+    ("svc/send.py", "the request of the service"),
+])
+def test_a_change_to_a_file_with_text_that_the_model_reads_is_high_risk_and_says_which(path, what):
+    labels = rules.labels_for([changed("docs/a.md"), changed(path)], False, MADE)
+    assert labels.reasons == (f"it changes {what} ({path})",)
+    assert labels.high_risk
+
+
+@pytest.mark.parametrize("path", ["svc/plan.py.md", "other/svc/plan.py", "svc/planning.py", "svc/stage/a.py", "svc/stages", "Svc/plan.py",
+                                  "svc/stages.py", "svc/send.py.bak", "svc/other.py", "checks/svc/plan.py"])
+def test_a_path_that_only_looks_like_a_file_with_text_for_the_model_is_not_one(path):
+    assert rules.labels_for([changed(path)], False, MADE).reasons == ()
+
+
+def test_the_core_parts_come_first_and_each_kind_of_text_for_the_model_is_named_once_with_its_first_file():
+    files = [changed("svc/stages/b.py"), changed("svc/send.py"), changed("svc/plan.py"), changed("core/loop.go"), changed("svc/stages/a.py")]
+    assert rules.labels_for(files, False, MADE).reasons == (
+        "it changes the loop (core/loop.go)", "it changes a prompt of the service (svc/plan.py)",
+        "it changes the request of the service (svc/send.py)")
+    # Without the list, such a file is a file like any other.
+    assert rules.labels_for(files[:3], False, {**MADE, "model_text_paths": None}).reasons == ()
 
 
 @pytest.mark.parametrize("lines, high", [(39, False), (40, True), (41, True), (100, True)])
@@ -182,6 +214,43 @@ def test_every_core_path_of_the_settings_names_a_file_that_is_there():
     assert set(SETTINGS["core_paths"].values()) == {"the agent loop", "the tool handlers", "the guards"}
 
 
+def files_with_text_for_the_model():
+    """The files of v3-service, without its tests, that hold a prompt: a text that starts with "You are a", or the
+    marks of a ChatML prompt."""
+    found = []
+    for path in sorted((ROOT / "v3-service").rglob("*.py")):
+        if "tests" in path.parts:
+            continue
+        texts = [node.value for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+                 if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        if any(re.match(r"\s*You are an? ", text) or "<|im_start|>" in text for text in texts):
+            found.append(path.relative_to(ROOT).as_posix())
+    return found
+
+
+def test_the_list_of_files_with_text_for_the_model_is_each_such_file_of_v3_service_and_no_other():
+    listed, found = sorted(SETTINGS["model_text_paths"]), files_with_text_for_the_model()
+    assert len(found) >= 10, f"only {found} were found; the reading of this test no longer finds the prompts of v3-service"
+    assert listed == found, (
+        f"`model_text_paths` of .github/atlas-bot.yml and the files of v3-service that hold a prompt are not the same. "
+        f"Only on the list: {sorted(set(listed) - set(found))}. Only in v3-service: {sorted(set(found) - set(listed))}. A "
+        "change to a prompt of v3-service is seen by no recording, so the label `risk:high` is what names it. Fix: "
+        "give the list each such file, with what it is, and take out a file that holds no prompt any more.")
+    assert set(SETTINGS["model_text_paths"].values()) == {"a prompt of v3-service", "the request that v3-service sends to the model"}
+    assert not set(SETTINGS["model_text_paths"]) & set(SETTINGS["core_paths"])
+
+
+def test_a_change_to_a_prompt_of_v3_service_in_this_repository_is_high_risk_and_another_file_of_it_is_not():
+    prompt = rules.labels_for([changed("v3-service/stages/pr_cot.py", 2, 1)], False, SETTINGS)
+    assert prompt == rules.Labels("size/S", 3, ("it changes a prompt of v3-service (v3-service/stages/pr_cot.py)",))
+    request = rules.labels_for([changed("v3-service/adapters.py", 2, 1), changed("v3-service/planning.py", 1)], False, SETTINGS)
+    assert request.reasons == ("it changes a prompt of v3-service (v3-service/planning.py)",
+                               "it changes the request that v3-service sends to the model (v3-service/adapters.py)")
+    for path in ("v3-service/pipeline.py", "v3-service/stages/candidate_selection.py", "tests/v3-service/test_planning.py",
+                 "v3-service/stages/__init__.py", "v3-service/planning.md"):
+        assert rules.labels_for([changed(path, 2, 1)], False, SETTINGS).reasons == (), path
+
+
 def test_a_change_to_a_workflow_is_not_high_risk_by_the_label_and_the_integrity_check_names_it():
     # The label means a change that can alter what the product does. A change that can alter what the checks accept
     # has its own line on the pull request, from the integrity check.
@@ -237,6 +306,8 @@ def test_contributing_states_the_sizes_and_the_reasons_as_the_settings_have_them
     assert "`size/S`, `size/M`, `size/L`, `size/XL`" in guide and f"`{SETTINGS['risk_label']}`" in guide
     for what in set(SETTINGS["core_paths"].values()):
         assert what in guide, f"CONTRIBUTING does not name `{what}` as a core path"
+    assert "or it changes a file of v3-service that holds a prompt or shapes the request to the model;" in guide
+    assert "no recorded request shows that text" in guide
 
 
 def test_the_pull_request_template_asks_about_ai_tools_and_about_every_line():

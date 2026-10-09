@@ -13,6 +13,9 @@ largest size whose first number of lines is not above that sum.
 High risk, when one of these holds:
   - the pull request changes a core path (`core_paths`: the agent loop, the
     tool handlers, the guards);
+  - it changes a file of v3-service that holds a prompt, or that shapes the
+    request to the model (`model_text_paths`). No recorded request shows a
+    change of that text, so no other check names it;
   - its size is `high_risk_from` or larger;
   - it is the author's first pull request here.
 
@@ -62,8 +65,8 @@ def size_of(lines: int, settings: dict) -> str:
 
 
 def is_under(path: str, entry: str) -> bool:
-    """Whether a file belongs to an entry of `core_paths`: a folder (the entry ends with `/`), the start of a name
-    (it ends with `*`), or one file."""
+    """Whether a file belongs to an entry of `core_paths` or of `model_text_paths`: a folder (the entry ends with
+    `/`), the start of a name (it ends with `*`), or one file."""
     if entry.endswith("/"):
         return path.startswith(entry)
     if entry.endswith("*"):
@@ -71,15 +74,20 @@ def is_under(path: str, entry: str) -> bool:
     return path == entry
 
 
-def core_parts(files: list, settings: dict) -> list:
-    """The core parts that the pull request changes: (what it is, the first changed file of it), in the settings' order."""
+def parts_of(files: list, listed: dict | None) -> list:
+    """The listed parts that the pull request changes: (what it is, the first changed file of it), in the list's order."""
     found: dict = {}
-    for entry, what in (settings.get("core_paths") or {}).items():
+    for entry, what in (listed or {}).items():
         for f in files:
             if is_under(f["filename"], entry):
                 found.setdefault(what, f["filename"])
                 break
     return list(found.items())
+
+
+def core_parts(files: list, settings: dict) -> list:
+    """The core parts that the pull request changes, and after them the files with text that the model reads."""
+    return parts_of(files, settings.get("core_paths")) + parts_of(files, settings.get("model_text_paths"))
 
 
 def labels_for(files: list, first_time: bool, settings: dict) -> Labels:
@@ -119,7 +127,8 @@ def descriptions(settings: dict) -> dict:
     for (name, first), after in zip(steps, [*steps[1:], None]):
         lines = f"{first:,} or more" if after is None else f"Under {after[1]:,}" if first == 0 else f"{first:,} to {after[1] - 1:,}"
         said[SIZE_PREFIX + name] = f"{lines} changed lines" + (f", without {left_out}" if left_out else "")
-    parts = list(dict.fromkeys(what[4:] if what.startswith("the ") else what for what in (settings.get("core_paths") or {}).values()))
+    # The kinds of core path do not fit beside a second list: CONTRIBUTING names them.
+    paths = "A core path" + (", a v3-service prompt file" if settings.get("model_text_paths") else "")
     first_large = settings["sizes"][settings["high_risk_from"]]
-    said[settings["risk_label"]] = f"A core path ({', '.join(parts)}), {first_large:,} or more counted lines, or a first pull request"
+    said[settings["risk_label"]] = f"{paths}, {first_large:,} or more counted lines, or a first pull request"
     return said

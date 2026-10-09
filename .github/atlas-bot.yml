@@ -63,6 +63,23 @@ pull_requests:
     proxy/confined_dir.go: the guards
     sandbox/executor_server.py: the guards
     sandbox/resource_contract.py: the guards
+  # Path -> what it is. A pull request that changes one is high risk too.
+  # These files of v3-service hold a prompt, or shape the request that
+  # carries it. No recorded request shows a change of that text, so this
+  # label is what names it. An entry has the forms of core_paths. A test
+  # holds that the list is each such file of v3-service and no other.
+  model_text_paths:
+    v3-service/planning.py: a prompt of v3-service
+    v3-service/adapters.py: the request that v3-service sends to the model
+    v3-service/stages/budget_forcing.py: a prompt of v3-service
+    v3-service/stages/constraint_refinement.py: a prompt of v3-service
+    v3-service/stages/div_sampling.py: a prompt of v3-service
+    v3-service/stages/failure_analysis.py: a prompt of v3-service
+    v3-service/stages/llm_client.py: a prompt of v3-service
+    v3-service/stages/plan_search.py: a prompt of v3-service
+    v3-service/stages/pr_cot.py: a prompt of v3-service
+    v3-service/stages/refinement_loop.py: a prompt of v3-service
+    v3-service/stages/self_test_gen.py: a prompt of v3-service
 
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:

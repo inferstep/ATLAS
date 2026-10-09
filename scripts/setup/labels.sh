@@ -62,7 +62,7 @@ LABELS=(
     "size/M|ededed|100 to 399 changed lines, without lock files, tests and documents"
     "size/L|ededed|400 to 999 changed lines, without lock files, tests and documents"
     "size/XL|ededed|1,000 or more changed lines, without lock files, tests and documents"
-    "risk:high|d93f0b|A core path (agent loop, tool handlers, guards), 400 or more counted lines, or a first pull request"
+    "risk:high|d93f0b|A core path, a v3-service prompt file, 400 or more counted lines, or a first pull request"
     "status/ready|0e8a16|Ready to claim (mirrors the project Status; set by the bot)"
     "status/blocked|b60205|Blocked (mirrors the project Status; set by the bot)"
     "good first issue|7057ff|Good for newcomers"
