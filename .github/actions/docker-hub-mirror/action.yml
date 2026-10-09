@@ -24,8 +24,21 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # The tests of this step name a file of their own here. A job does not.
+        # This step writes the settings file of the Docker service and no
+        # other file. Its tests name a file of their own, and that one has to
+        # lie in the folder for temporary files. Any other name is refused.
         settings="${DOCKER_SETTINGS_FILE:-/etc/docker/daemon.json}"
+        temporary="${TMPDIR:-/tmp}"
+        case "$settings" in
+          /etc/docker/daemon.json) refused="" ;;
+          *..*) refused=yes ;;
+          "${temporary%/}"/*) refused="" ;;
+          *) refused=yes ;;
+        esac
+        if [ -n "$refused" ]; then
+          echo "::error::This step writes the settings file of the Docker service and no other file, and DOCKER_SETTINGS_FILE names another one. Nothing was written. Fix: take DOCKER_SETTINGS_FILE out of the environment of this job; only the tests of the step set it, to a file in the folder for temporary files."
+          exit 1
+        fi
         script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
         show() {
           # What a file or a tool says is data: it is printed in a block of
