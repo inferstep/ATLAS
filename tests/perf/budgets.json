@@ -3,6 +3,6 @@
   "_comment": "Deterministic, non-hardware perf budgets gated in CI. Generous ceilings that catch regressions (e.g. an accidental heavy import in the stdlib-only CLI) without flapping. Hardware budgets are tracked separately once real-hardware results are imported.",
   "deterministic_max": {
     "cli_import_time_s": 3.0,
-    "proxy_binary_bytes": 62914560
+    "proxy_binary_bytes": 1
   }
 }

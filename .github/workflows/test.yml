@@ -509,13 +509,13 @@ jobs:
       matrix:
         include:
           - language: java
-            code: 'public class Main { public static void main(String[] args) { System.out.println("ok"); } }'
+            code: 'public class Main { public static void main(String[] args) { System.out.println("canary-" + "java-failed"); System.exit(1); } }'
           - language: kotlin
-            code: 'fun main() { println("ok") }'
+            code: 'fun main() { println("canary-" + "kotlin-failed"); kotlin.system.exitProcess(1) }'
           - language: ruby
-            code: 'puts "ok"'
+            code: 'puts "canary-" + "ruby-failed"; exit 1'
           - language: php
-            code: '<?php echo "ok";'
+            code: '<?php echo "canary-" . "php-failed"; exit(1);'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

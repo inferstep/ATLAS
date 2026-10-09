@@ -1,0 +1,9 @@
+# Planted by scripts/canary.py for the canary pull request. Never merge it.
+name: canary workflow lint
+on:
+  workflow_dispatch: {}
+jobs:
+  planted:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "${{ steps.no_such_step.outputs.value }}"
