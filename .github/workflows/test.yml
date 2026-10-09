@@ -520,6 +520,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # This job builds or runs an image of Docker Hub. The Docker service
+      # asks a mirror first, so a limit or a fault of Docker Hub does not turn
+      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
       - name: build sandbox image
         run: docker build -t atlas-sandbox-test ./sandbox
       - name: start sandbox
@@ -562,6 +568,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      # This job builds or runs an image of Docker Hub. The Docker service
+      # asks a mirror first, so a limit or a fault of Docker Hub does not turn
+      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:

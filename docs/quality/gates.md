@@ -582,6 +582,55 @@ in one place.
   with `SANDBOX_URL` set to a running sandbox; `proxy` with
   `ATLAS_PROXY_URL`; `model` on a host with the stack up.
 
+## Docker Hub and the checks
+
+14 jobs build or run an image of Docker Hub: the five of the install matrix,
+the four `sandbox smoke` jobs, `sandbox tests (containerized)` and the four
+`PR build check` jobs. When Docker Hub refuses a pull for its limit, or its
+token service does not answer, such a job is red and the change is not at
+fault. Five of them are required checks, so that red also takes a pull
+request out of the merge queue.
+
+So each of these jobs has a second source for its images, the mirror
+`mirror.gcr.io`, through one step: `.github/actions/docker-hub-mirror`, which
+runs `scripts/docker_hub_mirror.py`. The step does two things.
+
+- It sets the one key `registry-mirrors` in the settings file of the Docker
+  service and starts the service again. Every other setting stays as it is.
+  A build then asks the mirror first and Docker Hub second. When the service
+  does not come back, or does not name the mirror, the step is red and no
+  later step runs.
+- It pulls the images that the job runs with `docker run` by the mirror's own
+  name and gives them the name of Docker Hub. A runner is logged in to Docker
+  Hub, and for `docker run` the service sends that login to the mirror too,
+  which refuses it; with the mirror's own name no login goes. When the mirror
+  does not give an image, the step says so and the job pulls it from Docker
+  Hub, as it did before.
+
+What follows from it:
+
+- The install matrix runs `ubuntu:22.04`, `ubuntu:24.04`, `debian:12` and
+  `rockylinux/rockylinux:9` by tag. Those five jobs run the mirror's copy of
+  each tag, which can be older than the one of Docker Hub. The step prints
+  the digest of each image that it took from the mirror.
+- An image that a Dockerfile pins by its digest is the same image from the
+  mirror: Docker checks the digest.
+- The four `PR build check` jobs have a builder of their own. It pulls the
+  base images itself, so it has the mirror in its own settings. Its own
+  image comes from the mirror by the mirror's name; when that setup step
+  fails, a second one sets the builder up from Docker Hub.
+- GitHub pulls the image of a job's `container:` or `services:` before the
+  first step, so the step cannot help there. A test refuses such an image of
+  Docker Hub.
+- A test reads the workflow files: every job that builds or runs an image for
+  a pull request or in the merge queue has the step after its checkout and
+  before its first docker command, and the step is given the very images
+  that the job runs. The jobs that publish images or start on a schedule are
+  listed in that test, each with the condition that keeps it from a pull
+  request.
+- The step does not help on a day when the mirror and Docker Hub both give no
+  answer.
+
 ## The nightly run
 
 `scripts/nightly_run.py` is one run for the development server, in a folder
