@@ -1,13 +1,10 @@
 name: try docker hub mirror
 
-# A try by hand on a branch of its own. It is never merged. The question: is a
-# job that builds or runs an image of Docker Hub still green when Docker Hub
-# cannot be reached, once the Docker service has a mirror?
-#
-# Each pair of jobs points the three addresses of Docker Hub to nowhere. The
-# control has no mirror and has to fail at its pull: a control that passes
-# shows that the block does not block, and then the try shows nothing. The
-# other job has the mirror step and has to pass.
+# A try by hand on a branch of its own. It is never merged. The first run
+# showed: with the mirror in the settings of the Docker service and Docker
+# Hub pointed to nowhere, a pull still fails. This run asks why. Each check
+# keeps its own result; the last step prints them. The job's own colour is
+# not the verdict.
 
 on:
   push:
@@ -26,156 +23,87 @@ env:
   PYTHON_IMAGE: docker.io/library/python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
 
 jobs:
-  control:
-    name: control, no mirror (each pull has to fail)
+  diagnose:
+    name: why a pull goes to Docker Hub with a mirror set
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: what the runner has before the try
-        run: |
-          echo "The settings file of the Docker service:"
-          echo '```'; sudo cat /etc/docker/daemon.json 2>&1 || true; echo '```'
-          echo "The images in its store:"
-          echo '```'; docker images 2>&1; echo '```'
-          curl -s -o /dev/null -m 15 -w 'Docker Hub answers with status %{http_code} before the block.\n' https://registry-1.docker.io/v2/ || echo "Docker Hub gave no answer before the block."
-      - name: point Docker Hub to nowhere
-        run: |
-          echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
-          sudo systemctl restart docker
-          if curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/; then
-            echo "::error::Docker Hub still answers after the block, so this try shows nothing. Fix: the block of this workflow."
-            exit 1
-          fi
-          echo "Docker Hub does not answer on this runner now."
-      - name: docker run of a distro image has to fail
-        run: |
-          if docker run --rm ubuntu:24.04 true; then
-            echo "::error::The control passed: ubuntu:24.04 ran with no mirror and no Docker Hub. The try shows nothing."
-            exit 1
-          fi
-          echo "The control failed at its pull, as it has to."
-      - name: a plain docker build of the sandbox image has to fail
-        run: |
-          if docker build -t try-sandbox ./sandbox; then
-            echo "::error::The control passed: the sandbox image was built with no mirror and no Docker Hub. The try shows nothing."
-            exit 1
-          fi
-          echo "The control failed at its base image, as it has to."
-
-  with-mirror:
-    name: with the mirror step (each pull has to pass)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
       - name: point Docker Hub to nowhere
         run: |
           echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
           if curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/; then
-            echo "::error::Docker Hub still answers after the block, so this try shows nothing. Fix: the block of this workflow."
+            echo "::error::Docker Hub still answers after the block, so this try shows nothing."
             exit 1
           fi
-          echo "Docker Hub does not answer on this runner now."
       # zizmor asks for the `$/` form here; actionlint does not read that form yet.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-      - name: the settings file after the step
+      - name: the state of the runner
         run: |
-          echo '```'; sudo cat /etc/docker/daemon.json; echo '```'
-      - name: docker run of the four distro images
-        run: |
-          for image in ubuntu:22.04 ubuntu:24.04 debian:12 rockylinux/rockylinux:9; do
-            docker run --rm "$image" sh -c '. /etc/os-release && echo "ran: $PRETTY_NAME"'
-            docker image inspect "$image" --format "$image is {{json .RepoDigests}}"
-          done
-      - name: a pull by the digest that the sandbox Dockerfile pins
-        run: |
-          docker pull "$PYTHON_IMAGE"
-          docker image inspect "$PYTHON_IMAGE" --format 'pulled: {{json .RepoDigests}}'
-          grep -n "^FROM" sandbox/Dockerfile
-      - name: a plain docker build of the sandbox image
-        run: docker build --no-cache -t try-sandbox ./sandbox
-      - name: the built image starts
-        run: |
-          docker run -d --name try-sandbox -p 8020:8020 try-sandbox
-          for _ in $(seq 1 30); do
-            if curl -sf -m 5 -o /dev/null http://127.0.0.1:8020/health; then echo "The sandbox answers."; exit 0; fi
-            sleep 2
-          done
-          docker logs --tail 40 try-sandbox
-          exit 1
-
-  builder-control:
-    name: builder control, no mirror (the build has to fail)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: point Docker Hub to nowhere
-        run: |
-          echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
-          sudo systemctl restart docker
-      - name: set up the builder
-        id: setup
+          echo '```'
+          docker info 2>/dev/null | grep -E "Server Version|Storage Driver|Username|Registry Mirrors|mirror|Registry:" || true
+          echo "the user's Docker settings name a login for: $(python3 -c 'import json,os,sys; p=os.path.expanduser("~/.docker/config.json"); print(sorted(json.load(open(p)).get("auths", {})) if os.path.exists(p) else "no settings file")')"
+          curl -s -o /dev/null -m 15 -w 'the mirror answers with status %{http_code}\n' https://mirror.gcr.io/v2/ || echo "the mirror gave no answer"
+          echo '```'
+      - name: A. a pull by the mirror's own name
+        id: a
         continue-on-error: true
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
-        with:
-          # The builder's container gets the hosts file of the runner only
-          # with the runner's own network. That is for this try alone: it is
-          # how the block reaches the builder.
-          driver-opts: network=host
-      - name: build the proxy image
-        id: build
-        if: steps.setup.outcome == 'success'
+        run: docker pull mirror.gcr.io/library/ubuntu:22.04
+      - name: B. a pull of ubuntu:22.04 with the runner's login
+        id: b
         continue-on-error: true
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: ./proxy
-          file: ./proxy/Dockerfile
-          push: false
-          provenance: false
-      - name: the control has to fail
+        run: |
+          since="$(date '+%Y-%m-%d %H:%M:%S')"
+          status=0
+          docker pull ubuntu:22.04 || status=$?
+          echo "What the Docker service wrote for this pull:"
+          echo '```'
+          sudo journalctl --unit docker --since "$since" --no-pager --output cat 2>&1 | tail -n 40
+          echo '```'
+          exit "$status"
+      - name: C. the same kind of pull with no login
+        id: c
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/no-login"
+          since="$(date '+%Y-%m-%d %H:%M:%S')"
+          status=0
+          DOCKER_CONFIG="$RUNNER_TEMP/no-login" docker pull debian:12 || status=$?
+          echo "What the Docker service wrote for this pull:"
+          echo '```'
+          sudo journalctl --unit docker --since "$since" --no-pager --output cat 2>&1 | tail -n 40
+          echo '```'
+          exit "$status"
+      - name: D1. a plain docker build from the pinned digest, with the runner's login
+        id: d1
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/small" && printf 'FROM %s\nRUN true\n' "$PYTHON_IMAGE" > "$RUNNER_TEMP/small/Dockerfile"
+          docker build --no-cache -t try-small-1 "$RUNNER_TEMP/small"
+      - name: D2. the same build with no login
+        id: d2
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/no-login"
+          DOCKER_CONFIG="$RUNNER_TEMP/no-login" docker build --no-cache -t try-small-2 "$RUNNER_TEMP/small"
+      - name: E. a pull by the pinned digest, with no login
+        id: e
+        continue-on-error: true
+        run: DOCKER_CONFIG="$RUNNER_TEMP/no-login" docker pull "$PYTHON_IMAGE"
+      - name: the results
         env:
-          SETUP: ${{ steps.setup.outcome }}
-          BUILD: ${{ steps.build.outcome }}
+          A: ${{ steps.a.outcome }}
+          B: ${{ steps.b.outcome }}
+          C: ${{ steps.c.outcome }}
+          D1: ${{ steps.d1.outcome }}
+          D2: ${{ steps.d2.outcome }}
+          E: ${{ steps.e.outcome }}
         run: |
-          echo "set up the builder: $SETUP; build: $BUILD"
-          if [ "$SETUP" = "success" ] && [ "$BUILD" = "success" ]; then
-            echo "::error::The control passed: the proxy image was built with no mirror and no Docker Hub. The try shows nothing."
-            exit 1
-          fi
-          echo "The control failed, as it has to."
-
-  builder-with-mirror:
-    name: builder with the mirror (the build has to pass)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: point Docker Hub to nowhere
-        run: echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
-      # zizmor asks for the `$/` form here; actionlint does not read that form yet.
-      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-      - name: set up the builder
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
-        with:
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
-      - name: build the proxy image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
-        with:
-          context: ./proxy
-          file: ./proxy/Dockerfile
-          push: false
-          provenance: false
-          no-cache: true
+          echo "A, by the mirror's own name:            $A"
+          echo "B, ubuntu:22.04 with the login:         $B"
+          echo "C, debian:12 with no login:             $C"
+          echo "D1, plain build with the login:         $D1"
+          echo "D2, plain build with no login:          $D2"
+          echo "E, pinned digest with no login:         $E"

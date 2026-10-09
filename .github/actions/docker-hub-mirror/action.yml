@@ -12,7 +12,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        settings=/etc/docker/daemon.json
+        # The tests of this step name a file of their own here. A job does not.
+        settings="${DOCKER_SETTINGS_FILE:-/etc/docker/daemon.json}"
         script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
         show() {
           # What a file or a tool says is data: it is printed in a block of
