@@ -2,13 +2,17 @@
 
 No test here reaches git, docker, a graphics card, a model or the network. The
 run is started with a path that holds only stand-ins made for the test: `git`,
-`docker`, `nvidia-smi` and the Python that would run the driver and the tests.
-Each stand-in writes down how it was called and answers from a small plan.
-Every run has a time limit.
+`docker`, `nvidia-smi`, `openssl` and the Python that would run the driver and
+the tests. Each stand-in writes down how it was called and answers from a
+small plan. GitHub is a stand-in too: a small server on this machine. Every
+call that a started run makes to GitHub's address is turned to it and written
+down, and a call to another address is refused (ON_EVERY_START). Every run has
+a time limit.
 """
-import ast
+import base64
 import contextlib
 import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -20,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import venv
 from pathlib import Path
 
@@ -64,7 +69,7 @@ plan = json.load(open(home + "/plan.json"))
 args = sys.argv[1:]
 call = " ".join(args)
 with open(home + "/calls.log", "a") as log:
-    log.write(json.dumps({{"tool": {name!r}, "args": args, "has_the_token": "ATLAS_NIGHTLY_TOKEN" in os.environ,
+    log.write(json.dumps({{"tool": {name!r}, "args": args, "environment": dict(os.environ),
                           "env": {{k: v for k, v in os.environ.items() if k.endswith("_URL") or k in ("ATLAS_SERVICE_TOKEN_FILE", "ATLAS_MODEL_NAME")}}}}) + "\n")
 calls = [json.loads(line) for line in open(home + "/calls.log")]
 
@@ -117,6 +122,8 @@ elif "checkout" in args and plan.get("checkout_asks_for_the_lock"):
         open(script, "w").write(text.replace(first, first + asks, 1))
 elif "rev-parse" in args:
     print(head_now())
+elif args[0] == "ls-remote":
+    print("\\n".join(plan.get("smoke_tips", [])))
 '''
 DOCKER = '''
 if args[0] == "ps":
@@ -157,6 +164,39 @@ if args[:2] == ["-m", "pytest"]:
 CARD = '''
 print("\\n".join(plan.get("card", [])))
 '''
+# openssl signs as the real one does: it reads the key from the file that it is given, and prints bytes that only
+# this key and this text give. The stand-in of GitHub makes the same bytes from the key of the test.
+OPENSSL = '''
+import hashlib
+given = sys.stdin.buffer.read()
+sys.stdout.buffer.write(b"signed:" + hashlib.sha256(open(args[args.index("-sign") + 1], "rb").read() + given).digest())
+'''
+# What every Python that a test starts does first (a file `sitecustomize.py` on its path). The script of the run has
+# one fixed address and no way to give it another, so the stand-in of GitHub is put behind that address here.
+ON_EVERY_START = '''"""Each call to GitHub's address goes to the stand-in of the test and is written down. Another address is refused."""
+import json
+import urllib.error
+import urllib.request
+
+_open = urllib.request.OpenerDirector.open
+
+
+def _to_the_stand_in(self, request, *args, **kwargs):
+    asked = request if isinstance(request, str) else request.full_url
+    with open({log!r}, "a") as log:
+        log.write(json.dumps([request.get_method(), asked]) + "\\n")
+    if not asked.startswith("https://api.github.com/") or not {port}:
+        raise urllib.error.URLError("the test has no stand-in at this address")
+    request.full_url = "http://127.0.0.1:{port}/" + asked[len("https://api.github.com/"):]
+    return _open(self, request, *args, **kwargs)
+
+
+urllib.request.OpenerDirector.open = _to_the_stand_in
+'''
+# The key of the app, as a test has it: a text that no file, no output and no call may hold, but its own file.
+KEY = "the-key-made-for-this-test-0123456789"
+APP, WRITER, INSTALLATION = "Iv23liMadeForThisTest", 424242, 77
+TOKEN = "a-token-made-for-this-test-0123456789"
 
 
 def rows(*defects):
@@ -167,7 +207,7 @@ def rows(*defects):
 class Night:
     """A folder for one run with its stand-ins, and what the run did."""
 
-    def __init__(self, root, python=sys.executable, from_the_tree=False, **plan):
+    def __init__(self, root, python=sys.executable, from_the_tree=False, github=0, **plan):
         self.root = root
         self.dir = root / "nightly"
         self.lock = root / "card.lock"
@@ -176,7 +216,14 @@ class Night:
         (root / "stand-ins").mkdir()
         self.dir.mkdir()
         (self.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\nATLAS_PROXY_PORT=8090\n")
-        for name, body in (("git", GIT), ("docker", DOCKER), ("python-for-the-run", PYTHON), ("nvidia-smi", CARD)):
+        # The key lies outside the folder of the run, and only the user of the run can read it.
+        self.key = root / "keys of the server" / "status-app.pem"
+        self.key.parent.mkdir()
+        self.key.write_text(KEY)
+        self.key.chmod(0o600)
+        (root / "site").mkdir()
+        self.github_at(github)
+        for name, body in (("git", GIT), ("docker", DOCKER), ("python-for-the-run", PYTHON), ("nvidia-smi", CARD), ("openssl", OPENSSL)):
             code = root / "stand-ins" / f"{name}.py"
             code.write_text(STAND_IN.format(name=name, home=str(root), body=body))
             path = root / "bin" / name
@@ -197,12 +244,18 @@ class Night:
     def command(self, *more):
         # No wait in a test unless the test asks for one: an argument that is given again holds.
         return [sys.executable, str(self.script), "--dir", str(self.dir), "--lock", str(self.lock),
-                "--python", str(self.root / "bin" / "python-for-the-run"), "--api", "http://127.0.0.1:9",
+                "--python", str(self.root / "bin" / "python-for-the-run"),
                 "--image-wait-minutes", "0", "--settle-seconds", "0", *more]
 
+    def with_the_key(self):
+        """The settings of a server that has the key of the app."""
+        return ["--status-key", str(self.key), "--status-app", APP, "--status-writer", str(WRITER)]
+
     def env(self, **more):
-        # Only the stand-ins are on the path: the real git and docker cannot be reached.
-        return {"PATH": str(self.root / "bin"), "HOME": str(self.root), **more}
+        # Only the stand-ins are on the path: the real git and docker cannot be reached. And GitHub's address is the
+        # stand-in of the test, or nothing.
+        return {"PATH": str(self.root / "bin"), "HOME": str(self.root), "PYTHONPATH": str(self.root / "site"),
+                "PYTHONDONTWRITEBYTECODE": "1", **more}
 
     def run(self, *more, **env):
         self.done = subprocess.run(self.command(*more), env=self.env(**env), capture_output=True, text=True, timeout=90)
@@ -226,6 +279,20 @@ class Night:
         log = self.root / "calls.log"
         return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
+    def asked(self):
+        """Each address that the run asked, with the method, in order."""
+        log = self.root / "asked.log"
+        return [tuple(json.loads(line)) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def github_at(self, port):
+        """From now on GitHub's address is the stand-in at this port."""
+        (self.root / "site" / "sitecustomize.py").write_text(ON_EVERY_START.format(log=str(self.root / "asked.log"), port=int(port)))
+        return self
+
+    def waits(self, folder="to-send"):
+        """The statuses in a folder of the run: the ones that wait, or `sent`, or `not-sent`."""
+        return [json.loads(path.read_text()) for path in sorted((self.dir / folder).glob("*.json"))]
+
     def did(self):
         """What was called, in order, in a few words each. The questions of one round to the services are one step."""
         short = []
@@ -236,9 +303,11 @@ class Night:
             elif call["tool"] == "docker":
                 step = {"ps": "look", "pull": "image pull", "image": "image inspect"}[args[0]]
             elif call["tool"] == "git":
-                step = "git " + next(word for word in args if word in ("clone", "fetch", "checkout", "rev-parse"))
+                step = "git " + next(word for word in args if word in ("clone", "fetch", "checkout", "rev-parse", "ls-remote"))
             elif call["tool"] == "nvidia-smi":
                 step = "card"
+            elif call["tool"] == "openssl":
+                step = "sign"
             else:
                 step = "driver" if "e2e-reliability" in args[0] else "tests"
             if not (step == "ask" and short and short[-1] == "ask"):
@@ -272,11 +341,10 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
             "the lens's /ready": {"status": 200, "answer": WHOLE["lens/ready"][1]},
             "the lens's /health": {"status": 200, "answer": WHOLE["lens/health"][1]}}
     assert report["not_whole_at_the_end"] == [] and report["stack_stopped"] == "yes"
-    assert report["sent"] == "not sent: no token or no issue was given"
-    text = nightly.as_text(report)
-    assert "- The services at the end of the run: whole" in text
-    assert "- The lens about itself: self test passed: yes; C(x) calibrated: yes; G(x) calibrated: yes" in text
-    assert "- Waited for the images of that commit: 0 s" in text and "- The card before the start: no process computes on it" in text
+    assert report["mode"] == "night"
+    # No key was given: the status of the night waits, and the run asked GitHub nothing.
+    assert report["sent"] == "not sent: no key: the run was started without --status-key or without --status-app; waits: 1"
+    assert night.asked() == []
 
 
 def test_the_stack_has_a_name_and_ports_of_its_own_and_the_driver_and_the_tests_are_sent_to_it(tmp_path):
@@ -375,7 +443,6 @@ def test_images_that_do_not_come_in_the_time_of_the_wait_leave_the_night_not_run
     assert night.done.returncode == 0
     assert night.report["result"] == stale("atlas-v3")
     assert night.report["waited_for_images"] == "1.2 s" and night.did().count("image pull") == 5 * 11
-    assert "- Waited for the images of that commit: 1.2 s" in nightly.as_text(night.report)
 
 
 def test_when_the_branch_moves_during_the_wait_the_run_measures_its_new_head(tmp_path):
@@ -772,14 +839,15 @@ def test_a_service_that_is_not_whole_at_the_end_fails_the_run_and_the_result_nam
     assert night.done.returncode == 1
     assert night.report["result"] == "failed: at the end of the run the proxy says that v3-service is not ready"
     assert night.did()[-4:] == ["driver", "tests", "ask", "stack down"]
-    assert "- The services at the end of the run: the proxy says that v3-service is not ready" in nightly.as_text(night.report)
+    assert night.report["not_whole_at_the_end"] == ["the proxy says that v3-service is not ready"]
 
 
 def test_a_lens_with_no_calibration_is_in_the_report_and_does_not_fail_the_run(tmp_path):
     lens = {**WHOLE["lens/health"][1]["subsystems"]["lens"], "cx_calibrated": False}
     night = Night(tmp_path, answers={"lens/health": [200, {"status": "healthy", "subsystems": {"lens": lens}}]}).run()
     assert night.done.returncode == 0 and night.report["result"] == "passed"
-    assert "- The lens about itself: self test passed: yes; C(x) calibrated: no; G(x) calibrated: yes" in nightly.as_text(night.report)
+    for when in ("at the start", "at the end"):
+        assert night.report["services"][when]["the lens's /health"]["answer"]["subsystems"]["lens"] == lens
 
 
 def test_each_service_is_asked_inside_its_own_container_of_the_runs_own_stack(tmp_path):
@@ -815,100 +883,105 @@ def test_each_question_goes_to_a_service_of_the_compose_file_at_the_port_of_its_
         "PROXY_PARTS in scripts/nightly_run.py.")
 
 
-# --- the report on GitHub -----------------------------------------------------------------------------------------
+# --- GitHub, as a test has it -------------------------------------------------------------------------------------
 
-class Issue(http.server.BaseHTTPRequestHandler):
+def unpadded(part: str) -> bytes:
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+class GitHub(http.server.BaseHTTPRequestHandler):
+    """A stand-in for the part of GitHub that the run uses. It writes down each call and answers as GitHub does.
+
+    `plan` changes its answers: "refuse" maps words of a call to the status that it gets; "moved" is a word of a call
+    that is answered with a redirect; "writer" is the account that the statuses of the key are written by; "activity"
+    maps a branch to what GitHub's record of it says; "statuses" maps a commit to the statuses that it has already;
+    "pulls" maps a commit to the pull requests that GitHub names for it.
+    """
+    plan: dict = {}
     seen: list = []
+    statuses: dict = {}
+    port = 0
 
-    def do_PATCH(self):
-        body = self.rfile.read(int(self.headers["Content-Length"]))
-        Issue.seen.append((self.path, self.headers["Authorization"], json.loads(body)))
-        self.send_response(200)
+    def answer(self, status, body, where=""):
+        raw = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        if where:
+            self.send_header("Location", where)
         self.end_headers()
-        self.wfile.write(b"{}")
+        self.wfile.write(raw)
+
+    def proved(self):
+        """Whether the call carries a proof that the key of the test signed, for this app, good for ten minutes at most."""
+        try:
+            head, claims, signature = self.headers.get("Authorization", "").removeprefix("Bearer ").split(".")
+            header, said, now = json.loads(unpadded(head)), json.loads(unpadded(claims)), time.time()
+            signed = b"signed:" + hashlib.sha256(KEY.encode() + f"{head}.{claims}".encode()).digest()
+            return (header == {"alg": "RS256", "typ": "JWT"} and said["iss"] == APP and set(said) == {"iat", "exp", "iss"}
+                    and said["iat"] <= now < said["exp"] <= now + 600 and unpadded(signature) == signed)
+        except (ValueError, KeyError, TypeError):
+            return False
+
+    def take(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length)) if length else None
+        GitHub.seen.append({"call": f"{self.command} {self.path}", "with": self.headers.get("Authorization", ""), "body": body})
+        plan, call, repo = GitHub.plan, f"{self.command} {self.path}", "/repos/inferstep/ATLAS"
+        where = urllib.parse.urlsplit(self.path)
+        for words, status in plan.get("refuse", {}).items():
+            if words in call:
+                return self.answer(status, {"message": "a planted answer"})
+        if plan.get("moved") and plan["moved"] in call:
+            # The other place is a fixed one of the stand-in itself. A call that comes there was followed.
+            return self.answer(302, {}, where=f"http://127.0.0.1:{GitHub.port}/elsewhere")
+        if call == f"GET {repo}/installation":
+            return self.answer(200, plan.get("installation", {"id": INSTALLATION})) if self.proved() else self.answer(401, {})
+        if call == f"POST /app/installations/{INSTALLATION}/access_tokens":
+            return self.answer(201, plan.get("made", {"token": TOKEN})) if self.proved() else self.answer(401, {})
+        if self.command == "POST" and where.path.startswith(f"{repo}/statuses/"):
+            if self.headers.get("Authorization") != f"Bearer {TOKEN}":
+                return self.answer(401, {})
+            made = {**body, "creator": {"id": plan.get("writer", WRITER), "type": "Bot"}}
+            GitHub.statuses.setdefault(where.path.rsplit("/", 1)[1], []).insert(0, made)
+            return self.answer(201, plan.get("written", made))
+        if self.command == "GET" and where.path.startswith(f"{repo}/commits/") and where.path.endswith("/statuses"):
+            return self.answer(200, GitHub.statuses.get(where.path.split("/")[-2], []))
+        if self.command == "GET" and where.path.startswith(f"{repo}/commits/") and where.path.endswith("/pulls"):
+            return self.answer(200, plan.get("pulls", {}).get(where.path.split("/")[-2], []))
+        if self.command == "GET" and where.path == f"{repo}/activity":
+            return self.answer(200, plan.get("activity", {}).get(urllib.parse.parse_qs(where.query)["ref"][0], []))
+        return self.answer(404, {"message": "the stand-in has no such place"})
+
+    do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = take
 
     def log_message(self, *_args):
         pass
 
 
-TOKEN = "a-token-made-for-this-test-0123456789"
-
-
 @contextlib.contextmanager
-def a_stand_in_for_github():
-    """A server on this machine that takes the change of an issue's text. Gives its port."""
-    Issue.seen = []
-    server = http.server.HTTPServer(("127.0.0.1", 0), Issue)
+def a_stand_in_for_github(**plan):
+    """A server on this machine that answers as GitHub does. Gives the stand-in: its port, and what it saw."""
+    GitHub.plan, GitHub.seen, GitHub.statuses = plan, [], {commit: list(have) for commit, have in plan.get("statuses", {}).items()}
+    server = http.server.HTTPServer(("127.0.0.1", 0), GitHub)
+    GitHub.port = server.server_port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield server.server_port
+        yield GitHub
     finally:
         server.shutdown()
+        server.server_close()
         thread.join(timeout=10)
 
 
-def test_with_a_token_the_report_replaces_the_text_of_the_one_issue_and_the_token_is_written_nowhere(tmp_path):
-    with a_stand_in_for_github() as port:
-        night = Night(tmp_path).run("--issue", "7", "--api", f"http://127.0.0.1:{port}", ATLAS_NIGHTLY_TOKEN=TOKEN)
-    assert night.done.returncode == 0, night.done.stdout + night.done.stderr
-    ((path, sent_with, body),) = Issue.seen
-    assert path == "/repos/inferstep/ATLAS/issues/7" and sent_with == f"Bearer {TOKEN}"
-    assert body["body"].startswith("**Nightly run of `dev`: passed**") and HEAD in body["body"]
-    assert night.report["sent"] == "sent to issue 7 (status 200)"
-    assert TOKEN not in night.done.stdout + night.done.stderr
-    for path in tmp_path.rglob("*"):
-        if path.is_file():
-            assert TOKEN not in path.read_text(errors="replace"), path
-
-
-def test_no_command_that_the_run_starts_has_the_token(tmp_path):
-    # The driver and the tests are code of the tree, and what they print is kept in a log.
-    with a_stand_in_for_github() as port:
-        night = Night(tmp_path).run("--issue", "7", "--api", f"http://127.0.0.1:{port}", ATLAS_NIGHTLY_TOKEN=TOKEN)
-    calls = night.calls()
-    assert {"git", "docker", "python-for-the-run", "nvidia-smi"} == {call["tool"] for call in calls} and len(calls) >= 25
-    assert [call for call in calls if call["has_the_token"]] == []
-    assert len(Issue.seen) == 1, "the run itself still has the token for the report"
-
-
-NOT_SENT = "not sent: the token goes only to https://api.github.com, and --api names another address"
-
-
-@pytest.mark.parametrize("address", ["http://localhost:{port}", "http://127.0.0.1:{port}/elsewhere", "http://127.0.0.1:{port}?",
-                                     "http://127.0.0.1:{port}.example.invalid", "https://127.0.0.1:{port}",
-                                     "https://api.github.com.example.invalid", "http://api.github.com", "https://api.github.com/"])
-def test_the_token_is_sent_to_no_other_address_than_githubs(monkeypatch, address):
-    monkeypatch.setenv("ATLAS_NIGHTLY_TOKEN", TOKEN)
-    with a_stand_in_for_github() as port:
-        args = nightly.parse(["--dir", "/not-used", "--issue", "7", "--api", address.replace("{port}", str(port))])
-        assert nightly.publish(args, "a report") == NOT_SENT
-    assert Issue.seen == []
-
-
-def test_a_run_whose_address_is_another_one_sends_nothing_and_keeps_its_result(tmp_path):
-    with a_stand_in_for_github() as port:
-        night = Night(tmp_path).run("--issue", "7", "--api", f"http://localhost:{port}", ATLAS_NIGHTLY_TOKEN=TOKEN)
-    assert Issue.seen == [] and night.report["sent"] == NOT_SENT
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
-
-
-@pytest.mark.parametrize("argument", ["--repo-url", "--branch", "--registry", "--tag", "--repository"])
-def test_no_argument_points_the_run_at_another_repository_registry_or_branch(tmp_path, argument):
+@pytest.mark.parametrize("argument", ["--repo-url", "--branch", "--registry", "--tag", "--repository", "--api", "--issue",
+                                      "--status-api", "--github"])
+def test_no_argument_points_the_run_at_another_repository_registry_branch_or_address(tmp_path, argument):
     night = Night(tmp_path).run(argument, "another")
     assert night.done.returncode == 2 and "unrecognized arguments" in night.done.stderr
     assert night.calls() == []
-
-
-def test_a_token_with_no_issue_sends_nothing(tmp_path):
-    night = Night(tmp_path).run(ATLAS_NIGHTLY_TOKEN="a-token")
-    assert night.report["sent"] == "not sent: no token or no issue was given"
-
-
-def test_a_report_that_cannot_be_sent_says_so_and_the_run_keeps_its_result(tmp_path):
-    night = Night(tmp_path).run("--issue", "7", ATLAS_NIGHTLY_TOKEN="a-token")
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
-    assert night.report["sent"].startswith("not sent: ") and "a-token" not in json.dumps(night.report)
+    assert night.asked() == []
 
 
 # --- a stack that an earlier run left -----------------------------------------------------------------------------
@@ -920,7 +993,6 @@ def test_a_stack_that_an_earlier_run_left_is_stopped_first_and_the_report_says_s
     assert night.did() == ["git clone"] + ONE_HEAD + ["look", "stack down"] + IMAGES + WITH_THE_CARD
     look = next(call["args"] for call in night.calls() if call["args"][0] == "ps")
     assert look == ["ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=atlas-nightly"]
-    assert "- A stack that an earlier run left: 2 container(s) of an earlier run were stopped first" in nightly.as_text(night.report)
 
 
 def test_a_left_stack_that_cannot_be_stopped_fails_the_run_before_anything_is_pulled_or_started(tmp_path):
@@ -991,18 +1063,6 @@ def test_a_run_that_was_not_started_from_its_tree_is_never_replaced_by_the_trees
     night.script = SCRIPT
     night.run()
     assert night.did() == ONE_HEAD + THE_REST and night.report["script"] == "as it was started"
-
-
-def test_the_new_copy_has_the_token_for_the_report_and_its_commands_do_not(tmp_path):
-    with a_stand_in_for_github() as port:
-        night = Night(tmp_path, from_the_tree=True, checkout_adds="\n# one more line\n").run(
-            "--issue", "7", "--api", f"http://127.0.0.1:{port}", ATLAS_NIGHTLY_TOKEN=TOKEN)
-    assert night.report["script"].startswith("the new copy") and night.report["sent"] == "sent to issue 7 (status 200)"
-    assert [sent_with for _path, sent_with, _body in Issue.seen] == [f"Bearer {TOKEN}"]
-    assert [call for call in night.calls() if call["has_the_token"]] == []
-    for path in tmp_path.rglob("*"):
-        if path.is_file():
-            assert TOKEN not in path.read_text(errors="replace"), path
 
 
 def test_a_new_copy_that_does_not_start_leaves_a_report_that_says_so(tmp_path):

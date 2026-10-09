@@ -585,12 +585,12 @@ in one place.
 ## The nightly run
 
 `scripts/nightly_run.py` is one run for the development server, in a folder
-of its own. A timer starts it each night. It is not a CI job: a check on a
-pull request cannot see a real model that got slower, and it has no model
-server for the 32 tests above that need one.
+of its own. A timer on the server starts it (see "The timer" below). It is
+not a CI job: a check on a pull request cannot see a real model that got
+slower, and it has no model server for the 32 tests above that need one.
 
-The nightly run is best effort. The server is one machine at home, and it is
-not always on. A night with no run is not a failure: the server was off, the
+The nightly run is best effort. The server is one machine, and it is not
+always on. A night with no run is not a failure: the server was off, the
 card was in use, or the images were not of the head yet. No check and no
 rule of this repository waits for the nightly run, and one command switches
 it off (the timer is disabled).
@@ -665,22 +665,231 @@ The first line of the report is its result:
   send none. A user's install has a token when `atlas init` was run.
 - The run writes only inside its own folder, and it stops and removes only
   the containers of its own compose project.
-- With a token in `ATLAS_NIGHTLY_TOKEN` and `--issue N` it puts the report
-  into the text of that one issue. The text is replaced; no comment is
-  added. The token is read at that one call, no command of the run has it,
-  and it is sent to GitHub's own address only. With no token the run only
-  writes the file.
 
-What it needs on the server: a folder for the run; Docker for the user that
-runs it; a Python with `pytest` and `httpx`; the file `nightly.env` in the
-folder, with the settings of the model for that server; a timer at a fixed
-hour; and the graphics card free at that hour for the run, which has a time
-limit of 30 minutes. The server needs no `javac`, `kotlinc`, `ruby` or `php`,
-no Go and no built TUI: the tests that needed them run in jobs on GitHub. The
-timer stops the stack of the usual install before the run when that stack
-runs, and after the run it starts again only what it stopped, also when the
-run failed. It stops nothing else: when something else holds the card, the
-night is "not run".
+### The result on GitHub
+
+A run puts its result on GitHub as a status of the commit that ran:
+`server/nightly` on the head of `dev` that the night ran, and `server/smoke`
+on the commit of a smoke run.
+
+| Result of the run | Status |
+|---|---|
+| `passed`, with no harness defect in the three sessions and, for a night, each of its 32 tests passed, none failed and none skipped | Green |
+| `failed: ...` | Red |
+| `not run: ...` | None |
+
+- The text of a status has fixed words and numbers only: `passed` or
+  `failed`; `started` with the start time of the run in UTC, in the form
+  `2026-10-08T08:00:03Z`; the number of sessions with no harness defect;
+  and the numbers of the tests, or the mark of the text. It has no path, no
+  name of a machine, and nothing that a tool, a test or the model wrote. It
+  has no link.
+- No required check has a name that starts with `server/`. The server is
+  one machine that is not always on, so a night with no status counts
+  neither way.
+- The status is written with the key of a GitHub App of its own. The app
+  has one right, "Commit statuses", on this one repository. For each send
+  the run makes a token that is limited to this repository and to statuses.
+- The key is a file on the server, outside the folder of the run, that only
+  the user of the run can read (`--status-key`). `openssl` signs with it and
+  gets it as the path of that file: the script never reads the key. The key
+  is in no container, in no environment of a command, in no log, in no
+  report and in no status. A key file that the group or others can reach,
+  or that lies in the folder of the run, is not used: the report says so,
+  and the run goes on.
+- The script calls one fixed address, GitHub's own. It has no argument and
+  reads no variable for another one, it uses no proxy that the environment
+  names, and it does not follow an answer that points to another place.
+- Sending changes neither the result nor the exit status of a run. A status
+  that cannot go out (GitHub cannot be reached, or the key is refused or
+  not there) waits in the folder `to-send` of the run's folder. Each later
+  run and each look of the timer tries it once. After 14 days it is set
+  aside into `not-sent`. A status that went out lies in `sent`. A status
+  that is sent twice does no harm.
+- The folder `to-send` is checked like the key: it is a folder of the user
+  of the run, and nobody else can write into it. A file in it is sent only
+  then, and only when the file itself is the run's own.
+
+### The timer
+
+A timer on the server starts the script with `--tick`, every 15 minutes.
+The server only calls out: it has no open port, no tunnel and no runner for
+this. One look:
+
+1. sends each status that waits;
+2. starts nothing when the graphics card is in use;
+3. runs the night, when the hour of the night has come (`--night-hour`, in
+   UTC) and no night was started that day;
+4. or else runs the tip of one branch `smoke/<name>` that has no result
+   yet;
+5. or else does nothing, and leaves no report.
+
+- A tip has a result when the app wrote a `server/smoke` status on it. The
+  look compares the id of the account that wrote the status
+  (`--status-writer`), not a name: a status of that name by another account
+  changes nothing. A tip also has a result when the folder of the run holds
+  a run for it that made a status, or that did not take place for a reason
+  of the commit itself.
+- Before a tip runs, the look asks GitHub which account moved the branch to
+  that commit. The tip runs only when that is a person on the list of the
+  server (`--smoke-by`). Else nothing runs, one line says so, and no status
+  is written. This guard does not rest on the rules of the repository.
+- The timer runs only the repository's own code by itself. The look knows
+  who pushed a branch, not whose code the commit is. So it also asks GitHub
+  for the pull requests of the commit, and the tip runs only when it is the
+  head of an open pull request from a branch of this repository. A pull
+  request from a `smoke/` branch does not count: a person can push
+  another's commit there. The head of a pull request from another
+  repository, a commit with no pull request and the head of a closed one
+  are not run by the timer; one line says so, and no status is written.
+- The timer starts a smoke run only in the hours for smoke runs
+  (`--smoke-hours`, in UTC, as in `22-23,0-5`). With no such hours given it
+  starts none. Outside them a smoke branch waits, and the look says so. The
+  night has its own hour. The unit names the hours 6 and 7. The hours are
+  in UTC, so against a local clock they move by one hour when that clock
+  changes between summer time and winter time; the setting is one argument
+  of the unit.
+- A look that finds a process on the card that holds no lock starts
+  nothing, and the looks of the 60 minutes after it start nothing either.
+  So the usual stack is not stopped and started at every look while
+  something else holds the card.
+- The name after `smoke/` is one part of letters, digits, `.`, `_` and `-`.
+- `--smokes-a-day` bounds how many smoke runs the looks start in one day.
+  Without it the bound is 6.
+- The looks at GitHub need no key. GitHub answers 60 such calls an hour from
+  one address. A look that gets no answer starts no smoke run.
+- `--tick --look` says what is due and starts nothing. Its status is 0 when
+  a run is due and 3 when none is. A server whose usual stack holds the card
+  asks this first, and stops that stack only when a run is due.
+- The files of the timer are in `scripts/server/`. `atlas-nightly.timer`
+  starts `atlas-nightly.service` every 15 minutes. The unit starts
+  `nightly_look.sh`, which asks with `--look`. Only status 3 is "nothing
+  due"; every other status than 0 fails the unit, so a look whose settings
+  cannot be used is seen. When a run is due, the script stops the
+  containers of the usual stack that run (the compose project `atlas`),
+  starts the run, and starts those containers again, also when the run
+  failed. The unit calls the same script once more after every look, so a
+  look that was stopped in its middle leaves no stack down.
+- The unit has no condition and gives nothing through the environment. The
+  path of the key is an argument of the script.
+
+### The smoke run of one commit
+
+`scripts/nightly_run.py --dir <folder> --commit <full id>` runs the three
+sessions for one commit of a branch, with a real model, and nothing else. It
+is for a pull request that changes text which every request carries. A look
+of the timer starts it for the tip of a `smoke/` branch, or a maintainer
+starts it by hand on the development server. It takes the same locks as a
+night and gives the same "not run" answers, each with status 0.
+
+- It takes only what a maintainer has pushed under the name `smoke/`: the
+  commit has to be the tip of a branch `smoke/<name>` of this repository.
+  To try a commit, a maintainer reads the whole change and pushes exactly
+  that commit: `git push origin <commit>:refs/heads/smoke/<name>`. For the
+  head of an open pull request from a branch of this repository, the timer
+  then makes the run. The head of a pull request from outside is not run by
+  the timer: a maintainer who has read the whole change starts that run by
+  hand, with `--commit`. The run fetches the `smoke/` branches and no other
+  name.
+- Why not any commit of the repository: the run builds and starts what the
+  commit holds, with Docker, and a user that can use Docker can do on that
+  machine what its administrator can. The address of the repository gives
+  the head of a pull request from outside to a fetch by its id, so a fetch
+  that works shows nothing. And a branch of another name can be one that a
+  program pushes, with a change that no maintainer has read.
+- The tip, and not a commit further down the branch: one push stands for
+  one commit. No workflow starts on a push to a `smoke/` branch, and a test
+  holds that. The run deletes nothing on GitHub; its output gives the
+  command that removes the branch.
+- The commit has to stand on the head of `dev`. Then what differs from `dev`
+  is what the pull request changes. Else the answer is "not run", and the
+  way is to update the branch.
+- No file of the commit runs on the server itself. The tree of the run stays
+  at the head of `dev`. The script of the run, the driver and its modules,
+  the compose files, the script that makes the mark, the model server's
+  folder and the files that the stack mounts are those of `dev`. A commit
+  that changes one of them is "not run", and the result names the file: the
+  run would use the copy of `dev` under the name of the commit.
+- It builds the image of each service whose build folder the commit changes,
+  from a copy of that folder, and pulls the other images as built from the
+  head of `dev`. An image that it builds has a name of this run's own
+  (`localhost/atlas-nightly/...`, with the start time and the commit) and
+  never the tag `dev`. Each build has a time limit. When no build folder
+  differs, it builds nothing and says so.
+- It runs no tests. Its result goes to GitHub as the status `server/smoke`
+  on the commit.
+- At its end it removes the images that it built, by their own names, and
+  nothing else, also when a step failed. The copy of the commit's build
+  folders (`commit.tar` and `commit/`) stays in the folder of the run, with
+  its report.
+- It prints one line that starts with "Smoke run on", for the person who
+  started it. A run with a harness defect prints its line too, with the
+  number of sessions that had none. A run that failed for another reason
+  prints no line.
+- The line names the text by a mark that is made from the commit's
+  recordings, and the proxy sends that text. So when the commit's mark is
+  not the one of `dev`, the proxy has to be built from the commit. Else the
+  answer is "not run": no session would carry the text that the line names.
+  The way is to put the change of the text into the same commit as its
+  recordings.
+
+What it needs on the server:
+
+- a folder for the run, and Docker for the user that runs it;
+- a Python with `pytest` and `httpx`, and `git` and `openssl`;
+- the file `nightly.env` in the folder, with the settings of the model for
+  that server and nothing else. The key is not in it;
+- the key file of the app, outside that folder, owned by that user, with
+  mode 600;
+- a timer that starts the script with `--tick` every 15 minutes, with the
+  client id of the app (`--status-app`), the id of the account that writes
+  the app's statuses (`--status-writer`) and each person whose push to a
+  `smoke/` branch counts (`--smoke-by`);
+- the graphics card free for the run, which has a time limit of 30 minutes.
+
+The server needs no `javac`, `kotlinc`, `ruby` or `php`, no Go and no built
+TUI: the tests that needed them run in jobs on GitHub.
+
+When a look with `--look` finds a run due, the timer stops the stack of the
+usual install when that stack runs. After the run it starts again only what
+it stopped, also when the run failed. It stops nothing else: when something
+else holds the card, nothing is started.
+
+### The steps on the server
+
+Each step is typed by the user that runs the nightly run, on the server. The
+places are fixed, each under the home folder of that user, so that the unit
+needs no change.
+
+1. The folder of the run and its copy of the repository:
+   `git clone --branch dev https://github.com/inferstep/ATLAS.git ~/atlas-nightly/tree`
+2. Its Python: `python3 -m venv ~/atlas-nightly/venv`, then
+   `~/atlas-nightly/venv/bin/pip install pytest httpx`.
+3. The settings of the model: the file `~/atlas-nightly/nightly.env`, as
+   above. No key and no token goes into it.
+4. The key of the app: `mkdir -p ~/.config/atlas-nightly`, then the key as
+   the file `~/.config/atlas-nightly/status-app.pem`, then
+   `chmod 600 ~/.config/atlas-nightly/status-app.pem`. The file lies outside
+   the folder of the run, and its owner is the user that types this.
+5. The unit and the timer: `mkdir -p ~/.config/systemd/user`, then
+   `cp ~/atlas-nightly/tree/scripts/server/atlas-nightly.service ~/atlas-nightly/tree/scripts/server/atlas-nightly.timer ~/.config/systemd/user/`
+   The unit names the app by its client id (`--status-app`), the account
+   that writes its statuses (`--status-writer`), and the hours for smoke
+   runs (`--smoke-hours 6-7`).
+6. One look that starts nothing, to try the folder and the Python:
+   `~/atlas-nightly/venv/bin/python ~/atlas-nightly/tree/scripts/nightly_run.py --dir ~/atlas-nightly --tick --look`
+   It prints what is due and ends with status 0 or 3. Status 2 says which
+   setting cannot be used.
+7. The timer: `systemctl --user daemon-reload`, then
+   `systemctl --user enable --now atlas-nightly.timer`. So that it runs
+   when nobody is logged in: `loginctl enable-linger`.
+8. To see what a look did: `journalctl --user -u atlas-nightly.service`.
+   To switch the nightly run off:
+   `systemctl --user disable --now atlas-nightly.timer`.
+
+What a look needs on its path: `docker`, `git` and `openssl`. The Python is
+named by its full path. The path of a look is the user unit's own, not the
+path of a login shell; `systemctl --user show-environment` shows it.
 
 The integrity check names a change that takes a test out of the plain jobs
 this way: the mark on a test or a file that was there before, a file added to
