@@ -549,8 +549,12 @@ jobs:
   sandbox-tests:
     # The tests that need a running sandbox service: the group `sandbox` of
     # scripts/tests_counted.py. The image is built from this commit, so the
-    # code of the change runs. The languages are in the image; no test asks
-    # the runner for a tool.
+    # code of the change runs. The service is started as the stack starts it:
+    # by the `sandbox` service of docker-compose.yml, with its read-only
+    # base, its tmpfs mounts, its dropped capabilities and its limits. The
+    # job gives none of these itself, so a change of the stack's settings is
+    # under test by itself. The languages are in the image; no test asks the
+    # runner for a tool.
     name: sandbox tests (containerized)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -575,28 +579,45 @@ jobs:
           pip install --require-hashes -r .github/requirements/ci.txt
           pip install --no-deps -e .
 
-      - name: build sandbox image
-        run: docker build -t atlas-sandbox-test ./sandbox
-
-      - name: start the sandbox and wait for its health answer
+      - name: the settings that an install gives the compose file
         run: |
-          docker run -d --name sandbox-test -p 127.0.0.1:8020:8020 atlas-sandbox-test
+          # What an install has in its `.env`: the caller's user, a workspace,
+          # and the folder of the service token (here with no token in it, so
+          # the service asks for none). The compose file asks for the two
+          # names of the model for its other services; the sandbox does not
+          # read them. No limit and no mount of the sandbox is set here.
+          mkdir -p "$RUNNER_TEMP/workspace" "$RUNNER_TEMP/no-secrets"
+          {
+            echo "ATLAS_SANDBOX_UID=$(id -u)"
+            echo "ATLAS_SANDBOX_GID=$(id -g)"
+            echo "ATLAS_PROJECT_DIR=$RUNNER_TEMP/workspace"
+            echo "ATLAS_SECRETS_DIR=$RUNNER_TEMP/no-secrets"
+            echo "ATLAS_MODEL_FILE=not-read-by-the-sandbox"
+            echo "ATLAS_MODEL_NAME=not-read-by-the-sandbox"
+          } > "$RUNNER_TEMP/sandbox.env"
+
+      - name: build sandbox image
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+
+      - name: start the sandbox as the stack starts it, and wait for its health answer
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" up -d --no-deps --no-build --pull never sandbox
           # The service says itself when it serves. No fixed wait: a slow
           # start would read as 80 failed tests.
           for _ in $(seq 1 60); do
-            if curl -sf -m 5 -o /dev/null http://127.0.0.1:8020/health; then
+            if curl -sf -m 5 -o /dev/null http://127.0.0.1:30820/health; then
               echo "The sandbox answers."
               exit 0
             fi
             sleep 2
           done
-          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; the image is built from ./sandbox of this commit."
-          docker logs sandbox-test 2>&1 | tail -n 80
+          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; it is the sandbox service of docker-compose.yml, with the image built from ./sandbox of this commit."
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 80 sandbox
           exit 1
 
       - name: the sandbox tests
         env:
-          SANDBOX_URL: http://127.0.0.1:8020
+          SANDBOX_URL: http://127.0.0.1:30820
         # The status of pytest is not the verdict: it is 0 for a run in which
         # tests were skipped. The next step reads the result file.
         run: |
@@ -609,11 +630,11 @@ jobs:
 
       - name: the log of the sandbox, when a step failed
         if: failure()
-        run: docker logs sandbox-test 2>&1 | tail -n 120
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 120 sandbox
 
       - name: cleanup
         if: always()
-        run: docker rm -f sandbox-test || true
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" down --volumes || true
 
   proxy-tui-tests:
     # The tests that need the built TUI and a running proxy: the group

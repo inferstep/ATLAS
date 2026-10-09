@@ -5,6 +5,7 @@ the case, so the judge is held against the file as pytest writes it.
 """
 import ast
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -293,12 +294,77 @@ def test_no_file_of_the_sandbox_group_asks_the_machine_that_runs_pytest_for_a_to
                 "cannot run a language fails the test.")
 
 
+COMPOSE = 'docker compose --env-file "$RUNNER_TEMP/sandbox.env" '
+
+
+def sandbox_service():
+    return yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))["services"]["sandbox"]
+
+
+def port_of_the_sandbox():
+    """The port that the compose file gives the sandbox on the machine when no setting names another."""
+    (port,) = re.findall(r"127\.0\.0\.1:\$\{ATLAS_SANDBOX_PORT:-(\d+)\}:8020", "\n".join(sandbox_service()["ports"]))
+    return port
+
+
+def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_none_of_its_settings_itself():
+    # The stack starts the sandbox with a read-only base, tmpfs mounts that do not allow exec, no capability and
+    # limits. A fault that shows only under those settings has to turn this job red, so the job starts the service
+    # of the compose file and sets nothing of that itself: a change of the stack's settings is then under test too.
+    job = job_of("sandbox tests (containerized)")
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    docker = [line.strip() for line in commands.splitlines() if line.strip().startswith("docker ")]
+    assert len(docker) == 5
+    for line in docker:
+        assert line.startswith(COMPOSE), f"`{line}` is not a command on the compose file with the job's one settings file"
+    assert COMPOSE + "build sandbox" in docker
+    assert COMPOSE + "up -d --no-deps --no-build --pull never sandbox" in docker
+    # No other compose file, and no setting of the stack as a flag of the job's own.
+    for word in ("docker run", "docker build", " -f ", " --file ", "--cap-", "--read-only", "--tmpfs", "--memory", "--cpus", "--pids-limit",
+                 "--user", "--security-opt", "--publish", "--privileged", "--project-directory"):
+        assert word not in commands, f"the job gives `{word}` itself"
+    assert "env" not in job, "a setting of the stack that is given to the whole job"
+    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    assert ("starts it as the stack starts it: by the `sandbox` service of the compose file, with its read-only base, its tmpfs "
+            "mounts, its dropped capabilities and its limits. The job gives none of these itself") in page
+
+
+def test_the_settings_file_of_the_sandbox_job_holds_what_an_install_gives_and_no_limit_and_no_mount():
+    job = job_of("sandbox tests (containerized)")
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    names = re.findall(r'echo "(\w+)=', commands)
+    assert names == ["ATLAS_SANDBOX_UID", "ATLAS_SANDBOX_GID", "ATLAS_PROJECT_DIR", "ATLAS_SECRETS_DIR", "ATLAS_MODEL_FILE", "ATLAS_MODEL_NAME"]
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    service = json.dumps(sandbox_service())
+    # The two names of the model: the compose file does not load without them, and the sandbox does not read them.
+    assert set(re.findall(r"\$\{(\w+):\?", compose)) == {"ATLAS_MODEL_FILE", "ATLAS_MODEL_NAME"}
+    for name in ("ATLAS_MODEL_FILE", "ATLAS_MODEL_NAME"):
+        assert name not in service
+    # The other four are settings of the sandbox service itself: who runs it, its workspace, and where a token would lie.
+    for name in ("ATLAS_SANDBOX_UID", "ATLAS_SANDBOX_GID", "ATLAS_PROJECT_DIR", "ATLAS_SECRETS_DIR"):
+        assert "${" + name + ":-" in service, name
+    assert 'echo "ATLAS_SANDBOX_UID=$(id -u)"' in commands
+    assert 'mkdir -p "$RUNNER_TEMP/workspace" "$RUNNER_TEMP/no-secrets"' in commands
+
+
+def test_the_service_that_the_sandbox_job_starts_is_built_from_the_change_and_has_no_dependency():
+    service = sandbox_service()
+    # The compose file builds the image from the folder of the change, so the job's build is a build of this commit.
+    assert service["build"] == {"context": "./sandbox"}
+    # With a dependency the job would have to start more than the sandbox, or `--no-deps` would hide a part of the stack.
+    assert "depends_on" not in service
+
+
 def test_the_sandbox_job_waits_for_the_health_answer_of_the_service_and_not_for_a_number_of_seconds():
     job = job_of("sandbox tests (containerized)")
-    start = next(step for step in job["steps"] if "docker run" in step.get("run", ""))
-    assert "http://127.0.0.1:8020/health" in start["run"]
+    start = next(step for step in job["steps"] if COMPOSE + "up " in step.get("run", ""))
+    port = port_of_the_sandbox()
+    assert f"http://127.0.0.1:{port}/health" in start["run"]
     assert "::error::The sandbox gave no health answer" in start["run"]
     assert "Fix: " in start["run"]
-    assert "docker logs sandbox-test" in start["run"]
+    assert COMPOSE + "logs --tail 80 sandbox" in start["run"]
     assert "exit 1" in start["run"]
+    # The tests are sent to the same port.
+    tests = next(step for step in job["steps"] if "-m pytest" in step.get("run", ""))
+    assert tests["env"] == {"SANDBOX_URL": f"http://127.0.0.1:{port}"}
     assert job["steps"].index(start) < next(n for n, step in enumerate(job["steps"]) if "-m pytest" in step.get("run", ""))
