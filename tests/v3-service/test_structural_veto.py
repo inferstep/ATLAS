@@ -10,9 +10,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import adapters  # noqa: E402
-import main  # noqa: E402
-import symbols  # noqa: E402
+import adapters
+import main
+import symbols
 
 pytestmark = pytest.mark.skipif(
     not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),

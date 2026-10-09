@@ -34,7 +34,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters as A
-import contract as C  # noqa: E402
+import contract as C
 
 ALL_FIVE = [
     A.ADAPTER_CSS_SYNTAX,

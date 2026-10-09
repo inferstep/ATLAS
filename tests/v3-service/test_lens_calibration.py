@@ -6,8 +6,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import main as v3main  # noqa: E402
-import scoring  # noqa: E402
+import main as v3main
+import scoring
 
 
 class _Response:

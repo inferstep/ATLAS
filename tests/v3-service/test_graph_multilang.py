@@ -8,9 +8,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import graph  # noqa: E402
-from graph.analyses import callees  # noqa: E402
-from graph.extract import extract_file, is_js, is_supported, js_available  # noqa: E402
+import graph
+from graph.analyses import callees
+from graph.extract import extract_file, is_js, is_supported, js_available
 
 pytestmark = pytest.mark.skipif(not js_available(),
                                 reason="tree-sitter JavaScript grammar not installed")

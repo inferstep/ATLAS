@@ -326,7 +326,7 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
     return plan, notes
 
 
-def _score_plan(plan: dict, user_message: str,
+def _score_plan(plan: dict, user_message: str,  # noqa: C901
                 existing_files: set = frozenset()) -> Tuple[float, List[str]]:
     """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
 

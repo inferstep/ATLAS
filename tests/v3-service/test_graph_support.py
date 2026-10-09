@@ -8,12 +8,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import graph  # noqa: E402
-from graph.analyses import reachability  # noqa: E402
-from graph.extract import available as extraction_available  # noqa: E402
-from graph.types import CodeGraph, ImportsFact  # noqa: E402
-from graph.resolve import resolve_imports, _module_name  # noqa: E402
-from graph.cache import FileGraphCache, file_hash  # noqa: E402
+import graph
+from graph.analyses import reachability
+from graph.extract import available as extraction_available
+from graph.types import CodeGraph, ImportsFact
+from graph.resolve import resolve_imports, _module_name
+from graph.cache import FileGraphCache, file_hash
 
 _HAS_TS = extraction_available()
 

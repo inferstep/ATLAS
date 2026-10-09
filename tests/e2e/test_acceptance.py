@@ -31,7 +31,7 @@ import uuid
 
 import pytest
 
-from tests.e2e.test_v3_lens_acceptance import fake_lens  # noqa: F401  (fixture)
+from tests.e2e.test_v3_lens_acceptance import fake_lens  # a fixture, used by name
 from tests.e2e.conftest import (
     drive_agent_turn, free_port, ordered_subsequence,
     sandbox_deps_available, start_proxy, proxy_binary_available,

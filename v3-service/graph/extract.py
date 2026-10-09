@@ -98,7 +98,7 @@ def _resolve_callee(call_node) -> Optional[str]:
     return None
 
 
-def _walk(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
+def _walk(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:  # noqa: C901
     t = node.type
 
     if t == "function_definition":
@@ -230,7 +230,7 @@ def _js_callee(call_node) -> Optional[str]:
     return None
 
 
-def _walk_js(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:
+def _walk_js(node, file_path: str, scope: List[str], g: CodeGraph, call_set: Set[str]) -> None:  # noqa: C901
     t = node.type
 
     if t == "function_declaration":

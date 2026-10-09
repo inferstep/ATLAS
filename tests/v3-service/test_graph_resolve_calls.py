@@ -11,9 +11,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import graph  # noqa: E402
-from graph.extract import available as extraction_available  # noqa: E402
-from symbols import _extract_python_call_targets  # noqa: E402
+import graph
+from graph.extract import available as extraction_available
+from symbols import _extract_python_call_targets
 
 pytestmark = pytest.mark.skipif(not extraction_available(),
                                 reason="tree-sitter Python grammar not installed")

@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import pipeline  # noqa: E402
+import pipeline
 
 
 def test_a_helper_defined_first_is_not_the_entry_point():

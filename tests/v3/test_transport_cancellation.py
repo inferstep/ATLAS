@@ -22,7 +22,7 @@ import pytest
 
 V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 sys.path.insert(0, V3)
-import adapters  # noqa: E402
+import adapters
 
 
 class Upstream(BaseHTTPRequestHandler):
@@ -129,7 +129,7 @@ def run_call(scope, payload=b'{"x":1}', collect=None):
                 for raw in resp:
                     if collect is not None:
                         collect.append(raw)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             err["exc"] = exc
     t = threading.Thread(target=_go)
     t.start()

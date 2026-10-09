@@ -64,7 +64,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 # Structured logging (JSON when ATLAS_LOG_FORMAT=json) + private-value
 # masking + correlation IDs (see structured_log.py — canonical copy).
-from structured_log import (install as _install_logging,  # noqa: E402
+from structured_log import (install as _install_logging,
                             set_request_id as _set_rid)
 _install_logging("sandbox")
 logger = logging.getLogger(__name__)
@@ -173,9 +173,9 @@ app.add_middleware(_ServiceTokenMiddleware)
 app.add_middleware(_CorrelationIDMiddleware)
 
 
-from html.parser import HTMLParser  # noqa: E402
+from html.parser import HTMLParser
 
-from resource_contract import (  # noqa: E402
+from resource_contract import (
     OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
     OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
     OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
@@ -207,7 +207,7 @@ SUPPORTED_LANGUAGES = {
     "php",
 }
 
-def normalize_language(lang: str) -> str:
+def normalize_language(lang: str) -> str:  # noqa: C901
     lang = lang.lower().strip()
     if lang in ("python", "py", "python3"):
         return "python"
@@ -1404,7 +1404,7 @@ def _html_structure_errors(code: str) -> List[str]:
     return errors
 
 
-def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:
+def _syntax_check_impl(lang: str, code: str, workspace: Path, filename: Optional[str] = None) -> List[str]:  # noqa: C901
     """Language-specific syntax checking. Returns list of error strings."""
     # Reject path-traversal filenames (absolute, .., backslash escapes)
     # before any language branch can write outside the workspace.
@@ -1758,7 +1758,7 @@ def execute_python(code, test_code, workspace, timeout, requirements, stdin=None
         m = re.search(r"rated at ([\d.]+)/10", lr["stdout"])
         if m:
             lint_score = float(m.group(1))
-    except Exception:
+    except Exception:  # noqa: S110
         # best-effort: swallow on failure (caller continues)
         pass
 

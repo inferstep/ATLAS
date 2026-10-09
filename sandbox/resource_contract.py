@@ -482,7 +482,7 @@ def _exit_code(status) -> int:
     return -1
 
 
-def run_bounded(cmd: List[str], contract: ResourceContract,
+def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
                 cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None,
                 stdin: Optional[str] = None,
                 cancelled=None) -> BoundedResult:

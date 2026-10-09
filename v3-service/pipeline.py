@@ -320,7 +320,7 @@ class _PoolCapture:
                         record=result.get("evidence_record"), phase="delivered")
             self._write_selection(result)
             self._write_reconciliation(result)
-        except Exception as exc:                       # noqa: BLE001
+        except Exception as exc:
             self.write_error = self.write_error or f"close: {exc}"
         self._write_status()
         fd, self._fd = self._fd, None
@@ -1030,9 +1030,9 @@ def _make_self_test(code: str, tc, task_input_file: str = ""):
     if name and _entry_takes_case_input(code, name):
         return (code + "\nimport ast as _a\n"
             + f"_i={repr(inp)}\n_e={repr(exp)}\n"
-            + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + "try:\n _p=_a.literal_eval(_i)\nexcept:\n _p=_i\n"  # bare except inside generated user code, intentional
             + f"_r={name}(*_p) if isinstance(_p,tuple) else {name}(_p) if isinstance(_p,list) else {name}(_p)\n"
-            + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # noqa: E722  -- bare except inside generated user code, intentional
+            + "try:\n _ev=_a.literal_eval(_e)\nexcept:\n _ev=_e\n"  # bare except inside generated user code, intentional
             + "assert str(_r)==str(_ev) or _r==_ev,f'got {_r}'\nprint('SELF_TEST_PASS')\n"), {}
     # A program that reads a named file has to be given that file. Feeding it
     # stdin instead tests a contract the task never stated, and the verdict
@@ -1478,7 +1478,7 @@ class V3PipelineService:
             print(f"  [telemetry] pipeline summary write failed (non-fatal): {e}",
                   flush=True)
 
-    def _run_impl(self, problem: str, task_id: str = "cli",
+    def _run_impl(self, problem: str, task_id: str = "cli",  # noqa: C901
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
                   working_dir: str = "/workspace", baseline_code: str = "",
@@ -1673,7 +1673,7 @@ class V3PipelineService:
                 sandbox, baseline_code, file_path, working_dir,
                 remaining_ms=lambda: _remaining_budget_ms(start, budget_ms), check_cancel=check_client)
 
-        def verified_sandbox(code, extra_test=""):
+        def verified_sandbox(code, extra_test=""):  # noqa: C901
             """Sandbox + verification. Algorithmic tasks: execution, with the
             I/O self-tests recorded as diagnostics; interactive: compile smoke.
 

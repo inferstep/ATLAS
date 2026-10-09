@@ -36,7 +36,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import pr_labels  # noqa: E402
+import pr_labels
 from typing import Any, Iterable
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "atlas-bot.yml")

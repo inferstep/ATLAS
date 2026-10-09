@@ -109,7 +109,7 @@ def main():
     try:
         from atlas.token import install_urllib_opener
         install_urllib_opener()
-    except Exception:
+    except Exception:  # noqa: S110
         pass  # auth is best-effort on the client side; servers enforce
 
     if len(sys.argv) > 1:

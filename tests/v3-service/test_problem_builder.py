@@ -17,8 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-from pipeline import _build_problem_from_request  # noqa: E402
-from stages.llm_client import extract_code_for_problem  # noqa: E402
+from pipeline import _build_problem_from_request
+from stages.llm_client import extract_code_for_problem
 
 TASK = ("input.txt holds one integer per line: a sonar depth reading. Write "
         "solve.py that reads input.txt and prints how many window sums are "

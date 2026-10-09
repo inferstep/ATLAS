@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import pipeline  # noqa: E402
+import pipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

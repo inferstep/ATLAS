@@ -20,8 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import scoring  # noqa: E402
-from stages.candidate_selection import NONFINITE_SCORE  # noqa: E402
+import scoring
+from stages.candidate_selection import NONFINITE_SCORE
 
 NON_FINITE = [float("nan"), float("inf"), float("-inf")]
 

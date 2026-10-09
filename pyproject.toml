@@ -58,6 +58,24 @@ source = ["atlas", "v3-service", "geometric-lens", "sandbox", "scripts"]
 omit = ["geometric-lens/tests/*"]
 relative_files = true
 
+[tool.ruff.lint]
+# F: Pyflakes, the rules for real bugs (an undefined or redefined name, a local
+#   read before it is set, a broken format string). F401 (unused import), F541
+#   (f-string with no placeholder) and F841 (unused variable) are left out.
+# E722, S110, S112: a bare `except`, and an `except` that only passes or
+#   continues, which swallow an exception.
+# C901: a function more complex than max-complexity below.
+# RUF100: a suppression marker that no finding uses any more. The findings
+#   that were there when these rules came in carry a marker each, so the list
+#   can only shrink: repairing one leaves its marker unused, and RUF100 then
+#   asks for it to go.
+select = ["F", "E722", "S110", "S112", "C901", "RUF100"]
+ignore = ["F401", "F541", "F841"]
+
+[tool.ruff.lint.mccabe]
+# The limit gocognit uses for the Go code and the extension's lint for its functions.
+max-complexity = 15
+
 [build-system]
 # >=77 because the SPDX-string `license` form (PEP 639) fails the build
 # on older setuptools ("license should be a table").

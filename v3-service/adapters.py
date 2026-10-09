@@ -391,10 +391,10 @@ class LLMAdapter:
                 scope.unregister(conn)
             try:
                 conn.close()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: S110
                 pass
 
-    def _send(self, body: dict, call_no: int = 0) -> dict:
+    def _send(self, body: dict, call_no: int = 0) -> dict:  # noqa: C901
         """Send to llama-server via /v1/chat/completions.
 
         V3 modules generate ChatML prompts. We parse them into messages format
@@ -606,7 +606,7 @@ def _abort_connection(conn) -> bool:
         pass
     try:
         conn.close()
-    except Exception:  # noqa: BLE001 - a close that fails is still cancelled
+    except Exception:  # a close that fails is still cancelled  # noqa: S110
         pass
     return did_shutdown
 

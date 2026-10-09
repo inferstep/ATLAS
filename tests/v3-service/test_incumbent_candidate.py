@@ -19,10 +19,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import adapters  # noqa: E402
-import pipeline as P  # noqa: E402
-import scoring  # noqa: E402
-import symbols  # noqa: E402
+import adapters
+import pipeline as P
+import scoring
+import symbols
 
 THEIRS = ("import sys\n\n\ndef solve():\n"
           "    print(sum(int(x) for x in open('input.txt')))\n\n\n"

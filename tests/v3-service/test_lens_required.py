@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import main  # noqa: E402
+import main
 
 def test_a_lens_that_cannot_score_is_answered_as_such(monkeypatch):
     """/v3/generate answers a lens that cannot score with a typed result the

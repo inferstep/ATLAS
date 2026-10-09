@@ -31,7 +31,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SANDBOX = os.path.join(ROOT, "sandbox")
 sys.path.insert(0, SANDBOX)
 
-import resource_contract as rc  # noqa: E402
+import resource_contract as rc
 
 # Unique per run. A fixed marker is contaminated by any earlier run that
 # left a process behind -- and these tests deliberately leave processes

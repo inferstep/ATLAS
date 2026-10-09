@@ -17,7 +17,7 @@ def _atlas_root() -> Path:
     return Path(cli_env.atlas_root())
 
 
-def bench(dataset: str = "livecodebench", max_tasks: int = 0,
+def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
           selection_strategy: str = "random", run_id: str = None) -> int:
     """Run benchmark with live progress display. Returns a process exit
     code: 0 on success (including a fully-resumed run), 1 when the runner

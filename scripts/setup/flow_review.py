@@ -113,7 +113,7 @@ def main() -> int:
 
     items = [i for i in board_items(owner, a.project) if i.get("content")]
     open_issues = [i for i in items if i["content"]["__typename"] == "Issue" and i["content"]["state"] == "OPEN"]
-    status = lambda i: (i.get("status") or {}).get("name")  # noqa: E731
+    status = lambda i: (i.get("status") or {}).get("name")
 
     print(f"# Contributor flow review, {now:%Y-%m-%d}\n")
 

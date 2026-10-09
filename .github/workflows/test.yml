@@ -267,13 +267,9 @@ jobs:
             --only dockerfile-sources
 
       - name: ruff check
-        # --select F is Pyflakes — real-bug rules (undefined names, redefined
-        # symbols, local-before-assign, string-format errors). The three
-        # codes ignored are pure style noise we don't gate on:
-        #   F401 unused-import   F541 empty-f-string   F841 unused-variable
-        # Bug-catchers like F821 (undefined name) and F823 (local var
-        # referenced before assignment) stay on. Tighten later by removing
-        # entries from --ignore as the codebase gets cleaner.
+        # The rules are in pyproject.toml ([tool.ruff.lint]): Pyflakes for real
+        # bugs, swallowed exceptions, complexity over 15, and suppression
+        # markers that no finding uses. The gate lints scripts/ as well.
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only ruff

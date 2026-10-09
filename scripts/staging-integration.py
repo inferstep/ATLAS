@@ -87,8 +87,8 @@ def main() -> int:
             print(f"staging-integration: {why}", file=sys.stderr)
             return 2
     try:
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
+        import uvicorn
+        import fastapi
     except ImportError as exc:
         print(f"staging-integration: {exc.name} is not installed", file=sys.stderr)
         return 2

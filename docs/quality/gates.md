@@ -225,6 +225,7 @@ Measured 2026-10-06 on commit `a413df4`, unless a row says otherwise.
 | Coverage, TypeScript (VS Code extension) | 51.5% of lines (943 of 1,831), from the extension's last run |
 | Coverage on Codecov | 67.91% of lines, all flags together (30,948 of 45,567). `go-proxy` 83.07%, `go-tui` 47.13%, `python` 59.78%, `typescript` 50.3% |
 | Workflow lint, on commit `f65e01b` | zizmor: 25 findings before the fixes (20 checkouts that kept the job's token, 4 values pasted into a shell line, 1 pin comment that named no tag); none after, with one written exception in `star-chart.yml`. actionlint: none. Measured and not adopted: zizmor's level "pedantic" 61, "auditor" 62 |
+| Python lint markers, on commit `eec0147` | 65 findings carry a `# noqa`: C901 37, S110 25, S112 3. The 180 markers that no finding used were removed, 155 of them `# noqa: E402` |
 | Size baseline | 88 functions over 100 lines (longest: `runAgentLoop`, 2,112); 11 files over 1,500 lines (longest: `proxy/agent.go`, 9,929) |
 | Extension size rules, on commit `f65e01b` | 2 files listed: `src/ui/chatView.ts` for `dispatch` (188 lines, 33 decision points) and `src/session/editPreview.ts` for `predictEdit` (17 decision points). No other function is over a limit; the next longest has 94 lines |
 | Go lint, all code, with the repository's settings | proxy 220 (gocognit 121, errcheck 52, forbidigo 23, nilerr 22, gofmt 2); tui 48 (gocognit 21, errcheck 16, forbidigo 9, nilerr 2) |

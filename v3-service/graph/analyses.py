@@ -212,7 +212,7 @@ def impact(graph: CodeGraph, target: str) -> List[str]:
     return union
 
 
-def cycles(graph: CodeGraph) -> List[str]:
+def cycles(graph: CodeGraph) -> List[str]:  # noqa: C901
     """Function-level cycles via iterative Tarjan SCC. Methods are excluded
     because unqualified method names collide across classes and produce phantom
     cycles (faithful to chiasmus)."""

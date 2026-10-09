@@ -28,7 +28,7 @@ SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "sandbox")
 sys.path.insert(0, SANDBOX)
 
-import resource_contract as rc  # noqa: E402
+import resource_contract as rc
 
 MiB = 1024 * 1024
 # The loop of the staged verification command, as it was seeded: it appends

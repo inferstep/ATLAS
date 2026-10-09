@@ -28,7 +28,7 @@ V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
-import structured_log as SL  # noqa: E402
+import structured_log as SL
 
 MAIN = os.path.join(V3, "main.py")
 

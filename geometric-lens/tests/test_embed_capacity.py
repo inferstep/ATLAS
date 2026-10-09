@@ -31,9 +31,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
 
-from geometric_lens import embed_capacity as ec  # noqa: E402
-from geometric_lens import embedding_extractor as ee  # noqa: E402
-from geometric_lens import service  # noqa: E402
+from geometric_lens import embed_capacity as ec
+from geometric_lens import embedding_extractor as ee
+from geometric_lens import service
 
 CAPACITY = 2048
 DIM = 4

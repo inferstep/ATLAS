@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novel_tasks import build_tasks  # noqa: E402
+from novel_tasks import build_tasks
 
 
 # Scoring is EXACT MATCH by decision. The output-separator ambiguity that
@@ -87,7 +87,7 @@ class TelemetrySubscriber:
                         payload = line[5:].strip()
                         if payload:
                             self.lines.append(payload)
-            except Exception as exc:                   # noqa: BLE001
+            except Exception as exc:
                 if self._stop.is_set():
                     return
                 self.lines.append(json.dumps(
@@ -191,7 +191,7 @@ def _load_e2e():
     return mod
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=50)
     ap.add_argument("--seed", type=int, default=20260806)

@@ -24,8 +24,8 @@ from tests.infrastructure.proc_files import needs_proc
 SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "sandbox")
 sys.path.insert(0, SANDBOX)
 
-import executor_server as ex  # noqa: E402
-import resource_contract as rc  # noqa: E402
+import executor_server as ex
+import resource_contract as rc
 
 MiB = 1024 * 1024
 OWN_WORDS = "Traceback (most recent call last):\n  File \"x\", line 1\nNameError: name 'x' is not defined\n"

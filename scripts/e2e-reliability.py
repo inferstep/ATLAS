@@ -51,10 +51,10 @@ from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from code_quality import analyze as analyze_quality  # noqa: E402
-from reliability_report import (Stopped, log_defects, report, sibling,  # noqa: E402
+from code_quality import analyze as analyze_quality
+from reliability_report import (Stopped, log_defects, report, sibling,
                                 stop_on_signals, write_summary)
-from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream  # noqa: E402
+from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 
 # --------------------------------------------------------------------------
 # Task suite
@@ -1537,7 +1537,7 @@ def tui_handled_types() -> set[str]:
 # Runner
 # --------------------------------------------------------------------------
 
-def run_session(task: Task, rep: int, url: str, workspace: Path,
+def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
                 subdir: str, timeout: int, raw_sink=None, prompt_policy: str = "deny") -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible

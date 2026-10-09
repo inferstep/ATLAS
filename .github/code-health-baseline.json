@@ -70,7 +70,7 @@
   "scripts/derive_ablation.py:derive_condition": 112,
   "scripts/e2e-reliability.py:run_session": 140,
   "scripts/novel-atlas.py:main": 172,
-  "scripts/production-readiness.py:_gates": 180,
+  "scripts/production-readiness.py:_gates": 177,
   "scripts/setup/audit.py:Audit.run": 136,
   "tui/chat.go:sendRawChat": 121,
   "tui/commands.go:tuiModel.handleSlash": 243,

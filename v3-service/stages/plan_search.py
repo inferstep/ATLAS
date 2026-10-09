@@ -496,7 +496,7 @@ class PlanSearch:
             constraint_sets, step1_tokens = self._step1_extract_constraints(
                 problem, n, llm_call, budget_tier, base_seed
             )
-        except Exception as exc:  # noqa: BLE001 — re-raised either way
+        except Exception as exc:  # re-raised either way
             if not _is_infrastructure_failure(exc):
                 raise
             result.total_time_ms = (time.time() - total_start) * 1000
@@ -653,7 +653,7 @@ class PlanSearch:
             for idx, item in items:
                 try:
                     out.append((idx, fn(idx, item)))
-                except Exception as exc:  # noqa: BLE001 — one item, not the batch
+                except Exception as exc:  # one item, not the batch
                     _record(idx, exc)
             _raise_if_infrastructure(infra)
             return out
@@ -675,7 +675,7 @@ class PlanSearch:
             for fut, idx in futures.items():
                 try:
                     results.append((idx, fut.result()))
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     _record(idx, exc)
         _raise_if_infrastructure(infra)
         # Ordered by index so seeds, plans and candidates stay aligned with

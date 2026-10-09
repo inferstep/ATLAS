@@ -28,7 +28,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "nightly_run.py"
 sys.path.insert(0, str(ROOT / "scripts"))
-import nightly_run as nightly  # noqa: E402
+import nightly_run as nightly
 
 HEAD = "1" * 40
 OLD = "2" * 40

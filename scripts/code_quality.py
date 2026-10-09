@@ -119,7 +119,7 @@ def host_parser_label() -> str:
     return f"host python {sys.version_info.major}.{sys.version_info.minor}"
 
 
-def analyze(root: Path, baseline: set[str] | None = None,
+def analyze(root: Path, baseline: set[str] | None = None,  # noqa: C901
             target_parse=None, target_label: str = "") -> QualityReport:
     """`target_parse(src) -> (ok, message)` asks the interpreter the code will
     run under; ok is None when it cannot be reached. Without it, or when it is

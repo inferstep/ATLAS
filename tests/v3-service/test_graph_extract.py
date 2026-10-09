@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-from graph.extract import available as extraction_available, extract_file, is_python  # noqa: E402
+from graph.extract import available as extraction_available, extract_file, is_python
 
 pytestmark = pytest.mark.skipif(not extraction_available(),
                                 reason="tree-sitter Python grammar not installed")

@@ -26,9 +26,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import adapters  # noqa: E402
-import pipeline as v3pipeline  # noqa: E402
-import scoring  # noqa: E402
+import adapters
+import pipeline as v3pipeline
+import scoring
 
 STUB_CODES = [
     "def stub_a():\n    pass\n",

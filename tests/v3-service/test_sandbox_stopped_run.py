@@ -17,10 +17,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 sys.path.insert(0, str(PROJECT_ROOT / "sandbox"))
 
-import adapters  # noqa: E402
-import pipeline  # noqa: E402
-import resource_contract  # noqa: E402
-from stages import failure_analysis, pr_cot  # noqa: E402
+import adapters
+import pipeline
+import resource_contract
+from stages import failure_analysis, pr_cot
 
 CASE = SimpleNamespace(input_str="3", expected_output="7")
 

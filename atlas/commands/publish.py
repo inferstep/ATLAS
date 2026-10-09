@@ -40,7 +40,7 @@ from atlas.commands.asa import (
 )
 
 
-def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
+def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     atlas_root = cli_env.atlas_root()
 
     # Resolve the model once, the same way the component flows do.
@@ -52,7 +52,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
             mp = fit_module._default_model_path()
             if mp:
                 model_label = os.path.splitext(os.path.basename(mp))[0]
-        except Exception:
+        except Exception:  # noqa: S110
             # Model autodetection is optional here; the explicit validation
             # below tells the publisher to pass a model when it fails.
             pass
@@ -158,7 +158,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     try:
         from atlas.commands.tier import classify, probe
         entry_tier = classify(probe()).tier
-    except Exception:
+    except Exception:  # noqa: S110
         # Tier is advisory registry metadata; medium is the safe fallback.
         pass
     model_file = model_label + ".gguf"
@@ -169,7 +169,7 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
                 else os.path.join(atlas_root, cli_env.MODEL_DIR))
         size_gb = round(os.path.getsize(
             os.path.join(base, model_file)) / (1024 ** 3), 1)
-    except Exception:
+    except Exception:  # noqa: S110
         # Size is optional publishing metadata; artifact validation and hashes
         # remain mandatory regardless of this lookup.
         pass

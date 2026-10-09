@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import pipeline  # noqa: E402
+import pipeline
 
 CRASH_RUNTIME = "raise RuntimeError('boom')\n"
 CRASH_KEYERROR = "x = {}\nprint(x['missing'])\n"

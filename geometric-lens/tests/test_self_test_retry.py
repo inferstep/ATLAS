@@ -23,10 +23,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
 sys.path.insert(0, ROOT)
 
-from geometric_lens import drift  # noqa: E402
-from geometric_lens import embedding_extractor as ee  # noqa: E402
-from geometric_lens import service  # noqa: E402
-from geometric_lens.model_transport import ModelServerHTTPError  # noqa: E402
+from geometric_lens import drift
+from geometric_lens import embedding_extractor as ee
+from geometric_lens import service
+from geometric_lens.model_transport import ModelServerHTTPError
 
 
 @pytest.fixture(scope="module")

@@ -239,7 +239,7 @@ def registry_set_asa(content: str, model_label: str, hf_repo: str,
     return content.replace(block, new_block)
 
 
-def open_registry_pr_via_api(model_label: str, title: str, body: str,
+def open_registry_pr_via_api(model_label: str, title: str, body: str,  # noqa: C901
                              edit_fn) -> Optional[str]:
     """Open a registry PR through the GitHub API — no local git checkout.
 
@@ -429,7 +429,7 @@ def huggingface_hub_available() -> bool:
     we don't want to fail the whole CLI just because the user hasn't
     installed it yet; publish itself catches the ImportError too."""
     try:
-        import huggingface_hub  # noqa: F401
+        import huggingface_hub
         return True
     except ImportError:
         return False

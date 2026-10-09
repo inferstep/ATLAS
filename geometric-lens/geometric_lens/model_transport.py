@@ -69,7 +69,7 @@ def _error_message(exc: urllib.error.HTTPError) -> str:
     when the body is one, else the status reason. One bounded line."""
     try:
         body = exc.read(_ERROR_BODY_LIMIT)
-    except Exception:  # noqa: BLE001 - a body that cannot be read has no message
+    except Exception:  # a body that cannot be read has no message
         body = b""
     message = ""
     try:

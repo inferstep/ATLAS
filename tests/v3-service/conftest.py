@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import adapters  # noqa: E402
+import adapters
 
 _UNROUTABLE = "http://127.0.0.1:9"
 
