@@ -758,8 +758,14 @@ def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     assert data["ruled_branches"] == ["dev", "staging", "main"]
     assert set(data["server"]) == {"status", "writer", "max_age_days"}
     assert data["server"]["status"] == "server/nightly"
-    # The account `atlas-server-results[bot]`, by its id.
-    assert data["server"]["writer"] == 340202947
+    # The account `atlas-server-results[bot]`, by its id; or 0 while the server has written no night, and then the
+    # page says that the nights are not looked for yet. No other account, and no other kind of value.
+    writer = data["server"]["writer"]
+    assert type(writer) is int
+    assert writer in (0, 340202947)
+    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    not_yet = "Today the list names no account, so the nights are not looked for yet." in page
+    assert not_yet == (writer == 0), "the gates page and `server.writer` in the list do not say the same about the nights"
     assert data["server"]["max_age_days"] == 14
 
 

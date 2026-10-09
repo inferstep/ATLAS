@@ -651,6 +651,7 @@ and red for its own violation.
   commit of `dev`. A night that started more than 14 days ago, or none in
   that time, is a finding. While no account is set as the writer
   (`server.writer` in the list), one line says that nothing was looked for.
+  Today the list names no account, so the nights are not looked for yet.
 
 A maintainer renews the canary once a week, and after a change to a workflow
 or to a file that configures a check:
