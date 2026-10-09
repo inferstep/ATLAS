@@ -1,10 +1,11 @@
 name: try docker hub mirror
 
-# A try by hand on a branch of its own. It is never merged. This run tries
-# two setup steps for the builder: the first names the builder's own image at
-# the mirror and may fail without failing the job; the second is the usual
-# one and runs only when the first failed. So the mirror is the first source
-# of the builder's image and Docker Hub, with the runner's login, the second.
+# A try by hand on a branch of its own. It is never merged. This is the last
+# run, on the bytes of the step and of the script as the pull request has
+# them. Docker Hub is pointed to nowhere and the runner's login is as it is.
+# The first job tries `docker run`, a plain build and a compose build; the
+# other two try the two setup steps of a builder, once with Docker Hub
+# pointed to nowhere and once with the mirror pointed to nowhere.
 
 on:
   push:
@@ -18,7 +19,81 @@ concurrency:
   group: try-docker-hub-mirror
   cancel-in-progress: true
 
+env:
+  HUB: registry-1.docker.io auth.docker.io production.cloudflare.docker.com
+
 jobs:
+  run-and-build:
+    name: docker run, a plain build and a compose build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: point Docker Hub to nowhere
+        run: |
+          echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
+          if curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/; then
+            echo "::error::Docker Hub still answers after the block, so this try shows nothing."
+            exit 1
+          fi
+      # zizmor asks for the `$/` form here; actionlint does not read that form yet.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
+        with:
+          images: |
+            ubuntu:22.04
+            rockylinux/rockylinux:9
+      - name: G0. control, an image that the step was not given (has to fail)
+        id: g0
+        continue-on-error: true
+        run: docker run --rm debian:12 true
+      - name: G. docker run of the two images that the step was given
+        id: g
+        continue-on-error: true
+        run: |
+          for image in ubuntu:22.04 rockylinux/rockylinux:9; do
+            docker run --rm "$image" sh -c '. /etc/os-release && echo "ran: $PRETTY_NAME"'
+          done
+      - name: H. the real build of the sandbox image, and the sandbox answers
+        id: h
+        continue-on-error: true
+        run: |
+          docker build -t try-sandbox ./sandbox
+          docker run -d --name try-sandbox -p 8020:8020 try-sandbox
+          for _ in $(seq 1 30); do
+            if curl -sf -m 5 -o /dev/null http://127.0.0.1:8020/health; then echo "The sandbox answers."; exit 0; fi
+            sleep 2
+          done
+          docker logs --tail 40 try-sandbox
+          exit 1
+      - name: I. docker compose build of the sandbox service
+        id: i
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/workspace" "$RUNNER_TEMP/no-secrets"
+          {
+            echo "ATLAS_SANDBOX_UID=$(id -u)"
+            echo "ATLAS_SANDBOX_GID=$(id -g)"
+            echo "ATLAS_PROJECT_DIR=$RUNNER_TEMP/workspace"
+            echo "ATLAS_SECRETS_DIR=$RUNNER_TEMP/no-secrets"
+            echo "ATLAS_MODEL_FILE=not-read-by-the-sandbox"
+            echo "ATLAS_MODEL_NAME=not-read-by-the-sandbox"
+          } > "$RUNNER_TEMP/sandbox.env"
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" build --no-cache sandbox
+      - name: the results against what each has to be
+        env:
+          G0: ${{ steps.g0.outcome }}
+          G: ${{ steps.g.outcome }}
+          H: ${{ steps.h.outcome }}
+          I: ${{ steps.i.outcome }}
+        run: |
+          echo "G0, an image not given to the step: $G0 (has to be failure)"
+          echo "G, the two images given to the step:  $G (has to be success)"
+          echo "H, the build of the sandbox image:    $H (has to be success)"
+          echo "I, the compose build of the sandbox:  $I (has to be success)"
+          [ "$G0" = failure ] && [ "$G" = success ] && [ "$H" = success ] && [ "$I" = success ]
+
   hub-blocked:
     name: J1. Docker Hub pointed to nowhere (the first setup step has to carry)
     runs-on: ubuntu-24.04
