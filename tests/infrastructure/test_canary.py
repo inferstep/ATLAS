@@ -517,6 +517,8 @@ class GitHub:
             "repos/o/r/pulls/7": [pull(manifest)],
             f"repos/o/r/commits/{HEAD}/check-runs?per_page=100": [{"check_runs": [{k: v for k, v in run.items() if k != "log"} for run in self.runs]}],
             "repos/o/r/rules/branches/dev?per_page=100": [[]],
+            "repos/o/r/rules/branches/staging?per_page=100": [[]],
+            "repos/o/r/rules/branches/main?per_page=100": [[]],
             f"repos/o/r/compare/{HEAD}...dev?per_page=100": [{"merge_base_commit": {"sha": "b" * 40, "commit": {"committer": {"date": "1999-01-01T00:00:00Z"}}},
                                                           "total_commits": lacking, "commits": commits}],
         }
@@ -529,6 +531,13 @@ class GitHub:
         if "/annotations" in path:
             run = next(run for run in self.runs if str(run["id"]) == path.split("/")[4])
             return [[{"path": place} for place in run.get("annotation_paths", [])]]
+        if path.startswith("repos/o/r/commits?sha=dev&since="):
+            return [[{"sha": "e" * 40}]]
+        if path == f"repos/o/r/commits/{'e' * 40}/statuses?per_page=100":
+            # The newest night of the server is of the day before, by the account that the list names: it is not old.
+            server = self.manifest["server"]
+            return [[{"context": server["status"], "state": "success", "created_at": days_ago(1), "creator": {"id": server["writer"], "type": "Bot"},
+                      "description": f"passed; started {days_ago(1)}; 3 of 3 sessions with no harness defect; 32 of 32 tests passed"}]]
         return self.answers[path]
 
     def required_names(self, rules, own):
@@ -744,7 +753,14 @@ def test_without_a_token_it_stops_with_a_fix(tmp_path):
 
 def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     data = json.loads((ROOT / ".github" / "canary.json").read_text(encoding="utf-8"))
-    assert set(data) == {"branch", "title", "max_age_days", "plants", "not_covered", "other_checks", "side_effects"}
+    assert set(data) == {"branch", "title", "max_age_days", "ruled_branches", "server", "plants", "not_covered", "other_checks",
+                         "side_effects"}
+    assert data["ruled_branches"] == ["dev", "staging", "main"]
+    assert set(data["server"]) == {"status", "writer", "max_age_days"}
+    assert data["server"]["status"] == "server/nightly"
+    # The account `atlas-server-results[bot]`, by its id.
+    assert data["server"]["writer"] == 340202947
+    assert data["server"]["max_age_days"] == 14
 
 
 class _Logs(http.server.BaseHTTPRequestHandler):
@@ -790,3 +806,238 @@ def test_a_log_address_that_is_not_https_is_not_followed(canary, github):
     with pytest.raises(RuntimeError, match="did not give the log of job 2"):
         canary.job_log(github, "o/r", 2, "a-token")
     assert [path for path, _ in _Logs.seen] == ["/repos/o/r/actions/jobs/2/logs"]
+
+
+# --- the source of a required check, and the age of the newest night ----------------------------------------------
+
+ACTIONS = 15368
+SERVER = 424242
+
+
+def rules_with(*items):
+    """The rules of a branch as GitHub gives them, with these required checks."""
+    return [{"type": "pull_request", "parameters": {}},
+            {"type": "required_status_checks", "parameters": {"required_status_checks": list(items)}}]
+
+
+def test_required_checks_that_are_each_bound_to_an_app_are_no_finding(canary):
+    rules = rules_with({"context": "go test (proxy)", "integration_id": ACTIONS}, {"context": "pr title", "integration_id": ACTIONS})
+    assert canary.source_findings(rules, "dev") == []
+    assert canary.source_findings([], "dev") == []
+    assert canary.source_findings([{"type": "pull_request", "parameters": {}}], "dev") == []
+
+
+@pytest.mark.parametrize("source", [{}, {"integration_id": None}, {"integration_id": 0}, {"integration_id": "15368"},
+                                    {"integration_id": True}, {"integration_id": -1}])
+def test_a_required_check_that_is_bound_to_no_source_is_a_finding(canary, source):
+    rules = rules_with({"context": "go test (proxy)", "integration_id": ACTIONS}, {"context": "pr title", **source})
+    (found,) = canary.source_findings(rules, "dev")
+    assert found.check == "pr title"
+    assert found.message == ("required check `pr title` is bound to no source, so a status of that name by any account that can "
+                             "write statuses counts for it. Fix: in the ruleset of `dev`, choose the app that the check has to "
+                             "come from (GitHub Actions for a job of a workflow).")
+
+
+@pytest.mark.parametrize("name", ["server/nightly", "server/smoke", "Server/another"])
+def test_a_required_check_with_a_name_of_the_server_is_a_finding(canary, name):
+    (found,) = canary.source_findings(rules_with({"context": name, "integration_id": SERVER}, {"context": "the server/x", "integration_id": ACTIONS}), "dev")
+    assert found.check == name
+    assert f"required check `{name}` is a status of the development server." in found.message
+    assert "Fix: take the check out of the required checks in the ruleset of `dev`." in found.message
+    # The finding says why such a check cannot be required, and not where the server is.
+    assert "That server is one machine that is not always on, so a rule that waits for it stops every merge" in found.message
+    assert "at home" not in SCRIPT.read_text(encoding="utf-8")
+    # Bound to no source too: both are said.
+    assert len(canary.source_findings(rules_with({"context": name}), "dev")) == 2
+
+
+@pytest.mark.parametrize("branch", ["dev", "staging", "main"])
+def test_the_rules_of_each_ruled_branch_are_read_and_a_check_with_no_source_on_any_of_them_is_a_finding(canary, manifest, monkeypatch, tmp_path,
+                                                                                                         capsys, branch):
+    github = GitHub(manifest)
+    github.answers[f"repos/o/r/rules/branches/{branch}?per_page=100"] = [rules_with({"context": "go test (proxy)", "integration_id": ACTIONS},
+                                                                                {"context": "pr title"})]
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert f"Fix: in the ruleset of `{branch}`, choose the app that the check has to come from" in printed
+    assert printed.count("is bound to no source") == 1
+    # Each branch is asked once: the rules of the canary's base are not read a second time.
+    assert sorted(path for path in github.asked if "/rules/branches/" in path) == sorted(
+        f"repos/o/r/rules/branches/{name}?per_page=100" for name in manifest["ruled_branches"])
+
+
+def test_a_check_with_no_source_on_two_branches_is_named_for_each(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    for branch in ("staging", "main"):
+        github.answers[f"repos/o/r/rules/branches/{branch}?per_page=100"] = [rules_with({"context": "pr title"}, {"context": "server/nightly",
+                                                                                                                 "integration_id": SERVER})]
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert printed.count("required check `pr title` is bound to no source") == 2
+    assert printed.count("required check `server/nightly` is a status of the development server") == 2
+    assert "canary: 4 thing(s) are not as the list says" in printed
+
+
+def test_when_the_rules_of_a_ruled_branch_cannot_be_read_nothing_is_judged(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest, fails=("/rules/branches/main",))
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 2, printed
+    assert page.splitlines()[2].startswith("**Not judged.**")
+
+
+def a_night(days=2, by=SERVER, name="server/nightly", **more):
+    """A status of a night that started so many days ago, as the server writes it."""
+    said = f"passed; started {days_ago(days)}; 3 of 3 sessions with no harness defect; 32 of 32 tests passed"
+    return {"context": name, "state": "success", "created_at": days_ago(days - 1) if days else days_ago(0), "description": said,
+            "creator": {"id": by, "type": "Bot"}, **more}
+
+
+class WithNights(GitHub):
+    """GitHub with the commits of `dev` of the last days, newest first, and the statuses on each."""
+
+    def __init__(self, manifest, statuses, commits=3, **more):
+        super().__init__(manifest, **more)
+        self.commits = [{"sha": f"{n:040x}"} for n in range(1, commits + 1)]
+        self.statuses = {f"{n:040x}": on for n, on in statuses.items()}
+
+    def api(self, path, key):
+        if path.startswith("repos/o/r/commits?sha=dev&since="):
+            self.asked.append(path)
+            if any(words in path for words in self.fails):
+                raise RuntimeError(f"GitHub did not answer {path}: a planted failure")
+            return [self.commits[:100], self.commits[100:]] if len(self.commits) > 100 else [self.commits]
+        if path.endswith("/statuses?per_page=100"):
+            self.asked.append(path)
+            return [self.statuses.get(path.split("/")[4], [])]
+        return super().api(path, key)
+
+    def asked_for_statuses(self):
+        return [int(path.split("/")[4], 16) for path in self.asked if path.endswith("/statuses?per_page=100")]
+
+
+def with_a_writer(canary, monkeypatch, manifest, writer=SERVER):
+    """The list as it is when an account is set as the writer of the server's statuses."""
+    set_ = {**manifest, "server": {**manifest["server"], "writer": writer}}
+    monkeypatch.setattr(canary, "load_manifest", lambda root: set_)
+    return set_
+
+
+def test_while_no_account_is_set_as_the_writer_the_night_is_not_looked_for_and_one_line_says_so(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest, writer=0), {1: [a_night(by=0)]})
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 0, printed
+    assert ("note the newest night of the development server was not looked for: no account is set as the writer of the "
+            "server's statuses (`server.writer` in .github/canary.json)") in printed
+    assert [path for path in github.asked if "/statuses" in path or "commits?sha=" in path] == []
+    assert "server.writer" not in outside_code(page)
+
+
+def test_the_newest_night_of_the_server_is_a_note_with_its_age(canary, manifest, monkeypatch, tmp_path, capsys):
+    night = a_night(days=2)
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {1: [a_night(days=1, by=999), a_night(days=1, name="server/smoke")], 2: [night],
+                                                                     3: [a_night(days=9)]})
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 0, printed
+    started = re.search(r"started (\S+);", night["description"]).group(1)
+    assert f"note the newest `server/nightly` status of the server on `dev` is of a night that started 2 day(s) ago (`{started}`, limit 14)" in printed
+    # The commits are read newest first, and the look ends at the first night of the server.
+    assert github.asked_for_statuses() == [1, 2]
+    (since,) = [path.split("since=")[1].split("&")[0] for path in github.asked if "commits?sha=dev" in path]
+    asked_from = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    assert abs((datetime.now(timezone.utc) - asked_from) - timedelta(days=15)) < timedelta(minutes=5)
+    assert "server/nightly" not in outside_code(page)
+
+
+@pytest.mark.parametrize("other", [
+    a_night(by=999), a_night(by=str(SERVER)), a_night(by=None), a_night(by=True), a_night(name="server/smoke"), a_night(name="server/nightly-2"),
+    {"context": "server/nightly", "state": "success", "created_at": "2000-01-01T00:00:00Z", "description": "x", "creator": None},
+    {"context": "server/nightly", "state": "success", "created_at": "2000-01-01T00:00:00Z", "description": "x"},
+])
+def test_a_status_of_that_name_by_another_account_is_not_a_night_of_the_server(canary, manifest, monkeypatch, tmp_path, capsys, other):
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {1: [other], 2: [other]})
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert ("FAIL the newest `server/nightly` status of the server on `dev` is older than 14 days, or there is none: 3 commit(s) "
+            "of the last 15 days have none.") in printed
+    assert "Fix: look at the development server: is it on, does its timer run" in printed
+    assert github.asked_for_statuses() == [1, 2, 3]
+    # The fix sends the reader to a section. The page has to have it.
+    named = set(re.findall(r'section "([^"]+)"', printed))
+    assert named == {"The nightly run"}, printed
+    headings = set(re.findall(r"^#{2,3} (.+)$", (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8"), re.M))
+    assert named <= headings, f"the fix of the finding names a section that the gates page does not have: {sorted(named - headings)}"
+
+
+def test_a_night_that_started_more_than_fourteen_days_ago_is_a_finding(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {3: [a_night(days=15)]})
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert "FAIL the newest `server/nightly` status of the server on `dev` is of a night that started 15 days ago (limit 14)." in printed
+    assert page.splitlines()[2].startswith("**A finding.**")
+    in_time = WithNights(with_a_writer(canary, monkeypatch, manifest), {3: [a_night(days=14)]})
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, in_time)
+    assert status == 0, printed
+    assert "started 14 day(s) ago" in printed
+
+
+def test_the_age_of_a_night_is_read_from_the_start_time_in_its_text_and_else_from_the_time_of_the_status(canary, manifest):
+    set_ = {**manifest, "server": {**manifest["server"], "writer": SERVER}}
+    now = datetime.now(timezone.utc)
+    sent_late = a_night(days=3, created_at=days_ago(0))
+    github = WithNights(set_, {1: [sent_late]})
+    assert canary.newest_night(github, REPO, "a-token", "dev", set_, now)["started"] == re.search(r"started (\S+);", sent_late["description"]).group(1)
+    for said in ("passed", "", None, "started yesterday; passed", "restarted 2026-10-08T08:00:03Z; passed", "started 2026-10-08T08:00:03Zx"):
+        with_no_time = a_night(days=3, description=said, created_at="2026-10-01T00:00:00Z")
+        found = canary.newest_night(WithNights(set_, {1: [with_no_time]}), REPO, "a-token", "dev", set_, now)
+        assert found == {"started": "2026-10-01T00:00:00Z", "commits": 3, "read": True}, said
+
+
+@pytest.mark.parametrize("order", [(9, 2, 5), (2, 9, 5), (5, 9, 2)])
+def test_of_the_nights_on_one_commit_the_newest_counts_in_whatever_order_github_gives_them(canary, manifest, order):
+    # A head of `dev` that stays for days gets the status of a night on each of them.
+    set_ = {**manifest, "server": {**manifest["server"], "writer": SERVER}}
+    nights = [a_night(days=days) for days in order]
+    found = canary.newest_night(WithNights(set_, {1: nights}), REPO, "a-token", "dev", set_, datetime.now(timezone.utc))
+    newest = next(night for night in nights if night is nights[order.index(2)])
+    assert found["started"] == re.search(r"started (\S+);", newest["description"]).group(1)
+    notes, findings = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
+    assert findings == []
+    assert "started 2 day(s) ago" in notes[0]
+
+
+def test_the_look_for_the_newest_night_ends_after_a_fixed_number_of_commits(canary, manifest):
+    set_ = {**manifest, "server": {**manifest["server"], "writer": SERVER}}
+    github = WithNights(set_, {canary.NIGHT_COMMITS + 1: [a_night()]}, commits=canary.NIGHT_COMMITS + 5)
+    found = canary.newest_night(github, REPO, "a-token", "dev", set_, datetime.now(timezone.utc))
+    assert found == {"started": None, "commits": canary.NIGHT_COMMITS + 5, "read": True}
+    assert github.asked_for_statuses() == list(range(1, canary.NIGHT_COMMITS + 1))
+    notes, (finding,) = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
+    assert notes == []
+    assert f"{canary.NIGHT_COMMITS} commit(s) of the last 15 days have none" in finding.message
+
+
+@pytest.mark.parametrize("fails", ["/commits?sha=dev", "/statuses?per_page"])
+def test_when_the_nights_cannot_be_read_nothing_is_judged(canary, manifest, monkeypatch, tmp_path, capsys, fails):
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {1: [a_night()]})
+    real = github.api
+
+    def api(path, key):
+        if fails in path:
+            raise RuntimeError(f"GitHub did not answer {path}: a planted failure")
+        return real(path, key)
+
+    github.api = api
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 2, printed
+    assert page.splitlines()[2].startswith("**Not judged.**")
+
+
+def test_a_required_check_that_is_bound_to_no_source_fails_the_check_of_the_canary(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    github.answers["repos/o/r/rules/branches/dev?per_page=100"] = [rules_with({"context": "go test (proxy)", "integration_id": ACTIONS},
+                                                                           {"context": "pr title"})]
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert "FAIL required check `pr title` is bound to no source" in printed
+    assert "canary: 1 thing(s) are not as the list says" in printed
+    assert "pr title" not in outside_code(page)

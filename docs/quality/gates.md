@@ -639,6 +639,18 @@ and red for its own violation.
   on does not count. A canary on the head of `dev` is not old, whatever the
   age of its runs: they ran on the files that `dev` has today. What such a
   canary does not show is a runner or a service that changed since its runs.
+- The check also reads two things that no run of the canary shows. Each
+  required check of `dev`, `staging` and `main` has to be bound to the app
+  that it comes from: a required check that is bound to no source would
+  count a status of that name by any account that can write statuses. The
+  three branches are in the list (`ruled_branches`). And no required check
+  may have a name that starts with `server/`: those are the statuses of the
+  development server, which is one machine that is not always on.
+- It reads how old the newest night of the development server is: the
+  newest `server/nightly` status that the server's own account wrote on a
+  commit of `dev`. A night that started more than 14 days ago, or none in
+  that time, is a finding. While no account is set as the writer
+  (`server.writer` in the list), one line says that nothing was looked for.
 
 A maintainer renews the canary once a week, and after a change to a workflow
 or to a file that configures a check:
@@ -661,8 +673,8 @@ or a file that a violation edits has moved.
 The workflow `canary check` runs `scripts/canary.py check` each Monday at
 02:47 UTC. It only reads: it renews nothing, opens no pull request and no
 issue, and writes no comment. Its job has a token that can read the
-contents, the pull request, the check runs and the logs of the jobs, and
-nothing else.
+contents, the pull request, the check runs, the logs of the jobs and the
+statuses of a commit, and nothing else.
 
 - A red run is the report. No issue appears. GitHub sends its mail for a
   failed scheduled run to the account that last changed the `cron` line of

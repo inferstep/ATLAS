@@ -17,6 +17,14 @@ branch. Its exit status: 0 when every listed check is as the list says, 1
 when one is not, 2 when the pull request or its checks cannot be read. A
 status of 2 is not a pass: nothing was judged.
 
+`check` also reads two things that no run of the canary shows. Each
+required check of each branch that has required checks (`ruled_branches`
+in .github/canary.json) has to be bound to the app that it comes from, and
+none may be a status of the development server (a name that starts with
+`server/`). And the newest status `server/nightly` that the
+server's own account wrote on the base branch may not be older than the
+list says (`server` in .github/canary.json).
+
 In a job, `check` also writes its result to the page of the run. The first
 line there says which of the three results it is.
 """
@@ -353,6 +361,82 @@ def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str
     return [finding for finding in findings if finding]
 
 
+def source_findings(rules: list[dict], base: str) -> list[Finding]:
+    """Each required check is bound to the app that it comes from, and none is a status of the development server."""
+    items = [item for rule in rules if rule.get("type") == "required_status_checks"
+             for item in rule["parameters"]["required_status_checks"]]
+    out = [Finding(item["context"], f"required check `{item['context']}` is bound to no source, so a status of that "
+                                    "name by any account that can write statuses counts for it. Fix: in the ruleset of "
+                                    f"`{base}`, choose the app that the check has to come from (GitHub Actions for a "
+                                    "job of a workflow).")
+           for item in items if type(item.get("integration_id")) is not int or item["integration_id"] <= 0]
+    return out + [Finding(item["context"], f"required check `{item['context']}` is a status of the development server. "
+                                           "That server is one machine that is not always on, so a rule that waits for it stops every "
+                                           "merge while the machine is off. Fix: take the check out of the required "
+                                           f"checks in the ruleset of `{base}`.")
+                  for item in items if item["context"].lower().startswith("server/")]
+
+
+STARTED = re.compile(r"\bstarted (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)")
+# The look for the newest night ends after this many commits of the base branch.
+NIGHT_COMMITS = 300
+
+
+def is_a_night(status: dict, server: dict) -> bool:
+    """Whether a status is one of a night that the server's own account wrote. The id of the account is compared,
+    not a name: a status of that name by another account is not a night."""
+    creator = status.get("creator") if isinstance(status.get("creator"), dict) else {}
+    return status.get("context") == server["status"] and type(creator.get("id")) is int and creator["id"] == server["writer"]
+
+
+def start_of(status: dict) -> str:
+    """When the night of a status started: the time in its text, as the server writes it (`started <time>` at the
+    end of the text or before a `;`), or else the time when the status was written."""
+    text = str(status.get("description") or "")
+    said = STARTED.search(text)
+    return said.group(1) if said and text[said.end():said.end() + 1] in ("", ";") else status["created_at"]
+
+
+def newest_night(checks, repo: str, key: str, base: str, manifest: dict, now: datetime) -> dict:
+    """The newest status of a night that the server's own account wrote on a commit of the base branch.
+
+    Gives when that night started, or None when the commits of the days that count have none, and how many commits
+    there are. With no account set, nothing is read.
+    """
+    server = manifest["server"]
+    if not server["writer"]:
+        return {"started": None, "commits": 0, "read": False}
+    since = (now - timedelta(days=server["max_age_days"] + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    commits = [commit for page in checks.api(f"repos/{repo}/commits?sha={base}&since={since}&per_page=100", key) for commit in page]
+    for commit in commits[:NIGHT_COMMITS]:
+        statuses = [status for page in checks.api(f"repos/{repo}/commits/{commit['sha']}/statuses?per_page=100", key) for status in page]
+        nights = [status for status in statuses if is_a_night(status, server)]
+        if nights:
+            # A head of the branch that stays for days has a night of each day: the newest counts.
+            return {"started": max(start_of(night) for night in nights), "commits": len(commits), "read": True}
+    return {"started": None, "commits": len(commits), "read": True}
+
+
+def night_lines(manifest: dict, night: dict, base: str, now: datetime) -> tuple[list[str], list[Finding]]:
+    """What the page says about the newest night of the server, as notes, and the finding when it is too old."""
+    server = manifest["server"]
+    name, limit = server["status"], server["max_age_days"]
+    if not night["read"]:
+        return [f"the newest night of the development server was not looked for: no account is set as the writer of "
+                f"the server's statuses (`server.writer` in {MANIFEST})"], []
+    age = days_since(night["started"], now) if night["started"] else None
+    if age is not None and age <= limit:
+        return [f"the newest `{name}` status of the server on `{base}` is of a night that started {age} day(s) ago "
+                f"(`{night['started']}`, limit {limit})"], []
+    found = (f"is of a night that started {age} days ago (limit {limit})" if age is not None
+             else f"is older than {limit} days, or there is none: {min(night['commits'], NIGHT_COMMITS)} commit(s) of the last {limit + 1} days have none")
+    return [], [Finding("the nightly run", f"the newest `{name}` status of the server on `{base}` {found}. So nothing "
+                                           "shows that the head of today runs with a real model. Fix: look at the "
+                                           "development server: is it on, does its timer run, and what does the last "
+                                           "report in the folder of the run say (docs/quality/gates.md, section \"The "
+                                           "nightly run\").")]
+
+
 def token() -> str:
     found = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if found:
@@ -421,7 +505,8 @@ def find_pull(checks, repo: str, key: str, manifest: dict) -> tuple[int | None, 
 
 
 def gather(checks, repo: str, key: str, number: int, manifest: dict):
-    """Read the pull request, its check runs, the required checks of its base, and where it stands against its base."""
+    """Read the pull request, its check runs, the required checks of its base, where it stands against its base, and
+    the rules of the base."""
     pull = checks.api(f"repos/{repo}/pulls/{number}", key)[0]
     sha, base = pull["head"]["sha"], pull["base"]["ref"]
     check_runs = [run for page in checks.api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key)
@@ -440,7 +525,7 @@ def gather(checks, repo: str, key: str, number: int, manifest: dict):
     lacking = checks.api(f"repos/{repo}/compare/{sha}...{base}?per_page=100", key)[0]
     behind = {"base": lacking["merge_base_commit"]["sha"], "commits": lacking["total_commits"],
               "since": lacking["commits"][0]["commit"]["committer"]["date"] if lacking["total_commits"] else None}
-    return pull, check_runs, checks.required_names(rules, {}), behind
+    return pull, check_runs, checks.required_names(rules, {}), behind, rules
 
 
 def fenced(text: str) -> str:
@@ -481,8 +566,14 @@ def check(root: Path, number: int | None) -> int:
             if findings:
                 return told(1, [f"FAIL {finding.message}" for finding in findings] + ["canary: there is not one canary pull request"])
         now = datetime.now(timezone.utc)
-        pull, check_runs, required, behind = gather(checks, repo, key, number, manifest)
-        findings = judge(manifest, pull, check_runs, required, behind["since"], now)
+        pull, check_runs, required, behind, rules = gather(checks, repo, key, number, manifest)
+        base = pull["base"]["ref"]
+        about_the_night, too_old = night_lines(manifest, newest_night(checks, repo, key, base, manifest, now), base, now)
+        # The rules of the base were read for the canary itself; the other ruled branches are read here.
+        ruled = {branch: rules if branch == base else [rule for page in checks.api(f"repos/{repo}/rules/branches/{branch}?per_page=100", key)
+                                                       for rule in page] for branch in manifest["ruled_branches"]}
+        sources = [finding for branch, its_rules in ruled.items() for finding in source_findings(its_rules, branch)]
+        findings = judge(manifest, pull, check_runs, required, behind["since"], now) + sources + too_old
         where, renew = standing(manifest, behind, now)
     except (KeyError, IndexError, TypeError, AttributeError, ValueError, OSError, RuntimeError) as error:
         fix = ("  fix: run this again; when it stays so, pass the number of the canary pull request with --pr, and "
@@ -494,7 +585,7 @@ def check(root: Path, number: int | None) -> int:
     counts = (f"note pull request {number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
               f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
     lines = [counts, f"note {where}"]
-    lines += [f"note {line}" for line in notes(manifest, latest_checks(check_runs))]
+    lines += [f"note {line}" for line in notes(manifest, latest_checks(check_runs)) + about_the_night]
     lines += [f"FAIL {finding.message}" for finding in findings]
     lines.append(f"canary: {len(findings)} thing(s) are not as the list says" if findings
                  else "canary: every listed check is red for its plant, and every listed report is there")

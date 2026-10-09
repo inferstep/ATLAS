@@ -44,6 +44,9 @@ jobs:
       checks: read
       # The log of a red job, which says why the job is red.
       actions: read
+      # The statuses that the development server wrote on the commits of
+      # `dev`: how old the newest night is.
+      statuses: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

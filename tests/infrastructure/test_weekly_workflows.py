@@ -84,7 +84,9 @@ def test_the_workflow_gives_no_right_by_itself_and_each_job_names_its_own(name):
 
 def test_the_canary_check_can_only_read(name=CANARY):
     (job,) = workflow(name)["jobs"].values()
-    assert job["permissions"] == {"contents": "read", "pull-requests": "read", "checks": "read", "actions": "read"}
+    assert job["permissions"] == {"contents": "read", "pull-requests": "read", "checks": "read", "actions": "read", "statuses": "read"}
+    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    assert "the\ncontents, the pull request, the check runs, the logs of the jobs and the\nstatuses of a commit, and nothing else." in page
     assert {level for _job, _right, level in rights(name)} == {"read"}
     assert job["name"] == "canary check (reads only)"
 

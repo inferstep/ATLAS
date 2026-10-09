@@ -2,6 +2,12 @@
   "branch": "canary/must-stay-red",
   "title": "canary: this pull request must stay red",
   "max_age_days": 14,
+  "ruled_branches": ["dev", "staging", "main"],
+  "server": {
+    "status": "server/nightly",
+    "writer": 340202947,
+    "max_age_days": 14
+  },
   "plants": [
     {
       "id": "pytest (tests/v3)",

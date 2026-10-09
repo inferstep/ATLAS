@@ -255,9 +255,10 @@ stated as untested).
 
 ### The labels the bot puts on your pull request
 
-Each hour the bot gives every open pull request two kinds of label, beside
-the `area/*` ones. Both are computed from the change, and computed again when
-it changes; a label that is set or removed by hand is put back.
+Several times a day the bot gives every open pull request two kinds of
+label, beside the `area/*` ones. Both are computed from the change, and
+computed again when it changes; a label that is set or removed by hand is put
+back.
 
 | Label | When |
 |---|---|
