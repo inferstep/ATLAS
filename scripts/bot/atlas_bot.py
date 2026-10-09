@@ -373,10 +373,11 @@ class Bot:
             return
         if not maintainer:
             open_claims = self.api.search_count(f"is:issue is:open assignee:{user}")
-            merged = self.api.search_count(f"is:pr is:merged author:{user}")
-            limit = int(c["max_open"] if merged else c["max_open_first_timer"])
+            # None: the bot cannot tell. Then nothing says that this person is new.
+            merged = self._merged_by(user)
+            limit = int(c["max_open_first_timer"] if merged == 0 else c["max_open"])
             if open_claims >= limit:
-                kind = "" if merged else " before your first merged pull request"
+                kind = " before your first merged pull request" if merged == 0 else ""
                 self.api.comment(n, f"@{user} you can hold {limit} open claim{'s' if limit > 1 else ''}"
                                  f"{kind}, and you have {open_claims}. Finish or `/unclaim` one first.")
                 return
@@ -393,6 +394,22 @@ class Bot:
                          f"3. Without a linked pull request, the claim is released after "
                          f"{c['release_after_days']} days. Comment `/unclaim` any time to let it go.\n\n"
                          f"The steps are in [CONTRIBUTING]({links['contributing']}).")
+
+    def _merged_by(self, user: str) -> int | None:
+        """How many merged pull requests this person has here, or None when
+        the token cannot tell.
+
+        A search gives only what the token may read. A token with no right
+        to read pull requests gets 0 for everybody, and 0 would read as
+        "new". So a 0 counts only when the same token sees a merged pull
+        request of the repository at all."""
+        merged = self.api.search_count(f"is:pr is:merged author:{user}")
+        if merged or self.api.search_count("is:pr is:merged"):
+            return merged
+        print("atlas-bot: this token sees no merged pull request of the repository, so it cannot tell "
+              f"whether {user} is new, and the wider claim limit is taken. Fix: give the token of this "
+              "job the right to read pull requests (`permission-pull-requests: read` in its workflow file).")
+        return None
 
     def _unclaim(self, issue: dict, user: str) -> None:
         n = issue["number"]

@@ -6,11 +6,15 @@ comments and board cards in memory, so every rule in .github/atlas-bot.yml
 welcomes, RFC links) is checked without the network.
 """
 
+import ast
 import datetime as dt
+import glob
 import importlib.util
 import os
+import re
 
 import pytest
+import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("atlas_bot", os.path.join(ROOT, "scripts", "bot", "atlas_bot.py"))
@@ -40,6 +44,7 @@ class FakeAPI:
         self.merged = []      # PRs merged into dev: {number, body}
         self.assignable = True
         self.log = []
+        self.asked = []       # every search, in order
 
     def issue(self, n):
         if n not in self.issues:
@@ -72,6 +77,7 @@ class FakeAPI:
         self.log.append(("remove_label", n, label))
 
     def search_count(self, q):
+        self.asked.append(q)
         return self.counts.get(q, 0)
 
     def search(self, q):
@@ -131,6 +137,8 @@ def api():
     a = FakeAPI()
     a.issues[7] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
     a.cards[7] = {"id": "ITEM7", "status": "Ready", "shepherd": "@maint"}
+    # The token of the test sees the merged pull requests of the repository, as a token with the right does.
+    a.counts["is:pr is:merged"] = 40
     return a
 
 
@@ -216,6 +224,46 @@ def test_claim_limits(api, cfg, merged, open_claims, allowed):
     api.counts["is:issue is:open assignee:alice"] = open_claims
     run(api, cfg).claim(claim_event(api, 7, "/claim"))
     assert (("assign", 7, "alice") in api.log) is allowed
+
+
+def test_a_person_with_no_merged_pull_request_is_new_when_the_token_sees_pull_requests(api, cfg, capsys):
+    api.counts["is:issue is:open assignee:alice"] = 1
+    run(api, cfg).claim(claim_event(api, 7, "/claim"))
+    assert not [x for x in api.log if x[0] == "assign"]
+    assert api.said(7)[-1] == ("@alice you can hold 1 open claim before your first merged pull request, and you have 1. "
+                               "Finish or `/unclaim` one first.")
+    assert capsys.readouterr().out == ""
+
+
+def test_when_the_token_sees_no_pull_request_at_all_a_count_of_zero_does_not_make_a_person_new(api, cfg, capsys):
+    # As with a token that may not read pull requests: every search for them gives 0.
+    api.counts["is:pr is:merged"] = 0
+    api.counts["is:issue is:open assignee:alice"] = 1
+    run(api, cfg).claim(claim_event(api, 7, "/claim"))
+    assert ("assign", 7, "alice") in api.log
+    said = capsys.readouterr().out
+    assert "this token sees no merged pull request of the repository, so it cannot tell whether alice is new" in said
+    assert "the wider claim limit is taken" in said
+    assert "Fix: give the token of this job the right to read pull requests (`permission-pull-requests: read`" in said
+
+
+def test_when_the_bot_cannot_tell_the_wide_limit_still_holds_and_its_answer_does_not_call_the_person_new(api, cfg, capsys):
+    api.counts["is:pr is:merged"] = 0
+    api.counts["is:issue is:open assignee:alice"] = 2
+    run(api, cfg).claim(claim_event(api, 7, "/claim"))
+    assert not [x for x in api.log if x[0] == "assign"]
+    assert api.said(7)[-1] == "@alice you can hold 2 open claims, and you have 2. Finish or `/unclaim` one first."
+
+
+def test_the_repository_is_asked_for_its_pull_requests_only_when_the_persons_count_is_zero(api, cfg):
+    api.counts["is:pr is:merged author:alice"] = 3
+    run(api, cfg).claim(claim_event(api, 7, "/claim"))
+    assert api.asked == ["is:issue is:open assignee:alice", "is:pr is:merged author:alice"]
+    api.asked.clear()
+    api.issues[7]["assignees"] = []
+    api.cards[7]["status"] = "Ready"
+    run(api, cfg).claim(claim_event(api, 7, "/claim", user="bob"))
+    assert api.asked == ["is:issue is:open assignee:bob", "is:pr is:merged author:bob", "is:pr is:merged"]
 
 
 def test_maintainers_skip_the_limits(api, cfg):
@@ -630,3 +678,126 @@ def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
     run(api, cfg).sync()
     assert closed(api) == [] and api.said(8) == api.said(9) == []
 
+
+# --- the rights of each workflow's token -------------------------------------
+
+# What each call of the bot asks GitHub for: the right, and how far. A search
+# gives only what the token may read, so a search for pull requests needs the
+# right to read them. A call that is not here fails the test below.
+RIGHT_OF = {
+    "issue": ("issues", "read"), "comments": ("issues", "read"), "assigned_at": ("issues", "read"),
+    "comment": ("issues", "write"), "assign": ("issues", "write"), "unassign": ("issues", "write"),
+    "add_labels": ("issues", "write"), "remove_label": ("issues", "write"), "close_issue": ("issues", "write"),
+    "open_pulls": ("pull-requests", "read"), "pull_files": ("pull-requests", "read"), "pull_changes": ("pull-requests", "read"),
+    "merged_pulls": ("pull-requests", "read"), "linked_open_pr_authors": ("pull-requests", "read"),
+    "branch_commits": ("contents", "read"),
+    "item": ("organization-projects", "read"), "items": ("organization-projects", "read"),
+    "set_status": ("organization-projects", "write"),
+}
+SEARCH_FOR = {"is:pr": ("pull-requests", "read"), "is:issue": ("issues", "read")}
+SCRIPT = os.path.join(ROOT, "scripts", "bot", "atlas_bot.py")
+
+
+def asked_by(command, source=None):
+    """Every right that a command of the bot needs, read from its code: the calls to GitHub of its method and of the
+    methods that it calls."""
+    with open(SCRIPT, encoding="utf-8") as fh:
+        tree = ast.parse(source or fh.read())
+    (bot,) = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Bot"]
+    methods = {node.name: node for node in bot.body if isinstance(node, ast.FunctionDef)}
+    needs, seen, todo = set(), set(), [command.replace("-", "_")]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for node in ast.walk(methods[name]):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            on = node.func.value
+            if isinstance(on, ast.Name) and on.id == "self" and node.func.attr in methods:
+                todo.append(node.func.attr)
+            elif isinstance(on, ast.Attribute) and on.attr == "api":
+                call = node.func.attr
+                if call in ("search", "search_count"):
+                    first = node.args[0]
+                    start = first.values[0] if isinstance(first, ast.JoinedStr) else first
+                    kind = start.value.split()[0]
+                    assert kind in SEARCH_FOR, f"`{name}` searches for `{kind}...`, and this test cannot tell which right that needs"
+                    needs.add(SEARCH_FOR[kind])
+                else:
+                    assert call in RIGHT_OF, f"`{name}` calls `api.{call}`, which has no entry in RIGHT_OF: add it with the right it needs"
+                    needs.add(RIGHT_OF[call])
+    return needs
+
+
+def bot_workflows():
+    """Each bot workflow: the rights of its token, and the commands of the bot that it runs."""
+    found = {}
+    for path in sorted(glob.glob(os.path.join(ROOT, ".github", "workflows", "bot-*.yml"))):
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        steps = [step for job in yaml.safe_load(text)["jobs"].values() for step in job["steps"]]
+        (token,) = [step["with"] for step in steps if step.get("uses", "").startswith("actions/create-github-app-token@")]
+        rights = {name[len("permission-"):]: level for name, level in token.items() if name.startswith("permission-")}
+        found[os.path.basename(path)] = (rights, re.findall(r"atlas_bot\.py ([a-z-]+)", text))
+    return found
+
+
+def not_covered(rights, needs):
+    return sorted(f"{right}: {level}" for right, level in needs
+                  if rights.get(right) != "write" and not (level == "read" and rights.get(right) == "read"))
+
+
+def test_the_token_of_each_bot_workflow_has_every_right_that_its_commands_ask_github_for():
+    workflows = bot_workflows()
+    assert sorted(workflows) == ["bot-claim.yml", "bot-new-issue.yml", "bot-stale-claims.yml", "bot-sync.yml"]
+    assert sorted(command for _rights, commands in workflows.values() for command in commands) == [
+        "claim", "rfc-dedupe", "stale", "sync", "welcome"]
+    for name, (rights, commands) in workflows.items():
+        for command in commands:
+            missing = not_covered(rights, asked_by(command))
+            assert not missing, (f"{name}: the command `{command}` asks GitHub for {', '.join(missing)}, and the token of the "
+                                 "workflow does not have it. A search then gives 0 with no error. Fix: add "
+                                 "`permission-<right>: <level>` to the token step of that workflow.")
+
+
+def test_the_token_of_each_bot_workflow_has_no_right_that_none_of_its_commands_asks_for():
+    for name, (rights, commands) in bot_workflows().items():
+        needed = {right for command in commands for right, _level in asked_by(command)}
+        assert set(rights) <= needed, f"{name}: the token has {sorted(set(rights) - needed)}, and no command of it asks for that"
+
+
+def test_the_claim_command_needs_the_right_to_read_pull_requests_and_its_workflow_gives_it():
+    assert ("pull-requests", "read") in asked_by("claim")
+    rights, _commands = bot_workflows()["bot-claim.yml"]
+    assert rights == {"issues": "write", "pull-requests": "read", "organization-projects": "write"}
+
+
+@pytest.mark.parametrize("rights, needs, missing", [
+    ({"issues": "write"}, {("issues", "read"), ("issues", "write")}, []),
+    ({"issues": "read"}, {("issues", "write")}, ["issues: write"]),
+    ({"issues": "write"}, {("pull-requests", "read")}, ["pull-requests: read"]),
+    ({"pull-requests": "write"}, {("pull-requests", "read")}, []),
+    ({}, {("contents", "read"), ("issues", "read")}, ["contents: read", "issues: read"]),
+])
+def test_a_right_to_write_covers_reading_and_nothing_else_stands_in_for_a_right(rights, needs, missing):
+    assert not_covered(rights, needs) == missing
+
+
+def test_a_call_that_the_table_does_not_know_and_a_search_of_another_kind_fail_the_reading():
+    with open(SCRIPT, encoding="utf-8") as fh:
+        source = fh.read()
+    new_call = source.replace("        issue = event[\"issue\"]\n        user = issue[\"user\"]\n",
+                              "        issue = event[\"issue\"]\n        user = issue[\"user\"]\n        self.api.teams()\n", 1)
+    assert new_call != source
+    with pytest.raises(AssertionError, match="calls `api.teams`, which has no entry in RIGHT_OF"):
+        asked_by("welcome", new_call)
+    other_search = source.replace('self.api.search_count(f"is:issue author:', 'self.api.search_count(f"org:inferstep author:', 1)
+    assert other_search != source
+    with pytest.raises(AssertionError, match="searches for `org:inferstep...`"):
+        asked_by("welcome", other_search)
+    asks_for_pulls = source.replace("        issue = event[\"issue\"]\n        user = issue[\"user\"]\n",
+                                    "        issue = event[\"issue\"]\n        user = issue[\"user\"]\n        self.api.open_pulls()\n", 1)
+    assert ("pull-requests", "read") in asked_by("welcome", asks_for_pulls)
+    assert ("pull-requests", "read") not in asked_by("welcome")
