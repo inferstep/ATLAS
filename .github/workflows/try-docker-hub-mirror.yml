@@ -1,11 +1,10 @@
 name: try docker hub mirror
 
-# A try by hand on a branch of its own. It is never merged. The third run
-# showed that a builder whose own image is named at the mirror builds with
-# Docker Hub pointed to nowhere. This run is its control: the same builder
-# with no mirror in its own settings has to fail at its base images. If it
-# passes, the block does not reach the builder and the third run showed
-# nothing about the base images.
+# A try by hand on a branch of its own. It is never merged. This run tries
+# two setup steps for the builder: the first names the builder's own image at
+# the mirror and may fail without failing the job; the second is the usual
+# one and runs only when the first failed. So the mirror is the first source
+# of the builder's image and Docker Hub, with the runner's login, the second.
 
 on:
   push:
@@ -19,30 +18,43 @@ concurrency:
   group: try-docker-hub-mirror
   cancel-in-progress: true
 
-env:
-  HUB: registry-1.docker.io auth.docker.io production.cloudflare.docker.com
-
 jobs:
-  builder-control:
-    name: builder control, no mirror in the builder's settings (the build has to fail)
+  hub-blocked:
+    name: J1. Docker Hub pointed to nowhere (the first setup step has to carry)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: point Docker Hub to nowhere
-        run: echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
+      - name: point one registry to nowhere
+        run: |
+          echo "0.0.0.0 registry-1.docker.io auth.docker.io production.cloudflare.docker.com" | sudo tee -a /etc/hosts
       # zizmor asks for the `$/` form here; actionlint does not read that form yet.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-      - name: set up the builder
+      - name: set up the builder, its image from the mirror
+        id: first
+        continue-on-error: true
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
           # The runner's own network is for this try alone: it is how the
-          # block of Docker Hub reaches the builder's container.
+          # block reaches the builder's container.
           driver-opts: |
             image=mirror.gcr.io/moby/buildkit:buildx-stable-1
             network=host
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      - name: set up the builder, its image from Docker Hub
+        id: second
+        if: steps.first.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: build the proxy image
         id: build
         continue-on-error: true
@@ -53,38 +65,56 @@ jobs:
           push: false
           provenance: false
           no-cache: true
-      - name: the control has to fail
+      - name: the results against what each has to be
         env:
+          FIRST: ${{ steps.first.outcome }}
+          SECOND: ${{ steps.second.outcome }}
           BUILD: ${{ steps.build.outcome }}
         run: |
-          echo "the build: $BUILD (has to be failure)"
-          if [ "$BUILD" != failure ]; then
-            echo "::error::The control passed: the builder reached Docker Hub, so the block does not reach it and the third run showed nothing about the base images."
-            exit 1
-          fi
+          echo "the first setup step:  $FIRST (has to be success)"
+          echo "the second setup step: $SECOND (has to be skipped)"
+          echo "the build:             $BUILD (has to be success)"
+          [ "$FIRST" = success ] && [ "$SECOND" = skipped ] && [ "$BUILD" = success ]
 
-  builder-with-mirror:
-    name: builder with the mirror in its settings (the build has to pass)
+  mirror-blocked:
+    name: J2. the mirror pointed to nowhere (the second setup step has to carry)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: point Docker Hub to nowhere
-        run: echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
+      - name: point one registry to nowhere
+        run: |
+          echo "0.0.0.0 mirror.gcr.io" | sudo tee -a /etc/hosts
       # zizmor asks for the `$/` form here; actionlint does not read that form yet.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-      - name: set up the builder
+      - name: set up the builder, its image from the mirror
+        id: first
+        continue-on-error: true
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
+          # The runner's own network is for this try alone: it is how the
+          # block reaches the builder's container.
           driver-opts: |
             image=mirror.gcr.io/moby/buildkit:buildx-stable-1
             network=host
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
+      - name: set up the builder, its image from Docker Hub
+        id: second
+        if: steps.first.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+        with:
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
       - name: build the proxy image
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: ./proxy
@@ -92,3 +122,13 @@ jobs:
           push: false
           provenance: false
           no-cache: true
+      - name: the results against what each has to be
+        env:
+          FIRST: ${{ steps.first.outcome }}
+          SECOND: ${{ steps.second.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+        run: |
+          echo "the first setup step:  $FIRST (has to be failure)"
+          echo "the second setup step: $SECOND (has to be success)"
+          echo "the build:             $BUILD (has to be success)"
+          [ "$FIRST" = failure ] && [ "$SECOND" = success ] && [ "$BUILD" = success ]
