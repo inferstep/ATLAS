@@ -1,6 +1,6 @@
 # Contributing to ATLAS
 
-This page takes you from "I'd like to help" to "my change is in a release".
+This page takes you from wanting to help to a change of yours in a release.
 If something here is unclear or wrong, that's a bug. Open a Documentation
 issue.
 
@@ -111,9 +111,8 @@ request. Codecov does not comment. A branch that does not have `codecov.yml`
 yet uploads nothing; update it from `dev`.
 
 CI also runs the SonarQube Cloud analysis (`sonar-project.properties`), and
-Sonar adds its result to the pull request as a check of its own. The
-analysis needs a secret, so it is skipped for a pull request from a fork;
-a maintainer sees Sonar's result after the merge.
+Sonar adds its result to the pull request as a check of its own. A pull
+request from a fork gets none ([When a check is red](#when-a-check-is-red)).
 
 ## 5. Find an issue
 
@@ -200,17 +199,48 @@ check was skipped. Each of these would otherwise look like a pass. Its
 output names what did not run and how to fix it; after you re-run a
 cancelled workflow, re-run this check too.
 
+### When a check is red
+
+A required check stops the merge while it is red. The other checks report:
+a red one is a reason to look, and a maintainer decides what it means for
+the merge. The [quality gates page](docs/quality/gates.md) keeps the list
+of both kinds.
+
+| You see | What it means | What to do |
+|---|---|---|
+| `pr title` is red | The title is not in the form of [section 7](#7-branches-commits-and-pull-request-titles), or its summary has more than 100 characters | Edit the title. The check starts again by itself |
+| A test job is red | A test failed with your change | Open the job and read the first failure. `make verify` ([section 4](#4-run-the-quality-gate)) runs the same gates on your machine |
+| `code health (size)` is red | A function has more than 100 lines, or a file more than 1,500, and is not on the size list; or one on the list grew | Split it |
+| `checks ran` is red | What the paragraph above says. On a pull request from a fork it can say "waiting for a maintainer's approval" | Nothing for that one: a maintainer approves the run. For the rest, its output says what to do |
+| `integrity check` has a report | It is the check that reads your change, not the code ([Testing](#testing)) | Give each skip its reason. A maintainer reads the rest |
+| There is no Sonar result | On a pull request from a fork the Sonar check does not run; the change is analysed after the merge. | Nothing |
+| `codecov/patch` and `codecov/project` | They are the two coverage statuses of [section 4](#4-run-the-quality-gate) | Nothing. If your new lines have no test, add one |
+| Red crosses appear at the moment your pull request merges | Runs that still waited for approval were closed as failed. They have no job in them and never started | Nothing |
+| Runs of an older commit that were never approved | They never start and do not count | Nothing. The checks of the newest commit are the ones that count |
+| No check starts, and GitHub says the branch has conflicts | No workflow runs while the branch conflicts with `dev` | Merge `dev` into your branch and resolve the conflict. Then the runs start, and wait for approval |
+| `CodeQL` is red with a new alert | Code scanning marked a line of your change and opened a thread on it | Change the line, or say in the thread why it is no fault. Only a maintainer can dismiss an alert |
+
+**When a red check is not from your change.** A check can be red because of
+a network fault, or because of a mistake in the check. You cannot run a job
+again on this repository; a maintainer can. Write in your pull request that
+you think the red is not from your change, and say which check. A maintainer
+looks and runs it again. A mistake in a check is ours to fix.
+
 ## 9. Review
 
-- A maintainer responds within **5 business days**.
+- A maintainer reviews your pull request, and responds within
+  **5 business days**.
 - To merge, a pull request needs:
-  - an approval from a code owner ([CODEOWNERS](.github/CODEOWNERS))
   - all required checks green
   - every conversation resolved
-  - no conflict with `dev` (a maintainer may ask you to click **Update branch**)
-- New commits dismiss earlier approvals, so the last push gets reviewed.
-- Maintainers merge with **squash** (your title becomes the commit) or
-  **rebase**. History on `dev` stays linear.
+  - no conflict with `dev`
+- A maintainer may ask you to click **Update branch** when the results are
+  from an older `dev`. That button does not work while the branch conflicts
+  with `dev`; for a conflict see [When a check is red](#when-a-check-is-red).
+- A maintainer adds the pull request to the merge queue. The queue runs the
+  required checks again, on your change merged with `dev` as it is at that
+  moment, and squashes it into one commit. Your title becomes that commit.
+  History on `dev` stays linear.
 
 **Definition of done:** linked issue, tests for new behavior, docs updated
 for behavior changes, conventional title, CI green, and hardware tested (or
@@ -340,11 +370,14 @@ pytest tests/e2e -v
 - A test of a limit must be harmless when the limit fails. A command that
   the limit has to stop ends by itself a little above that limit: build it
   with `tests/infrastructure/bounded_commands.py`.
+- More rules that a review or a failure has taught us, each with the check
+  or test that holds it:
+  [the gates page](docs/quality/gates.md#rules-learned-from-review-and-from-failures).
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression
 markers, and changes to the files that configure the checks. It says what it
-found, why it matters and what to do, and it does not fail. Three things keep
+found, why it matters and what to do, and it does not fail. Two things keep
 its report short:
 - A skip needs its reason: the message of the skip, or a comment on its line
   or the line directly above. Then a maintainer approves the reason and you
@@ -353,8 +386,6 @@ its report short:
   build tag on a Go test file) is named with how far it reaches.
 - A test you rename in place is listed, not questioned. So is a test whose
   body becomes a helper that your tests call.
-- An import that must follow the line that sets the import path takes
-  `# noqa: E402` and is not counted as a suppression. Every other marker is.
 
 ```bash
 python scripts/integrity_check.py                 # your branch against origin/dev

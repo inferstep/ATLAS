@@ -16,7 +16,9 @@ RUN git init /llama.cpp && \
     # at the pinned rev (test.yml llama-patches-apply).
     sed -i '/auto params_dft = params_base;/a\        params_dft.embedding = false;  // ATLAS: draft never needs embeddings' \
         tools/server/server-context.cpp && \
-    cmake -B build -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="120;121" && \
+    # GGML_NATIVE off: the CPU part is built for a named processor level (SSE4.2,
+    # AVX, AVX2, BMI2, FMA, F16C), not for the processor of the build machine.
+    cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_CUDA_ARCHITECTURES="120;121" && \
     cmake --build build --config Release -j$(nproc)
 
 # nvidia/cuda:12.9.0-runtime-rockylinux9 — digest-pinned for reproducible builds (Dependabot maintains)

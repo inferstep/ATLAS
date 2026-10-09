@@ -41,3 +41,17 @@ body:
       label: Relevant logs
       description: "Proxy or v3-service logs around the failure (`docker compose logs atlas-proxy` / `docker compose logs v3-service`)."
       render: text
+  - type: dropdown
+    id: cause
+    attributes:
+      label: Cause
+      description: Leave this as it is. A maintainer sets it when the issue closes.
+      options:
+        - Not known yet
+        - A check was missing
+        - Checks ran in the wrong order
+        - Parsing
+        - Tool protocol
+        - Documentation
+        - Other
+      default: 0
