@@ -260,31 +260,38 @@ def test_the_settings_get_the_one_mirror_and_every_other_key_stays(before):
         {key: value for key, value in old.items() if key != "registry-mirrors"}
 
 
-def test_on_a_runner_which_has_no_settings_file_the_file_is_made_with_the_one_key(tmp_path):
-    settings = tmp_path / "daemon.json"
-    done = subprocess.run([sys.executable, str(SCRIPT), str(settings)], capture_output=True, text=True, timeout=60, check=False)
-    assert done.returncode == 0, done.stderr
-    assert json.loads(settings.read_text(encoding="utf-8")) == {"registry-mirrors": ["https://mirror.gcr.io"]}
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["daemon.json"]
+def filtered(text):
+    """Run the script as the step runs it: the settings go in as text, the new settings come out as text."""
+    return subprocess.run([sys.executable, str(SCRIPT)], input=text, capture_output=True, text=True, timeout=60, check=False)
 
 
-def test_a_settings_file_that_is_there_keeps_its_keys(tmp_path):
-    settings = tmp_path / "daemon.json"
-    settings.write_text('{"debug": true, "dns": ["10.0.0.2"]}', encoding="utf-8")
-    done = subprocess.run([sys.executable, str(SCRIPT), str(settings)], capture_output=True, text=True, timeout=60, check=False)
+def test_with_no_settings_as_on_a_runner_the_script_prints_the_one_key():
+    done = filtered("")
     assert done.returncode == 0, done.stderr
-    assert json.loads(settings.read_text(encoding="utf-8")) == {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]}
+    assert json.loads(done.stdout) == {"registry-mirrors": ["https://mirror.gcr.io"]}
+
+
+def test_settings_that_are_there_keep_their_keys():
+    done = filtered('{"debug": true, "dns": ["10.0.0.2"]}')
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]}
 
 
 @pytest.mark.parametrize("content", ["[1]", '"text"', "7", "null", "{not json", '{"a": 1} trailing'])
-def test_settings_that_are_not_one_object_are_not_written_and_the_message_says_the_fix(tmp_path, content):
-    settings = tmp_path / "daemon.json"
-    settings.write_text(content, encoding="utf-8")
-    done = subprocess.run([sys.executable, str(SCRIPT), str(settings)], capture_output=True, text=True, timeout=60, check=False)
+def test_settings_that_are_not_one_object_print_nothing_and_the_message_says_the_fix(content):
+    done = filtered(content)
     assert done.returncode == 1
-    assert settings.read_text(encoding="utf-8") == content
-    assert "was not changed" in done.stderr
+    assert done.stdout == ""
+    assert "were not changed" in done.stderr
     assert "Fix:" in done.stderr
+
+
+def test_the_script_opens_no_file():
+    # The step reads the settings file and puts the new one in its place. A script that took the path of a file
+    # from its caller would write wherever the caller says.
+    source = SCRIPT.read_text(encoding="utf-8")
+    for word in ("open(", "pathlib", "read_text", "write_text", "os.path"):
+        assert word not in source, f"scripts/docker_hub_mirror.py uses `{word}`: it is a filter from its input to its output"
 
 
 @pytest.mark.parametrize("named, has", [
@@ -322,10 +329,12 @@ def test_another_name_is_not_asked_of_the_mirror_and_the_message_says_the_fix(im
     assert "Fix:" in done.stderr
 
 
-@pytest.mark.parametrize("arguments", [[], ["--other", "x"], ["a", "b"], ["--asked-first"], ["--at-the-mirror"]])
+@pytest.mark.parametrize("arguments", [["a file"], ["--other", "x"], ["a", "b"], ["--asked-first"], ["--at-the-mirror"]])
 def test_another_call_of_the_script_writes_nothing_and_says_how_it_is_called(tmp_path, arguments):
-    done = subprocess.run([sys.executable, str(SCRIPT), *arguments], capture_output=True, text=True, timeout=60, check=False, cwd=tmp_path)
+    done = subprocess.run([sys.executable, str(SCRIPT), *arguments], input="{}", capture_output=True, text=True, timeout=60, check=False,
+                          cwd=tmp_path)
     assert done.returncode == 1
+    assert done.stdout == ""
     assert "usage:" in done.stderr
     assert list(tmp_path.iterdir()) == []
 
@@ -346,15 +355,23 @@ def stand_in(folder, name, body):
 INFO = 'echo \'["https://mirror.gcr.io/"]\''
 
 
-def run_a_step(tmp_path, number, restart="exit 0", docker=INFO, content=None, images=""):
+RUNS_NOTHING = 'echo "sudo $*" >> "$CALLS"\nexit 97'
+
+
+def run_a_step(tmp_path, number, restart="exit 0", docker=INFO, content=None, images="", settings=None, sudo='exec "$@"'):
     """Run the shell of one step of the action. `sudo` runs its command as it is, `systemctl` and `docker` answer as
-    the test says, and the settings file is one of the test's own."""
+    the test says, and the settings file is one of the test's own, in the folder for temporary files.
+
+    A test that names a file outside that folder gives `sudo` as RUNS_NOTHING: when the step does not refuse the
+    name, the test is red and still nothing was done to that file."""
     tools = tmp_path / "tools"
     tools.mkdir()
-    settings = tmp_path / "daemon.json"
+    (tmp_path / "temporary").mkdir()
+    settings = tmp_path / "temporary" / "docker" / "daemon.json" if settings is None else settings
     if content is not None:
+        settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(content, encoding="utf-8")
-    stand_in(tools, "sudo", 'exec "$@"')
+    stand_in(tools, "sudo", sudo)
     stand_in(tools, "systemctl", f'echo "systemctl $*" >> "{tmp_path}/calls"\n{restart}')
     stand_in(tools, "docker", f'echo "docker $*" >> "{tmp_path}/calls"\n{docker}')
     stand_in(tools, "journalctl", 'echo "a line of the service"')
@@ -364,7 +381,8 @@ def run_a_step(tmp_path, number, restart="exit 0", docker=INFO, content=None, im
     script = tmp_path / "step.sh"
     script.write_text(steps[number]["run"], encoding="utf-8")
     environment = {"PATH": f"{tools}{os.pathsep}/usr/bin{os.pathsep}/bin", "GITHUB_ACTION_PATH": str(ACTION.parent),
-                   "DOCKER_SETTINGS_FILE": str(settings), "HOME": str(tmp_path), "IMAGES": images}
+                   "DOCKER_SETTINGS_FILE": str(settings), "HOME": str(tmp_path), "IMAGES": images,
+                   "TMPDIR": str(tmp_path / "temporary"), "CALLS": str(tmp_path / "calls")}
     done = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=120, check=False, env=environment, cwd=tmp_path)
     calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines() if (tmp_path / "calls").exists() else []
     return done, calls, settings
@@ -377,6 +395,16 @@ def test_the_first_step_sets_the_mirror_starts_the_service_again_and_asks_it(tmp
     assert calls == ["systemctl restart docker", "docker info --format {{json .RegistryConfig.Mirrors}}"]
     assert "The Docker service asks the mirror first and Docker Hub second." in done.stdout
     assert "::error::" not in done.stdout
+    # The file that the step made for the new settings is gone again.
+    assert sorted(path.name for path in (tmp_path / "temporary").iterdir()) == ["docker"]
+    assert sorted(path.name for path in settings.parent.iterdir()) == ["daemon.json"]
+
+
+def test_the_first_step_keeps_the_other_settings_of_a_file_that_is_there(tmp_path):
+    done, _calls, settings = run_a_step(tmp_path, 0, content='{"debug": true, "dns": ["10.0.0.2"]}\n')
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert json.loads(settings.read_text(encoding="utf-8")) == {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]}
+    assert stat.S_IMODE(settings.stat().st_mode) == 0o644
 
 
 def test_when_the_service_does_not_start_again_the_step_fails_and_nothing_asks_docker(tmp_path):
@@ -443,13 +471,30 @@ def test_an_image_that_the_mirror_cannot_be_asked_for_fails_the_step(tmp_path, i
     assert "::error::The step was given an image that it cannot ask the mirror for" in done.stdout
 
 
+@pytest.mark.parametrize("named", ["{here}/outside/daemon.json", "{here}/temporary/../outside/daemon.json",
+                                   "{here}/temporary/docker/../../outside.json", "/etc/passwd", "/etc/docker/other.json",
+                                   "/etc/docker/daemon.json/../../passwd", "daemon.json", "./daemon.json"])
+def test_the_step_writes_no_other_file_than_the_settings_of_the_service_or_one_in_the_temporary_folder(tmp_path, named):
+    done, calls, _settings = run_a_step(tmp_path, 0, settings=Path(named.format(here=tmp_path)), sudo=RUNS_NOTHING)
+    assert done.returncode == 1
+    assert "::error::This step writes the settings file of the Docker service and no other file" in done.stdout
+    assert calls == []
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["step.sh", "temporary", "tools"]
+
+
+def test_with_no_file_named_the_step_takes_the_settings_file_of_the_service():
+    _loaded, steps = the_steps()
+    assert 'settings="${DOCKER_SETTINGS_FILE:-/etc/docker/daemon.json}"\n' in steps[0]["run"]
+    assert steps[0]["run"].count("/etc/docker/daemon.json") == 2
+
+
 def test_each_error_of_the_action_says_the_fix_and_ends_the_step():
     loaded, steps = the_steps()
     assert loaded["runs"]["using"] == "composite"
     assert [set(step) for step in steps] == [{"name", "shell", "run"}, {"name", "shell", "env", "run"}]
     lines = [line for step in steps for line in step["run"].splitlines()]
     errors = [n for n, line in enumerate(lines) if "::error::" in line]
-    assert len(errors) == 5
+    assert len(errors) == 6
     for n in errors:
         assert "Fix:" in lines[n], lines[n]
         assert "exit 1" in [line.strip() for line in lines[n + 1:n + 4]], lines[n]

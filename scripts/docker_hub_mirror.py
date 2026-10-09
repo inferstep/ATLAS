@@ -6,9 +6,10 @@ token service does not answer. The change under test is not at fault then. With 
 service asks the mirror first and Docker Hub second (docs/quality/gates.md, section "Docker Hub and the checks").
 
 usage:
-  docker_hub_mirror.py <the settings file of the Docker service>
-      Sets the one key `registry-mirrors` in the file. Every other key stays as it is. A file that is not there, or
-      that is empty, becomes a file with that one key.
+  docker_hub_mirror.py < the settings of the Docker service
+      Reads the text of the settings file and prints it with the one key `registry-mirrors` set. Every other key
+      stays as it is. An empty text gives settings with that one key. This script opens no file: the step that
+      calls it reads the file and puts the new one in its place.
   docker_hub_mirror.py --asked-first '<the mirrors that `docker info` names, as JSON>'
       Says whether the running service has the mirror.
   docker_hub_mirror.py --at-the-mirror <an image of Docker Hub, by name and tag>
@@ -18,14 +19,13 @@ A runner of GitHub is logged in to Docker Hub. For `docker run` and `docker pull
 login to the mirror too, and the mirror refuses a login that it does not know. So the step pulls an image that a
 job runs by the mirror's own name, with which no login goes, and gives it the name of Docker Hub.
 
-Exit status: 0 done, or the service has the mirror; 1 not so, and for the settings file nothing was written.
+Exit status: 0 done, or the service has the mirror; 1 not so, and then nothing is printed.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
-from pathlib import Path
 
 # Google's public mirror of Docker Hub. The builder jobs name the same host in the settings of their builder.
 MIRROR = "https://mirror.gcr.io"
@@ -77,19 +77,17 @@ def main(argv: list | None = None) -> int:
                   "name that the job runs, with its tag; an image of another registry needs no mirror.", file=sys.stderr)
             return 1
         return 0
-    if len(args) != 1 or args[0].startswith("-"):
+    if args:
         print(__doc__, file=sys.stderr)
         return 1
-    path = Path(args[0])
     try:
-        text = with_the_mirror(path.read_text(encoding="utf-8") if path.exists() else "")
-    except (ValueError, TypeError, OSError) as error:
-        print(f"docker hub mirror: the settings file `{path}` was not changed: {error}. So the Docker service has no "
-              "mirror, and a pull is refused when Docker Hub refuses it. Fix: look at the file on the runner (the "
-              "step prints it); this script expects one JSON object in it.", file=sys.stderr)
+        text = with_the_mirror(sys.stdin.read())
+    except (ValueError, TypeError) as error:
+        print(f"docker hub mirror: the settings of the Docker service were not changed: {error}. So the service has "
+              "no mirror, and a pull is refused when Docker Hub refuses it. Fix: look at the settings file on the "
+              "runner (the step prints it); this script expects one JSON object in it.", file=sys.stderr)
         return 1
-    path.write_text(text, encoding="utf-8")
-    print(f"docker hub mirror: `{path}` names the mirror `{MIRROR}`; every other setting is as it was.")
+    sys.stdout.write(text)
     return 0
 
 
