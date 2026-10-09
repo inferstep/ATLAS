@@ -1,11 +1,11 @@
 name: try docker hub mirror
 
-# A try by hand on a branch of its own. It is never merged. The second run
-# showed the cause: a runner is logged in to Docker Hub, the Docker service
-# sends that login to the mirror for `docker run` and `docker pull`, and the
-# mirror refuses it. This run tries the repair, with Docker Hub pointed to
-# nowhere and the runner's login as it is. The last step of each job holds
-# the results against what each has to be.
+# A try by hand on a branch of its own. It is never merged. The third run
+# showed that a builder whose own image is named at the mirror builds with
+# Docker Hub pointed to nowhere. This run is its control: the same builder
+# with no mirror in its own settings has to fail at its base images. If it
+# passes, the block does not reach the builder and the third run showed
+# nothing about the base images.
 
 on:
   push:
@@ -23,79 +23,8 @@ env:
   HUB: registry-1.docker.io auth.docker.io production.cloudflare.docker.com
 
 jobs:
-  run-and-build:
-    name: docker run, a plain build and a compose build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: point Docker Hub to nowhere
-        run: |
-          echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
-          if curl -s -o /dev/null -m 10 https://registry-1.docker.io/v2/; then
-            echo "::error::Docker Hub still answers after the block, so this try shows nothing."
-            exit 1
-          fi
-      # zizmor asks for the `$/` form here; actionlint does not read that form yet.
-      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-        with:
-          images: |
-            ubuntu:22.04
-            rockylinux/rockylinux:9
-      - name: G0. control, an image that the step was not given (has to fail)
-        id: g0
-        continue-on-error: true
-        run: docker run --rm debian:12 true
-      - name: G. docker run of the two images that the step was given
-        id: g
-        continue-on-error: true
-        run: |
-          for image in ubuntu:22.04 rockylinux/rockylinux:9; do
-            docker run --rm "$image" sh -c '. /etc/os-release && echo "ran: $PRETTY_NAME"'
-          done
-      - name: H. the real build of the sandbox image, and the sandbox answers
-        id: h
-        continue-on-error: true
-        run: |
-          docker build -t try-sandbox ./sandbox
-          docker run -d --name try-sandbox -p 8020:8020 try-sandbox
-          for _ in $(seq 1 30); do
-            if curl -sf -m 5 -o /dev/null http://127.0.0.1:8020/health; then echo "The sandbox answers."; exit 0; fi
-            sleep 2
-          done
-          docker logs --tail 40 try-sandbox
-          exit 1
-      - name: I. docker compose build of the sandbox service
-        id: i
-        continue-on-error: true
-        run: |
-          mkdir -p "$RUNNER_TEMP/workspace" "$RUNNER_TEMP/no-secrets"
-          {
-            echo "ATLAS_SANDBOX_UID=$(id -u)"
-            echo "ATLAS_SANDBOX_GID=$(id -g)"
-            echo "ATLAS_PROJECT_DIR=$RUNNER_TEMP/workspace"
-            echo "ATLAS_SECRETS_DIR=$RUNNER_TEMP/no-secrets"
-            echo "ATLAS_MODEL_FILE=not-read-by-the-sandbox"
-            echo "ATLAS_MODEL_NAME=not-read-by-the-sandbox"
-          } > "$RUNNER_TEMP/sandbox.env"
-          docker compose --env-file "$RUNNER_TEMP/sandbox.env" build --no-cache sandbox
-      - name: the results against what each has to be
-        env:
-          G0: ${{ steps.g0.outcome }}
-          G: ${{ steps.g.outcome }}
-          H: ${{ steps.h.outcome }}
-          I: ${{ steps.i.outcome }}
-        run: |
-          echo "G0, an image not given to the step: $G0 (has to be failure)"
-          echo "G, the two images given to the step:  $G (has to be success)"
-          echo "H, the build of the sandbox image:    $H (has to be success)"
-          echo "I, the compose build of the sandbox:  $I (has to be success)"
-          [ "$G0" = failure ] && [ "$G" = success ] && [ "$H" = success ] && [ "$I" = success ]
-
-  builder-image-on-the-machine:
-    name: F1. builder, its image pulled from the mirror under the name of Docker Hub
+  builder-control:
+    name: builder control, no mirror in the builder's settings (the build has to fail)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -106,18 +35,17 @@ jobs:
         run: echo "0.0.0.0 $HUB" | sudo tee -a /etc/hosts
       # zizmor asks for the `$/` form here; actionlint does not read that form yet.
       - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-        with:
-          images: moby/buildkit:buildx-stable-1
       - name: set up the builder
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
         with:
           # The runner's own network is for this try alone: it is how the
           # block of Docker Hub reaches the builder's container.
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
+          driver-opts: |
+            image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+            network=host
       - name: build the proxy image
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: ./proxy
@@ -125,9 +53,18 @@ jobs:
           push: false
           provenance: false
           no-cache: true
+      - name: the control has to fail
+        env:
+          BUILD: ${{ steps.build.outcome }}
+        run: |
+          echo "the build: $BUILD (has to be failure)"
+          if [ "$BUILD" != failure ]; then
+            echo "::error::The control passed: the builder reached Docker Hub, so the block does not reach it and the third run showed nothing about the base images."
+            exit 1
+          fi
 
-  builder-image-named-at-the-mirror:
-    name: F2. builder, its image named at the mirror
+  builder-with-mirror:
+    name: builder with the mirror in its settings (the build has to pass)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
