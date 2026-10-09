@@ -34,11 +34,22 @@ runs:
           cat
           echo '```'
         }
-        if ! sudo python3 "$script" "$settings"; then
+        # The script opens no file. This step reads the settings and puts
+        # the new ones in their place; a runner has no settings file at first.
+        old=""
+        if sudo test -e "$settings"; then
+          old="$(sudo cat "$settings")"
+        fi
+        new="$(mktemp)"
+        if ! printf '%s' "$old" | python3 "$script" > "$new"; then
           echo "::error::The settings file of the Docker service could not get the mirror of Docker Hub (the line above says why), so this job stops before its first docker command. Fix: read the file below; scripts/docker_hub_mirror.py expects one JSON object in it."
-          sudo cat "$settings" 2>&1 | show || true
+          printf '%s\n' "$old" | show || true
           exit 1
         fi
+        sudo mkdir -p "$(dirname "$settings")"
+        sudo install -m 0644 "$new" "$settings"
+        rm -f -- "${new:?}"
+        echo "The settings file of the Docker service names the mirror; every other setting is as it was."
         if ! sudo systemctl restart docker; then
           echo "::error::The Docker service did not start again with the mirror in its settings, so no later step can use Docker. Fix: read the lines of the service below. When the settings are at fault, the change belongs in scripts/docker_hub_mirror.py."
           sudo journalctl --unit docker --no-pager --lines 40 2>&1 | show || true
