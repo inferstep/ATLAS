@@ -753,6 +753,35 @@ def test_without_a_token_it_stops_with_a_fix(tmp_path):
     assert "fix:" in done.stderr
 
 
+def test_the_compose_plant_is_in_an_overlay_file_that_no_job_starts_a_service_from(manifest):
+    # The job `sandbox tests (containerized)` builds and starts the sandbox through docker-compose.yml. With the
+    # plant in that file the job stops before a test runs, red for another cause than its own plant.
+    (plant,) = [entry for entry in manifest["plants"] if entry["id"] == "docker compose config"]
+    assert re.fullmatch(r"docker-compose\.[a-z]+\.yml", plant["path"]), (
+        f"the plant of `docker compose config` is in {plant['path']}. A job that starts a service through the compose "
+        "file is then red for this plant and not for its own. Fix: plant it in an overlay file, which the compose "
+        "check validates too.")
+    assert (ROOT / plant["path"]).is_file()
+    assert f'"{plant["path"]}"' in (ROOT / "scripts" / "production-readiness.py").read_text(encoding="utf-8")
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        for job in yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"].values():
+            for step in job.get("steps", []):
+                assert plant["path"] not in step.get("run", ""), f"{path.name}: a step reads {plant['path']}, where the compose plant is"
+
+
+def test_the_page_names_the_checks_with_no_violation_as_the_list_has_them(manifest):
+    page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
+    table = page[page.index("Checks with no violation, and why:"):page.index("No check with no violation of its own is red")]
+    codeql = [name for name in manifest["not_covered"] if name.startswith("codeql (")]
+    number = {3: "three", 4: "four", 5: "five", 6: "six"}[len(codeql)]
+    assert f"the {number} `codeql` jobs" in table, (
+        f"the list has {len(codeql)} codeql jobs with no violation, and the table of the gates page gives another "
+        "number. Fix: give the page the number of the list.")
+    for name in ("smoke result", ".github/dependabot.yml", "codecov/patch", "dependency review", "integrity check", "checks ran"):
+        assert f"`{name}`" in table, f"the table of the gates page does not name `{name}`"
+        assert name in manifest["not_covered"] or name in manifest["other_checks"], name
+
+
 def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     data = json.loads((ROOT / ".github" / "canary.json").read_text(encoding="utf-8"))
     assert set(data) == {"branch", "title", "max_age_days", "ruled_branches", "server", "plants", "not_covered", "other_checks",
