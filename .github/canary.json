@@ -265,10 +265,10 @@
       "red": [
         "docker compose config"
       ],
-      "what": "a top-level key that Compose does not know, at the end of docker-compose.yml",
+      "what": "a top-level key that Compose does not know, at the end of docker-compose.rocm.yml, an overlay file that this job validates and that no other job starts a service from",
       "shows": "canary_must_fail",
       "action": "append",
-      "path": "docker-compose.yml",
+      "path": "docker-compose.rocm.yml",
       "lines": [
         "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
         "canary_must_fail: true"
@@ -497,6 +497,8 @@
     "codeql (go)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "codeql (java-kotlin)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "smoke result": "It turns red only for a pull request that changes text which every request to the model carries. No planted file is such text.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
     "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
@@ -519,7 +521,8 @@
     "CodeQL": "The result of the code scanning service. A finding of the planted files does not turn it red.",
     "SonarCloud": "The result of the service's own app. A finding of the planted files does not turn it red.",
     "SonarCloud Code Analysis": "The service's quality gate. The planted files do not fail it.",
-    "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary."
+    "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary.",
+    ".github/dependabot.yml": "GitHub's own check of the Dependabot settings file. No planted file changes that file."
   },
   "side_effects": {}
 }

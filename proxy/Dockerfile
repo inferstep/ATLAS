@@ -39,3 +39,5 @@ COPY --from=builder /build/atlas-proxy-v2 /usr/local/bin/atlas-proxy-v2
 USER atlas
 EXPOSE 8090
 CMD ["atlas-proxy-v2"]
+# Planted by scripts/canary.py for the canary pull request. Never merge it.
+RUN cd /tmp

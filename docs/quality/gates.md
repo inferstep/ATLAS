@@ -799,7 +799,9 @@ Checks with no violation, and why:
 
 | Check | Why it has none |
 |---|---|
-| the three `codeql` jobs, `CodeQL`, `sonar scan`, `SonarCloud`, `SonarCloud Code Analysis` | They report findings. A finding in the planted files does not turn them red |
+| the four `codeql` jobs, `CodeQL`, `sonar scan`, `SonarCloud`, `SonarCloud Code Analysis` | They report findings. A finding in the planted files does not turn them red |
+| `smoke result` | It turns red only for a pull request that changes text which every request to the model carries. No planted file is such text |
+| `.github/dependabot.yml` | GitHub's own check of the Dependabot settings file. No planted file changes that file |
 | `codecov/patch` | The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary |
 | `dependency review` | It turns red only for a dependency with a published advisory, and none is planted |
 | the four `PR build check` jobs | A build that fails makes other jobs red for the wrong reason |

@@ -84,3 +84,5 @@ services:
   # geometric-lens, v3-service, sandbox, atlas-proxy: no override
   # needed — all CPU-only services. They keep the base-file definition
   # unchanged. The override merge leaves them alone.
+# Planted by scripts/canary.py for the canary pull request. Never merge it.
+canary_must_fail: true
