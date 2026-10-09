@@ -724,6 +724,32 @@ def _sandbox_safe_filename(filename: str) -> Optional[str]:
 # The sandbox's run cap for one execution, sent with every request.
 _EXECUTE_TIMEOUT_S = 15
 
+# The outcomes of an /execute answer under which the sandbox stopped the run at
+# a limit, and the line for each when the answer brings no message of its own.
+_STOPPED_AT_A_LIMIT = {
+    "timed_out": "Execution timed out",
+    "memory_exhausted": "Execution stopped at the memory limit",
+    "process_limit_exceeded": "Execution stopped at the limit of processes",
+    "output_limit_exceeded": "Execution stopped at the output limit",
+}
+
+
+def _error_text(answer: dict) -> str:
+    """The error text of an /execute answer, for the repair step and for the record of a run.
+
+    A program that the sandbox stops at a limit writes nothing about it, so its
+    error stream alone reads as a failure with no cause. The limit is taken
+    from the answer's `outcome` field, never from words in `stderr`, and is
+    the first line of the text: the first line of the answer's message, which
+    names the limit with its size.
+    """
+    stderr = answer.get("stderr", "") or ""
+    outcome = answer.get("outcome")
+    if outcome not in _STOPPED_AT_A_LIMIT:
+        return stderr
+    said = (answer.get("error_message") or "").split("\n", 1)[0] or _STOPPED_AT_A_LIMIT[outcome]
+    return "\n".join(part for part in (said, stderr) if part)
+
 
 class SandboxAdapter:
     """Calls the sandbox service for code execution.
@@ -779,7 +805,7 @@ class SandboxAdapter:
             _client_timeout = max(45, _EXECUTE_TIMEOUT_S + 30)
             with urllib.request.urlopen(req, timeout=_client_timeout) as resp:
                 data = json.loads(resp.read())
-                return data.get("success", False), data.get("stdout", ""), data.get("stderr", "")
+                return data.get("success", False), data.get("stdout", ""), _error_text(data)
         except Exception as e:
             return False, "", str(e)
 

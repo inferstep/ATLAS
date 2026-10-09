@@ -51,11 +51,11 @@ GATE_FILES = (
     ".golangci.yml", ".golangci.yaml", ".codescene/", "codecov.yml",
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "tests/perf/budgets.json", "tests/replay/recordings/",
-    "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py",
+    "scripts/integrity_check.py", "scripts/code_health.py", "scripts/production-readiness.py", "scripts/fix_tests.py",
     "scripts/checks_ran.py", "scripts/change_base.py", "scripts/queue_run.py", "scripts/go_test_build.py",
     "scripts/verify.py", "scripts/canary.py", "scripts/smoke_result.py",
     "scripts/dockerfile_lint.py", "scripts/check_dockerfile_sources.py", "scripts/check_min_python.py",
-    "scripts/staging-integration.py",
+    "scripts/staging-integration.py", "scripts/licence_names.py",
     "scripts/ci-lock.sh", "scripts/release-tag.sh", "scripts/setup/environments.sh", "scripts/setup/rulesets.sh",
     # The settings file of each linter of the pipeline, should one appear.
     ".hadolint.yaml", ".hadolint.yml", ".github/zizmor.yml", "zizmor.yml", ".github/actionlint.yaml",
@@ -65,7 +65,7 @@ GATE_FILES = (
 )
 # Scripts that a workflow runs with a credential that can write: a token with
 # a write permission, an app token, a right to publish.
-WRITE_CREDENTIAL_SCRIPTS = ("scripts/bot/", "scripts/star-history-chart.py")
+WRITE_CREDENTIAL_SCRIPTS = ("scripts/bot/", "scripts/star-history-chart.py", "scripts/weekly_cleanup.py")
 # Scripts that a workflow runs and that are neither: the thing under test, in
 # a job that cannot write. Each with its reason.
 RUN_NOT_GATE = {

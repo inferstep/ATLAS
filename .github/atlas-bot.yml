@@ -22,6 +22,48 @@ links:
 rfc_dedupe:
   max_links: 5
 
+# The size label and the risk label of a pull request
+# (scripts/bot/pr_labels.py says what each is computed from).
+pull_requests:
+  # The smallest number of changed lines for each size label. The lines of
+  # lock files, tests and documents (not_counted) are left out.
+  sizes:
+    S: 0
+    M: 100
+    L: 400
+    XL: 1000
+  # A pull request of this size or larger is high risk.
+  high_risk_from: L
+  risk_label: risk:high
+  # What does not count for the size -> what such files are. An entry is the
+  # end of a path, or a folder at any depth with all that is in it (it ends
+  # with "/").
+  not_counted:
+    package-lock.json: lock files
+    go.sum: lock files
+    .github/requirements/ci.txt: lock files
+    tests/: tests
+    test/: tests
+    _test.go: tests
+    docs/: documents
+    .md: documents
+  # Path -> what it is. A pull request that changes one is high risk. An
+  # entry is one file, a folder with all that is in it (it ends with "/"),
+  # or the start of a name (it ends with "*"). The workflows are not here:
+  # the integrity check names a change to one on the pull request, for a
+  # maintainer's approval.
+  core_paths:
+    proxy/agent.go: the agent loop
+    proxy/tools.go: the tool handlers
+    proxy/gates.go: the guards
+    proxy/guardrails.go: the guards
+    proxy/permissions.go: the guards
+    proxy/authorization_*: the guards
+    proxy/shell_wrapper.go: the guards
+    proxy/confined_dir.go: the guards
+    sandbox/executor_server.py: the guards
+    sandbox/resource_contract.py: the guards
+
 # Path prefix -> area label, for pull requests. A file can match several.
 areas:
   proxy/: area/proxy

@@ -982,7 +982,9 @@ Execute code in an isolated environment.
   "stderr": "",
   "error_type": null,
   "error_message": null,
-  "execution_time_ms": 45
+  "execution_time_ms": 45,
+  "timed_out": false,
+  "outcome": "completed"
 }
 ```
 
@@ -994,10 +996,12 @@ Execute code in an isolated environment.
 | `tests_passed` | int | Number of tests that passed |
 | `lint_score` | float? | Pylint score 0–10 (Python only, null for other languages) |
 | `stdout` | string | Stdout output (truncated to last 4000 chars) |
-| `stderr` | string | Stderr output (truncated to last 2000 chars) |
-| `error_type` | string? | Error classification (e.g. `SyntaxError`, `CompileError`, `Timeout`, `ImportError`) |
-| `error_message` | string? | First 500 chars of error details |
+| `stderr` | string | Stderr output (truncated to last 2000 chars). It is what the program itself wrote: a program that is stopped at a limit writes nothing about it |
+| `error_type` | string? | Error classification (e.g. `SyntaxError`, `CompileError`, `ImportError`). For a run that was stopped at a limit it is `Timeout`, `MemoryLimit`, `ProcessLimit` or `OutputLimit`, taken from `outcome` |
+| `error_message` | string? | First 500 chars of error details. For a run that was stopped at a limit its first line names the limit, as in `Execution timed out after 5s` |
 | `execution_time_ms` | int | Execution time in milliseconds |
+| `timed_out` | bool | Whether the run was stopped at its time limit |
+| `outcome` | string | How the run ended. `completed`: it reached its own end, and `success` says whether it passed. Any other value means that it was stopped: `timed_out`, `memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `cancelled`, `spawn_failed`, `internal_unclassified` |
 
 ### POST /syntax-check
 

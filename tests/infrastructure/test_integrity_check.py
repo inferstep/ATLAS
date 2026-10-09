@@ -577,6 +577,7 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
     ("scripts/queue_run.py", "change to a file that configures the checks"),
     ("scripts/go_test_build.py", "change to a file that configures the checks"),
     (".github/actions/upload-coverage/action.yml", "change to a file that configures the checks"),
+    ("scripts/fix_tests.py", "change to a file that configures the checks"),
     ("scripts/dockerfile_lint.py", "change to a file that configures the checks"),
     ("scripts/setup/rulesets.sh", "change to a file that configures the checks"),
     (".hadolint.yaml", "change to a file that configures the checks"),

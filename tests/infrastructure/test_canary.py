@@ -9,12 +9,13 @@ renewed.
 import http.server
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "canary.py"
 NOW = datetime(2000, 1, 10, tzinfo=timezone.utc)
-BASE_DATE = "2000-01-05T00:00:00Z"
+# The date of the oldest commit of `dev` that the canary does not have.
+LACKING_SINCE = "2000-01-05T00:00:00Z"
 
 
 def load(name):
@@ -78,7 +80,7 @@ def required(manifest):
 
 def judged(canary, manifest, runs=None, required_names=None, **pull_changes):
     found = canary.judge(manifest, pull(manifest, **pull_changes), runs_as_listed(manifest) if runs is None else runs,
-                         required(manifest) if required_names is None else required_names, BASE_DATE, NOW)
+                         required(manifest) if required_names is None else required_names, LACKING_SINCE, NOW)
     return [finding.message for finding in found]
 
 
@@ -461,10 +463,274 @@ def test_a_pull_request_that_is_not_the_canary_as_listed_is_named(canary, manife
 
 def test_a_canary_that_was_not_renewed_in_time_is_named(canary, manifest):
     late = datetime(2000, 1, 5 + manifest["max_age_days"] + 1, tzinfo=timezone.utc)
-    found = canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), BASE_DATE, late)
-    assert "days ago" in only(found).message
+    found = canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), LACKING_SINCE, late)
+    message = only(found).message
+    assert f"does not have for {manifest['max_age_days'] + 1} days (limit {manifest['max_age_days']})" in message
+    assert "Fix: Renew the canary" in message
     in_time = datetime(2000, 1, 5 + manifest["max_age_days"], tzinfo=timezone.utc)
-    assert canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), BASE_DATE, in_time) == []
+    assert canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), LACKING_SINCE, in_time) == []
+
+
+def test_a_canary_on_the_head_of_dev_is_not_old_whatever_the_age_of_its_runs(canary, manifest):
+    # Its checks ran in the year 2000, and `dev` has no commit that it lacks: they ran on the files of today.
+    much_later = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert canary.judge(manifest, pull(manifest), runs_as_listed(manifest), required(manifest), None, much_later) == []
+
+
+# --- the check as a job runs it: with no number, against what GitHub answers ---------------------------------------
+
+REPO, HEAD = "o/r", "0" * 40
+
+
+@pytest.fixture(autouse=True)
+def no_name_of_a_runner(monkeypatch):
+    """No test reads the environment of the machine it runs on. A job on a runner has names of its own there
+    (`GITHUB_REPOSITORY`, `GITHUB_STEP_SUMMARY`, ...), and the script would take them for the test's. A test that
+    needs such a name sets it."""
+    for name in [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"]:
+        monkeypatch.delenv(name)
+
+
+SEARCH = "repos/o/r/pulls?state=open&head=o%3Acanary%2Fmust-stay-red&per_page=100"
+
+
+def days_ago(days):
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_a_test_does_not_see_the_names_that_a_runner_gives_its_jobs():
+    # The fixture above took them out. Where it does not, this test is red on a runner and green on a desk.
+    assert [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"] == []
+
+
+class GitHub:
+    """What GitHub answers for a canary on which every check does what the list says. A test changes one answer."""
+
+    API = "https://api.github.invalid"
+
+    def __init__(self, manifest, runs=None, lacking=3, lacking_since=None, pulls=None, fails=()):
+        self.manifest, self.asked, self.fails = manifest, [], fails
+        self.runs = runs_as_listed(manifest) if runs is None else runs
+        commits = [{"sha": "c" * 40, "commit": {"committer": {"date": lacking_since or days_ago(2)}}}] if lacking else []
+        self.answers = {
+            SEARCH: [[pull(manifest)] if pulls is None else pulls],
+            "repos/o/r/pulls/7": [pull(manifest)],
+            f"repos/o/r/commits/{HEAD}/check-runs?per_page=100": [{"check_runs": [{k: v for k, v in run.items() if k != "log"} for run in self.runs]}],
+            "repos/o/r/rules/branches/dev?per_page=100": [[]],
+            f"repos/o/r/compare/{HEAD}...dev?per_page=100": [{"merge_base_commit": {"sha": "b" * 40, "commit": {"committer": {"date": "1999-01-01T00:00:00Z"}}},
+                                                          "total_commits": lacking, "commits": commits}],
+        }
+
+    def api(self, path, key):
+        assert key == "a-token"
+        self.asked.append(path)
+        if any(words in path for words in self.fails):
+            raise RuntimeError(f"GitHub did not answer {path}: a planted failure")
+        if "/annotations" in path:
+            run = next(run for run in self.runs if str(run["id"]) == path.split("/")[4])
+            return [[{"path": place} for place in run.get("annotation_paths", [])]]
+        return self.answers[path]
+
+    def required_names(self, rules, own):
+        return required(self.manifest)
+
+    def log_of(self, api_root, repo, job, key):
+        assert (api_root, repo, key) == (self.API, REPO, "a-token")
+        return next(run for run in self.runs if run["id"] == job)["log"]
+
+
+def checked(canary, monkeypatch, tmp_path, capsys, github, number=None):
+    """Run the check against these answers. Gives its status, what it printed, and what it wrote to the page of the run."""
+    page = tmp_path / "page.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(page))
+    monkeypatch.setattr(canary, "load_checks_ran", lambda: github)
+    monkeypatch.setattr(canary, "token", lambda: "a-token")
+    monkeypatch.setattr(canary, "repository", lambda root: REPO)
+    monkeypatch.setattr(canary, "job_log", github.log_of)
+    status = canary.check(ROOT, number)
+    printed = capsys.readouterr()
+    return status, printed.out + printed.err, page.read_text(encoding="utf-8") if page.exists() else ""
+
+
+def outside_code(page):
+    """The text of a page that is in no fenced block and in no code marks: what a reader's program may read as a
+    mention or as a link to an issue. The weekly cleanup's script has the reading; both pages are read by one rule."""
+    plain = load("weekly_cleanup").plain_part(page)
+    assert "a fenced block is not closed" not in plain
+    return plain
+
+
+def test_the_one_open_pull_request_of_the_canary_branch_is_found_and_a_canary_as_listed_passes(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest, lacking_since=days_ago(3))
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 0, printed
+    assert github.asked[0] == SEARCH
+    assert github.asked[1] == "repos/o/r/pulls/7"
+    assert "note pull request 7 at 0000000:" in printed
+    assert "note the canary stands on commit `bbbbbbb` of `dev`; `dev` is 3 commit(s) ahead, and the oldest of them is 3 day(s) old (limit 14)" in printed
+    assert printed.rstrip().endswith("canary: every listed check is red for its plant, and every listed report is there")
+    by = (datetime.now(timezone.utc) - timedelta(days=3) + timedelta(days=manifest["max_age_days"])).date().isoformat()
+    assert page.splitlines()[2] == ("**As listed.** Every listed check is red for its own violation, and every listed report is "
+                                    f"there. Renew the canary by {by}.")
+
+
+def test_with_a_number_no_pull_request_is_looked_for(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github, number=7)
+    assert status == 0, printed
+    assert SEARCH not in github.asked
+
+
+def test_a_pull_request_of_another_branch_in_the_answer_is_not_taken_for_the_canary(canary, manifest, monkeypatch, tmp_path, capsys):
+    other = pull(manifest, number=9, head={"ref": "fix/something", "sha": "9" * 40})
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, pulls=[other, pull(manifest)]))
+    assert status == 0, printed
+    assert "note pull request 7 at" in printed
+
+
+def one_run(manifest):
+    """A check that must be red, and the runs with that check as given."""
+    name = names(manifest, "red")[0]
+    return name, lambda **fields: changed(runs_as_listed(manifest), name, **fields)
+
+
+def test_a_listed_check_that_is_green_fails_the_job_and_is_named_on_the_page(canary, manifest, monkeypatch, tmp_path, capsys):
+    name, runs = one_run(manifest)
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, runs=runs(conclusion="success")))
+    assert status == 1
+    assert f"FAIL check `{name}` passed on the canary" in printed
+    assert "canary: 1 thing(s) are not as the list says" in printed
+    assert page.splitlines()[2].startswith("**A finding.** Something is not as the list says.")
+    assert f"FAIL check `{name}` passed on the canary" in page
+
+
+def test_a_listed_check_that_is_red_for_another_reason_than_its_plant_fails_the_job(canary, manifest, monkeypatch, tmp_path, capsys):
+    name, runs = one_run(manifest)
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys,
+                                     GitHub(manifest, runs=runs(log="The runner lost the network.\n")))
+    assert status == 1
+    assert f"FAIL check `{name}` is red on the canary, but not for its plant" in printed
+
+
+def test_a_listed_check_that_is_missing_fails_the_job(canary, manifest, monkeypatch, tmp_path, capsys):
+    name, _runs = one_run(manifest)
+    runs = [run for run in runs_as_listed(manifest) if run["name"] != name]
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, runs=runs))
+    assert status == 1
+    assert f"FAIL check `{name}` did not run on the canary" in printed
+
+
+def test_a_canary_whose_runs_are_of_an_old_dev_fails_the_job_and_the_page_says_when_it_had_to_be_renewed(canary, manifest, monkeypatch, tmp_path, capsys):
+    limit = manifest["max_age_days"]
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, lacking_since=days_ago(limit + 1)))
+    assert status == 1
+    assert f"FAIL `dev` has had a commit that the canary does not have for {limit + 1} days (limit {limit})" in printed
+    by = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+    assert page.splitlines()[2] == ("**A finding.** Something is not as the list says. The lines below name each thing and its "
+                                    f"fix. The canary had to be renewed by {by}.")
+
+
+def test_on_its_last_day_the_canary_still_passes(canary, manifest, monkeypatch, tmp_path, capsys):
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, lacking_since=days_ago(manifest["max_age_days"])))
+    assert status == 0, printed
+    assert f"Renew the canary by {datetime.now(timezone.utc).date().isoformat()}." in page
+
+
+def test_the_age_is_not_counted_from_the_commit_that_the_canary_stands_on(canary, manifest, monkeypatch, tmp_path, capsys):
+    # The commit that the canary stands on is from 1999 in these answers. `dev` has no newer commit.
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, lacking=0))
+    assert status == 0, printed
+    assert "note the canary stands on the head of `dev` (`bbbbbbb`), so there is nothing to renew" in printed
+    assert page.splitlines()[2].endswith("The canary stands on the head of `dev`: there is nothing to renew.")
+
+
+@pytest.mark.parametrize("fails", ["/check-runs?", "/pulls/7", "/pulls?state=open", "/compare/", "/rules/branches/", "/annotations"])
+def test_when_github_cannot_be_read_nothing_is_judged_and_that_is_not_a_pass(canary, manifest, monkeypatch, tmp_path, capsys, fails):
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, GitHub(manifest, fails=(fails,)))
+    assert status == 2
+    assert "canary: cannot read the canary pull request or its checks:" in printed
+    assert "fix: run this again" in printed
+    assert page.splitlines()[2].startswith("**Not judged.**")
+    assert "This is not a pass." in page.splitlines()[2]
+    assert "every listed check is red" not in printed + page
+
+
+def test_an_answer_of_another_shape_is_not_judged(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    # `dev` is four commits ahead by the number, and the list of those commits is empty.
+    github.answers[f"repos/o/r/compare/{HEAD}...dev?per_page=100"] = [{"merge_base_commit": {"sha": "b" * 40}, "total_commits": 4, "commits": []}]
+    status, _printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 2
+    assert page.splitlines()[2].startswith("**Not judged.**")
+
+
+@pytest.mark.parametrize("commits", [None, "not a list", [{"commit": None}], [{}], [None]])
+def test_an_answer_with_a_part_of_another_kind_is_not_judged_and_is_no_finding(canary, manifest, monkeypatch, tmp_path, capsys, commits):
+    github = GitHub(manifest)
+    github.answers[f"repos/o/r/compare/{HEAD}...dev?per_page=100"] = [{"merge_base_commit": {"sha": "b" * 40}, "total_commits": 4, "commits": commits}]
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 2, printed
+    assert page.splitlines()[2].startswith("**Not judged.**")
+
+
+def test_with_no_open_canary_pull_request_the_job_fails_and_says_how_to_renew(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest, pulls=[])
+    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1
+    assert "FAIL no pull request from `canary/must-stay-red` is open, so no run shows that a check still turns red. Fix: Renew the canary" in printed
+    assert github.asked == [SEARCH]
+    assert page.splitlines()[2].startswith("**A finding.**")
+
+
+def test_with_two_open_canary_pull_requests_the_job_fails_and_names_both(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest, pulls=[pull(manifest), pull(manifest, number=9)])
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1
+    assert "FAIL 2 pull requests from `canary/must-stay-red` are open (numbers 7, 9), and the canary is one pull request. Fix: close all but one." in printed
+    assert github.asked == [SEARCH]
+
+
+def test_nothing_that_github_or_a_file_gave_can_be_read_from_the_page_as_a_mention_or_a_link(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    # A title with one code mark in it: the marks around it in the finding would end at that mark.
+    title = "one ` mark, then @someone and #12, and ````` five"
+    github.answers["repos/o/r/pulls/7"] = [pull(manifest, title=title)]
+    status, _printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1
+    assert f"its title is `{title}`" in page
+    plain = outside_code(page)
+    assert "@" not in plain
+    assert not re.search(r"#\d", plain)
+    assert plain.splitlines()[0] == "### The canary"
+
+
+@pytest.mark.parametrize("text, fence", [("no marks", "```"), ("one ` and three ```", "````"), ("a line\n``````\nof six", "```````")])
+def test_the_fence_of_a_block_is_longer_than_any_run_of_marks_in_it(canary, text, fence):
+    block = canary.fenced(text)
+    assert block.splitlines()[0] == fence + "text"
+    assert block.splitlines()[-1] == fence
+    assert outside_code("before\n" + block + "after") == "before\nafter"
+
+
+def test_outside_a_job_the_check_writes_no_page(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(canary, "load_checks_ran", lambda: github)
+    monkeypatch.setattr(canary, "token", lambda: "a-token")
+    monkeypatch.setattr(canary, "repository", lambda root: REPO)
+    monkeypatch.setattr(canary, "job_log", github.log_of)
+    assert canary.check(ROOT, None) == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_check_only_reads(canary, manifest, monkeypatch, tmp_path, capsys):
+    github = GitHub(manifest)
+    checked(canary, monkeypatch, tmp_path, capsys, github)
+    # Every call went through the reader, which only asks. And the script has no call that sends.
+    assert len(github.asked) >= 6
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert not re.search(r"method\s*=|\bdata\s*=|[\"'](POST|PATCH|PUT|DELETE)[\"']", source)
 
 
 def test_without_a_token_it_stops_with_a_fix(tmp_path):

@@ -2415,25 +2415,6 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 // concrete evidence of breakage, so the message says that rather than
 // describing the request — the model has already seen the failure and needs
 // to act on it, not be told what verification is.
-// blockedServerStart reports whether a failed verification command failed
-// because it is a long-running process rather than because the code is
-// broken: it never exited (the sandbox timeout fired) or it could not bind
-// because something is already serving that port.
-//
-// The distinction decides what the verification gate says next. Treating it
-// as a red test tells the model to fix its code and re-run the command, and
-// re-running a blocking server start can never exit clean — an observed
-// session started the server correctly with run_background, was told to
-// "re-run the same command and confirm it exits clean", and spent its three
-// remaining bounces re-sending `done` because nothing it could do satisfied
-// that.
-func blockedServerStart(output string) bool {
-	low := strings.ToLower(output)
-	return strings.Contains(low, "execution timed out") ||
-		strings.Contains(low, "address already in use") ||
-		strings.Contains(low, "is in use by another program")
-}
-
 func verificationRejectionMessage(sawFailedVerification bool) string {
 	return verificationRejection(sawFailedVerification, false, "")
 }

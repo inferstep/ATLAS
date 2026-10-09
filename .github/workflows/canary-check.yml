@@ -1,0 +1,68 @@
+name: canary check
+
+# The canary is one draft pull request on which every listed check must be
+# red (docs/quality/gates.md, section "The canary"). Its checks run only when
+# its branch is pushed. This job reads them once a week and fails when one is
+# not as the list says, or when the canary is old. It only reads: it renews
+# nothing, opens nothing and writes no comment. A red run is the report.
+#
+# GitHub starts a scheduled run from the workflow file of the default branch
+# only. That copy is only the starter: the job checks out `dev` and runs the
+# script and the list of `dev`.
+#
+# On a pull request that changes this file or the script, the job runs with
+# the pull request's copy of both, so that such a change is shown by a real
+# run before it merges.
+
+on:
+  schedule:
+    - cron: '47 2 * * 1'   # weekly, Monday 02:47 UTC
+  workflow_dispatch: {}
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/canary-check.yml'
+      - 'scripts/canary.py'
+
+concurrency:
+  group: canary-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  check:
+    name: canary check (reads only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # The checkout, the comparison with `dev`, and the rules of the branch.
+      contents: read
+      # The canary pull request.
+      pull-requests: read
+      # The check runs of its head commit, and their notes.
+      checks: read
+      # The log of a red job, which says why the job is red.
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # A scheduled run and a run by hand read `dev`. A pull request
+          # reads itself.
+          ref: ${{ github.event_name != 'pull_request' && 'dev' || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: the packages of the script
+        run: pip install --require-hashes -r .github/requirements/ci.txt
+
+      - name: the checks of the canary against the list
+        # Status 0: as listed. 1: a finding. 2: not judged, because GitHub
+        # could not be read. 1 and 2 both fail the job, and the first line on
+        # the page of the run says which of the two it is.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/canary.py check

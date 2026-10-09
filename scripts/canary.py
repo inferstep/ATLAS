@@ -8,11 +8,17 @@ lint error, a function that is too long, and so on (.github/canary.json).
 Every listed check must be red on it. One that is green has stopped checking.
 
   scripts/canary.py plant            write the violations into this checkout
-  scripts/canary.py check --pr N     compare the checks of pull request N with the list
+  scripts/canary.py check            compare the checks of the canary pull request with the list
+  scripts/canary.py check --pr N     the same, for pull request N
 
 `plant` runs only on the canary branch. `check` reads GitHub and changes
-nothing. Its exit status: 0 when every listed check is as the list says, 1
-when one is not, 2 when the pull request or its checks cannot be read.
+nothing. With no number it takes the one open pull request of the canary
+branch. Its exit status: 0 when every listed check is as the list says, 1
+when one is not, 2 when the pull request or its checks cannot be read. A
+status of 2 is not a pass: nothing was judged.
+
+In a job, `check` also writes its result to the page of the run. The first
+line there says which of the three results it is.
 """
 
 from __future__ import annotations
@@ -25,8 +31,9 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -300,18 +307,41 @@ def notes(manifest: dict, runs: dict[str, dict]) -> list[str]:
                   for name, reason in sorted(listed.items()) if name not in runs]
 
 
-def age_finding(manifest: dict, base_date: str, now: datetime) -> list[Finding]:
-    age = (now - datetime.fromisoformat(base_date.replace("Z", "+00:00"))).days
-    if age <= manifest["max_age_days"]:
+def days_since(date: str, now: datetime) -> int:
+    return (now - datetime.fromisoformat(date.replace("Z", "+00:00"))).days
+
+
+def age_finding(manifest: dict, lacking_since: str | None, now: datetime) -> list[Finding]:
+    """The canary is old when `dev` has had a commit that the canary lacks for longer than the limit.
+
+    The date of the commit that the canary stands on does not count: on a `dev` with no new commit, a canary that
+    was renewed today stands on an old commit. A canary on the head of `dev` is not old, whatever the age of its runs.
+    """
+    if not lacking_since or days_since(lacking_since, now) <= manifest["max_age_days"]:
         return []
-    return [Finding("the canary branch", f"the canary was last renewed from `dev` {age} days ago (limit "
-                                         f"{manifest['max_age_days']}), so it shows the checks of that day and not "
-                                         f"today's. Fix: {RENEW}")]
+    return [Finding("the canary branch", f"`dev` has had a commit that the canary does not have for "
+                                         f"{days_since(lacking_since, now)} days (limit {manifest['max_age_days']}), so "
+                                         f"the canary shows the checks of that day and not today's. Fix: {RENEW}")]
 
 
-def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str], base_date: str,
+def standing(manifest: dict, behind: dict, now: datetime) -> tuple[str, str]:
+    """Where the canary stands against `dev`, as a line, and the short form of what to do about it."""
+    if not behind["since"]:
+        return (f"the canary stands on the head of `dev` (`{behind['base'][:7]}`), so there is nothing to renew",
+                "The canary stands on the head of `dev`: there is nothing to renew.")
+    age, limit = days_since(behind["since"], now), manifest["max_age_days"]
+    last = (datetime.fromisoformat(behind["since"].replace("Z", "+00:00")) + timedelta(days=limit)).date().isoformat()
+    line = (f"the canary stands on commit `{behind['base'][:7]}` of `dev`; `dev` is {behind['commits']} commit(s) ahead, "
+            f"and the oldest of them is {age} day(s) old (limit {limit})")
+    return line, (f"Renew the canary by {last}." if age <= limit else f"The canary had to be renewed by {last}.")
+
+
+def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str], lacking_since: str | None,
           now: datetime) -> list[Finding]:
-    """Every difference between the canary pull request and the list."""
+    """Every difference between the canary pull request and the list.
+
+    `lacking_since` is the date of the oldest commit of `dev` that the canary does not have, or None when it has all.
+    """
     runs, findings = latest_checks(check_runs), pull_findings(manifest, pull)
     for plant_entry in manifest["plants"]:
         for name in plant_entry.get("red", []):
@@ -319,7 +349,7 @@ def judge(manifest: dict, pull: dict, check_runs: list[dict], required: list[str
         for name in plant_entry.get("reports", []):
             findings.append(report_finding(name, runs.get(name), plant_entry))
     findings += (coverage_findings(manifest, required, list(runs)) + side_effect_findings(manifest, runs)
-                 + age_finding(manifest, base_date, now))
+                 + age_finding(manifest, lacking_since, now))
     return [finding for finding in findings if finding]
 
 
@@ -373,11 +403,25 @@ def job_log(api_root: str, repo: str, job: int, key: str) -> str:
         raise RuntimeError(f"the log of job {job} could not be read: {error}") from error
 
 
-def gather(root: Path, number: int, manifest: dict):
-    """Read the pull request, its check runs, the required checks of its base and the date of its base commit."""
-    checks, key, repo = load_checks_ran(), token(), repository(root)
-    if not key:
-        raise RuntimeError("no GitHub token: set GITHUB_TOKEN, or sign in with `gh auth login`")
+def find_pull(checks, repo: str, key: str, manifest: dict) -> tuple[int | None, list[Finding]]:
+    """The number of the one open pull request of the canary branch, or why there is not exactly one."""
+    head = urllib.parse.quote(f"{repo.split('/')[0]}:{manifest['branch']}", safe="")
+    pulls = [pull for page in checks.api(f"repos/{repo}/pulls?state=open&head={head}&per_page=100", key) for pull in page
+             if pull["head"]["ref"] == manifest["branch"]]
+    if len(pulls) == 1:
+        return pulls[0]["number"], []
+    if not pulls:
+        return None, [Finding("the canary pull request", f"no pull request from `{manifest['branch']}` is open, so no "
+                                                         f"run shows that a check still turns red. Fix: {RENEW} Then open "
+                                                         "a draft pull request from that branch.")]
+    numbers = ", ".join(str(pull["number"]) for pull in pulls)
+    return None, [Finding("the canary pull request", f"{len(pulls)} pull requests from `{manifest['branch']}` are open "
+                                                     f"(numbers {numbers}), and the canary is one pull request. Fix: "
+                                                     "close all but one.")]
+
+
+def gather(checks, repo: str, key: str, number: int, manifest: dict):
+    """Read the pull request, its check runs, the required checks of its base, and where it stands against its base."""
     pull = checks.api(f"repos/{repo}/pulls/{number}", key)[0]
     sha, base = pull["head"]["sha"], pull["base"]["ref"]
     check_runs = [run for page in checks.api(f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key)
@@ -392,32 +436,69 @@ def gather(root: Path, number: int, manifest: dict):
             # The log says why the check is red. A check run of a workflow job has the job's number.
             run["log"] = job_log(checks.API, repo, run["id"], key)
     rules = [rule for page in checks.api(f"repos/{repo}/rules/branches/{base}?per_page=100", key) for rule in page]
-    compared = checks.api(f"repos/{repo}/compare/{base}...{sha}", key)[0]
-    return pull, check_runs, checks.required_names(rules, {}), compared["merge_base_commit"]["commit"]["committer"]["date"]
+    # The commits of the base that the pull request does not have, the oldest first.
+    lacking = checks.api(f"repos/{repo}/compare/{sha}...{base}?per_page=100", key)[0]
+    behind = {"base": lacking["merge_base_commit"]["sha"], "commits": lacking["total_commits"],
+              "since": lacking["commits"][0]["commit"]["committer"]["date"] if lacking["total_commits"] else None}
+    return pull, check_runs, checks.required_names(rules, {}), behind
 
 
-def check(root: Path, number: int) -> int:
+def fenced(text: str) -> str:
+    """The text as a fenced block. The fence is longer than any run of backticks in the text, so no line ends the block
+    early, and nothing in it is read as a mention, a link to an issue or a heading."""
+    fence = "`" * max(3, max((len(run) for run in re.findall("`+", text)), default=0) + 1)
+    return f"{fence}text\n{text.strip(chr(10))}\n{fence}\n"
+
+
+# The first line of the page of a run, for each exit status. It holds fixed words only.
+FIRST_LINE = {0: "**As listed.** Every listed check is red for its own violation, and every listed report is there.",
+              1: "**A finding.** Something is not as the list says. The lines below name each thing and its fix.",
+              2: "**Not judged.** The canary pull request or its checks could not be read, so nothing is known about "
+                 "the checks. This is not a pass."}
+
+
+def told(status: int, lines: list[str], renew: str = "") -> int:
+    """Print the lines, and write the result to the page of the run when there is one. Gives the status back.
+
+    On the page, everything that comes from GitHub or from a file stands inside the fenced block.
+    """
+    print("\n".join(lines), file=sys.stderr if status == 2 else sys.stdout)
+    page = os.environ.get("GITHUB_STEP_SUMMARY")
+    if page:
+        with open(page, "a", encoding="utf-8") as out:
+            out.write(f"### The canary\n\n{FIRST_LINE[status]}{' ' + renew if renew else ''}\n\n{fenced(chr(10).join(lines))}")
+    return status
+
+
+def check(root: Path, number: int | None) -> int:
     manifest = load_manifest(root)
     try:
-        pull, check_runs, required, base_date = gather(root, number, manifest)
-        findings = judge(manifest, pull, check_runs, required, base_date, datetime.now(timezone.utc))
-    except (KeyError, ValueError, OSError, RuntimeError) as error:
-        print(f"canary: cannot read pull request #{number} or its checks: {error!r}\n"
-              "  fix: pass the number of the canary pull request, with a token that can read the repository "
-              "(GITHUB_TOKEN, or `gh auth login`).", file=sys.stderr)
-        return 2
+        checks, key, repo = load_checks_ran(), token(), repository(root)
+        if not key:
+            raise RuntimeError("no GitHub token: set GITHUB_TOKEN, or sign in with `gh auth login`")
+        if number is None:
+            number, findings = find_pull(checks, repo, key, manifest)
+            if findings:
+                return told(1, [f"FAIL {finding.message}" for finding in findings] + ["canary: there is not one canary pull request"])
+        now = datetime.now(timezone.utc)
+        pull, check_runs, required, behind = gather(checks, repo, key, number, manifest)
+        findings = judge(manifest, pull, check_runs, required, behind["since"], now)
+        where, renew = standing(manifest, behind, now)
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError, OSError, RuntimeError) as error:
+        fix = ("  fix: run this again; when it stays so, pass the number of the canary pull request with --pr, and "
+               "use a token that can read the repository (GITHUB_TOKEN, or `gh auth login`).")
+        return told(2, [f"canary: cannot read the canary pull request or its checks: {error!r}", fix])
     red = sum(len(entry.get("red", [])) for entry in manifest["plants"])
     reports = sum(len(entry.get("reports", [])) for entry in manifest["plants"])
     no_plant = len(manifest["not_covered"]) + len(manifest["other_checks"])
-    print(f"note pull request #{number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
-          f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
-    for line in notes(manifest, latest_checks(check_runs)):
-        print(f"note {line}")
-    for finding in findings:
-        print(f"FAIL {finding.message}")
-    print(f"canary: {len(findings)} thing(s) are not as the list says" if findings
-          else "canary: every listed check is red for its plant, and every listed report is there")
-    return int(bool(findings))
+    counts = (f"note pull request {number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
+              f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
+    lines = [counts, f"note {where}"]
+    lines += [f"note {line}" for line in notes(manifest, latest_checks(check_runs))]
+    lines += [f"FAIL {finding.message}" for finding in findings]
+    lines.append(f"canary: {len(findings)} thing(s) are not as the list says" if findings
+                 else "canary: every listed check is red for its plant, and every listed report is there")
+    return told(int(bool(findings)), lines, renew)
 
 
 def main() -> int:
@@ -426,7 +507,8 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("plant", help="write the violations into this checkout (canary branch only)")
     checker = commands.add_parser("check", help="compare the checks of the canary pull request with the list")
-    checker.add_argument("--pr", type=int, required=True, help="number of the canary pull request")
+    checker.add_argument("--pr", type=int, default=None,
+                         help="number of the canary pull request; without it, the one open pull request of the canary branch")
     args = parser.parse_args()
     return plant(args.root) if args.command == "plant" else check(args.root, args.pr)
 

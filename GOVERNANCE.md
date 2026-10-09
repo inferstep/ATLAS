@@ -76,7 +76,8 @@ earning maintainer trust, so every rung also has hard technical limits.
 
 **Safeguards on every rung**
 
-- Every path needs a code owner's review. The security- and
+- Every path has a code owner, whose approval a pull request into
+  `staging` or `main` needs. The security- and
   release-critical paths stay with the lead even when subsystems gain
   owners: `.github/workflows/`, `scripts/`, `sandbox/`, `SECURITY.md`,
   `docs/RELEASE.md`, `docs/PUBLISHING.md` and

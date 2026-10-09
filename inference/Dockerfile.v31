@@ -110,12 +110,18 @@ RUN cd /llama.cpp && \
 #    hit the on-disk cache. id=llama-ccache shares the cache across
 #    all Dockerfile.* in this dir; sharing=locked prevents concurrent
 #    writes if multiple builds run in parallel. #117.
+# The CPU part is built for a named processor level and not for the build
+# machine's own: with GGML_NATIVE off, llama.cpp at the pinned commit turns on
+# SSE4.2, AVX, AVX2, BMI2, FMA and F16C, and nothing above them. So the image
+# runs on every amd64 processor with AVX2, and the compile does not depend on
+# the processor of the runner it lands on.
 # Only the stats call may fail: a failed configure or compile must fail this step,
 # not surface later as a missing binary at COPY.
 RUN --mount=type=cache,id=llama-ccache,target=/root/.ccache,sharing=locked \
     cd /llama.cpp && \
     cmake -B build \
         -DGGML_CUDA=ON \
+        -DGGML_NATIVE=OFF \
         -DBUILD_SHARED_LIBS=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCH}" \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \

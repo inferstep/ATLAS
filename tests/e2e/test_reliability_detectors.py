@@ -670,6 +670,54 @@ def _states(rel, **containers):
     return rel.container_states("atlas", run=_fake_docker(containers))
 
 
+def _mounts(mounts, folders=("_reliability",)):
+    """A stand-in for subprocess.run: `docker inspect <container>` gives the host folder that the container has at
+    /workspace, and `docker exec <container> test -d <folder>` passes for the folders that are there."""
+    asked = []
+
+    def run(argv, **kw):
+        asked.append(argv[2])
+        if argv[:2] == ["docker", "inspect"]:
+            return _Proc(mounts.get(argv[2], "") + "\n")
+        if argv[:2] == ["docker", "exec"]:
+            return _Proc("", returncode=0 if argv[-1].split("/")[-1] in folders else 1)
+        raise AssertionError(f"unexpected command {argv}")
+    run.asked = asked
+    return run
+
+
+def test_the_mounts_that_are_compared_are_those_of_the_stack_under_measurement(rel):
+    # Two stacks on one host: the usual one, and one under another project name with a workspace of its own.
+    mounts = {"atlas-atlas-proxy-1": "/home/u/demo", "atlas-sandbox-1": "/home/u/demo",
+              "atlas-nightly-atlas-proxy-1": "/srv/nightly/workspace", "atlas-nightly-sandbox-1": "/srv/nightly/workspace"}
+    run = _mounts(mounts)
+    assert rel.preflight("atlas-nightly-sandbox-1", "_reliability", "atlas-nightly", run=run) == []
+    assert run.asked[:2] == ["atlas-nightly-atlas-proxy-1", "atlas-nightly-sandbox-1"]
+    assert rel.preflight("atlas-sandbox-1", "_reliability", run=_mounts(mounts)) == []
+
+
+def test_a_stack_whose_proxy_and_sandbox_have_other_folders_is_refused_under_any_project_name(rel):
+    for project, proxy, sandbox in (("atlas", "atlas-atlas-proxy-1", "atlas-sandbox-1"),
+                                    ("atlas-nightly", "atlas-nightly-atlas-proxy-1", "atlas-nightly-sandbox-1")):
+        problems = rel.preflight(sandbox, "_reliability", project, run=_mounts({proxy: "/a", sandbox: "/b"}))
+        assert len(problems) == 1 and "proxy=/a sandbox=/b" in problems[0], problems
+
+
+def test_a_run_gives_the_check_of_mounts_the_project_name_it_was_started_with(rel):
+    import ast
+    import inspect
+    calls = [node for node in ast.walk(ast.parse(inspect.getsource(rel.main)))
+             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "preflight"]
+    assert len(calls) == 1
+    assert [ast.unparse(arg) for arg in calls[0].args] == ["args.sandbox_container", "args.subdir", "args.compose_project"]
+
+
+def test_a_folder_that_the_sandbox_does_not_have_is_refused(rel):
+    mounts = {"atlas-atlas-proxy-1": "/a", "atlas-sandbox-1": "/a"}
+    problems = rel.preflight("atlas-sandbox-1", "_reliability", run=_mounts(mounts, folders=()))
+    assert len(problems) == 1 and "/workspace/_reliability does not exist inside atlas-sandbox-1" in problems[0]
+
+
 def test_a_restart_during_the_session_is_in_its_result(rel, tmp_path):
     before = _states(rel, lens=(0, False, "T1"), proxy=(0, False, "T1"))
     after = _states(rel, lens=(1, False, "T2"), proxy=(0, False, "T1"))

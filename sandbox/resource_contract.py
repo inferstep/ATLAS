@@ -79,6 +79,44 @@ def outcome_is_complete(outcome: str) -> bool:
     return outcome in COMPLETED_OUTCOMES
 
 
+# What an answer with a field for the kind of error calls a command that was
+# stopped at a ceiling. The kind comes from the outcome, never from a phrase in
+# what the command wrote: a command that is killed writes nothing about it.
+STOPPED_KINDS = {
+    OUTCOME_TIMED_OUT: "Timeout", OUTCOME_MEMORY_EXHAUSTED: "MemoryLimit",
+    OUTCOME_PROCESS_LIMIT: "ProcessLimit", OUTCOME_OUTPUT_LIMIT: "OutputLimit",
+}
+
+
+def stopped_words(outcome: str, contract: "ResourceContract") -> str:
+    """One line that names the ceiling a command was stopped at; empty for every other outcome."""
+    return {
+        OUTCOME_TIMED_OUT: f"Execution timed out after {contract.wall_seconds}s",
+        OUTCOME_MEMORY_EXHAUSTED: f"Execution stopped at the memory limit of {contract.memory_bytes // (1024 * 1024)} MiB",
+        OUTCOME_PROCESS_LIMIT: f"Execution stopped at the limit of {contract.max_processes} processes",
+        OUTCOME_OUTPUT_LIMIT: f"Execution stopped at the output limit of {contract.output_bytes} bytes",
+    }.get(outcome, "")
+
+
+def why_it_failed(run: dict, kind, classify) -> dict:
+    """The fields of an answer that say why a run failed, and how the run ended.
+
+    `run` is the result of one bounded command, with `stopped` holding the
+    line of stopped_words. A run that was stopped at a ceiling is named by
+    its outcome, and that line is the first line of its message. Its stderr
+    stays what the command itself wrote. For a run that reached its own end,
+    `kind` is the kind of a failure of this step (a compile error); with no
+    `kind`, `classify` reads the kind out of what the run wrote.
+    """
+    stderr, failed = run["stderr"], not run["success"]
+    message = "\n".join(part for part in (run.get("stopped", ""), stderr) if part)
+    return {
+        "stderr": stderr, "outcome": run["outcome"], "timed_out": run["outcome"] == OUTCOME_TIMED_OUT,
+        "error_type": (STOPPED_KINDS.get(run["outcome"]) or kind or classify(stderr)) if failed else None,
+        "error_message": message[:500] if failed else None,
+    }
+
+
 class ResourceContractError(ValueError):
     """An operator budget that cannot be enforced as written."""
 
