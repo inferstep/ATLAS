@@ -350,6 +350,31 @@ def test_a_status_names_a_step_only_from_a_list_and_the_list_holds_the_steps_of_
 
 # --- the one address ----------------------------------------------------------------------------------------------
 
+@pytest.mark.parametrize("path", [
+    f"/repos/inferstep/ATLAS/statuses/{HEAD}/../../../other", "/repos/inferstep/ATLAS/statuses/../installation",
+    f"/repos/another/ATLAS/statuses/{HEAD}", f"/repos/inferstep/ATLAS/commits/{HEAD}/statuses?per_page=100&ref=x",
+    f"/repos/inferstep/ATLAS/commits/{'A' * 40}/pulls?per_page=100", "/repos/inferstep/ATLAS/activity?ref=refs/heads/smoke/a&per_page=5",
+    "/app/installations/12/access_tokens/..", "/app/installations/x/access_tokens", "//another.example/repos/inferstep/ATLAS/installation", "",
+])
+def test_a_call_whose_path_is_not_one_that_the_script_makes_is_not_made(path, monkeypatch):
+    # A value from a file, an argument or an answer of GitHub goes into the path of a call. Whatever it holds, the
+    # call goes to one of the script's own paths or it is not made.
+    made = []
+    monkeypatch.setattr(nightly.urllib.request, "build_opener", lambda *handlers: made.append(handlers))
+    with pytest.raises(nightly.NotSent, match="its path is not one that this script makes"):
+        nightly.github("GET", path)
+    assert made == []
+
+
+@pytest.mark.parametrize("path", [
+    "/repos/inferstep/ATLAS/installation", "/app/installations/169647834/access_tokens", f"/repos/inferstep/ATLAS/statuses/{HEAD}",
+    f"/repos/inferstep/ATLAS/commits/{HEAD}/statuses?per_page=100", f"/repos/inferstep/ATLAS/commits/{HEAD}/pulls?per_page=100",
+    "/repos/inferstep/ATLAS/activity?ref=refs%2Fheads%2Fsmoke%2Fa.b_c-1&per_page=5",
+])
+def test_each_path_that_the_script_makes_is_one_that_it_takes(path):
+    assert nightly.PATHS.fullmatch(path)
+
+
 def test_the_script_has_one_address_of_github_and_no_way_to_give_it_another():
     tree = ast.parse(source())
     texts = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]

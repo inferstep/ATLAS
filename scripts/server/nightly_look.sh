@@ -22,6 +22,12 @@
 # removes the file. With no marker file it does nothing. The unit calls it
 # after every look, so a look that was stopped in its middle leaves no
 # stack down.
+#
+# The marker file has to lie on disk, in a place that a restart of the
+# server leaves as it is. Docker does not start a container again that was
+# stopped by hand, also not after a restart. So after a restart in the
+# middle of a run only the marker file says what to start, and the first
+# look after the restart starts it, before anything else.
 set -eu
 
 usage() {
@@ -41,18 +47,20 @@ shift 3
 start_again() {
     [ -f "$marker" ] || return 0
     stopped=""
+    count=0
     while read -r id; do
-        [ -n "$id" ] && stopped="$id $stopped"
+        [ -n "$id" ] && stopped="$id $stopped" && count=$((count + 1))
     done < "$marker"
     failed=0
     for id in $stopped; do
         if ! docker start "$id" > /dev/null; then
-            echo "nightly_look.sh: the container $id of the usual stack did not start again. Fix: look at it with 'docker ps --all', and start the usual stack by hand." >&2
+            echo "nightly_look.sh: the container $id of the usual stack did not start again. The next look tries again. Fix: look at it with 'docker ps --all', and start the usual stack by hand. When that container is gone for good, remove the marker file of the look: every look fails here while the file names it." >&2
             failed=1
         fi
     done
     [ "$failed" -eq 0 ] || return 1
     rm -f -- "${marker:?}"
+    echo "nightly_look.sh: the usual stack runs again: $count container(s) that a look had stopped were started."
 }
 
 case "$mode" in

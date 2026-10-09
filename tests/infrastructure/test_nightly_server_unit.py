@@ -147,12 +147,25 @@ def test_the_step_after_a_look_starts_again_what_a_look_that_did_not_end_had_sto
 
 
 def test_a_look_first_starts_again_what_an_earlier_look_left_stopped(tmp_path):
+    # A look that never ended, as after a restart of the server in the middle of a run, leaves only the marker
+    # file. The next look starts what it names before anything else, also when nothing is due, and says so.
     look = Look(tmp_path, look=3)
     look.marker.write_text("c2\nc1\n")
     look.look()
     assert look.done.returncode == 0
     assert look.calls() == [["docker", "start", "c1"], ["docker", "start", "c2"], ASKED]
     assert not look.marker.exists()
+    assert "nightly_look.sh: the usual stack runs again: 2 container(s) that a look had stopped were started." in look.done.stdout
+    # It is started once: the look after that finds no marker file and starts nothing.
+    look.look()
+    assert look.calls()[3:] == [ASKED]
+    assert "the usual stack runs again" not in look.done.stdout
+
+
+def test_a_look_with_no_marker_file_says_nothing_about_the_usual_stack(tmp_path):
+    look = Look(tmp_path, look=3).look()
+    assert look.done.returncode == 0
+    assert look.done.stdout == ""
 
 
 def test_when_the_stop_of_the_usual_stack_fails_no_run_is_started_and_the_marker_names_what_was_to_stop(tmp_path):
@@ -171,7 +184,9 @@ def test_a_container_that_does_not_start_again_is_named_the_others_start_and_the
     assert look.done.returncode == 1
     assert look.calls()[-3:] == [["docker", "start", "c1"], ["docker", "start", "c2"], ["docker", "start", "c3"]]
     assert "the container c2 of the usual stack did not start again" in look.done.stderr
-    assert "Fix: look at it with 'docker ps --all', and start the usual stack by hand." in look.done.stderr
+    assert "The next look tries again. Fix: look at it with 'docker ps --all', and start the usual stack by hand." in look.done.stderr
+    assert "When that container is gone for good, remove the marker file of the look" in look.done.stderr
+    assert "the usual stack runs again" not in look.done.stdout
     assert look.marker.read_text() == "c3\nc2\nc1\n"
     # The step after the look says so by its status too, and the next one that works clears the marker.
     assert look.look("after").done.returncode == 1
@@ -248,8 +263,16 @@ def test_the_unit_has_no_condition_and_gives_nothing_through_the_environment():
 def test_the_unit_starts_the_script_of_the_look_from_the_tree_of_the_run_and_starts_the_usual_stack_again_after_it():
     start, after = shlex.split(one(UNIT, "ExecStart")), shlex.split(one(UNIT, "ExecStopPost"))
     helper = "%h/atlas-nightly/tree/scripts/server/nightly_look.sh"
-    assert start[:5] == [helper, "run", "atlas", "%t/atlas-nightly.stopped", "--"]
-    assert after == [helper, "after", "atlas", "%t/atlas-nightly.stopped"]
+    marker = "%h/atlas-nightly/usual-stack.stopped"
+    assert start[:5] == [helper, "run", "atlas", marker, "--"]
+    assert after == [helper, "after", "atlas", marker]
+    # The marker file lies in the folder of the run, on disk. The runtime folder of the user (%t) is in memory: a
+    # restart of the server empties it, Docker does not start a stopped container again by itself, and the usual
+    # stack would stay down.
+    assert marker.startswith(start[start.index("--dir") + 1] + "/")
+    assert "%t" not in " ".join(start + after)
+    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    assert "That holds for a restart of the server too: the file that names what was stopped lies in the folder of the run, on disk." in page
     assert start[5:7] == ["%h/atlas-nightly/venv/bin/python", "%h/atlas-nightly/tree/scripts/nightly_run.py"]
     assert (ROOT / "scripts" / "server" / "nightly_look.sh").is_file()
     # `atlas` is the compose project of the usual stack, as the driver of the sessions names it. The stack of the
@@ -293,7 +316,7 @@ def test_a_look_that_is_told_to_stop_has_the_time_to_stop_the_stack_of_the_run()
 @pytest.mark.parametrize("path", [UNIT, TIMER, SCRIPT])
 def test_no_file_of_the_timer_names_a_path_or_a_machine_of_a_server(path):
     text = path.read_text(encoding="utf-8")
-    # Every place is under the home folder of the user (%h) or the folder of its session (%t).
+    # Every place is under the home folder of the user (%h).
     for word in re.findall(r"(?<![\w%.<])/(?:home|root|srv|opt|var|mnt|data|Users)/\S*", text):
         raise AssertionError(f"{path.name} names the path {word}")
     assert not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", text)
@@ -359,7 +382,8 @@ def test_with_the_real_script_of_the_run_a_card_that_is_held_with_no_lock_stops_
         second = subprocess.run(run, env=env, capture_output=True, text=True, timeout=90)
     assert first.returncode == 0, first.stdout + first.stderr
     assert first.stdout.splitlines() == ["tick: statuses: nothing waits", "tick: the tip of `smoke/a-change` has no result yet",
-                                         "tick: statuses: nothing waits", "tick: nothing is started: the card is in use"]
+                                         "tick: statuses: nothing waits", "tick: nothing is started: the card is in use",
+                                         "nightly_look.sh: the usual stack runs again: 1 container(s) that a look had stopped were started."]
     assert docker == [["ps", "--quiet", "--filter", "label=com.docker.compose.project=atlas"], ["stop", "c1"], ["start", "c1"]]
     assert second.returncode == 0, second.stdout + second.stderr
     assert second.stdout.splitlines()[0] == "tick: statuses: nothing waits"

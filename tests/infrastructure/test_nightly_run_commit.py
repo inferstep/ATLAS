@@ -145,7 +145,7 @@ class OneCommit(base.Night):
         self.commit = commit
         return super().run("--commit", commit, *more, **env)
 
-    def start(self, commit):
+    def start_for(self, commit):
         self.commit = commit
         return subprocess.Popen(self.command("--commit", commit), env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
@@ -573,7 +573,8 @@ def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_remo
     assert [args for args in docker if "down" in args and "-p" in args and args[args.index("-p") + 1] != "atlas-nightly"] == []
     for args in docker:
         if args[0] in ("build", "push", "tag"):
-            assert not [word for word in args if word.startswith("ghcr.io/") or word.endswith(":dev")], args
+            # No image of the registry and none with the tag `dev`: the first part of a name is the registry.
+            assert not [word for word in args if word.split("/")[0] == "ghcr.io" or word.endswith(":dev")], args
     assert not [args for args in docker if args[0] in ("push", "tag", "login")]
 
 
@@ -616,7 +617,7 @@ def test_when_another_run_holds_the_card_the_built_images_are_removed_and_no_sta
 
 def test_a_run_that_is_told_to_stop_stops_its_stack_and_removes_its_images(tmp_path, repository):
     run = OneCommit(tmp_path, repository, sleep={base.DRIVER: 30})
-    process = run.start(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+    process = run.start_for(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
     run.wait_for("driver")
     process.send_signal(signal.SIGTERM)
     process.communicate(timeout=30)

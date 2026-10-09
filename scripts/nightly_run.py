@@ -708,7 +708,7 @@ def changed_by(args, head: str, commit: str) -> list:
 
 def taken_from_dev(args, files: list) -> None:
     """Refuse a commit that changes a file which the run takes from `dev`, and name the file."""
-    own = {**FROM_DEV, **{name: "a compose file of the stack" for name in ["docker-compose.yml", *args.compose_file]}}
+    own = {**FROM_DEV, **dict.fromkeys(["docker-compose.yml", *args.compose_file], "a compose file of the stack")}
     found = [(name, what) for name in files for path, what in own.items() if under(name, path)]
     if found:
         name, what = found[0]
@@ -931,8 +931,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# The paths of the calls that this script makes. A value from a file, from an argument or from an answer goes into a
+# path only as letters, digits and the few signs of a commit id, a number or an encoded name of a branch.
+PATHS = re.compile(rf"/repos/{re.escape(REPOSITORY)}/(?:installation|statuses/[0-9a-f]{{40}}|commits/[0-9a-f]{{40}}/(?:statuses|pulls)\?per_page=100"
+                   r"|activity\?ref=[A-Za-z0-9._%-]+&per_page=5)|/app/installations/[0-9]+/access_tokens")
+
+
 def github(method: str, path: str, bearer: str = "", body: dict | None = None):
     """One call to GitHub's own address, and the decoded answer. A call that reads sends no key: the repository is public."""
+    if not PATHS.fullmatch(path):
+        raise NotSent("the call was not made: its path is not one that this script makes")
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "atlas-nightly",
                **({"Authorization": f"Bearer {bearer}"} if bearer else {})}
     request = urllib.request.Request(f"{GITHUB_API}{path}", data=json.dumps(body).encode() if body is not None else None,
@@ -943,7 +951,8 @@ def github(method: str, path: str, bearer: str = "", body: dict | None = None):
             answer = response.read()
     except urllib.error.HTTPError as error:
         raise NotSent(f"GitHub answered {error.code}") from None
-    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError):
+    except (http.client.HTTPException, OSError):
+        # A URLError and a timeout are an OSError too.
         raise NotSent("GitHub could not be reached") from None
     try:
         return json.loads(answer)
@@ -1090,7 +1099,7 @@ def keep_for_sending(args, status: dict, stamp: str) -> None:
         return
     place = args.dir / WAITING / f"{stamp}-{status['context'].replace('/', '-')}.json"
     # The file is made for the user of the run alone, whatever the settings of the server give a new file.
-    with open(os.open(place, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as out:
+    with os.fdopen(os.open(place, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as out:
         out.write(json.dumps(status, indent=2) + "\n")
 
 
@@ -1116,7 +1125,7 @@ def waiting_status(path: Path, now: dt.datetime) -> dict | None:
 def send_one(args, status: dict) -> str:
     """Send one status, with a token made for it. Gives a note when the account that wrote it is not the one that
     the settings name, and else nothing. Only the name, the state and the text of the status are sent."""
-    made = github("POST", f"/repos/{REPOSITORY}/statuses/{status['sha']}", token_for_statuses(args),
+    made = github("POST", f"/repos/{REPOSITORY}/statuses/{urllib.parse.quote(str(status['sha']), safe='')}", token_for_statuses(args),
                   {key: status[key] for key in ("state", "context", "description")})
     creator = made.get("creator") if isinstance(made, dict) else None
     writer = creator.get("id") if isinstance(creator, dict) else None
@@ -1212,7 +1221,7 @@ def smoke_tips() -> list:
 
 def has_a_status(commit: str, name: str, writer: int) -> bool:
     """Whether the app wrote a status of this name on the commit. A status of that name by anybody else counts for nothing."""
-    listed = github("GET", f"/repos/{REPOSITORY}/commits/{commit}/statuses?per_page=100")
+    listed = github("GET", f"/repos/{REPOSITORY}/commits/{urllib.parse.quote(commit, safe='')}/statuses?per_page=100")
     return any(status.get("context") == name and (status.get("creator") or {}).get("id") == writer for status in listed)
 
 
@@ -1233,7 +1242,7 @@ def not_our_own_code(tip: str) -> str:
     """Why the timer does not run a commit by itself, or nothing. The commit has to be the head of an open pull
     request from a branch of this repository, and not from a `smoke/` branch: a person can push another's commit
     there. The look knows who pushed a branch, not whose code the commit is."""
-    pulls = github("GET", f"/repos/{REPOSITORY}/commits/{tip}/pulls?per_page=100")
+    pulls = github("GET", f"/repos/{REPOSITORY}/commits/{urllib.parse.quote(tip, safe='')}/pulls?per_page=100")
     for pull in pulls or []:
         head = pull.get("head") or {}
         ours = (head.get("repo") or {}).get("full_name") == REPOSITORY and not str(head.get("ref", "")).startswith(SMOKE)

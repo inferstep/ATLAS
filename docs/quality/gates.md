@@ -769,7 +769,11 @@ this. One look:
   containers of the usual stack that run (the compose project `atlas`),
   starts the run, and starts those containers again, also when the run
   failed. The unit calls the same script once more after every look, so a
-  look that was stopped in its middle leaves no stack down.
+  look that was stopped in its middle leaves no stack down. That holds for
+  a restart of the server too: the file that names what was stopped lies in
+  the folder of the run, on disk. Docker does not start a container again
+  that was stopped by hand, so the first look after the restart finds the
+  file, starts the usual stack before anything else, and says so.
 - The unit has no condition and gives nothing through the environment. The
   path of the key is an argument of the script.
 
