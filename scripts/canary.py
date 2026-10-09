@@ -365,6 +365,11 @@ def source_findings(rules: list[dict], base: str) -> list[Finding]:
     """Each required check is bound to the app that it comes from, and none is a status of the development server."""
     items = [item for rule in rules if rule.get("type") == "required_status_checks"
              for item in rule["parameters"]["required_status_checks"]]
+    if not items:
+        return [Finding(base, f"`{base}` is in `ruled_branches` of the list, and GitHub gives no required check for it. So "
+                              f"no check has to pass before a merge into `{base}`. Fix: look at the rulesets of the "
+                              f"repository: is the one for `{base}` there and active? If `{base}` has no required "
+                              "checks any more on purpose, take it out of `ruled_branches`.")]
     out = [Finding(item["context"], f"required check `{item['context']}` is bound to no source, so a status of that "
                                     "name by any account that can write statuses counts for it. Fix: in the ruleset of "
                                     f"`{base}`, choose the app that the check has to come from (GitHub Actions for a "

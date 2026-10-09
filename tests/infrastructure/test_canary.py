@@ -512,13 +512,15 @@ class GitHub:
         self.manifest, self.asked, self.fails = manifest, [], fails
         self.runs = runs_as_listed(manifest) if runs is None else runs
         commits = [{"sha": "c" * 40, "commit": {"committer": {"date": lacking_since or days_ago(2)}}}] if lacking else []
+        # Each ruled branch has a required check, of a name that the list covers, bound to the app that it comes from.
+        required = [rules_with({"context": names(manifest, "red")[0], "integration_id": ACTIONS})]
         self.answers = {
             SEARCH: [[pull(manifest)] if pulls is None else pulls],
             "repos/o/r/pulls/7": [pull(manifest)],
             f"repos/o/r/commits/{HEAD}/check-runs?per_page=100": [{"check_runs": [{k: v for k, v in run.items() if k != "log"} for run in self.runs]}],
-            "repos/o/r/rules/branches/dev?per_page=100": [[]],
-            "repos/o/r/rules/branches/staging?per_page=100": [[]],
-            "repos/o/r/rules/branches/main?per_page=100": [[]],
+            "repos/o/r/rules/branches/dev?per_page=100": required,
+            "repos/o/r/rules/branches/staging?per_page=100": required,
+            "repos/o/r/rules/branches/main?per_page=100": required,
             f"repos/o/r/compare/{HEAD}...dev?per_page=100": [{"merge_base_commit": {"sha": "b" * 40, "commit": {"committer": {"date": "1999-01-01T00:00:00Z"}}},
                                                           "total_commits": lacking, "commits": commits}],
         }
@@ -829,8 +831,16 @@ def rules_with(*items):
 def test_required_checks_that_are_each_bound_to_an_app_are_no_finding(canary):
     rules = rules_with({"context": "go test (proxy)", "integration_id": ACTIONS}, {"context": "pr title", "integration_id": ACTIONS})
     assert canary.source_findings(rules, "dev") == []
-    assert canary.source_findings([], "dev") == []
-    assert canary.source_findings([{"type": "pull_request", "parameters": {}}], "dev") == []
+
+
+@pytest.mark.parametrize("rules", [[], [{"type": "pull_request", "parameters": {}}], rules_with()])
+def test_a_ruled_branch_for_which_github_gives_no_required_check_is_a_finding(canary, rules):
+    (finding,) = canary.source_findings(rules, "staging")
+    assert finding.check == "staging"
+    assert "`staging` is in `ruled_branches` of the list, and GitHub gives no required check for it." in finding.message
+    assert "Fix: look at the rulesets of the repository: is the one for `staging` there and active?" in finding.message
+    page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
+    assert "A branch of that list for which GitHub gives no required check at all is a finding" in page
 
 
 @pytest.mark.parametrize("source", [{}, {"integration_id": None}, {"integration_id": 0}, {"integration_id": "15368"},
@@ -882,6 +892,16 @@ def test_a_check_with_no_source_on_two_branches_is_named_for_each(canary, manife
     assert printed.count("required check `pr title` is bound to no source") == 2
     assert printed.count("required check `server/nightly` is a status of the development server") == 2
     assert "canary: 4 thing(s) are not as the list says" in printed
+
+
+@pytest.mark.parametrize("branch", ["dev", "staging", "main"])
+def test_a_ruled_branch_whose_rules_come_back_empty_fails_the_check_and_is_named(canary, manifest, monkeypatch, tmp_path, capsys, branch):
+    github = GitHub(manifest)
+    github.answers[f"repos/o/r/rules/branches/{branch}?per_page=100"] = [[]]
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
+    assert status == 1, printed
+    assert f"FAIL `{branch}` is in `ruled_branches` of the list, and GitHub gives no required check for it." in printed
+    assert "canary: 1 thing(s) are not as the list says" in printed
 
 
 def test_when_the_rules_of_a_ruled_branch_cannot_be_read_nothing_is_judged(canary, manifest, monkeypatch, tmp_path, capsys):

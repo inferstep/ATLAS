@@ -643,9 +643,11 @@ and red for its own violation.
   required check of `dev`, `staging` and `main` has to be bound to the app
   that it comes from: a required check that is bound to no source would
   count a status of that name by any account that can write statuses. The
-  three branches are in the list (`ruled_branches`). And no required check
-  may have a name that starts with `server/`: those are the statuses of the
-  development server, which is one machine that is not always on.
+  three branches are in the list (`ruled_branches`). A branch of that list
+  for which GitHub gives no required check at all is a finding: its ruleset
+  is gone or not active. And no required check may have a name that starts
+  with `server/`: those are the statuses of the development server, which
+  is one machine that is not always on.
 - It reads how old the newest night of the development server is: the
   newest `server/nightly` status that the server's own account wrote on a
   commit of `dev`. A night that started more than 14 days ago, or none in
