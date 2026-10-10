@@ -69,6 +69,13 @@ Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS
 
 The bootstrap works around EPEL, nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
 
+**Docker group security:** The bootstrap may add your user to the `docker`
+group so Docker commands can run without `sudo`. Membership in the `docker`
+group grants root-level privileges on the host. Only grant this access to
+trusted users. To manage Docker installation and group membership yourself,
+set `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` before running the bootstrap.
+
+
 **Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
 
 <a id="cpu-only"></a>

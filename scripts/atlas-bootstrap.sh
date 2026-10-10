@@ -510,10 +510,10 @@ install_docker() {
     # Add invoking user to docker group so they can run without sudo
     if [[ -n "${SUDO_USER:-}" ]]; then
         $SUDO usermod -aG docker "$SUDO_USER" 2>/dev/null || true
-        log_warn "Added $SUDO_USER to the docker group. Log out and back in for it to take effect."
+        log_warn "Added $SUDO_USER to the docker group. The docker group grants root-level privileges. Set ATLAS_BOOTSTRAP_SKIP_DOCKER=1 to manage Docker manually. Log out and back in for it to take effect."
     elif [[ "$(id -u)" != "0" ]]; then
         $SUDO usermod -aG docker "$USER" 2>/dev/null || true
-        log_warn "Added $USER to the docker group. Log out and back in for it to take effect."
+        log_warn "Added $USER to the docker group. The docker group grants root-level privileges. Set ATLAS_BOOTSTRAP_SKIP_DOCKER=1 to manage Docker manually. Log out and back in for it to take effect."
     fi
 
     log_ok "Docker installed: $(docker --version | awk '{print $3}' | tr -d ',')"
