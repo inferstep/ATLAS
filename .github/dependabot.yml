@@ -60,6 +60,15 @@ updates:
   # pinned in the build and stay hand-managed: bumping the platform is a
   # compatibility decision (sinceBuild, Kotlin API level), not a routine
   # bump.
+  #
+  # Ktor is hand-managed too, and for a sharper reason. Ktor 3.5.0 moved to
+  # kotlinx-coroutines 1.11.0, which hoisted Job.invokeOnCompletion$default
+  # onto the Job interface; IntelliJ Platform 2026.1 bundles coroutines 1.10.2,
+  # where that synthetic lives in Job$DefaultImpls. The plugin uses the
+  # platform's coroutines (it must not ship a second copy), so Ktor 3.5+
+  # throws NoSuchMethodError on its first request. Re-pin only after checking
+  # the coroutines the target platform bundles; the mock-proxy tests in
+  # AtlasClientTest fail loudly on a bump past 3.4.3.
   - package-ecosystem: gradle
     directory: /extensions/jetbrains
     target-branch: dev
@@ -68,6 +77,9 @@ updates:
     groups:
       gradle:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "io.ktor:*"
+        versions: [">= 3.5.0"]
 
   - package-ecosystem: docker
     directories:

@@ -4,6 +4,50 @@
 
 ## [Unreleased]
 
+### Added: the ATLAS protocol/client layer for the JetBrains plugin
+
+Stage 2 of [issue #35](https://github.com/inferstep/ATLAS/issues/35): the
+Kotlin client for the atlas-proxy HTTP API, in
+`extensions/jetbrains/src/main/kotlin/com/inferstep/atlas/{protocol,client}`.
+A behavioural port of `extensions/vscode/src/client/`, with no UI wired to it
+yet — the tool window still renders the Stage 1 stub, and sessions, chat,
+permissions and diffs remain later stages.
+- Both packages are free of `com.intellij` imports so they run on a plain JVM;
+  `ProtocolIsolationTest` enforces that, because the plugin module compiles
+  the platform onto the same classpath and a stray platform import would
+  otherwise build silently.
+- `Sse.kt` is a hand-written incremental parser rather than a third-party SSE
+  plugin. The wire format is `data:`-only with a `[DONE]` sentinel, and a
+  malformed frame must be skipped rather than fail the turn — that
+  permissiveness has to be ours. It buffers bytes and decodes a line only once
+  its newline has arrived, so a multi-byte character split across two socket
+  reads decodes correctly without an incremental decoder.
+- `AtlasClient.kt` covers `/v1/agent` (streaming), `/cancel`,
+  `/v1/permission` (404 means already resolved, treated as success), `/ready`,
+  `/version`, `/workspace` and `/v1/calibration/status`, with the service
+  token on every request when one is configured. No `HttpTimeout` plugin is
+  installed: while a `permission_request` is open the agent stream is silent
+  for up to `ATLAS_PERMISSION_TIMEOUT_SEC` (600s), and a read timeout shorter
+  than that would kill the turn mid-permission.
+- Ktor is pinned to **3.4.3** and must not be bumped while the plugin targets
+  IntelliJ Platform 2026.1. Ktor 3.5.0 moved to kotlinx-coroutines 1.11.0,
+  which hoisted `Job.invokeOnCompletion$default` onto the `Job` interface;
+  IntelliJ Platform 2026.1 bundles coroutines 1.10.2, where that synthetic
+  lives in `Job$DefaultImpls`, so Ktor 3.5+ throws `NoSuchMethodError` on its
+  first request against the platform's coroutines. The plugin uses the
+  platform's coroutines (it must not package a second copy), so 3.4.3 — the
+  newest release built against 1.10.2 — is the newest one that runs here.
+  `.github/dependabot.yml` now ignores `io.ktor:*` at `>= 3.5.0` for this
+  tree.
+- Tests: Jupiter unit tests for the parser and the wire types, a replay of a
+  recorded real proxy turn at four chunk sizes, and an integration suite
+  against an in-process HTTP fixture — including the permission pause and its
+  resume, and a dropped connection that ends without the sentinel. The test
+  task declares no coroutines dependency of its own, so it runs against the
+  platform's coroutines exactly as the plugin does; that is what makes the
+  Ktor pin a tested property rather than a comment. The plugin ZIP still
+  contains no kotlinx-coroutines and no Kotlin stdlib.
+
 ### Added: the JetBrains plugin scaffold, its Compose spike and its CI
 
 `extensions/jetbrains/` is the second IDE client ([issue #35](https://github.com/inferstep/ATLAS/issues/35)),

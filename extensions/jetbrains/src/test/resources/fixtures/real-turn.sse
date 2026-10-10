@@ -1,0 +1,638 @@
+: connected
+
+data: {"type":"v3_plan","data":{"detail":"generating 3 candidate plans","stage":"plan_start"}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 1/3 (temp=0.3)","index":0,"stage":"plan_candidate","temperature":0.3}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 1 score=1.00","index":0,"reasons":["step count 2 in range","verify_step=s2","verify_step references a real verification command","2 step(s) target user-mentioned files","rationale present"],"score":0.9999999999999999,"stage":"plan_candidate_scored"}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 2/3 (temp=0.5)","index":1,"stage":"plan_candidate","temperature":0.5}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 2 score=1.00","index":1,"reasons":["step count 2 in range","verify_step=s2","verify_step references a real verification command","2 step(s) target user-mentioned files","rationale present"],"score":0.9999999999999999,"stage":"plan_candidate_scored"}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 3/3 (temp=0.7)","index":2,"stage":"plan_candidate","temperature":0.7}}
+
+data: {"type":"v3_plan","data":{"detail":"candidate 3 score=1.00","index":2,"reasons":["step count 2 in range","verify_step=s2","verify_step references a real verification command","2 step(s) target user-mentioned files","rationale present"],"score":0.9999999999999999,"stage":"plan_candidate_scored"}}
+
+data: {"type":"v3_plan","data":{"detail":"plan 1 won (score=1.00)","index":0,"score":0.9999999999999999,"stage":"plan_selected","steps":2}}
+
+data: {"type":"plan_loaded","data":{"rationale":" The plan creates the file directly and then uses a python command to verify the content.","revision":0,"steps":[{"id":"s1","action":"write_file","target":"smoke.txt","why":"Create the file with the required content."},{"id":"s2","action":"run_command","target":"python -c \"with open('smoke.txt', 'r') as f: print(f.read())\"","why":" Verify that the file exists and contains the word 'hello'."}],"verify_step":"s2","winning_score":0.9999999999999999}}
+
+data: {"type":"pattern_context_injected","data":{"count":3,"types":["idiom","idiom","idiom"]}}
+
+data: {"type":"turn_start","data":{"messages":3,"trimmed":false,"turn":0}}
+
+data: {"type":"llm_call_start","data":{"messages":3,"prompt_tokens":3603,"turn":0}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":100,"pct":0,"processed":0,"total":3657}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":200,"pct":0,"processed":0,"total":3657}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":1381,"pct":0,"processed":0,"total":3657}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":2516,"pct":0,"processed":0,"total":3657}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":2600,"pct":0,"processed":0,"total":3657}}
+
+data: {"type":"llm_first_token","data":{"prompt_ms":2640}}
+
+data: {"type":"llm_token","data":{"text":"{\""}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"tool"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"call"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"name"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"write"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"file"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"args"}}
+
+data: {"type":"llm_token","data":{"text":"\":{\""}}
+
+data: {"type":"llm_token","data":{"text":"path"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"content"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"hello"}}
+
+data: {"type":"llm_token","data":{"text":"\"}}"}}
+
+data: {"type":"llm_token","data":{"text":"\n"}}
+
+data: {"type":"llm_call_end","data":{"chars":87,"ms":3648,"tokens":3804,"total_tokens":3804,"turn":0}}
+
+data: {"type":"tool_call","data":{"args":{"path":"smoke.txt","content":"hello"},"name":"write_file","turn":0}}
+
+data: {"type":"tool_result","data":{"data":{"bytes_written":5},"elapsed":"1.526485ms","error":"","success":true,"tool":"write_file"}}
+
+data: {"type":"plan_adherence","data":{"matched":true,"satisfied":1,"step_action":"write_file","step_id":"s1","step_index":0,"total":2}}
+
+data: {"type":"turn_start","data":{"messages":5,"trimmed":false,"turn":1}}
+
+data: {"type":"llm_call_start","data":{"messages":5,"prompt_tokens":3634,"turn":1}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":100,"pct":0,"processed":0,"total":3699}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":200,"pct":0,"processed":0,"total":3699}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":1382,"pct":0,"processed":0,"total":3699}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":2653,"pct":0,"processed":0,"total":3699}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":2700,"pct":0,"processed":0,"total":3699}}
+
+data: {"type":"llm_first_token","data":{"prompt_ms":2780}}
+
+data: {"type":"llm_token","data":{"text":"{\""}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"tool"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"call"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"name"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"run"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"args"}}
+
+data: {"type":"llm_token","data":{"text":"\":{\""}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"python"}}
+
+data: {"type":"llm_token","data":{"text":" -"}}
+
+data: {"type":"llm_token","data":{"text":"c"}}
+
+data: {"type":"llm_token","data":{"text":" \\\""}}
+
+data: {"type":"llm_token","data":{"text":"with"}}
+
+data: {"type":"llm_token","data":{"text":" open"}}
+
+data: {"type":"llm_token","data":{"text":"('"}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":"',"}}
+
+data: {"type":"llm_token","data":{"text":" '"}}
+
+data: {"type":"llm_token","data":{"text":"r"}}
+
+data: {"type":"llm_token","data":{"text":"')"}}
+
+data: {"type":"llm_token","data":{"text":" as"}}
+
+data: {"type":"llm_token","data":{"text":" f"}}
+
+data: {"type":"llm_token","data":{"text":":"}}
+
+data: {"type":"llm_token","data":{"text":" print"}}
+
+data: {"type":"llm_token","data":{"text":"("}}
+
+data: {"type":"llm_token","data":{"text":"f"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"read"}}
+
+data: {"type":"llm_token","data":{"text":"()"}}
+
+data: {"type":"llm_token","data":{"text":")\\"}}
+
+data: {"type":"llm_token","data":{"text":"\""}}
+
+data: {"type":"llm_token","data":{"text":"}}"}}
+
+data: {"type":"llm_token","data":{"text":"}"}}
+
+data: {"type":"llm_token","data":{"text":"```"}}
+
+data: {"type":"llm_token","data":{"text":"\u003c|channel\u003e"}}
+
+data: {"type":"llm_token","data":{"text":"thought"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"\u003cchannel|\u003e"}}
+
+data: {"type":"llm_token","data":{"text":"```"}}
+
+data: {"type":"llm_token","data":{"text":"json"}}
+
+data: {"type":"llm_token","data":{"text":" {\""}}
+
+data: {"type":"llm_token","data":{"text":"},"}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":"}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"tool"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"call"}}
+
+data: {"type":"llm_token","data":{"text":"\","}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"name"}}
+
+data: {"type":"llm_token","data":{"text":"\":"}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"run"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\","}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"args"}}
+
+data: {"type":"llm_token","data":{"text":"\":"}}
+
+data: {"type":"llm_token","data":{"text":" {\""}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\":"}}
+
+data: {"type":"llm_token","data":{"text":" \""}}
+
+data: {"type":"llm_token","data":{"text":"python"}}
+
+data: {"type":"llm_token","data":{"text":" -"}}
+
+data: {"type":"llm_token","data":{"text":"c"}}
+
+data: {"type":"llm_token","data":{"text":" \\\""}}
+
+data: {"type":"llm_token","data":{"text":"with"}}
+
+data: {"type":"llm_token","data":{"text":" open"}}
+
+data: {"type":"llm_token","data":{"text":"('"}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":"',"}}
+
+data: {"type":"llm_token","data":{"text":" '"}}
+
+data: {"type":"llm_token","data":{"text":"r"}}
+
+data: {"type":"llm_token","data":{"text":"')"}}
+
+data: {"type":"llm_token","data":{"text":" as"}}
+
+data: {"type":"llm_token","data":{"text":"f"}}
+
+data: {"type":"llm_token","data":{"text":":"}}
+
+data: {"type":"llm_token","data":{"text":" print"}}
+
+data: {"type":"llm_token","data":{"text":"("}}
+
+data: {"type":"llm_token","data":{"text":"f"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"read"}}
+
+data: {"type":"llm_token","data":{"text":"()"}}
+
+data: {"type":"llm_token","data":{"text":")\\"}}
+
+data: {"type":"llm_token","data":{"text":"\"\""}}
+
+data: {"type":"llm_token","data":{"text":"}"}}
+
+data: {"type":"llm_token","data":{"text":" }"}}
+
+data: {"type":"llm_call_end","data":{"chars":301,"ms":8084,"tokens":3950,"total_tokens":7754,"turn":1}}
+
+data: {"type":"tool_call","data":{"args":{"command":"python -c \"with open('smoke.txt', 'r') asf: print(f.read())\""},"name":"run_command","turn":1}}
+
+data: {"type":"tool_result","data":{"data":{"stdout":"","stderr":"  File \"\u003cstring\u003e\", line 1\n    with open('smoke.txt', 'r') asf: print(f.read())\n                                ^^^\nSyntaxError: invalid syntax\n","exit_code":1},"elapsed":"41.349528ms","error":"File \"\u003cstring\u003e\", line 1\n    with open('smoke.txt', 'r') asf: print(f.read())\n                                ^^^\nSyntaxError: invalid syntax","success":false,"tool":"run_command"}}
+
+data: {"type":"plan_adherence","data":{"matched":false,"off_streak":1,"satisfied":1,"tool":"run_command","total":2}}
+
+data: {"type":"turn_start","data":{"messages":8,"trimmed":false,"turn":2}}
+
+data: {"type":"llm_call_start","data":{"messages":8,"prompt_tokens":3919,"turn":2}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":101,"pct":0,"processed":0,"total":3984}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":200,"pct":0,"processed":0,"total":3984}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":493,"pct":0,"processed":0,"total":3984}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":533,"pct":0,"processed":0,"total":3984}}
+
+data: {"type":"llm_first_token","data":{"prompt_ms":616}}
+
+data: {"type":"llm_token","data":{"text":"{\""}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":600,"pct":0,"processed":0,"total":3984}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"tool"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"call"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"name"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"write"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"file"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"args"}}
+
+data: {"type":"llm_token","data":{"text":"\":{\""}}
+
+data: {"type":"llm_token","data":{"text":"path"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"test"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"py"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"content"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"with"}}
+
+data: {"type":"llm_token","data":{"text":" open"}}
+
+data: {"type":"llm_token","data":{"text":"('"}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":"',"}}
+
+data: {"type":"llm_token","data":{"text":" '"}}
+
+data: {"type":"llm_token","data":{"text":"r"}}
+
+data: {"type":"llm_token","data":{"text":"')"}}
+
+data: {"type":"llm_token","data":{"text":" as"}}
+
+data: {"type":"llm_token","data":{"text":" f"}}
+
+data: {"type":"llm_token","data":{"text":":\\"}}
+
+data: {"type":"llm_token","data":{"text":"n"}}
+
+data: {"type":"llm_token","data":{"text":"    "}}
+
+data: {"type":"llm_token","data":{"text":"print"}}
+
+data: {"type":"llm_token","data":{"text":"("}}
+
+data: {"type":"llm_token","data":{"text":"f"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"read"}}
+
+data: {"type":"llm_token","data":{"text":"())"}}
+
+data: {"type":"llm_token","data":{"text":"\""}}
+
+data: {"type":"llm_token","data":{"text":"}}"}}
+
+data: {"type":"llm_token","data":{"text":"\n"}}
+
+data: {"type":"llm_call_end","data":{"chars":140,"ms":2535,"tokens":4263,"total_tokens":12017,"turn":2}}
+
+data: {"type":"tool_call","data":{"args":{"path":"test_smoke.py","content":"with open('smoke.txt', 'r') as f:\n    print(f.read())"},"name":"write_file","turn":2}}
+
+data: {"type":"tool_result","data":{"data":null,"elapsed":"145.339µs","error":"write_file deferred: you're creating a new .py file in /workspace, which already contains 2 sibling .py files (e.g. app.py, verify_chunk.py). Read at least one of those first so this new file follows the project's existing conventions (style, imports, structure). Then re-issue the write_file call.","success":false,"tool":"write_file"}}
+
+data: {"type":"plan_adherence","data":{"matched":false,"off_streak":2,"satisfied":1,"tool":"write_file","total":2}}
+
+data: {"type":"turn_start","data":{"messages":10,"trimmed":false,"turn":3}}
+
+data: {"type":"llm_call_start","data":{"messages":10,"prompt_tokens":4035,"turn":3}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":100,"pct":0,"processed":0,"total":4100}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":200,"pct":0,"processed":0,"total":4100}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":351,"pct":0,"processed":0,"total":4100}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":400,"pct":0,"processed":0,"total":4100}}
+
+data: {"type":"llm_first_token","data":{"prompt_ms":473}}
+
+data: {"type":"llm_token","data":{"text":"{\""}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"tool"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"call"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"name"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"run"}}
+
+data: {"type":"llm_token","data":{"text":"_"}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"args"}}
+
+data: {"type":"llm_token","data":{"text":"\":{\""}}
+
+data: {"type":"llm_token","data":{"text":"command"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"python"}}
+
+data: {"type":"llm_token","data":{"text":" -"}}
+
+data: {"type":"llm_token","data":{"text":"c"}}
+
+data: {"type":"llm_token","data":{"text":" \\\""}}
+
+data: {"type":"llm_token","data":{"text":"with"}}
+
+data: {"type":"llm_token","data":{"text":" open"}}
+
+data: {"type":"llm_token","data":{"text":"('"}}
+
+data: {"type":"llm_token","data":{"text":"smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":"',"}}
+
+data: {"type":"llm_token","data":{"text":" '"}}
+
+data: {"type":"llm_token","data":{"text":"r"}}
+
+data: {"type":"llm_token","data":{"text":"')"}}
+
+data: {"type":"llm_token","data":{"text":" as"}}
+
+data: {"type":"llm_token","data":{"text":" _"}}
+
+data: {"type":"llm_token","data":{"text":":"}}
+
+data: {"type":"llm_token","data":{"text":" print"}}
+
+data: {"type":"llm_token","data":{"text":"(_"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"read"}}
+
+data: {"type":"llm_token","data":{"text":"()"}}
+
+data: {"type":"llm_token","data":{"text":")\\"}}
+
+data: {"type":"llm_token","data":{"text":"\"\""}}
+
+data: {"type":"llm_token","data":{"text":"}}"}}
+
+data: {"type":"llm_token","data":{"text":"\n"}}
+
+data: {"type":"llm_call_end","data":{"chars":127,"ms":2124,"tokens":4403,"total_tokens":16420,"turn":3}}
+
+data: {"type":"tool_call","data":{"args":{"command":"python -c \"with open('smoke.txt', 'r') as _: print(_.read())\""},"name":"run_command","turn":3}}
+
+data: {"type":"tool_result","data":{"data":{"stdout":"hello\n","stderr":"","exit_code":0},"elapsed":"22.290096ms","error":"","success":true,"tool":"run_command"}}
+
+data: {"type":"plan_adherence","data":{"matched":false,"off_streak":3,"satisfied":1,"tool":"run_command","total":2}}
+
+data: {"type":"turn_start","data":{"messages":12,"trimmed":false,"turn":4}}
+
+data: {"type":"llm_call_start","data":{"messages":12,"prompt_tokens":4083,"turn":4}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":100,"pct":0,"processed":0,"total":4148}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":200,"pct":0,"processed":0,"total":4148}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":331,"pct":0,"processed":0,"total":4148}}
+
+data: {"type":"llm_prompt_progress","data":{"elapsed_ms":400,"pct":0,"processed":0,"total":4148}}
+
+data: {"type":"llm_first_token","data":{"prompt_ms":454}}
+
+data: {"type":"llm_token","data":{"text":"{\""}}
+
+data: {"type":"llm_token","data":{"text":"type"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"done"}}
+
+data: {"type":"llm_token","data":{"text":"\",\""}}
+
+data: {"type":"llm_token","data":{"text":"summary"}}
+
+data: {"type":"llm_token","data":{"text":"\":\""}}
+
+data: {"type":"llm_token","data":{"text":"Created"}}
+
+data: {"type":"llm_token","data":{"text":" smoke"}}
+
+data: {"type":"llm_token","data":{"text":"."}}
+
+data: {"type":"llm_token","data":{"text":"txt"}}
+
+data: {"type":"llm_token","data":{"text":" with"}}
+
+data: {"type":"llm_token","data":{"text":" the"}}
+
+data: {"type":"llm_token","data":{"text":" content"}}
+
+data: {"type":"llm_token","data":{"text":" '"}}
+
+data: {"type":"llm_token","data":{"text":"hello"}}
+
+data: {"type":"llm_token","data":{"text":"'"}}
+
+data: {"type":"llm_token","data":{"text":" and"}}
+
+data: {"type":"llm_token","data":{"text":" verified"}}
+
+data: {"type":"llm_token","data":{"text":" its"}}
+
+data: {"type":"llm_token","data":{"text":" existence"}}
+
+data: {"type":"llm_token","data":{"text":" and"}}
+
+data: {"type":"llm_token","data":{"text":" content"}}
+
+data: {"type":"llm_token","data":{"text":" using"}}
+
+data: {"type":"llm_token","data":{"text":" a"}}
+
+data: {"type":"llm_token","data":{"text":" python"}}
+
+data: {"type":"llm_token","data":{"text":" command"}}
+
+data: {"type":"llm_token","data":{"text":".\""}}
+
+data: {"type":"llm_token","data":{"text":"}"}}
+
+data: {"type":"llm_token","data":{"text":"\n"}}
+
+data: {"type":"llm_call_end","data":{"chars":134,"ms":1633,"tokens":4465,"total_tokens":20885,"turn":4}}
+
+data: {"type":"done","data":{"summary":"Created smoke.txt with the content 'hello' and verified its existence and content using a python command."}}
+
+data: [DONE]
+

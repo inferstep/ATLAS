@@ -2,7 +2,7 @@
 
 A JetBrains IDE client for the [ATLAS](https://github.com/inferstep/ATLAS) agent proxy — a thin UI layer wrapping `atlas-proxy`'s agent loop with no agent logic in the plugin itself.
 
-**Status: Stage 1 technical spike.** Tracking [issue #35](https://github.com/inferstep/ATLAS/issues/35). This stage proves a Jewel Compose panel can mount in the ATLAS tool window, follow the IDE theme, recompose incrementally as frames arrive, and be covered by tests. The frames are a stub, not the proxy. Chat, permissions, diffs, workspace integration, and all protocol/client logic arrive in later stages, one pull request each.
+**Status: Stage 2 — the ATLAS protocol/client layer.** Tracking [issue #35](https://github.com/inferstep/ATLAS/issues/35), one pull request per stage. Stage 1 proved a Jewel Compose panel can mount in the ATLAS tool window, follow the IDE theme and recompose incrementally as frames arrive. Stage 2 adds the Kotlin client for the atlas-proxy HTTP API and nothing else: the tool window still renders the Stage 1 stub, deliberately unwired from the client until sessions arrive. Chat, permissions, diffs and workspace integration are later stages.
 
 ## Spike results
 
@@ -23,7 +23,47 @@ The build side names the modules too, because `bundledModule` attaches the jar o
 
 ## How it works
 
-The plugin will be a thin client over the proxy HTTP API (see `docs/API.md`) in Stage 2. This Stage 1 spike deliberately has no HTTP, endpoint, or protocol code. The layout mirrors `extensions/vscode/`, which is the reference IDE client; the TUI (`tui/`) remains the reference client overall.
+The plugin is a thin client over the proxy HTTP API (see `docs/API.md`). The layout mirrors `extensions/vscode/`, which is the reference IDE client; the TUI (`tui/`) remains the reference client overall.
+
+## The protocol/client layer (Stage 2)
+
+Two packages, both deliberately free of any `com.intellij` import, so they compile and run on a plain JVM and are tested with plain JUnit:
+
+```
+src/main/kotlin/com/inferstep/atlas/protocol/Types.kt   # wire types, one file per direction
+src/main/kotlin/com/inferstep/atlas/protocol/Sse.kt     # the SSE frame parser
+src/main/kotlin/com/inferstep/atlas/client/AtlasClient.kt  # Ktor client for the seven endpoints
+```
+
+`ProtocolIsolationTest` enforces the no-IntelliJ rule mechanically: the plugin module compiles the platform onto the same classpath, so a stray `import com.intellij.…` would build, pass review, and quietly take the layer hostage.
+
+**Events are decoded on demand.** A frame is `{"type":"<name>","data":{…}}`, and `data` stays a raw `JsonElement` until a caller asks for a payload shape with `event.payload<TextPayload>()`. The proxy documents event types this client does not render (every V3 stage, every detector intervention) and may add more, so an unknown type survives the envelope rather than failing the stream. Every payload field has a default, so a proxy that adds a field does not break a client that has never heard of it.
+
+**`SseParser` is hand-written, and that is deliberate.** The wire format is `data:`-only with a `[DONE]` sentinel, and the client must skip a malformed frame rather than fail the turn — that permissiveness is the parser's, and a strict third-party SSE parser would silently change it. The parser buffers bytes and decodes a line only once its newline has arrived, because a `\n` byte can never occur inside a UTF-8 multi-byte sequence; that is what makes a character split across two socket reads work without an incremental decoder. `ktor-client-sse` is therefore not a dependency; Ktor is used for transport and the payload is read as a byte stream.
+
+**No `HttpTimeout` plugin is installed**, on purpose. While a `permission_request` is open the proxy sends nothing on the agent stream, and the documented fail-safe is `ATLAS_PERMISSION_TIMEOUT_SEC` (600s). A read timeout shorter than that kills the turn mid-permission; the Java engine's defaults are no connect timeout and no read timeout, which is exactly what this needs.
+
+### Why Ktor is pinned to 3.4.3
+
+**Ktor must not be bumped past 3.4.3 while the plugin targets IntelliJ Platform 2026.1.** Ktor 3.5.0 moved to kotlinx-coroutines 1.11.0, which hoisted `Job.invokeOnCompletion$default` onto the `Job` interface (JVM default methods). IntelliJ Platform 2026.1 bundles kotlinx-coroutines 1.10.2 (as `1.10.2-intellij-1`), where that synthetic lives in `Job$DefaultImpls` — so the first request Ktor issues against the platform's coroutines fails with `NoSuchMethodError: 'kotlinx.coroutines.DisposableHandle kotlinx.coroutines.Job.invokeOnCompletion$default(...)'`.
+
+The plugin must use the platform's coroutines: shipping a second copy inside the plugin jar would shadow the platform's and is exactly the two-runtime hazard the build excludes against. 3.4.3 is the newest Ktor built against coroutines 1.10.2, so it is the newest one that runs here. `.github/dependabot.yml` ignores `io.ktor:*` at `>= 3.5.0` for this tree, and the mock-proxy tests below fail loudly if the pin is ever moved.
+
+That same incompatibility is why the tests declare no coroutines dependency of their own: the `test` task runs against the platform's coroutines, exactly as the plugin does in the IDE. A second, newer copy on the test classpath would have hidden the bug above instead of catching it.
+
+## Tests
+
+`./gradlew test` runs two suites in one JUnit Platform run: the existing `BasePlatformTestCase` tool-window test (via the vintage engine) and the Stage 2 protocol/client suite (Jupiter). The protocol suite needs no IDE and no proxy:
+
+| Class | What it covers |
+|---|---|
+| `SseTest` | comments, chunk splits at every byte boundary, multi-byte characters, >1MB frames, malformed frames, CRLF, the `[DONE]` sentinel, the end-of-stream flush |
+| `TypesTest` | wire names and modes, absent optionals staying absent, unknown fields and unknown event types, the documented `done.status` rule, the six-code error set |
+| `RealStreamTest` | a recorded real proxy turn, replayed at chunk sizes 1, 7, 64 and 1024 |
+| `ProtocolIsolationTest` | the layer imports nothing from `com.intellij` |
+| `AtlasClientTest` | the client against an in-process HTTP fixture: streaming, the permission pause and its resume, cancel, 401 and non-JSON envelopes, a dropped connection, and every optional endpoint |
+
+The fixture (`MockProxy`) is a real server on `com.sun.net.httpserver`, so the transport is exercised for real — which is also what makes a Ktor bump past the pin fail here rather than in an IDE.
 
 ## Requirements
 
@@ -44,7 +84,7 @@ All commands run from `extensions/jetbrains/`:
 ./gradlew runPyCharm       # launch sandboxed PyCharm
 ./gradlew runWebStorm      # launch sandboxed WebStorm
 ./gradlew runGoLand        # launch sandboxed GoLand
-./gradlew test             # BasePlatformTestCase tool-window integration test
+./gradlew test             # the platform tool-window test and the protocol/client suite
 ./gradlew ktlintCheck      # Kotlin formatting and lint gate
 ./gradlew ktlintFormat     # apply the same rules
 ./gradlew buildPlugin      # build the distributable ZIP
@@ -74,9 +114,11 @@ Kotlin is intentionally **not** covered by `scripts/code_health.py`, which scans
 ## Layout
 
 ```
-build.gradle.kts        # plugin module: IPGP, bundled Compose/Jewel, Kotlin toolchain, ktlint
+build.gradle.kts        # plugin module: IPGP, bundled Compose/Jewel, Ktor, Kotlin toolchain, ktlint
 settings.gradle.kts     # root project
-src/main/kotlin/        # Compose tool window and, later, the client and session layers
+src/main/kotlin/        # Compose tool window, the protocol layer, the proxy client
 src/main/resources/     # META-INF/plugin.xml
+src/test/kotlin/        # tool-window test, protocol/client suite, mock proxy
+src/test/resources/     # the recorded real proxy turn
 .editorconfig           # ktlint rules (single source)
 ```
