@@ -3,7 +3,9 @@
 
 Commands, one per workflow in .github/workflows/bot-*.yml:
 
-  claim       `/claim` or `/unclaim` as the first line of an issue comment
+  claim       `/claim` or `/unclaim` as the first line of an issue comment.
+              A first line that starts with one of them and is not the
+              command alone gets an answer and no action
   stale       daily: remind, then release, a /claim with no open pull request
               by the claimant that names the issue
   sync        hourly: mirror Ready/Blocked to labels, area labels on PRs,
@@ -32,10 +34,17 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pr_labels  # noqa: E402
 from typing import Any, Iterable
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "atlas-bot.yml")
 COMMAND = re.compile(r"^/(claim|unclaim)\s*$")
+# A first line that starts like a command. When it is not the command alone,
+# the bot does nothing with it and says so: it does not guess what the rest
+# of the line means.
+STARTS_LIKE_A_COMMAND = re.compile(r"^/(?:un)?claim", re.IGNORECASE)
 MAINTAINER = ("OWNER", "MEMBER")
 FIRST_PR = ("FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER")
 STATUS_LABELS = {"Ready": "status/ready", "Blocked": "status/blocked"}
@@ -193,8 +202,10 @@ class API:
         self._call("PATCH", f"/repos/{self.repo}/issues/{number}",
                    {"state": "closed", "state_reason": "completed"})
 
-    def pull_files(self, number: int) -> list:
-        return [f["filename"] for f in self._pages(f"/repos/{self.repo}/pulls/{number}/files")]
+    def pull_changes(self, number: int) -> list:
+        """The files a pull request changes, each with its lines added and removed."""
+        return [{"filename": f["filename"], "additions": f.get("additions") or 0, "deletions": f.get("deletions") or 0}
+                for f in self._pages(f"/repos/{self.repo}/pulls/{number}/files")]
 
     def assigned_at(self, number: int, login: str) -> str | None:
         """When this person was last assigned to the issue (an ISO time), by
@@ -338,8 +349,10 @@ class Bot:
         if "pull_request" in issue or (comment.get("user") or {}).get("type") == "Bot":
             return
         lines = (comment.get("body") or "").strip().splitlines()
-        m = COMMAND.match(lines[0].strip()) if lines else None
+        first = lines[0].strip() if lines else ""
+        m = COMMAND.match(first)
         if not m:
+            self._not_alone(issue["number"], (comment.get("user") or {}).get("login"), first)
             return
         user = comment["user"]["login"]
         maintainer = comment.get("author_association") in MAINTAINER
@@ -351,6 +364,25 @@ class Bot:
             self._claim(current, user, maintainer)
         else:
             self._unclaim(current, user)
+
+    def _not_alone(self, n: int, user: str | None, first: str) -> None:
+        """Answer a first line that starts with a command and is not the
+        command alone. Nothing is claimed or released. The answer holds none
+        of the author's words, and the same person gets it once a day for
+        the same command."""
+        near = STARTS_LIKE_A_COMMAND.match(first)
+        if not near or not user:
+            return
+        command = near.group(0).lower()
+        mark = marker(f"not-alone-{command[1:]}", user)
+        for c in self.api.comments(n):
+            if (self._mine(c) and mark in (c.get("body") or "")
+                    and self.now - parse_time(c["created_at"]) < dt.timedelta(days=1)):
+                return
+        self.api.comment(n, f"{mark}\n@{user} your comment did nothing: its first line starts with "
+                         f"`{command}` and is not `{command}` alone. The command works only by itself "
+                         f"on the first line, in small letters. Comment `{command}` again that way, "
+                         f"and put any other words on the lines below it.")
 
     def _claim(self, issue: dict, user: str, maintainer: bool) -> None:
         n, c, links = issue["number"], self.cfg["claims"], self.cfg["links"]
@@ -373,10 +405,11 @@ class Bot:
             return
         if not maintainer:
             open_claims = self.api.search_count(f"is:issue is:open assignee:{user}")
-            merged = self.api.search_count(f"is:pr is:merged author:{user}")
-            limit = int(c["max_open"] if merged else c["max_open_first_timer"])
+            # None: the bot cannot tell. Then nothing says that this person is new.
+            merged = self._merged_by(user)
+            limit = int(c["max_open_first_timer"] if merged == 0 else c["max_open"])
             if open_claims >= limit:
-                kind = "" if merged else " before your first merged pull request"
+                kind = " before your first merged pull request" if merged == 0 else ""
                 self.api.comment(n, f"@{user} you can hold {limit} open claim{'s' if limit > 1 else ''}"
                                  f"{kind}, and you have {open_claims}. Finish or `/unclaim` one first.")
                 return
@@ -393,6 +426,22 @@ class Bot:
                          f"3. Without a linked pull request, the claim is released after "
                          f"{c['release_after_days']} days. Comment `/unclaim` any time to let it go.\n\n"
                          f"The steps are in [CONTRIBUTING]({links['contributing']}).")
+
+    def _merged_by(self, user: str) -> int | None:
+        """How many merged pull requests this person has here, or None when
+        the token cannot tell.
+
+        A search gives only what the token may read. A token with no right
+        to read pull requests gets 0 for everybody, and 0 would read as
+        "new". So a 0 counts only when the same token sees a merged pull
+        request of the repository at all."""
+        merged = self.api.search_count(f"is:pr is:merged author:{user}")
+        if merged or self.api.search_count("is:pr is:merged"):
+            return merged
+        print("atlas-bot: this token sees no merged pull request of the repository, so it cannot tell "
+              f"whether {user} is new, and the wider claim limit is taken. Fix: give the token of this "
+              "job the right to read pull requests (`permission-pull-requests: read` in its workflow file).")
+        return None
 
     def _unclaim(self, issue: dict, user: str) -> None:
         n = issue["number"]
@@ -466,16 +515,38 @@ class Bot:
         areas = self.cfg.get("areas", {})
         for pr in self.api.open_pulls():
             n = pr["number"]
-            files = self.api.pull_files(n)
+            changes = self.api.pull_changes(n)
+            files = [change["filename"] for change in changes]
             want = {label for prefix, label in areas.items() if any(f.startswith(prefix) for f in files)}
             have = {x["name"] for x in pr.get("labels") or []}
             if want - have:
                 self.api.add_labels(n, sorted(want - have))
+            self._size_and_risk(pr, changes, have)
             if self._first_pr(pr):
                 if not any(self._mine(x) and marker("welcome") in x.get("body", "")
                            for x in self.api.comments(n)):
                     self.api.comment(n, self._welcome_pr(pr["user"]["login"]))
         self._close_fixed()
+
+    def _size_and_risk(self, pr: dict, changes: list, have: set) -> None:
+        """Give an open pull request its size label and, when the rules say so, the risk label (pr_labels.py).
+        Both are computed again each time, so a label that no longer holds is taken off."""
+        settings = self.cfg.get("pull_requests")
+        if not settings:
+            return
+        want = pr_labels.labels_for(changes, self._no_merged_pull_request_yet(pr), settings)
+        add, remove = pr_labels.label_changes(have, want, settings)
+        if add:
+            self.api.add_labels(pr["number"], add)
+        for label in remove:
+            self.api.remove_label(pr["number"], label)
+
+    def _no_merged_pull_request_yet(self, pr: dict) -> bool:
+        """Whether the author has no merged pull request here. A maintainer and a bot are never new."""
+        user = pr.get("user") or {}
+        if user.get("type") == "Bot" or pr.get("author_association") in MAINTAINER:
+            return False
+        return self.api.search_count(f"is:pr is:merged author:{user.get('login')}") == 0
 
     def _close_fixed(self) -> None:
         """Close the open issues that a commit or merged pull request on the

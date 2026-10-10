@@ -14,9 +14,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: pip
-    # /.github/requirements holds CI's hashed tool lock (ci.txt); its ruff
-    # and mypy must move with sandbox/requirements-verify.txt, so both sit
-    # in the same group PR.
+    # /.github/requirements holds CI's hashed lock (ci.in and ci.txt). Some
+    # pins of ci.in are copies of pins in the sandbox and v3-service files
+    # (a contract test holds them the same), so both folders sit in the same
+    # group: one pull request then moves a pin in both places and makes the
+    # lock again.
     directories: ["/", "/.github/requirements"]
     target-branch: dev
     schedule:
@@ -51,6 +53,20 @@ updates:
       interval: weekly
     groups:
       go:
+        patterns: ["*"]
+
+  # The JetBrains plugin is its own Gradle build under extensions/jetbrains.
+  # The IntelliJ Platform Gradle Plugin and the IntelliJ Platform version are
+  # pinned in the build and stay hand-managed: bumping the platform is a
+  # compatibility decision (sinceBuild, Kotlin API level), not a routine
+  # bump.
+  - package-ecosystem: gradle
+    directory: /extensions/jetbrains
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      gradle:
         patterns: ["*"]
 
   - package-ecosystem: docker

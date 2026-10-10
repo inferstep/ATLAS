@@ -2,8 +2,9 @@ name: bot · claim
 
 # `/claim` and `/unclaim` as the first line of an issue comment. Runs the
 # default branch's copy of the bot (issue_comment events always do); it
-# reads and writes issue and project metadata only. The comment text is
-# passed in the event file, never interpolated into a command.
+# writes issue and project metadata only, and reads pull requests to count
+# the merged ones of the person who claims. The comment text is passed in
+# the event file, never interpolated into a command.
 on:
   issue_comment:
     types: [created]
@@ -38,6 +39,10 @@ jobs:
           client-id: ${{ vars.ATLAS_BOT_CLIENT_ID }}
           private-key: ${{ secrets.ATLAS_BOT_PRIVATE_KEY }}
           permission-issues: write
+          # The claim limit is wider after a first merged pull request, and
+          # a search shows only what the token may read: without this right
+          # every person counts as new.
+          permission-pull-requests: read
           permission-organization-projects: write
 
       - run: python3 scripts/bot/atlas_bot.py claim

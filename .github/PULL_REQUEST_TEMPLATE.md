@@ -2,6 +2,12 @@
 
 <!-- One or two sentences: the behavior before, the behavior after. -->
 
+## What users will notice
+
+<!-- What a user of ATLAS sees differently after this change: plain sentences or a list
+     (no table, no code block, no list inside a list). The changelog of the release is made
+     from this part, so do not edit CHANGELOG.md. If users notice nothing, write only: Nothing. -->
+
 ## Why
 
 <!-- The problem this addresses. -->
@@ -22,3 +28,5 @@ Closes #<!-- the issue this delivers; small fixes under ~50 lines may skip this 
 - [ ] Matching `docs/*.md` updated for any behavior change
 - [ ] New behavior covered by a test, or a note on why not
 - [ ] Works model-agnostically (no model-name/dimension/token assumptions outside Lens/ASA artifacts)
+- [ ] AI tools helped write this change (tick it when they did; it is not held against the change)
+- [ ] I can explain every line of this change
