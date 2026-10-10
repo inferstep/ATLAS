@@ -1,0 +1,54 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us how ATLAS runs on your hardware. Reports keep
+        [SUPPORT_MATRIX](https://github.com/inferstep/ATLAS/blob/main/SUPPORT_MATRIX.md) honest.
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU (and VRAM)
+      placeholder: "RTX 5070 12 GB"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ATLAS version
+      placeholder: "3.1.4"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "Qwen3.5-9B-Q6_K"
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works as installed
+        - Works after changes (describe them below)
+        - Does not work
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `atlas doctor`
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: What you changed, how fast it felt, and any problems.

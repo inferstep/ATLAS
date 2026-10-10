@@ -1,0 +1,35 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask anything about installing, configuring or using ATLAS. No question is too basic.
+        Found a bug? Open a [bug report](https://github.com/inferstep/ATLAS/issues/new/choose).
+        Found a security problem? [Report it privately](https://github.com/inferstep/ATLAS/security/advisories/new).
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ATLAS version
+      description: The release you installed, or the output of `atlas --version`.
+      placeholder: "3.1.4"
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU and operating system
+      placeholder: "RTX 5070 12 GB, Ubuntu 24.04"
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "Qwen3.5-9B-Q6_K"
+  - type: textarea
+    id: output
+    attributes:
+      label: What you tried, and the output
+      description: The output of `atlas doctor` helps most questions.
+      render: text

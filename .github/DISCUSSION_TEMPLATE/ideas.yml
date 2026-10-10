@@ -1,0 +1,23 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Early ideas are welcome here. When an idea is ready to build, it becomes an
+        RFC issue ([how proposals work](https://github.com/inferstep/ATLAS/blob/main/GOVERNANCE.md#proposals-rfc--adr--epic)).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Other ways you considered

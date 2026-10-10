@@ -106,6 +106,8 @@ request without one may be closed with a pointer to do that.
 
 Comment `/claim` (alone, as the first line) on a Ready issue. The bot
 assigns you, moves the card to In Progress, and replies with your Shepherd.
+With more words on that line the bot claims nothing and tells you so: put
+them on the lines below.
 
 - One person per issue. You can hold **2** open claims, or **1** before
   your first merged pull request.
@@ -151,6 +153,14 @@ It links you to the issue, lets your Shepherd help early, and keeps your
 claim. Fill in the template: what changed, why, how you verified it, and
 the hardware you ran it on (or "untested on hardware").
 
+Under **What users will notice**, say what a user of ATLAS sees differently
+after your change, in plain sentences or a list. If users notice nothing,
+write only "Nothing." The changelog of a release is made from that part, so
+a pull request does not edit `CHANGELOG.md`.
+
+GitHub sets **base** to `main` on a new pull request. Change it to `dev`
+before you click **Create pull request**.
+
 CI for a pull request from outside the org waits until a maintainer
 approves the run. CI on a fork never gets the repository's secrets.
 
@@ -169,6 +179,28 @@ approves the run. CI on a fork never gets the repository's secrets.
 **Definition of done:** linked issue, tests for new behavior, docs updated
 for behavior changes, conventional title, CI green, and hardware tested (or
 stated as untested).
+
+### The labels the bot puts on your pull request
+
+Several times a day the bot gives every open pull request two kinds of
+label, beside the `area/*` ones. Both are computed from the change, and
+computed again when it changes; a label that is set or removed by hand is put
+back.
+
+| Label | When |
+|---|---|
+| `size/S`, `size/M`, `size/L`, `size/XL` | By the lines the pull request adds and removes: under 100, from 100, from 400, from 1,000. The lines of lock files, tests and documents do not count |
+| `risk:high` | The pull request changes a core path (the agent loop, the tool handlers, the guards); or it changes a file of v3-service that holds a prompt or shapes the request to the model; or it has 400 counted lines or more; or it is the author's first pull request here |
+
+`risk:high` says where a mistake would cost most, so that review time goes
+there first. It is not a mark against you or your change. A change to a
+workflow does not get it: the integrity check names such a change on the
+pull request, for a maintainer's approval. A change to a prompt of
+v3-service gets it because no other check can name such a change: no
+recorded request shows that text. Each label says in its own description
+what it is computed from. The numbers, the list of core paths and the list
+of those files of v3-service are in
+[.github/atlas-bot.yml](.github/atlas-bot.yml).
 
 ## 10. After your change merges
 

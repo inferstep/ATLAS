@@ -1,0 +1,110 @@
+name: weekly cleanup
+
+# What the fixers would change on `dev`, as the text of one issue
+# (docs/quality/gates.md, section "The weekly cleanup"). No job here changes
+# the repository: nothing is pushed and no pull request is opened.
+#
+# Two jobs. The first runs the fixers, the builds and the tests, on a copy,
+# with a token that can only read. The second can write an issue, and runs
+# no fixer, no build and no test: it takes the text that the first made, as
+# data, and puts it into the one issue. It does not run for a pull request.
+#
+# GitHub starts a scheduled run from the workflow file of the default branch
+# only. That copy is only the starter: both jobs check out `dev` and run the
+# script of `dev`. On a pull request that changes this file or the script,
+# the first job runs with the pull request's copy and shows the text on the
+# page of the run.
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'   # weekly, Monday 03:17 UTC
+  workflow_dispatch: {}
+  pull_request:
+    branches: [dev]
+    paths:
+      - '.github/workflows/weekly-cleanup.yml'
+      - 'scripts/weekly_cleanup.py'
+
+concurrency:
+  group: weekly-cleanup-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  text:
+    name: weekly cleanup (make the text)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # A scheduled run and a run by hand read `dev`. A pull request
+          # reads itself.
+          ref: ${{ github.event_name != 'pull_request' && 'dev' || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          # The version of the Go test jobs. The list of fixers in the script
+          # is read again when this version changes: a fixer that a newer Go
+          # brings is named in the text and not run until it is on the list.
+          go-version: '1.26.6'
+          cache: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: the packages of the script
+        # ruff comes from the hashed lock, at the version of the lint job.
+        run: pip install --require-hashes -r .github/requirements/ci.txt
+
+      - name: run each fixer on a copy, check each piece, write the text
+        # Status 0: the text was made. 2: not judged, because a tool is
+        # missing or fails on the files as they are. Then the job fails, no
+        # text is kept, and the job below does not run.
+        run: python scripts/weekly_cleanup.py make --out "$RUNNER_TEMP/weekly-cleanup"
+
+      - name: keep the text and the patches
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: weekly-cleanup
+          path: ${{ runner.temp }}/weekly-cleanup/
+          if-no-files-found: error
+
+  issue:
+    name: weekly cleanup (write the issue)
+    needs: text
+    # The text of a pull request is shown on the page of its run, and goes
+    # into no issue.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # The checkout of the script.
+      contents: read
+      # The text of the one issue. No other job of this workflow has it.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: dev
+          sparse-checkout: scripts/weekly_cleanup.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: weekly-cleanup
+          path: ${{ runner.temp }}/weekly-cleanup
+
+      - name: put the text into the one issue
+        # The text is data here: it is sent as the text of the issue and is
+        # run nowhere. The script reads no other file of the folder but the
+        # text and its result file.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/weekly_cleanup.py write --from "$RUNNER_TEMP/weekly-cleanup"
