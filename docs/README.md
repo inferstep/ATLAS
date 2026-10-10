@@ -5,8 +5,8 @@ map of the repository itself, see [MAP.md](MAP.md).
 
 > 翻訳 / 번역 / 翻译: [简体中文](lang/zh-CN/README.md) ·
 > [日本語](lang/ja/README.md) · [한국어](lang/ko/README.md)
-> (README, SETUP, ARCHITECTURE, TROUBLESHOOTING are translated; everything
-> else is English-only.)
+> (README, GETTING_STARTED, SETUP, ARCHITECTURE, TROUBLESHOOTING are
+> translated; everything else is English-only.)
 
 ---
 
