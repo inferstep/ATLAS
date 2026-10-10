@@ -272,7 +272,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-如果这个方法在一张此前不受支持的卡上对你有效，请在 [GH #26](https://github.com/itigges22/ATLAS/issues/26) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
+如果这个方法在一张此前不受支持的卡上对你有效，请在 [GH #26](https://github.com/inferstep/ATLAS/issues/26) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
 
 ### RDNA4（RX 9070 / 9070 XT，gfx1200 / gfx1201）—— 需要 ROCm 7.x
 
@@ -464,7 +464,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 
 ### `no kernel image is available for execution on the device` (CUDA)
 
-**适用范围：** 比 Blackwell 更早的 NVIDIA GPU —— RTX 40xx（Ada）、RTX 30xx（Ampere）、RTX 20xx / T4（Turing）、GTX 10xx（Pascal）、V100/A100/H100/L4 —— 运行预构建的 `ghcr.io/itigges22/atlas-llama` 镜像时。同源错误 `invalid device function`（运行时）和 `nvcc fatal: unsupported gpu architecture`（本地构建）成因相同。（AMD 上的同一错误见 [ROCm 条目](#amd-gpu-不受-rocm-支持但你想试试rocm-上的-no-kernel-image)。）
+**适用范围：** 比 Blackwell 更早的 NVIDIA GPU —— RTX 40xx（Ada）、RTX 30xx（Ampere）、RTX 20xx / T4（Turing）、GTX 10xx（Pascal）、V100/A100/H100/L4 —— 运行预构建的 `ghcr.io/inferstep/atlas-llama` 镜像时。同源错误 `invalid device function`（运行时）和 `nvcc fatal: unsupported gpu architecture`（本地构建）成因相同。（AMD 上的同一错误见 [ROCm 条目](#amd-gpu-不受-rocm-支持但你想试试rocm-上的-no-kernel-image)。）
 
 **含义：** 发布的 CUDA 镜像只针对计算能力 `120;121`（仅 Blackwell）编译。llama-server 二进制不包含更早架构的 GPU 内核，其内嵌的 PTX（`compute_121`）无法向下 JIT 编译，因此第一次 CUDA 内核启动就会失败。这是镜像/GPU 不匹配，不是驱动或显存问题。
 
@@ -473,7 +473,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 # Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
 nvidia-smi --query-gpu=name,compute_cap --format=csv
 # What the image was built for (Blackwell-only image prints sm_120/sm_121)
-docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+docker run --rm --entrypoint bash ghcr.io/inferstep/atlas-llama:latest \
   -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
 ```
 如果你的计算能力低于 12.0，而镜像只列出 `sm_120`/`sm_121`，那么本条目适用。
@@ -947,4 +947,4 @@ atlas bench --run-id <your-run-id> --tasks 200
 1. 查看服务日志：`docker compose logs <service-name>`
 2. 检查代理健康检查端点：`curl http://localhost:8090/health`
 3. 参见 [CONFIGURATION.md](../../CONFIGURATION.md) 了解所有环境变量
-4. 在 [GitHub](https://github.com/itigges22/ATLAS/issues) 上提交 issue
+4. 在 [GitHub](https://github.com/inferstep/ATLAS/issues) 上提交 issue
