@@ -9,6 +9,12 @@ check names it to a maintainer.
 The settings of the wrapper are held as they are today: the distribution comes from Gradle's own address, its sum
 is set, and the wrapper checks the address.
 
+The wrapper reads its settings with Java's own reader of such files, and that reader takes more forms than the
+plain `key=value`: another sign or a space between the key and the value, a key that is written with an escape, a
+value that goes on in the next line. For a key that stands twice it takes the last one. A test that read the file
+in its own way could hold one setting while the wrapper uses another. So the file has to be in the plain form
+that `gradle wrapper` and Dependabot write, and a file in another form is red before anything else is held.
+
 No network is used. A version with no line in the list is red, and the message says what to do.
 """
 import hashlib
@@ -26,6 +32,12 @@ VERSION = r"\d+\.\d+(?:\.\d+)?(?:-(?:rc|milestone)-\d+)?"
 ADDRESS = re.compile(rf"https://services\.gradle\.org/distributions/gradle-(?P<version>{VERSION})-(?:bin|all)\.zip")
 A_SUM = re.compile(r"[0-9a-f]{64}")
 LINE = re.compile(rf"(?P<version>{VERSION}) (?P<sum>[0-9a-f]{{64}})")
+# The plain form of a settings file. A line is empty, a comment that starts with `#`, or `key=value`: a key of
+# letters and digits, the equals sign, and a value with no space in it. Every character is a printable one of
+# ASCII. In a value a backslash stands only before a colon, as the wrapper writes the colon of an address.
+A_COMMENT = re.compile(r"#[ -~]*")
+A_PAIR = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9]*)=(?P<value>[!-~]*)")
+A_BACKSLASH_ALONE = re.compile(r"\\(?!:)")
 
 
 def published(text):
@@ -48,10 +60,30 @@ def published(text):
     return sums, findings
 
 
-def settings_of(text):
-    """The keys of a Java properties file as the wrapper writes it: `key=value`, with `\\:` for a colon."""
-    pairs = (line.split("=", 1) for line in text.splitlines() if "=" in line and not line.lstrip().startswith(("#", "!")))
-    return {key.strip(): value.strip().replace("\\:", ":").replace("\\=", "=") for key, value in pairs}
+def plain_settings(raw, name):
+    """The settings of a file in the plain form as key -> value, and a finding for each line that is not in that
+    form or that gives a key a second time. In the plain form Java's reader and this one read the same pairs."""
+    settings, findings = {}, []
+    for number, line in enumerate(raw.decode("ascii", errors="replace").split("\n"), 1):
+        line = line[:-1] if line.endswith("\r") else line
+        pair = A_PAIR.fullmatch(line)
+        if not line or A_COMMENT.fullmatch(line):
+            continue
+        if not pair or A_BACKSLASH_ALONE.search(pair["value"]):
+            findings.append(
+                f"`{name}/{SETTINGS}`, line {number}, is not in the plain form: {ascii(line)[:120]}. The plain form is "
+                "an empty line, a comment that starts with `#`, or `key=value` with a key of letters and digits, no "
+                "space, and a backslash only before a colon. The wrapper reads this file with Java's own reader, "
+                "which takes more forms than that, so this test could hold one setting while the wrapper uses "
+                "another. Fix: write the line as `gradle wrapper` writes it.")
+        elif pair["key"] in settings:
+            findings.append(
+                f"`{name}/{SETTINGS}`, line {number}, gives `{pair['key']}` a second time. Java's reader takes the "
+                "last line of a key, so the line that a reader of the file sees first is not the one that the "
+                "wrapper uses. Fix: keep one line for the key.")
+        else:
+            settings[pair["key"]] = pair["value"].replace("\\:", ":")
+    return settings, findings
 
 
 def settings_findings(name, settings):
@@ -85,7 +117,11 @@ def wrapper_findings(folder, sums, name):
                for one in (jar, settings) if not one.is_file()]
     if missing:
         return missing
-    findings, version = settings_findings(name, settings_of(settings.read_text(encoding="utf-8")))
+    plain, not_plain = plain_settings(settings.read_bytes(), name)
+    if not_plain:
+        # Nothing else is said of such a file: what this test would read from it is not what the wrapper reads.
+        return not_plain
+    findings, version = settings_findings(name, plain)
     if version is None:
         return findings
     has = hashlib.sha256(jar.read_bytes()).hexdigest()
@@ -140,14 +176,19 @@ GOOD = {
 }
 
 
-def a_wrapper(tmp_path, jar=A_JAR, without=(), **changed):
+def as_text(without=(), **changed):
+    keys = {key: value for key, value in {**GOOD, **changed}.items() if key not in without}
+    return "".join(f"{key}={value}\n" for key, value in keys.items())
+
+
+def a_wrapper(tmp_path, jar=A_JAR, without=(), raw=None, **changed):
+    """The findings for a wrapper made here: the good settings with some changed or left out, or the bytes `raw`."""
     folder = tmp_path / "gradle" / "wrapper"
     folder.mkdir(parents=True)
     if jar is not None:
         (folder / JAR).write_bytes(jar)
     if changed.get("settings", True) is not None:
-        keys = {key: value for key, value in {**GOOD, **changed}.items() if key not in without}
-        (folder / SETTINGS).write_text("".join(f"{key}={value}\n" for key, value in keys.items()), encoding="utf-8")
+        (folder / SETTINGS).write_bytes(as_text(without, **changed).encode() if raw is None else raw)
     return wrapper_findings(folder, SUMS_HERE, "gradle/wrapper")
 
 
@@ -261,7 +302,96 @@ def test_the_list_takes_a_version_and_a_sum_on_a_line_and_nothing_else(text, ver
     assert len(findings) == len(words) and all(word in finding for word, finding in zip(words, findings)), findings
 
 
+# The settings file: the plain form, and each form that Java's reader takes and that is not plain.
+
+AS_GRADLE_WRITES_IT = """distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip
+distributionSha256Sum=bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c
+networkTimeout=10000
+retries=0
+retryBackOffMs=500
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+"""
+
+
 def test_the_settings_are_read_as_the_wrapper_writes_them():
-    text = "#Mon Oct 12\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip\nretries=0\n"
-    assert settings_of(text) == {
-        "distributionUrl": "https://services.gradle.org/distributions/gradle-9.8.0-bin.zip", "retries": "0"}
+    settings, findings = plain_settings(AS_GRADLE_WRITES_IT.encode(), "gradle/wrapper")
+    assert findings == []
+    assert len(settings) == 10 and settings["retries"] == "0" and settings["validateDistributionUrl"] == "true"
+    assert settings["distributionUrl"] == "https://services.gradle.org/distributions/gradle-9.8.0-bin.zip"
+
+
+@pytest.mark.parametrize("text", [
+    AS_GRADLE_WRITES_IT,
+    AS_GRADLE_WRITES_IT.replace("9.8.0", "9.8.1"),
+    "#Mon Oct 12 16:00:00 UTC 2026\n" + AS_GRADLE_WRITES_IT,
+    AS_GRADLE_WRITES_IT.replace("\n", "\r\n"),
+    AS_GRADLE_WRITES_IT.replace("networkTimeout", "\n# a comment, with spaces\nnetworkTimeout"),
+    AS_GRADLE_WRITES_IT.rstrip("\n"),
+], ids=["as Gradle 9.8.0 writes it", "as Gradle 9.8.1 writes it", "with the date line of an older Gradle",
+        "with the line ends of Windows", "with an empty line and a comment", "with no line end at the end"])
+def test_a_settings_file_in_the_plain_form_has_no_finding(text):
+    settings, findings = plain_settings(text.encode(), "gradle/wrapper")
+    assert findings == [] and len(settings) == 10
+    assert settings == plain_settings(AS_GRADLE_WRITES_IT.replace("9.8.0", settings["distributionUrl"][-13:-8]).encode(), "")[0]
+
+
+GOOD_TEXT = as_text()
+URL_LINE = "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip\n"
+ELSEWHERE = "https\\://example.org/distributions/gradle-9.8.0-bin.zip"
+# Each row: bytes that Java's reader takes as settings, and that give the wrapper another address, or no check of
+# the address, than a reader of plain `key=value` lines sees. The last rows are forms that change nothing for
+# Java's reader; they are refused all the same, so that the rule stays one rule.
+NOT_PLAIN = {
+    "a second line for a key, with a colon": GOOD_TEXT + "validateDistributionUrl:false\n",
+    "a second line for a key, with a space": GOOD_TEXT + "validateDistributionUrl false\n",
+    "a second line for a key, with a tab": GOOD_TEXT + "validateDistributionUrl\tfalse\n",
+    "a second line for the address, with a colon": GOOD_TEXT + f"distributionUrl:{ELSEWHERE}\n",
+    "a second line whose key is written with an escape": GOOD_TEXT + "validateDistributionUr\\u006c=false\n",
+    "a second line whose key has a backslash in it": GOOD_TEXT + "validate\\DistributionUrl=false\n",
+    "a second line with spaces before the key": GOOD_TEXT + "  validateDistributionUrl=false\n",
+    "a second line with a space before the equals sign": GOOD_TEXT + "validateDistributionUrl =false\n",
+    "a second line after a carriage return in a comment": GOOD_TEXT + "#a note\rvalidateDistributionUrl=false\n",
+    "a second line after a form feed": GOOD_TEXT + "\x0cvalidateDistributionUrl=false\n",
+    "the one line of a key, with a space as the separator": as_text(without=("validateDistributionUrl",)) + "validateDistributionUrl true\n",
+    "the one line of the address, with a space as the separator": as_text(without=("distributionUrl",)) + URL_LINE.replace("=", " ", 1),
+    "a value that goes on in the next line": GOOD_TEXT.replace("/distributions/gradle-9.8.0-bin.zip", "/distributions/\\\n    gradle-9.8.0-bin.zip"),
+    "a value with a space after it": as_text(validateDistributionUrl="true "),
+    "a value that is written with an escape": as_text(validateDistributionUrl="\\u0074rue"),
+    "a backslash before the backslash of the colon": GOOD_TEXT.replace("https\\:", "https\\\\:"),
+    "a value with a letter that is not ASCII": as_text(distributionBase="GRADLE_USER_HOM\u00c9"),
+    "a key with a sign in it": GOOD_TEXT + "validate.DistributionUrl=false\n",
+    "a line with no key": GOOD_TEXT + "=false\n",
+    "a comment that starts with an exclamation mark": GOOD_TEXT + "!validateDistributionUrl=false\n",
+    "a comment with spaces before it": GOOD_TEXT + "  # a note\n",
+    "a value with a space before it": as_text(validateDistributionUrl=" true"),
+}
+
+
+@pytest.mark.parametrize("text", NOT_PLAIN.values(), ids=NOT_PLAIN.keys())
+def test_a_settings_file_that_is_not_in_the_plain_form_is_found(tmp_path, text):
+    findings = a_wrapper(tmp_path, raw=text.encode())
+    assert findings and all("is not in the plain form" in finding and "Fix:" in finding for finding in findings), findings
+    assert all("Java's own reader" in finding for finding in findings)
+
+
+@pytest.mark.parametrize("line, key", [
+    ("validateDistributionUrl=false\n", "validateDistributionUrl"),
+    (f"distributionUrl={ELSEWHERE}\n", "distributionUrl"),
+    (URL_LINE, "distributionUrl"),
+    ("distributionSha256Sum=" + "cd" * 32 + "\n", "distributionSha256Sum"),
+], ids=["the check of the address", "the address", "the same address again", "the sum of the distribution"])
+def test_a_key_that_stands_twice_is_found(tmp_path, line, key):
+    for place, text in enumerate((GOOD_TEXT + line, line + GOOD_TEXT)):
+        findings = a_wrapper(tmp_path / str(place), raw=text.encode())
+        assert len(findings) == 1 and f"gives `{key}` a second time" in findings[0] and "Fix:" in findings[0], findings
+
+
+def test_a_file_that_is_not_plain_gets_no_other_finding(tmp_path):
+    # The jar is another one too, and nothing is said of it: what the test would read is not what the wrapper reads.
+    findings = a_wrapper(tmp_path, jar=b"changed", raw=(GOOD_TEXT + "validateDistributionUrl:false\n").encode())
+    assert len(findings) == 1 and "line 5, is not in the plain form" in findings[0], findings
+    assert "'validateDistributionUrl:false'" in findings[0]
