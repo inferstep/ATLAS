@@ -172,7 +172,11 @@ def test_cancel_while_waiting_before_headers(upstream):
     latency = time.time() - t0
     assert closed == 1, "the live connection was not registered for cancellation"
     assert latency < 3.0, f"cancellation took {latency:.2f}s while blocked pre-headers"
-    assert not Upstream.calls[0]["finished"], "the upstream completed anyway"
+    # The upstream is still silent at this moment, so its record says nothing yet. It is read when the upstream has
+    # come to its end: only then can it show a call that completed anyway.
+    rec = upstream_settled(timeout=Upstream.header_delay + 8)
+    assert rec.get("end"), f"the upstream did not come to its end in time, so nothing can be said: {rec}"
+    assert not rec["finished"], "the upstream completed anyway"
 
 
 # --- 6-8: cancellation after headers, mid-stream, and in a silent gap ---------
@@ -245,9 +249,12 @@ def test_cancel_after_normal_completion_is_harmless(upstream):
     t, err = run_call(scope)
     assert settled(scope, t)
     assert not err, err
-    with Upstream.lock:
-        assert Upstream.calls[0]["finished"]
-        assert not Upstream.calls[0]["client_gone"]
+    # The upstream sets `finished` after it has sent its last piece, and the call is over as soon as that piece is
+    # read. So the record is read when the upstream has come to its end, not at once.
+    rec = upstream_settled()
+    assert rec.get("end"), f"the upstream did not come to its end in time, so nothing can be said: {rec}"
+    assert rec["finished"], f"the upstream did not complete a call that ran to its end: {rec}"
+    assert not rec["client_gone"]
     assert scope.cancel() == 0
 
 
