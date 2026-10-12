@@ -120,7 +120,7 @@ job on this list that does not start gives no red:
 |---|---|
 | `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
 | `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue |
-| `smoke result` | For a pull request that changes text that every request to the model carries: red until the text of the pull request has the result line of a smoke run that was made with that text. See [below](#a-change-to-text-that-the-model-reads) |
+| `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) |
 | `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix |
 | `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
 | `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job |
@@ -465,8 +465,8 @@ and a changed recording marks such a pull request. Two things follow:
 
 - **Text that every request carries** (the system prompt with the tool
   descriptions, the grammar, the schema of the reply): the job
-  `smoke result` is red until the text of the pull request has the result
-  line of a smoke run that was made with that text. The job sees such a
+  `smoke result` is red until the development server wrote the green
+  status `server/smoke` on the head commit. The job sees such a
   change from the recordings themselves: the part has other values than
   on the base, and none that the base's recordings had. A part that no
   request carries any more counts, and so does a part that is new in every
@@ -477,16 +477,27 @@ and a changed recording marks such a pull request. Two things follow:
   asked for.
 
 The smoke run is three fixed tasks of the driver, once each, with a real
-model. A maintainer starts it by hand, after reading the diff; nothing on
-GitHub starts it. Its one result line goes into the text of the pull
-request as it is:
+model, on the development server. A maintainer reads the whole change and
+pushes the head commit to a branch `smoke/<name>`; nothing on GitHub starts
+the run. The server finds the branch, makes the run, and writes its result
+on that commit as the status `server/smoke`.
 
-`Smoke run on <commit>: 3 of 3 sessions with no harness defect, <seconds> s; the changed text is part of every request (text <mark>).`
-
-The mark is made from the text that every request carries
-(`scripts/smoke_result.py --mark <commit>` prints it). So the line holds
-while the head of the pull request has that same text: also after a rebase,
-and after a later commit that leaves the text as it is.
+- The job is green when the newest `server/smoke` status of the server on
+  the head commit is green.
+- It counts only a status that the server's own account wrote, and it
+  compares the id of that account, not a name. A status of that name by
+  another account counts for nothing, and the output of the job names it.
+- A red status of the server is red. The line for a server that is not
+  available does not set it aside: the change was tried.
+- A line in the text of the pull request that says a smoke run passed is
+  not read.
+- The status is for one commit. A new commit of the pull request needs a
+  new smoke run.
+- A status that comes later does not start the job again. To read it,
+  start the job again by hand ("Re-run jobs"), or edit the text of the
+  pull request.
+- The job has a token that can read the statuses of a commit, and nothing
+  more than it had before.
 
 What the result says, and what it does not say:
 
@@ -507,16 +518,19 @@ What the result says, and what it does not say:
   are no check of such a change: its recordings are written again from the
   new text, so they pass. The line, with the mark of the text:
   `No smoke run: the server is not available. Not tried with a real model; the first nightly run after the server is back covers this text (text <mark>).`
+  The mark is made from the text that every request carries
+  (`scripts/smoke_result.py --mark <commit>` prints it). The line counts
+  only while the server wrote no status for the head commit.
 
 The limits of the job:
 
-- It cannot know that a run took place. It holds that the line is there,
-  that it says 3 of 3, and that it is for the text of this head.
+- It holds that the server's own account wrote a green status on the head
+  commit. What the run did is in the report on the server.
 - It is not a required check. A red `smoke result` is for the maintainer
   who merges.
-- Anybody who can edit the text of the pull request can write either line.
-  A maintainer reads the text before the merge. If the job is ever made a
-  required check, the line for a server that is not available needs a sign
+- Anybody who can edit the text of the pull request can write the line for
+  a server that is not available. A maintainer reads the text before the
+  merge. If the job is ever made a required check, that line needs a sign
   that only a maintainer can give.
 - v3-service builds prompts of its own, and no recording looks inside it.
   For a change to one of them no smoke run is asked for: nothing can show

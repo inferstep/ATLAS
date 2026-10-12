@@ -1,12 +1,20 @@
-"""A pull request that changes the text every request carries needs the result line of a smoke run made with that text.
+"""A pull request that changes the text every request carries needs the green status of the server's smoke run on its
+head commit.
 
 The check reads recordings from two commits. Each test makes a small repository with recordings made for the test.
+GitHub is a stand-in: a small server on this machine that holds the statuses of the commits. The script has one fixed
+address; what a started check asks there is turned to the stand-in and written down, and a call to another address
+is refused. No test reaches the network.
 """
+import http.server
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -40,13 +48,95 @@ def recording(system="You are a coding assistant. Tools: read_file, write_file."
         {"service": "model", "method": "POST", "path": "/v1/chat/completions", "request": json.dumps(second), "response": ""}]}
 
 
+# The account of the server's GitHub App, as a test has it, and a token that can read statuses.
+SERVER, TOKEN = 424242, "a-token-made-for-this-test-0123456789"
+# What every Python that a test starts does first (a file `sitecustomize.py` on its path). The script has one fixed
+# address and no way to give it another, so the stand-in of GitHub is put behind that address here.
+ON_EVERY_START = '''"""Each call to GitHub's address goes to the stand-in of the test and is written down. Another address is refused."""
+import json
+import urllib.error
+import urllib.request
+
+_open = urllib.request.OpenerDirector.open
+
+
+def _to_the_stand_in(self, request, *args, **kwargs):
+    asked = request if isinstance(request, str) else request.full_url
+    with open({log!r}, "a") as log:
+        log.write(json.dumps([request.get_method(), asked]) + "\\n")
+    if not asked.startswith("https://api.github.com/") or not {port}:
+        raise urllib.error.URLError("the test has no stand-in at this address")
+    request.full_url = "http://127.0.0.1:{port}/" + asked[len("https://api.github.com/"):]
+    return _open(self, request, *args, **kwargs)
+
+
+urllib.request.OpenerDirector.open = _to_the_stand_in
+'''
+
+
+class GitHub(http.server.BaseHTTPRequestHandler):
+    """A stand-in for the one place of GitHub that the check reads: the statuses of a commit, newest first, in pages."""
+    on: dict = {}
+    seen: list = []
+    answer = None
+    cut_short = False
+    port = 0
+
+    def do_GET(self):
+        where = urllib.parse.urlsplit(self.path)
+        GitHub.seen.append((self.path, self.headers.get("Authorization", "")))
+        at = re.fullmatch(r"/repos/inferstep/ATLAS/commits/([0-9a-f]{40})/statuses", where.path)
+        status, body = (404, {"message": "the stand-in has no such place"})
+        if GitHub.answer is not None:
+            status, body = GitHub.answer
+        elif at:
+            asked = urllib.parse.parse_qs(where.query)
+            page, each = int(asked["page"][0]), int(asked["per_page"][0])
+            status, body = 200, GitHub.on.get(at.group(1), [])[(page - 1) * each:page * each]
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        # An answer that is cut short: the head says more bytes than come.
+        self.send_header("Content-Length", str(len(raw) + (50 if GitHub.cut_short else 0)))
+        if status in (301, 302, 307, 308):
+            # The other place is a fixed one of the stand-in itself. A call that comes there was followed.
+            self.send_header("Location", f"http://127.0.0.1:{GitHub.port}/elsewhere")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def log_message(self, *_args):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def github():
+    """GitHub for each test of this file: it holds no status until the test gives it one."""
+    GitHub.on, GitHub.seen, GitHub.answer, GitHub.cut_short = {}, [], None, False
+    server = http.server.HTTPServer(("127.0.0.1", 0), GitHub)
+    GitHub.port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield GitHub
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+def a_status(state="success", by=SERVER, name="server/smoke", said="passed; started 2026-10-08T08:00:03Z; 3 of 3 sessions with no harness defect; text 0123456789ab", **more):
+    return {"context": name, "state": state, "description": said, "creator": {"id": by, "login": "an-account", "type": "Bot"}, **more}
+
+
 class Repo:
     """A repository with recordings, and the commits that were made in it."""
 
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, home):
+        self.home, self.root = home, home / "the repository"
         self.commits = 0
-        (root / "tests" / "replay" / "recordings").mkdir(parents=True)
+        (self.root / "tests" / "replay" / "recordings").mkdir(parents=True)
+        (home / "site").mkdir()
+        (home / "site" / "sitecustomize.py").write_text(ON_EVERY_START.format(log=str(home / "asked.log"), port=GitHub.port))
         self.git("init", "-q", "-b", "dev")
 
     def git(self, *args):
@@ -68,9 +158,30 @@ class Repo:
         self.git("commit", "-q", "-m", "a commit")
         return self.git("rev-parse", "HEAD")
 
+    def env(self, text=""):
+        """What a started check gets: the text of the pull request, a token, and GitHub's address behind the stand-in."""
+        return {"PATH": os.environ["PATH"], "PR_BODY": text, "GITHUB_TOKEN": TOKEN, "PYTHONPATH": str(self.home / "site"),
+                "PYTHONDONTWRITEBYTECODE": "1"}
+
     def check(self, base, head, text=""):
         return subprocess.run([sys.executable, str(SCRIPT), "--base", base, "--head", head], cwd=self.root, capture_output=True,
-                              text=True, timeout=60, check=False, env={"PATH": os.environ["PATH"], "PR_BODY": text})
+                              text=True, timeout=60, check=False, env=self.env(text))
+
+    def asked(self):
+        """Each address that the started checks asked, in order."""
+        log = self.home / "asked.log"
+        return [json.loads(line)[1] for line in log.read_text().splitlines()] if log.exists() else []
+
+    def judged(self, monkeypatch, capsys, base, head, text="", writer=SERVER):
+        """The check in the process of the test, with this account as the server's. Gives its status and what it printed."""
+        monkeypatch.setattr(smoke, "WRITER", writer)
+        monkeypatch.setattr(smoke, "GITHUB_API", f"http://127.0.0.1:{GitHub.port}")
+        monkeypatch.setenv("PR_BODY", text)
+        monkeypatch.setenv("GITHUB_TOKEN", TOKEN)
+        monkeypatch.chdir(self.root)
+        status = smoke.main(["--base", base, "--head", head])
+        printed = capsys.readouterr()
+        return status, printed.out + printed.err
 
     def mark(self, commit):
         return subprocess.run([sys.executable, str(SCRIPT), "--mark", commit], cwd=self.root, capture_output=True, text=True,
@@ -78,8 +189,12 @@ class Repo:
 
 
 def line(commit, mark, passed=3, seconds=412):
+    """The line that a smoke run prints for the person who started it. The check does not read it as a result."""
     return (f"Smoke run on {commit[:12]}: {passed} of 3 sessions with no harness defect, {seconds} s; "
             f"the changed text is part of every request (text {mark}).")
+
+
+NO_STATUS = "and its head commit has no status `server/smoke` of the development server"
 
 
 @pytest.fixture
@@ -99,6 +214,9 @@ def test_a_pull_request_that_changes_no_recording_is_asked_for_nothing(repo):
     done = repo.check(repo.base, head)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "the smoke run is not asked for" in done.stdout, done.stdout + done.stderr
+    # GitHub is asked only when the smoke run is asked for.
+    assert repo.asked() == []
+    assert GitHub.seen == []
 
 
 @pytest.mark.parametrize("change", [
@@ -123,13 +241,20 @@ def test_a_change_of_a_recording_in_text_that_not_every_request_carries_is_asked
     ({"schema": "array"}, "the schema of the reply"),
     ({"system": NEW, "grammar": "root ::= call | done"}, "the system prompt and the grammar"),
 ])
-def test_a_change_of_text_that_every_request_carries_is_red_until_the_result_line_is_there(repo, change, what):
+def test_a_change_of_text_that_every_request_carries_is_red_while_the_server_wrote_no_status(repo, change, what):
     head = repo.commit(one=recording(**change), two=recording(task="repair a fault", **change))
-    done = repo.check(repo.base, head, "A pull request with no result line.")
+    done = repo.check(repo.base, head, "A pull request with no word about a smoke run.")
     assert done.returncode == 1
-    assert f"::error title=smoke result::this pull request changes {what}, which every request to the model carries" in done.stdout
+    assert f"::error title=smoke result::this pull request changes {what}, which every request to the model carries, {NO_STATUS}" in done.stdout
     assert "Fix: ask a maintainer for the smoke run of the head commit" in done.stdout
+    assert "pushes that commit to a branch `smoke/<name>`" in done.stdout
+    # The message says how the check turns green when the status has come.
+    assert 'A status that comes later does not start this check again: open this job and choose "Re-run jobs"' in done.stdout
     assert "after two red smoke runs the change stops and is thought over" in done.stdout
+    # The statuses of exactly the head commit were asked, at GitHub's own address, with the token of the job.
+    assert repo.asked() == [f"https://api.github.com/repos/inferstep/ATLAS/commits/{head}/statuses?per_page=100&page=1"]
+    assert GitHub.seen == [(f"/repos/inferstep/ATLAS/commits/{head}/statuses?per_page=100&page=1", f"Bearer {TOKEN}")]
+    assert TOKEN not in done.stdout + done.stderr
 
 
 @pytest.mark.parametrize("gone, what", [
@@ -140,11 +265,9 @@ def test_a_change_of_text_that_every_request_carries_is_red_until_the_result_lin
 ])
 def test_a_part_that_no_request_carries_any_more_is_a_change_of_every_request(repo, gone, what):
     head = repo.commit(one=recording(**gone), two=recording(task="repair a fault", **gone))
-    done = repo.check(repo.base, head, "A pull request with no result line.")
+    done = repo.check(repo.base, head, "A pull request with no word about a smoke run.")
     assert done.returncode == 1, done.stdout + done.stderr
     assert f"this pull request changes {what}, which every request to the model carries" in done.stdout
-    # The line of a run with the text of this head makes it green, as for any other change.
-    assert repo.check(repo.base, head, line(head, repo.mark(head))).returncode == 0
 
 
 @pytest.mark.parametrize("new", [{"grammar": None}, {"schema": None}, {"system": None}])
@@ -152,9 +275,9 @@ def test_a_part_that_is_new_in_every_request_is_a_change_of_every_request(tmp_pa
     made = Repo(tmp_path)
     base = made.commit(one=recording(**new), two=recording(task="repair a fault", **new))
     head = made.commit(one=recording(), two=recording(task="repair a fault"))
-    done = made.check(base, head, "A pull request with no result line.")
+    done = made.check(base, head, "A pull request with no word about a smoke run.")
     assert done.returncode == 1, done.stdout + done.stderr
-    assert "has no result line of a smoke run" in done.stdout
+    assert NO_STATUS in done.stdout
 
 
 def test_a_part_that_one_recording_loses_and_the_others_keep_is_asked_for_nothing(repo):
@@ -178,7 +301,7 @@ def test_the_first_recordings_of_a_branch_are_a_change_of_every_request(tmp_path
     base = made.commit()
     head = made.commit(one=recording(), two=recording(task="repair a fault"))
     assert made.check(base, head, "no line").returncode == 1
-    assert made.check(base, head, line(head, made.mark(head))).returncode == 0
+    assert made.check(base, head, no_server(made.mark(head))).returncode == 0
 
 
 def test_a_new_recording_beside_changed_ones_does_not_hide_the_change(repo):
@@ -186,53 +309,152 @@ def test_a_new_recording_beside_changed_ones_does_not_hide_the_change(repo):
     assert repo.check(repo.base, head).returncode == 1
 
 
-# --- the result line ----------------------------------------------------------------------------------------------
-
-def test_the_result_line_of_a_run_with_this_text_makes_the_check_green(repo):
-    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    text = "What this changes.\n\n" + line(head, repo.mark(head)) + "\n\nMore text."
-    done = repo.check(repo.base, head, text)
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert f"the smoke run on {head[:12]} (412 s, 3 of 3 sessions) was made with the text of this head" in done.stdout
-
-
-def test_the_line_holds_after_a_later_commit_and_after_a_rebase_that_leave_the_text_as_it_is(repo):
-    ran_on = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    text = line(ran_on, repo.mark(ran_on))
-    later = repo.commit(one=recording(system=NEW, note="a note in another wording"))
-    assert repo.check(repo.base, later, text).returncode == 0
-    # A rebase makes new commits: the commit of the run is no longer part of the branch.
-    repo.git("checkout", "-q", "--orphan", "rebased")
-    rebased = repo.commit()
-    assert rebased != later
-    assert repo.mark(rebased) == repo.mark(ran_on)
-    assert repo.check(repo.base, rebased, text).returncode == 0
-
-
-def test_the_line_no_longer_holds_when_the_text_changes_again(repo):
-    ran_on = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    text = line(ran_on, repo.mark(ran_on))
-    again = NEW + " Use them with care."
-    head = repo.commit(one=recording(system=again), two=recording(system=again, task="repair a fault"))
-    done = repo.check(repo.base, head, text)
-    assert done.returncode == 1
-    assert f"is for another text (text {repo.mark(ran_on)})" in done.stdout
-    assert f"has the mark {repo.mark(head)}" in done.stdout
-    # A second line, of a run with the new text, makes it green; the old line may stay.
-    assert repo.check(repo.base, head, text + "\n" + line(head, repo.mark(head))).returncode == 0
-
+# --- the status of the server -------------------------------------------------------------------------------------
 
 def no_server(mark):
     return ("No smoke run: the server is not available. Not tried with a real model; the first nightly run after "
             f"the server is back covers this text (text {mark}).")
 
 
-def test_when_the_server_is_not_available_one_line_says_so_and_the_check_is_green(repo):
-    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    red = repo.check(repo.base, head, "no line")
+@pytest.fixture
+def changed(repo):
+    """A repository whose head changes the system prompt of every request."""
+    repo.head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
+    return repo
+
+
+def test_a_green_status_of_the_server_on_the_head_commit_makes_the_check_green(changed, monkeypatch, capsys):
+    GitHub.on[changed.head] = [a_status()]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head, "What this changes.")
+    assert status == 0, printed
+    assert printed == ("smoke result: the smoke run of the server passed on the head commit (`passed; started 2026-10-08T08:00:03Z; "
+                       "3 of 3 sessions with no harness defect; text 0123456789ab`).\n")
+    assert GitHub.seen == [(f"/repos/inferstep/ATLAS/commits/{changed.head}/statuses?per_page=100&page=1", f"Bearer {TOKEN}")]
+
+
+def test_the_script_as_it_is_takes_a_green_status_of_the_servers_own_account_and_of_no_other(changed):
+    # No stand-in for the account here: the script is started as the job starts it, with the id that it holds.
+    assert smoke.WRITER == 340202947, "the id of the account `atlas-server-results[bot]`"
+    GitHub.on[changed.head] = [a_status(by=smoke.WRITER)]
+    done = changed.check(changed.base, changed.head)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.startswith("smoke result: the smoke run of the server passed on the head commit (`passed; started ")
+    for other in (smoke.WRITER + 1, SERVER, 0, str(smoke.WRITER)):
+        GitHub.on[changed.head] = [a_status(by=other)]
+        assert changed.check(changed.base, changed.head).returncode == 1, other
+    GitHub.on[changed.head] = [a_status("failure", by=smoke.WRITER)]
+    red = changed.check(changed.base, changed.head, no_server(changed.mark(changed.head)))
+    assert red.returncode == 1
+    assert "the smoke run of the server did not pass on the head commit" in red.stdout
+
+
+def test_the_status_counts_for_the_head_commit_only(changed, monkeypatch, capsys):
+    GitHub.on[changed.head] = [a_status()]
+    # A later commit that leaves the text as it is has no status of its own.
+    later = changed.commit(one=recording(system=NEW, note="a note in another wording"))
+    assert changed.mark(later) == changed.mark(changed.head)
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, later)
+    assert status == 1
+    assert NO_STATUS in printed
+    assert changed.judged(monkeypatch, capsys, changed.base, changed.head)[0] == 0
+    # A short name of the commit is the same commit: the full id is asked.
+    assert changed.judged(monkeypatch, capsys, changed.base, changed.head[:12])[0] == 0
+    assert GitHub.seen[-1][0].startswith(f"/repos/inferstep/ATLAS/commits/{changed.head}/statuses")
+
+
+@pytest.mark.parametrize("state", ["failure", "error", "pending", "", "Success", None])
+def test_a_status_of_the_server_that_is_not_green_is_red_and_the_line_for_the_server_does_not_pass_over_it(changed, monkeypatch, capsys, state):
+    said = "failed; started 2026-10-08T08:00:03Z; 2 of 3 sessions with no harness defect; text 0123456789ab"
+    GitHub.on[changed.head] = [a_status(state, said=said)]
+    for text in ("no line", no_server(changed.mark(changed.head))):
+        status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head, text)
+        assert status == 1, printed
+        assert "::error title=smoke result::the smoke run of the server did not pass on the head commit" in printed
+        assert f"`{said}`" in printed
+        assert "the line for a server that is not available does not set it aside: the change was tried" in printed
+        assert "No text is changed to make the smoke pass; after two red smoke runs the change stops and is thought over" in printed
+        assert "A new commit needs a new smoke run." in printed
+
+
+@pytest.mark.parametrize("statuses, green", [
+    # The newest status of the server decides.
+    ([a_status("success", created_at="2026-10-08T09:00:00Z", id=2), a_status("failure", created_at="2026-10-08T08:00:00Z", id=1)], True),
+    ([a_status("failure", created_at="2026-10-08T09:00:00Z", id=2), a_status("success", created_at="2026-10-08T08:00:00Z", id=1)], False),
+    # In whatever order GitHub gives them.
+    ([a_status("success", created_at="2026-10-08T08:00:00Z", id=1), a_status("failure", created_at="2026-10-08T09:00:00Z", id=2)], False),
+    ([a_status("failure", created_at="2026-10-08T08:00:00Z", id=1), a_status("success", created_at="2026-10-08T09:00:00Z", id=2)], True),
+    ([a_status("success", created_at="2026-10-08T09:00:00Z", id=7), a_status("failure", created_at="2026-10-08T09:00:00Z", id=8)], False),
+    # A newer status of another account, or of another name, is not a status of the smoke run of the server.
+    ([a_status("failure", by=999, created_at="2026-10-08T09:00:00Z", id=2), a_status("success", created_at="2026-10-08T08:00:00Z", id=1)], True),
+    ([a_status("success", by=999, created_at="2026-10-08T09:00:00Z", id=2), a_status("failure", created_at="2026-10-08T08:00:00Z", id=1)], False),
+    ([a_status("failure", name="server/nightly", created_at="2026-10-08T09:00:00Z", id=2), a_status("success", created_at="2026-10-08T08:00:00Z", id=1)], True),
+])
+def test_the_newest_status_that_the_server_wrote_decides(changed, monkeypatch, capsys, statuses, green):
+    GitHub.on[changed.head] = statuses
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert status == (0 if green else 1), printed
+
+
+@pytest.mark.parametrize("other", [
+    a_status(by=999), a_status(by=str(SERVER)), a_status(by=None), a_status(by=SERVER + 1), a_status(by=True),
+    {"context": "server/smoke", "state": "success", "description": "passed", "creator": None},
+    {"context": "server/smoke", "state": "success", "description": "passed"},
+    {"context": "server/smoke", "state": "success", "description": "passed", "creator": "an-account"},
+])
+def test_a_status_of_that_name_by_another_writer_counts_for_nothing_and_the_output_names_it(changed, monkeypatch, capsys, other):
+    GitHub.on[changed.head] = [other]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert status == 1, printed
+    assert NO_STATUS in printed
+    assert "A status `server/smoke` by another account (id " in printed
+    assert "is on the commit; it is not counted." in printed
+    # It does not turn a green status of the server red either, and the output still names it.
+    GitHub.on[changed.head] = [{**other, "state": "failure"}, a_status()]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert status == 0, printed
+    assert "is on the commit; it is not counted." in printed
+    # And the line for a server that is not available still counts beside it: the server wrote nothing.
+    GitHub.on[changed.head] = [{**other, "state": "failure"}]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head, no_server(changed.mark(changed.head)))
+    assert status == 0, printed
+    assert "is on the commit; it is not counted." in printed
+
+
+def test_the_account_of_another_writer_is_named_by_its_id_in_plain_letters(changed, monkeypatch, capsys):
+    GitHub.on[changed.head] = [a_status(by=999), a_status(by="<b>@someone</b>\n::error::x")]
+    _status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert "A status `server/smoke` by another account (id 999, not given) is on the commit; it is not counted." in printed
+    assert "@someone" not in printed
+    assert "::error::x" not in printed
+    assert printed.count("\n") == 1
+
+
+def test_a_typed_line_that_says_a_smoke_run_passed_is_not_read(changed):
+    mark = changed.mark(changed.head)
+    done = changed.check(changed.base, changed.head, "What this changes.\n\n" + line(changed.head, mark) + "\n")
+    assert done.returncode == 1
+    assert NO_STATUS in done.stdout
+    assert "A line in the text of the pull request that says a smoke run passed is not read: the result comes from the server." in done.stdout
+    # Without such a line the output does not speak of one.
+    assert "is not read" not in changed.check(changed.base, changed.head, "What this changes.").stdout
+
+
+def test_while_no_account_is_set_as_the_writer_no_status_is_counted_and_the_output_says_so(changed, monkeypatch, capsys):
+    GitHub.on[changed.head] = [a_status(by=0), a_status(by=SERVER)]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head, writer=0)
+    assert status == 1
+    assert NO_STATUS in printed
+    assert "No account is set as the writer of the server's statuses (WRITER in scripts/smoke_result.py), so no status is counted." in printed
+    assert isinstance(smoke.WRITER, int)
+    assert not isinstance(smoke.WRITER, bool)
+
+
+def test_when_the_server_is_not_available_one_line_says_so_and_the_check_is_green(changed):
+    mark = changed.mark(changed.head)
+    red = changed.check(changed.base, changed.head, "no line")
     assert red.returncode == 1, "the message gives the line to write, with the mark"
-    assert no_server(repo.mark(head)) in red.stdout, "the message gives the line to write, with the mark"
-    done = repo.check(repo.base, head, "Some text.\n\n" + no_server(repo.mark(head)) + "\n")
+    assert no_server(mark) in red.stdout, "the message gives the line to write, with the mark"
+    done = changed.check(changed.base, changed.head, "Some text.\n\n" + no_server(mark) + "\n")
     assert done.returncode == 0, done.stdout + done.stderr
     assert "no smoke run was made for this change of the system prompt: the server was not available" in done.stdout
     assert "The change was not tried with a real model" in done.stdout
@@ -249,50 +471,99 @@ def test_the_line_for_a_server_that_is_not_available_holds_only_for_the_text_it_
     earlier_words = ("No smoke run: the server is not available; the replay tests are the check, and the first nightly run after "
                      f"the server is back covers this text (text {repo.mark(head)}).")
     assert repo.check(repo.base, head, earlier_words).returncode == 1
-
-
-def test_an_older_result_line_beside_the_line_for_the_server_is_red_and_the_message_says_the_way_out(repo):
-    first = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    older = line(first, repo.mark(first))
-    again = NEW + " Use them with care."
-    head = repo.commit(one=recording(system=again), two=recording(system=again, task="repair a fault"))
-    done = repo.check(repo.base, head, older + "\n" + no_server(repo.mark(head)))
-    assert done.returncode == 1
-    assert f"a result line of a smoke run for another text (text {repo.mark(first)})" in done.stdout
-    assert "Fix: delete the result line of the other text and leave the line for the server." in done.stdout
-    # With the older line deleted the line for the server holds.
+    assert repo.check(repo.base, head, "> " + no_server(repo.mark(head))).returncode == 1
     assert repo.check(repo.base, head, no_server(repo.mark(head))).returncode == 0
 
 
-def test_a_red_smoke_run_is_not_set_aside_by_the_line_for_a_server_that_is_not_available(repo):
-    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    mark = repo.mark(head)
-    done = repo.check(repo.base, head, line(head, mark, passed=1) + "\n" + no_server(mark))
-    assert done.returncode == 1
-    assert "had 1 of 3 sessions with no harness defect" in done.stdout
+# --- statuses that cannot be read ---------------------------------------------------------------------------------
 
-
-@pytest.mark.parametrize("passed", [0, 1, 2])
-def test_a_smoke_run_that_was_not_three_of_three_keeps_the_check_red(repo, passed):
-    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    done = repo.check(repo.base, head, line(head, repo.mark(head), passed=passed))
-    assert done.returncode == 1
-    assert f"had {passed} of 3 sessions with no harness defect" in done.stdout
-    assert "No text is changed to make the smoke pass" in done.stdout
-
-
-@pytest.mark.parametrize("text", [
-    "Smoke run: passed",
-    "The smoke run on {commit} was 3 of 3 sessions (text {mark}).",
-    "> Smoke run on {commit}: 3 of 3 sessions with no harness defect, 412 s; the changed text is part of every request (text {mark}).",
-    "Smoke run on {commit}: 3 of 3 sessions with no harness defect, 412 s; the changed text is part of every request (text {mark}) and more.",
-    "Smoke run on {commit}: 4 of 3 sessions with no harness defect, 412 s; the changed text is part of every request (text {mark}).",
+@pytest.mark.parametrize("answer, why", [
+    ((403, {"message": "rate limit"}), "GitHub answered 403"),
+    ((500, {}), "GitHub answered 500"),
+    ((404, {}), "GitHub answered 404"),
+    ((200, b"this is not JSON"), "GitHub gave no answer that can be read"),
+    ((200, {"message": "a text"}), "GitHub gave an answer of another shape"),
+    ((200, ["a text"]), "GitHub gave an answer of another shape"),
+    ((200, None), "GitHub gave an answer of another shape"),
 ])
-def test_a_line_in_another_form_is_not_the_result_line(repo, text):
-    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
-    done = repo.check(repo.base, head, text.format(commit=head[:12], mark=repo.mark(head)))
+def test_statuses_that_cannot_be_read_end_the_check_with_status_2_and_nothing_is_judged(changed, answer, why):
+    GitHub.answer = answer
+    # Not green and not the plain red: also the line for a server that is not available is not judged.
+    for text in ("no line", no_server(changed.mark(changed.head))):
+        done = changed.check(changed.base, changed.head, text)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert f"::error title=smoke result::the statuses of the head commit cannot be read, so nothing was judged: {why}. Fix: start this job again" in done.stderr
+        assert done.stdout == ""
+        assert TOKEN not in done.stderr
+
+
+def test_an_answer_that_is_cut_short_ends_the_check_with_status_2_too(changed):
+    GitHub.on[changed.head] = [a_status()]
+    GitHub.cut_short = True
+    done = changed.check(changed.base, changed.head)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "the statuses of the head commit cannot be read, so nothing was judged: GitHub gave no answer that can be read" in done.stderr
+    assert "Traceback" not in done.stderr
+
+
+def test_with_no_stand_in_at_githubs_address_nothing_is_judged(changed):
+    (changed.home / "site" / "sitecustomize.py").write_text(ON_EVERY_START.format(log=str(changed.home / "asked.log"), port=0))
+    done = changed.check(changed.base, changed.head, no_server(changed.mark(changed.head)))
+    assert done.returncode == 2
+    assert "the statuses of the head commit cannot be read, so nothing was judged: GitHub gave no answer that can be read" in done.stderr
+
+
+@pytest.mark.parametrize("head", ["", "main", "1" * 39, "1" * 41, "A" * 40, "1" * 40 + "/../../other", "../installation", "1" * 40 + "?per_page=1"])
+def test_a_head_that_is_no_full_commit_id_is_not_asked_of_github(head, monkeypatch):
+    # The commit goes into the path of the call. Whatever the caller gives, the call has the one path or is not made.
+    made = []
+    monkeypatch.setattr(smoke.urllib.request, "build_opener", lambda *handlers: made.append(handlers))
+    with pytest.raises(smoke.Unreadable, match="the head is not a full commit id, so GitHub was not asked"):
+        smoke.statuses_of(head)
+    assert made == []
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+def test_an_answer_that_points_to_another_place_is_not_followed(changed, status):
+    GitHub.answer = (status, {})
+    done = changed.check(changed.base, changed.head)
+    assert done.returncode == 2
+    assert f"GitHub answered {status}" in done.stderr
+    assert len(GitHub.seen) == 1
+    assert [address for address in changed.asked() if not address.startswith("https://api.github.com/")] == []
+
+
+def test_every_page_of_the_statuses_is_read_and_a_commit_with_too_many_is_not_judged(changed, monkeypatch, capsys):
+    others = [a_status(name=f"another/check-{n}", by=999) for n in range(250)]
+    GitHub.on[changed.head] = others + [a_status()]
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert status == 0, printed
+    assert [path.rsplit("=", 1)[1] for path, _token in GitHub.seen] == ["1", "2", "3"]
+    GitHub.on[changed.head] = others * 4 + [a_status()]
+    GitHub.seen.clear()
+    status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+    assert status == 2
+    assert "the statuses of the head commit cannot be read, so nothing was judged: the commit has more than 1000 statuses" in printed
+    assert len(GitHub.seen) == 10
+
+
+def test_the_check_runs_without_a_token_too(changed):
+    done = subprocess.run([sys.executable, str(SCRIPT), "--base", changed.base, "--head", changed.head], cwd=changed.root, capture_output=True,
+                          text=True, timeout=60, check=False, env={key: value for key, value in changed.env().items() if key != "GITHUB_TOKEN"})
     assert done.returncode == 1
-    assert "has no result line of a smoke run" in done.stdout
+    assert GitHub.seen == [(f"/repos/inferstep/ATLAS/commits/{changed.head}/statuses?per_page=100&page=1", "")]
+
+
+def test_the_script_has_one_address_of_github_and_reads_two_variables_and_no_other():
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert re.findall(r"https?://[^\s\"')]+", source) == ["https://api.github.com"]
+    assert smoke.GITHUB_API == "https://api.github.com"
+    assert smoke.REPOSITORY == "inferstep/ATLAS"
+    assert smoke.STATUS == "server/smoke"
+    assert sorted(re.findall(r"os\.environ\.get\(\"(\w+)\"", source)) == ["GITHUB_TOKEN", "PR_BODY"]
+    assert len(re.findall(r"os\.environ|getenv", source)) == 2
+    assert source.count("urllib.request.Request(") == 1
+    assert "urlopen" not in source
 
 
 def test_the_mark_is_made_from_the_text_that_every_request_carries_and_from_nothing_else(repo):
@@ -316,7 +587,7 @@ def test_a_recording_that_cannot_be_read_ends_the_check_with_status_2_and_nothin
 
 def test_a_head_with_no_recording_at_all_ends_the_check_with_status_2(repo):
     head = repo.commit(one=None, two=None)
-    done = repo.check(repo.base, head, line(head, "0" * 12))
+    done = repo.check(repo.base, head, no_server("0" * 12))
     assert done.returncode == 2
     assert "has no recording under tests/replay/recordings/, so nothing shows what its requests carry" in done.stderr
     assert "Fix: keep the recordings." in done.stderr
@@ -363,13 +634,24 @@ def step(name):
 def test_the_job_reads_the_text_of_the_pull_request_from_the_event_and_never_as_part_of_a_command():
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     judge = step("smoke_result.py")
-    assert judge["env"] == {"BASE": "${{ steps.base.outputs.sha }}", "PR_BODY": "${{ github.event.pull_request.body }}"}
+    assert judge["env"] == {"BASE": "${{ steps.base.outputs.sha }}", "PR_BODY": "${{ github.event.pull_request.body }}",
+                            "GITHUB_TOKEN": "${{ github.token }}"}
     for one in workflow["jobs"]["smoke-result"]["steps"]:
         assert "github.event" not in str(one.get("run")), "a value of the event stands in a command; give it through `env:`"
     # `on` is read as the boolean True by the YAML reader.
-    assert "edited" in workflow[True]["pull_request"]["types"], "without `edited` the job does not see the result line come into the text"
+    assert "edited" in workflow[True]["pull_request"]["types"], "without `edited` the job does not see the line for the server come into the text"
     assert workflow["permissions"] == {"contents": "read"}
     assert "concurrency" not in workflow
+
+
+def test_the_job_can_read_the_statuses_of_a_commit_and_write_nothing():
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    (job,) = workflow["jobs"].values()
+    assert job["permissions"] == {"contents": "read", "statuses": "read"}
+    with_the_token = [one for one in job["steps"] if "token" in str(one).lower().replace("persist-credentials", "")]
+    assert with_the_token == [step("smoke_result.py")], "only the step that runs the script has the token"
+    assert "secrets." not in WORKFLOW.read_text(encoding="utf-8")
+    assert "pull_request_target" not in WORKFLOW.read_text(encoding="utf-8")
 
 
 def in_a_merge(tmp_path, on_the_base, on_the_branch, text):
@@ -386,8 +668,8 @@ def in_a_merge(tmp_path, on_the_base, on_the_branch, text):
     repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
     (tmp_path / "runner").mkdir()
     return subprocess.run(["bash", "-e", "-c", step("smoke_result.py")["run"]], cwd=repo.root, capture_output=True, text=True,
-                          timeout=60, check=False, env={"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
-                                                        "RUNNER_TEMP": str(tmp_path / "runner"), "BASE": base, "PR_BODY": text})
+                          timeout=60, check=False, env={**repo.env(text), "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
+                                                        "RUNNER_TEMP": str(tmp_path / "runner"), "BASE": base})
 
 
 PASSES_ALL = 'print("the copy of the change ran")\n'
@@ -395,7 +677,7 @@ PASSES_ALL = 'print("the copy of the change ran")\n'
 
 def test_the_job_runs_the_base_branchs_copy_of_the_script_when_a_change_rewrites_the_script(tmp_path):
     # The change alters the text of every request and brings a script that passes everything.
-    done = in_a_merge(tmp_path, SCRIPT.read_text(encoding="utf-8"), PASSES_ALL, "no result line")
+    done = in_a_merge(tmp_path, SCRIPT.read_text(encoding="utf-8"), PASSES_ALL, "no word about a smoke run")
     assert done.returncode == 1, done.stdout + done.stderr
     assert "::error title=smoke result::this pull request changes the system prompt" in done.stdout
     assert "the copy of the change ran" not in done.stdout
@@ -423,6 +705,31 @@ def test_the_gates_page_has_the_words_of_the_rule():
         ("The replay tests are no check of such a change: its recordings are written again from the new text, so they "
          "pass."),
         "Not tried with a real model; the first nightly run after the server is back covers this text",
-        "the changed text is part of every request",
+        "The job is green when the newest `server/smoke` status of the server on the head commit is green.",
+        ("It counts only a status that the server's own account wrote, and it compares the id of that account, not a name. "
+         "A status of that name by another account counts for nothing, and the output of the job names it."),
+        ("A red status of the server is red. The line for a server that is not available does not set it aside: the "
+         "change was tried."),
+        "A line in the text of the pull request that says a smoke run passed is not read.",
+        "A status that comes later does not start the job again.",
+        "The line counts only while the server wrote no status for the head commit.",
     ):
         assert sentence in page, f"docs/quality/gates.md no longer has: {sentence!r}"
+
+
+def test_the_text_of_a_status_is_printed_in_plain_letters_as_code(changed, monkeypatch, capsys):
+    # The check prints the text of a status that the server's account wrote. Also that text is data.
+    said = "passed`\n::error title=x::<b>@someone</b> #12 [a](https://example.invalid) " + "x" * 200
+    for state in ("success", "failure\n::warning::y"):
+        GitHub.on[changed.head] = [a_status(state, said=said)]
+        _status, printed = changed.judged(monkeypatch, capsys, changed.base, changed.head)
+        assert printed.count("\n") == 1, printed
+        # One line, so nothing in it starts a line as a command of the job does.
+        for word in ("@someone", "<b>", "#12", "[a]", "title=x", "//"):
+            assert word not in printed, word
+        shown = re.findall(r"`([^`]*)`", printed)
+        assert len(shown) == (1 if state == "success" else 2), printed
+        for text in shown:
+            assert re.fullmatch(r"[A-Za-z0-9 ,.:;()'?-]{1,140}", text), text
+        assert shown[-1].startswith("passed??::error title?x::?b??someone??b? ?12 ?a?(https:??example.invalid) xxx")
+        assert len(shown[-1]) == 140

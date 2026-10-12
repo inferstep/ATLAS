@@ -4,19 +4,22 @@ name: smoke result
 # with the tool descriptions, the grammar, the schema of the reply) needs a
 # smoke run with a real model before it merges. The recordings of the replay
 # tests show such a change exactly. This job reads them, and for such a pull
-# request it is red until the text of the pull request has the result line of
-# a smoke run that was made with that text (scripts/smoke_result.py).
+# request it is red until the development server wrote the green status
+# `server/smoke` on the head commit (scripts/smoke_result.py).
 #
-# The job starts no smoke run and reaches no server: a maintainer starts the
-# run by hand. It reads the text of the pull request from the event, through
-# an environment variable, never as part of a command. It runs no code of the
-# change: its one script is the base branch's copy, and the change's copy only
-# while the base has none. Not a required check.
+# The job starts no smoke run and reaches no server: it reads the statuses of
+# the head commit from GitHub, with a token that can only read. It reads the
+# text of the pull request from the event, through an environment variable,
+# never as part of a command. It runs no code of the change: its one script is
+# the base branch's copy, and the change's copy only while the base has none.
+# Not a required check.
 on:
   pull_request:
     branches: [main, dev]
-    # `edited`: the result line comes into the text of the pull request by an
-    # edit, and the job has to read the new text.
+    # `edited`: the line for a server that is not available comes into the
+    # text of the pull request by an edit, and the job has to read the new
+    # text. An edit is also a way to start the job again when the status of
+    # the server has come: a new status starts no job by itself.
     types: [opened, edited, synchronize, reopened]
   merge_group:
     types: [checks_requested]
@@ -32,10 +35,14 @@ jobs:
   smoke-result:
     name: smoke result
     runs-on: ubuntu-24.04
+    # The statuses of the head commit are read, and nothing is written.
+    permissions:
+      contents: read
+      statuses: read
     steps:
       - name: Nothing to check in the merge queue
         if: github.event_name == 'merge_group'
-        run: echo "The result line was checked on the pull request. A merge group has no text of its own."
+        run: echo "The smoke result was checked on the pull request. A merge group has no text of its own."
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'pull_request'
@@ -70,6 +77,9 @@ jobs:
         env:
           BASE: ${{ steps.base.outputs.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          # The token can only read, and what it reads here is public: the
+          # statuses of the head commit.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           # The base branch's copy of the script judges the change, so a
           # change cannot rewrite its own judge. The change's copy runs only
