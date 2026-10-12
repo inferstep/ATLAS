@@ -273,6 +273,14 @@ How to read the coverage rows:
   root, and no other folder. The two upload actions there pin the Codecov
   action: when Dependabot moves that pin in a workflow file, move it in the
   two action files in the same pull request.
+- Dependabot updates the Gradle wrapper of the JetBrains plugin, and the jar of
+  the wrapper is a binary file. `tests/infrastructure/test_gradle_wrapper.py`
+  holds the jar against the sum that Gradle published for its version. The
+  sums stand in `tests/infrastructure/gradle_wrapper_jar_sums.txt`, and a
+  wrapper of a version with no line there is red. Add the line first, in a
+  pull request of its own, with the "Wrapper JAR Checksum" of that version
+  from https://gradle.org/release-checksums/ . Then have Dependabot rebase its
+  pull request (`@dependabot rebase`).
 
 ## What the checks found so far
 
