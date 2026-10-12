@@ -69,6 +69,21 @@ updates:
   # throws NoSuchMethodError on its first request. Re-pin only after checking
   # the coroutines the target platform bundles; the mock-proxy tests in
   # AtlasClientTest fail loudly on a bump past 3.4.3.
+  #
+  # The three Kotlin plugins of the build are hand-managed too: `jvm`,
+  # `plugin.compose` and `plugin.serialization`. The Kotlin compiler follows
+  # the platform that the plugin targets. The IDE bundles Kotlin and the
+  # Compose runtime, the plugin compiles against that runtime and must not
+  # package a second copy, and the Compose compiler plugin has to match the
+  # Kotlin compiler. So the three move together, by hand, when the platform
+  # version moves; a bump of one or two of them leaves the rest behind.
+  #
+  # The rules below use the names that Dependabot gives a Gradle plugin: the
+  # word inside `kotlin("...")` or `id("...")`. A rule with the long name
+  # `org.jetbrains.kotlin.jvm` matches nothing, and nothing says so.
+  # tests/contracts/test_dependabot_hand_managed.py holds each name against
+  # the build file. Dependabot does not read the platform version
+  # (`intellijIdea("...")`), so that one needs no rule.
   - package-ecosystem: gradle
     directory: /extensions/jetbrains
     target-branch: dev
@@ -80,6 +95,12 @@ updates:
     ignore:
       - dependency-name: "io.ktor:*"
         versions: [">= 3.5.0"]
+      # The three Kotlin plugins, at every version.
+      - dependency-name: "jvm"
+      - dependency-name: "plugin.compose"
+      - dependency-name: "plugin.serialization"
+      # The IntelliJ Platform Gradle Plugin, at every version.
+      - dependency-name: "org.jetbrains.intellij.platform"
 
   - package-ecosystem: docker
     directories:
