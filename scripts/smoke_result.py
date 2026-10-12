@@ -78,7 +78,9 @@ STATUS, WRITER = "server/smoke", 340202947
 TYPED = re.compile(r"^Smoke run on [0-9a-f]{7,40}: ", re.MULTILINE)
 NO_SERVER_LINE = ("No smoke run: the server is not available. Not tried with a real model; the first nightly run after "
                   "the server is back covers this text (text {mark}).")
-NO_SERVER = re.compile("^" + re.escape(NO_SERVER_LINE).replace(re.escape("{mark}"), "([0-9a-f]{12})") + r"[ \t]*$", re.MULTILINE)
+# The text of a pull request that was typed in GitHub's web form has CR LF at the end of each line. So a CR may stand
+# before the end of the line.
+NO_SERVER = re.compile("^" + re.escape(NO_SERVER_LINE).replace(re.escape("{mark}"), "([0-9a-f]{12})") + r"[ \t]*\r?$", re.MULTILINE)
 AGAIN = ("A status that comes later does not start this check again: open this job and choose \"Re-run jobs\", or "
          "edit the text of the pull request")
 HOW = ("Fix: ask a maintainer for the smoke run of the head commit of this pull request. The maintainer reads the "

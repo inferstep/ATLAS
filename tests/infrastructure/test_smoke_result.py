@@ -461,6 +461,32 @@ def test_when_the_server_is_not_available_one_line_says_so_and_the_check_is_gree
     assert "replay tests are the check" not in red.stdout + done.stdout
 
 
+@pytest.mark.parametrize("form", [
+    "Some text.\r\n\r\n{line}\r\n\r\nMore text.\r\n",   # the line in the middle, as the web form of GitHub sends a text
+    "Some text.\r\n\r\n{line}\r\n",                       # the line last, with a line end after it
+    "Some text.\r\n\r\n{line}",                            # the line last, with nothing after it
+    "{line}\r\nMore text.\r\n",                            # the line first
+    "Some text.\r\n{line} \t\r\nMore text.",                # blanks before the line end
+    "Some text.\n\n{line}\n\nMore text.\n",                 # the same with the line ends of a program
+])
+def test_the_line_counts_with_the_line_ends_of_githubs_web_form(changed, form):
+    # A text that a person types in the browser has CR LF at the end of each line. The line counted only as the
+    # very last thing of such a text, so the check was red for a maintainer who had written the line.
+    done = changed.check(changed.base, changed.head, form.format(line=no_server(changed.mark(changed.head))))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize("form", [
+    "Some text.\r\n> {line}\r\n",          # quoted
+    "Some text.\r\n{line} and more\r\n",   # more words behind it on the line
+    "Some text.\r\n{line}\rmore\r\n",      # a CR in the middle of a line is no line end
+    "Some text.\r\n{line}\r\r\n",          # two of them
+])
+def test_a_line_that_is_not_alone_on_its_line_does_not_count_with_those_line_ends_either(changed, form):
+    done = changed.check(changed.base, changed.head, form.format(line=no_server(changed.mark(changed.head))))
+    assert done.returncode == 1, done.stdout + done.stderr
+
+
 def test_the_line_for_a_server_that_is_not_available_holds_only_for_the_text_it_names(repo):
     first = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
     text = no_server(repo.mark(first))
