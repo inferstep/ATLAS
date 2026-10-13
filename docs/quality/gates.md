@@ -574,6 +574,12 @@ in one place.
   TUI, 32 for the model, and 1 that asks a real Docker engine what it
   removes with an image's name by digest. `tests/integration/` holds no
   test.
+- GitHub's runner has Docker 28.0.4 with the storage driver overlay2, not
+  the image store of containerd. So on GitHub that one test proves that
+  the guard keeps the name by digest: with the guard taken out it fails on
+  the answer of the code itself, on any store. What Docker itself does on
+  the store of containerd, the kind that the development server has, was
+  shown by tries on a developer's machine.
 - The groups, their files and their numbers are in one place:
   `scripts/tests_counted.py`. A test in the test suite holds that list, the
   hook's list, this table, the two jobs and the number of test functions in

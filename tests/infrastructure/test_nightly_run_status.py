@@ -867,6 +867,10 @@ def test_the_tip_of_a_smoke_branch_is_due_when_a_listed_person_moved_the_branch_
     assert asked == ["ls-remote", "--heads", "https://github.com/inferstep/ATLAS.git", "refs/heads/smoke/*"]
     # In its hour the night comes first.
     assert nightly.what_is_due(settings(night), EIGHT)[0] == "night"
+    # The name of a person is the same name in other letters.
+    github.plan["activity"] = {"refs/heads/smoke/a-change": by("A-Maintainer")}
+    assert nightly.what_is_due(settings(night), NOON)[0] == "one commit"
+    assert nightly.what_is_due(settings(night, "--smoke-by", "another-maintainer"), NOON)[0] == "one commit"
 
 
 def test_with_too_little_room_on_dockers_disk_the_tip_of_a_smoke_branch_is_not_due_either(server):
@@ -875,10 +879,6 @@ def test_with_too_little_room_on_dockers_disk_the_tip_of_a_smoke_branch_is_not_d
     mode, commit, why = nightly.what_is_due(settings(night, "--room-gb", "99999"), NOON)
     assert (mode, commit) == (None, None)
     assert why.startswith("nothing is started: too little room on Docker's disk (") and why.endswith(" GB free, 99999 GB needed)")
-    # The name of a person is the same name in other letters.
-    github.plan["activity"] = {"refs/heads/smoke/a-change": by("A-Maintainer")}
-    assert nightly.what_is_due(settings(night), NOON)[0] == "one commit"
-    assert nightly.what_is_due(settings(night, "--smoke-by", "another-maintainer"), NOON)[0] == "one commit"
 
 
 @pytest.mark.parametrize("record, why", [
