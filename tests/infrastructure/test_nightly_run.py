@@ -40,7 +40,7 @@ OLD = "2" * 40
 NEWER = "3" * 40
 # Words that are in one call only, for the plan of a stand-in: the first pull, the start of the stack (and not its
 # stop), the driver, the tests.
-PULL, UP, DRIVER, TESTS = "pull --quiet ghcr.io/inferstep/atlas-llama:dev", "up -d --wait", "scripts/e2e-reliability.py", "-m pytest"
+PULL, UP, DRIVER, TESTS = "pull --quiet ghcr.io/inferstep/atlas-llama@sha256:", "up -d --wait", "scripts/e2e-reliability.py", "-m pytest"
 
 # What whole services answer: the status of the reply, and its body.
 WHOLE = {
@@ -128,8 +128,16 @@ elif args[0] == "ls-remote":
 DOCKER = '''
 if args[0] == "ps":
     print("\\n".join(plan.get("left", [])))
+if args[:3] == ["buildx", "imagetools", "inspect"]:
+    # The registry's answer for a tag: the digest of the plan for this image, one for each time it is asked, or
+    # else one that is made from the name of the image.
+    import hashlib
+    name = args[3].split("/")[-1].split(":")[0]
+    rounds = plan.get("digests", {}).get(name) or [hashlib.sha256(name.encode()).hexdigest()]
+    print(json.dumps({"mediaType": "application/vnd.oci.image.index.v1+json",
+                     "digest": "sha256:" + this_time(rounds, lambda c: c["args"] == args), "manifests": []}))
 if args[:2] == ["image", "inspect"]:
-    name = args[2].split("/")[-1].split(":")[0]
+    name = args[-1].split("/")[-1].split(":")[0].split("@")[0]
     rounds = plan["built_from"] if isinstance(plan["built_from"], list) else [plan["built_from"]]
     built = this_time(rounds, lambda c: c["args"] == args)
     print(json.dumps([{"RepoDigests": [args[2].split(":")[0] + "@sha256:" + name.encode().hex()],
@@ -236,16 +244,22 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-            shutil.copy(SCRIPT.with_name("tests_counted.py"), tree / "scripts" / "tests_counted.py")
+            for beside in ("tests_counted.py", "nightly_images.py"):
+                shutil.copy(SCRIPT.with_name(beside), tree / "scripts" / beside)
         self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 32}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
         (root / "plan.json").write_text(json.dumps(self.plan))
 
     def command(self, *more):
         # No wait in a test unless the test asks for one: an argument that is given again holds.
+        # And room is asked of the folder of the test, with no number: the disk of the machine that runs the tests
+        # says nothing about the run.
         return [sys.executable, str(self.script), "--dir", str(self.dir), "--lock", str(self.lock),
                 "--python", str(self.root / "bin" / "python-for-the-run"),
-                "--image-wait-minutes", "0", "--settle-seconds", "0", *more]
+                "--image-wait-minutes", "0", "--settle-seconds", "0", *self.room(), *more]
+
+    def room(self):
+        return ["--docker-folder", str(self.root), "--room-gb", "0"]
 
     def with_the_key(self):
         """The settings of a server that has the key of the app."""
@@ -301,7 +315,8 @@ class Night:
             if call["tool"] == "docker" and args[0] == "compose":
                 step = "ask" if "exec" in args else "stack " + next(word for word in args if word in ("up", "down"))
             elif call["tool"] == "docker":
-                step = {"ps": "look", "pull": "image pull", "image": "image inspect"}[args[0]]
+                step = {"ps": "look", "buildx": "image digest", "pull": "image pull", "tag": "image name", "build": "image build",
+                        "image": "image " + args[1]}[args[0]]
             elif call["tool"] == "git":
                 step = "git " + next(word for word in args if word in ("clone", "fetch", "checkout", "rev-parse", "ls-remote"))
             elif call["tool"] == "nvidia-smi":
@@ -316,7 +331,9 @@ class Night:
 
 
 ONE_HEAD = ["git fetch", "git checkout", "git rev-parse"]
-IMAGES = ["image pull", "image inspect"] * 5
+# For each image: the registry is asked for the digest of the tag, the image is pulled by that digest, it gets the
+# run's own name, and the commit that it was built from is read.
+IMAGES = ["image digest", "image pull", "image name", "image inspect"] * 5
 WITH_THE_CARD = ["card", "stack up", "ask", "driver", "tests", "ask", "stack down"]
 
 
@@ -579,7 +596,11 @@ def test_only_one_run_of_a_folder_goes_at_a_time(tmp_path):
 @pytest.mark.parametrize("plan, says, last_step", [
     ({"fail": ["fetch --quiet"]}, "failed: the newest commit of the branch: status 1: a planted failure of: fetch --quiet", "git fetch"),
     ({"fail": ["ps --all"]}, "failed: the look for a stack that an earlier run left: status 1", "look"),
-    ({"fail": ["pull --quiet ghcr.io/inferstep/atlas-lens:dev"]}, "failed: the pull of ghcr.io/inferstep/atlas-lens:dev: status 1", "image pull"),
+    ({"fail": ["imagetools inspect ghcr.io/inferstep/atlas-lens:dev"]}, "failed: the reading of the digest of ghcr.io/inferstep/atlas-lens:dev: status 1", "image digest"),
+    ({"digests": {"atlas-lens": ["not a digest"]}}, "failed: the reading of the digest of ghcr.io/inferstep/atlas-lens:dev: the registry's answer names no digest", "image digest"),
+    ({"fail": ["pull --quiet ghcr.io/inferstep/atlas-lens@sha256:"]}, "failed: the pull of ghcr.io/inferstep/atlas-lens@sha256:", "image pull"),
+    ({"fail": ["tag ghcr.io/inferstep/atlas-lens@sha256:"]}, "failed: the naming of ghcr.io/inferstep/atlas-lens@sha256:", "image name"),
+    ({"fail": ["image inspect localhost/atlas-nightly/atlas-lens:night"]}, "failed: the reading of localhost/atlas-nightly/atlas-lens:night: status 1", "image inspect"),
     ({"fail": [UP]}, "failed: the start of the stack: status 1", "stack up"),
     ({"driver_rows": None, "driver_status": 2}, "failed: the driver left no result (status 2): the driver ran", "driver"),
     ({"driver_rows": rows()[:2]}, "failed: the driver gave no result for ask_explain (status 0)", "driver"),

@@ -28,7 +28,8 @@ MARK = "0123456789ab"
 READ_BY_THE_CHECK = re.compile(r"^Smoke run on ([0-9a-f]{7,40}): ([0-3]) of 3 sessions with no harness defect, (\d+) s; "
                                r"the changed text is part of every request \(text ([0-9a-f]{12})\)\.[ \t]*$", re.MULTILINE)
 # What the stand-in of docker does for an image of the run's own: a build writes down what it was given, and an
-# image is there from the end of its build until it is removed.
+# image is there from the end of its build until it is removed. An image that got the run's own name with `tag`
+# is there too, and what is read of it is what the stand-in of the other tests gives.
 OWN_IMAGES = '''
 own = [word for word in args if word.startswith("localhost/")]
 if args[0] == "build":
@@ -42,8 +43,10 @@ if args[0] == "build":
     sys.exit(0)
 if args[:2] == ["image", "inspect"] and own:
     built = [json.loads(line)["name"] for line in open(home + "/built.log")] if os.path.exists(home + "/built.log") else []
+    named = [c["args"][-1] for c in calls[:-1] if c["tool"] == "docker" and c["args"][0] == "tag"]
     removed = [word for c in calls[:-1] if c["args"][:2] == ["image", "rm"] for word in c["args"][2:]]
-    sys.exit(0 if own[0] in built and own[0] not in removed else 1)
+    if own[0] not in named or own[0] in removed:
+        sys.exit(0 if own[0] in built and own[0] not in removed else 1)
 if args[:2] == ["image", "rm"]:
     sys.exit(0)
 '''
@@ -96,8 +99,9 @@ class Repository:
         subprocess.run(["git", "init", "--quiet", "--initial-branch", "dev", str(self.work)], check=True, timeout=60,
                        env={**os.environ, **GIT_ENV})
         git(self.work, "remote", "add", "origin", str(self.bare))
-        # The real script loads the judge of the tests that lies beside it, so a tree that runs it has both.
-        judge = {"scripts/tests_counted.py": (ROOT / "scripts" / "tests_counted.py").read_text(encoding="utf-8")} if script else {}
+        # The real script loads the two files that lie beside it, so a tree that runs it has all three.
+        judge = {f"scripts/{name}": (ROOT / "scripts" / name).read_text(encoding="utf-8")
+                 for name in ("tests_counted.py", "nightly_images.py")} if script else {}
         self.head = self.commit({**ON_DEV, "scripts/nightly_run.py": script or "# the script of dev\n", **judge}, "refs/heads/dev")
 
     def commit(self, files, to, on="dev"):
@@ -166,10 +170,12 @@ class OneCommit(base.Night):
         short = []
         for call in self.calls():
             args = call["args"]
-            image = SHORT.get(next((word.split("/")[-1].split(":")[0] for word in args if "/atlas-" in word), ""), "")
+            image = SHORT.get(next((word.split("/")[-1].split(":")[0].split("@")[0] for word in args if "/atlas-" in word), ""), "")
             if call["tool"] == "docker" and args[0] == "compose":
                 step = "ask" if "exec" in args else "stack " + next(word for word in args if word in ("up", "down"))
-            elif call["tool"] == "docker" and args[:2] == ["image", "inspect"]:
+            elif call["tool"] == "docker" and (args[:2] == ["image", "inspect"] or args[0] in ("buildx", "tag")):
+                # The reading of an image, the registry's digest of a tag, and the run's own name for a pulled
+                # image are not steps of this list: tests/infrastructure/test_nightly_images.py holds them.
                 continue
             elif call["tool"] == "docker":
                 step = {"ps": "look", "pull": f"pull {image}", "build": f"build {image}", "image": f"remove {image}"}[args[0]]
@@ -226,8 +232,10 @@ def test_the_stack_runs_the_image_that_was_built_and_the_driver_is_told_the_comm
     files = [up[n + 1] for n, word in enumerate(up) if word == "-f"]
     # The file of the run comes last, so its images hold over the ones of the compose file.
     assert files == [str(run.dir / "tree" / "docker-compose.yml"), str(run.folder / "own-images.yml")]
-    assert yaml.safe_load((run.folder / "own-images.yml").read_text()) == {
-        "services": {"atlas-proxy": {"image": run.name_of("atlas-proxy"), "pull_policy": "never"}}}
+    # Each service has a name of the run's own: the image that was built, and else the registry's image as pulled.
+    assert yaml.safe_load((run.folder / "own-images.yml").read_text()) == {"services": {
+        service: {"image": run.name_of(service) if service == "atlas-proxy" else f"localhost/atlas-nightly/{image}:night",
+                  "pull_policy": "never"} for service, image in nightly.IMAGES.items()}}
     (driver,) = [call["args"] for call in run.calls() if call["args"][0] == "scripts/e2e-reliability.py"]
     assert driver[driver.index("--commit") + 1] == commit
     # The stop of the stack names the same files: it is the same stack.
@@ -270,8 +278,11 @@ def test_each_service_is_built_from_its_own_folder_and_only_the_others_are_pulle
     (build,) = [call["args"] for call in run.calls() if call["args"][0] == "build"]
     assert build[build.index("--file") + 1] == str(run.folder / "commit" / nightly.BUILDS[service][1])
     assert build[build.index("--label") + 1] == f"org.opencontainers.image.revision={commit}"
+    # The other images are the registry's, each pulled by its digest: no tag is pulled, so no tag of the server moves.
     pulled = [call["args"][-1] for call in run.calls() if call["args"][0] == "pull"]
-    assert pulled == [f"ghcr.io/inferstep/{image}:dev" for other, image in nightly.IMAGES.items() if other != service]
+    assert [name.split("@")[0] for name in pulled] == [
+        f"ghcr.io/inferstep/{image}" for other, image in nightly.IMAGES.items() if other != service]
+    assert all(re.fullmatch(r"[^@:]+@sha256:[0-9a-f]{64}", name) for name in pulled), pulled
 
 
 def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp_path, repository):
@@ -280,7 +291,10 @@ def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp
     assert run.report["changed_services"] == ["sandbox", "atlas-proxy"]
     assert run.did() == (START + without(NOT_BUILT, "pull the proxy", "pull the sandbox") + ["build the sandbox", "build the proxy"]
                          + SESSIONS + ["remove the sandbox", "remove the proxy"])
-    assert set(yaml.safe_load((run.folder / "own-images.yml").read_text())["services"]) == {"sandbox", "atlas-proxy"}
+    named = {service: about["image"] for service, about in yaml.safe_load((run.folder / "own-images.yml").read_text())["services"].items()}
+    assert set(named) == set(nightly.IMAGES)
+    assert {service for service, name in named.items() if not name.endswith(":night")} == {"sandbox", "atlas-proxy"}
+    assert named["sandbox"] == run.name_of("sandbox") and named["atlas-proxy"] == run.name_of("atlas-proxy")
 
 
 def test_when_no_build_folder_differs_nothing_is_built_and_the_run_says_so(tmp_path, repository):
@@ -295,9 +309,11 @@ def test_when_no_build_folder_differs_nothing_is_built_and_the_run_says_so(tmp_p
     assert run.report["built"] == {}
     assert run.report["built_removed"] == {}
     assert run.report["changed_services"] == []
+    # The stack still runs images under the run's own names: the five of the registry, as pulled by digest.
     (up,) = [call["args"] for call in run.calls() if call["tool"] == "docker" and "up" in call["args"]]
-    assert up.count("-f") == 1
-    assert not (run.folder / "own-images.yml").exists()
+    assert up.count("-f") == 2
+    assert {about["image"] for about in yaml.safe_load((run.folder / "own-images.yml").read_text())["services"].values()} == {
+        f"localhost/atlas-nightly/{image}:night" for image in nightly.IMAGES.values()}
     assert not (run.folder / "commit").exists()
     assert READ_BY_THE_CHECK.findall(run.done.stdout) == [(commit, "3", "34", MARK)]
 
@@ -484,6 +500,7 @@ TAKEN_FROM_DEV = [
     ("scripts/server/nightly_look.sh", "the files of the timer, which run on the server itself"),
     ("scripts/server/atlas-nightly.service", "the files of the timer, which run on the server itself"),
     ("scripts/tests_counted.py", "the judge of the tests, which the script loads on the server itself"),
+    ("scripts/nightly_images.py", "the images of a run, which the script loads on the server itself"),
     ("scripts/e2e-reliability.py", "the driver of the sessions, which runs on the server itself"),
     ("scripts/code_quality.py", "a module of the driver, which runs on the server itself"),
     ("scripts/reliability_report.py", "a module of the driver, which runs on the server itself"),
@@ -572,10 +589,14 @@ def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_remo
     # The only other thing that the run removes is its own stack.
     assert [args for args in docker if "down" in args and "-p" in args and args[args.index("-p") + 1] != "atlas-nightly"] == []
     for args in docker:
-        if args[0] in ("build", "push", "tag"):
+        if args[0] in ("build", "push"):
             # No image of the registry and none with the tag `dev`: the first part of a name is the registry.
             assert not [word for word in args if word.split("/")[0] == "ghcr.io" or word.endswith(":dev")], args
-    assert not [args for args in docker if args[0] in ("push", "tag", "login")]
+        if args[0] == "tag":
+            # The one use of `tag`: an image that was pulled by its digest gets the run's own name.
+            assert re.fullmatch(r"ghcr\.io/inferstep/atlas-[a-z0-9]+@sha256:[0-9a-f]{64}", args[1]), args
+            assert args[2].startswith("localhost/atlas-nightly/") and args[2].endswith(":night") and len(args) == 3, args
+    assert not [args for args in docker if args[0] in ("push", "login")]
 
 
 def test_the_images_are_removed_after_the_stack_is_stopped(tmp_path, repository):
@@ -832,7 +853,7 @@ def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_tha
     loaded = {f"scripts/{name}" for name in modules_of_scripts("e2e-reliability.py", set())}
     assert len(loaded) >= 3
     held = {path.relative_to(ROOT.resolve()).as_posix() for path in nightly.AS_STARTED}
-    assert held == {"scripts/nightly_run.py", "scripts/tests_counted.py"}, held
+    assert held == {"scripts/nightly_run.py", "scripts/tests_counted.py", "scripts/nightly_images.py"}, held
     for name in started | loaded | held:
         assert name in nightly.FROM_DEV, f"the run uses dev's copy of {name}; a commit that changes it has to be refused"
 

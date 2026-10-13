@@ -8,10 +8,11 @@ One run, started by a timer on the development server, in a folder of its own
      file or the judge beside it (the run was started from the tree), the
      new copy does the run;
   2. stops a stack of its own name that an earlier run left;
-  3. pulls the `dev` images and compares the commit each was built from with
-     the head. The images of a push come some minutes after it, so the run
-     looks again for a while. When one still differs, the night is "not
-     run" and nothing more is done;
+  3. takes the `dev` images of the registry under names of its own, so that
+     no tag of the server moves (scripts/nightly_images.py), and compares
+     the commit each was built from with the head. The images of a push
+     come some minutes after it, so the run looks again for a while. When
+     one still differs, the night is "not run" and nothing more is done;
   4. takes the lock of the graphics card, and reads what the card holds;
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
@@ -123,9 +124,6 @@ import urllib.request
 from pathlib import Path
 
 PROJECT = "atlas-nightly"
-# The service of the compose file -> the image it runs.
-IMAGES = {"llama-server": "atlas-llama", "geometric-lens": "atlas-lens", "v3-service": "atlas-v3",
-          "sandbox": "atlas-sandbox", "atlas-proxy": "atlas-proxy"}
 # What a run for one commit can build, as the compose file builds it: for each service the folder that is the
 # context of its build, its Dockerfile, and the paths of the repository that the build reads. The model server is
 # not here: its image is never built on the server.
@@ -139,6 +137,7 @@ BUILDS = {"geometric-lens": ("geometric-lens", "geometric-lens/Dockerfile", ("ge
 FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/server/": "the files of the timer, which run on the server itself",
             "scripts/tests_counted.py": "the judge of the tests, which the script loads on the server itself",
+            "scripts/nightly_images.py": "the images of a run, which the script loads on the server itself",
             "scripts/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
             "scripts/code_quality.py": "a module of the driver, which runs on the server itself",
             "scripts/reliability_report.py": "a module of the driver, which runs on the server itself",
@@ -150,9 +149,8 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
 # A run for one commit takes only the tip of a branch of this name: what a maintainer has pushed for a smoke run.
 # No workflow starts on a push to such a branch, and no program pushes one.
 SMOKE = "smoke/"
-# The names of this run's own for the smoke branches that it fetches, and for the images that it builds. An image
-# name that starts with `localhost/` is in no registry, so Docker cannot pull another image under it.
-BRANCHES, OWN_IMAGES = "refs/nightly/smoke/", "localhost/atlas-nightly"
+# The names of this run's own for the smoke branches that it fetches.
+BRANCHES = "refs/nightly/smoke/"
 # The service that sends the text which the mark is made from.
 SENDS_THE_TEXT = "atlas-proxy"
 RESULT_LINE = ("Smoke run on {commit}: {good} of {tasks} sessions with no harness defect, {seconds} s; the changed "
@@ -164,11 +162,9 @@ TASKS = ("add_function", "offbyone", "ask_explain")
 # Loopback ports of this stack's own, so that it stands beside a stack on the usual ports.
 PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 18070,
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
-REVISION = "org.opencontainers.image.revision"
 NOT_RUN = "not run: the card was in use"
 STALE = "not run: the images are not of the head of the branch yet"
 REPO_URL, BRANCH = "https://github.com/inferstep/ATLAS.git", "dev"
-REGISTRY, TAG = "ghcr.io/inferstep", "dev"
 REPOSITORY, GITHUB_API = "inferstep/ATLAS", "https://api.github.com"
 # The status that a run writes on the commit that ran, by the kind of run. Each name starts with `server/`: no
 # required check has such a name.
@@ -195,23 +191,26 @@ NOTHING_DUE = 3
 STAMP = "%Y%m%dT%H%M%SZ"
 NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the run, the run started the new copy in its "
                            "place, and that copy left no report")
-# The judge of a run of tests that must all run, and the list of such tests: the file beside this one.
+# The judge of a run of tests that must all run, and the list of such tests: a file beside this one. And the file
+# of the images of a run: the run's own names for them, and the room that they need.
 JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
+IMAGES_FILE = JUDGE.with_name("nightly_images.py")
 
 
-def load_the_judge():
-    spec = importlib.util.spec_from_file_location("atlas_tests_counted", JUDGE)
+def load_beside(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-counted = load_the_judge()
+counted, images = load_beside(JUDGE, "atlas_tests_counted"), load_beside(IMAGES_FILE, "atlas_nightly_images")
+IMAGES, REGISTRY, TAG, REVISION, OWN_IMAGES = images.IMAGES, images.REGISTRY, images.TAG, images.REVISION, images.OWN
 # The tests of the run: the group that needs a real model.
 TESTS = counted.GROUPS["model"]
-# This file and the judge as Python read them when the run started.
-AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE)}
+# This file and the two beside it as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -343,8 +342,8 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file or the judge beside it: the run was started from the tree, and one
-    of the two holds other bytes now."""
+    """Whether taking the head changed this very file or one of the two beside it: the run was started from the tree,
+    and one of the three holds other bytes now."""
     own = Path(__file__).resolve()
     try:
         return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
@@ -383,16 +382,11 @@ def stop_a_left_stack(args) -> str:
     return f"{len(left)} container(s) of an earlier run were stopped first"
 
 
-def pull_images(services=tuple(IMAGES)) -> dict:
-    """Pull the image of each service and give, for each service, its digest and the commit it was built from."""
-    found = {}
-    for service, name in ((service, IMAGES[service]) for service in services):
-        ref = f"{REGISTRY}/{name}:{TAG}"
-        must(f"the pull of {ref}", ["docker", "pull", "--quiet", ref], 1200)
-        about = json.loads(must(f"the reading of {ref}", ["docker", "image", "inspect", ref], 60))[0]
-        digests = about.get("RepoDigests") or [""]
-        found[service] = {"image": ref, "digest": digests[0].split("@")[-1],
-                          "commit": ((about.get("Config") or {}).get("Labels") or {}).get(REVISION, "")}
+def pull_images(args, report: dict, services=tuple(IMAGES)) -> dict:
+    """Bring the registry's image of each service under this run's own name, and give, for each service, its digest
+    and the commit it was built from. No tag of the server moves, and the run keeps one set (scripts/nightly_images.py)."""
+    found, removed = images.take(args.dir, services, must, ended, StepFailed)
+    report.setdefault("images_removed", {}).update(removed)
     return found
 
 
@@ -412,7 +406,7 @@ def images_of_the_head(args, report: dict) -> None:
     pause = args.image_wait_minutes * 60 / 10
     for look in range(looks + 1):
         now_in(report, "pull the images")
-        report["images"] = pull_images()
+        report["images"] = pull_images(args, report)
         report["stale"] = stale_images(report["images"], report["commit"])
         report["waited_for_images"] = f"{look * pause:g} s"
         if not report["stale"] or look == looks:
@@ -643,6 +637,9 @@ def with_the_card(args, report: dict, folder: Path) -> None:
     """
     now_in(report, "start the stack")
     write_settings(args)
+    # The stack runs the images under this run's own names: the ones it built, and else the registry's.
+    args.own_images = folder / "own-images.yml"
+    args.own_images.write_text(images.compose_file(report.get("built") or {}), encoding="utf-8")
     start_stack(args)
     now_in(report, "ask the services whether they are whole")
     answers, faults = ask_the_services(args, args.settle_seconds)
@@ -746,9 +743,8 @@ def mark_of_the_text(args, commit: str) -> str:
     return printed
 
 
-def own_image(service: str, stamp: str, commit: str) -> str:
-    """The name of an image that this run builds: of this machine only, with the start time of the run and the commit."""
-    return f"{OWN_IMAGES}/{IMAGES[service]}:{stamp}-{commit[:12]}"
+# The name of an image that this run builds: of this machine only, with the start time of the run and the commit.
+own_image = images.built_name
 
 
 def build_images(args, report: dict, folder: Path) -> None:
@@ -775,10 +771,6 @@ def build_images(args, report: dict, folder: Path) -> None:
                                                          "--file", str(folder / "commit" / dockerfile), str(folder / "commit" / context)],
              args.build_seconds)
     report["build"] = f"built from the commit: {', '.join(services)}"
-    args.own_images = folder / "own-images.yml"
-    # JSON is YAML. An image of this run is never looked for in a registry.
-    args.own_images.write_text(json.dumps({"services": {service: {"image": name, "pull_policy": "never"}
-                                                        for service, name in report["built"].items()}}, indent=2) + "\n", encoding="utf-8")
 
 
 def remove_built(report: dict) -> None:
@@ -816,7 +808,7 @@ def before_the_card_for_a_commit(args, report: dict, folder: Path, first_start: 
     now_in(report, "stop a stack that an earlier run left")
     report["left_stack"] = stop_a_left_stack(args)
     now_in(report, "pull the images")
-    report["images"] = pull_images([service for service in IMAGES if service not in report["changed_services"]])
+    report["images"] = pull_images(args, report, [service for service in IMAGES if service not in report["changed_services"]])
     report["stale"] = stale_images(report["images"], head)
     if report["stale"]:
         return
@@ -1309,7 +1301,15 @@ def card_is_free(args, now: dt.datetime) -> bool:
 
 def what_is_due(args, now: dt.datetime) -> tuple:
     """What this look of the timer runs, and why, in one line: ("night", None, why), ("one commit", <its id>, why) or
-    (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day."""
+    (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day. The
+    same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped."""
+    mode, commit, why = run_that_is_due(args, now)
+    short = images.room_fault(args.docker_folder, args.room_gb) if mode else ""
+    return (None, None, short) if short else (mode, commit, why)
+
+
+def run_that_is_due(args, now: dt.datetime) -> tuple:
+    """What a look would run if Docker's disk has the room, as `what_is_due` gives it."""
     today = [report for report in reports_of(args) if str(report.get("started", "")).startswith(now.strftime("%Y-%m-%d"))]
     night_is_due = now.hour == args.night_hour and not [report for report in today if report.get("mode") == "night"]
     lately = held_lately(args, now)
@@ -1372,6 +1372,9 @@ def parse(argv: list) -> argparse.Namespace:
                         help="the hours, in UTC, in which a look may start a smoke run, as in 22-23,0-5; with none, the timer starts no smoke run")
     parser.add_argument("--commit", type=full_id, default=None, help="run the three sessions for this commit of a branch, and nothing else")
     parser.add_argument("--build-seconds", type=int, default=1800, help="the time limit of one image build of a run for a commit")
+    parser.add_argument("--room-gb", type=float, default=images.ROOM_GB, help="the free room on Docker's disk, in GB, that a look of the timer wants before it starts a run")
+    parser.add_argument("--docker-folder", action="append", default=[], metavar="FOLDER",
+                        help="a folder whose disk holds Docker's images; with none, Docker's own folder and the one of containerd")
     parser.set_defaults(own_images=None)
     args = parser.parse_args(argv)
     if args.tick and args.commit:

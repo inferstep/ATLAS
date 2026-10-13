@@ -669,12 +669,18 @@ it off (the timer is disabled).
 
 Each night it:
 
-1. takes the head of `dev`. When that changes the script itself or the
-   judge beside it (`scripts/tests_counted.py`), the new copy does the run,
-   so a repair of either acts in the night after its merge;
+1. takes the head of `dev`. When that changes the script itself or one of
+   the two files beside it (`scripts/tests_counted.py`, the judge, and
+   `scripts/nightly_images.py`, the images), the new copy does the run, so a
+   repair of one of them acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
    killed leaves its stack, and Docker starts that stack again;
-3. pulls the `dev` images and compares the commit that each was built from
+3. takes the `dev` images of the registry under names of its own. It reads
+   the digest of each `<image>:dev` from the registry with no pull, pulls
+   the image by that digest, and names it
+   `localhost/atlas-nightly/<image>:night`. No tag of the server moves, so a
+   usual stack on the same machine keeps its own `:dev` images. Then the run
+   compares the commit that each image was built from
    with the head. The images of a push come some minutes after it, so the
    run looks again every two minutes, for up to twenty, and takes the head
    again each time;
@@ -738,6 +744,24 @@ The first line of the report is its result:
 - The run writes only inside its own folder, and it stops and removes only
   the containers of its own compose project.
 
+What a run keeps on disk:
+
+- On Docker's disk: one set of the five images, under the run's own names.
+  When the registry has another image for a service, the run removes its
+  last one before it pulls the new one. It removes by the two names that
+  the run itself gave that image, its own name and the name by digest that
+  its pull left, by no other name, and it never prunes. Docker deletes a
+  layer only when no other image uses it, so an image of another name
+  keeps every layer.
+- An image that a smoke run builds is removed at the end of that run. The
+  build cache that such a build leaves is not removed: it cannot be told
+  from the cache of another build on the machine. `docker builder prune`
+  removes it, by hand.
+- In the folder of the run: one folder for each run under `reports/`, one
+  small file for each status, and the workspace of the last session. A
+  smoke run that builds keeps its copy of the commit's build folders in its
+  report folder. Nothing removes an old report folder.
+
 ### The result on GitHub
 
 A run puts its result on GitHub as a status of the commit that ran:
@@ -789,13 +813,22 @@ The server only calls out: it has no open port, no tunnel and no runner for
 this. One look:
 
 1. sends each status that waits;
-2. starts nothing when the graphics card is in use;
+2. starts nothing when the graphics card is in use, and nothing when
+   Docker's disk has too little free room;
 3. runs the night, when the hour of the night has come (`--night-hour`, in
    UTC) and no night was started that day;
 4. or else runs the tip of one branch `smoke/<name>` that has no result
    yet;
 5. or else does nothing, and leaves no report.
 
+- The room: a look that would start a run first reads the free room of
+  Docker's disk, at Docker's own folder and at the folder of containerd.
+  With less than `--room-gb` (20 GB when it is not given) it starts nothing
+  and says `nothing is started: too little room on Docker's disk (<n> GB
+  free, <m> GB needed)`. The usual stack is then not stopped, and no status
+  is written. `--docker-folder` names another folder to read. The number
+  20: one whole set of the five images was about 4 GB compressed and 13 GB
+  unpacked when this was written, and an image store can keep both.
 - A tip has a result when the app wrote a `server/smoke` status on it. The
   look compares the id of the account that wrote the status
   (`--status-writer`), not a name: a status of that name by another account
@@ -911,7 +944,10 @@ night and gives the same "not run" answers, each with status 0.
 
 What it needs on the server:
 
-- a folder for the run, and Docker for the user that runs it;
+- a folder for the run, and Docker for the user that runs it, with its
+  `buildx` plugin: the run reads the digest of an image from the registry
+  with it;
+- 20 GB of free room on Docker's disk before a run starts;
 - a Python with `pytest` and `httpx`, and `git` and `openssl`;
 - the file `nightly.env` in the folder, with the settings of the model for
   that server and nothing else. The key is not in it;
@@ -942,7 +978,17 @@ needs no change.
 2. Its Python: `python3 -m venv ~/atlas-nightly/venv`, then
    `~/atlas-nightly/venv/bin/pip install pytest httpx`.
 3. The settings of the model: the file `~/atlas-nightly/nightly.env`, as
-   above. No key and no token goes into it.
+   above. No key and no token goes into it. From the `.env` of the usual
+   install, which takes the settings of the model by their names and
+   nothing else:
+   `grep -E '^(ATLAS_MODEL_FILE|ATLAS_MODEL_NAME|ATLAS_CTX_SIZE|ATLAS_PARALLEL_SLOTS|ATLAS_KV_TYPE_[KV]|ATLAS_UBATCH|ATLAS_BATCH|ATLAS_GPU_INDEX|ATLAS_LLAMA_MEM|ATLAS_EMBED_POOLING|ATLAS_CONTROL_VECTOR[A-Z_]*|PARALLEL_SLOTS|KV_CACHE_TYPE_[KV])=' <the usual install>/.env > ~/atlas-nightly/nightly.env`
+   Then the folder of the model files, as a full path. With none, or with
+   `./models`, the stack of the run looks inside its own copy of the
+   repository, where no model is. Docker says where the usual model server
+   takes its models from:
+   `echo "ATLAS_MODELS_DIR=$(docker inspect atlas-llama-server-1 --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Source}}{{end}}{{end}}')" >> ~/atlas-nightly/nightly.env`
+   Then `cat ~/atlas-nightly/nightly.env`: it has to show the file of the
+   model, its name, and a folder that starts with `/`.
 4. The key of the app: `mkdir -p ~/.config/atlas-nightly`, then the key as
    the file `~/.config/atlas-nightly/status-app.pem`, then
    `chmod 600 ~/.config/atlas-nightly/status-app.pem`. The file lies outside
@@ -963,7 +1009,8 @@ needs no change.
    To switch the nightly run off:
    `systemctl --user disable --now atlas-nightly.timer`.
 
-What a look needs on its path: `docker`, `git` and `openssl`. The Python is
+What a look needs on its path: `docker`, `git` and `openssl`. Docker needs
+its `buildx` plugin (`docker buildx version` shows it). The Python is
 named by its full path. The path of a look is the user unit's own, not the
 path of a login shell; `systemctl --user show-environment` shows it.
 

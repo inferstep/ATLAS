@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""The images of the nightly run: names of the run's own for them, and the room that they need.
+
+The file beside this one, scripts/nightly_run.py, loads it. It starts nothing by itself.
+
+The server of the nightly run has a usual stack too, and other images that have to stay as they are. So the run:
+
+  - moves no tag of the server. It reads the digest of `<image>:dev` from the registry with no pull, pulls the
+    image by that digest, and gives it a name of its own, `localhost/atlas-nightly/<image>:night`. A name that
+    starts with `localhost/` is in no registry. The compose file of the run names these images, with
+    `pull_policy: never`;
+  - keeps one set. When the registry has another image for a service, the run first removes its last one, by the
+    two names that the run itself gave it: the name of its own, and the name by digest that its pull left. It
+    removes by no other name and never prunes. Docker deletes a layer only when no other image uses it, so an
+    image of another name keeps every layer;
+  - looks at the free room first. A look of the timer that finds too little room on Docker's disk starts nothing,
+    and the usual stack is not stopped.
+
+What the run pulled is written down in <dir>/night-images.json: for each service, the name by digest.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+REGISTRY, TAG = "ghcr.io/inferstep", "dev"
+# The service of the compose file -> the image it runs.
+IMAGES = {"llama-server": "atlas-llama", "geometric-lens": "atlas-lens", "v3-service": "atlas-v3",
+          "sandbox": "atlas-sandbox", "atlas-proxy": "atlas-proxy"}
+# The names of this run's own: of this machine only, so Docker cannot pull another image under one of them.
+OWN = "localhost/atlas-nightly"
+REVISION = "org.opencontainers.image.revision"
+A_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+RECORD = "night-images.json"
+# Where Docker keeps its images: its own folder, and the folder of containerd, which holds them where Docker uses
+# containerd's image store. A folder of this list that is not there is passed over.
+FOLDERS = ("/var/lib/docker", "/var/lib/containerd")
+# The room, in GB as `df -h` counts them, that a look wants free before it starts a run. One whole set of the five
+# images is about 4 GB compressed and 13 GB unpacked, and an image store can keep both.
+ROOM_GB = 20.0
+
+
+def own_name(service: str) -> str:
+    """The name of this run's own for the registry's image of a service."""
+    return f"{OWN}/{IMAGES[service]}:night"
+
+
+def built_name(service: str, stamp: str, commit: str) -> str:
+    """The name of an image that a run builds: with the start time of the run and the commit."""
+    return f"{OWN}/{IMAGES[service]}:{stamp}-{commit[:12]}"
+
+
+def by_digest(service: str, digest: str) -> str:
+    """The name that a pull by digest leaves on the image of a service. It has no tag."""
+    return f"{REGISTRY}/{IMAGES[service]}@{digest}"
+
+
+def digest_in(printed: str) -> str:
+    """The digest in what `docker buildx imagetools inspect --format '{{json .Manifest}}'` printed, or nothing."""
+    try:
+        digest = json.loads(printed)["digest"]
+    except (ValueError, KeyError, TypeError):
+        return ""
+    return digest if isinstance(digest, str) and A_DIGEST.fullmatch(digest) else ""
+
+
+def last_pulls(folder: Path) -> dict:
+    """What the run wrote down at its last pulls: for each service the name by digest. A line of the file is taken
+    only when it is such a name for that service, because the run gives it to `docker image rm`."""
+    try:
+        written = json.loads((folder / RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(written, dict):
+        return {}
+    return {service: name for service, name in written.items()
+            if service in IMAGES and isinstance(name, str) and name.startswith(f"{REGISTRY}/{IMAGES[service]}@")
+            and A_DIGEST.fullmatch(name.split("@", 1)[1])}
+
+
+def take(folder: Path, services, must, ended, failed) -> tuple:
+    """Bring the image of each service to the one that the registry has under the tag, under this run's own name.
+
+    Gives two things. For each service: the registry's name, its digest, the run's own name and the commit that
+    the image was built from. And for each name that was to be removed: what happened.
+
+    The three last arguments come from scripts/nightly_run.py: `must` runs a command that has to pass and gives
+    its output, `ended` runs one whose status is read here, and `failed` is the error of a step that failed.
+    """
+    pulls, found, removed = last_pulls(folder), {}, {}
+    for service in services:
+        tagged, own = f"{REGISTRY}/{IMAGES[service]}:{TAG}", own_name(service)
+        digest = digest_in(must(f"the reading of the digest of {tagged}",
+                                ["docker", "buildx", "imagetools", "inspect", tagged, "--format", "{{json .Manifest}}"], 120))
+        if not digest:
+            raise failed(f"the reading of the digest of {tagged}: the registry's answer names no digest")
+        pulled, last = by_digest(service, digest), pulls.get(service)
+        if last and last != pulled:
+            # The registry has another image. The last one goes before the new one comes, so the run holds one set.
+            for name in (own, last):
+                if ended(f"the look for {name}", ["docker", "image", "inspect", "--format", "{{.Id}}", name], 60).returncode != 0:
+                    removed[name] = "there was none"
+                    continue
+                must(f"the removal of {name}", ["docker", "image", "rm", name], 300)
+                removed[name] = "yes"
+        must(f"the pull of {pulled}", ["docker", "pull", "--quiet", pulled], 1200)
+        must(f"the naming of {pulled}", ["docker", "tag", pulled, own], 60)
+        pulls[service] = pulled
+        (folder / RECORD).write_text(json.dumps(pulls, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        about = json.loads(must(f"the reading of {own}", ["docker", "image", "inspect", own], 60))[0]
+        found[service] = {"image": tagged, "digest": digest, "name": own,
+                          "commit": ((about.get("Config") or {}).get("Labels") or {}).get(REVISION, "")}
+    return found, removed
+
+
+def compose_file(built: dict) -> str:
+    """The compose file that names the image of each service: the one that this run built, or else the run's own
+    name for the registry's image. JSON is YAML. An image of this run is never looked for in a registry."""
+    return json.dumps({"services": {service: {"image": built.get(service) or own_name(service), "pull_policy": "never"}
+                                    for service in IMAGES}}, indent=2) + "\n"
+
+
+def room_fault(folders, needed_gb: float) -> str:
+    """Why a look starts nothing for the room on Docker's disk, or nothing.
+
+    The room is the smallest free room of the folders. With no folder named, the folders of FOLDERS are looked at,
+    and one that is not there is passed over. A folder that the settings name has to be there.
+    """
+    free = []
+    for folder in folders or FOLDERS:
+        try:
+            about = os.statvfs(folder)
+        except OSError:
+            if folders:
+                return (f"nothing is started: the free room of Docker's disk could not be read at `{folder}`. Fix: "
+                        "name the folder of Docker's images with --docker-folder")
+            continue
+        free.append(about.f_bavail * about.f_frsize / 2**30)
+    if not free:
+        return ("nothing is started: the free room of Docker's disk could not be read: none of "
+                f"{', '.join(FOLDERS)} is there. Fix: name the folder of Docker's images with --docker-folder")
+    if min(free) >= needed_gb:
+        return ""
+    return f"nothing is started: too little room on Docker's disk ({int(min(free))} GB free, {needed_gb:g} GB needed)"
