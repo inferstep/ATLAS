@@ -41,7 +41,7 @@ NOT_ON_THE_LIST = "the account that moved the branch to its tip is not on the li
 NOT_AT_THE_TIP = "GitHub's record of the branch does not end at its tip"
 NO_SETTINGS = "no smoke: the settings of the server name no writer of the statuses, or no person whose push counts"
 NO_HOURS = "no smoke: the settings of the server name no hours in which a look may start a smoke run (--smoke-hours)"
-NOT_THIS_HOUR = "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). A smoke branch waits"
+NOT_THIS_HOUR = "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). Smoke branches are looked at only in those hours"
 NOT_OUR_OWN = ("its commit is not the head of an open pull request from a branch of this repository. The timer runs only "
                "such a commit by itself; another one is run by hand")
 IN_USE = "nothing is started: the card is in use"
@@ -912,7 +912,7 @@ def test_with_too_little_room_on_dockers_disk_the_tip_of_a_smoke_branch_is_not_d
     a_smoke_is_there(night, github)
     mode, commit, why = nightly.what_is_due(settings(night, "--reserve-gb", "99999"), NOON)
     assert (mode, commit) == (None, None)
-    assert why.startswith("nothing is started: too little room on Docker's disk (") and why.endswith(" GB free, 99999 GB needed)")
+    assert why.startswith("nothing is started: too little room on Docker's disk (") and why.endswith(" GB free, 99999.0 GB needed)")
 
 
 @pytest.mark.parametrize("record, why", [
@@ -1426,7 +1426,8 @@ def test_a_look_that_starts_nothing_gives_its_status_by_the_hour_of_the_night(se
     assert nightly.main(argv) == 3
     assert capsys.readouterr().out.splitlines() == ["tick: statuses: nothing waits", f"tick: {NO_SETTINGS}"]
     assert not (night.dir / "reports").exists()
-    assert night.did() == []
+    # The look that found the night due asked Docker one thing: whether the run's own images are there.
+    assert night.did() == ["image inspect"]
 
 
 def test_while_another_run_of_the_folder_goes_a_look_that_starts_nothing_finds_nothing_due(tmp_path):

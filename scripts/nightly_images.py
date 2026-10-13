@@ -19,7 +19,10 @@ The server of the nightly run has a usual stack too, and other images that have 
     it when no such tag is on the image any more;
   - looks at the free room first. A look of the timer that finds too little room on Docker's disk starts nothing,
     and the usual stack is not stopped. The look wants a reserve before every run, and the room of a first set on
-    top of it only while the run has not written down a pull for each of its images.
+    top of it only while Docker has not an image under each of the run's own names;
+  - reads the free room again before each pull. The registry says which layers the image has and how large each
+    is, with no pull. When the layers that are not on this machine yet, and the reserve after them, do not fit,
+    the run ends as not run.
 
 What the run pulled and has not removed is written down in <dir>/night-images.json: for each service, the names
 by digest, the newest last.
@@ -50,6 +53,10 @@ FIRST_SET_GB = 17.0
 # The reserve, before every run: for what the containers of the stack write, and for an image that grew. It is a
 # choice, not a measure.
 RESERVE_GB = 5.0
+# What a layer takes on disk, as a multiple of its compressed size: the image store of containerd keeps the layer
+# compressed and unpacked, and the registry gives the compressed size only. The five images took 17.1 GB on disk
+# for 4.18 GB compressed; one image alone took between 3.3 and 6.3 times its compressed size.
+ON_DISK = 4.1
 
 
 def own_name(service: str) -> str:
@@ -121,14 +128,15 @@ def remove_pull(name: str, must, ended) -> str:
     return "yes"
 
 
-def take(folder: Path, services, must, ended, failed) -> tuple:
+def take(folder: Path, services, must, ended, failed, hold_room) -> tuple:
     """Bring the image of each service to the one that the registry has under the tag, under this run's own name.
 
     Gives two things. For each service: the registry's name, its digest, the run's own name and the commit that
     the image was built from. And for each name that was to be removed: what happened.
 
-    The three last arguments come from scripts/nightly_run.py: `must` runs a command that has to pass and gives
-    its output, `ended` runs one whose status is read here, and `failed` is the error of a step that failed.
+    The four last arguments come from scripts/nightly_run.py: `must` runs a command that has to pass and gives
+    its output, `ended` runs one whose status is read here, `failed` is the error of a step that failed, and
+    `hold_room` ends the run as not run when Docker's disk has not the room of a step.
     """
     pulls, found, removed = earlier_pulls(folder), {}, {}
     for service in services:
@@ -144,6 +152,10 @@ def take(folder: Path, services, must, ended, failed) -> tuple:
         for name in earlier:
             if name != pulled:
                 removed[name] = remove_pull(name, must, ended)
+        # The room is read here, after the last image went: the removal frees room, and it can take away layers
+        # that the new image has too.
+        layers = layers_in_the_registry(service, pulled, must, failed)
+        hold_room(f"the pull of {pulled}", room_on_disk(layers, layers_here(must, ended)))
         must(f"the pull of {pulled}", ["docker", "pull", "--quiet", pulled], 1200)
         must(f"the naming of {pulled}", ["docker", "tag", pulled, own], 60)
         pulls[service] = [name for name in earlier if name != pulled and removed[name].startswith("kept")] + [pulled]
@@ -161,16 +173,19 @@ def compose_file(built: dict) -> str:
                                     for service in IMAGES}}, indent=2) + "\n"
 
 
-def room_wanted(folder: Path, first_set_gb: float, reserve_gb: float) -> float:
+# --- the room ----------------------------------------------------------------------------------------------------
+
+def room_wanted(first_set_gb: float, reserve_gb: float, ended) -> float:
     """The free room that a look wants before it starts a run: the reserve, and the room of a first set on top of
-    it while the run has not written down a pull for each of its images."""
-    written = earlier_pulls(folder)
-    has_the_set = all(written.get(service) for service in IMAGES)
-    return reserve_gb if has_the_set else first_set_gb + reserve_gb
+    it while Docker has not an image under each of the run's own names. That is one question to Docker: its
+    status is 0 only when every name is there."""
+    own = [own_name(service) for service in IMAGES]
+    asked = ended("the look for the run's own images", ["docker", "image", "inspect", "--format", "{{.Id}}", *own], 60)
+    return reserve_gb if asked.returncode == 0 else first_set_gb + reserve_gb
 
 
-def room_fault(folders, needed_gb: float) -> str:
-    """Why a look starts nothing for the room on Docker's disk, or nothing.
+def free_room(folders) -> tuple:
+    """The free room on Docker's disk in GB, and nothing; or None, and why it could not be read.
 
     The room is the smallest free room of the folders. With no folder named, the folders of FOLDERS are looked at,
     and one that is not there is passed over. A folder that the settings name has to be there.
@@ -181,13 +196,79 @@ def room_fault(folders, needed_gb: float) -> str:
             about = os.statvfs(folder)
         except OSError:
             if folders:
-                return (f"nothing is started: the free room of Docker's disk could not be read at `{folder}`. Fix: "
-                        "name the folder of Docker's images with --docker-folder")
+                return None, (f"the free room of Docker's disk could not be read at `{folder}`. Fix: name the folder "
+                              "of Docker's images with --docker-folder")
             continue
         free.append(about.f_bavail * about.f_frsize / 2**30)
     if not free:
-        return ("nothing is started: the free room of Docker's disk could not be read: none of "
-                f"{', '.join(FOLDERS)} is there. Fix: name the folder of Docker's images with --docker-folder")
-    if min(free) >= needed_gb:
+        return None, ("the free room of Docker's disk could not be read: none of "
+                      f"{', '.join(FOLDERS)} is there. Fix: name the folder of Docker's images with --docker-folder")
+    return round(min(free), 1), ""
+
+
+def room_fault(folders, needed_gb: float, what_for: str = "on Docker's disk") -> str:
+    """Why the free room on Docker's disk is not enough, or nothing."""
+    free, unread = free_room(folders)
+    if unread:
+        return unread
+    if free >= needed_gb:
         return ""
-    return f"nothing is started: too little room on Docker's disk ({int(min(free))} GB free, {needed_gb:g} GB needed)"
+    return f"too little room {what_for} ({free:.1f} GB free, {needed_gb:.1f} GB needed)"
+
+
+def layers_in_the_registry(service: str, name: str, must, failed) -> list:
+    """The layers of an image as the registry has it, lowest first: for each the id of the unpacked layer and its
+    compressed size in bytes. Nothing is pulled. A name can hold images for several kinds of machine; the one for
+    the kind of this Docker is read."""
+    what = f"the reading of the layers of {name}"
+    kind = must("the reading of Docker's kind of machine", ["docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"], 60).strip()
+    try:
+        index = json.loads(must(what, ["docker", "buildx", "imagetools", "inspect", "--raw", name], 120))
+        of_this_kind = []
+        for one in index["manifests"]:
+            platform = one.get("platform") or {}
+            if f"{platform.get('os')}/{platform.get('architecture')}" == kind:
+                of_this_kind.append(one["digest"])
+        if len(of_this_kind) != 1:
+            raise failed(f"{what}: the registry has {len(of_this_kind)} images for {kind} under that name, not 1")
+        image = by_digest(service, of_this_kind[0])
+        sizes = [layer["size"] for layer in json.loads(must(what, ["docker", "buildx", "imagetools", "inspect", "--raw", image], 120))["layers"]]
+        ids = json.loads(must(what, ["docker", "buildx", "imagetools", "inspect", image, "--format", "{{json .Image}}"], 120))["rootfs"]["diff_ids"]
+    except (KeyError, TypeError, ValueError):
+        raise failed(f"{what}: the registry's answer could not be read") from None
+    if len(ids) != len(sizes):
+        raise failed(f"{what}: the registry names {len(ids)} unpacked layers and {len(sizes)} compressed ones")
+    return list(zip(ids, sizes))
+
+
+def layers_here(must, ended) -> list:
+    """For each image on this machine, the ids of its unpacked layers, lowest first."""
+    images = sorted(set(must("the list of the images here", ["docker", "image", "ls", "--quiet", "--no-trunc"], 120).split()))
+    if not images:
+        return []
+    # An image can go between the two commands. Then the status is not 0, and the lines of the others still count.
+    said = ended("the reading of the layers here", ["docker", "image", "inspect", "--format", "{{json .RootFS.Layers}}", *images], 120)
+    return [json.loads(line) for line in said.stdout.splitlines() if line.startswith("[")]
+
+
+def room_on_disk(layers: list, stacks: list) -> float:
+    """The room in GB that an image takes on disk when it comes: of its layers that are not here yet.
+
+    A layer counts as here only together with every layer under it: Docker shares a layer between two images
+    when the whole stack up to it is the same. `stacks` is what `layers_here` gives.
+    """
+    ids = [layer_id for layer_id, _size in layers]
+    here = 0
+    for stack in stacks:
+        same = 0
+        while same < len(ids) and same < len(stack) and ids[same] == stack[same]:
+            same += 1
+        here = max(here, same)
+    return sum(size for _id, size in layers[here:]) * ON_DISK / 2**30
+
+
+def room_of_a_build(service: str, must, failed) -> float:
+    """The room in GB that the build of a service's image is given: that of the whole image that the registry has
+    for the service, with no layer counted as here. What a build writes cannot be known before it; this is the
+    careful side."""
+    return room_on_disk(layers_in_the_registry(service, f"{REGISTRY}/{IMAGES[service]}:{TAG}", must, failed), [])

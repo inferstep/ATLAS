@@ -174,9 +174,10 @@ class OneCommit(base.Night):
             if call["tool"] == "docker" and args[0] == "compose":
                 step = "ask" if "exec" in args else "logs" if "logs" in args else "stack " + next(
                     word for word in args if word in ("up", "down"))
-            elif call["tool"] == "docker" and (args[:2] == ["image", "inspect"] or args[0] in ("buildx", "tag")):
-                # The reading of an image, the registry's digest of a tag, and the run's own name for a pulled
-                # image are not steps of this list: tests/infrastructure/test_nightly_images.py holds them.
+            elif call["tool"] == "docker" and (args[:2] in (["image", "inspect"], ["image", "ls"]) or args[0] in ("buildx", "tag", "version")):
+                # The reading of an image, the registry's digest of a tag, the questions about the room, and the
+                # run's own name for a pulled image are not steps of this list:
+                # tests/infrastructure/test_nightly_images.py holds them.
                 continue
             elif call["tool"] == "docker":
                 step = {"ps": "look", "pull": f"pull {image}", "build": f"build {image}", "image": f"remove {image}"}[args[0]]
@@ -296,6 +297,17 @@ def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp
     assert set(named) == set(nightly.IMAGES)
     assert {service for service, name in named.items() if not name.endswith(":night")} == {"sandbox", "atlas-proxy"}
     assert named["sandbox"] == run.name_of("sandbox") and named["atlas-proxy"] == run.name_of("atlas-proxy")
+
+
+def test_a_build_is_given_the_room_of_the_whole_image_and_does_not_start_without_it(tmp_path, repository):
+    commit = repository.on_a_branch({"proxy/prompt.go": "a change\n"})
+    # The registry's image is larger than any disk, and an image here has its one layer. So a pull needs no room.
+    # A build is given the room of the whole image: for a build no layer counts as here.
+    layer = "sha256:" + "1" * 64
+    run = OneCommit(tmp_path, repository, layers=[[layer, 10**15]], layers_here=[layer]).run(commit)
+    assert re.fullmatch(r"not run: too little room for the build of atlas-proxy from the commit \([\d.]+ GB free, [\d.]+ GB needed\)",
+                        run.report["result"]), run.report["result"]
+    assert "pull the sandbox" in run.did() and "build the proxy" not in run.did()
 
 
 def test_when_no_build_folder_differs_nothing_is_built_and_the_run_says_so(tmp_path, repository):

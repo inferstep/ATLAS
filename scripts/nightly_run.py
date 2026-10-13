@@ -385,10 +385,17 @@ def stop_a_left_stack(args) -> str:
     return f"{len(left)} container(s) of an earlier run were stopped first"
 
 
+def hold_room(args, step: str, room_gb: float) -> None:
+    """End the run as not run when Docker's disk has not the room of a step and the reserve after it."""
+    short = images.room_fault(args.docker_folder, room_gb + args.reserve_gb, f"for {step}")
+    if short:
+        raise NotRun(short)
+
+
 def pull_images(args, report: dict, services=tuple(IMAGES)) -> dict:
     """Bring the registry's image of each service under this run's own name, and give, for each service, its digest
     and the commit it was built from. No tag of the server moves, and the run keeps one set (scripts/nightly_images.py)."""
-    found, removed = images.take(args.dir, services, must, ended, StepFailed)
+    found, removed = images.take(args.dir, services, must, ended, StepFailed, lambda step, room: hold_room(args, step, room))
     report.setdefault("images_removed", {}).update(removed)
     return found
 
@@ -814,6 +821,7 @@ def build_images(args, report: dict, folder: Path) -> None:
     must("the unpacking of that copy", ["tar", "-x", "-f", str(folder / "commit.tar"), "-C", str(folder / "commit")], 300)
     for service in services:
         context, dockerfile, _paths = BUILDS[service]
+        hold_room(args, f"the build of {service} from the commit", images.room_of_a_build(service, must, StepFailed))
         name = report["built"][service] = own_image(service, folder.name, commit)
         must(f"the build of {service} from the commit", ["docker", "build", "--tag", name, "--label", f"{REVISION}={commit}",
                                                          "--file", str(folder / "commit" / dockerfile), str(folder / "commit" / context)],
@@ -1124,7 +1132,7 @@ def smoke_that_is_due(args, today: list, hour: int) -> tuple:
     if not args.smoke_hours:
         return None, "no smoke: the settings of the server name no hours in which a look may start a smoke run (--smoke-hours)"
     if hour not in args.smoke_hours:
-        return None, "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). A smoke branch waits"
+        return None, "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). Smoke branches are looked at only in those hours"
     ran = {report.get("commit") for report in reports_of(args) if report.get("mode") == "one commit" and settled(report)}
     for name, tip in smoke_tips():
         if tip in ran or has_a_status(tip, STATUS["one commit"], args.status_writer):
@@ -1170,9 +1178,11 @@ def what_is_due(args, now: dt.datetime) -> tuple:
     (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day. The
     same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped."""
     mode, commit, why = run_that_is_due(args, now)
-    wanted = images.room_wanted(args.dir, args.first_set_gb, args.reserve_gb)
-    short = images.room_fault(args.docker_folder, wanted) if mode else ""
-    return (None, None, short) if short else (mode, commit, why)
+    if not mode:
+        return mode, commit, why
+    wanted = images.room_wanted(args.first_set_gb, args.reserve_gb, ended)
+    short = images.room_fault(args.docker_folder, wanted)
+    return (None, None, f"nothing is started: {short}") if short else (mode, commit, why)
 
 
 def run_that_is_due(args, now: dt.datetime) -> tuple:
@@ -1297,12 +1307,14 @@ def run(args, argv: list, started: dt.datetime, first_start: bool, folder: Path,
     report = {"started": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "step": "start", "mode": "one commit" if args.commit else "night",
               "script": "as it was started" if first_start else "the new copy: taking the head changed the script"}
     folder.mkdir(parents=True, exist_ok=not first_start)
+    report["free_gb_before"] = images.free_room(args.docker_folder)[0]
     try:
         with halt_on(signal.SIGTERM, "the run was told to stop"), failures_into(report):
             (one_commit if args.commit else one_night)(args, report, folder, first_start)
     except NewScript:
         start_the_new_copy(argv, started.strftime(STAMP), report, folder, held)
     report["ended"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    report["free_gb_after"] = images.free_room(args.docker_folder)[0]
     to_github(args, report, folder, started.strftime(STAMP))
     return report
 

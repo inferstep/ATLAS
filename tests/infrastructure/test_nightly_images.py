@@ -21,16 +21,31 @@ EVAL = "ghcr.io/inferstep/atlas-proxy:eval"
 BY_DIGEST = re.compile(r"ghcr\.io/inferstep/atlas-[a-z0-9]+@sha256:[0-9a-f]{64}")
 
 
+FOR_AMD64 = "sha256:" + "f" * 64
+# The image that the registry has in these tests: three layers, the lowest first, 4 GB compressed together.
+LAYERS = [("sha256:low", 2 * 2**30), ("sha256:mid", 2**30), ("sha256:top", 2**30)]
+
+
 class Docker:
-    """Stands in for the two ways the file of the images runs a command. It writes each command down. The
-    registry has the digest NEW. `there` gives, for each name that is on the machine, the names that Docker lists
-    for its image."""
+    """Stands in for the ways the file of the images runs a command and asks for room. It writes each one down.
+    The registry has the digest NEW; the image under it for linux/amd64 has the layers of LAYERS. `there` gives,
+    for each name that is on the machine, the names that Docker lists for its image. `docker image ls` lists
+    no image, so no layer is here."""
 
     def __init__(self, there=None):
         self.commands, self.there = [], there or {}
 
     def must(self, what, argv, limit):
         self.commands.append(" ".join(argv))
+        if argv[1] == "version":
+            return "linux/amd64\n"
+        if argv[1] == "buildx" and "--raw" in argv:
+            # One answer for both lists: the images under a name, and the layers of an image.
+            return json.dumps({"manifests": [{"digest": FOR_AMD64, "platform": {"os": "linux", "architecture": "amd64"}},
+                                             {"digest": OLD, "platform": {"os": "unknown", "architecture": "unknown"}}],
+                               "layers": [{"size": size} for _id, size in LAYERS]})
+        if argv[1] == "buildx" and "{{json .Image}}" in argv:
+            return json.dumps({"rootfs": {"diff_ids": [layer_id for layer_id, _size in LAYERS]}})
         if argv[1] == "buildx":
             return json.dumps({"digest": NEW})
         if argv[1:3] == ["image", "inspect"]:
@@ -43,13 +58,24 @@ class Docker:
             return SimpleNamespace(returncode=1, stdout="")
         return SimpleNamespace(returncode=0, stdout=json.dumps(self.there[argv[-1]]))
 
+    def hold_room(self, step, room):
+        self.commands.append(f"room for {step}: {room:.1f} GB")
+
 
 def test_an_image_is_pulled_by_its_digest_and_gets_the_runs_own_name(tmp_path):
     docker = Docker()
-    found, removed = images.take(tmp_path, ["atlas-proxy"], docker.must, docker.ended, RuntimeError)
+    found, removed = images.take(tmp_path, ["atlas-proxy"], docker.must, docker.ended, RuntimeError, docker.hold_room)
     # The tag `dev` is named once, in the question to the registry. Nothing is pulled by a tag, so no tag moves.
     assert docker.commands == [
         "docker buildx imagetools inspect ghcr.io/inferstep/atlas-proxy:dev --format {{json .Manifest}}",
+        # The room of the pull: the layers of the image for this Docker's kind of machine, against the images here.
+        # 4 GB compressed are given 4.1 times that on disk.
+        "docker version --format {{.Server.Os}}/{{.Server.Arch}}",
+        f"docker buildx imagetools inspect --raw {TODAY}",
+        f"docker buildx imagetools inspect --raw ghcr.io/inferstep/atlas-proxy@{FOR_AMD64}",
+        f"docker buildx imagetools inspect ghcr.io/inferstep/atlas-proxy@{FOR_AMD64} --format " + "{{json .Image}}",
+        "docker image ls --quiet --no-trunc",
+        f"room for the pull of {TODAY}: 16.4 GB",
         f"docker pull --quiet ghcr.io/inferstep/atlas-proxy@{NEW}",
         f"docker tag ghcr.io/inferstep/atlas-proxy@{NEW} {OWN}",
         f"docker image inspect {OWN}",
@@ -90,50 +116,61 @@ KEPT = f"kept: {EVAL} names the same image, and Docker would remove that tag too
 def test_the_last_image_goes_before_the_new_one_comes_and_only_by_a_name_that_the_run_gave_it(tmp_path, written, there, removed, written_after):
     (tmp_path / "night-images.json").write_text(json.dumps({"atlas-proxy": written}))
     docker = Docker(there)
-    assert images.take(tmp_path, ["atlas-proxy"], docker.must, docker.ended, RuntimeError)[1] == removed
+    assert images.take(tmp_path, ["atlas-proxy"], docker.must, docker.ended, RuntimeError, docker.hold_room)[1] == removed
     removing = [command for command in docker.commands if " rm " in command or "prune" in command]
     assert removing == [f"docker image rm {name}" for name, said in removed.items() if said == "yes"]
-    pull = docker.commands.index(f"docker pull --quiet {TODAY}")
-    assert all(docker.commands.index(command) < pull for command in removing)
+    # The room is read after the last image went, and before the new one comes.
+    room, pull = docker.commands.index(f"room for the pull of {TODAY}: 16.4 GB"), docker.commands.index(f"docker pull --quiet {TODAY}")
+    assert all(docker.commands.index(command) < room < pull for command in removing)
     assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": written_after}
+
+
+@pytest.mark.parametrize("stacks, compressed_gb", [
+    pytest.param([], 4, id="no image here has a layer of it"),
+    pytest.param([["sha256:low", "sha256:another"]], 2, id="an image here stands on the same lowest layer"),
+    pytest.param([["sha256:low"], ["sha256:low", "sha256:mid", "sha256:top", "sha256:more"]], 0, id="an image here has every layer"),
+    pytest.param([["sha256:another", "sha256:low", "sha256:mid", "sha256:top"]], 4, id="the same layers on another lowest layer do not count"),
+])
+def test_the_room_of_an_image_is_that_of_its_layers_that_are_not_here_yet(stacks, compressed_gb):
+    assert images.room_on_disk(LAYERS, stacks) == pytest.approx(compressed_gb * 4.1)
 
 
 @pytest.mark.parametrize("folder, needed, says", [
     ("", 0, ""),
-    ("", 99999, r"nothing is started: too little room on Docker's disk \(\d+ GB free, 99999 GB needed\)"),
-    ("not there", 0, r"nothing is started: the free room of Docker's disk could not be read at `.*not there`\. Fix: .*"),
+    ("", 99999, r"too little room on Docker's disk \([\d.]+ GB free, 99999\.0 GB needed\)"),
+    ("not there", 0, r"the free room of Docker's disk could not be read at `.*not there`\. Fix: .*"),
 ])
-def test_a_look_wants_room_on_dockers_disk(tmp_path, folder, needed, says):
+def test_the_free_room_of_dockers_disk_is_read_at_its_folder(tmp_path, folder, needed, says):
     assert re.fullmatch(says, images.room_fault([str(tmp_path / folder)], needed))
 
 
-def test_with_no_folder_named_and_none_of_the_usual_ones_there_a_look_starts_nothing(tmp_path, monkeypatch):
+def test_with_no_folder_named_and_none_of_the_usual_ones_there_the_room_cannot_be_read(tmp_path, monkeypatch):
     monkeypatch.setattr(images, "FOLDERS", (str(tmp_path / "one"), str(tmp_path / "two")))
-    assert images.room_fault([], 0).startswith("nothing is started: the free room of Docker's disk could not be read: none of ")
+    assert images.room_fault([], 0).startswith("the free room of Docker's disk could not be read: none of ")
     (tmp_path / "two").mkdir()
     assert images.room_fault([], 0) == ""
 
 
-A_SET = {service: [f"ghcr.io/inferstep/{image}@{NEW}"] for service, image in images.IMAGES.items()}
-NO_MODEL_SERVER = {service: names for service, names in A_SET.items() if service != "llama-server"}
-TOO_LITTLE = r"nothing is started: too little room on Docker's disk \(\d+ GB free, 99999 GB needed\)"
+TOO_LITTLE = r"nothing is started: too little room on Docker's disk \([\d.]+ GB free, 99999\.0 GB needed\)"
+OWN_NAMES = [f"localhost/atlas-nightly/{image}:night" for image in images.IMAGES.values()]
 
 
-@pytest.mark.parametrize("written, first_set, reserve, due, why", [
-    pytest.param({}, "0", "0", "night", "the night is due",
+@pytest.mark.parametrize("docker_has_the_set, first_set, reserve, due, why", [
+    pytest.param(False, "0", "0", "night", "the night is due",
                  id="no set yet, and room for both"),
-    pytest.param({}, "60000", "39999", None, TOO_LITTLE,
+    # 60000 and 39999 add up to the 99999 of the message.
+    pytest.param(False, "60000", "39999", None, TOO_LITTLE,
                  id="no set yet: the room of a first set and the reserve are wanted together"),
-    pytest.param(NO_MODEL_SERVER, "60000", "39999", None, TOO_LITTLE,
-                 id="a set with one image missing is no set"),
-    pytest.param(A_SET, "99999", "0", "night", "the night is due",
+    pytest.param(True, "99999", "0", "night", "the night is due",
                  id="the set is there: the room of a first set is not wanted again"),
-    pytest.param(A_SET, "0", "99999", None, TOO_LITTLE,
+    pytest.param(True, "0", "99999", None, TOO_LITTLE,
                  id="the set is there: the reserve is wanted"),
 ])
-def test_a_look_wants_the_room_of_a_first_set_while_the_run_has_none_and_a_reserve_before_every_run(tmp_path, written, first_set, reserve, due, why):
-    night = Night(tmp_path)
-    (night.dir / "night-images.json").write_text(json.dumps(written))
+def test_a_look_wants_the_room_of_a_first_set_while_the_run_has_none_and_a_reserve_before_every_run(
+        tmp_path, monkeypatch, docker_has_the_set, first_set, reserve, due, why):
+    # The stand-in for Docker answers the look's question with status 0, and with status 1 when the plan fails it.
+    night = Night(tmp_path, fail=[] if docker_has_the_set else ["image inspect --format {{.Id}} localhost/atlas-nightly/"])
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
     noon = dt.datetime(2026, 10, 8, 12, 30, tzinfo=dt.timezone.utc)
     settings = nightly.parse(["--dir", str(night.dir), "--lock", str(night.lock), "--tick", "--look", "--night-hour", "12",
                               "--docker-folder", str(tmp_path), "--first-set-gb", first_set, "--reserve-gb", reserve])
@@ -141,6 +178,8 @@ def test_a_look_wants_the_room_of_a_first_set_while_the_run_has_none_and_a_reser
     mode, commit, says = nightly.what_is_due(settings, noon)
     assert (mode, commit) == (due, None)
     assert re.fullmatch(why, says)
+    # One question to Docker, with each of the run's five own names: its status is 0 only when every name is there.
+    assert [call["args"] for call in night.calls() if call["tool"] == "docker"] == [["image", "inspect", "--format", "{{.Id}}", *OWN_NAMES]]
 
 
 def test_the_unit_of_the_server_gives_no_number_so_the_numbers_of_the_script_hold_there(tmp_path):

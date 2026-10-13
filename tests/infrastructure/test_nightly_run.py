@@ -128,6 +128,24 @@ elif args[0] == "ls-remote":
 DOCKER = '''
 if args[0] == "ps":
     print("\\n".join(plan.get("left", [])))
+# The questions about the room of a pull or a build. The registry's image has the layers of the plan, each with
+# its id and its size. One answer stands for both lists that the run reads: under a name, one image for
+# linux/amd64, and in that image, the layers. An image is here only when the plan says which layers it has.
+if args[0] == "version":
+    print("linux/amd64")
+layers = plan.get("layers", [["sha256:" + "1" * 64, 1000]])
+if args[:3] == ["buildx", "imagetools", "inspect"] and "--raw" in args:
+    print(json.dumps({"manifests": [{"digest": "sha256:" + "f" * 64, "platform": {"os": "linux", "architecture": "amd64"}}],
+                      "layers": [{"size": size} for _id, size in layers]}))
+    sys.exit(0)
+if args[:3] == ["buildx", "imagetools", "inspect"] and "{{json .Image}}" in args:
+    print(json.dumps({"rootfs": {"diff_ids": [layer_id for layer_id, _size in layers]}}))
+    sys.exit(0)
+if args[:2] == ["image", "ls"] and plan.get("layers_here"):
+    print("sha256:" + "e" * 64)
+if args[:2] == ["image", "inspect"] and "{{json .RootFS.Layers}}" in args:
+    print(json.dumps(plan["layers_here"]))
+    sys.exit(0)
 if args[:3] == ["buildx", "imagetools", "inspect"]:
     # The registry's answer for a tag: the digest of the plan for this image, one for each time it is asked, or
     # else one that is made from the name of the image.
@@ -316,13 +334,15 @@ class Night:
 
     def did(self):
         """What was called, in order, in a few words each. The questions of one round to the services are one step, and
-        so are the logs of the services."""
+        so are the logs of the services and the questions about the room of one pull or build."""
         short = []
         for call in self.calls():
             args = call["args"]
             if call["tool"] == "docker" and args[0] == "compose":
                 step = "ask" if "exec" in args else "logs" if "logs" in args else "stack " + next(
                     word for word in args if word in ("up", "down"))
+            elif call["tool"] == "docker" and ABOUT_THE_ROOM & set(args):
+                step = "image room"
             elif call["tool"] == "docker":
                 step = {"ps": "look", "buildx": "image digest", "pull": "image pull", "tag": "image name", "build": "image build",
                         "image": "image " + args[1]}[args[0]]
@@ -334,15 +354,18 @@ class Night:
                 step = "sign"
             else:
                 step = "driver" if "e2e-reliability" in args[0] else "tests"
-            if not (step in ("ask", "logs") and short and short[-1] == step):
+            if not (step in ("ask", "logs", "image room") and short and short[-1] == step):
                 short.append(step)
         return short
 
 
+# A word of each call of docker that asks about the room: Docker's kind of machine, the two lists of the registry,
+# the images here and their layers.
+ABOUT_THE_ROOM = {"version", "--raw", "{{json .Image}}", "ls", "{{json .RootFS.Layers}}"}
 ONE_HEAD = ["git fetch", "git checkout", "git rev-parse"]
-# For each image: the registry is asked for the digest of the tag, the image is pulled by that digest, it gets the
-# run's own name, and the commit that it was built from is read.
-IMAGES = ["image digest", "image pull", "image name", "image inspect"] * 5
+# For each image: the registry is asked for the digest of the tag, the room of the pull is read, the image is
+# pulled by that digest, it gets the run's own name, and the commit that it was built from is read.
+IMAGES = ["image digest", "image room", "image pull", "image name", "image inspect"] * 5
 WITH_THE_CARD = ["card", "stack up", "ask", "driver", "tests", "ask", "logs", "stack down"]
 
 
@@ -350,6 +373,8 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
     night = Night(tmp_path).run()
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
     assert night.did() == ["git clone"] + ONE_HEAD + ["look"] + IMAGES + WITH_THE_CARD
+    # The free room on Docker's disk, in GB, before the run and after it.
+    assert isinstance(night.report["free_gb_before"], float) and isinstance(night.report["free_gb_after"], float)
     report = night.report
     assert report["result"] == "passed" and report["commit"] == HEAD and report["stale"] == []
     assert report["left_stack"] == "none" and report["script"] == "as it was started"
@@ -439,6 +464,13 @@ def test_with_an_image_that_was_not_built_from_the_head_the_night_is_not_run_and
     did = night.did()
     assert "card" not in did and "stack up" not in did and "driver" not in did and "tests" not in did
     assert "tasks" not in night.report and "tests" not in night.report and "stack_stopped" not in night.report
+
+
+def test_a_pull_that_does_not_fit_with_the_reserve_after_it_does_not_start_and_the_run_is_not_run(tmp_path):
+    night = Night(tmp_path).run("--reserve-gb", "99999")
+    assert re.fullmatch(r"not run: too little room for the pull of ghcr\.io/inferstep/atlas-llama@sha256:[0-9a-f]{64} "
+                        r"\([\d.]+ GB free, 99999\.0 GB needed\)", night.report["result"]), night.report["result"]
+    assert "image pull" not in night.did() and "stack up" not in night.did()
 
 
 @pytest.mark.parametrize("service", sorted(nightly.IMAGES))

@@ -761,6 +761,7 @@ The first line of the report is its result:
 | `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 32 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
+| `not run: too little room for ...` | Before a pull or a build, Docker's disk had less free room than that step needs with the reserve after it. Nothing more is pulled or built, and no stack is started |
 
 - A task whose change did not land is in the report and does not fail the
   run. That number moves with the model and with chance; one night says
@@ -891,18 +892,36 @@ this. One look:
     what the containers of the stack write and for an image that grew. It
     is a choice, not a measure.
   - `--first-set-gb`, 17 GB when it is not given, on top of the reserve,
-    while the run has not written down a pull for each of the five images
-    (`night-images.json`). The measure: the five images were 4.18 GB
-    compressed in the registry and 12.9 GB unpacked when this was written,
-    and the image store of containerd keeps both. A server that has some
-    of their layers already needs less. Compare the layers of the
-    registry's images with the layers of the images on the server, and
-    give the smaller number as `--first-set-gb` in the server's copy of
-    the unit.
-  - The look reads `night-images.json` for this and does not ask Docker.
-    When the run's own images were removed by hand, remove that file too.
-    Without that the look wants the reserve only, and the night pulls a
-    whole set.
+    while Docker has not an image under each of the run's five own names.
+    The look asks Docker that with one question. The measure: the five
+    images were 4.18 GB compressed in the registry and 12.9 GB unpacked
+    when this was written, and the image store of containerd keeps both. A
+    server that has some of their layers already needs less. Compare the
+    layers of the registry's images with the layers of the images on the
+    server, and give the smaller number as `--first-set-gb` in the
+    server's copy of the unit.
+- The run reads the free room again before each pull, and before each
+  build of a smoke run. When the room of that step and the reserve after it
+  are not there, the run ends `not run: too little room for <the step>
+  (<n> GB free, <m> GB needed)`. Nothing more is pulled or built, and no
+  stack is started. The usual stack is started again as after any run.
+  - The room of a pull: the run reads the layers of the image from the
+    registry, with no pull, and counts those that no image on the server
+    has yet. A layer counts as there only together with every layer under
+    it. The registry gives the compressed size only. On disk a layer is
+    given 4.1 times that, for the compressed and the unpacked layer
+    together. The measure: the five images took 17.1 GB on disk for 4.18 GB
+    compressed when this was written. One image alone took between 3.3 and
+    6.3 times its compressed size; the reserve is for that difference.
+  - The room of a build: that of the whole image that the registry has for
+    the service, with no layer counted as there. What a build writes
+    cannot be known before it.
+  - The room is read after the last image of the service was removed: the
+    removal frees room, and it can take away layers that the new image
+    has too. So when a pull is refused, that last image is gone, and the
+    next look wants the room of a first set again.
+- The report of a run says the free room on Docker's disk before the run
+  and after it, in GB (`free_gb_before`, `free_gb_after`).
 - A tip has a result when the app wrote a `server/smoke` status on it. The
   look compares the id of the account that wrote the status
   (`--status-writer`), not a name: a status of that name by another account
@@ -923,7 +942,8 @@ this. One look:
   are not run by the timer; one line says so, and no status is written.
 - The timer starts a smoke run only in the hours for smoke runs
   (`--smoke-hours`, in UTC, as in `22-23,0-5`). With no such hours given it
-  starts none. Outside them a smoke branch waits, and the look says so. The
+  starts none. Outside them the look does not look for a smoke branch, and
+  says so; a branch that is there waits. The
   night has its own hour. The unit names the hours 6 and 7. The hours are
   in UTC, so against a local clock they move by one hour when that clock
   changes between summer time and winter time; the setting is one argument
@@ -1030,7 +1050,9 @@ What it needs on the server:
 - a folder for the run, and Docker for the user that runs it, with its
   `buildx` plugin: the run reads the digest of an image from the registry
   with it;
-- 20 GB of free room on Docker's disk before a run starts;
+- free room on Docker's disk: 5 GB before every run, and before the first
+  one also the room of the first set of the images (17 GB when the server
+  has no layer of them);
 - a Python with `pytest` and `httpx`, and `git` and `openssl`;
 - the file `nightly.env` in the folder, with the settings of the model for
   that server, the folder of the model files and the folder of the lens's
@@ -1096,7 +1118,11 @@ needs no change.
 7. The timer: `systemctl --user daemon-reload`, then
    `systemctl --user enable --now atlas-nightly.timer`. So that it runs
    when nobody is logged in: `loginctl enable-linger`.
-8. To see what a look did: `journalctl --user -u atlas-nightly.service`.
+8. To see what a look did: `journalctl --user-unit atlas-nightly.service`.
+   The last lines are also in `systemctl --user status atlas-nightly.service`.
+   The form `journalctl --user -u atlas-nightly.service` prints "No journal
+   files were found" on a server that keeps no journal of the user's own
+   (seen on RHEL 9).
    To switch the nightly run off:
    `systemctl --user disable --now atlas-nightly.timer`.
 

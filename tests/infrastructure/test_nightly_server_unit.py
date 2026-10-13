@@ -385,7 +385,10 @@ def test_with_the_real_script_of_the_run_a_card_that_is_held_with_no_lock_stops_
     assert first.stdout.splitlines() == ["tick: statuses: nothing waits", "tick: the tip of `smoke/a-change` has no result yet",
                                          "tick: statuses: nothing waits", "tick: nothing is started: the card is in use",
                                          "nightly_look.sh: the usual stack runs again: 1 container(s) that a look had stopped were started."]
-    assert docker == [["ps", "--quiet", "--filter", "label=com.docker.compose.project=atlas"], ["stop", "c1"], ["start", "c1"]]
+    # The look that finds a run due asks Docker one thing first: whether the run's own images are there.
+    own = [f"localhost/atlas-nightly/{image}:night" for image in base.nightly.IMAGES.values()]
+    assert docker == [["image", "inspect", "--format", "{{.Id}}", *own],
+                      ["ps", "--quiet", "--filter", "label=com.docker.compose.project=atlas"], ["stop", "c1"], ["start", "c1"]]
     assert second.returncode == 0, second.stdout + second.stderr
     assert second.stdout.splitlines()[0] == "tick: statuses: nothing waits"
     assert re.fullmatch(r"tick: nothing is started: at \S+Z a process held the card with no lock, and the looks of the 60 minutes "
