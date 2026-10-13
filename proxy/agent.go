@@ -2779,11 +2779,17 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	// /demo: each pane works inside its own workspace subdir so the two
 	// concurrent sessions can't clobber each other's files and the TUI's
-	// post-run review finds each side's output where it expects it. The
-	// subdir is a bare name (no separators, no traversal) or it's ignored.
-	if sub := filepath.Clean(req.SandboxSubdir); req.SandboxSubdir != "" &&
-		sub != "." && sub != ".." &&
-		!strings.ContainsAny(sub, "/\\") {
+	// post-run review finds each side's output where it expects it. A
+	// non-empty value is a bare name only — no separators, neither "."
+	// nor "..", and unchanged by Clean — so a path Clean would collapse
+	// (foo/../bar, ./pane, pane/) is refused instead of rewritten into
+	// another directory. An omitted value keeps the whole workspace.
+	if sub := req.SandboxSubdir; sub != "" {
+		if strings.ContainsAny(sub, "/\\") || sub == "." || sub == ".." || filepath.Clean(sub) != sub {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput,
+				`sandbox_subdir: a single bare directory name is required, with no path separators and neither "." nor ".."`)
+			return
+		}
 		workingDir = filepath.Join(workingDir, sub)
 		if hostDir != "" && hostDir != "." {
 			hostDir = filepath.Join(hostDir, sub)
