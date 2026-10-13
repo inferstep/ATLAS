@@ -14,11 +14,19 @@ After the recording pass the same binary replays it once in a fresh
 workspace. That replay must be clean, and the files it leaves are the
 recording's expected files: at a replay no command really runs, so only what
 the proxy itself writes can be expected.
+
+    python -m tests.replay.record <case> --model-at <port>
+
+The cases of REAL_MODEL have no written replies. A real model server answers
+them, at that port of this machine, and the recording keeps what it said and
+which model it was. Such a session is one sample: the model answers in
+another way the next time.
 """
 from __future__ import annotations
 
 import argparse
 import http.client
+import importlib.util
 import json
 import os
 import subprocess
@@ -29,6 +37,9 @@ from pathlib import Path
 
 from tests.replay import recording, stage
 
+# The word that the tool sends as a token. It is no key of any service: the sandbox of a recording is started with
+# this word, and a model server that asks for a real key cannot be recorded from.
+PLACEHOLDER = "replay-placeholder-token"
 BUGGY_APP = ('def greeting(name):\n    return "Hello, " + nmae\n\n\nif __name__ == "__main__":\n'
              '    print(greeting("world"))\n')
 
@@ -84,6 +95,34 @@ CASES = {
 }
 
 
+# The sessions that a real model answers: the name of the recording, the set its task comes from, and the task.
+# A task of the smoke set is one that the nightly run drives; its text and its files are read from the driver.
+REAL_MODEL = {
+    "real_model_edit": ("e2e", ""), "real_model_edit_again": ("e2e", ""),
+    "real_model_add_function": ("smoke", "add_function"), "real_model_offbyone": ("smoke", "offbyone"),
+    "real_model_ask_explain": ("smoke", "ask_explain"),
+}
+DRIVER = stage.REPO / "scripts" / "e2e-reliability.py"
+
+
+def real_model_case(name: str) -> dict:
+    """A case whose replies come from a real model server: the e2e task of the cases above, or a task of the smoke set."""
+    kind, smoke_task = REAL_MODEL[name]
+    task, files, message, contract = TASK, {"app.py": BUGGY_APP}, MESSAGE, {"task_mode": "work"}
+    if kind == "smoke":
+        spec = importlib.util.spec_from_file_location("the_driver_of_the_smoke_set", DRIVER)
+        driver = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = driver
+        spec.loader.exec_module(driver)
+        chosen = driver.TASKS[smoke_task]
+        task = f"the task `{smoke_task}` of the smoke set (scripts/e2e-reliability.py)"
+        files, message, contract = chosen.files, chosen.prompt, driver.task_contract(chosen)
+    return {"source": {"task": task, "kind": kind, "model_replies": "captured", "what": "a session that a real model answers"},
+            "files": files,
+            "request": {"message": message, "working_dir": stage.WORKSPACE, "mode": "default",
+                        "session_id": "replay-" + name.replace("_", "-"), "task_contract": contract}}
+
+
 def model_stream(reply) -> str:
     """One model reply as the stream the model server sends. A reply given as text is sent as it is written."""
     content = reply if isinstance(reply, str) else json.dumps(reply)
@@ -132,10 +171,20 @@ def pass_through(port: int, token: str):
     return answer
 
 
+def about_the_model(port: int) -> dict:
+    """Which model answered, for the `source` of a recording: the name of its file and the build of its server.
+    The folder of the file is left out: it is a path of the machine that the model server runs on."""
+    status, _kind, text = pass_through(port, PLACEHOLDER)("GET", "/props", "")
+    if status != 200:
+        raise SystemExit(f"the model server at port {port} did not say which model it is: /props gave status {status}")
+    said = json.loads(text)
+    return {"model": Path(str(said.get("model_path") or "not named")).name, "model_server": str(said.get("build_info") or "not named")}
+
+
 def start_sandbox(root: Path, workspace_root: Path):
     """The sandbox executor of this checkout, as the e2e acceptance job starts it."""
     port, token = stage.free_port(), root / "sandbox-token"
-    token.write_text("replay-placeholder-token\n", encoding="utf-8")
+    token.write_text(PLACEHOLDER + "\n", encoding="utf-8")
     (root / "sandbox-scratch").mkdir()
     # The executor runs `python`; the interpreter that runs this recording provides it.
     path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
@@ -155,12 +204,19 @@ def start_sandbox(root: Path, workspace_root: Path):
     raise RuntimeError("the sandbox executor did not start: " + process.communicate(timeout=5)[1].decode()[-1500:])
 
 
-def record(name: str) -> dict:
-    scripted = CASES[name]
+def record(name: str, model_at: int | None = None) -> dict:
+    """Make the recording of a case. `model_at` is the port of this machine at which a real model server answers:
+    a case of REAL_MODEL needs it, and a case with written replies takes none."""
+    real = name in REAL_MODEL
+    if real != (model_at is not None):
+        raise SystemExit(f"the case {name} " + ("takes its replies from a real model server: give its port with --model-at"
+                                                if real else "has written replies: it takes no --model-at"))
+    case_ = real_model_case(name) if real else CASES[name]
+    model = pass_through(model_at, PLACEHOLDER) if real else scripted_model(case_["model"], case_["model_again"])
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=stage.REPO, capture_output=True, text=True,
                             check=True).stdout.strip()
-    made = {"source": {**scripted["source"], "commit": commit}, "files": scripted["files"],
-            "request": scripted["request"]}
+    made = {"source": {**case_["source"], "commit": commit, **(about_the_model(model_at) if real else {})},
+            "files": case_["files"], "request": case_["request"]}
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         binary = stage.build_proxy(root)
@@ -168,9 +224,7 @@ def record(name: str) -> dict:
         sandbox_port, sandbox = start_sandbox(root, root / "record")
         try:
             result = recording.run(made, binary, root / "record", upstreams={
-                "model": scripted_model(scripted["model"], scripted["model_again"]),
-                "sandbox": pass_through(sandbox_port, "replay-placeholder-token"),
-                "v3": v3_not_available, "lens": lens})
+                "model": model, "sandbox": pass_through(sandbox_port, PLACEHOLDER), "v3": v3_not_available, "lens": lens})
         finally:
             sandbox.terminate()
             sandbox.communicate(timeout=10)
@@ -185,10 +239,12 @@ def record(name: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("case", choices=sorted(CASES) + ["all"])
+    parser.add_argument("case", choices=sorted(CASES) + sorted(REAL_MODEL) + ["all"], help="`all` is every case with written replies")
+    parser.add_argument("--model-at", type=int, metavar="PORT",
+                        help="the port of this machine (127.0.0.1) at which a real model server answers; for a case of a real model")
     args = parser.parse_args()
     for name in sorted(CASES) if args.case == "all" else [args.case]:
-        path = recording.save(name, record(name))
+        path = recording.save(name, record(name, args.model_at))
         made = recording.load(name)
         print(f"wrote {path.relative_to(stage.REPO)}: {len(made['exchanges'])} exchange(s), "
               f"{len(made['expected']['events'])} event(s), ends {made['expected']['events'][-1]['data']}")

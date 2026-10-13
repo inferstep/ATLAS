@@ -432,12 +432,21 @@ The cases: a normal session; a tool call that is not well formed; a reply
 that is cut off; the same call again and again until the proxy stops the
 session; an edit that would leave the file unparseable; a write of a whole
 existing file, which is refused and redirected; and a `done` before anything
-was run.
+was run. In these seven the replies of the model are written by hand.
+
+The recording tool can also take the replies from a real model server
+(`--model-at`). A session that is recorded so holds the proxy to the real
+form of a reply: a stream in many small pieces, with the mistakes that this
+model makes. It is one sample. The model answers in another way the next
+time, and the replay says nothing about that. The tasks for it are the e2e
+task of the seven cases and the three tasks of the nightly's smoke run, and
+no other.
 
 | Command | What it does |
 |---|---|
 | `python -m pytest tests/replay` | Replays every recording. The tests build the proxy themselves and need Go. `make verify` runs them when a file of the proxy changed |
 | `python -m tests.replay.record <case>` | Makes a recording from a scripted case, with the real sandbox executor of the checkout. Needs the packages of `sandbox/requirements-runtime.txt` |
+| `python -m tests.replay.record <case> --model-at <port>` | Records a session that a real model answers, for a case named `real_model_...`. The model server answers at that port of the machine that records (127.0.0.1). The recording keeps what the model said, the name of the model's file and the build of its server. Needs the same packages |
 | `python -m tests.replay.rewrite <case>` | Writes the expected side of a recording again from the proxy of the checkout: the text of each request, the events, the end files. The recorded answers stay |
 | `python -m tests.replay.reach [--checks]` | Says how much of the proxy the recordings run through, by file, and which check functions no case reaches |
 

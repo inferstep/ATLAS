@@ -11,12 +11,14 @@ The tests of the harness itself come after the replays: a recording that is
 changed in one place must be reported at that place, or the net has a hole.
 """
 import copy
+import http.server
 import json
 import re
+import threading
 
 import pytest
 
-from tests.replay import recording, stage
+from tests.replay import record, recording, stage
 
 
 @pytest.fixture(scope="session")
@@ -185,3 +187,61 @@ def test_what_varies_between_runs_is_left_out_and_nothing_else(normal):
     kept = json.dumps(normal["expected"]["events"])
     assert '"elapsed"' not in kept
     assert '"turn"' in kept
+
+
+class _ModelServer(http.server.BaseHTTPRequestHandler):
+    """A stand-in for a real model server. It says which model it is, and it gives each reply of its list as a stream
+    in small pieces, as a real one does."""
+
+    replies = []
+
+    def do_GET(self):
+        self.answer("application/json", json.dumps({"build_info": "b1-stand-in", "model_path": "/a/folder/of/the/server/a-model.gguf"}))
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        reply = json.dumps(self.replies.pop(0))
+        lines = [json.dumps({"choices": [{"delta": {"content": reply[at:at + 9]}}]}) for at in range(0, len(reply), 9)]
+        lines += [json.dumps({"choices": [], "usage": {"total_tokens": 20, "prompt_tokens": 15, "completion_tokens": 5}}), "[DONE]"]
+        self.answer("text/event-stream", "".join(f"data: {line}\n\n" for line in lines))
+
+    def answer(self, kind, text):
+        body = text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_which_model_it_was():
+    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, record.DONE]
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ModelServer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        made = record.record("real_model_edit", model_at=server.server_port)
+    finally:
+        server.shutdown()
+    # The folder of the model's file is a path of the server's machine, and it is not in the recording.
+    assert made["source"] == {"task": record.TASK, "kind": "e2e", "model_replies": "captured", "what": "a session that a real model answers",
+                              "commit": made["source"]["commit"], "model": "a-model.gguf", "model_server": "b1-stand-in"}
+    # What the model server said is kept as it came, each reply in its small pieces.
+    said = [exchange["response"]["body"] for exchange in made["exchanges"] if exchange["service"] == "model"]
+    assert len(said) == 4 and all(body.count("data: ") > 5 for body in said)
+    assert made["expected"]["events"][-1]["type"] == "done"
+
+
+def test_a_case_of_a_real_model_and_a_port_go_together():
+    with pytest.raises(SystemExit, match="takes its replies from a real model server: give its port with --model-at"):
+        record.record("real_model_edit")
+    with pytest.raises(SystemExit, match="has written replies: it takes no --model-at"):
+        record.record("normal_edit", model_at=1)
+
+
+def test_a_case_of_the_smoke_set_takes_its_text_and_its_files_from_the_driver_of_the_nightly_run():
+    case = record.real_model_case("real_model_ask_explain")
+    assert case["source"]["kind"] == "smoke" and "find_duplicates" in case["request"]["message"]
+    assert list(case["files"]) == ["orders.py"] and case["request"]["task_contract"] == {"task_mode": "question"}
