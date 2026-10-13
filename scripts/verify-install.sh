@@ -51,7 +51,8 @@ check_service() {
 check_pod() {
     local name="$1"
 
-    local status=$(kubectl get pods -n "$ATLAS_NAMESPACE" -l app="$name" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
+    local status
+    status=$(kubectl get pods -n "$ATLAS_NAMESPACE" -l app="$name" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
 
     if [[ "$status" == "Running" ]]; then
         check_pass "$name pod is Running"
@@ -120,10 +121,11 @@ check_models() {
 
 # LLM inference test
 check_llm_inference() {
-    local response=$(curl -sf --max-time "$ATLAS_LLM_TIMEOUT" \
+    local response
+    response=$(curl -sf --max-time "$ATLAS_LLM_TIMEOUT" \
         -X POST "http://localhost:${ATLAS_LLAMA_NODEPORT}/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d '{"messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}' 2>/dev/null)
+        -d '{"messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}' 2>/dev/null) || true
 
     if echo "$response" | grep -q "choices"; then
         check_pass "LLM inference working"
@@ -136,7 +138,8 @@ check_llm_inference() {
 # Replaces the legacy api-portal user-registration probe (api-portal was
 # removed; no auth surface anymore — the proxy is the entry point).
 check_e2e() {
-    local response=$(curl -sf --max-time 30 \
+    local response
+    response=$(curl -sf --max-time 30 \
         -X POST "http://localhost:${ATLAS_PROXY_NODEPORT}/v1/agent" \
         -H "Content-Type: application/json" \
         -d '{"message":"echo hello","mode":"yolo","session_id":"verify-install"}' 2>/dev/null || echo "")

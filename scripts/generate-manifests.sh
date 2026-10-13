@@ -47,7 +47,8 @@ main() {
     mkdir -p "$MANIFESTS_DIR"
 
     # Count templates
-    local tmpl_count=$(find "$TEMPLATES_DIR" -name "*.yaml.tmpl" 2>/dev/null | wc -l)
+    local tmpl_count
+    tmpl_count=$(find "$TEMPLATES_DIR" -name "*.yaml.tmpl" 2>/dev/null | wc -l) || true
     if [[ $tmpl_count -eq 0 ]]; then
         log_warn "No templates found in $TEMPLATES_DIR"
         log_info "Using existing manifests without templating"

@@ -27,8 +27,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import provenance as P  # noqa: E402
-import contract as C  # noqa: E402
+import provenance as P
+import contract as C
 
 
 def binding(**over):

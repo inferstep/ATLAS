@@ -9,8 +9,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import scoring  # noqa: E402
-import pipeline  # noqa: E402
+import scoring
+import pipeline
 
 
 class Response(io.BytesIO):

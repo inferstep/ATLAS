@@ -350,6 +350,66 @@ func TestExecuteToolCallRejectsWorkspaceEscape(t *testing.T) {
 	}
 }
 
+// encoding/json decodes "PATH" or "ſource" into the handler's field, so a
+// value under such a key never passed the workspace check or the deny-list.
+// Each is refused, and nothing outside the workspace is read or written.
+func TestAnArgumentNameThatIsNotLowercaseIsRefused(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(root, "inside.txt"), []byte("inside\n"), 0o644)
+	secret := filepath.Join(outside, "secret.txt")
+	os.WriteFile(secret, []byte("OUTSIDE\n"), 0o644)
+	escaped := filepath.Join(outside, "escaped.txt")
+	calls := []struct{ tool, args string }{
+		{"read_file", `{"PATH":` + jsonQuote(secret) + `}`},
+		{"read_file", `{"path":"inside.txt","Path":` + jsonQuote(secret) + `}`},
+		{"write_file", `{"Path":` + jsonQuote(escaped) + `,"content":"x\n"}`},
+		{"move_file", `{"source":"inside.txt","ſource":` + jsonQuote(secret) + `,"destination":"moved.txt"}`},
+		{"run_command", `{"Command":"rm -rf /"}`}, // the deny-list reads "command"
+	}
+	for _, c := range calls {
+		ctx := NewAgentContext(root, Tier2Medium)
+		ctx.PermissionMode = PermissionYolo
+		res := executeToolCall(c.tool, json.RawMessage(c.args), ctx)
+		if res.Success || !strings.Contains(res.Error, "argument names are lowercase") {
+			t.Errorf("%s %s = %+v, want a refusal", c.tool, c.args, res)
+		}
+		if strings.Contains(string(res.Data), "OUTSIDE") {
+			t.Errorf("%s %s returned the outside file", c.tool, c.args)
+		}
+	}
+	if _, err := os.Stat(escaped); err == nil {
+		t.Fatal("write_file wrote outside the workspace")
+	}
+	if _, err := os.Stat(secret); err != nil {
+		t.Fatal("move_file moved a file from outside the workspace")
+	}
+}
+
+// The ledger trims a path and the handler does not, so " /x" would be
+// checked as a file inside the workspace and recorded as /x outside it.
+func TestAPathPaddedWithWhitespaceIsRefused(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	for _, args := range []string{
+		`{"path":` + jsonQuote(" "+filepath.Join(outside, "padded.txt")) + `,"content":"x\n"}`,
+		`{"path":"inside.txt\n","content":"x\n"}`,
+	} {
+		ctx := NewAgentContext(root, Tier2Medium)
+		ctx.PermissionMode = PermissionYolo
+		res := executeToolCall("write_file", json.RawMessage(args), ctx)
+		if res.Success || !strings.Contains(res.Error, "whitespace") {
+			t.Errorf("write_file %s = %+v, want a refusal", args, res)
+		}
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Fatalf("a refused write left %v in the workspace", entries)
+	}
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
 // A build command is the project's own, never an invented syntax sweep. V3
 // runs a detected build command against a candidate and records the result
 // as the project's build, so "python -m py_compile *.py" passed candidates in

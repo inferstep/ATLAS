@@ -921,7 +921,8 @@ func writeFileTool() *ToolDef {
 			// retyping a 2000-line fixture from memory, degenerating into
 			// repetition, and getting its stream cut mid-JSON.
 			if existing, err := os.ReadFile(path); err == nil {
-				if echoesExistingFile(string(existing), input.Content) {
+				if echoesExistingFile(string(existing), input.Content) ||
+					(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
 					log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
 						logPath(input.Path), len(existing), len(input.Content))
 					return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path])), nil

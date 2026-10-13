@@ -46,6 +46,7 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 | `/health` | GET | Liveness — always 200, `status` reports `"ok"` or `"degraded"` |
 | `/ready` | GET | Readiness probe — 200 only when inference, lens scoring (the lens can score: the check `/v1/agent` applies), the sandbox, and v3-service are all healthy; 503 otherwise. Use this for load-balancer / orchestrator health checks; use `/health` for informational status. |
 | `/version` | GET | API version, SSE protocol version, and the full error-code set — see [Versioning and error codes](#versioning-and-error-codes) |
+| `/workspace` | GET | Host and container workspace paths for the connected proxy — see [GET /workspace](#workspace-path) |
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
 
@@ -96,7 +97,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `llm_call_end` | LLM call finished | `turn`, `tokens` (this call), `total_tokens` (cumulative for the turn), `ms`, `chars`. On error: `error` is added, `chars` is absent, and `tokens` is `0`. |
 | `tool_call` | Model emitted a `{"type":"tool_call",...}` JSON | `name` (string), `args` (raw JSON), `turn` |
 | `permission_request` | A destructive tool call is awaiting approval in `default`/`accept-edits` mode. The turn pauses until the client answers via `POST /v1/permission` (or the client disconnects/cancels, or the fail-safe timeout denies). | `tool_name` (string), `args` (raw JSON), `message` (human-readable description), `tool_call_id` (string — echo back on `/v1/permission`) |
-| `permission_denied` | The pending tool call was denied (by the client, a disconnect/cancel, or the timeout) | `tool` (the tool name) |
+| `permission_denied` | The pending tool call was not allowed: denied by the client, ended by a disconnect or cancel, timed out, not askable (no `session_id`), or refused by the proxy before it asked | `tool` (the tool name); `reason` whenever no user denied the call: why the proxy refused a `delete_file` before asking, that nobody could be asked, that the request ended, or that nobody answered in time. A denial by the user has no `reason` |
 | `tool_result` | Tool finished executing | `tool`, `success` (bool), `data` (raw JSON), `error` (string), `elapsed` (Go duration string, e.g. `"245ms"`) |
 | `text` | Model emitted a `{"type":"text","content":"..."}` JSON (conversational reply) | `content` (string) |
 | `v3_progress` | V3 pipeline stage that doesn't have a dedicated typed event yet (fallback) | `message` (string) — humanized stage label |
@@ -120,6 +121,7 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `reasoning_token` | One delta from a model's optional `reasoning_content` stream during SSE chat completion. These tokens are forwarded to the TUI for live display. Distinct from `llm_token` (which carries the JSON tool-call content destined for parse). | `text` (string — single delta of reasoning prose) |
 | `reasoning_budget_cut` | The `reasoning_content` stream exceeded the reasoning budget with no content emitted — the proxy cuts the stream and re-prompts. | `reasoning_chars` (int — reasoning chars accumulated when cut) |
 | `content_loop_cut` | The proxy detected a verbatim repeating tail in the content stream (the model restating itself in a loop) and cut the stream. | `chars` (int — content chars accumulated when cut) |
+| `old_str_cut` | An `edit_file` old_str had stopped matching its target file and kept arriving, so the proxy cut the stream: the call could not succeed. The model is told the file and the line where old_str left it. | `path` (string), `chars` (int — content chars when cut), `old_str_chars` (int), `matched_lines` (int — old_str lines that still matched) |
 | `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `fallback`, `fallback_all_vetoed`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
 | `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
 | `v3_self_test` | Self-test generation/verify events (`self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip`, `self_test_verify`) | `stage`, `detail` |
@@ -980,7 +982,9 @@ Execute code in an isolated environment.
   "stderr": "",
   "error_type": null,
   "error_message": null,
-  "execution_time_ms": 45
+  "execution_time_ms": 45,
+  "timed_out": false,
+  "outcome": "completed"
 }
 ```
 
@@ -992,10 +996,12 @@ Execute code in an isolated environment.
 | `tests_passed` | int | Number of tests that passed |
 | `lint_score` | float? | Pylint score 0–10 (Python only, null for other languages) |
 | `stdout` | string | Stdout output (truncated to last 4000 chars) |
-| `stderr` | string | Stderr output (truncated to last 2000 chars) |
-| `error_type` | string? | Error classification (e.g. `SyntaxError`, `CompileError`, `Timeout`, `ImportError`) |
-| `error_message` | string? | First 500 chars of error details |
+| `stderr` | string | Stderr output (truncated to last 2000 chars). It is what the program itself wrote: a program that is stopped at a limit writes nothing about it |
+| `error_type` | string? | Error classification (e.g. `SyntaxError`, `CompileError`, `ImportError`). For a run that was stopped at a limit it is `Timeout`, `MemoryLimit`, `ProcessLimit` or `OutputLimit`, taken from `outcome` |
+| `error_message` | string? | First 500 chars of error details. For a run that was stopped at a limit its first line names the limit, as in `Execution timed out after 5s` |
 | `execution_time_ms` | int | Execution time in milliseconds |
+| `timed_out` | bool | Whether the run was stopped at its time limit |
+| `outcome` | string | How the run ended. `completed`: it reached its own end, and `success` says whether it passed. Any other value means that it was stopped: `timed_out`, `memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `cancelled`, `spawn_failed`, `internal_unclassified` |
 
 ### POST /syntax-check
 
@@ -1171,12 +1177,13 @@ curl http://localhost:8080/health
 ## Versioning and error codes
 
 `GET /version` returns the API version, the SSE protocol version, the
-full error-code set, and the tool-call grammar mode this proxy applies
-(`strict` or `loose`, from `ATLAS_GRAMMAR_MODE`), so a measurement can
+full error-code set, the tool-call grammar mode this proxy applies
+(`strict` or `loose`, from `ATLAS_GRAMMAR_MODE`), and the session limit in
+seconds (`ATLAS_AGENT_SESSION_TIMEOUT_SEC`, default 600), so a measurement can
 record the configuration it ran against:
 
 ```json
-{"api_version": "1.0.0", "protocol_version": 1, "error_codes": [...], "grammar_mode": "strict"}
+{"api_version": "1.0.0", "protocol_version": 1, "error_codes": [...], "grammar_mode": "strict", "session_timeout_s": 600}
 ```
 
 `api_version` follows semver (minor = additive, major = breaking).
@@ -1195,6 +1202,32 @@ OpenAPI 3.1 spec for this surface (`proxy_openapi.yaml`, parity-checked
 against the registered routes in CI) plus JSON Schemas for the error and
 SSE envelopes.
 
+---
+
+## Workspace path
+
+`GET /workspace` returns the host and container paths the connected
+proxy has mounted, so a client can detect whether its own workspace
+folder matches what the proxy is actually editing:
+
+```json
+{"project_dir": "/home/anuj/atlas-proxy", "working_dir": "/workspace", "containerized": true}
+```
+
+`project_dir` is the **host** path (from `ATLAS_PROJECT_DIR`) — empty
+string when the proxy can't report an absolute path (unset, or a
+relative default like `.`), never a raw relative value. `working_dir` is the path the proxy writes to inside its own process
+(from `ATLAS_WORKSPACE_DIR` — `/workspace` under Compose, the launch
+cwd for a locally-spawned proxy). `containerized` is `true` when
+a container runtime's marker file exists (`/.dockerenv` for Docker,
+`/run/.containerenv` for Podman) or `KUBERNETES_SERVICE_HOST` is set (a
+Kubernetes or K3s pod); `working_dir` is not a container signal, since
+the local launcher sets it too.
+
+This endpoint requires the service token like any other route — it
+discloses a host filesystem path, so it is deliberately **not** in the
+open-path exemption list (`/health`, `/ready`, `/version`).
+
 ## Building a non-TUI client
 
 A minimal client needs four things (plus one header):
@@ -1210,6 +1243,11 @@ A minimal client needs four things (plus one header):
 2. **Answer `permission_request` events.** In `default`/`accept-edits` mode the turn pauses on destructive tools until you **POST `/v1/permission`** with `{session_id, tool_call_id, decision:"allow"|"deny", scope:"once"|"session"}` (echo `tool_call_id` from the event). Unanswered requests deny after `ATLAS_PERMISSION_TIMEOUT_SEC` (default 600s). Unattended clients skip this by using `mode:"yolo"` or pre-approving tools via `session_allowed_tools`.
 3. **POST `/cancel`** with `{session_id}` when the user wants to abort.
 4. *(Optional)* **GET `/events`** in a background goroutine/thread for the global typed-envelope feed if you want a pipeline-progress sidebar.
+5. *(Optional)* **GET `/workspace`** to compare the proxy's mounted
+   host path against your own workspace root, and warn the user if
+   they differ (a "wrong folder open" check). Treat a missing or
+   unreachable response as "can't tell" — older proxies won't have
+   this route yet.
 
 The TUI ([atlas tui](CLI.md)) is a Go reference implementation — its `model.go`/`events.go` show how to handle every event type, and `panes.go` shows one approach to rendering them. Browse `tui/` in the repo for a complete worked example. The VS Code extension (`extensions/vscode/`) is a TypeScript client built exactly to this section's surface, with unit-tested SSE parsing and permission handling.
 

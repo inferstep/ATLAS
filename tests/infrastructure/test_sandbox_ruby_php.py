@@ -4,31 +4,19 @@ Tests for Ruby and PHP sandbox executor support.
 Validates code execution, syntax checking, language detection via /languages
 endpoint, compile errors, and runtime errors for both languages.
 
-All tests are gated with skipif(ruby is None) and skipif(php is None) so CI 
-runners without a ruby and php don't fail — the executor boots on the host runner
-which has no ruby and php installed in it.
+The code runs in the sandbox service, which has Ruby and PHP. No test here
+is skipped for what the machine that runs pytest has: a sandbox that cannot
+run a language fails its tests.
 """
 
 import pytest
-import shutil
 
 # importorskip, not a plain import — see test_llm.py: keeps collection
 # alive on environments without the integration deps.
 httpx = pytest.importorskip("httpx")
 
-# Reusable skipif marker for all classes that need ruby.
-_requires_ruby = pytest.mark.skipif(
-    shutil.which("ruby") is None,
-    reason="ruby not available",
-)
 
-# Reusable skipif marker for all classes that need php.
-_requires_php = pytest.mark.skipif(
-    shutil.which("php") is None,
-    reason="php not available",
-)
 
-@_requires_ruby
 class TestRubyExecution:
     """Test Ruby code execution in sandbox."""
     def test_hello_world(self, sandbox_client: httpx.Client):
@@ -117,7 +105,6 @@ puts a / b
         assert "ZeroDivisionError" in data.get("stderr", "")
 
 
-@_requires_ruby
 class TestRubySyntaxCheck:
     """Test Ruby syntax checking via /syntax-check."""
 
@@ -174,8 +161,7 @@ end
 
 
 class TestRubyLanguagesEndpoint:
-    """Test /languages reports Ruby — no skipif needed, endpoint
-    returns 'not installed' gracefully when ruby is absent."""
+    """Test /languages reports Ruby."""
 
     def test_ruby_in_languages(self, sandbox_client: httpx.Client):
         """Ruby should appear in the /languages response."""
@@ -189,7 +175,6 @@ class TestRubyLanguagesEndpoint:
 
 # --- PHP ---
 
-@_requires_php
 class TestPHPExecution:
     """Test PHP code execution in sandbox."""
 
@@ -284,7 +269,6 @@ echo intdiv($a, $b);
         assert "DivisionByZeroError" in data.get("stderr", "")
 
 
-@_requires_php
 class TestPHPSyntaxCheck:
     """Test PHP syntax checking via /syntax-check."""
 
@@ -344,8 +328,7 @@ function main() {
 
 
 class TestPHPLanguagesEndpoint:
-    """Test /languages reports PHP — no skipif needed, endpoint
-    returns 'not installed' gracefully when php is absent."""
+    """Test /languages reports PHP."""
 
     def test_php_in_languages(self, sandbox_client: httpx.Client):
         """PHP should appear in the /languages response."""

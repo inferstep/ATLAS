@@ -4,6 +4,7 @@ checking, traceback frame parsing, and cyclomatic complexity."""
 
 import re
 
+import node_splice
 
 # --- structural_edit (GH #39 v1) ----------------------------------------------------
 #
@@ -105,7 +106,7 @@ def _supported_structural_exts() -> str:
     return ", ".join(exts)
 
 
-def _ast_selector_to_query(selector: str, language: str):
+def _ast_selector_to_query(selector: str, language: str):  # noqa: C901
     """Translate friendly selector → (tree-sitter query string, target capture).
     Returns (None, None, error_message) for unknown selectors.
     """
@@ -382,7 +383,7 @@ PY_BUILTINS = frozenset(
 )
 
 
-def _extract_python_imports(source: bytes) -> set:
+def _extract_python_imports(source: bytes) -> set:  # noqa: C901
     """Names introduced into the file's namespace by import statements.
 
     Handles `import foo`, `import foo.bar`, `import foo as bar`,
@@ -405,7 +406,7 @@ def _extract_python_imports(source: bytes) -> set:
     def text_of(node):
         return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
 
-    def walk(node):
+    def walk(node):  # noqa: C901
         if node.type == "import_statement":
             for child in node.children:
                 if child.type == "dotted_name":
@@ -511,7 +512,7 @@ def _extract_python_top_level_defs(source: bytes) -> set:
     return names
 
 
-def _extract_python_bound_names(source: bytes) -> set:
+def _extract_python_bound_names(source: bytes) -> set:  # noqa: C901
     """Every name BOUND anywhere in the file — assignment targets, function
     and lambda parameters, for / with-as / except-as / comprehension
     targets, walrus, global/nonlocal, and def/class names at any nesting.
@@ -598,7 +599,7 @@ def build_project_symbols(file_map: dict) -> set:
             continue
         try:
             out |= _extract_python_top_level_defs(source_text.encode("utf-8"))
-        except Exception:
+        except Exception:  # noqa: S112
             continue
     return out
 
@@ -797,7 +798,7 @@ def _duplicate_definitions(before_text: str, after_text: str) -> str:
     return ", ".join(sorted(dupes))
 
 
-def structural_edit(path: str, source_text: str, selector: str, content: str) -> dict:
+def structural_edit(path: str, source_text: str, selector: str, content: str) -> dict:  # noqa: C901
     """Apply a friendly-selector structural edit. Stateless transform — caller provides
     the source bytes (read from their own filesystem) and gets back new content.
     v3-service does no file IO; the proxy reads + writes via its existing
@@ -902,11 +903,10 @@ def structural_edit(path: str, source_text: str, selector: str, content: str) ->
     # the old ones stay, double-decorating the function.
     if language == "python" and target.parent is not None and target.parent.type == "decorated_definition":
         target = target.parent
-    try:
-        new_bytes = source[:target.start_byte] + content.encode("utf-8") + source[target.end_byte:]
-        new_content = new_bytes.decode("utf-8")
-    except UnicodeDecodeError as e:
-        return {"success": False, "error": f"replacement produced invalid utf-8: {e}"}
+    content, new_bytes, splice_error = node_splice.splice(source, target, content, path, language)
+    if splice_error:
+        return {"success": False, "error": splice_error}
+    new_content = new_bytes.decode("utf-8")
 
     # Node-size precondition. A replacement many times the size of the node is
     # not an edit of that node — it is the whole file wearing a selector.
@@ -1378,7 +1378,7 @@ def _project_module_names(project_files) -> set:
     """
     names = set()
     for path in project_files or ():
-        p = str(path).replace("\\", "/").lstrip("./")
+        p = re.sub(r"^(?:\./)+", "", str(path).replace("\\", "/"))
         if not p.endswith(".py"):
             continue
         dotted = p[:-3].replace("/", ".")
@@ -1727,7 +1727,7 @@ _RECURRING_TIMERS = frozenset({"setInterval"})
 _ONE_SHOT_TIMERS = frozenset({"setTimeout", "requestAnimationFrame"})
 
 
-def _js_looping_functions(block: bytes):
+def _js_looping_functions(block: bytes):  # noqa: C901
     """(looping, one_shot) for this JavaScript block.
 
     `looping` is the set of function names the code keeps calling; `one_shot`
@@ -1975,7 +1975,7 @@ def _line_at(source: bytes, offset: int):
     return line_no, offset - line_start + 1, text
 
 
-def embedded_script_check(path: str, source_text: str, previous_text: str = "") -> dict:
+def embedded_script_check(path: str, source_text: str, previous_text: str = "") -> dict:  # noqa: C901
     """Syntax-check the JavaScript / CSS embedded in `source_text`.
 
     Handles two carriers:

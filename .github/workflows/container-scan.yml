@@ -1,8 +1,12 @@
 name: Container image scan
 
-# Scans the published service images for known vulnerabilities on a
-# schedule (and manually). Findings are reported; CRITICAL/HIGH in the
-# base OS/library layers should be triaged per SECURITY.md.
+# Scans the published images for known vulnerabilities on a schedule (and
+# manually): the four service images and the two inference images that CI
+# publishes. Findings are reported; CRITICAL/HIGH in the base OS/library
+# layers should be triaged per SECURITY.md.
+# Not scanned: the ROCm inference image (inference/Dockerfile.rocm). It is
+# built on the user's machine and never published, so there is no image to
+# read here.
 on:
   schedule:
     - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC
@@ -13,28 +17,31 @@ permissions:
 
 jobs:
   trivy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox]
+        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox, atlas-llama, atlas-llama-vulkan]
     steps:
       - name: Scan ${{ matrix.image }}:dev
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ghcr.io/inferstep/${{ matrix.image }}:dev
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # The CUDA inference image is about 2.8 GB compressed; the default
+          # of five minutes is for the small service images.
+          timeout: 30m0s
           exit-code: '0'   # report-only for now; flip to 1 to gate
 
   attestations:
     name: SBOM + provenance attestation check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox]
+        image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox, atlas-llama, atlas-llama-vulkan]
     steps:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2

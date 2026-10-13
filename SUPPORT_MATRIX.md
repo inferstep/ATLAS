@@ -1,6 +1,6 @@
 # ATLAS Support Matrix
 
-Applies to: **V3.1.4 and the current `dev` branch.** This document is
+Applies to: **V3.1.6 and the current `dev` branch.** This document is
 versioned with the repo — the matrix for a release is the file at that
 release's tag.
 
@@ -48,6 +48,8 @@ Supported row cites its validation.
 | CPU (lavapipe via Vulkan image) | Preview | CI-adjacent smoke | Functional but slow by design |
 | Intel SYCL | Roadmap | — | Vulkan is the Intel path today |
 | Multi-GPU | Unsupported | — | `ATLAS_GPU_INDEX` selects ONE GPU; splitting across GPUs is untested (GH #34 is roadmap) |
+
+The published model-server images for amd64 need a processor with AVX2 (and with it FMA, F16C and BMI2). A virtual machine must pass AVX2 on to its guest; some default processor models do not.
 
 ## Models (registry)
 

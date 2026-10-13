@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 4f1be83 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **日本語** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 # ATLAS トラブルシューティングガイド
@@ -41,7 +41,7 @@ docker compose logs --tail 50
 }
 ```
 
-いずれかのフィールドが `false` の場合、そのサービスに問題があります。`inference`、`lens`、`lens_ready`、`sandbox` のいずれかが false になると、`status` は `"degraded"` に切り替わります。`lens` と `lens_ready` が分かれていることで、「Lens プロセスは起動しているが `/ready` ゲートが失敗している — 通常はウェイト欠落か埋め込み次元の不一致」と「Lens の HTTP に到達できない」を区別できます。
+いずれかのフィールドが `false` の場合、そのサービスに問題があります。`inference`、`lens`、`lens_ready`、`sandbox` のいずれかが false になると、`status` は `"degraded"` に切り替わります。`lens` はレンズが応答するかどうかを示します。`lens_ready` は、プロキシがすべてのリクエストに適用するのと同じチェックによって、スコアリング可能かどうかを示します。`false` のときは `lens_reason` が理由を述べ、`true` に戻るまですべてのリクエストが拒否されます（[リクエスト拒否: レンズがスコアリングできない](#リクエスト拒否-レンズがスコアリングできない)を参照）。
 
 ---
 
@@ -90,8 +90,8 @@ docker compose logs --tail 50
 | `file not read yet — use read_file first before editing` | [編集前にファイルが読み込まれていない](#編集前にファイルが読み込まれていない) |
 | `file modified since last read — read it again before editing` | [外部でファイルが変更された](#外部でファイルが変更された) |
 | `You have full project context in the system prompt. Do not read more files.` | [探索予算の警告](#探索予算の警告) |
-| `"lens": false` / "Lens unavailable — verification disabled" | [Lens が読み込まれない / 利用不可](#lens-が読み込まれない--利用不可) |
-| すべての候補のスコアが `cx_energy: 0.0`、`gx_score: 0.5` になる | [すべてのスコアが 0.5 付近](#すべてのスコアが-05-付近) |
+| "ATLAS needs the geometric lens for every request" / 実行が `lens_unavailable` で終了 / `"lens_ready": false` | [リクエスト拒否: レンズがスコアリングできない](#リクエスト拒否-レンズがスコアリングできない) |
+| "No gx_thresholds.json — Lens scores are uncalibrated" | [レンズが未キャリブレーション](#レンズが未キャリブレーション) |
 | lens のログに "embedding extraction failed" | [エンベディング抽出の失敗](#エンベディング抽出の失敗) |
 | サンドボックスが `"error_type": "Timeout"` を返す | [コード実行のタイムアウト](#コード実行のタイムアウト) |
 | 特定の言語でサンドボックスがエラーになる | [言語がサポートされていない](#言語がサポートされていない) |
@@ -268,7 +268,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-以前は非対応だったカードでこれが動いた場合は、ぜひ [GH #26](https://github.com/itigges22/ATLAS/issues/26) にメモを残してください — コミュニティ検証済みのオーバーライドは次のリリースのドキュメントに反映されます。
+以前は非対応だったカードでこれが動いた場合は、ぜひ [GH #26](https://github.com/inferstep/ATLAS/issues/26) にメモを残してください — コミュニティ検証済みのオーバーライドは次のリリースのドキュメントに反映されます。
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x が必要
 
@@ -460,7 +460,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 
 ### `no kernel image is available for execution on the device` (CUDA)
 
-**対象:** Blackwell より古い NVIDIA GPU — RTX 40xx (Ada)、RTX 30xx (Ampere)、RTX 20xx / T4 (Turing)、GTX 10xx (Pascal)、V100/A100/H100/L4 — でプレビルドの `ghcr.io/itigges22/atlas-llama` イメージを実行している場合。兄弟エラーの `invalid device function`（ランタイム）と `nvcc fatal: unsupported gpu architecture`（ローカルビルド）も同じ原因です。（AMD での同じエラーについては [ROCm のエントリ](#amd-gpu-が-rocm-の非対応だがそれでも試したい-rocm-での-no-kernel-image) を参照してください。）
+**対象:** Blackwell より古い NVIDIA GPU — RTX 40xx (Ada)、RTX 30xx (Ampere)、RTX 20xx / T4 (Turing)、GTX 10xx (Pascal)、V100/A100/H100/L4 — でプレビルドの `ghcr.io/inferstep/atlas-llama` イメージを実行している場合。兄弟エラーの `invalid device function`（ランタイム）と `nvcc fatal: unsupported gpu architecture`（ローカルビルド）も同じ原因です。（AMD での同じエラーについては [ROCm のエントリ](#amd-gpu-が-rocm-の非対応だがそれでも試したい-rocm-での-no-kernel-image) を参照してください。）
 
 **意味:** 公開されている CUDA イメージは compute capability `120;121`（Blackwell のみ）向けにコンパイルされています。llama-server のバイナリにはそれより前のアーキテクチャ向けの GPU カーネルが含まれておらず、埋め込まれた PTX（`compute_121`）を下位向けに JIT コンパイルすることもできないため、最初の CUDA カーネル起動が失敗します。これはイメージと GPU の不一致であり、ドライバや VRAM の問題ではありません。
 
@@ -469,7 +469,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 # Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
 nvidia-smi --query-gpu=name,compute_cap --format=csv
 # What the image was built for (Blackwell-only image prints sm_120/sm_121)
-docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+docker run --rm --entrypoint bash ghcr.io/inferstep/atlas-llama:latest \
   -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
 ```
 compute capability が 12.0 未満で、イメージが `sm_120`/`sm_121` しか列挙しない場合、このエントリが該当します。
@@ -732,7 +732,7 @@ except curses.error:
 
 **何が起きているか:** エージェントループのティア分類器（`proxy/agent.go:classifyAgentTier`）が答える問いは1つです: これは会話か、それとも作業か。デフォルトは作業であり、T0 には積極的な根拠が必要です。2種類の誤りのコストが大きく違うからです。会話を作業と読み違えた場合に失うのは、モデルが1ターンで閉じるメッセージに対するプランナー呼び出し1回分だけです。作業を会話と読み違えた場合はターンが5で打ち切られ、プランニングもスキップされるため、リクエストそのものが失敗します。
 
-メッセージが会話的と判定されるのは、12文字未満（`hi`、`thanks`、`ok`）であるか、疑問文の形をしている場合だけです — `?` で終わる、あるいは疑問詞（`why`、`what`、`how`、`is`、`can` など）で始まる場合。ただしタスクを表す言い回しは両者に優先するため、`can you fix the login bug?` は疑問符があっても作業です。それ以外はすべて作業として扱われます: `still doesn't work, try again` も `the snake is moving way too fast, slow it down` も、ファイル名を挙げておらずタスク動詞のリストにも一致しませんが、どちらもパイプラインが動きます。
+メッセージが会話的と判定されるのは、12文字未満（`hi`、`thanks`、`ok`）であるか、疑問文の形をしている場合だけです — 節を終える `?` で終わる、あるいは単語全体で一致する疑問詞（`why`、`what`、`how`、`is`、`can` など）で始まる場合。ただしタスクを表す言い回しは両者に優先するため、`can you fix the login bug?` は疑問符があっても作業です。`task_mode: work` を送信するクライアント（TUI がそうです）は、決して会話として分類されません。ただしタスクを表す言い回しは両者に優先するため、`can you fix the login bug?` は疑問符があっても作業です。それ以外はすべて作業として扱われます: `still doesn't work, try again` も `the snake is moving way too fast, slow it down` も、ファイル名を挙げておらずタスク動詞のリストにも一致しませんが、どちらもパイプラインが動きます。
 
 **どうするか:** 短くてもいいので、望むことを言ってください — "yes, fix it" は T0 のゲートを通過します。フォローアップがエージェントループを実行するのに V3 が沈黙している場合、ゲートはリクエストのティアではなく、ファイル自身のティアです。[機能ファイルで V3 パイプラインが起動しない](#機能ファイルで-v3-パイプラインが起動しない) を参照し、`docker compose logs atlas-proxy | grep -E "write_file|edit_file"` でファイルティアの行（例: `[write_file] app.py → T1:simple (8 lines)`）を確認してください。
 
@@ -764,36 +764,35 @@ except curses.error:
 
 ## Geometric Lens の問題
 
-### Lens が読み込まれない / 利用不可
+### リクエスト拒否: レンズがスコアリングできない
 
-**症状:** プロキシのヘルスが `"lens": false` を表示する。または起動時に "Lens unavailable — verification disabled." と表示される。
+**症状:** リクエストが HTTP 503 `dependency_down` で即座に失敗します: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." または実行が `lens_unavailable` で停止します: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。プロキシの `/ready` は `"lens_ready": false` と `lens_reason` を表示し、`atlas doctor` の `status_dimensions` は `direct_agent: blocked` で失敗します。
 
-**影響:** ATLAS は C(x)/G(x) スコアリングなしでも動作します。V3 の候補選択はサンドボックスのみの検証にフォールバックします。
+**影響:** レンズがスコアリングできるようになるまで、リクエストは何も実行されません。これは意図的なものです — レンズは必須です（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。停止した実行は、停止前にファイルを変更したかどうかを報告します。
 
-**修正:** Lens のヘルスとログを確認してください:
+**修正:** メッセージに理由が書かれています。レンズのヘルスとログを確認してください:
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:8099/health | python3 -m json.tool
 docker compose logs geometric-lens
 ```
 
-一般的な原因:
-- Lens が llama-server に接続できない（`LLAMA_URL` 環境変数を確認）
-- モデルウェイトファイルが見つからない（サービスはグレースフルにデグレードします — カスタムモデルをトレーニングしていない場合はこれが想定される動作です）
+| メッセージの理由 | 修正 |
+|---|---|
+| unreachable | レンズのコンテナが停止しているか `ATLAS_LENS_URL` が誤り。`docker compose ps geometric-lens`。 |
+| no C(x) / no G(x) model loaded | 提供中のモデルにレンズウェイトがない。レジストリのモデルは `atlas model install-artifacts <name>`、または `atlas lens build`（[SETUP.md](../../SETUP.md) 参照）。 |
+| cannot reach llama-server | レンズがモデルサーバーに到達できない。`LLAMA_URL` / `LLAMA_EMBED_URL` と llama-server のヘルスを確認。 |
+| self-test failed | `/health` の `self_test_error` を参照。 |
+| drifted from the served model | [エンベディング規約のドリフト](#スコアはもっともらしいのにスケールが大きく外れているエンベディング規約のドリフト) を参照。 |
 
-### すべてのスコアが 0.5 付近
+プロキシはレンズの応答を 5 秒キャッシュするため、直ったレンズは 5 秒以内に受け入れられます。
 
-**症状:** コード品質に関係なく、すべての候補が `cx_energy: 0.0` および `gx_score: 0.5` になる。
+### レンズが未キャリブレーション
 
-**原因:** モデルウェイトが読み込まれていません。モデルが存在しない場合、サービスはニュートラルなデフォルト値を返します。
+**症状:** レンズの起動時に `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled` がログに出て、ステータスは `lens_calibration: uncalibrated` を表示します。
 
-**確認:**
-```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
-  -H "Content-Type: application/json" \
-  -d '{"text": "print(1)"}' | python3 -m json.tool
-```
+**影響:** リクエストは実行されます。レンズは生の C(x) エネルギーと G(x) 確率を返します。キャリブレーション済みの用途（正規化ルーティング、拒否と是正のしきい値）は、そのモデルのキャリブレーションファイルが存在するまで無効のままです。
 
-`enabled: false` または `cx_energy: 0.0` の場合、モデルが読み込まれていません。新規インストールではこれが想定される動作です — モデルウェイトはリポジトリに含まれておらず、トレーニングするか [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) からダウンロードする必要があります。
+**修正:** `atlas lens build` がしきい値をキャリブレーションし、`cx_normalization.json` と `gx_thresholds.json` をバンドルに書き出します。[CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。
 
 ### スコアはもっともらしいのにスケールが大きく外れている（エンベディング規約のドリフト）
 
@@ -801,21 +800,21 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **原因:** エンベディングサーバーが、Geometric Lens の `C(x)`/`G(x)` アーティファクトの学習時とは異なる `/embedding` の規約で応答しています — 典型的にはプーリング済みではなくトークンごと、あるいは L2 正規化ではなく未正規化（‖v‖ が ~1 ではなく ≈60）。次元数は同じで分布が違うため、コストフィールドの MLP が巨大なエネルギーへ外挿し、`cx_normalized` が飽和します。これは `--pooling mean` なしでサービングスタックを再ビルドした後に発生します（llama-server に `--embd-normalize` というサーバーフラグはありません。レンズは `/embedding` のボディの `embd_normalize` で呼び出しごとに L2 正規化を要求します）。
 
-**確認:** レンズはセルフテスト（起動時、および再試行可能な失敗の後に `/ready` から再実行されるとき）で、保存済みのフィンガープリントを再スコアリングします。`/ready` と `/health` を確認してください:
+**確認:** アーティファクトの横に `drift_fingerprint.json` がある場合（下のステップ 3 を参照）、レンズはセルフテスト（起動時、および再試行可能な失敗の後に `/ready` から再実行されるとき）でそれを再スコアリングします。`/ready` と `/health` を確認してください:
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
-`fingerprint_ok: false` と、期待値と観測値のエネルギーを示す `fingerprint_error` が出ていればドリフトの兆候です — `/ready` は 503 を返し、スコア付きレスポンスは `"drifted": true` を伴い `calibrated` フラグはすべて false に強制されるため、下流がそれらを信頼できるものと取り違えることはありません。
+`fingerprint_ok: false` と、期待値と観測値のエネルギーを示す `fingerprint_error` が出ていればドリフトの兆候です — `/ready` は 503 を返し、プロキシはドリフトを指してリクエストを拒否し、スコア付きレスポンスは `"drifted": true` を伴い `calibrated` フラグはすべて false に強制され、しきい値も含まれないため、下流がそれらを信頼できるものと取り違えることも、行動を取ることもありません。
 
 **修正:**
 1. エンベディングサーバーの規約を確認します。プーリング済み + 正規化済みのサーバーは ‖v‖≈1 のフラットなベクトルを返します:
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
 2. `ATLAS_EMBED_POOLING=none`（デフォルト。[CONFIGURATION.md](../../CONFIGURATION.md) を参照）を設定し、エントリーポイントがフラグを固定するように llama-server コンテナを再作成します。`--pooling` は llama.cpp ではサーバー全体の設定であり、全文パスと per-step パスの両方を満たせるのは `none` だけです。プーリングとスケールはクライアント側で処理します。
-3. サーバーが正しい規約で応答するようになれば、起動時セルフテストのフィンガープリントチェックが通り、`/ready` は 200 を返します。アーティファクトがフィンガープリントより古い場合は、再ビルド（`atlas lens build`）がフィンガープリントを書き出し、`embedding_contract` を `model_identity.json` に刻みます。
+3. サーバーが正しい規約で応答するようになれば、起動時セルフテストが通り、`/ready` が 200 を返します。再ビルド（`atlas lens build`）は `embedding_contract` を `model_identity.json` に刻みます。ただしドリフトフィンガープリントは書き込みません: `geometric_lens.drift.write_fingerprint` は存在しますが、それを呼び出すコマンドはまだなく、フィンガープリントのチェックは手動で書き込まれた `drift_fingerprint.json` がある場合のみ実行されます。
 
 ### エンベディング抽出の失敗
 
@@ -832,6 +831,22 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` フラグは、すべてのデプロイモード（Compose、ベアメタル、K3s）で llama-server のエントリーポイントが設定します — Geometric Lens が依存しているため、セルフエンベディングは常にオンです。レイヤーごとの hidden-states 拡張を運ぶのも、ネイティブの `/embedding` パス（`/v1/embeddings` ではありません）です。
+
+### 候補が `unscored` とマークされる（入力が物理バッチを超える）
+
+**症状:** レンズのログに `unscored: the input of 2055 tokens exceeds the /embedding physical batch of 2048 tokens` と出る。v3-service が候補に対して `lens_unscored`（`kind: embed_capacity`、`input_tokens`、`capacity_tokens`）を発行する。または `atlas doctor` が `lens_scoring: partial` を表示し、embed 容量が `ATLAS_MAX_TOKENS` を下回ることを指します。
+
+**原因:** llama-server は埋め込みリクエストを単一の物理バッチ（`-ub`、`ATLAS_UBATCH`）で処理し、それより長い入力は HTTP 500 で拒否します。レンズの各スコアリングはシーケンス全体に対する単一フォワードであるため、レンズはその候補を切り詰めたり分割したりせず、未スコアとして報告します: 分割された入力は先行するコンテキストなしで後続のチャンクを埋め込むことになり、アーティファクトがキャリブレーションされたベクトルではなくなるためです。候補を生成する生成側の予算（PlanSearch のコード 4,096 トークン、ファイル書き込みの `ATLAS_MAX_TOKENS` 8,192）は `atlas tier fit` が選ぶ最大マイクロバッチ（2,048）より大きいため、長い候補でこれが起きるのはデフォルトのデプロイでは想定内です。
+
+**影響:** その候補はサンドボックスの結果を保持し、スコア済みのすべての候補の後に置かれます。スコア済みの候補が一つも通過しない場合にのみ受け入れられ、`selected` イベントがその旨を述べます。0.0 や 0.5 でスコアを代替することはありません。
+
+**確認:**
+```bash
+curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(sys.stdin)['subsystems']['lens']; print({k:v for k,v in l.items() if k.startswith('embed_capacity')})"
+```
+`embed_capacity_tokens` はレンズがスコアリングできる最長の入力です。`embed_capacity_source` は `declared`（`ATLAS_UBATCH` から）または `observed`（拒否から、こちらが権威）です。
+
+**修正:** `ATLAS_UBATCH` を大きくすると容量が上がりますが、約 `ubatch × n_embd × 280` バイトの計算バッファ VRAM（3,840 次元モデルで 4,096 のとき約 4.4 GB）を代償します: `atlas tier fit` でサイジングし、llama-server を再作成し、`--fit off` で起動することを確認してください。`ATLAS_MAX_TOKENS` を下げると、プロキシがレンズにスコアリングを依頼する書き込みの上限が狭まります。どちらも分割入力をスコアリング可能にするわけではありません。物理バッチを超えた入力のスコアリングには [ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md) が説明するキャリブレーション作業が必要です。
 
 ---
 
@@ -935,4 +950,4 @@ atlas bench --run-id <your-run-id> --tasks 200
 1. サービスログを確認: `docker compose logs <service-name>`
 2. プロキシのヘルスエンドポイントを確認: `curl http://localhost:8090/health`
 3. すべての環境変数については [CONFIGURATION.md](../../CONFIGURATION.md) をご覧ください
-4. [GitHub](https://github.com/itigges22/ATLAS/issues) で Issue を作成してください
+4. [GitHub](https://github.com/inferstep/ATLAS/issues) で Issue を作成してください

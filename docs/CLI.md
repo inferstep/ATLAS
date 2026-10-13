@@ -601,6 +601,27 @@ reboot, or closed session. If the run reports fewer tasks than `--tasks`
 requested, the dataset cache is a partial download — see
 [TROUBLESHOOTING.md § Benchmark Issues](TROUBLESHOOTING.md#benchmark-issues).
 
+### Why the bench keeps a neutral lens score
+
+The product path requires the lens: a lens that cannot score stops the run
+([ADR 0011](adr/0011-the-lens-is-required.md)). `atlas bench` does not follow
+that rule on purpose. Its own lens client (`atlas/bench/best_of_k.py`) answers
+a lens with no model loaded with `NEUTRAL_COMBINED`: C(x) energy `0.0`,
+normalized `0.5`, G(x) `0.5`, verdict `"unavailable"`. The runner
+(`atlas/bench/v3_runner.py`) starts each probe from the same value. The CxGx
+allocation gate reads it as "no signal" and keeps its k=3 floor.
+
+This is what lets the bench run for a model that has no lens bundle yet, which
+is exactly the model you are building one for (`atlas lens build
+--from-results`). A lens that is reachable but did not score a text is a
+different case: the bench returns `UNSCORED_COMBINED`, with no numbers, never a
+neutral pair.
+
+The neutral path is never part of the product. If you see `NEUTRAL_COMBINED`
+in `atlas/bench/` and think it breaks "the lens is required", this is why it
+isn't a bug. The product's scorer in `v3-service/scoring.py` raises
+`LensUnavailable` instead.
+
 ---
 
 ## atlas lens

@@ -117,8 +117,8 @@ pipe a moving `main` script into bash):
 # Pinned to a release: fetch the script AT the tag and install that tag.
 # The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
 # pinned to the matching cosign-signed images.
-curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
 
 # Review before running: download, read, then execute the same bytes.
 curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
@@ -141,6 +141,10 @@ bash atlas-bootstrap.sh
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
 | `ATLAS_GO_VERSION=1.26.6` | Go toolchain version installed for the TUI build (the TUI needs 1.26.6+; older installed toolchains auto-fetch it) |
+| `ATLAS_DOWNLOAD_TRIES=3` | How often a download that fails is tried before the install stops (the pip downloads and the Go module download) |
+| `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | The wait between two tries of a download |
+
+**Downloads and logs.** The installer keeps its downloads and logs in a private temporary folder that it makes for the run. An install that passed removes the folder at the end. When the install failed, or a step warned and named its log, the folder is kept, and the last line of the output gives its path.
 
 **Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
 
@@ -528,7 +532,10 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 ```
 
 K3s installs use `scripts/uninstall.sh` instead, which tears down the
-manifests and (optionally) the K3s node itself.
+manifests and (optionally) the K3s node itself. With `--data` it also
+removes the data folder and the projects folder, where your own projects
+are; with `--models`, the model files. Before it asks, it lists each folder
+that it will remove, with its path.
 
 ---
 

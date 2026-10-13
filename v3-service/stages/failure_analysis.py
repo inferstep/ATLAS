@@ -339,7 +339,7 @@ class FailureAnalyzer:
                 try:
                     emb = embed_call(c.code)
                     analysis.failure_embeddings.append(emb)
-                except Exception:
+                except Exception:  # noqa: S110
                     # best-effort: swallow on failure (caller continues)
                     pass
 

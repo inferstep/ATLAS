@@ -1,0 +1,53 @@
+name: jetbrains-plugin
+
+# Code-level checks for the JetBrains plugin (extensions/jetbrains/) —
+# ktlint, the tool-window tests, plugin project configuration, and a
+# distributable build. Kept out of test.yml's Go/Python matrix, like
+# vscode-extension.yml: the plugin is its own Gradle ecosystem and only
+# needs to run when its files change.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'extensions/jetbrains/**'
+      - '.github/workflows/jetbrains-plugin.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'extensions/jetbrains/**'
+      - '.github/workflows/jetbrains-plugin.yml'
+
+concurrency:
+  group: jetbrains-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ktlint + test + build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: extensions/jetbrains
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The toolchain pins Java 21, so the runner's JDK must be 21 too;
+      # IntelliJ Platform Gradle Plugin resolves the IDE against the JDK
+      # that runs the build, not against the toolchain.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      # verifyPluginProjectConfiguration checks the sinceBuild/untilBuild
+      # pair and the Kotlin API level against the target platform, so it
+      # runs before the build rather than after a bad plugin is packaged.
+      - name: gate
+        run: ./gradlew --no-daemon ktlintCheck test verifyPluginProjectConfiguration buildPlugin

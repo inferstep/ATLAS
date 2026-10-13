@@ -191,19 +191,17 @@ def _verify_step_verifies(action: str) -> bool:
 _CREATE_ACTIONS = ("write_file", "create", "generate")
 
 
-def _existing_workspace_files(working_dir: str, project_context: Dict[str, str]) -> set:
-    """Relative paths already present, from the workspace and the context the
-    proxy shipped. Best-effort: an unreadable directory yields what context
-    knows, and the check simply does less."""
-    found = {k.lstrip("./") for k in (project_context or {})}
-    if working_dir and os.path.isdir(working_dir):
-        for root, dirs, files in os.walk(working_dir):
-            dirs[:] = [d for d in dirs if d not in
-                       (".git", "node_modules", "__pycache__", ".venv")]
-            for f in files:
-                rel = os.path.relpath(os.path.join(root, f), working_dir)
-                found.add(rel.lstrip("./"))
-    return found
+def _strip_dot_slash(path: str) -> str:
+    """`path` without its leading `./`, repeated, and nothing else. Not
+    `lstrip("./")`, which strips a set of characters and so also ate the dot
+    of a hidden name: `.env` became `env` (#277)."""
+    return re.sub(r"^(?:\./)+", "", path)
+
+
+def _known_files(project_context: Dict[str, str], existing_files: Optional[List[str]]) -> set:
+    """Relative paths already present: the proxy's listing and the context it
+    shipped. This service has no workspace mount, so it lists no directory."""
+    return {_strip_dot_slash(f) for f in [*(project_context or {}), *(existing_files or [])]}
 
 
 
@@ -328,7 +326,7 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
     return plan, notes
 
 
-def _score_plan(plan: dict, user_message: str,
+def _score_plan(plan: dict, user_message: str,  # noqa: C901
                 existing_files: set = frozenset()) -> Tuple[float, List[str]]:
     """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
 
@@ -398,7 +396,7 @@ def _score_plan(plan: dict, user_message: str,
         if not isinstance(st, dict):
             continue
         action = (st.get("action") or "").lower()
-        target = (st.get("target") or "").strip().lstrip("./")
+        target = _strip_dot_slash((st.get("target") or "").strip())
         if not target or not any(a in action for a in _CREATE_ACTIONS):
             continue
         if target in existing_files:
@@ -499,14 +497,11 @@ def generate_plan(
     # to the request-ID ContextVar, so an unset identity here would strip
     # attribution off every /v3/plan generation.
     llm.request_identity = request_identity
-    # What is already on disk. The proxy sends the listing because this
-    # service has no /workspace mount — walking working_dir here finds
-    # nothing, which is why the first version of this check never fired.
-    # Needed before the prompt: naming the files stops all three candidates
-    # proposing the same "create the input data" opening step, which scoring
-    # alone cannot fix when every candidate shares the flaw.
-    existing = _existing_workspace_files(working_dir, project_context)
-    existing.update(f.lstrip("./") for f in (existing_files or []))
+    # What is already on disk, as the proxy lists it. Needed before the
+    # prompt: naming the files stops all three candidates proposing the same
+    # "create the input data" opening step, which scoring alone cannot fix
+    # when every candidate shares the flaw.
+    existing = _known_files(project_context, existing_files)
 
     prompt = _build_plan_prompt(user_message, working_dir, project_context, sorted(existing))
 

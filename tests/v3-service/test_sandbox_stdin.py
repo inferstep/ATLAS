@@ -19,7 +19,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import adapters  # noqa: E402
+import adapters
 
 SANDBOX_DIR = PROJECT_ROOT / "sandbox"
 

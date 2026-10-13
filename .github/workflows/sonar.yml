@@ -1,0 +1,47 @@
+name: sonar
+
+# Runs the SonarQube Cloud analysis from CI, with the settings in
+# sonar-project.properties. A push to dev or main gives Sonar the state of
+# that branch; a pull request is compared with its base. Sonar reports its
+# result as a check of its own. This job fails only when the analysis
+# itself cannot run.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: sonar scan
+    # The analysis needs a secret. GitHub gives none to a pull request from
+    # a fork or from Dependabot, so the job is skipped for those.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.user.login != 'dependabot[bot]')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Sonar reads the history to tell new code from old.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The action is pinned by commit and its scanner by version; the
+      # action checks the scanner's signature before it runs it. The token
+      # is named in this step and nowhere else.
+      - name: analysis
+        uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9  # v8.3.0
+        with:
+          scannerVersion: 8.1.0.6389
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

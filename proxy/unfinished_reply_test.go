@@ -24,6 +24,10 @@ func TestReplyClosingThatDefersWorkIsDetected(t *testing.T) {
 		"Next, I will locate where the cache key is built.",
 		"I found the loop in scoring.py. Now I need to check how planning.py consumes it.",
 		"That narrows it to two functions. I'll run the tests to confirm which one.",
+		// verbatim closing sentence, ce68470 #273 proof run 09, ask_bug: reported completed
+		"Since the search returned the file, I will try to read it using the exact string provided by the search tool, but I suspect the filesystem might be behaving unexpectedly.",
+		"The key functions disagree somewhere. Let me attempt to verify that in keys.py.",
+		"I'll go ahead and check the call site in pricing.py next.",
 	} {
 		if !replyDefersWork(reply) {
 			t.Errorf("a reply that closes by deferring work was not detected:\n  %q", reply)
@@ -41,6 +45,8 @@ func TestSubstantiveAnswersAreNotTreatedAsDeferrals(t *testing.T) {
 		"I read the file and traced the call from orders.py into pricing.py. The miss happens because the two key functions use different customer fields.",
 		"I couldn't run the tests here, but the fix is to change `>` to `>=` on line 6 of filters.py.",
 		"Would you like me to check the other modules as well? The cause in keys.py is that read_key and write_key use different fields.",
+		"apply_discount returns 90.0 because `/` always returns a float. If you'd like, I will try to add a test for it.",
+		"It is not a bug: `/` always returns a float in Python 3, so try to use `//` if you need an integer.",
 	} {
 		if replyDefersWork(reply) {
 			t.Errorf("a substantive answer was treated as deferring work:\n  %q", reply)

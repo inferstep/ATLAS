@@ -239,6 +239,8 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 	// answer /v1/permission.
 	if ctx.PassID == "" {
 		log.Printf("[permission] %s requires approval but the request has no session_id — denying. Pass session_id and answer POST /v1/permission, pre-approve via session_allowed_tools, or use mode \"yolo\".", toolName)
+		noteNotAllowed(ctx, callID, toolName+" needs the user's approval, and this request has no session id, so nobody could be asked. "+
+			"It was not run. Do not send the same call again: no call that needs approval can be approved in this request.")
 		return false
 	}
 
@@ -253,6 +255,7 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		t, refusal := inspectDeleteTarget(ctx, args)
 		if refusal != "" {
 			log.Printf("[permission] not asking about %s: %s", toolName, refusal)
+			noteNotAllowed(ctx, callID, refusal+". Nobody was asked, and nothing was deleted.")
 			return false
 		}
 		target = t
@@ -304,12 +307,66 @@ func awaitPermission(ctx *AgentContext, toolName, callID string, args json.RawMe
 		return true
 	case <-ctx.Ctx.Done():
 		target.release()
+		noteNotAllowed(ctx, callID, "the request ended before the approval prompt for "+toolName+" was answered. It was not run.")
 		return false
 	case <-time.After(permissionTimeout()):
 		log.Printf("[permission] %s timed out for session %q — denying", toolName, ctx.PassID)
 		target.release()
+		noteNotAllowed(ctx, callID, fmt.Sprintf("nobody answered the approval prompt for %s within %s. It was not run. "+
+			"Do not send the same call again in this turn: it would wait for the same prompt.", toolName, permissionTimeout()))
 		return false
 	}
+}
+
+// userDenied is what a call reads as when the user said no. It is the one
+// case in which a user denied anything.
+const userDenied = "permission denied by user"
+
+// notAllowedKey names one call of one request. The request is part of the
+// key because requests with no session id share an empty session name.
+type notAllowedKey struct {
+	ctx    *AgentContext
+	callID string
+}
+
+// notAllowedReasons keeps, for a call that was not allowed and that no user
+// denied, the reason that the call reads next.
+var notAllowedReasons sync.Map
+
+// noteNotAllowed records why a call was not allowed when no user denied it:
+// the proxy refused before it asked, nobody could be asked, the request
+// ended, or nobody answered. Such a call must not read as a denial.
+func noteNotAllowed(ctx *AgentContext, callID, reason string) {
+	notAllowedReasons.Store(notAllowedKey{ctx, callID}, reason)
+}
+
+// permissionDenial is the reason a call that was not allowed reads as: the
+// recorded reason, once, and a denial by the user when none was recorded.
+func permissionDenial(ctx *AgentContext, callID string) string {
+	if reason, recorded := notAllowedReasons.LoadAndDelete(notAllowedKey{ctx, callID}); recorded {
+		return reason.(string)
+	}
+	return userDenied
+}
+
+// permissionDeniedEvent is the stream event of a call that was not allowed.
+// It carries a reason only when no user denied the call.
+func permissionDeniedEvent(tool, denial string) map[string]string {
+	event := map[string]string{"tool": tool}
+	if denial != userDenied {
+		event["reason"] = denial
+	}
+	return event
+}
+
+// deniedToolMessage is what the model reads back for a call that was not
+// allowed.
+func deniedToolMessage(denial string) string {
+	body, _ := json.Marshal(struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}{false, denial})
+	return string(body)
 }
 
 // handlePermission receives a client's approve/deny decision and signals the

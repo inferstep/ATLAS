@@ -1,0 +1,63 @@
+# Settings for Codecov, which shows the coverage reports that CI uploads.
+# Codecov reads this file from the commit a report belongs to.
+
+codecov:
+  # The branch Codecov shows first and compares pull requests with. Work
+  # lands on dev; without this Codecov follows the repository default, main.
+  branch: dev
+  # Reports are uploaded only after the test jobs passed, so Codecov does not
+  # wait for, or judge by, the other checks of the commit.
+  require_ci_to_pass: false
+  notify:
+    wait_for_ci: false
+    # One upload each for go-proxy, go-tui and python. Reporting after the
+    # first one would compare a part of the code with the whole.
+    after_n_builds: 3
+
+# No comment on pull requests. The result is in the commit statuses.
+comment: false
+
+# No note on each uncovered line in the diff of a pull request.
+github_checks:
+  annotations: false
+
+coverage:
+  status:
+    # Both statuses show their numbers and always pass. A target comes
+    # after the numbers have been watched on real pull requests.
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# One flag per report. A commit that does not upload a flag (the extension is
+# tested only when its files change) keeps that flag's result of its parent.
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: go-proxy
+      paths:
+        - proxy/
+    - name: go-tui
+      paths:
+        - tui/
+    - name: python
+      paths:
+        - atlas/
+        - v3-service/
+        - geometric-lens/
+        - sandbox/
+        - scripts/
+    - name: typescript
+      paths:
+        - extensions/vscode/
+
+# Go reports name files by module path, and the extension's report by its
+# own folder. These turn both into paths from the repository root.
+fixes:
+  - "github.com/itigges22/atlas-proxy/::proxy/"
+  - "github.com/itigges22/atlas-tui/::tui/"
+  - "src/::extensions/vscode/src/"

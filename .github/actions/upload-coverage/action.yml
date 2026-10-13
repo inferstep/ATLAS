@@ -1,0 +1,74 @@
+name: upload coverage
+description: >-
+  Sends the coverage reports of the Go and Python test jobs to Codecov. The
+  reports are in a folder, one sub-folder for each downloaded artifact. The
+  job that uses this needs `id-token: write` and a checkout of the commit.
+
+inputs:
+  reports:
+    description: The folder that holds the downloaded coverage artifacts.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: settings file is in this commit
+      id: settings
+      shell: bash
+      run: |
+        if [ -f codecov.yml ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice title=coverage not uploaded::This commit has no codecov.yml, so Codecov would use its own defaults for it (it would comment on the pull request). Nothing is uploaded. Fix: update the branch from dev."
+        fi
+    - name: list the python reports
+      id: python
+      if: steps.settings.outputs.present == 'true'
+      shell: bash
+      env:
+        REPORTS: ${{ inputs.reports }}
+      run: |
+        set -o pipefail
+        echo "files=$(ls "$REPORTS"/coverage-python-*/python.lcov | paste -sd, -)" >> "$GITHUB_OUTPUT"
+
+    # The action is pinned by commit and its uploader by version; the
+    # action checks the uploader's signature before it runs it. No secret
+    # is stored: Codecov accepts the identity token GitHub signs for this
+    # run. A pull request from a fork gets no such token, and the action
+    # then uploads the way Codecov allows for forks. A refused upload
+    # fails this job, so it cannot pass unseen.
+    - name: upload go-proxy
+      if: steps.settings.outputs.present == 'true'
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        files: ${{ inputs.reports }}/coverage-go-proxy/go-proxy.out
+        flags: go-proxy
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true
+
+    - name: upload go-tui
+      if: steps.settings.outputs.present == 'true'
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        files: ${{ inputs.reports }}/coverage-go-tui/go-tui.out
+        flags: go-tui
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true
+
+    - name: upload python
+      if: steps.settings.outputs.present == 'true'
+      uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+      with:
+        version: v11.3.1
+        files: ${{ steps.python.outputs.files }}
+        flags: python
+        disable_search: true
+        disable_telem: true
+        fail_ci_if_error: true
+        use_oidc: true

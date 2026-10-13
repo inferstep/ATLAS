@@ -21,7 +21,8 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # K3s path and only reads atlas.conf — values in .env are ignored here.
 # This catches the case where a user edited the wrong file. See PC-021.
 warn_dual_config() {
-    local repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+    local repo_root
+    repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
     if [[ -f "$repo_root/.env" ]] && [[ -f "$repo_root/atlas.conf" ]]; then
         log_warn "Both .env and atlas.conf are present."
         log_warn "  install.sh (this script) reads atlas.conf only — .env is ignored."
@@ -78,16 +79,20 @@ detect_hardware() {
     log_info "Detecting hardware configuration..."
 
     # Detect CPU cores
-    local cpu_cores=$(nproc)
+    local cpu_cores
+    cpu_cores=$(nproc)
     log_info "  CPU cores: $cpu_cores"
 
     # Detect system memory (in GB)
-    local sys_mem_gb=$(free -g | awk '/^Mem:/{print $2}')
+    local sys_mem_gb
+    sys_mem_gb=$(free -g | awk '/^Mem:/{print $2}')
     log_info "  System RAM: ${sys_mem_gb}GB"
 
     # Detect GPU memory (in MB)
-    local gpu_mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
-    local gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    local gpu_mem_mb
+    gpu_mem_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1) || true
+    local gpu_name
+    gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1) || true
     log_info "  GPU: $gpu_name (${gpu_mem_mb}MB VRAM)"
 
     # Calculate recommended resource limits based on hardware
@@ -98,7 +103,8 @@ detect_hardware() {
     fi
 
     # LLM server gets 25% of available CPU (min 0.5, max 2)
-    local llama_cpu_req=$(echo "scale=1; $available_cpu * 0.25" | bc)
+    local llama_cpu_req
+    llama_cpu_req=$(echo "scale=1; $available_cpu * 0.25" | bc)
     if (( $(echo "$llama_cpu_req < 0.5" | bc -l) )); then
         llama_cpu_req="0.5"
     elif (( $(echo "$llama_cpu_req > 2" | bc -l) )); then
@@ -106,7 +112,8 @@ detect_hardware() {
     fi
 
     # Other services share remaining CPU (min 0.25 each)
-    local service_cpu_req=$(echo "scale=2; ($available_cpu - $llama_cpu_req) / 8" | bc)
+    local service_cpu_req
+    service_cpu_req=$(echo "scale=2; ($available_cpu - $llama_cpu_req) / 8" | bc)
     if (( $(echo "$service_cpu_req < 0.25" | bc -l) )); then
         service_cpu_req="0.25"
     elif (( $(echo "$service_cpu_req > 0.5" | bc -l) )); then
@@ -129,9 +136,11 @@ detect_hardware() {
 
     log_info "  Recommended LLM CPU request: $llama_cpu_req"
     log_info "  Recommended service CPU request: $service_cpu_req"
+    log_info "  Recommended LLM memory request: $llama_mem_req (limit $llama_mem_limit)"
 
     # Check if current config exceeds hardware
-    local total_cpu_requests=$(echo "$ATLAS_LLAMA_CPU_REQUEST + ($ATLAS_SERVICE_CPU_REQUEST * 8)" | bc 2>/dev/null || echo "0")
+    local total_cpu_requests
+    total_cpu_requests=$(echo "$ATLAS_LLAMA_CPU_REQUEST + ($ATLAS_SERVICE_CPU_REQUEST * 8)" | bc 2>/dev/null || echo "0")
     if (( $(echo "$total_cpu_requests > $available_cpu" | bc -l 2>/dev/null || echo "0") )); then
         log_warn "Config requests ${total_cpu_requests} CPUs but only ${available_cpu} available"
         log_warn "Consider updating atlas.conf:"
@@ -227,7 +236,6 @@ detect_existing_setup() {
 
     SKIP_K3S=false
     SKIP_GPU=false
-    SKIP_NAMESPACE=false
 
     # Check K3s
     if command -v k3s &> /dev/null && systemctl is-active --quiet k3s 2>/dev/null; then
@@ -255,7 +263,6 @@ detect_existing_setup() {
     # Check namespace
     if kubectl get namespace "$ATLAS_NAMESPACE" &>/dev/null; then
         log_info "  [FOUND] Namespace '$ATLAS_NAMESPACE' exists"
-        SKIP_NAMESPACE=true
     else
         log_info "  [MISSING] Namespace '$ATLAS_NAMESPACE' - will create"
     fi
@@ -360,7 +367,7 @@ install_gpu_operator() {
 
     # Wait for GPU to be available
     log_info "Waiting for GPU to be available in cluster..."
-    for i in {1..30}; do
+    for _ in {1..30}; do
         if check_gpu_available; then
             log_info "GPU available in cluster"
             return
@@ -424,7 +431,8 @@ process_templates() {
     # Process each template file
     for tmpl in "$template_dir"/*.yaml.tmpl; do
         if [[ -f "$tmpl" ]]; then
-            local filename=$(basename "$tmpl" .tmpl)
+            local filename
+            filename=$(basename "$tmpl" .tmpl)
             log_info "  Processing $filename..."
             envsubst < "$tmpl" > "$manifest_dir/$filename"
         fi

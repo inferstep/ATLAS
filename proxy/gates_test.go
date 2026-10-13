@@ -1583,15 +1583,14 @@ func TestDuplicateEntrypointGuardLeavesEverythingElseAlone(t *testing.T) {
 // observed session burned all three bounces re-sending `done` against that
 // advice after correctly starting the server with run_background.
 func TestBlockedServerStartGetsProbeAdviceNotFixAdvice(t *testing.T) {
-	for _, out := range []string{
-		"Execution timed out after 30s",
-		"Address already in use\nPort 5001 is in use by another program.",
-	} {
-		if !blockedServerStart(out) {
-			t.Errorf("not recognised as a blocked server start: %q", out)
-		}
+	wrote := func(stderr string) *ToolResult {
+		data, _ := json.Marshal(RunCommandOutput{Stderr: stderr, ExitCode: 1, Outcome: ExecutionCompleted})
+		return &ToolResult{Error: stderr, Data: data}
 	}
-	if blockedServerStart("AssertionError: expected 3, got 4") {
+	if !blockedServerStart(wrote("Address already in use\nPort 5001 is in use by another program.")) {
+		t.Error("a port that is taken was not recognised as a blocked server start")
+	}
+	if blockedServerStart(wrote("AssertionError: expected 3, got 4")) {
 		t.Error("a genuinely red test was mistaken for a server start")
 	}
 

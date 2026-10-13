@@ -1,4 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: 4f1be83 -->
+<!-- source: docs/SETUP.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド
@@ -16,7 +16,7 @@
 | NVIDIA RTX 50 シリーズ / Blackwell (B100、GB10) | Linux | [方法 0: ブートストラップ](#方法-0-ワンショットブートストラップ) または [方法 1: Docker](#方法-1-docker-compose-推奨) | サポート対象 (Supported) — 公開されている CUDA イメージは Blackwell を対象 |
 | NVIDIA RTX 20/30/40、GTX 10xx、データセンター (V100/A100/H100/T4/L4) | Linux | [方法 1: Docker](#方法-1-docker-compose-推奨) + 一度だけの[ローカル再ビルド](#cuda-compute-capability-dockerfilev31) | プレビュー (Preview) — ローカル再ビルドが必要 |
 | NVIDIA GPU | Windows (WSL2) | [方法 1: Docker — NVIDIA セクション](#方法-1-docker-compose-推奨) | サポート対象外 (Unsupported) — 未テスト、動作の主張はなし。報告歓迎 |
-| AMD GPU (RX 6000/7000、MI200+) | Linux | [方法 1: Docker — AMD ROCm](#amd-rocm--相違点) | コミュニティ検証済み (Community-tested) ([GH #26](https://github.com/itigges22/ATLAS/issues/26)) |
+| AMD GPU (RX 6000/7000、MI200+) | Linux | [方法 1: Docker — AMD ROCm](#amd-rocm--相違点) | コミュニティ検証済み (Community-tested) ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | **Apple Silicon (M1/M2/M3/M4)** | **macOS** | **[SETUP_MACOS.md](../../SETUP_MACOS.md)**（専用ガイド — ハイブリッドのネイティブ Metal + Docker） | サポート対象（メンテナー検証済み、M2 Pro） |
 | Intel Arc / Iris Xe | Linux | [方法 1: Docker — Vulkan](#vulkan--クロスベンダーフォールバック) | プレビュー — Vulkan は lavapipe 上でのスモークテストのみ。実 GPU での検証はまだなし |
 | Snapdragon X Elite（ラップトップ） | Linux | [Vulkan](#vulkan--クロスベンダーフォールバック) + [arm64 セクション](#arm64) | プレビュー（Linux arm64）。Windows on ARM はサポート対象外 |
@@ -52,7 +52,7 @@
 > アーキテクチャの完全な対応表: [CUDA Compute Capability](#cuda-compute-capability-dockerfilev31)。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 またはチェックアウト済みのリポジトリから:
@@ -98,10 +98,10 @@ atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns
 ```bash
 # Run as your normal user; sudo elevates as needed (Docker install, etc).
 # Install ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 
 # Run via sudo. SUDO_USER is detected, install still ends up owned by you.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | sudo bash
 
 # Real root login (no sudo) — install owned by root. Only do this if there's
 # no human user on the box (CI runner, container, etc).
@@ -113,11 +113,11 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 # Pinned to a release: fetch the script AT the tag and install that tag.
 # The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
 # pinned to the matching cosign-signed images.
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
 
 # Review before running: download, read, then execute the same bytes.
-curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
 less atlas-bootstrap.sh
 bash atlas-bootstrap.sh
 ```
@@ -136,12 +136,12 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main` を追跡する代わりに git タグ/SHA にインストールを固定。`vX.Y.Z` 形式の値なら `ATLAS_IMAGE_TAG` も対応するイメージに固定されます |
 | `ATLAS_INSTALL_DIR=/path` | クローン先（デフォルト `/opt/atlas` — 下記参照） |
 | `ATLAS_REPO_URL=https://...` | 別のリポジトリ URL |
-| `ATLAS_GO_VERSION=1.26.2` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.2+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
+| `ATLAS_GO_VERSION=1.26.6` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.6+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
 
 **なぜ `/opt/atlas` なのか?** システム全体で使うサードパーティソフトウェアの標準的な FHS プレフィックスであり、`$HOME` のクリーンアップを生き残り、同じマシンの複数ユーザーが 1 つのインストールを共有できるためです。ホームディレクトリに置きたい場合は:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh \
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
@@ -212,7 +212,7 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 
 ```bash
 # 1. Clone
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 
 # 2. Install the ATLAS CLI (puts `atlas` in ~/.local/bin)
@@ -227,13 +227,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.2+ — required for the TUI client (atlas tui) and
+# 4. Install Go 1.26.6+ — required for the TUI client (atlas tui) and
 #    optional for the proxy (proxy builds automatically on first run if Go
 #    is present; otherwise it runs in Docker with file access limited to
 #    ATLAS_PROJECT_DIR). Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.6.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.6.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -334,7 +334,7 @@ ATLAS は 2 つの CPU アーキテクチャを対象としています: `x86_64
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）— sbsa ベースイメージによる CUDA、compute cap 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t ベースイメージによる CUDA、compute cap 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。高速パスとしてのネイティブ Metal インストールは [#32](https://github.com/itigges22/ATLAS/issues/32) で追跡
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。高速パスとしてのネイティブ Metal インストールは [#32](https://github.com/inferstep/ATLAS/issues/32) で追跡
 - **Snapdragon X Elite**（Windows on ARM ラップトップ）— Adreno ドライバ経由の Vulkan
 - **Raspberry Pi 5** — Mesa V3D ドライバ経由の Vulkan、CPU 級の性能を想定
 - **Ampere Altra / AWS Graviton ワークステーション** — lavapipe 経由の Vulkan（コンシューマ向け arm64 dGPU がまだ存在しないため CPU フォールバック）
@@ -365,11 +365,11 @@ Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に
 
 - GHCR にまだ arm64 のプレビルドイメージがない — arm64 ユーザーは上記のレシピでローカルビルドが必要です。少なくとも 1 つの arm64 デバイスがエンドツーエンドで検証され次第、プレビルドのマルチアーキイメージが提供されます。
 - ブートストラップインストーラー（`scripts/atlas-bootstrap.sh`）は arm64 パスの監査が済んでいません。
-- 5 つの対象デバイスすべてでハードウェアテストのマトリクスが空です — これらのいずれかをお持ちのアーリーアダプターの方は、`atlas doctor` の出力と `vulkaninfo --summary` を [#115](https://github.com/itigges22/ATLAS/issues/115) に投稿してください。
+- 5 つの対象デバイスすべてでハードウェアテストのマトリクスが空です — これらのいずれかをお持ちのアーリーアダプターの方は、`atlas doctor` の出力と `vulkaninfo --summary` を [#115](https://github.com/inferstep/ATLAS/issues/115) に投稿してください。
 
 ### 初回実行時の動作
 
-1. Docker が `ghcr.io/itigges22/atlas-{proxy,v3,lens,llama,sandbox}` から 5 つのプレビルドコンテナイメージを取得します（高速な回線で約 3 分）。代わりにソースからビルドする場合（開発パス）は、`up` の前に `docker compose build` を実行してください — 下の「イメージソース」を参照。
+1. Docker が `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` から 5 つのプレビルドコンテナイメージを取得します（高速な回線で約 3 分）。代わりにソースからビルドする場合（開発パス）は、`up` の前に `docker compose build` を実行してください — 下の「イメージソース」を参照。
 2. llama-server が 7GB のモデルを GPU VRAM にロード（約 1〜2 分）
 3. 全サービスがヘルスチェックを開始
 4. 5 つのサービス（llama-server、geometric-lens、v3-service、sandbox、atlas-proxy）すべてが healthy を報告すると、`atlas` が接続して Bubbletea TUI を起動します
@@ -395,7 +395,7 @@ ATLAS_IMAGE_TAG=sha-abc1234  # exact commit
 ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 ```
 
-利用可能なタグの一覧: <https://github.com/itigges22/ATLAS/pkgs/container/atlas-proxy>
+利用可能なタグの一覧: <https://github.com/inferstep/ATLAS/pkgs/container/atlas-proxy>
 （`atlas-proxy` を他のサービス名に置き換えてください: `atlas-v3`、`atlas-lens`、`atlas-llama`、`atlas-sandbox`）。
 
 エッジケース: GHCR でまだ非公開のパッケージに対して `compose pull` は `unauthorized` で失敗します — `read:packages` トークンで認証するか、代わりにソースからビルドしてください。`compose pull` は同じタグを共有するローカルビルド済みイメージも上書きします。サービスを反復開発している間は pull をスキップするか、`ATLAS_IMAGE_TAG=dev-local` を設定してローカルとレジストリのイメージを別々のタグに分けてください。フォークのイメージを取得するには `.env` に `ATLAS_GHCR_OWNER=<your-username>` を設定します。
@@ -511,7 +511,7 @@ K3s のインストールでは代わりに `scripts/uninstall.sh` を使いま�
 
 | 要件 | 詳細 |
 |-------------|---------|
-| **Go 1.26.2+** | atlas-proxy と atlas-tui クライアントのビルド用（より古い Go ツールチェーンは自動で取得します） |
+| **Go 1.26.6+** | atlas-proxy と atlas-tui クライアントのビルド用（より古い Go ツールチェーンは自動で取得します） |
 | **llama.cpp** | CUDA 付きでソースからビルド（[llama.cpp ビルド手順](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) を参照） |
 | **Node.js 20+** | サンドボックスの JavaScript/TypeScript 実行に必要 |
 | **Rust** | サンドボックスの Rust 実行に必要 |
@@ -520,7 +520,7 @@ K3s のインストールでは代わりに `scripts/uninstall.sh` を使いま�
 
 ```bash
 # 1. Clone and install Python CLI
-git clone https://github.com/itigges22/ATLAS.git
+git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 pip install -e .
 
@@ -553,13 +553,16 @@ llama-server \
   --model "models/$ATLAS_MODEL_FILE" \
   --host 0.0.0.0 --port 8080 \
   --ctx-size 32768 --n-gpu-layers 99 --no-mmap \
-  --embeddings --pooling mean --flash-attn on --fit off
+  --embeddings --pooling none --flash-attn on --fit off
+# --pooling none: the lens's per-step path needs per-token vectors, and it
+# pools and normalizes them itself for the whole-text path (the compose
+# default, ATLAS_EMBED_POOLING=none).
 
-# Terminal 2: Geometric Lens
+# Terminal 2: Geometric Lens (required: the proxy refuses requests while it
+# cannot score)
 cd geometric-lens
 LLAMA_URL=http://localhost:8080 \
 LLAMA_EMBED_URL=http://localhost:8080 \
-GEOMETRIC_LENS_ENABLED=true \
 python -m uvicorn main:app --host 0.0.0.0 --port 8099
 
 # Terminal 3: V3 Pipeline
@@ -595,7 +598,7 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas` は `atlas-tui` バイナリが見つからない、またはチェックアウトより古い場合に `tui/` から自動的にビルドし（PATH 上に Go 1.26.2+ が必要）、TUI に処理を渡す前に localhost:8090 のプロキシを検証します。
+`atlas` は `atlas-tui` バイナリが見つからない、またはチェックアウトより古い場合に `tui/` から自動的にビルドし（PATH 上に Go 1.26.6+ が必要）、TUI に処理を渡す前に localhost:8090 のプロキシを検証します。
 
 ---
 
@@ -730,8 +733,8 @@ medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh
 |---|---|---|---|---|
 | NVIDIA (Blackwell — RTX 50xx、B100、GB10) | CUDA | サポート対象 (Supported)（公開イメージ） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要開発機） |
 | NVIDIA (Blackwell 以前 — RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4) | CUDA | プレビュー (Preview) — 一度だけの[ローカル再ビルドが必要](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上流の llama.cpp はこれらをサポート。ATLAS 上でのメンテナー検証はなし） |
-| AMD | ROCm / HIP | コミュニティ検証済み (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（コミュニティスモークテスト、[GH #26](https://github.com/itigges22/ATLAS/issues/26)） |
-| Apple Silicon | Metal | サポート対象（macOS ハイブリッド: ネイティブ llama-server + Docker、[#32](https://github.com/itigges22/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（検証済み）、M3/M4（対象） |
+| AMD | ROCm / HIP | コミュニティ検証済み (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（コミュニティスモークテスト、[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
+| Apple Silicon | Metal | サポート対象（macOS ハイブリッド: ネイティブ llama-server + Docker、[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（検証済み）、M3/M4（対象） |
 | 任意（クロスベンダーフォールバック） | Vulkan | プレビュー | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）でスモークテスト済み。実 GPU での検証はまだなし |
 | Intel Arc | SYCL | ロードマップ (Roadmap) — Intel Arc は現在 Vulkan を使用 | 未定 | Arc A770 16GB（対象） |
 
@@ -807,17 +810,17 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ---
 
-## Geometric Lens ウェイト (オプション)
+## Geometric Lens ウェイト (必須)
 
-ATLAS は Geometric Lens ウェイトなしでも動作します — サービスはグレースフルにデグレードし、ニュートラルスコアを返します。V3 パイプラインはサンドボックスのみの検証にフォールバックします。
+ATLAS のすべてのリクエストは Geometric Lens を必要とします（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。レンズは提供されるモデルの C(x) / G(x) ウェイトを必要とします。それらがないと、プロキシは HTTP 503 `dependency_down` ですべてのリクエストを拒否し、理由を示します。`atlas doctor` も失敗します。ウェイトはあるがキャリブレーションがまだのレンズは受け入れられます。スコアは返し、しきい値の介入はキャリブレーションを待ちます。
 
-C(x)/G(x) スコアリングを有効にするには、トレーニング済みのモデルウェイトが必要です。事前トレーニング済みウェイトとトレーニングデータは HuggingFace で入手できます:
+[SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md) にレンズアーティファクトが載っているモデルは `atlas model install-artifacts` で取得できます。事前トレーニング済みウェイトとトレーニングデータは HuggingFace でも入手できます:
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — エンベディング、トレーニングデータ、ウェイトファイルが含まれています。
 
 ウェイトファイルを `geometric-lens/geometric_lens/models/` に配置してください（または Docker Compose で `ATLAS_LENS_MODELS` 経由でマウント）。サービスは起動時に自動的にロードします。
 
-独自のベンチマークデータでトレーニングしたい場合、ループ全体が CLI で完結します:
+ウェイトがないモデルは、独自のベンチマークデータでビルドします。`atlas bench` はプロキシを経由せずに V3 の各ステージを直接実行するため、レンズがウェイトを持つ前でも動作します。ループ全体が CLI で完結します:
 
 ```bash
 atlas bench --run-id mymodel_lens --tasks 200    # 候補の生成とセルフラベリング
@@ -825,6 +828,41 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 ```
 
 `atlas lens build` はレンズの両半分をトレーニングし、しきい値をキャリブレーションして、有効化されたバンドルに `provenance.json` マニフェストを書き出します。[CLI.md § atlas lens](../../CLI.md#atlas-lens) を参照してください。
+
+### llama-server の持ち込み
+
+推論を自分で実行したい場合 — ホストネイティブビルド、リモートマシン、またはルーターモードの llama.cpp — は、消費する 4 つのサービスをそこに向けて、同梱コンテナをスタブします。`docker-compose.override.yml` を作成します:
+
+```yaml
+services:
+  llama-server:                      # stub the bundled one out
+    command: ["sleep", "infinity"]
+    entrypoint: []
+    healthcheck:
+      test: ["CMD", "true"]
+    deploy: {}
+  geometric-lens:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  v3-service:
+    environment:
+      LLAMA_URL: http://host.docker.internal:8080
+  atlas-proxy:
+    environment:
+      ATLAS_LLAMA_URL: http://host.docker.internal:8080
+```
+
+`host.docker.internal` は Linux でも macOS でも解決します。compose ファイルは、それを必要とするすべてのサービスに `extra_hosts: host.docker.internal:host-gateway` のマッピングを設定しています。docker0 ゲートウェイアドレス（`172.17.0.1`）を直接使う必要はありません（そのマッピングの解決先がそれではありますが）。
+
+**ルーターモード。** `llama-server --models-preset` は `model` フィールドのないリクエストをすべて拒否します（`model name is missing from the request`）。`.env` の `ATLAS_MODEL_NAME` を提供モデルの名前に設定してください — `atlas doctor` のスモークテストがそれを送信し、単一モデルサーバーはそれを無視します。
+
+**初回の `docker compose up` の前に、** シークレットディレクトリが存在することを確認してください — これがないとバインドマウントが失敗します:
+
+```bash
+mkdir -p secrets     # or set ATLAS_SECRETS_DIR
+```
+
+`atlas init` が代わりに作成します。手動の compose-first フローでのみ必要です。
 
 ### モデルの持ち込み
 

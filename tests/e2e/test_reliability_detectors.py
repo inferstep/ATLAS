@@ -10,8 +10,11 @@ No live stack: streams are literals and the workspace is a tmp_path.
 """
 import importlib.util
 import json
+import os
 import re
+import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -667,6 +670,54 @@ def _states(rel, **containers):
     return rel.container_states("atlas", run=_fake_docker(containers))
 
 
+def _mounts(mounts, folders=("_reliability",)):
+    """A stand-in for subprocess.run: `docker inspect <container>` gives the host folder that the container has at
+    /workspace, and `docker exec <container> test -d <folder>` passes for the folders that are there."""
+    asked = []
+
+    def run(argv, **kw):
+        asked.append(argv[2])
+        if argv[:2] == ["docker", "inspect"]:
+            return _Proc(mounts.get(argv[2], "") + "\n")
+        if argv[:2] == ["docker", "exec"]:
+            return _Proc("", returncode=0 if argv[-1].split("/")[-1] in folders else 1)
+        raise AssertionError(f"unexpected command {argv}")
+    run.asked = asked
+    return run
+
+
+def test_the_mounts_that_are_compared_are_those_of_the_stack_under_measurement(rel):
+    # Two stacks on one host: the usual one, and one under another project name with a workspace of its own.
+    mounts = {"atlas-atlas-proxy-1": "/home/u/demo", "atlas-sandbox-1": "/home/u/demo",
+              "atlas-nightly-atlas-proxy-1": "/srv/nightly/workspace", "atlas-nightly-sandbox-1": "/srv/nightly/workspace"}
+    run = _mounts(mounts)
+    assert rel.preflight("atlas-nightly-sandbox-1", "_reliability", "atlas-nightly", run=run) == []
+    assert run.asked[:2] == ["atlas-nightly-atlas-proxy-1", "atlas-nightly-sandbox-1"]
+    assert rel.preflight("atlas-sandbox-1", "_reliability", run=_mounts(mounts)) == []
+
+
+def test_a_stack_whose_proxy_and_sandbox_have_other_folders_is_refused_under_any_project_name(rel):
+    for project, proxy, sandbox in (("atlas", "atlas-atlas-proxy-1", "atlas-sandbox-1"),
+                                    ("atlas-nightly", "atlas-nightly-atlas-proxy-1", "atlas-nightly-sandbox-1")):
+        problems = rel.preflight(sandbox, "_reliability", project, run=_mounts({proxy: "/a", sandbox: "/b"}))
+        assert len(problems) == 1 and "proxy=/a sandbox=/b" in problems[0], problems
+
+
+def test_a_run_gives_the_check_of_mounts_the_project_name_it_was_started_with(rel):
+    import ast
+    import inspect
+    calls = [node for node in ast.walk(ast.parse(inspect.getsource(rel.main)))
+             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "preflight"]
+    assert len(calls) == 1
+    assert [ast.unparse(arg) for arg in calls[0].args] == ["args.sandbox_container", "args.subdir", "args.compose_project"]
+
+
+def test_a_folder_that_the_sandbox_does_not_have_is_refused(rel):
+    mounts = {"atlas-atlas-proxy-1": "/a", "atlas-sandbox-1": "/a"}
+    problems = rel.preflight("atlas-sandbox-1", "_reliability", run=_mounts(mounts, folders=()))
+    assert len(problems) == 1 and "/workspace/_reliability does not exist inside atlas-sandbox-1" in problems[0]
+
+
 def test_a_restart_during_the_session_is_in_its_result(rel, tmp_path):
     before = _states(rel, lens=(0, False, "T1"), proxy=(0, False, "T1"))
     after = _states(rel, lens=(1, False, "T2"), proxy=(0, False, "T1"))
@@ -710,3 +761,172 @@ def test_docker_that_cannot_be_asked_is_not_read_as_stable_mid_session(rel):
     snap = _states(rel, lens=(0, False, "T1"))
     assert rel.stack_changes(snap, None) == [
         "container state could not be read at the end of the session"]
+
+
+# --- one commit, five images (#241) --------------------------------------------
+#
+# A result is evidence only for the stack that produced it. Before a run, the
+# runner checks the stated commit against the gated deploy's record and each
+# running service's image against the image recorded for that commit.
+
+_IMAGES = {"llama-server": "sha256:aaa", "geometric-lens": "sha256:bbb",
+           "v3-service": "sha256:ccc", "sandbox": "sha256:ddd", "atlas-proxy": "sha256:eee"}
+
+
+def _fake_images(images):
+    """`docker ps` lists one container per service; `docker inspect` reports
+    each one's compose service label and image id."""
+    def run(argv, **kw):
+        if argv[:2] == ["docker", "ps"]:
+            return _Proc("\n".join(f"atlas-{s}-1" for s in images) + "\n")
+        if argv[:2] == ["docker", "inspect"]:
+            return _Proc("".join(f"{s} {i}\n" for s, i in images.items()))
+        raise AssertionError(f"unexpected command {argv}")
+    return run
+
+
+def _deploy_record(tmp_path, sha="b0e6013", images=None):
+    d = tmp_path / "atlas-ralph"
+    (d / "deployed").mkdir(parents=True)
+    (d / "DEPLOYED_SHA").write_text(sha + "\n")
+    (d / "deployed" / f"running-{sha}.json").write_text(json.dumps(
+        {"sha": sha, "running": {s: {"image_id": i} for s, i in (images or _IMAGES).items()}}))
+    return d
+
+
+def test_a_single_commit_stack_is_verified_and_its_images_recorded(rel, tmp_path):
+    ident = rel.deployed_identity("atlas", _deploy_record(tmp_path), "b0e6013",
+                                  run=_fake_images(_IMAGES))
+    assert ident["verified"] and not ident["mismatch"], ident["problems"]
+    assert ident["commit"] == "b0e6013"
+    assert ident["images"] == _IMAGES
+
+
+def test_a_mixed_stack_is_refused(rel, tmp_path):
+    live = dict(_IMAGES, **{"v3-service": "sha256:999"})
+    ident = rel.deployed_identity("atlas", _deploy_record(tmp_path), "b0e6013",
+                                  run=_fake_images(live))
+    assert ident["mismatch"] and not ident["verified"]
+    assert any("v3-service runs sha256:999" in p for p in ident["problems"]), ident["problems"]
+
+
+def test_a_checkout_that_is_not_the_deployed_commit_is_refused(rel, tmp_path):
+    ident = rel.deployed_identity("atlas", _deploy_record(tmp_path), "47907c9",
+                                  run=_fake_images(_IMAGES))
+    assert ident["mismatch"]
+    assert any("deployed from b0e6013" in p for p in ident["problems"])
+    # The same commit, named at another length, is the same commit.
+    ok = rel.deployed_identity("atlas", _deploy_record(tmp_path / "x"), "b0e6013a1b2c",
+                               run=_fake_images(_IMAGES))
+    assert ok["verified"], ok["problems"]
+
+
+def test_a_service_that_is_not_running_is_refused(rel, tmp_path):
+    live = {s: i for s, i in _IMAGES.items() if s != "llama-server"}
+    ident = rel.deployed_identity("atlas", _deploy_record(tmp_path), "b0e6013",
+                                  run=_fake_images(live))
+    assert ident["mismatch"]
+    assert "llama-server is not running" in ident["problems"]
+
+
+def test_a_stack_with_no_deploy_record_is_unverified_not_refused(rel, tmp_path):
+    ident = rel.deployed_identity("atlas", tmp_path / "none", "b0e6013",
+                                  run=_fake_images(_IMAGES))
+    assert not ident["mismatch"] and not ident["verified"]
+    assert ident["images"] == _IMAGES
+    assert "unverified" in ident["problems"][0]
+
+
+def test_the_runner_refuses_a_mixed_stack_before_any_session(rel, tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    record = _deploy_record(tmp_path)
+    monkeypatch.setattr(rel, "stack_identity", lambda url: {})
+    monkeypatch.setattr(rel, "running_images",
+                        lambda project, run=None: dict(_IMAGES, sandbox="sha256:777"))
+
+    def no_session(*a, **k):
+        raise AssertionError("a session ran on a mixed stack")
+    monkeypatch.setattr(rel, "run_session", no_session)
+    monkeypatch.setattr(sys, "argv", ["e2e-reliability.py", "--workspace", str(ws),
+                                      "--deploy-dir", str(record), "--commit", "b0e6013",
+                                      "--sandbox-container", "", "--tasks", "offbyone"])
+    assert rel.main() == 2
+
+
+def test_the_identity_is_kept_with_every_result(rel, tmp_path):
+    ident = rel.deployed_identity("atlas", _deploy_record(tmp_path), "b0e6013",
+                                  run=_fake_images(_IMAGES))
+    stack = {"grammar_mode": "loose", "commit": ident["commit"], "images": ident["images"],
+             "identity_verified": ident["verified"]}
+    row = rel.result_row(_session(rel, [], tmp_path), {}, stack)
+    assert row["stack"]["commit"] == "b0e6013"
+    assert row["stack"]["images"]["atlas-proxy"] == "sha256:eee"
+    assert row["stack"]["identity_verified"] is True
+
+
+# --- A stopped run keeps what it has (#222) -------------------------------
+
+_DETECTORS = ("h1_protocol", "h2_false_rejection", "h3_dead_end_steering", "h4_gate_escape",
+              "h5_corrupt_write", "h8_anchored_on_injected_text", "h9_tier_misapplied",
+              "h7_background_leak")
+
+
+def _recorded(task, rep, workspace):
+    """A finished session, as run_session returns it."""
+    return {"task": task.name, "rep": rep, "workspace": workspace, "wall_s": 1.0,
+            "stream_ok": True, "events": [{"type": "turn_start", "data": {}},
+                                          {"type": "done", "data": {"summary": "x"}}]}
+
+
+def _sigterm(task, rep, workspace):
+    """The operator stops the run while this session is in flight."""
+    if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+        raise AssertionError("no SIGTERM handler: the run would die with nothing written")
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(5)
+    raise AssertionError("SIGTERM did not stop the run")
+
+
+def _run_main(rel, tmp_path, monkeypatch, sessions, reps):
+    """main() over recorded sessions, one H6 defect each, results in out.json."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    out = tmp_path / "out.json"
+    monkeypatch.setattr(rel, "stack_identity", lambda url: {})
+    for name in _DETECTORS:
+        monkeypatch.setattr(rel, name, lambda *a: [])
+    monkeypatch.setattr(rel, "h6_service_fault", lambda s: ["H6 service fault: sandbox answered 500"])
+    queue = iter(sessions)
+    monkeypatch.setattr(rel, "run_session",
+                        lambda task, rep, *a, **k: rel.Session(**next(queue)(task, rep, ws)))
+    monkeypatch.setattr(sys, "argv", ["e2e-reliability.py", "--workspace", str(ws),
+                                      "--deploy-dir", str(tmp_path / "none"),
+                                      "--compose-project", "", "--sandbox-container", "",
+                                      "--tasks", "offbyone", "--reps", str(reps),
+                                      "--json", str(out)])
+    return rel.main(), out
+
+
+def test_a_stopped_run_keeps_its_defects_and_a_partial_summary(rel, tmp_path, monkeypatch):
+    before = signal.getsignal(signal.SIGTERM)
+    code, out = _run_main(rel, tmp_path, monkeypatch, [_recorded, _sigterm, _recorded], reps=3)
+    assert code == 128 + signal.SIGTERM
+    logged = [json.loads(line)
+              for line in out.with_suffix(".defects.jsonl").read_text().splitlines()]
+    assert logged == [{"task": "offbyone", "rep": 1,
+                       "defect": "H6 service fault: sandbox answered 500"}]
+    assert [row["rep"] for row in json.loads(out.read_text())] == [1]
+    summary = out.with_suffix(".summary.txt").read_text()
+    assert "Harness Integrity Rate   0/1" in summary
+    assert "H6 service fault" in summary
+    assert "stopped by SIGTERM after 1 session(s)" in summary
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_a_full_run_logs_each_defect_and_writes_no_partial_summary(rel, tmp_path, monkeypatch):
+    code, out = _run_main(rel, tmp_path, monkeypatch, [_recorded, _recorded], reps=2)
+    assert code == 1
+    assert [row["rep"] for row in json.loads(out.read_text())] == [1, 2]
+    assert len(out.with_suffix(".defects.jsonl").read_text().splitlines()) == 2
+    assert not out.with_suffix(".summary.txt").exists()

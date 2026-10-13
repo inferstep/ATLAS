@@ -19,7 +19,7 @@ jobs:
     name: scorecard analysis
     # Publishing is tied to this repo's identity; a fork has nothing to publish.
     if: github.repository == 'inferstep/ATLAS'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read

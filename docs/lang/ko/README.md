@@ -10,7 +10,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.4-blue" alt="버전"/>
+  <img src="https://img.shields.io/badge/version-V3.1.6-blue" alt="버전"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="라이선스"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="모델 독립적"/>
 </p>
@@ -116,8 +116,8 @@ curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-
 계속 바뀌는 스크립트를 그대로 bash에 파이프하고 싶지 않다면? 같은 설치 프로그램을 더 신중하게 실행하는 두 가지 방법이 있습니다:
 ```bash
 # Pinned to a release: script, checkout, and images all at the signed tag
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
 
 # Review before running
 curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh

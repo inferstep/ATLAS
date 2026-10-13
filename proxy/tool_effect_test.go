@@ -2107,7 +2107,14 @@ type delLoop struct {
 	census   map[string]int
 	terminal map[string]string
 	seq      []string
+	events   []delEvent
 	ctx      *AgentContext
+}
+
+// delEvent is one stream event of a fixture run, as the client receives it.
+type delEvent struct {
+	kind string
+	data string
 }
 
 // delLoopApprove selects whether the fixture answers deletion prompts. It is
@@ -2195,6 +2202,7 @@ func delLoopFixture(t *testing.T, seed map[string]string, prompt string,
 		mu.Lock()
 		defer mu.Unlock()
 		r.census[et]++
+		r.events = append(r.events, delEvent{et, string(b)})
 		switch et {
 		case "tool_call":
 			var tc struct{ Name string }
@@ -2264,6 +2272,7 @@ func dlWrite(p, c string) map[string]interface{} {
 
 // The defect: the remaining requested write is never attempted.
 func TestDeleteDoesNotSwallowTheRestOfTheTask(t *testing.T) {
+	needsObjectHold(t)
 	r := delLoopFixture(t, map[string]string{"a.py": delSeed},
 		"Delete a.py and create report.py with the summary.",
 		func(i int) map[string]interface{} {
@@ -2302,6 +2311,7 @@ func TestDeleteDoesNotSwallowTheRestOfTheTask(t *testing.T) {
 // Every other delete shape: the loop continues, and the terminal is decided at
 // the real terminal point by the rules that already exist.
 func TestDeleteContinuationMatrix(t *testing.T) {
+	needsObjectHold(t)
 	for _, c := range []struct {
 		name, prompt string
 		seed         map[string]string
@@ -2666,6 +2676,7 @@ func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 	})
 
 	t.Run("10 source gone but destination never landed", func(t *testing.T) {
+		needsObjectHold(t)
 		// The destination is removed straight after, which is the observable
 		// end state of a copy that did not survive.
 		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
@@ -2856,6 +2867,7 @@ func TestUnansweredDeletionCannotAuthoriseCompletion(t *testing.T) {
 // move is still owned by its own predicate.
 
 func TestApprovedDeletionCompletionMatrix(t *testing.T) {
+	needsObjectHold(t)
 	valid := delSeed
 	for _, c := range []struct {
 		name       string
@@ -3000,6 +3012,7 @@ func TestApprovedDeletionCompletionMatrix(t *testing.T) {
 
 // Recreation, and re-deletion, across generations.
 func TestApprovedDeletionAcrossGenerations(t *testing.T) {
+	needsObjectHold(t)
 	valid := delSeed
 	for _, c := range []struct {
 		name       string

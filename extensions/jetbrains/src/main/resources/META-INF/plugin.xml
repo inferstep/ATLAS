@@ -1,0 +1,35 @@
+<idea-plugin>
+    <id>com.inferstep.atlas</id>
+    <name>ATLAS</name>
+    <vendor url="https://inferstep.com">inferstep</vendor>
+
+    <description><![CDATA[
+        Use the ATLAS agent from your JetBrains IDE. This build is an early
+        scaffold: it adds an ATLAS tool window and nothing else yet.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Compose and Jewel are shipped by the IDE, never bundled into the
+         plugin. Requesting the module is what puts them on this plugin's
+         classloader: without this line the tool window throws
+         NoClassDefFoundError on a product that does not enable them for us
+         (PyCharm 2026.1), even though the classes are in its distribution. -->
+    <depends>com.intellij.modules.compose</depends>
+
+    <!-- Jewel's Markdown renderer is a platform content module, declared
+         with visibility="public" by the platform itself, so it is reached
+         as a module and not as a plugin id: a <depends> on it would name
+         nothing and disable the plugin. This one module brings the Compose
+         Markdown stack with it, including the Jewel Markdown modules. See
+         extensions/jetbrains/README.md. -->
+    <dependencies>
+        <module name="intellij.platform.compose.markdown"/>
+    </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="ATLAS"
+                    anchor="right"
+                    factoryClass="com.inferstep.atlas.ui.AtlasToolWindowFactory"/>
+    </extensions>
+</idea-plugin>

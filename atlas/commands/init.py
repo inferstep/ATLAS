@@ -461,7 +461,7 @@ def _detect_total_ram_gib() -> float:
                              capture_output=True, text=True, timeout=3)
         if out.returncode == 0 and out.stdout.strip():
             return int(out.stdout.strip()) / (1024 ** 3)
-    except Exception:
+    except Exception:  # noqa: S110
         # sysctl is a best-effort platform probe; psutil remains available as
         # the portable fallback.
         pass

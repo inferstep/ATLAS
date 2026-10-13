@@ -67,7 +67,9 @@ load_config() {
         fi
     fi
 
-    # Source the config
+    # Source the config. Its path is chosen at run time (ATLAS_CONFIG_FILE, atlas.conf or
+    # atlas.conf.example), so there is no single file for shellcheck to follow.
+    # shellcheck source=/dev/null
     source "$config_file"
 
     # Handle auto-detection for node IP
@@ -103,7 +105,7 @@ validate_config() {
 
     local seen=()
     for port in "${ports[@]}"; do
-        if [[ " ${seen[*]} " =~ " ${port} " ]]; then
+        if [[ " ${seen[*]} " == *" ${port} "* ]]; then
             echo -e "${RED}[ERROR]${NC} Duplicate NodePort: $port"
             errors=$((errors + 1))
         fi

@@ -246,3 +246,18 @@ def test_an_escaping_observe_path_reports_absent_rather_than_reading_it(executor
                 observe=["../../etc/passwd"])
     assert res.observation.target_before["../../etc/passwd"] == ""
     assert res.observation.target_after["../../etc/passwd"] == ""
+
+
+def test_an_observed_name_outside_the_snapshot_is_never_hashed(executor, tmp_path):
+    """A name that leaves the snapshot reads as absent; nothing outside is
+    opened, and looking creates nothing inside."""
+    root = tmp_path / "snap"
+    root.mkdir()
+    (root / "inside.py").write_text(CANDIDATE)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("outside\n")
+    got = executor._observe_paths(root, ["inside.py", "../secret.txt", str(secret), "",
+                                         "new/dir/file.py"])
+    assert got["inside.py"] == sha(CANDIDATE)
+    assert got["../secret.txt"] == "" and got[str(secret)] == "" and got[""] == ""
+    assert got["new/dir/file.py"] == "" and not (root / "new").exists()

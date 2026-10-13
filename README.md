@@ -7,7 +7,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.4-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.6-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="Model-agnostic"/>
 </p>
@@ -45,6 +45,9 @@
 
 ## 📰 Latest News
 
+- **2026-10-01** - **[V3.1.6 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.6)** - security fix for the command policy ([GHSA-m9w4-p32x-chx9](https://github.com/inferstep/ATLAS/security/advisories/GHSA-m9w4-p32x-chx9), reported and fixed by [@Rendegou](https://github.com/Rendegou)). Please upgrade.
+- **2026-09-29** - **[V3.1.5 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.5)** - security fix for tool argument names ([GHSA-c3p6-m657-h629](https://github.com/inferstep/ATLAS/security/advisories/GHSA-c3p6-m657-h629)). Please upgrade.
+- **2026-09-27** - **[V3.1.4 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.4)** - the move to inferstep/ATLAS, security fixes ([GHSA-5hvw-59r4-7rcq](https://github.com/inferstep/ATLAS/security/advisories/GHSA-5hvw-59r4-7rcq)), and the contributor setup.
 - **2026-07-06** - **[V3.1.3 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)** - production-platform pass: staged upgrade/rollback with auto-restore, SQLite state store (no more Redis), signed artifact manifests, structured logs + correlation IDs, interactive permissions, session resume, and two adversarial bug-fix sweeps
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads (since removed; see the CHANGELOG), and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
@@ -119,8 +122,8 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 Prefer not to pipe a moving script into bash? Same installer, two more careful ways to run it:
 ```bash
 # Pinned to a release: script, checkout, and images all at the signed tag
-curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.3/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.3 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
 
 # Review before running
 curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh

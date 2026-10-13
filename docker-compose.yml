@@ -521,6 +521,7 @@ services:
       # Pins the proxy's "where to write files" target. Must match the
       # working_dir below and the right-hand side of the volume mount.
       - ATLAS_WORKSPACE_DIR=/workspace
+      - ATLAS_PROJECT_DIR=${ATLAS_PROJECT_DIR:-.}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
     volumes:
       - ${ATLAS_MODELS_DIR:-./models}:/models:ro

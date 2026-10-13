@@ -26,6 +26,21 @@ paths:
                   api_version: {type: string}
                   protocol_version: {type: integer}
                   error_codes: {type: array, items: {type: string}}
+  /workspace:
+    get:
+      summary: Host and container workspace paths for the connected proxy
+      responses:
+        "200":
+          description: Workspace info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_dir: {type: string}
+                  working_dir: {type: string}
+                  containerized: {type: boolean}
+        "401": {$ref: "#/components/responses/Unauthorized"}
   /health:
     get:
       summary: >

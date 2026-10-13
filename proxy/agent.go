@@ -626,7 +626,7 @@ func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command strin
 	s.verifiedStandalone = false
 	s.verifiedByRedirect = ""
 	s.redRunStreak++
-	s.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
+	s.serverStartBlocked = blockedServerStart(result)
 	recordVerificationEvidence(ctx, turn, command, ev, true)
 	log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 		turn, truncateStr(command, 60), s.serverStartBlocked)
@@ -963,7 +963,7 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
 		staleJob, staleFile := staleServingJob(ctx)
 		if staleJob != "" {
-			log.Printf("[agent] job %s predates the last change to %s — probing it would not show it", staleJob, staleFile)
+			log.Printf("[agent] job %s predates the last change to %s — probing it would not show it", logPath(staleJob), logPath(staleFile))
 		}
 		return "verification_gate", verificationRejectionFor(
 			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx), s.redRunStreak,
@@ -980,7 +980,7 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		if staleJob, staleFile := staleServingJob(ctx); staleJob != "" {
 			if s.chargeBounce("verification_gate") {
 				log.Printf("[agent] the probe that verified this loop hit job %s, started before the last change to %s (bounce %d/%d)",
-					staleJob, staleFile, s.gateBounces["verification_gate"], maxGateBounces)
+					logPath(staleJob), logPath(staleFile), s.gateBounces["verification_gate"], maxGateBounces)
 				return "verification_gate", verificationRejectionFor(false, false, "", 0, "", staleJob, staleFile)
 			}
 			// The probe answered for older code, so nothing verified this.
@@ -1070,7 +1070,7 @@ func (s *runState) gateUnresolved(gate, finding string) {
 		s.unresolvedGates = map[string]string{}
 	}
 	s.unresolvedGates[gate] = finding
-	log.Printf("[agent] %s: bounces spent and the finding still holds: %s", gate, truncateStr(finding, 160))
+	log.Printf("[agent] %s: bounces spent and the finding still holds: %s", gate, logPath(truncateStr(finding, 160)))
 }
 
 // unresolvedReasons are the spent gates whose finding is a fact about the
@@ -1698,6 +1698,11 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 					"getting truncated. Try a more targeted request (e.g. 'edit just the " +
 					"@app.route(\"/product\") handler in app.py') so the response stays under the " +
 					"token cap."
+				if ctx.LastStreamCut == "old_str_unmatched" {
+					summary = "Stopped: three edit_file calls in a row ran old_str past the text in " +
+						"the file, and each was cut before it was sent. Nothing was changed by them. " +
+						"Ask again and name the line to change, or ask for replace_lines with line numbers."
+				}
 				if ctx.LastStreamCut == "content_loop" {
 					// Same misdiagnosis the classifier used to make: the token cap
 					// had nothing to do with it. The model began repeating itself
@@ -1919,9 +1924,9 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						allowed = awaitPermission(ctx, parsed.Name, permCallID(turn), parsed.Args)
 					}
 					if !allowed {
-						ctx.Stream("permission_denied", map[string]string{
-							"tool": parsed.Name,
-						})
+						denial := permissionDenial(ctx, permCallID(turn))
+						ctx.Stream("permission_denied",
+							permissionDeniedEvent(parsed.Name, denial))
 						// A refusal here is a failed call like any other, and this
 						// branch returned before everything that counts one. It
 						// matters more now that a deletion always reaches the
@@ -1930,7 +1935,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						// accounting it repeats until the turn cap -- measured at
 						// 21 turns with no terminal of ATLAS's own.
 						if stop := accountRefusedCall(parsed.Name, intentArgs,
-							"permission denied by user",
+							denial,
 							workspaceRefusalPath(ctx, parsed.Name, parsed.Args)); stop {
 							return 2
 						}
@@ -1946,7 +1951,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 							"tool":    parsed.Name,
 							"success": false,
 							"data":    json.RawMessage("null"),
-							"error":   "permission denied by user",
+							"error":   denial,
 							"elapsed": "0s",
 						})
 						// Bespoke bounce: the permission flow keys its tool-call
@@ -1957,7 +1962,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						})
 						ctx.Messages = append(ctx.Messages, AgentMessage{
 							Role:       "tool",
-							Content:    `{"success":false,"error":"permission denied by user"}`,
+							Content:    deniedToolMessage(denial),
 							ToolCallID: permCallID(turn),
 							ToolName:   parsed.Name,
 						})
@@ -3020,7 +3025,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				if consecutiveErrors >= 3 {
 					samePath := stuckOnOnePath(ctx.RecentFailurePaths)
 					if !samePath {
-						log.Printf("[agent] path-aware breaker: %d consecutive failures across different paths (%v) — continuing, not a stuck loop", consecutiveErrors, ctx.RecentFailurePaths)
+						log.Printf("[agent] path-aware breaker: %d consecutive failures across different paths (%v) — continuing, not a stuck loop", consecutiveErrors, logPaths(ctx.RecentFailurePaths))
 						// Reset consecutiveErrors so the multi-file grind
 						// can keep going. The recent-paths list stays as
 						// a rolling window so if subsequent fails DO
@@ -3222,7 +3227,7 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 						"turn":   turn,
 						"detail": note,
 					})
-					log.Printf("[agent] asset lint: %s", truncateStr(note, 160))
+					log.Printf("[agent] asset lint: %s", logPath(truncateStr(note, 160)))
 				}
 			}
 
@@ -3281,26 +3286,10 @@ func runAgentLoop(ctx *AgentContext, userMessage string) error {
 				}
 			}
 
-			// Exploration budget: after 4 consecutive read-only calls,
-			// inject nudge. After 5, escalate the nudge. The read above
-			// already executed and its result is in context — the nudge
-			// steers the NEXT turn toward a write.
-			// FUTURE (L6 reliability): Compact models can over-explore when adding
-			// features to existing projects (~67% pass rate). Better prompting,
-			// larger model, or V3-guided exploration would improve this.
-			if consecutiveReads == 4 {
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "You have full project context in the system prompt. Do not read more files. Emit a write_file or edit_file tool call now.",
-				})
-				log.Printf("[agent] exploration budget: warning at turn %d", turn)
-			} else if consecutiveReads >= 5 {
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "You already have this information in context — reading more files will not help. Write your changes now. Use write_file or edit_file.",
-				})
-				consecutiveReads = 2 // Keep at warning level, don't reset
-				log.Printf("[agent] exploration budget: escalated nudge at turn %d", turn)
+			// Exploration budget: after a run of read-only calls, steer the next
+			// turn toward a write, or toward the answer (explorationNudge).
+			if note := explorationNudge(&consecutiveReads, turn, !answerOnlyRequest(ctx)); note != "" {
+				ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: note})
 			}
 
 		default:
@@ -3444,7 +3433,7 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 
 	_, target := stepExclusionTarget(ctx)
 	var source string
-	if b, rerr := os.ReadFile(resolveAgentPath(ctx, target)); rerr == nil {
+	if b, _, rerr := readWorkspaceFile(ctx, target); rerr == nil {
 		source = string(b)
 	}
 	note := fmt.Sprintf(
@@ -4046,6 +4035,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// Stale from the previous turn otherwise, which would blame a clean
 	// parse failure on a cut that happened earlier.
 	ctx.LastStreamCut = ""
+	ctx.LastOldStrCut = nil
 	ctx.LastFencedStream = fencedStreamStats{}
 	wireMessages := toWireMessages(messages)
 	wireMessages = appendLastReadRestatementFor(ctx, wireMessages, restateOnly)
@@ -4242,7 +4232,11 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 		contentLoopCut bool
 		noFenceCut     bool
 		lastLoopCheck  int
+		oldStrCut      bool
 	)
+	// An edit_file old_str is checked against its file while it streams
+	// (old_str_watch.go). Not in a fenced sub-call, which carries a body.
+	oldStrW := newOldStrWatch(ctx)
 
 	// Per-turn reasoning budget. A reasoning-heavy model can spiral for
 	// tens of thousands of tokens inside ONE generation (observed: a
@@ -4394,9 +4388,12 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 				!strings.Contains(contentBuf.String(), "```") {
 				noFenceCut = true
 			}
-			if !contentLoopCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
+			if !contentLoopCut && !oldStrCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
 				lastLoopCheck = contentBuf.Len()
 				contentLoopCut = streamLooping(contentBuf.String())
+				if !contentLoopCut && !fencedSubCall {
+					oldStrCut = oldStrW.runaway(contentBuf.String())
+				}
 			}
 		}
 		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
@@ -4421,6 +4418,17 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 			log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", contentBuf.Len())
 			ctx.Stream("content_loop_cut", map[string]interface{}{"chars": contentBuf.Len()})
 			ctx.LastStreamCut = "content_loop"
+			break
+		}
+		if oldStrCut {
+			log.Printf("[agent] edit_file old_str on %s stopped matching the file after %d line(s) and ran on (%d bytes) — cutting the stream",
+				logPath(oldStrW.Path), oldStrW.MatchedLines, oldStrW.Chars)
+			ctx.Stream("old_str_cut", map[string]interface{}{
+				"path": oldStrW.Path, "chars": contentBuf.Len(),
+				"old_str_chars": oldStrW.Chars, "matched_lines": oldStrW.MatchedLines,
+			})
+			ctx.LastStreamCut = "old_str_unmatched"
+			ctx.LastOldStrCut = oldStrW
 			break
 		}
 	}
@@ -4942,6 +4950,13 @@ func shadowCompareSets(contract, legacy []string, failed bool) string {
 	default:
 		return shadowOutputsPartial
 	}
+}
+
+// answerOnlyRequest reports a request whose deliverable is an answer: the
+// client declared a question, or the user forbade any change. Steers read it;
+// the exit gates keep deciding the action demand (decideActionDemand).
+func answerOnlyRequest(ctx *AgentContext) bool {
+	return mutationForbidden(ctx) || (ctx.TaskContract != nil && ctx.TaskContract.TaskMode == TaskModeQuestion)
 }
 
 // observeActionDemand records one live action-demand decision and returns it
@@ -5864,6 +5879,12 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 			"file, and input or fixture data should be read at runtime by the code you " +
 			"write, never retyped into a tool call. Write the CODE that processes the " +
 			"data, not the data."
+	case "old_str_unmatched":
+		return "old_str_cut", "Your edit_file call was stopped while old_str was still arriving: " +
+			"it had stopped matching any text in the file and kept going. Nothing was executed " +
+			"and the file is unchanged. old_str must be text copied from the file; one short " +
+			"line that appears once in it is enough to place an edit, or use replace_lines " +
+			"with the line numbers read_file showed."
 	case "reasoning_budget":
 		return "reasoning_cut", "Your response was cut off: it spent the whole per-turn " +
 			"budget on reasoning without emitting a tool call. Skip the deliberation and " +
@@ -5943,6 +5964,10 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 // Nothing in the cut call is executed either way.
 func parseFailureFeedback(ctx *AgentContext, raw, streamCut string) (string, string) {
 	category, feedback := classifyParseFailure(raw, streamCut)
+	if category == "old_str_cut" && ctx != nil && ctx.LastOldStrCut != nil && ctx.LastOldStrCut.Cut {
+		// The watch knows the file and the line where old_str left it.
+		return category, oldStrCutFeedback(ctx.LastOldStrCut)
+	}
 	if category != "loop_cut" && category != "truncated_tool" {
 		return category, feedback
 	}
@@ -7325,28 +7350,18 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 		"requirements.txt", "pyproject.toml", "setup.py",
 		"README.md",
 	}
+	// Every read goes through the workspace folder, so a name in it that
+	// points somewhere else is skipped like a file that cannot be read.
+	dir := openConfinedDir(workingDir)
+	defer dir.Close()
 	for _, rel := range priority {
 		if len(out) >= maxFiles {
 			break
 		}
-		full := filepath.Join(workingDir, rel)
-		info, err := os.Stat(full)
-		if err != nil || info.IsDir() {
-			continue
+		// Oversized files are skipped: the planner doesn't need a 50KB README.
+		if s, ok := dir.readCapped(rel, maxBytes); ok {
+			out[rel] = s
 		}
-		// Skip oversized files — the planner doesn't need a 50KB README.
-		if info.Size() > int64(maxBytes)*4 {
-			continue
-		}
-		data, err := os.ReadFile(full)
-		if err != nil {
-			continue
-		}
-		s := string(data)
-		if len(s) > maxBytes {
-			s = s[:maxBytes] + "\n... (truncated)"
-		}
-		out[rel] = s
 	}
 	// If priority files yielded nothing at the workspace root, the
 	// project may live one level down — common when the user's
@@ -7356,7 +7371,7 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 	// this, the May 2026 user-session planner saw zero context and
 	// the agent wasted 3 turns finding `snake/app.py`.
 	if len(out) == 0 {
-		entries, err := os.ReadDir(workingDir)
+		entries, err := dir.ReadDir()
 		if err != nil {
 			return nil
 		}
@@ -7377,25 +7392,11 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 				if len(out) >= maxFiles {
 					break
 				}
-				full := filepath.Join(workingDir, name, rel)
-				info, err := os.Stat(full)
-				if err != nil || info.IsDir() {
-					continue
-				}
-				if info.Size() > int64(maxBytes)*4 {
-					continue
-				}
-				data, err := os.ReadFile(full)
-				if err != nil {
-					continue
-				}
-				s := string(data)
-				if len(s) > maxBytes {
-					s = s[:maxBytes] + "\n... (truncated)"
-				}
 				// Key uses subdir/filename so the planner sees the
 				// path the agent will need to use in tool calls.
-				out[filepath.Join(name, rel)] = s
+				if s, ok := dir.readCapped(filepath.Join(name, rel), maxBytes); ok {
+					out[filepath.Join(name, rel)] = s
+				}
 			}
 			if len(out) >= maxFiles {
 				break
@@ -7421,19 +7422,9 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 				default:
 					continue
 				}
-				info, err := e.Info()
-				if err != nil || info.Size() > int64(maxBytes)*4 {
-					continue
+				if s, ok := dir.readCapped(name, maxBytes); ok {
+					out[name] = s
 				}
-				data, err := os.ReadFile(filepath.Join(workingDir, name))
-				if err != nil {
-					continue
-				}
-				s := string(data)
-				if len(s) > maxBytes {
-					s = s[:maxBytes] + "\n... (truncated)"
-				}
-				out[name] = s
 			}
 		}
 	}

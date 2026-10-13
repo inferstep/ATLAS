@@ -45,7 +45,7 @@ from atlas import compose as compose_config
 from atlas import env as cli_env
 from atlas import publishing
 from atlas.client import LlamaProbe, post_json_or_none, probe_llama
-from atlas.commands import model_registry
+from atlas.commands import lens_card, model_registry
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -112,7 +112,7 @@ def _inspect_cost_field(artifact_dir: str) -> ArtifactInspection:
             try:
                 return ArtifactInspection(present=True,
                                           dim=int(state[key].shape[1]))
-            except Exception:
+            except Exception:  # noqa: S112
                 continue
     return ArtifactInspection(present=True, dim=None,
                               error="no recognized first-layer weight key")
@@ -467,7 +467,7 @@ def _embed_text(llama_url: str, text: str,
             pa + pb)
 
 
-def _extract_training_embeddings(samples: List[Dict],
+def _extract_training_embeddings(samples: List[Dict],  # noqa: C901
                                   llama_url: str,
                                   color: bool,
                                   cache_path: Optional[str] = None,
@@ -682,7 +682,7 @@ def _write_bundle_fingerprint(staging_dir: str, model, embed=None,
 
         write_fingerprint(staging_dir, score, note="written by atlas lens build")
         return None
-    except Exception as exc:  # noqa: BLE001 — a missing fingerprint is the old behaviour
+    except Exception as exc:  # a missing fingerprint is the old behaviour
         return (f"drift fingerprint not written ({exc}); the lens drift check "
                 f"enforces nothing for this bundle")
     finally:
@@ -764,7 +764,7 @@ def _load_results_samples(results_dir: str) -> List[Dict]:
     return samples
 
 
-def _emit_build(args: argparse.Namespace, color: bool) -> int:
+def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     """Train fresh Lens artifacts for the model llama-server has loaded.
 
     Doesn't ship its own dataset — users point --samples at a labeled
@@ -1028,7 +1028,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 observe_embedding_convention,
             )
             embedding_contract = observe_embedding_convention()
-        except Exception as exc:  # noqa: BLE001 — telemetry, not correctness
+        except Exception as exc:  # telemetry, not correctness
             _safe_print(f"  could not observe the embedding convention "
                         f"({exc}); artifacts will declare none")
         save_model_identity(
@@ -1100,7 +1100,8 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
 def _render_model_card_md(model_name: str, base_model: str, dim: int,
                            sha256: str, size_bytes: int,
-                           license_id: str, files_uploaded: List[str]) -> str:
+                           license_id: str, files_uploaded: List[str],
+                           provenance: str) -> str:
     """Generate the README.md / model card body for the HF upload.
 
     Front-matter is the YAML block HuggingFace renders into the sidebar
@@ -1151,9 +1152,7 @@ atlas lens check
 
 ## Provenance
 
-Trained locally via `atlas lens build` against {base_model}'s
-self-embeddings. Architecture: {dim} -> 512 -> 128 -> 1 (SiLU, SiLU,
-Softplus). Contrastive ranking loss on labeled pass/fail code samples.
+{provenance}
 
 ## License
 
@@ -1224,7 +1223,7 @@ once the PR merges.
 """
 
 
-def _emit_publish(args: argparse.Namespace, color: bool) -> int:
+def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     """Upload local artifacts to HF + generate a registry-add PR body.
 
     Pipeline (matches PC-059 issue spec):
@@ -1275,8 +1274,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                     f"publishing.{RESET if color else ''}")
         return 1
 
-    files_to_upload = ["cost_field.pt", "model_identity.json"]
-    files_to_upload.append("cx_normalization.json")
+    files_to_upload = ["cost_field.pt", "model_identity.json", "cx_normalization.json"]
     # Pickle-free twin: include only when at least as fresh as the .pt —
     # an older safetensors is a previous model's weights.
     st_path = os.path.join(artifact_dir, "cost_field.safetensors")
@@ -1368,8 +1366,9 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                 return 1
 
         # Upload model card
+        provenance = lens_card.model_card_provenance(artifact_dir, base_model, dim)
         card_md = _render_model_card_md(model_label, base_model, dim, sha,
-                                          size, license_id, files_to_upload)
+                                          size, license_id, files_to_upload, provenance)
         try:
             api.upload_file(path_or_fileobj=card_md.encode(),
                              path_in_repo="README.md",
@@ -1422,7 +1421,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     try:
         from atlas.commands.tier import classify, probe
         entry_tier = classify(probe()).tier
-    except Exception:
+    except Exception:  # noqa: S110
         # Host tier detection is optional publishing metadata; medium is the
         # conservative registry fallback when hardware probing is unavailable.
         pass
@@ -1434,7 +1433,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
                 else os.path.join(atlas_root, cli_env.MODEL_DIR))
         size_gb = round(os.path.getsize(
             os.path.join(base, model_file)) / (1024 ** 3), 1)
-    except Exception:
+    except Exception:  # noqa: S110
         # Model size enriches the registry entry but is not required to
         # publish a verified artifact bundle.
         pass

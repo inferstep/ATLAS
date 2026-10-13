@@ -112,7 +112,10 @@ temp/
 
 # ----- Test artifacts -----
 .coverage
+.coverage.*
 coverage.xml
+coverage/
+*.lcov
 junit.xml
 test-results/
 htmlcov/

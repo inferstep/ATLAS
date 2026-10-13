@@ -1,0 +1,12 @@
+# Every 15 minutes: one look of the nightly run (atlas-nightly.service).
+# To switch the nightly run off: systemctl --user disable --now atlas-nightly.timer
+[Unit]
+Description=ATLAS nightly run: a look every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+AccuracySec=1min
+Unit=atlas-nightly.service
+
+[Install]
+WantedBy=timers.target

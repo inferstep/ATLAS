@@ -224,7 +224,8 @@ while True:
         assert response.status_code == 200
         data = response.json()
         assert data.get("success") is False, "Infinite loop should fail"
-        error_msg = data.get("stderr", "") + data.get("error_message", "") + data.get("error_type", "")
+        # A field that the answer gives as null counts as empty.
+        error_msg = "".join(data.get(field) or "" for field in ("stderr", "error_message", "error_type"))
         assert "timeout" in error_msg.lower() or "timed out" in error_msg.lower() or "Timeout" in error_msg, \
             f"Error should mention timeout: {error_msg}"
 

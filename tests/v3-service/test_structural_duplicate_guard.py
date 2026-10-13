@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import symbols  # noqa: E402
+import symbols
 
 FILE = '''def a():
     return 1

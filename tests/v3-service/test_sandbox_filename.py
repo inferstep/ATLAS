@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import adapters as A  # noqa: E402
+import adapters as A
 
 
 # --- the name itself --------------------------------------------------------

@@ -89,14 +89,14 @@ PREV=$RECORD/deployed/prev-$STAMP.json
 cat "$PREV"
 
 echo "=== build: $SERVICES ==="
-# shellcheck disable=SC2086
-docker compose build $SERVICES 2>&1 | tail -15
+read -ra build_services <<< "$SERVICES"
+docker compose build "${build_services[@]}" 2>&1 | tail -15
 [ "${PIPESTATUS[0]}" = 0 ] || fail "docker compose build failed"
 
 # --- recreate, in dependency order, each one healthy before the next --------
 wait_healthy() {  # service, deadline in seconds
-  local s=none i
-  for i in $(seq 1 $(( $2 / 5 ))); do
+  local s=none
+  for _ in $(seq 1 $(( $2 / 5 ))); do
     s=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
       "$(cid "$1")" 2>/dev/null || echo none)
     [ "$s" = healthy ] && { echo "$1 healthy"; return 0; }

@@ -21,7 +21,7 @@ V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
-import structured_log as SL  # noqa: E402
+import structured_log as SL
 
 
 @pytest.fixture(autouse=True)
@@ -119,7 +119,7 @@ def test_two_concurrent_requests_cannot_exchange_identities():
                 return idx
 
             stage._fan_out([(0, "x"), (1, "y"), (2, "z")], fn)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             errs.append(exc)
 
     ta = threading.Thread(target=parent, args=("A",))

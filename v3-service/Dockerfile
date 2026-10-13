@@ -4,7 +4,7 @@
 # code the sandbox then executes, so it has to use that interpreter's grammar.
 # On 3.11 it rejected valid 3.12+ code (PEP 701 f"{d["k"]}", PEP 695 type
 # parameters) that the sandbox runs fine.
-FROM docker.io/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+FROM docker.io/python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
 WORKDIR /app
 
 # Install system deps
@@ -23,6 +23,7 @@ COPY v3-service/main.py /app/main.py
 COPY v3-service/adapters.py /app/adapters.py
 COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
+COPY v3-service/node_splice.py /app/node_splice.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
 COPY v3-service/runtime_verification.py /app/runtime_verification.py

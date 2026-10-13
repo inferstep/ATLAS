@@ -16,6 +16,10 @@ import (
 
 var errObjectIdentityUnavailable = errors.New("the object could not be held for approval on this platform")
 
+// objectHoldSupported says whether this system can hold an object for a
+// deletion approval. Tests that go through the approval read it.
+const objectHoldSupported = false
+
 type objectHandle struct{}
 
 var pinObjectFn = pinObject

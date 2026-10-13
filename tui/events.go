@@ -406,7 +406,8 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 
 	case "permission_denied":
 		var p struct {
-			Tool string `json:"tool"`
+			Tool   string `json:"tool"`
+			Reason string `json:"reason"`
 		}
 		_ = json.Unmarshal(ev.Data, &p)
 		// A deny can originate proxy-side (timeout, cancel) while the
@@ -416,8 +417,7 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 			m.pendingPerm = nil
 		}
 		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "denied",
-			Body: fmt.Sprintf("permission denied for %s", p.Tool),
+			Role: roleSystem, Meta: "denied", Body: deniedRow(p.Tool, p.Reason),
 		})
 
 	case "error":
@@ -682,6 +682,20 @@ func (m *tuiModel) appendChatEvent(ev chatEvent) {
 		m.chat = append(m.chat, chatMessage{
 			Role: roleSystem, Meta: "cut",
 			Body: fmt.Sprintf("content loop detected — stream cut after %d chars", p.Chars),
+		})
+
+	// Stream cut: an edit_file old_str had stopped matching its file and was
+	// still arriving (#215), so the call could not succeed.
+	case "old_str_cut":
+		var p struct {
+			Path         string `json:"path"`
+			MatchedLines int    `json:"matched_lines"`
+		}
+		_ = json.Unmarshal(ev.Data, &p)
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cut",
+			Body: fmt.Sprintf("edit_file old_str stopped matching %s after %d line(s) — stream cut",
+				p.Path, p.MatchedLines),
 		})
 
 	// The other half of content_loop_cut: the cut was ANSWERED rather than
@@ -1203,6 +1217,16 @@ func formatStreamingLLM(s string) string {
 	}
 
 	return prefix + "\n" + suffix
+}
+
+// deniedRow is the chat row for a call that was not allowed. A reason means
+// the proxy refused before it asked anyone, so the row gives that reason and
+// does not call it a denied permission.
+func deniedRow(tool, reason string) string {
+	if reason != "" {
+		return reason
+	}
+	return fmt.Sprintf("permission denied for %s", tool)
 }
 
 func summarizeToolArgs(name string, args json.RawMessage) string {

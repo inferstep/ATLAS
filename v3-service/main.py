@@ -49,7 +49,7 @@ from symbols import (structural_edit, structural_score, build_project_symbols,
 # __all__ below states that so linters stop reading them as dead imports —
 # deleting any of them breaks the suite, which is the failure this guards.
 from pipeline import _candidate_by_index, _make_self_test
-from planning import _score_plan, _existing_workspace_files
+from planning import _score_plan, _known_files
 from scoring import (verify_build_command, smoke_compile_check,
                      score_candidate_per_step, _project_relative_path)
 from symbols import _ast_selector_to_query
@@ -57,7 +57,7 @@ from symbols import _ast_selector_to_query
 __all__ = [
     # Re-exported for tests that reach them via `import main`.
     "_candidate_by_index", "_make_self_test", "_score_plan",
-    "_existing_workspace_files",
+    "_known_files",
     "verify_build_command", "smoke_compile_check", "score_candidate_per_step",
     "_project_relative_path", "_ast_selector_to_query",
     "_symbol_index_for_python_source", "_STRUCTURAL_EDIT_AVAILABLE",

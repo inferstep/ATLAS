@@ -1,0 +1,8 @@
+# The SHA-256 of the Gradle wrapper jar that Gradle published, for each Gradle version that a wrapper of this
+# repository may have: one line for a version, the version and then the sum.
+# tests/infrastructure/test_gradle_wrapper.py holds each `gradle-wrapper.jar` of the repository against this list.
+#
+# A line for a new version: take the "Wrapper JAR Checksum" of that version from Gradle's own page,
+# https://gradle.org/release-checksums/ , and not from the pull request that brings the jar.
+9.8.0 238e777fcddd7e34f9708186085def2abd6e08e658505b38718d79d74c21abd5
+9.8.1 3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98

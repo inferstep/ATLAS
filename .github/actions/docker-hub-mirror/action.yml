@@ -1,0 +1,115 @@
+name: docker hub mirror
+description: >-
+  Gives the Docker service of the runner a mirror of Docker Hub, so that a
+  build asks the mirror first and Docker Hub second. And it pulls the images
+  that the job runs from the mirror, by the mirror's own name. A job that
+  builds or runs an image uses this after the checkout of the commit and
+  before its first docker command. It needs no secret and no right of the
+  token.
+
+inputs:
+  images:
+    description: >-
+      The images of Docker Hub that the job runs or pulls itself, by the names
+      that the job uses, each with its tag, with a space or a new line between
+      two. A build needs none: it takes its base image through the mirror of
+      the service.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: the Docker service gets a mirror of Docker Hub
+      shell: bash
+      run: |
+        set -euo pipefail
+        # This step writes the settings file of the Docker service and no
+        # other file. Its tests name a file of their own, and that one has to
+        # lie in the folder for temporary files. Any other name is refused.
+        settings="${DOCKER_SETTINGS_FILE:-/etc/docker/daemon.json}"
+        temporary="${TMPDIR:-/tmp}"
+        case "$settings" in
+          /etc/docker/daemon.json) refused="" ;;
+          *..*) refused=yes ;;
+          "${temporary%/}"/*) refused="" ;;
+          *) refused=yes ;;
+        esac
+        if [ -n "$refused" ]; then
+          echo "::error::This step writes the settings file of the Docker service and no other file, and DOCKER_SETTINGS_FILE names another one. Nothing was written. Fix: take DOCKER_SETTINGS_FILE out of the environment of this job; only the tests of the step set it, to a file in the folder for temporary files."
+          exit 1
+        fi
+        script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
+        show() {
+          # What a file or a tool says is data: it is printed in a block of
+          # its own.
+          echo '```'
+          cat
+          echo '```'
+        }
+        # The script opens no file. This step reads the settings and puts
+        # the new ones in their place; a runner has no settings file at first.
+        old=""
+        if sudo test -e "$settings"; then
+          old="$(sudo cat "$settings")"
+        fi
+        new="$(mktemp)"
+        if ! printf '%s' "$old" | python3 "$script" > "$new"; then
+          echo "::error::The settings file of the Docker service could not get the mirror of Docker Hub (the line above says why), so this job stops before its first docker command. Fix: read the file below; scripts/docker_hub_mirror.py expects one JSON object in it."
+          printf '%s\n' "$old" | show || true
+          exit 1
+        fi
+        sudo mkdir -p "$(dirname "$settings")"
+        sudo install -m 0644 "$new" "$settings"
+        rm -f -- "${new:?}"
+        echo "The settings file of the Docker service names the mirror; every other setting is as it was."
+        if ! sudo systemctl restart docker; then
+          echo "::error::The Docker service did not start again with the mirror in its settings, so no later step can use Docker. Fix: read the lines of the service below. When the settings are at fault, the change belongs in scripts/docker_hub_mirror.py."
+          sudo journalctl --unit docker --no-pager --lines 40 2>&1 | show || true
+          exit 1
+        fi
+        named=""
+        for _ in $(seq 1 30); do
+          if named="$(docker info --format '{{json .RegistryConfig.Mirrors}}' 2>/dev/null)"; then
+            break
+          fi
+          named=""
+          sleep 1
+        done
+        if [ -z "$named" ]; then
+          echo "::error::The Docker service gave no answer in 30 seconds after it started again, so no later step can use Docker. Fix: read the lines of the service below."
+          sudo journalctl --unit docker --no-pager --lines 40 2>&1 | show || true
+          exit 1
+        fi
+        if ! python3 "$script" --asked-first "$named"; then
+          echo "::error::The Docker service runs again and does not name the mirror of Docker Hub, so a pull would go to Docker Hub alone. Fix: read below what the service names and what its settings file holds; the key is registry-mirrors."
+          { echo "docker info names: $named"; sudo cat "$settings"; } 2>&1 | show || true
+          exit 1
+        fi
+        echo "The Docker service asks the mirror first and Docker Hub second."
+
+    # A runner is logged in to Docker Hub. For `docker run` and `docker pull`
+    # the service sends that login to the mirror too, and the mirror refuses
+    # it. So an image that the job runs is pulled here by the mirror's own
+    # name, with which no login goes, and gets the name of Docker Hub. When
+    # the mirror does not give it, the job's own command pulls it from Docker
+    # Hub, with the runner's login, as it did before.
+    - name: the images that the job runs come from the mirror
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+      run: |
+        set -euo pipefail
+        script="$GITHUB_ACTION_PATH/../../../scripts/docker_hub_mirror.py"
+        for image in $IMAGES; do
+          if ! there="$(python3 "$script" --at-the-mirror "$image")"; then
+            echo "::error::The step was given an image that it cannot ask the mirror for (the line above says why), so the job would pull it from Docker Hub alone. Fix: give the step the name that the job runs, with its tag."
+            exit 1
+          fi
+          if docker pull --quiet "$there" && docker tag "$there" "$image"; then
+            echo "From the mirror: \`$image\` is \`$(docker image inspect "$image" --format '{{json .RepoDigests}}')\`"
+          else
+            # The name passed the check of the script: it has only the letters of an image name.
+            echo "::notice title=not from the mirror::The mirror did not give \`$image\`. The job's own command pulls it from Docker Hub."
+          fi
+        done

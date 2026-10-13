@@ -268,31 +268,9 @@ var shellForkBombRe = regexp.MustCompile(`\(\)\s*\{[^}]*\|[^}]*&[^}]*\}\s*;`)
 // command that only mentions one, like `grep mkfs notes.txt`, is allowed.
 var shellDeviceWriteRe = regexp.MustCompile(`(^|\s)>\s*/dev/(sd|nvme|mmcblk|vd|hd|xvd)`)
 
-// shellWrapperRe matches a `bash -c "…"` / `sh -c '…'` / `eval …` prefix so we
-// can unwrap it and run the catastrophic checks against the REAL command — a
-// model that wraps `rm -rf /` in `bash -c` must not slip past the denylist.
-var shellWrapperRe = regexp.MustCompile(`^\s*(?:(?:bash|sh|zsh|dash|ksh)\s+-c|eval)\s+`)
-
-// unwrapShellWrapper strips one `bash -c "…"` / `eval "…"` layer (and the
-// surrounding quotes) so catastrophic-pattern checks see the inner command.
-func unwrapShellWrapper(seg string) string {
-	loc := shellWrapperRe.FindStringIndex(seg)
-	if loc == nil {
-		return seg
-	}
-	inner := strings.TrimSpace(seg[loc[1]:])
-	if len(inner) >= 2 {
-		if (inner[0] == '"' && inner[len(inner)-1] == '"') ||
-			(inner[0] == '\'' && inner[len(inner)-1] == '\'') {
-			inner = inner[1 : len(inner)-1]
-		}
-	}
-	return inner
-}
-
-// validateShellCommand returns a non-empty rejection reason ONLY for a command
-// that is catastrophic even inside the sandbox jail (whole-project wipe, fork
-// bomb, device destruction). Everything else — mv, cp, mkdir, rm of specific
+// validateShellCommand rejects catastrophic commands (whole-project wipe,
+// fork bomb, device destruction) and execution wrappers that cannot be inspected
+// within the quoting and depth limits. Everything else — mv, cp, mkdir, rm of specific
 // files, chmod, sed -i, > redirects, build/test/run — is allowed.
 //
 // It is the one command policy: every tool that runs a command goes through
@@ -300,27 +278,7 @@ func unwrapShellWrapper(seg string) string {
 // two, and they disagreed: run_command's deny-list saw through `env rm -rf /`
 // and `(rm -rf /)` and run_background's check did not.
 func validateShellCommand(cmd string) string {
-	stripped := strings.TrimSpace(cmd)
-	if stripped == "" {
-		return ""
-	}
-	// Whole-command checks (survive segment splitting / wrapper quoting).
-	unwrapped := unwrapShellWrapper(stripped)
-	if shellForkBombRe.MatchString(stripped) || shellForkBombRe.MatchString(unwrapped) {
-		return "refused: that is a fork bomb — it would exhaust the sandbox's process table. If you need to spawn processes, run them one at a time."
-	}
-	if shellDeviceWriteRe.MatchString(stripped) || shellDeviceWriteRe.MatchString(unwrapped) {
-		return "refused: writing to a block device is blocked. Work with files under the project directory instead."
-	}
-	for _, seg := range commandSegments(stripped) {
-		// A wrapper's inner command can itself hold several commands.
-		for _, inner := range commandSegments(unwrapShellWrapper(strings.TrimSpace(seg))) {
-			if msg := catastrophicCommand(inner); msg != "" {
-				return msg
-			}
-		}
-	}
-	return ""
+	return inspectShellCommand(cmd)
 }
 
 // commandSegments splits a command line where a new command can start: at
@@ -363,37 +321,6 @@ func commandSegments(cmd string) []string {
 	}
 	cut()
 	return out
-}
-
-// commandPrefixWords run the command that follows them.
-var commandPrefixWords = map[string]bool{
-	"sudo": true, "doas": true, "env": true, "command": true, "nice": true,
-	"nohup": true, "time": true, "exec": true, "builtin": true, "timeout": true,
-	"stdbuf": true,
-}
-
-// wrapperArgRe matches a prefix word's own options and values: `nice -n 10`,
-// `timeout 5s`, `env -i`.
-var wrapperArgRe = regexp.MustCompile(`^(-.*|\d+(\.\d+)?[smhd]?)$`)
-
-// commandPosition returns the index of the word a segment actually runs,
-// past variable assignments and prefix words with their arguments.
-func commandPosition(fields []string) int {
-	i := 0
-	for i < len(fields) {
-		switch f := fields[i]; {
-		case commandPrefixWords[filepath.Base(f)]:
-			i++
-			for i < len(fields) && wrapperArgRe.MatchString(fields[i]) {
-				i++
-			}
-		case strings.Contains(f, "=") && !strings.HasPrefix(f, "-"):
-			i++ // VAR=value
-		default:
-			return i
-		}
-	}
-	return i
 }
 
 // catastrophicCommand checks the command one segment runs.
@@ -759,9 +686,9 @@ func replyDefersWork(text string) bool {
 			if len(window) > 60 {
 				window = window[:60]
 			}
+			window = trimReplyLeadIns(window) // "i will try to read" defers as "i will read" does
 			for _, v := range verbs {
-				if strings.HasPrefix(strings.TrimPrefix(strings.TrimPrefix(window, "now "), "first "), v) ||
-					strings.HasPrefix(window, "now "+v) || strings.HasPrefix(window, "next "+v) {
+				if strings.HasPrefix(window, v) {
 					return true
 				}
 			}
@@ -1633,8 +1560,8 @@ func unreadFileCitations(ctx *AgentContext, text string) []string {
 			continue
 		}
 		seen[name] = true
-		resolved := resolveAgentPath(ctx, name)
-		if info, err := os.Stat(resolved); err != nil || info.IsDir() {
+		resolved, info, err := statWorkspaceFile(ctx, name) // "x/../../y" is never looked up
+		if err != nil || info.IsDir() {
 			continue
 		}
 		if ctx.WasBodySeen(resolved) || ledgerTracks(ctx, resolved) {
@@ -2488,25 +2415,6 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 // concrete evidence of breakage, so the message says that rather than
 // describing the request — the model has already seen the failure and needs
 // to act on it, not be told what verification is.
-// blockedServerStart reports whether a failed verification command failed
-// because it is a long-running process rather than because the code is
-// broken: it never exited (the sandbox timeout fired) or it could not bind
-// because something is already serving that port.
-//
-// The distinction decides what the verification gate says next. Treating it
-// as a red test tells the model to fix its code and re-run the command, and
-// re-running a blocking server start can never exit clean — an observed
-// session started the server correctly with run_background, was told to
-// "re-run the same command and confirm it exits clean", and spent its three
-// remaining bounces re-sending `done` because nothing it could do satisfied
-// that.
-func blockedServerStart(output string) bool {
-	low := strings.ToLower(output)
-	return strings.Contains(low, "execution timed out") ||
-		strings.Contains(low, "address already in use") ||
-		strings.Contains(low, "is in use by another program")
-}
-
 func verificationRejectionMessage(sawFailedVerification bool) string {
 	return verificationRejection(sawFailedVerification, false, "")
 }
@@ -2639,7 +2547,7 @@ func inlineCodePayload(segment string) (string, bool) {
 // that inspect a script before deciding how it should be run.
 func workspaceFileReader(ctx *AgentContext) func(string) (string, bool) {
 	return func(rel string) (string, bool) {
-		data, err := os.ReadFile(filepath.Join(ctx.WorkingDir, rel))
+		data, _, err := readWorkspaceFile(ctx, rel) // rel is parsed from a command string
 		if err != nil {
 			return "", false
 		}
@@ -3343,8 +3251,8 @@ func deliverablesDemonstrablyValid(ctx *AgentContext, expected []string) bool {
 		return false
 	}
 	for _, rel := range expected {
-		resolved := resolveAgentPath(ctx, rel)
-		content, err := os.ReadFile(resolved)
+		// A deliverable that resolves outside the workspace demonstrates nothing.
+		content, resolved, err := readWorkspaceFile(ctx, rel)
 		if err != nil {
 			return false
 		}

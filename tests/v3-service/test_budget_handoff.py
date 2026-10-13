@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import main  # noqa: E402
+import main
 
 
 @pytest.mark.parametrize("value, want", [

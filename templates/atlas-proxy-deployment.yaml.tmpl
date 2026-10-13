@@ -53,6 +53,7 @@ spec:
         - {name: ATLAS_PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}
         - {name: ATLAS_VERIFY_IN,      value: "sandbox"}
         - {name: ATLAS_WORKSPACE_DIR,  value: "/workspace"}
+        - {name: ATLAS_PROJECT_DIR,    value: "${ATLAS_PROJECTS_DIR}"}
         volumeMounts:
         - name: workspace
           mountPath: /workspace

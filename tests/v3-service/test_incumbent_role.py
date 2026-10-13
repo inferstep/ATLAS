@@ -20,10 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import adapters  # noqa: E402
-import pipeline as P  # noqa: E402
-import scoring  # noqa: E402
-import symbols  # noqa: E402
+import adapters
+import pipeline as P
+import scoring
+import symbols
 
 TEST_FILE = (
     "from stats import mean, median\n"
@@ -108,6 +108,13 @@ def test_a_project_name_defined_locally_instead_is_dropped():
     after = "def mean(v):\n    return sum(v) / len(v)\n\nprint(mean([1, 2]))\n"
     assert symbols.dropped_top_level_names(before, after, "check.py", PROJECT) == [
         "mean (imported from stats)"]
+
+
+def test_project_module_names_drop_only_a_leading_dot_slash():
+    """#277: `lstrip("./")` also ate the dot of a hidden directory."""
+    names = symbols._project_module_names(["./pkg/util.py", "././pkg/helpers.py", ".hidden/x.py"])
+    assert {"pkg.util", "util", "pkg.helpers", "helpers"} <= names
+    assert "hidden.x" not in names
 
 
 def test_project_modules_resolve_through_packages_and_relative_imports():

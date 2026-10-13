@@ -18,6 +18,7 @@ import type {
 	PermissionDecisionRequest,
 	ReadyResponse,
 	VersionResponse,
+	WorkspaceResponse,
 } from './types';
 
 export interface AtlasClientOptions {
@@ -221,6 +222,22 @@ export class AtlasClient {
 			throw await toApiError(response);
 		}
 		return (await response.json()) as VersionResponse;
+	}
+
+	/** GET /workspace - project_dir, working_dir, containerized */
+	async getWorkspace(): Promise<WorkspaceResponse | null> {
+		try {
+			const response = await fetch(`${this.baseUrl}/workspace`, {
+				method: 'GET',
+				headers: this.headers(false),
+			});
+			if (!response.ok) {
+				return null;
+			}
+			return (await response.json()) as WorkspaceResponse;
+		} catch {
+			return null;
+		}
 	}
 
 	/**

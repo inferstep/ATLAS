@@ -43,6 +43,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -2190,15 +2191,17 @@ type lintFile struct {
 func assetLintFiles(workingDir string) ([]lintFile, bool) {
 	var files []lintFile
 	count := 0
-	filepath.Walk(workingDir, func(path string, info os.FileInfo, err error) error {
+	dir := openConfinedDir(workingDir) // reads stay inside the workspace
+	defer dir.Close()
+	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error { // its one error, "too large", is in count
 		if err != nil {
 			return nil
 		}
-		name := info.Name()
-		if info.IsDir() {
+		name := entry.Name()
+		if entry.IsDir() {
 			if strings.HasPrefix(name, ".") || name == "node_modules" ||
 				name == "venv" || name == "__pycache__" {
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 			return nil
 		}
@@ -2206,17 +2209,13 @@ func assetLintFiles(workingDir string) ([]lintFile, bool) {
 		if count > assetLintMaxFiles {
 			return fmt.Errorf("project too large")
 		}
-		if info.Size() > assetLintMaxFileBytes {
+		if info, ierr := entry.Info(); ierr != nil || info.Size() > assetLintMaxFileBytes {
 			return nil
 		}
 		switch strings.ToLower(filepath.Ext(name)) {
 		case ".py", ".html", ".htm", ".js", ".css", ".jinja", ".jinja2":
-			data, rerr := os.ReadFile(path)
+			data, rerr := dir.ReadFile(rel)
 			if rerr != nil {
-				return nil
-			}
-			rel, rerr2 := filepath.Rel(workingDir, path)
-			if rerr2 != nil {
 				return nil
 			}
 			files = append(files, lintFile{rel: filepath.ToSlash(rel), content: string(data)})
@@ -2798,11 +2797,11 @@ func verifyWorkspaceAlignment(ctx *AgentContext) string {
 	wsAlignMu.Unlock()
 
 	token := fmt.Sprintf("atlas-mount-probe-%d", time.Now().UnixNano())
-	probe := filepath.Join(ctx.WorkingDir, ".atlas-mount-probe")
-	if err := os.WriteFile(probe, []byte(token), 0644); err != nil {
+	removeProbe, err := writeMountProbe(ctx.WorkingDir, token)
+	if err != nil {
 		return "" // can't probe; not evidence of a split
 	}
-	defer os.Remove(probe)
+	defer removeProbe()
 
 	problem := ""
 	if got, ok := sandboxReadProbe(ctx); !ok {
@@ -2830,7 +2829,7 @@ func sandboxReadProbe(ctx *AgentContext) (string, bool) {
 	// identical on both sides — but only if the subdirectory is carried
 	// across. Hardcoding /workspace made every session with a sandbox_subdir
 	// look split, which refused 28 of 28 benchmark sessions before they ran.
-	probe := filepath.Join(ctx.WorkingDir, ".atlas-mount-probe")
+	probe := filepath.Join(ctx.WorkingDir, mountProbeName)
 	body, err := json.Marshal(map[string]interface{}{
 		"code":     fmt.Sprintf("print(open(%q).read())", probe),
 		"language": "python",
@@ -2911,6 +2910,22 @@ func echoesExistingFile(existing, incoming string) bool {
 		return true
 	}
 	return false
+}
+
+// resendsOwnWrite reports a write whose content is already what the file holds,
+// at any size. It is asked only about a file this session wrote: re-sending
+// those bytes changes nothing, and the next step is to use them.
+//
+// echoesExistingFile keeps its 200-byte floor, which exists for the prefix
+// case (a short prefix proves nothing) and for files the session did not
+// write. For the session's own file the floor let small test files through.
+// In the ccc71fc smoke runs (2026-09-29), offbyone and add_function wrote a
+// 76-byte test_chunk.py (and a small test_stats.py), re-sent it five or six
+// times without running it, and passing work ended stopped/repeat_detector
+// in 4 of 84 sessions.
+func resendsOwnWrite(existing, incoming string) bool {
+	a, b := strings.TrimSpace(existing), strings.TrimSpace(incoming)
+	return b != "" && a == b
 }
 
 // echoedWriteRejection tells the model why copying a file back is refused.
@@ -3592,7 +3607,7 @@ func restoreDeliverable(ctx *AgentContext, key string) restoreDecision {
 	ctx.LedgerMu.Unlock()
 
 	dec.Restored = true
-	log.Printf("[recovery] restored %s to the last version shown to be valid", rel)
+	log.Printf("[recovery] restored %s to the last version shown to be valid", logPath(rel))
 	return dec
 }
 

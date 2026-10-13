@@ -59,6 +59,8 @@ def test_health_endpoint_reports_degraded_as_warning(monkeypatch):
         return True, json.dumps({"status": status})
 
     monkeypatch.setattr(doctor, "_http_get", fake_get)
+    # The lens URL comes from the checkout's .env at import; pin the default.
+    monkeypatch.setattr(doctor, "LENS_URL", "http://127.0.0.1:8099")
 
     results = {item.name: item for item in doctor.check_health_endpoints()}
 
@@ -161,6 +163,9 @@ def test_check_metal_native_warn_when_port_not_listening(monkeypatch, tmp_path):
     llama-server yet. Warn (not fail) — the binary is fine, they just
     need to run the launcher. Distinct from 'binary missing' because
     the recovery is different (run the launcher, not the setup script)."""
+    # atlas.env reads the checkout's .env at import, before conftest hides it,
+    # so the port these messages name is pinned to the default here.
+    monkeypatch.setattr(doctor, "LLAMA_PORT", 8080)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
     bin_dir = tmp_path / ".atlas" / "macos" / "bin"
@@ -188,6 +193,9 @@ def test_check_metal_native_pass_when_everything_healthy(monkeypatch, tmp_path):
     """Happy path: binary exists, is executable, runs --help cleanly,
     and the port is listening. This is the steady-state Mac user
     experience after setup + launcher are both done."""
+    # atlas.env reads the checkout's .env at import, before conftest hides it,
+    # so the port these messages name is pinned to the default here.
+    monkeypatch.setattr(doctor, "LLAMA_PORT", 8080)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
     bin_dir = tmp_path / ".atlas" / "macos" / "bin"
@@ -235,6 +243,9 @@ def test_check_metal_native_pass_when_llama_help_exits_nonzero(monkeypatch, tmp_
     the binary produced ANY output. A truly corrupt binary (dyld
     failure) produces no output AND exits nonzero; a healthy binary
     that just doesn't return 0 on --help prints its usage."""
+    # atlas.env reads the checkout's .env at import, before conftest hides it,
+    # so the port these messages name is pinned to the default here.
+    monkeypatch.setattr(doctor, "LLAMA_PORT", 8080)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
     bin_dir = tmp_path / ".atlas" / "macos" / "bin"

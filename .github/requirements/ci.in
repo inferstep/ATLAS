@@ -1,8 +1,36 @@
-# Tools the CI jobs install, locked with hashes in ci.txt (Scorecard
-# Pinned-Dependencies). Regenerate ci.txt with scripts/ci-lock.sh.
+# What the CI jobs install, locked with hashes in ci.txt (Scorecard
+# Pinned-Dependencies). Make ci.txt again with scripts/ci-lock.sh.
 # ruff and mypy match sandbox/requirements-verify.txt (a contract test checks).
 pytest
+# Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in
+# scripts/production-readiness.py).
+pytest-cov
 pyyaml
-ruff==0.16.9
-mypy==2.3.1
+ruff==0.16.10
+mypy==2.4.0
 yamllint
+
+# What the tests need of the product's own packages. Each pin below is a copy
+# of the pin in a product file, and a contract test holds the two the same.
+# Dependabot moves both in one pull request and makes ci.txt again.
+# From sandbox/requirements-runtime.txt: the sandbox service, which the
+# tests under tests/infrastructure start.
+fastapi==0.142.2
+defusedxml==0.7.1
+pydantic==2.13.5
+uvicorn==0.54.0
+# From sandbox/requirements-verify.txt: the sandbox's check of Jinja
+# templates. Without it the check passes everything.
+jinja2==3.1.6
+# From v3-service/requirements.txt: the grammars behind structural_edit and
+# the call graph, for the tests under tests/v3-service.
+tree-sitter==0.26.0
+tree-sitter-python==0.25.0
+tree-sitter-html==0.23.2
+tree-sitter-javascript==0.25.0
+tree-sitter-go==0.25.0
+tree-sitter-typescript==0.23.2
+# From geometric-lens/requirements.txt: the client with which the tests that
+# need a running service reach it (tests/conftest.py). Without it those test
+# files are skipped as a whole.
+httpx==0.28.1

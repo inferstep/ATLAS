@@ -190,3 +190,32 @@ func TestEveryWritePathRunsThroughTheRecorder(t *testing.T) {
 			"the model just wrote: %s", i+1, strings.TrimSpace(line))
 	}
 }
+
+// A citation that climbs out of the workspace is never looked up, so a reply
+// cannot learn whether a file outside it exists.
+func TestACitationOutsideTheWorkspaceIsNotLookedUp(t *testing.T) {
+	ctx := evidenceCtx(t, map[string]string{"real.py": "x = 1\n"})
+	outside := filepath.Join(filepath.Dir(ctx.WorkingDir), "secret.txt")
+	if err := os.WriteFile(outside, []byte("s\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := unreadFileCitations(ctx, "the key is in x/../../secret.txt"); len(got) != 0 {
+		t.Fatalf("a file outside the workspace was looked up: %v", got)
+	}
+}
+
+// The script a command names is read only inside the workspace.
+func TestAScriptOutsideTheWorkspaceIsNotRead(t *testing.T) {
+	ctx := evidenceCtx(t, map[string]string{"app.py": "inside\n"})
+	outside := filepath.Join(filepath.Dir(ctx.WorkingDir), "server.py")
+	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	read := workspaceFileReader(ctx)
+	if got, ok := read("app.py"); !ok || got != "inside\n" {
+		t.Fatalf("app.py = %q, %v", got, ok)
+	}
+	if got, ok := read("../server.py"); ok {
+		t.Fatalf("read a script outside the workspace: %q", got)
+	}
+}

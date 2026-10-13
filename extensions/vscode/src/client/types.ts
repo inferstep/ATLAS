@@ -243,6 +243,13 @@ export interface VersionResponse {
 	error_codes: string[];
 }
 
+/** GET /workspace body */
+export interface WorkspaceResponse {
+	project_dir: string;
+	working_dir: string;
+	containerized: boolean;
+}
+
 /** GET /v1/calibration/status — lens + ASA compat verdict for the loaded
  * model. Called once at activation and on manual refresh only: every call
  * re-probes the lens service (~50–200 ms, docs/API.md). */

@@ -24,8 +24,8 @@ V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
-import adapters  # noqa: E402
-import structured_log as SL  # noqa: E402
+import adapters
+import structured_log as SL
 
 CANDIDATE_SENTINEL = "ZZQCANDIDATEZZ_7f3a91"
 PROMPT_SENTINEL = "ZZQPROMPTZZ_4b8e02"

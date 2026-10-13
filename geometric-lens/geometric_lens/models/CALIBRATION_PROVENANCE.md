@@ -19,7 +19,7 @@ calibration file is only valid with the cost field it was derived from.
 | Training commit | e2d0c4c (dev) |
 | llama.cpp rev | 2e97c5f96f9fe2bb26f794a348e05d7a1c74baa1 |
 | Trainer | `scripts/retrain_lens_from_results.py` (historical — the script and the C(x) function it called, `retrain_cost_field_bce`, have since been removed; both are in the training commit. The closest path today is `atlas lens build --from-results`, which trains with a different loss: see Reproduce) |
-| Hyperparameters | epochs 100 (early-stopped 60, patience 10), BCE loss (`retrain_cost_field_bce`) |
+| Hyperparameters | epochs 100 (early-stopped 60, patience 10), class-weighted MSE loss to energy targets (PASS=2.0, FAIL=25.0) in `retrain_cost_field_bce` (despite its name, not a BCE loss) |
 | Seed | 42 (fixed in the script) |
 | Metrics | val AUC **0.732**, train AUC 0.805, val acc 73.7%, Spearman ρ 0.464 |
 | Energy separation | PASS mean 9.25 · FAIL mean 11.81 (higher = worse, correct direction) |
@@ -29,10 +29,11 @@ calibration file is only valid with the cost field it was derived from.
 
 ### Reproduce
 
-The original run used `scripts/retrain_lens_from_results.py` and its BCE
-C(x) trainer, `retrain_cost_field_bce`; both have since been removed, so
-this record cannot be reproduced exactly from the current tree (check out
-the training commit for that). `atlas lens build` rebuilds a bundle from the
+The original run used `scripts/retrain_lens_from_results.py` and its
+class-weighted MSE C(x) trainer, `retrain_cost_field_bce` (despite its
+name, it trains with MSE to energy targets, not BCE); both have since been
+removed, so this record cannot be reproduced exactly from the current tree
+(check out the training commit for that). `atlas lens build` rebuilds a bundle from the
 same data, but it trains C(x) with a contrastive ranking loss, also
 retrains G(x), and writes the bundle's `provenance.json`; its metrics are a
 new record, not this one:

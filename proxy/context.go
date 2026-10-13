@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // GH #39 point 4: auto-inject reachability slice. When a user message names
@@ -151,32 +153,32 @@ func walkPythonFiles(root string) map[string]string {
 		"dist": true, "build": true, ".mypy_cache": true,
 		".pytest_cache": true, ".idea": true, ".vscode": true,
 	}
-	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	// The walk and every read go through the folder, so a name in it that
+	// points somewhere else is skipped like an unreadable entry.
+	dir := openConfinedDir(root)
+	defer dir.Close()
+	_ = dir.Walk(func(rel string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable entries
 		}
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
+		if entry.IsDir() {
+			if skipDirs[entry.Name()] {
+				return fs.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(strings.ToLower(info.Name()), ".py") {
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".py") {
 			return nil
 		}
 		if len(result) >= projectScanMaxFiles || totalBytes >= projectScanMaxBytes {
-			return filepath.SkipAll
+			return fs.SkipAll
 		}
-		data, err := os.ReadFile(path)
+		data, err := dir.ReadFile(rel)
 		if err != nil {
 			return nil
 		}
 		if totalBytes+len(data) > projectScanMaxBytes {
-			return filepath.SkipAll
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			rel = path
+			return fs.SkipAll
 		}
 		result[rel] = string(data)
 		totalBytes += len(data)
@@ -373,7 +375,7 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Parse package.json for framework detection
-	data, err := os.ReadFile(filepath.Join(projectDir, "package.json"))
+	data, err := readConfined(projectDir, "package.json")
 	if err != nil {
 		return info
 	}
@@ -505,7 +507,7 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Detect framework from requirements or pyproject
-	if data, err := os.ReadFile(filepath.Join(projectDir, "requirements.txt")); err == nil {
+	if data, err := readConfined(projectDir, "requirements.txt"); err == nil {
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "flask") {
 			info.Framework = "flask"
@@ -637,6 +639,17 @@ func resolveWorkspacePath(ctx *AgentContext, path string) (string, error) {
 	return candidate, nil
 }
 
+// statWorkspaceFile stats a model-named path only when it resolves inside the
+// workspace, so a lookup cannot report on files outside it.
+func statWorkspaceFile(ctx *AgentContext, path string) (string, os.FileInfo, error) {
+	resolved, err := resolveWorkspacePath(ctx, path)
+	if err != nil {
+		return "", nil, err
+	}
+	info, err := os.Stat(resolved)
+	return resolved, info, err
+}
+
 // readWorkspaceFile opens a file through os.Root, so the read remains confined
 // even if a workspace symlink is swapped between validation and use.
 func readWorkspaceFile(ctx *AgentContext, path string) ([]byte, string, error) {
@@ -732,6 +745,9 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 		return ""
 	}
 	keys := workspacePathFields
+	if k := nonCanonicalArgName(fields); k != "" {
+		return fmt.Sprintf("%s: argument names are lowercase, as the tool lists them; %q is not", name, k)
+	}
 	for _, key := range keys[name] {
 		raw, ok := fields[key]
 		if !ok {
@@ -741,8 +757,28 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 		if json.Unmarshal(raw, &value) != nil || strings.TrimSpace(value) == "" {
 			continue
 		}
+		// The ledger trims a path and the handler does not, so a padded
+		// path would be checked in one form and recorded in another.
+		if value != strings.TrimSpace(value) {
+			return fmt.Sprintf("%s: %s %q starts or ends with whitespace", name, key, value)
+		}
 		if _, err := resolveWorkspacePath(ctx, value); err != nil {
 			return fmt.Sprintf("%s: %v", name, err)
+		}
+	}
+	return ""
+}
+
+// nonCanonicalArgName is an argument name that is not lowercase ASCII. Every
+// tool field is, and encoding/json matches names case-insensitively, so
+// "PATH" or "ſource" reaches the handler's field while every exact-key
+// reader (this check, the deny-list, the TUI's tool line) sees no such argument.
+func nonCanonicalArgName(fields map[string]json.RawMessage) string {
+	for k := range fields {
+		for _, r := range k {
+			if r > unicode.MaxASCII || unicode.IsUpper(r) {
+				return k
+			}
 		}
 	}
 	return ""

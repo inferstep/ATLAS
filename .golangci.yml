@@ -1,0 +1,43 @@
+# golangci-lint settings for the proxy and tui modules.
+#
+# CI runs this on new code only (--new-from-rev), so it judges what a change
+# adds and does not report what was already there.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck    # an error that is returned and not looked at
+    - nilerr      # an error that is checked and then dropped
+    - unused      # code nothing calls
+    - gocognit    # a function that is hard to follow
+    - forbidigo   # a setting read where settings are not loaded
+    - nolintlint  # a suppression with no reason
+  settings:
+    gocognit:
+      # The same limit SonarQube uses for cognitive complexity.
+      min-complexity: 15
+    forbidigo:
+      forbid:
+        - pattern: ^os\.(Getenv|LookupEnv)$
+          msg: >-
+            a new environment variable is a new switch. Read settings through
+            envOr, envIntOr or envDurationSec, and say in the pull request why
+            the switch is needed.
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    rules:
+      # Tests arrange a case: they set the environment, ignore errors of
+      # set-up calls, and run long tables. These three rules are for the code
+      # under test.
+      - path: _test\.go$
+        linters:
+          - forbidigo
+          - errcheck
+          - gocognit
+
+formatters:
+  enable:
+    - gofmt

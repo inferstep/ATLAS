@@ -391,7 +391,7 @@ def _docker_exec_rm(container: str, path: str) -> None:
         _safe_print(f"  (cleanup of {path} in {container} timed out)")
 
 
-def _emit_build(args: argparse.Namespace, color: bool) -> int:
+def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     """Train fresh ASA vector by running build_steering_vector.py inside
     the lens container.
 
@@ -555,7 +555,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
                 cmd += ["--model-hint", meta.architecture]
             if meta.n_layers:
                 cmd += ["--layer-count", str(meta.n_layers)]
-    except Exception:
+    except Exception:  # noqa: S110
         pass   # metadata stamps are informational — never block the build
     built_ok = False     # training produced a vector in the container
     copied_out = False   # the built vector survives in the container until True
@@ -732,7 +732,7 @@ Feb 2026 ASA paper (arxiv 2602.04935).
 """
 
 
-def _emit_publish(args: argparse.Namespace, color: bool) -> int:
+def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if not publishing.publish_preflight("asa", dry_run=args.dry_run,
                                         color=color):
         return 1
@@ -772,7 +772,7 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
             mp = fit_module._default_model_path()
             if mp:
                 model_label = os.path.splitext(os.path.basename(mp))[0]
-        except Exception:
+        except Exception:  # noqa: S110
             # Configured-model discovery is best-effort; the explicit-model
             # validation below produces the actionable error for the user.
             pass

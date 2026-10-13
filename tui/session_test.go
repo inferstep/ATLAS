@@ -11,11 +11,15 @@ import (
 	"time"
 )
 
-// isolateSessions points os.UserCacheDir at a temp dir so tests never touch a
-// real ~/.cache. On Linux os.UserCacheDir honors $XDG_CACHE_HOME.
+// isolateSessions points os.UserCacheDir at a temp dir of this test, so the
+// test sees no session of another test and never touches a real cache
+// folder. os.UserCacheDir reads $XDG_CACHE_HOME on Linux and $HOME on macOS,
+// so both are set.
 func isolateSessions(t *testing.T) {
 	t.Helper()
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("HOME", dir)
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {

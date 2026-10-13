@@ -1,6 +1,6 @@
 # Contributing to ATLAS
 
-This page takes you from "I'd like to help" to "my change is in a release".
+This page takes you from wanting to help to a change of yours in a release.
 If something here is unclear or wrong, that's a bug. Open a Documentation
 issue.
 
@@ -74,6 +74,17 @@ working tree in the containers without a rebuild after every edit.
 
 ## 4. Run the quality gate
 
+Before you push, run the checks your change needs:
+
+```bash
+make verify        # fast: the gates that cover the files you changed
+make verify-full   # the same, plus the slow suites CI runs
+```
+
+It prints only what failed, each with how to fix it. To run it on every
+push, install the hook in `.pre-commit-config.yaml` with
+[prek](https://github.com/j178/prek) or pre-commit. The whole gate is:
+
 ```bash
 python scripts/production-readiness.py            # everything
 python scripts/production-readiness.py --list     # the gates
@@ -82,7 +93,26 @@ python scripts/production-readiness.py --only ruff
 
 CI runs the same gates, so a green run here usually means a green pull
 request. An optional tool you haven't installed shows as `unavailable`,
-not as a pass. More on tests is in [Testing](#testing).
+not as a pass. A test gate that ran no test fails, also when its command
+exited 0: every test skipped, a Go package with no test files, or a `-run`
+pattern that matches nothing. More on tests is in [Testing](#testing).
+
+To measure test coverage as CI does, name a directory for the reports
+(the pytest gates need `pytest-cov`):
+
+```bash
+ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python-tests
+```
+
+CI sends its coverage reports to [Codecov](https://app.codecov.io/gh/inferstep/ATLAS).
+On a pull request it adds two statuses: the coverage of the whole project,
+and of the lines you changed. They show numbers and do not fail the pull
+request. Codecov does not comment. A branch that does not have `codecov.yml`
+yet uploads nothing; update it from `dev`.
+
+CI also runs the SonarQube Cloud analysis (`sonar-project.properties`), and
+Sonar adds its result to the pull request as a check of its own. A pull
+request from a fork gets none ([When a check is red](#when-a-check-is-red)).
 
 ## 5. Find an issue
 
@@ -111,12 +141,16 @@ request without one may be closed with a pointer to do that.
 
 Comment `/claim` (alone, as the first line) on a Ready issue. The bot
 assigns you, moves the card to In Progress, and replies with your Shepherd.
+With more words on that line the bot claims nothing and tells you so: put
+them on the lines below.
 
 - One person per issue. You can hold **2** open claims, or **1** before
   your first merged pull request.
-- Link a pull request within **5 days** (put `Closes #<issue>` in its
-  description, or the bot reminds you). After **7 days** without one, the
-  claim is released and the issue is Ready again.
+- Open a pull request within **10 days**, as a draft if it is not ready,
+  and put `Closes #<issue>` on a line of its own in its description
+  (`Refs #<issue>` when the issue must stay open). Without one the bot
+  reminds you. After **14 days** without one, the claim is released and the
+  issue is Ready again.
 - Comment `/unclaim` any time to let it go. No hard feelings.
 
 These numbers live in [.github/atlas-bot.yml](.github/atlas-bot.yml).
@@ -154,27 +188,92 @@ It links you to the issue, lets your Shepherd help early, and keeps your
 claim. Fill in the template: what changed, why, how you verified it, and
 the hardware you ran it on (or "untested on hardware").
 
+Under **What users will notice**, say what a user of ATLAS sees differently
+after your change, in plain sentences or a list. If users notice nothing,
+write only "Nothing." The changelog of a release is made from that part, so
+a pull request does not edit `CHANGELOG.md`.
+
 GitHub sets **base** to `main` on a new pull request. Change it to `dev`
 before you click **Create pull request**.
 
 CI for a pull request from outside the org waits until a maintainer
 approves the run. CI on a fork never gets the repository's secrets.
 
+One check, **checks ran**, tests nothing itself. It waits for the other
+workflows of your commit and fails when one of them did not start, when a
+job that has no `if:` condition was skipped or cancelled, or when a required
+check was skipped. Each of these would otherwise look like a pass. Its
+output names what did not run and how to fix it; after you re-run a
+cancelled workflow, re-run this check too.
+
+### When a check is red
+
+A required check stops the merge while it is red. The other checks report:
+a red one is a reason to look, and a maintainer decides what it means for
+the merge. The [quality gates page](docs/quality/gates.md) keeps the list
+of both kinds.
+
+| You see | What it means | What to do |
+|---|---|---|
+| `pr title` is red | The title is not in the form of [section 7](#7-branches-commits-and-pull-request-titles), or its summary has more than 100 characters | Edit the title. The check starts again by itself |
+| A test job is red | A test failed with your change | Open the job and read the first failure. `make verify` ([section 4](#4-run-the-quality-gate)) runs the same gates on your machine |
+| `code health (size)` is red | A function has more than 100 lines, or a file more than 1,500, and is not on the size list; or one on the list grew | Split it |
+| `checks ran` is red | What the paragraph above says. On a pull request from a fork it can say "waiting for a maintainer's approval" | Nothing for that one: a maintainer approves the run. For the rest, its output says what to do |
+| `integrity check` has a report | It is the check that reads your change, not the code ([Testing](#testing)) | Give each skip its reason. A maintainer reads the rest |
+| There is no Sonar result | On a pull request from a fork the Sonar check does not run; the change is analysed after the merge. | Nothing |
+| `codecov/patch` and `codecov/project` | They are the two coverage statuses of [section 4](#4-run-the-quality-gate) | Nothing. If your new lines have no test, add one |
+| Red crosses appear at the moment your pull request merges | Runs that still waited for approval were closed as failed. They have no job in them and never started | Nothing |
+| Runs of an older commit that were never approved | They never start and do not count | Nothing. The checks of the newest commit are the ones that count |
+| No check starts, and GitHub says the branch has conflicts | No workflow runs while the branch conflicts with `dev` | Merge `dev` into your branch and resolve the conflict. Then the runs start, and wait for approval |
+| `CodeQL` is red with a new alert | Code scanning marked a line of your change and opened a thread on it | Change the line, or say in the thread why it is no fault. Only a maintainer can dismiss an alert |
+
+**When a red check is not from your change.** A check can be red because of
+a network fault, or because of a mistake in the check. You cannot run a job
+again on this repository; a maintainer can. Write in your pull request that
+you think the red is not from your change, and say which check. A maintainer
+looks and runs it again. A mistake in a check is ours to fix.
+
 ## 9. Review
 
-- A maintainer responds within **5 business days**.
+- A maintainer reviews your pull request, and responds within
+  **5 business days**.
 - To merge, a pull request needs:
-  - an approval from a code owner ([CODEOWNERS](.github/CODEOWNERS))
   - all required checks green
   - every conversation resolved
-  - no conflict with `dev` (a maintainer may ask you to click **Update branch**)
-- New commits dismiss earlier approvals, so the last push gets reviewed.
-- Maintainers merge with **squash** (your title becomes the commit) or
-  **rebase**. History on `dev` stays linear.
+  - no conflict with `dev`
+- A maintainer may ask you to click **Update branch** when the results are
+  from an older `dev`. That button does not work while the branch conflicts
+  with `dev`; for a conflict see [When a check is red](#when-a-check-is-red).
+- A maintainer adds the pull request to the merge queue. The queue runs the
+  required checks again, on your change merged with `dev` as it is at that
+  moment, and squashes it into one commit. Your title becomes that commit.
+  History on `dev` stays linear.
 
 **Definition of done:** linked issue, tests for new behavior, docs updated
 for behavior changes, conventional title, CI green, and hardware tested (or
 stated as untested).
+
+### The labels the bot puts on your pull request
+
+Several times a day the bot gives every open pull request two kinds of
+label, beside the `area/*` ones. Both are computed from the change, and
+computed again when it changes; a label that is set or removed by hand is put
+back.
+
+| Label | When |
+|---|---|
+| `size/S`, `size/M`, `size/L`, `size/XL` | By the lines the pull request adds and removes: under 100, from 100, from 400, from 1,000. The lines of lock files, tests and documents do not count |
+| `risk:high` | The pull request changes a core path (the agent loop, the tool handlers, the guards); or it changes a file of v3-service that holds a prompt or shapes the request to the model; or it has 400 counted lines or more; or it is the author's first pull request here |
+
+`risk:high` says where a mistake would cost most, so that review time goes
+there first. It is not a mark against you or your change. A change to a
+workflow does not get it: the integrity check names such a change on the
+pull request, for a maintainer's approval. A change to a prompt of
+v3-service gets it because no other check can name such a change: no
+recorded request shows that text. Each label says in its own description
+what it is computed from. The numbers, the list of core paths and the list
+of those files of v3-service are in
+[.github/atlas-bot.yml](.github/atlas-bot.yml).
 
 ## 10. After your change merges
 
@@ -219,15 +318,57 @@ minimum time, a nomination, and hard technical limits. See the
 
 ## Code style
 
+How code should read (size, structure, abstractions, comments) is in
+[CODE_STYLE.md](docs/CODE_STYLE.md). The rules per language:
+
 **Python.** PEP 8, type hints on function signatures, docstrings on public
 functions, lines up to 100 characters. `ruff` runs in the gate.
 
 **Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
 for `proxy/` and `tui/`.
 
+New Go code is also linted with [golangci-lint](https://golangci-lint.run)
+(settings in `.golangci.yml`):
+
+```bash
+cd proxy    # or tui
+golangci-lint run ./... --new-from-merge-base=origin/dev
+```
+
+| It reports | What to do |
+|---|---|
+| An error that is returned and not checked, or checked and dropped | Handle it or return it. If ignoring it is right, assign it to `_` and say why in a comment |
+| A new function with a cognitive complexity over 15 | Split it into steps that each do one thing |
+| `os.Getenv` in new code | Read the setting through `envOr`, `envIntOr` or `envDurationSec`, and say in the pull request why a new switch is needed |
+| A `//nolint` with no linter name or no reason | Write `//nolint:<linter> // <reason>` |
+| Code nothing calls | Remove it |
+
+**Dockerfiles.** [hadolint](https://github.com/hadolint/hadolint) reads every
+Dockerfile. It reports and does not fail for a finding. With hadolint
+installed, `python scripts/dockerfile_lint.py` prints what CI prints. Do not
+add a finding in a Dockerfile you change; if a rule is wrong for a line, say
+why in the pull request and do not switch the rule off in the file.
+
 **Bash.** Must pass `shellcheck`. Start with `set -euo pipefail`, quote
 variables (`"$var"`), use `[[` for conditionals, and comment non-obvious
 logic.
+
+**Workflows.** [zizmor](https://docs.zizmor.sh) and
+[actionlint](https://github.com/rhysd/actionlint) read every file in
+`.github/workflows/`, and a finding fails the job. To run them yourself:
+`zizmor .github/workflows/*.yml` and
+`actionlint -shellcheck= -pyflakes= .github/workflows/*.yml`. Every
+`actions/checkout` step sets `persist-credentials: false`, and a value from
+`${{ }}` reaches a script through `env`, not pasted into the script. If a step
+must stay as zizmor names it, write `# zizmor: ignore[<rule>]` on its line with
+the reason beside it, and say so in the pull request.
+
+**Kotlin** (the JetBrains plugin, `extensions/jetbrains/`). `ktlint` is the
+gate, and `extensions/jetbrains/.editorconfig` is the single source of the
+rules it applies — no baseline and no rule configuration in the Gradle
+build. Lines up to 100 characters. Run `./gradlew ktlintCheck` from
+`extensions/jetbrains/`, or `ktlintFormat` to apply the same rules. Kotlin
+is not covered by `scripts/code_health.py`.
 
 **YAML and Kubernetes.** 2-space indentation, resource limits on every
 container, meaningful names and labels.
@@ -262,6 +403,30 @@ pytest tests/e2e -v
   values through the subprocess environment.
 - `tests/validate_tests.py` (the `test-integrity` gate) rejects weakened
   tests, e.g. `assert True` or a swallowed exception.
+- A test of a limit must be harmless when the limit fails. A command that
+  the limit has to stop ends by itself a little above that limit: build it
+  with `tests/infrastructure/bounded_commands.py`.
+- More rules that a review or a failure has taught us, each with the check
+  or test that holds it:
+  [the gates page](docs/quality/gates.md#rules-learned-from-review-and-from-failures).
+
+One more check reads your change, not the code. It looks for removed or
+skipped tests, history in new comments, new documents, new suppression
+markers, and changes to the files that configure the checks. It says what it
+found, why it matters and what to do, and it does not fail. Two things keep
+its report short:
+- A skip needs its reason: the message of the skip, or a comment on its line
+  or the line directly above. Then a maintainer approves the reason and you
+  have nothing else to do. A skip with no reason asks you for one. A form
+  that stops more than one test (`pytestmark`, a skip on a class, `.only`, a
+  build tag on a Go test file) is named with how far it reaches.
+- A test you rename in place is listed, not questioned. So is a test whose
+  body becomes a helper that your tests call.
+
+```bash
+python scripts/integrity_check.py                 # your branch against origin/dev
+python scripts/integrity_check.py --base <commit>
+```
 
 ## License
 

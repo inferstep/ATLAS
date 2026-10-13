@@ -66,7 +66,8 @@ def compose_contexts() -> dict[str, str]:
             df_path = (Path(context) / df) if not df.startswith("/") else Path(df)
         else:
             df_path = Path(context) / "Dockerfile"
-        out[str(Path(df_path).as_posix()).lstrip("./")] = context
+        # Only a leading `./`: lstrip("./") also ate a hidden directory's dot (#277).
+        out[re.sub(r"^(?:\./)+", "", Path(df_path).as_posix())] = context
     return out
 
 

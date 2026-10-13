@@ -74,6 +74,12 @@ def _unscored_answer(data) -> bool:
 # The answer of a Lens with no model loaded: the state a model is in before
 # its lens bundle is built, which is what this bench builds it from. The
 # allocation gate reads it as "no signal" (k=3 floor).
+#
+# This neutral path is deliberate and bench-only. The product requires the
+# lens and stops the run when it cannot score (docs/adr/0011-the-lens-is-
+# required.md); the bench keeps this so it still works for a model with no lens
+# bundle yet. It is never part of the product. Why:
+# docs/CLI.md, "Why the bench keeps a neutral lens score".
 NEUTRAL_COMBINED = {
     "cx_energy": 0.0, "cx_normalized": 0.5, "cx_calibrated": False,
     "gx_score": 0.5, "gx_available": False, "verdict": "unavailable",

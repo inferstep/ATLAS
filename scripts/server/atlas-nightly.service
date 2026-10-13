@@ -1,0 +1,39 @@
+# One look of the nightly run on the development server. A user unit: it
+# belongs in ~/.config/systemd/user/ of the user that runs it, beside
+# atlas-nightly.timer (docs/quality/gates.md, section "The timer").
+#
+# The places, each under the home folder of that user (%h):
+#   %h/atlas-nightly                             the folder of the run
+#   %h/atlas-nightly/tree                        its copy of this repository
+#   %h/atlas-nightly/venv                        its Python, with pytest and httpx
+#   %h/atlas-nightly/usual-stack.stopped         what a look stopped of the usual stack
+#   %h/.config/atlas-nightly/status-app.pem      the key of the app, mode 600
+# The key is outside the folder of the run. Its path is an argument and no
+# value of the environment: no command that the run starts has it.
+[Unit]
+Description=ATLAS nightly run: one look (send what waits, run what is due)
+
+[Service]
+Type=oneshot
+# A night waits for the images of the head for up to 20 minutes, and runs for
+# up to 30 with the card. The first night also pulls several gigabytes.
+TimeoutStartSec=3h
+# A look that is told to stop lets the run stop its own stack first.
+TimeoutStopSec=10min
+# `atlas` is the compose project of the usual stack. It is stopped only when
+# a run is due, and started again after the run (the last line). The file
+# that names what was stopped lies on disk, in the folder of the run, and
+# not in the runtime folder (%t), which a restart of the server empties:
+# Docker does not start a stopped container again by itself, so after a
+# restart in the middle of a run the first look starts the usual stack.
+# `--status-app` is the client id of the app that writes the statuses, and
+# `--status-writer` the id of its account, `atlas-server-results[bot]`. Both
+# are public. `--smoke-hours` names the hours, in UTC, in which a look may
+# start a smoke run; the night has its own hour (`--night-hour`, 8 UTC when
+# it is not given).
+ExecStart=%h/atlas-nightly/tree/scripts/server/nightly_look.sh run atlas %h/atlas-nightly/usual-stack.stopped -- \
+    %h/atlas-nightly/venv/bin/python %h/atlas-nightly/tree/scripts/nightly_run.py \
+    --dir %h/atlas-nightly --python %h/atlas-nightly/venv/bin/python --tick \
+    --status-key %h/.config/atlas-nightly/status-app.pem --status-app Iv23liQAJ0Ousufa05LE \
+    --status-writer 340202947 --smoke-by itigges22 --smoke-hours 6-7
+ExecStopPost=%h/atlas-nightly/tree/scripts/server/nightly_look.sh after atlas %h/atlas-nightly/usual-stack.stopped

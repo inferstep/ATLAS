@@ -15,7 +15,7 @@ import pytest
 
 V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 sys.path.insert(0, V3)
-import adapters  # noqa: E402
+import adapters
 
 
 def src(name):

@@ -51,6 +51,8 @@ map of the repository itself, see [MAP.md](MAP.md).
 - [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) — typed
   obligations, evidence provenance, candidate staging, and the observe-only
   authorization and feasibility decisions.
+- [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) — the one delivery rule for
+  V3 candidates: what can honestly be decided without an oracle.
 - [schemas/](schemas/) — machine-readable contracts:
   [proxy_openapi.yaml](schemas/proxy_openapi.yaml),
   [error_envelope.schema.json](schemas/error_envelope.schema.json),
@@ -79,6 +81,14 @@ map of the repository itself, see [MAP.md](MAP.md).
   V3.0 ablation report; its 74.6% result is withdrawn (notice at the top).
 - [reports/CALL_GRAPH_REASONING_V3.md](reports/CALL_GRAPH_REASONING_V3.md)
   — structural call-graph reasoning design notes.
+- [reports/RPG_WAVELET_PLANNING_V3_2.md](reports/RPG_WAVELET_PLANNING_V3_2.md)
+  — the V3.2 RPG/wavelet planning design record: built, A/B-measured (no
+  improvement on the reference 12B at ~10x planning latency), and removed in
+  the 2026-08 simplification; kept in-tree per [#148](https://github.com/inferstep/ATLAS/issues/148).
+- [reports/ablation/README.md](reports/ablation/README.md) — the raw
+  per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks).
+- [reports/archive/](reports/archive/) — kept-for-reference reports,
+  including the V2.5 ablation study.
 - [adr/](adr/README.md) — architecture decision records 0001-0011 (trust
   model, Redis, per-model bundles, fail-soft V3, lens optionality
   (superseded), release strategy, the SQLite store (retired), harness
@@ -92,6 +102,13 @@ map of the repository itself, see [MAP.md](MAP.md).
   gate (`scripts/production-readiness.py`).
 - [DEVELOPMENT.md](DEVELOPMENT.md) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
+- [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
+  `scripts/code_health.py` enforces on new code and refactors.
+- [EVAL_INTERFACE.md](EVAL_INTERFACE.md) — the held-out evaluation
+  contract between the evaluation session and the development side.
+- [quality/gates.md](quality/gates.md) — the checks on a pull request,
+  which of them are required, how the outside tools are set, and the
+  measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
 - [TRIAGE.md](TRIAGE.md) — how new issues become Ready work.
@@ -102,6 +119,10 @@ map of the repository itself, see [MAP.md](MAP.md).
 - [../GOVERNANCE.md](../GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
   [../SECURITY.md](../SECURITY.md),
   [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md)
+- READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
+  are not listed one-by-one here: they live in the tree next to what they
+  describe (see [MAP.md](MAP.md) for the per-directory layout), and
+  third-party notices live at the repository root.
 
 ---
 
@@ -166,7 +187,7 @@ In order, each building on the last:
 12. [reports/V3_ABLATION_STUDY.md](reports/V3_ABLATION_STUDY.md) — historical V3.0 ablation report (result withdrawn)
 13. [reports/CALL_GRAPH_REASONING_V3.md](reports/CALL_GRAPH_REASONING_V3.md)
 14. [SOURCES.md](SOURCES.md) — the research it stands on
-15. [adr/](adr/README.md) — decisions 0001 through 0010, in order (0007 retired)
+15. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
 16. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
 17. [OPERATIONS.md](OPERATIONS.md) — running it long-term
 18. [DEVELOPMENT.md](DEVELOPMENT.md), [../CONTRIBUTING.md](../CONTRIBUTING.md),

@@ -155,7 +155,7 @@ def options_match(spec, existing) -> bool:
     return have == [tuple(s) for s in spec]
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--owner", default="inferstep")

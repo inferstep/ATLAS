@@ -3,7 +3,9 @@ version: 2
 # updates always target the default branch (main) and are retargeted by hand.
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # "/" is the workflows. The pins inside the composite actions of
+    # .github/actions are not read from there, so their folders are named.
+    directories: ["/", "/.github/actions/*"]
     target-branch: dev
     schedule:
       interval: weekly
@@ -12,9 +14,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: pip
-    # /.github/requirements holds CI's hashed tool lock (ci.txt); its ruff
-    # and mypy must move with sandbox/requirements-verify.txt, so both sit
-    # in the same group PR.
+    # /.github/requirements holds CI's hashed lock (ci.in and ci.txt). Some
+    # pins of ci.in are copies of pins in the sandbox and v3-service files
+    # (a contract test holds them the same), so both folders sit in the same
+    # group: one pull request then moves a pin in both places and makes the
+    # lock again.
     directories: ["/", "/.github/requirements"]
     target-branch: dev
     schedule:
@@ -50,6 +54,53 @@ updates:
     groups:
       go:
         patterns: ["*"]
+
+  # The JetBrains plugin is its own Gradle build under extensions/jetbrains.
+  # The IntelliJ Platform Gradle Plugin and the IntelliJ Platform version are
+  # pinned in the build and stay hand-managed: bumping the platform is a
+  # compatibility decision (sinceBuild, Kotlin API level), not a routine
+  # bump.
+  #
+  # Ktor is hand-managed too, and for a sharper reason. Ktor 3.5.0 moved to
+  # kotlinx-coroutines 1.11.0, which hoisted Job.invokeOnCompletion$default
+  # onto the Job interface; IntelliJ Platform 2026.1 bundles coroutines 1.10.2,
+  # where that synthetic lives in Job$DefaultImpls. The plugin uses the
+  # platform's coroutines (it must not ship a second copy), so Ktor 3.5+
+  # throws NoSuchMethodError on its first request. Re-pin only after checking
+  # the coroutines the target platform bundles; the mock-proxy tests in
+  # AtlasClientTest fail loudly on a bump past 3.4.3.
+  #
+  # The three Kotlin plugins of the build are hand-managed too: `jvm`,
+  # `plugin.compose` and `plugin.serialization`. The Kotlin compiler follows
+  # the platform that the plugin targets. The IDE bundles Kotlin and the
+  # Compose runtime, the plugin compiles against that runtime and must not
+  # package a second copy, and the Compose compiler plugin has to match the
+  # Kotlin compiler. So the three move together, by hand, when the platform
+  # version moves; a bump of one or two of them leaves the rest behind.
+  #
+  # The rules below use the names that Dependabot gives a Gradle plugin: the
+  # word inside `kotlin("...")` or `id("...")`. A rule with the long name
+  # `org.jetbrains.kotlin.jvm` matches nothing, and nothing says so.
+  # tests/contracts/test_dependabot_hand_managed.py holds each name against
+  # the build file. Dependabot does not read the platform version
+  # (`intellijIdea("...")`), so that one needs no rule.
+  - package-ecosystem: gradle
+    directory: /extensions/jetbrains
+    target-branch: dev
+    schedule:
+      interval: weekly
+    groups:
+      gradle:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "io.ktor:*"
+        versions: [">= 3.5.0"]
+      # The three Kotlin plugins, at every version.
+      - dependency-name: "jvm"
+      - dependency-name: "plugin.compose"
+      - dependency-name: "plugin.serialization"
+      # The IntelliJ Platform Gradle Plugin, at every version.
+      - dependency-name: "org.jetbrains.intellij.platform"
 
   - package-ecosystem: docker
     directories:

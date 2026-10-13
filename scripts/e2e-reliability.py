@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -50,7 +51,10 @@ from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from code_quality import analyze as analyze_quality  # noqa: E402
+from code_quality import analyze as analyze_quality
+from reliability_report import (Stopped, log_defects, report, sibling,
+                                stop_on_signals, write_summary)
+from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 
 # --------------------------------------------------------------------------
 # Task suite
@@ -1088,6 +1092,8 @@ class Session:
     # session ran (stack_changes). A measured outcome over an unstable stack
     # says so.
     stack_changes: list[str] = field(default_factory=list)
+    # Each permission prompt of the session and what the runner answered.
+    prompts: list[dict] = field(default_factory=list)
 
     def of_type(self, t: str) -> list[dict]:
         return [e for e in self.events if e.get("type") == t]
@@ -1531,8 +1537,8 @@ def tui_handled_types() -> set[str]:
 # Runner
 # --------------------------------------------------------------------------
 
-def run_session(task: Task, rep: int, url: str, workspace: Path,
-                subdir: str, timeout: int, raw_sink=None) -> Session:
+def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
+                subdir: str, timeout: int, raw_sink=None, prompt_policy: str = "deny") -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible
     instead of overwriting its own evidence -- the parsed events beside it are
@@ -1584,6 +1590,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     req = urllib.request.Request(f"{url}/v1/agent", data=body,
                                  headers={"Content-Type": "application/json"})
     events: list[dict] = []
+    prompts: list[dict] = []
     stream_ok = False
     t0 = time.time()
 
@@ -1595,32 +1602,20 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
         # withdrawn. Inert to every detector, which read `type` and `data`.
         ev["_t"] = round(time.time() - t0, 3)
         events.append(ev)
+        if ev.get("type") == "permission_request":
+            prompts.append({**answer_prompt(url, payload["session_id"], ev, prompt_policy), "_t": ev["_t"]})
 
     history: list[dict] = [{"role": "user", "content": task.prompt}]
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            for raw in resp:
-                # urlopen's timeout is per-read, so a session that keeps
-                # streaming never trips it. One observed session looped past
-                # 20 minutes against a 900s cap, trying to satisfy a self-test
-                # it had written with the wrong expectation.
-                if time.time() - t0 > timeout:
-                    take({"type": "error", "data": {
-                        "error": f"harness cap: session exceeded {timeout}s"}})
-                    break
-                if raw_sink is not None:
-                    raw_sink.write(raw.decode("utf-8", "replace"))
-                line = raw.decode("utf-8", "replace").strip()
-                if not line.startswith("data: "):
-                    continue
-                payload = line[6:]
-                if payload == "[DONE]":
-                    stream_ok = True
-                    break
-                try:
-                    take(json.loads(payload))
-                except json.JSONDecodeError:
-                    take({"type": "__unparseable__", "raw": payload[:200]})
+            ended = read_stream(resp, take, t0 + timeout, raw_sink)
+        stream_ok = ended == "done"
+        if ended == "cap":
+            # One observed session looped past 20 minutes against a 900s cap,
+            # trying to satisfy a self-test it had written with the wrong
+            # expectation.
+            take({"type": "error", "data": {
+                "error": f"harness cap: session exceeded {timeout}s"}})
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         take({"type": "error", "data": {"error": f"stream failed: {e}"}})
 
@@ -1645,25 +1640,13 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
                                       headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(freq, timeout=timeout) as resp:
-                for raw in resp:
-                    if time.time() - t0 > timeout:
-                        break
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        take(json.loads(payload))
-                    except json.JSONDecodeError:
-                        take({"type": "__unparseable__", "raw": payload[:200]})
+                read_stream(resp, take, t0 + timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             take({"type": "error", "data": {"error": f"followup failed: {e}"}})
     wall = time.time() - t0
 
     s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
-                wall_s=wall, stream_ok=stream_ok)
+                wall_s=wall, stream_ok=stream_ok, prompts=prompts)
     # Fixture integrity first. A model that rewrites the input it was given is
     # not solving the task, and without this the symptom surfaces as a
     # confusing "wrong answer" — one session overwrote a single-line puzzle
@@ -1696,8 +1679,8 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     return s
 
 
-def preflight(sandbox: str, subdir: str) -> list[str]:
-    """Refuse to measure a stack that is misconfigured.
+def preflight(sandbox: str, subdir: str, project: str = "atlas", run=subprocess.run) -> list[str]:
+    """Refuse to measure a stack that is misconfigured. `project` is that stack's compose project.
 
     The proxy and the sandbox each bind a host directory at /workspace, and
     nothing in a session fails loudly when those differ: file tools write
@@ -1713,13 +1696,13 @@ def preflight(sandbox: str, subdir: str) -> list[str]:
         return problems
 
     def mount_of(container: str) -> str:
-        p = subprocess.run(
+        p = run(
             ["docker", "inspect", container, "--format",
              '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'],
             capture_output=True, text=True, timeout=30)
         return (p.stdout or "").strip()
 
-    proxy_mount = mount_of("atlas-atlas-proxy-1")
+    proxy_mount = mount_of(f"{project or 'atlas'}-atlas-proxy-1")
     sandbox_mount = mount_of(sandbox)
     if proxy_mount and sandbox_mount and proxy_mount != sandbox_mount:
         problems.append(
@@ -1732,8 +1715,8 @@ def preflight(sandbox: str, subdir: str) -> list[str]:
     # The subdir has to be visible to the sandbox too, or every verification
     # command fails with "cwd does not exist" and the task looks unsolvable.
     if subdir:
-        p = subprocess.run(["docker", "exec", sandbox, "test", "-d",
-                            f"/workspace/{subdir}"], capture_output=True, timeout=30)
+        p = run(["docker", "exec", sandbox, "test", "-d",
+                 f"/workspace/{subdir}"], capture_output=True, timeout=30)
         if p.returncode != 0:
             problems.append(
                 f"/workspace/{subdir} does not exist inside {sandbox} — every "
@@ -1800,6 +1783,95 @@ def stack_changes(before: dict | None, after: dict | None) -> list[str]:
     return out
 
 
+# The five services a stack runs, as scripts/deploy-gated.sh names them.
+STACK_SERVICES = ("llama-server", "geometric-lens", "v3-service", "sandbox", "atlas-proxy")
+
+
+def running_images(project: str, run=subprocess.run) -> dict | None:
+    """The image id each running service of the compose project uses.
+
+    None when docker cannot be asked. `run` is subprocess.run, injectable for
+    tests."""
+    try:
+        ps = run(["docker", "ps", "--filter",
+                  f"label=com.docker.compose.project={project}", "--format", "{{.Names}}"],
+                 capture_output=True, text=True, timeout=30)
+        names = (ps.stdout or "").split()
+        if ps.returncode != 0 or not names:
+            return None
+        p = run(["docker", "inspect", "--format",
+                 '{{index .Config.Labels "com.docker.compose.service"}} {{.Image}}', *names],
+                capture_output=True, text=True, timeout=30)
+        if p.returncode != 0:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = {}
+    for line in (p.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            out[parts[0]] = parts[1]
+    return out or None
+
+
+def _same_commit(a: str, b: str) -> bool:
+    """Two commit ids name one commit when the shorter is a prefix of the
+    longer and at least 7 characters long."""
+    a, b = (a or "").strip(), (b or "").strip()
+    short = min(len(a), len(b))
+    return short >= 7 and a[:short] == b[:short]
+
+
+def deployed_identity(project: str, deploy_dir: Path, commit: str,
+                      run=subprocess.run) -> dict:
+    """The commit and the five images this run measures (#241).
+
+    A result is evidence only for the stack that produced it. The gated deploy
+    records the commit it deployed (DEPLOYED_SHA) and, in
+    deployed/running-<sha>.json, the image each of the five services runs for
+    it. llama-server is kept, not rebuilt, when inference/ did not change, so
+    an image's own build commit is not the test: the record is. The stack is
+    that commit's only when the stated commit is the deployed one and every
+    running service uses the image recorded for it.
+
+    Returns {"commit", "images", "verified", "mismatch", "problems"}. A
+    mismatch means a record exists and the stack differs from it: a run is
+    refused. With no record there is nothing to check against (a stack this
+    script did not deploy): the run is unverified, and says so."""
+    out = {"commit": commit, "images": {}, "verified": False, "mismatch": False,
+           "problems": []}
+    try:
+        deployed = (deploy_dir / "DEPLOYED_SHA").read_text().strip()
+    except OSError:
+        out["problems"].append(f"no gated deploy record in {deploy_dir}: the stack is unverified")
+        live = running_images(project, run) if project else None
+        out["images"] = live or {}
+        return out
+    out["commit"] = deployed
+    if commit and not _same_commit(commit, deployed):
+        out["problems"].append(f"the checkout is at {commit}, but the stack was deployed from {deployed}")
+    try:
+        record = json.loads((deploy_dir / "deployed" / f"running-{deployed}.json").read_text())
+        recorded = {svc: (v or {}).get("image_id", "") for svc, v in (record.get("running") or {}).items()}
+    except (OSError, ValueError):
+        recorded = {}
+        out["problems"].append(f"no record of the images deployed for {deployed}")
+    live = running_images(project, run) if project else None
+    out["images"] = live or {}
+    if live is None:
+        out["problems"].append("docker could not be asked which images are running")
+    else:
+        for svc in STACK_SERVICES:
+            if svc not in live:
+                out["problems"].append(f"{svc} is not running")
+            elif recorded and live[svc] != recorded.get(svc):
+                out["problems"].append(
+                    f"{svc} runs {live[svc][:19]}, not the {recorded.get(svc, '?')[:19]} deployed for {deployed}")
+    out["mismatch"] = bool(out["problems"])
+    out["verified"] = not out["problems"]
+    return out
+
+
 def result_row(s: Session, evaluator, stack) -> dict:
     """One session in the run's JSON result."""
     return {
@@ -1811,12 +1883,13 @@ def result_row(s: Session, evaluator, stack) -> dict:
         "v3": s.v3,
         "quality": s.quality,
         "stack_changes": s.stack_changes,
+        "prompts": s.prompts,
         "evaluator": evaluator,
         "stack": stack,
     }
 
 
-def main() -> int:
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default=os.environ.get("ATLAS_PROXY_URL",
@@ -1832,15 +1905,31 @@ def main() -> int:
     ap.add_argument("--compose-project", default="atlas",
                     help="compose project whose containers are checked for restarts "
                          "and OOM kills around each session; '' to skip")
+    ap.add_argument("--deploy-dir", default=os.environ.get(
+                        "ATLAS_DEPLOY_DIR", str(Path.home() / "atlas-ralph")),
+                    help="the gated deploy's record directory (scripts/deploy-gated.sh)")
+    ap.add_argument("--commit", default="",
+                    help="the commit this run claims to measure; default: this checkout's HEAD")
     ap.add_argument("--tasks", default=",".join(TASKS))
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--timeout", type=int, default=900)
-    ap.add_argument("--json", dest="json_out", default="")
+    ap.add_argument("--json", dest="json_out", default="",
+                    help="write the results here; each defect is also appended to "
+                         "<name>.defects.jsonl as its session ends, and a SIGINT or "
+                         "SIGTERM writes the partial results and <name>.summary.txt")
     ap.add_argument("--save-events", default="",
                     help="directory to write each session's raw event stream "
                          "to; without it a failure can only be diagnosed from "
                          "container logs, which roll")
-    args = ap.parse_args()
+    ap.add_argument("--prompts", choices=sorted(PROMPT_POLICIES), default="deny",
+                    help="what the runner answers when a session asks for a permission (a deletion "
+                         "always asks): " + "; ".join(f"{k}: {v}" for k, v in sorted(PROMPT_POLICIES.items()))
+                         + ". The policy and each answer are kept in the results")
+    return ap.parse_args(argv)
+
+
+def main() -> int:
+    args = parse_args()
 
     if not args.workspace:
         print("error: --workspace (or ATLAS_PROJECT_DIR) must be set — it has "
@@ -1861,6 +1950,24 @@ def main() -> int:
     # What the proxy says it runs, read once before any session and kept
     # with every result.
     STACK = stack_identity(args.url)
+    # And which commit and images it is (#241). A stack that differs from its
+    # gated deploy record is not measured at all.
+    commit = args.commit
+    if not commit:
+        head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True)
+        commit = head.stdout.strip() if head.returncode == 0 else ""
+    identity = deployed_identity(args.compose_project, Path(args.deploy_dir), commit)
+    if identity["mismatch"]:
+        for line in identity["problems"]:
+            print(f"error: {line}", file=sys.stderr)
+        print("error: refusing to measure a stack that is not the one deployed "
+              "for this commit", file=sys.stderr)
+        return 2
+    for line in identity["problems"]:
+        print(f"warning: {line}", file=sys.stderr)
+    STACK.update(commit=identity["commit"], images=identity["images"],
+                 identity_verified=identity["verified"], prompt_policy=args.prompts)
 
     global _SANDBOX_CONTAINER, _SANDBOX_WORKDIR
     _SANDBOX_CONTAINER = args.sandbox_container or ""
@@ -1868,7 +1975,7 @@ def main() -> int:
     # required before any check leaves the host interpreter, so a run without
     # --sandbox-container behaves exactly as it did before.
     _SANDBOX_WORKDIR = f"/workspace/{args.subdir}" if args.subdir else ""
-    if problems := preflight(args.sandbox_container, args.subdir):
+    if problems := preflight(args.sandbox_container, args.subdir, args.compose_project):
         for line in problems:
             print(f"error: {line}", file=sys.stderr)
         return 2
@@ -1882,52 +1989,82 @@ def main() -> int:
 
     sessions: list[Session] = []
     total = len(selected) * args.reps
-    n = 0
-    for rep in range(1, args.reps + 1):
-        for task in selected:
-            n += 1
-            print(f"[{n}/{total}] {task.name} rep {rep} ...", flush=True)
-            if args.sandbox_container:
-                subprocess.run(["docker", "exec", args.sandbox_container,
-                                "pkill", "-f", "python app"],
-                               capture_output=True, timeout=30)
-            before = container_states(args.compose_project) if args.compose_project else None
-            s = run_session(task, rep, args.url, ws,
-                            args.subdir, args.timeout)
-            if args.compose_project:
-                s.stack_changes = stack_changes(before, container_states(args.compose_project))
-            s.defects += h1_protocol(s, known)
-            s.defects += h2_false_rejection(s)
-            s.defects += h3_dead_end_steering(s)
-            s.defects += h4_gate_escape(s, task)
-            s.defects += h5_corrupt_write(s, task)
-            s.defects += h6_service_fault(s)
-            s.defects += h8_anchored_on_injected_text(s)
-            s.defects += h9_tier_misapplied(s, task)
-            s.defects += h7_background_leak(args.sandbox_container, s)
-            sessions.append(s)
-            if args.save_events:
-                d = Path(args.save_events)
-                d.mkdir(parents=True, exist_ok=True)
-                (d / f"{task.name}-rep{rep}.jsonl").write_text(
-                    "\n".join(json.dumps(e) for e in s.events))
-            turns = len(s.of_type("turn_start"))
-            print(f"      task={'PASS' if s.task_passed else 'fail'} "
-                  f"harness={'clean' if not s.defects else str(len(s.defects)) + ' defect(s)'} "
-                  f"turns={turns} {s.wall_s:.0f}s — {s.task_detail[:70]}",
-                  flush=True)
-            for d in s.defects:
-                print(f"      ! {d}", flush=True)
-            for c in s.stack_changes:
-                print(f"      ! stack: {c}", flush=True)
+    defects_log = sibling(args.json_out, ".defects.jsonl")
+    stopped = 0
+    with stop_on_signals():
+        try:
+            for rep in range(1, args.reps + 1):
+                for task in selected:
+                    print(f"[{len(sessions) + 1}/{total}] {task.name} rep {rep} ...", flush=True)
+                    sessions.append(_scored_session(task, rep, args, ws, known, defects_log))
+        except Stopped as e:
+            stopped = e.signum
+            print(f"\nstopped by {signal.Signals(stopped).name} after {len(sessions)} "
+                  f"of {total} session(s)", flush=True)
+    return _finish(sessions, known, args, STACK, stopped)
 
-    report(sessions, known)
+
+def _scored_session(task: Task, rep: int, args, ws: Path, known: set[str],
+                    defects_log: Path | None) -> Session:
+    """Run one session, apply the harness-defect detectors, and report it as it ends."""
+    if args.sandbox_container:
+        subprocess.run(["docker", "exec", args.sandbox_container,
+                        "pkill", "-f", "python app"],
+                       capture_output=True, timeout=30)
+    before = container_states(args.compose_project) if args.compose_project else None
+    s = run_session(task, rep, args.url, ws,
+                    args.subdir, args.timeout, prompt_policy=args.prompts)
+    if args.compose_project:
+        s.stack_changes = stack_changes(before, container_states(args.compose_project))
+    s.defects += h1_protocol(s, known)
+    s.defects += h2_false_rejection(s)
+    s.defects += h3_dead_end_steering(s)
+    s.defects += h4_gate_escape(s, task)
+    s.defects += h5_corrupt_write(s, task)
+    s.defects += h6_service_fault(s)
+    s.defects += h8_anchored_on_injected_text(s)
+    s.defects += h9_tier_misapplied(s, task)
+    s.defects += h7_background_leak(args.sandbox_container, s)
+    if args.save_events:
+        d = Path(args.save_events)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{task.name}-rep{rep}.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in s.events))
+    log_defects(defects_log, task.name, rep, s.defects)
+    turns = len(s.of_type("turn_start"))
+    print(f"      task={'PASS' if s.task_passed else 'fail'} "
+          f"harness={'clean' if not s.defects else str(len(s.defects)) + ' defect(s)'} "
+          f"turns={turns} {s.wall_s:.0f}s — {s.task_detail[:70]}",
+          flush=True)
+    for d in s.defects:
+        print(f"      ! {d}", flush=True)
+    for c in s.stack_changes:
+        print(f"      ! stack: {c}", flush=True)
+    for p in s.prompts:
+        print(f"      ? asked to approve {p['tool']}: answered {p['answer'] or 'nothing'} "
+              f"(policy {p['policy']}, delivered: {p['delivered']})", flush=True)
+    return s
+
+
+def _finish(sessions: list[Session], known: set[str], args, stack: dict, stopped: int) -> int:
+    """The summary and the JSON result. After a stop, both cover the sessions
+    that finished, and the summary is also written to <name>.summary.txt."""
+    if sessions:
+        report(sessions, known, model_output_guards)
     EVAL_ID = evaluator_identity()
     print(f"evaluator: {EVAL_ID}")
-    print(f"stack: {STACK}")
+    print(f"stack: {stack}")
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps([result_row(s, EVAL_ID, STACK) for s in sessions], indent=2))
+        Path(args.json_out).write_text(json.dumps([result_row(s, EVAL_ID, stack) for s in sessions], indent=2))
         print(f"\nwrote {args.json_out}")
+    if stopped:
+        summary = sibling(args.json_out, ".summary.txt")
+        write_summary(summary, sessions, known, model_output_guards,
+                      [f"stopped by {signal.Signals(stopped).name} after {len(sessions)} session(s)",
+                       f"evaluator: {EVAL_ID}", f"stack: {stack}"])
+        if summary and sessions:
+            print(f"wrote {summary}")
+        return 128 + stopped
     return 0 if all(not s.defects for s in sessions) else 1
 
 
@@ -1955,97 +2092,6 @@ def stack_identity(url: str) -> dict:
         "lens": lens.get("verdict"),
         "errors": {k: v["error"] for k, v in raw.items() if "error" in v},
     }
-
-
-def report(sessions: list[Session], known: set[str]) -> None:
-    total = len(sessions)
-    clean = sum(1 for s in sessions if not s.defects)
-    passed = sum(1 for s in sessions if s.task_passed)
-    print("\n" + "=" * 72)
-    print(f"Harness Integrity Rate   {clean}/{total} "
-          f"({100.0 * clean / total:.0f}%)   <- ATLAS's own plumbing")
-    print(f"Task Success Rate        {passed}/{total} "
-          f"({100.0 * passed / total:.0f}%)   <- task outcome (cause not classified)")
-    v3 = [s.v3 for s in sessions]
-    writes = sum(x["write_calls"] for x in v3)
-    generated = sum(x["generated"] for x in v3)
-    delivered = sum(x["delivered"] for x in v3)
-    print(f"V3 generation            ran on {generated}/{writes} write calls, "
-          f"delivered {delivered} candidate(s)")
-    if writes and not generated:
-        print("  ! no write reached V3 generation: this run measured the "
-              "agent loop without V3")
-    print("=" * 72)
-
-    by_class: dict[str, int] = {}
-    for s in sessions:
-        for d in s.defects:
-            by_class[d.split(":")[0]] = by_class.get(d.split(":")[0], 0) + 1
-    if by_class:
-        print("\nHarness defects by class:")
-        for cls, cnt in sorted(by_class.items(), key=lambda kv: -kv[1]):
-            print(f"  {cnt:3d}  {cls}")
-    else:
-        print("\nNo harness defects detected.")
-    guards = [model_output_guards(s) for s in sessions]
-    if any(guards):
-        kinds: dict[str, int] = {}
-        for g in guards:
-            for k in g:
-                kinds[k] = kinds.get(k, 0) + 1
-        print(f"Model-output guards (the proxy caught malformed model output; "
-              f"not harness defects): {sum(len(g) for g in guards)} in "
-              f"{sum(1 for g in guards if g)} session(s): "
-              + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
-
-    unstable = [s for s in sessions if s.stack_changes]
-    if unstable:
-        print(f"Stack not stable in {len(unstable)}/{total} session(s): the outcomes "
-              f"of these ran over a restart, an OOM kill or a missing container:")
-        for s in unstable:
-            print(f"  {s.task} rep {s.rep}: {'; '.join(s.stack_changes)}")
-
-    print("\nPer task:")
-    for name in sorted({s.task for s in sessions}):
-        rows = [s for s in sessions if s.task == name]
-        cl = sum(1 for s in rows if not s.defects)
-        pa = sum(1 for s in rows if s.task_passed)
-        turns = [len(s.of_type("turn_start")) for s in rows]
-        print(f"  {name:14s} harness {cl}/{len(rows)}  task {pa}/{len(rows)}  "
-              f"turns min/med/max {min(turns)}/{sorted(turns)[len(turns)//2]}/{max(turns)}")
-
-    q = [s.quality for s in sessions if s.quality and "error" not in s.quality]
-    if q:
-        print("\nCode quality of what the agent wrote:")
-        worst_cx = max(q, key=lambda r: r.get("max_complexity", 0))
-        worst_fn = max(q, key=lambda r: r.get("max_function_lines", 0))
-        worst_file = max(q, key=lambda r: r.get("max_file_lines", 0))
-        defects = sum(r.get("lint_defects", 0) for r in q)
-        style = sum(r.get("lint_style", 0) for r in q)
-        unused = sum(r.get("unused_imports", 0) for r in q)
-        broken = sum(len(r.get("syntax_errors") or []) for r in q)
-        clean = sum(1 for r in q if not r.get("findings"))
-        print(f"  sessions with no quality finding   {clean}/{len(q)}")
-        print(f"  worst function complexity          {worst_cx.get('max_complexity', 0)}"
-              f" ({worst_cx.get('max_complexity_where') or 'n/a'})")
-        print(f"  longest function                   {worst_fn.get('max_function_lines', 0)} lines"
-              f" ({worst_fn.get('max_function_where') or 'n/a'})")
-        print(f"  longest file                       {worst_file.get('max_file_lines', 0)} lines"
-              f" ({worst_file.get('max_file_where') or 'n/a'})")
-        codes = sorted({c for r in q for c in (r.get("defect_codes") or [])})
-        print(f"  real lint defects                  {defects}"
-              + (f" {codes}" if codes else ""))
-        print(f"  unused imports                     {unused}")
-        print(f"  style nits (not scored)            {style}")
-        print(f"  files left unparseable             {broken}")
-
-    observed: set[str] = set()
-    for s in sessions:
-        observed |= {e.get("type") for e in s.events if e.get("type")}
-    unrendered = sorted(observed - known)
-    print(f"\nTUI coverage: {len(observed)} event types emitted, "
-          f"{len(unrendered)} the TUI cannot render"
-          + (f": {unrendered}" if unrendered else ""))
 
 
 if __name__ == "__main__":

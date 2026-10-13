@@ -1173,6 +1173,10 @@ type AgentContext struct {
 	// the one already known one line earlier.
 	LastStreamCut string
 
+	// LastOldStrCut is what the old_str watch saw when LastStreamCut is
+	// "old_str_unmatched": the file, and where old_str stopped matching it.
+	LastOldStrCut *oldStrWatch
+
 	// OriginalContent is each touched file as the run FIRST saw it. FilesRead
 	// is overwritten on every edit, so it cannot answer "what did this run
 	// change".

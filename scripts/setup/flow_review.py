@@ -113,7 +113,7 @@ def main() -> int:
 
     items = [i for i in board_items(owner, a.project) if i.get("content")]
     open_issues = [i for i in items if i["content"]["__typename"] == "Issue" and i["content"]["state"] == "OPEN"]
-    status = lambda i: (i.get("status") or {}).get("name")  # noqa: E731
+    status = lambda i: (i.get("status") or {}).get("name")
 
     print(f"# Contributor flow review, {now:%Y-%m-%d}\n")
 
@@ -174,13 +174,13 @@ def main() -> int:
     by_tool: dict = {}
     for s in scans:
         by_tool[s["tool"]["name"]] = by_tool.get(s["tool"]["name"], 0) + 1
-    secret_alert_count = len(gh(f"repos/{a.repo}/secret-scanning/alerts?state=open", "--paginate"))
+    leak_alerts = len(gh(f"repos/{a.repo}/secret-scanning/alerts?state=open", "--paginate"))
     print("## Security and upkeep\n")
     print(f"- Open Dependabot pull requests: {len(dep_prs)}")
     print(f"- Open Dependabot alerts: {alerts}")
     print(f"- Open code scanning alerts: {len(scans)}"
           + (f" ({', '.join(f'{k} {v}' for k, v in sorted(by_tool.items()))})" if by_tool else ""))
-    print(f"- Open secret scanning alerts: {secret_alert_count}")
+    print(f"- Open secret scanning alerts: {leak_alerts}")
     print(f"- OpenSSF Scorecard: {scorecard(a.repo)}")
 
     if broken:

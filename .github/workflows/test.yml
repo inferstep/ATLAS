@@ -1,22 +1,38 @@
 name: tests
 
-# Runs on every push to main/dev and every PR. All jobs run on the free
-# ubuntu-latest runner — no GPU, no large model downloads, no real
-# Docker compose stack. The install-test.yml workflow handles the
+# Runs on every pull request, in the merge queue, and on every push to main.
+# A commit reaches dev through the merge queue, which runs these jobs on it.
+# The push of that same commit to dev does not run them again: the workflow
+# dev-results.yml sends the results that the queue's run kept. All jobs run
+# on the free GitHub-hosted Ubuntu runner — no GPU, no large model downloads, no real
+# Docker compose stack. Every workflow names the runner image (ubuntu-24.04)
+# and not `ubuntu-latest`, so the image changes when a pull request changes
+# it and its checks pass, not on the day GitHub moves the label. The install-test.yml workflow handles the
 # distro-matrix bootstrap dry-run; this file is for code-level checks
 # (Go test, Python pytest, shellcheck, compose validate).
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main, dev]
+  # The merge queue runs the required checks on the merged result before it
+  # lands. A workflow without this trigger reports nothing there, and the
+  # queue waits for its checks until it times out.
+  merge_group:
+    types: [checks_requested]
+    branches: [main, dev]
+  # For a commit that reached a branch without the merge queue, as the
+  # release step's merge-back into dev does. Started by hand, a run does what
+  # a push run does: the tests, both uploads and the cache.
+  workflow_dispatch:
 
-# Cancel in-flight runs on the same ref when a newer commit lands —
-# saves runner minutes on rapid-fire pushes.
+# A newer commit on a pull request cancels the run of the older one. A push
+# to main is not cancelled by the next push: each pushed commit has a group
+# of its own, so its coverage and its test results reach the branch.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -24,25 +40,75 @@ permissions:
 jobs:
   go-tests:
     name: go test (${{ matrix.module }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         module: [proxy, tui]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        id: go
         with:
           # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
           # proxy's 1.24 floor builds fine on it). setup-go v6 pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
           go-version: '1.26.6'
-          cache-dependency-path: ${{ matrix.module }}/go.sum
+          # The step below keeps the caches, under a key of this job's own.
+          cache: false
+
+      - name: point the gates at Go's own build cache folder
+        # The gate script builds in a folder of its own unless GOCACHE is
+        # set. The step below keeps Go's own folder, so the gates use that.
+        run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
+
+      - name: Go module and build cache
+        # The key is the module, the Go version and the module's go.mod and
+        # go.sum (proxy has no go.sum). The cache makes the build faster and
+        # never decides a result: Go takes an object from it only for the same
+        # source, and the test gate runs with -count=1, so no test result
+        # comes from it.
+        # Not in the merge queue: a run there cannot read a cache of dev, and
+        # nothing could read what it saved.
+        if: github.event_name != 'merge_group'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # The number after "go-test" starts a new cache when it is raised:
+          # a saved cache is never written again under the same key.
+          key: go-test-2-${{ matrix.module }}-${{ runner.os }}-go${{ steps.go.outputs.go-version }}-${{ hashFiles(format('{0}/go.mod', matrix.module), format('{0}/go.sum', matrix.module)) }}
 
       - name: go test -race
+        env:
+          # Makes the test gate write a cover profile and the test results there.
+          ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-test
+
+      - name: coverage total
+        if: ${{ !cancelled() }}
+        working-directory: ${{ matrix.module }}
+        run: |
+          # The last command of a pipe decides the step. pipefail makes a
+          # report that cannot be read fail the step.
+          set -o pipefail
+          go tool cover -func="$RUNNER_TEMP/coverage/go-${{ matrix.module }}.out" | tail -1 \
+            | sed 's/^/go ${{ matrix.module }}: /' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: coverage-go-${{ matrix.module }}
+          path: ${{ runner.temp }}/coverage/
+          # No report means the tests did not run as expected: fail, do not skip.
+          if-no-files-found: error
+          retention-days: 14
 
       - name: go vet
         run: python scripts/production-readiness.py --only go-${{ matrix.module }}-vet
@@ -52,7 +118,7 @@ jobs:
 
   python-tests:
     name: pytest (${{ matrix.subset }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +141,8 @@ jobs:
           - geometric-lens/tests
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -90,31 +158,25 @@ jobs:
       - name: install
         run: |
           # The CLI is stdlib-only, so --no-deps installs everything it needs.
-          # pytest and pyyaml come from the hashed tool lock (ci.in lists
-          # them; scripts/ci-lock.sh regenerates it). pyyaml:
-          # tests/contracts/test_openapi_contract.py importorskips yaml —
-          # without it the whole route-parity contract silently skips.
+          # Everything else comes from the one hashed lock (ci.in lists it;
+          # scripts/ci-lock.sh makes ci.txt again), and pip checks each file
+          # it downloads against the lock's hashes:
+          # - pytest and pyyaml. pyyaml:
+          #   tests/contracts/test_openapi_contract.py importorskips yaml —
+          #   without it the whole route-parity contract silently skips.
+          # - tree-sitter and its grammars for the call-graph and
+          #   structural_edit tests under tests/v3-service/, at the pins the
+          #   image ships: an unpinned install once pulled a newer
+          #   tree-sitter whose API change made extraction return empty.
+          # - the sandbox's runtime packages: the boundary-regression suite
+          #   under tests/infrastructure boots sandbox/executor_server.py,
+          #   which imports fastapi and pydantic.
+          # - jinja2, at the pin the image ships: the sandbox's template
+          #   check passes everything without it.
+          # A contract test holds each of these pins the same as its product
+          # file (tests/contracts/test_ci_lock.py).
           pip install --require-hashes -r .github/requirements/ci.txt
           pip install --no-deps -e .
-          # tree-sitter + grammars for the call-graph/structural_edit tests
-          # under tests/v3-service/, at the exact pins the image ships —
-          # an unpinned install once pulled a newer tree-sitter whose API
-          # change made extraction silently return empty. Only the
-          # tree-sitter lines: the file's torch pin resolves from the
-          # pytorch CPU index, not PyPI, and these tests don't need torch.
-          grep -E '^tree-sitter' v3-service/requirements.txt | xargs pip install
-
-      - name: install sandbox runtime dependencies
-        # tests/infrastructure needs these too: the boundary-regression
-        # suite boots sandbox/executor_server.py, which imports
-        # fastapi/pydantic unconditionally.
-        # jinja2 too, at the pin the image ships: the sandbox's template
-        # check imports it lazily and passes everything without it, so the
-        # tests of that check failed on a runner that lacked it.
-        if: matrix.subset == 'tests/v3-service' || matrix.subset == 'tests/infrastructure'
-        run: |
-          pip install -r sandbox/requirements-runtime.txt
-          grep -E '^jinja2==' sandbox/requirements-verify.txt | xargs pip install
 
       - name: install lens dependencies (CPU torch)
         if: matrix.subset == 'geometric-lens/tests'
@@ -127,17 +189,45 @@ jobs:
           pip install -r geometric-lens/requirements.txt
 
       - name: pytest
+        env:
+          # Makes the test gate write an LCOV report, the raw data and the
+          # test results there.
+          ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
         run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+
+      - name: coverage total
+        if: ${{ !cancelled() }}
+        run: |
+          # See the Go job: without pipefail a missing report passes.
+          set -o pipefail
+          python -m coverage report --data-file="$RUNNER_TEMP/coverage/.coverage.python" | tail -1 \
+            | sed 's|^|python ${{ matrix.subset }}: |' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          # The subset has a slash, which an artifact name may not have.
+          name: coverage-python-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/coverage/
+          # The raw data file is a dotfile; it is needed to combine subsets.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   perf-gate:
     name: perf budget gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: proxy/go.sum
+          # No cache: this job builds the proxy once, in about ten seconds,
+          # and restoring a cache takes as long.
+          cache: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
@@ -151,9 +241,11 @@ jobs:
 
   ruff:
     name: ruff (python lint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -175,13 +267,9 @@ jobs:
             --only dockerfile-sources
 
       - name: ruff check
-        # --select F is Pyflakes — real-bug rules (undefined names, redefined
-        # symbols, local-before-assign, string-format errors). The three
-        # codes ignored are pure style noise we don't gate on:
-        #   F401 unused-import   F541 empty-f-string   F841 unused-variable
-        # Bug-catchers like F821 (undefined name) and F823 (local var
-        # referenced before assignment) stay on. Tighten later by removing
-        # entries from --ignore as the codebase gets cleaner.
+        # The rules are in pyproject.toml ([tool.ruff.lint]): Pyflakes for real
+        # bugs, swallowed exceptions, complexity over 15, and suppression
+        # markers that no finding uses. The gate lints scripts/ as well.
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only ruff
@@ -193,24 +281,28 @@ jobs:
 
   shellcheck:
     name: shellcheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
 
       - name: shellcheck
-        # --severity=error catches real bugs (unquoted vars in dangerous
-        # contexts, misuse of [[ ]], etc) without bikeshedding on style.
-        # Bump to `warning` later once the scripts are stable.
+        # Every tracked .sh file, at warning level: the install and
+        # bootstrap scripts run with high privileges on a user's machine,
+        # so their warnings are worth reading. Style and info notes stay off.
         run: python scripts/production-readiness.py --only shellcheck
 
   compose-validate:
     name: docker compose config
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: validate compose YAML
         # The runner has docker compose v2 pre-installed. `config -q`
@@ -227,14 +319,30 @@ jobs:
 
   yamllint:
     name: yamllint (workflows)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: yamllint
         run: |
           pip install --require-hashes -r .github/requirements/ci.txt
           python scripts/production-readiness.py --only workflow-yaml
+
+  code-health:
+    name: code health (size)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: function and file size against the baseline
+        # docs/CODE_STYLE.md: no new function over 100 lines or file over
+        # 1,500, and nothing on .github/code-health-baseline.json grows.
+        # Standard library only; the runner's python3 is enough.
+        run: python3 scripts/code_health.py
 
   e2e-acceptance:
     # Deterministic end-to-end acceptance tests (tests/e2e/): real proxy
@@ -249,14 +357,18 @@ jobs:
     # candidate landed on disk — plus V3-unreachable/malformed/timeout
     # and lens-unreachable failure modes. No GPU, no model download.
     name: e2e acceptance (proxy + sandbox + fake llama)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: proxy/go.sum
+          # No cache: this job builds the proxy once, in about ten seconds,
+          # and restoring a cache takes as long.
+          cache: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
@@ -272,9 +384,9 @@ jobs:
 
       - name: install
         run: |
+          # The sandbox's runtime packages are in the hashed lock.
           pip install --require-hashes -r .github/requirements/ci.txt
           pip install --no-deps -e .
-          pip install -r sandbox/requirements-runtime.txt
 
       - name: e2e acceptance test
         env:
@@ -307,9 +419,11 @@ jobs:
     # When this fails: see docs/TROUBLESHOOTING.md § "llama.cpp patch
     # drift" for the bump runbook.
     name: llama.cpp patches apply to pinned SHA
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: extract LLAMA_CPP_REV + check Dockerfiles agree
         id: sha
@@ -339,12 +453,14 @@ jobs:
         # Mirror the production fetch pattern: init + shallow-fetch a
         # specific SHA, not a full clone. GitHub supports
         # uploadpack.allowReachableSHA1InWant so this is cheap (~30s).
+        env:
+          LLAMA_CPP_REV: ${{ steps.sha.outputs.sha }}
         run: |
           git init -q llama.cpp
           cd llama.cpp
           git remote add origin https://github.com/ggml-org/llama.cpp
           git -c http.postBuffer=524288000 \
-              fetch --depth 1 origin ${{ steps.sha.outputs.sha }}
+              fetch --depth 1 origin "$LLAMA_CPP_REV"
           git checkout -q FETCH_HEAD
 
       - name: apply patches dry-run
@@ -357,21 +473,23 @@ jobs:
         #      missing target line would silently no-op... we verify the
         #      target line exists so that doesn't go unnoticed. The sed
         #      IS the patch — there is no separate .patch file for it.
+        env:
+          LLAMA_CPP_REV: ${{ steps.sha.outputs.sha }}
         run: |
           cd llama.cpp
           # 1. PC-202 hidden-states patch
           patch_path=../inference/patches/expose-hidden-states.patch
           if git apply --check "$patch_path" 2>&1; then
-            echo "  OK: expose-hidden-states.patch applies to ${{ steps.sha.outputs.sha }}"
+            echo "  OK: expose-hidden-states.patch applies to $LLAMA_CPP_REV"
           else
-            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
+            echo "::error file=inference/patches/expose-hidden-states.patch::patch does not apply to LLAMA_CPP_REV=$LLAMA_CPP_REV. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift' for the bump runbook."
             exit 1
           fi
           # 2. spec-decode embeddings fix (sed target must exist)
           if grep -q 'auto params_dft = params_base;' tools/server/server-context.cpp; then
             echo "  OK: spec-decode sed target present in server-context.cpp"
           else
-            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=${{ steps.sha.outputs.sha }}. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
+            echo "::error::Dockerfile sed target 'auto params_dft = params_base;' not found in tools/server/server-context.cpp at LLAMA_CPP_REV=$LLAMA_CPP_REV. The embeddings spec-decode fix would silently no-op. See docs/TROUBLESHOOTING.md § 'llama.cpp patch drift'."
             exit 1
           fi
           echo "All patch checks passed."
@@ -381,7 +499,7 @@ jobs:
     # ./sandbox` runs (and four chances to hit an upstream package-mirror
     # flake). The matrix keeps the same four verdicts on one job definition.
     name: ${{ matrix.language }} sandbox smoke (containerized)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -396,6 +514,14 @@ jobs:
             code: '<?php echo "ok";'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      # This job builds or runs an image of Docker Hub. The Docker service
+      # asks a mirror first, so a limit or a fault of Docker Hub does not turn
+      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
       - name: build sandbox image
         run: docker build -t atlas-sandbox-test ./sandbox
       - name: start sandbox
@@ -421,3 +547,275 @@ jobs:
       - name: cleanup
         if: always()
         run: docker rm -f sandbox-test || true
+
+  sandbox-tests:
+    # The tests that need a running sandbox service: the group `sandbox` of
+    # scripts/tests_counted.py. The image is built from this commit, so the
+    # code of the change runs. The service is started as the stack starts it:
+    # by the `sandbox` service of docker-compose.yml, with its read-only
+    # base, its tmpfs mounts, its dropped capabilities and its limits. The
+    # job gives none of these itself, so a change of the stack's settings is
+    # under test by itself. The languages are in the image; no test asks the
+    # runner for a tool.
+    name: sandbox tests (containerized)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # This job builds or runs an image of Docker Hub. The Docker service
+      # asks a mirror first, so a limit or a fault of Docker Hub does not turn
+      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
+            .github/requirements/ci.txt
+
+      - name: install
+        run: |
+          # pytest, and httpx with which the tests reach the service: from
+          # the hashed lock.
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
+
+      - name: the settings that an install gives the compose file
+        run: |
+          # What an install has in its `.env`: the caller's user, a workspace,
+          # and the folder of the service token (here with no token in it, so
+          # the service asks for none). The compose file asks for the two
+          # names of the model for its other services; the sandbox does not
+          # read them. No limit and no mount of the sandbox is set here.
+          mkdir -p "$RUNNER_TEMP/workspace" "$RUNNER_TEMP/no-secrets"
+          {
+            echo "ATLAS_SANDBOX_UID=$(id -u)"
+            echo "ATLAS_SANDBOX_GID=$(id -g)"
+            echo "ATLAS_PROJECT_DIR=$RUNNER_TEMP/workspace"
+            echo "ATLAS_SECRETS_DIR=$RUNNER_TEMP/no-secrets"
+            echo "ATLAS_MODEL_FILE=not-read-by-the-sandbox"
+            echo "ATLAS_MODEL_NAME=not-read-by-the-sandbox"
+          } > "$RUNNER_TEMP/sandbox.env"
+
+      - name: build sandbox image
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+
+      - name: start the sandbox as the stack starts it, and wait for its health answer
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" up -d --no-deps --no-build --pull never sandbox
+          # The service says itself when it serves. No fixed wait: a slow
+          # start would read as 80 failed tests.
+          for _ in $(seq 1 60); do
+            if curl -sf -m 5 -o /dev/null http://127.0.0.1:30820/health; then
+              echo "The sandbox answers."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::The sandbox gave no health answer in 120 seconds, so no test was run. Fix: read its log below for why the service did not start; it is the sandbox service of docker-compose.yml, with the image built from ./sandbox of this commit."
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 80 sandbox
+          exit 1
+
+      - name: the sandbox tests
+        env:
+          SANDBOX_URL: http://127.0.0.1:30820
+        # The status of pytest is not the verdict: it is 0 for a run in which
+        # tests were skipped. The next step reads the result file.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files sandbox) -q -rs -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/sandbox-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: every sandbox test ran and passed
+        run: python scripts/tests_counted.py sandbox "$RUNNER_TEMP/sandbox-tests.xml"
+
+      - name: the log of the sandbox, when a step failed
+        if: failure()
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 120 sandbox
+
+      - name: cleanup
+        if: always()
+        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" down --volumes || true
+
+  proxy-tui-tests:
+    # The tests that need the built TUI and a running proxy: the group
+    # `proxy` of scripts/tests_counted.py. They ask the proxy's own answers
+    # and read the TUI's own screen. None needs a model, so the proxy runs
+    # here with no service behind it.
+    name: proxy and TUI tests (no model)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: '1.26.6'
+          # No cache: the two builds take less time than restoring one.
+          cache: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            **/requirements*.txt
+            .github/requirements/ci.txt
+
+      - name: install
+        run: |
+          pip install --require-hashes -r .github/requirements/ci.txt
+          pip install --no-deps -e .
+
+      - name: build the proxy and the TUI
+        run: |
+          (cd proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
+          # The TUI tests start this file.
+          (cd tui && go build -o atlas-tui .)
+
+      - name: start the proxy and wait for its answer
+        env:
+          ATLAS_PROXY_PORT: "18090"
+          ATLAS_KEEP_LLAMA_WARM: "0"
+          ATLAS_SERVICE_TOKEN_FILE: /nonexistent
+          # No service is behind the proxy: nothing listens on port 9.
+          ATLAS_INFERENCE_URL: http://127.0.0.1:9
+          ATLAS_SANDBOX_URL: http://127.0.0.1:9
+          ATLAS_LENS_URL: http://127.0.0.1:9
+          ATLAS_V3_URL: http://127.0.0.1:9
+        run: |
+          nohup "$RUNNER_TEMP/atlas-proxy" > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          # Any answer shows that the proxy serves. With no service behind it
+          # the answer is "not ready", which is what these tests need.
+          for _ in $(seq 1 30); do
+            if curl -s -m 5 -o /dev/null http://127.0.0.1:18090/ready; then
+              echo "The proxy answers."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The proxy gave no answer in 30 seconds, so no test was run. Fix: read its log below for why it did not start; it is built from ./proxy of this commit."
+          tail -n 80 "$RUNNER_TEMP/proxy.log"
+          exit 1
+
+      - name: the proxy and TUI tests
+        env:
+          ATLAS_PROXY_URL: http://127.0.0.1:18090
+        # The status of pytest is not the verdict; the next step reads the
+        # result file.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files proxy) -q -rs -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/proxy-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: every proxy and TUI test ran and passed
+        run: python scripts/tests_counted.py proxy "$RUNNER_TEMP/proxy-tests.xml"
+
+      - name: the log of the proxy, when a step failed
+        if: failure()
+        run: tail -n 120 "$RUNNER_TEMP/proxy.log"
+
+  coverage-upload:
+    name: coverage upload
+    # Sends the coverage reports of the test jobs to Codecov. It is a job of
+    # its own so that no test job depends on a service outside GitHub, and so
+    # that the uploader runs with the reports and a read-only checkout and
+    # nothing else. It runs only when the test jobs passed: a report from a
+    # failed run would show coverage that is not real. The merge queue tests
+    # a commit that the push to the branch reports again, so it is left out.
+    needs: [go-tests, python-tests]
+    if: github.event_name != 'merge_group'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Lets this job ask GitHub for a short-lived token that says which
+      # repository and run it is. Codecov checks it; see the upload steps.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Codecov files a report under the head commit of a pull request
+          # and reads codecov.yml from that commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # The upload action is taken from the commit that this workflow file
+      # comes from. For a pull request that is the merge commit, and the
+      # checkout above is the head commit: a branch that left dev before an
+      # action was added does not have it in its tree, and the step below
+      # would end with "Can't find 'action.yml'". Only the actions are taken,
+      # into a folder of their own, and after the checkout above, which
+      # clears the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+          path: workflow-commit
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/reports
+
+      # The upload steps are in an action of this repository, so that the
+      # push to dev, which takes the merge queue's reports, sends them the
+      # same way (.github/workflows/dev-results.yml).
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./workflow-commit/.github/actions/upload-coverage  # zizmor: ignore[self-repository]
+        with:
+          reports: ${{ runner.temp }}/reports
+
+  test-results-upload:
+    name: test results upload
+    # Sends the result of each test of the test jobs to Codecov, so that a
+    # test that fails only sometimes is named over many runs. Unlike the
+    # coverage job it also runs when a test job failed: a failed test is what
+    # the report is for. It is a job of its own for the same reasons as the
+    # coverage job, so a refused upload turns this job red and never a test
+    # job. The merge queue is left out, as for coverage.
+    needs: [go-tests, python-tests]
+    if: ${{ !cancelled() && github.event_name != 'merge_group' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # For the identity token Codecov checks; see the coverage job.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Codecov files a report under the head commit of a pull request.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      # The upload action comes from this workflow file's own commit; see the
+      # coverage job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+          path: workflow-commit
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/reports
+
+      # zizmor asks for the `$/` form here. actionlint, in its newest version,
+      # does not read that form yet, so the form both read is kept.
+      - uses: ./workflow-commit/.github/actions/upload-test-results  # zizmor: ignore[self-repository]
+        with:
+          reports: ${{ runner.temp }}/reports

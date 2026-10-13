@@ -375,6 +375,92 @@ func TestValidateShellCommandUnwrapsBashCForCatastrophic(t *testing.T) {
 	}
 }
 
+func TestValidateShellCommandChecksPrefixedAndNestedShells(t *testing.T) {
+	blocked := []string{
+		`env ATLAS_FLAG=x bash -c 'rm -rf /'`,
+		`nohup env ATLAS_FLAG=x bash -c 'rm -rf /workspace'`,
+		`sudo -u root bash -c 'rm -rf /'`,
+		`doas -u root sh -c 'find . -delete'`,
+		`env -u HOME bash -c 'mkfs.ext4 /dev/sda1'`,
+		`nice -n 5 bash -c 'rm -rf /'`,
+		`stdbuf -o L bash -c 'rm -rf /'`,
+		`timeout --signal TERM 5s bash -c 'rm -rf /'`,
+		`env -S 'bash -c "rm -rf /"'`,
+		`env '-Sbash -c "rm -rf /"'`,
+		`env '--split-string=bash -c "rm -rf /"'`,
+		`env -iS 'bash -c "rm -rf /"'`,
+		`env '-ivSbash -c "rm -rf /"'`,
+		`env '--split-str=bash -c "rm -rf /"'`,
+		`env --s 'bash -c "rm -rf /"'`,
+		`env -S 'rm -rf /'`,
+		`env -S rm -rf /`,
+		`env -S '-S "bash -c '\''rm -rf /'\''"'`,
+		`env ATLAS_FLAG=x bash -lc 'rm -rf /'`,
+		`bash -o pipefail -c 'rm -rf /'`,
+		`bash -c -l 'rm -rf /'`,
+		`bash -c -- 'rm -rf /'`,
+		`bash -c -o pipefail 'rm -rf /'`,
+		`bash -clo pipefail 'rm -rf /'`,
+		`bash -c +e 'rm -rf /'`,
+		`sh -c -e 'rm -rf /'`,
+		`"b"'ash' -c 'rm -rf /'`,
+		`env ATLAS_FLAG=x b\ash -c 'rm -rf /'`,
+		`bash -c 'bash -c '\''rm -rf /'\'''`,
+		`eval 'bash -c "rm -rf /"'`,
+		`eval -- 'bash -c "rm -rf /"'`,
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			if got := validateShellCommand(cmd); got == "" {
+				t.Errorf("validateShellCommand(%q) = empty, want rejection", cmd)
+			}
+		})
+	}
+}
+
+func TestValidateShellCommandAllowsOrdinaryWrappedShells(t *testing.T) {
+	allowed := []string{
+		`env ATLAS_FLAG=x bash -c 'python app.py'`,
+		`sudo -u root bash -c 'python app.py'`,
+		`env -u HOME bash -c 'go test ./...'`,
+		`env -S 'bash -c "python app.py"'`,
+		`env '-Sbash -c "python app.py"'`,
+		`env '--split-string=bash -c "python app.py"'`,
+		`env -iS 'bash -c "python app.py"'`,
+		`env '-ivSbash -c "python app.py"'`,
+		`env '--split-str=bash -c "python app.py"'`,
+		`env --s 'bash -c "python app.py"'`,
+		`env -S 'echo "rm -rf /; rm -rf /"'`,
+		`env -S echo 'rm -rf /; rm -rf /'`,
+		`env -S '-S "bash -c '\''python app.py'\''"'`,
+		`env ATLAS_FLAG=x bash -lc 'python app.py'`,
+		`bash -o pipefail -c 'python app.py'`,
+		`bash -c -l 'python app.py'`,
+		`bash -c -- 'python app.py'`,
+		`bash -c -o pipefail 'python app.py'`,
+		`bash -clo pipefail 'python app.py'`,
+		`bash -c +e 'python app.py'`,
+		`sh -c -e 'python app.py'`,
+		`bash -c 'echo safe' 'rm -rf /'`,
+		`bash -c 'echo safe' env -S 'bash -c "rm -rf /"'`,
+		`"b"'ash' -c 'python app.py'`,
+		`env ATLAS_FLAG=x b\ash -c 'python app.py'`,
+		`bash -c 'bash -c '\''python app.py'\'''`,
+		`eval 'echo rm -rf /'`,
+		`eval -- 'echo rm -rf /'`,
+		`bash -c 'echo rm -rf /'`,
+		`bash -o`,
+		`eval --`,
+	}
+	for _, cmd := range allowed {
+		t.Run(cmd, func(t *testing.T) {
+			if got := validateShellCommand(cmd); got != "" {
+				t.Errorf("validateShellCommand(%q) rejected: %s", cmd, got)
+			}
+		})
+	}
+}
+
 func TestValidateShellCommandAllowsLegitShellWork(t *testing.T) {
 	// bash -c wrapping a benign command is fine now; `python -c` / `node -e`
 	// verification idioms must pass.

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ChatViewProvider, TOKEN_SECRET_KEY } from './ui/chatView';
 import { DiffProvider } from './ui/diffProvider';
 import { StatusBar } from './ui/statusBar';
-import { checkAlignment } from './workspace/alignment';
+import { checkAlignment, WorkspaceClient } from './workspace/alignment';
 
 export function activate(context: vscode.ExtensionContext) {
 	const diffs = new DiffProvider();
@@ -13,10 +13,10 @@ export function activate(context: vscode.ExtensionContext) {
 	// Ask once at startup rather than waiting for an edit to land somewhere
 	// the user cannot see. Fire-and-forget: a slow or missing CLI must not
 	// hold up activation.
-	void promptIfMisaligned(context);
+	void promptIfMisaligned(context, () => chat.makeClient());
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeWorkspaceFolders(() => {
-			void promptIfMisaligned(context);
+			void promptIfMisaligned(context, () => chat.makeClient());
 		}),
 		diffs.register(),
 		statusBar,
@@ -106,12 +106,15 @@ const ALIGN_PROMPT_DISMISSED_KEY = 'atlas.alignPromptDismissed';
 
 /** Offer to move the proxy's bind onto the open folder. Silent when aligned,
  * when the CLI is unavailable, and once the user has dismissed it. */
-async function promptIfMisaligned(context: vscode.ExtensionContext): Promise<void> {
+async function promptIfMisaligned(
+	context: vscode.ExtensionContext,
+	makeClient: () => Promise<WorkspaceClient>,
+): Promise<void> {
 	const folder = vscode.workspace.workspaceFolders?.[0];
 	if (!folder || context.workspaceState.get<boolean>(ALIGN_PROMPT_DISMISSED_KEY, false)) {
 		return;
 	}
-	if ((await checkAlignment(folder.uri.fsPath)) !== 'misaligned') {
+	if ((await checkAlignment(folder.uri.fsPath, undefined, await makeClient())) !== 'misaligned') {
 		return;
 	}
 	const choice = await vscode.window.showWarningMessage(

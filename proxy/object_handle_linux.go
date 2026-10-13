@@ -33,6 +33,10 @@ const oPath = 0x200000
 
 var errObjectIdentityUnavailable = errors.New("the object could not be held for approval")
 
+// objectHoldSupported says whether this system can hold an object for a
+// deletion approval. Tests that go through the approval read it.
+const objectHoldSupported = true
+
 // objectHandle is the held reference. It is created by inspection, carried by
 // the approval, and released exactly once by whoever ends the approval's life:
 // the tool after its attempt, the handshake on a refusal, the next grant that

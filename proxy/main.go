@@ -89,7 +89,7 @@ func resolveVerifyTarget(workingDir string) string {
 	if workingDir == "" {
 		return target
 	}
-	cfg, err := os.ReadFile(filepath.Join(workingDir, ".atlas", "config.toml"))
+	cfg, err := readConfined(workingDir, filepath.Join(".atlas", "config.toml"))
 	if err != nil {
 		return target
 	}
@@ -256,6 +256,7 @@ func newProxyMux() *http.ServeMux {
 	// TUI calls this on connect to render a Lens/ASA compat badge.
 	mux.HandleFunc("/v1/calibration/status", handleCalibrationStatus)
 	mux.HandleFunc("/version", handleVersion)
+	mux.HandleFunc("/workspace", handleWorkspace)
 
 	// Catch-all: proxy to llama-server
 	mux.HandleFunc("/", handlePassthrough)
@@ -753,7 +754,7 @@ func main() {
 	log.SetOutput(filteringWriter{w: out})
 
 	addr := ":" + proxyPort
-	log.Printf("ATLAS Proxy v3.1.4 starting on %s", addr)
+	log.Printf("ATLAS Proxy v3.1.6 starting on %s", addr)
 	log.Printf("  Inference: %s", inferenceURL)
 	log.Printf("  Geometric Lens: %s", lensURL)
 	log.Printf("  Sandbox: %s", sandboxURL)
@@ -1170,6 +1171,7 @@ func writeError(w http.ResponseWriter, status int, code ErrorCode,
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	total, _ := sessionBudget()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"api_version":      APIVersion,
 		"protocol_version": ProtocolVersion,
@@ -1178,6 +1180,50 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 		// it: two installs of one model can differ here and behave
 		// differently.
 		"grammar_mode": effectiveGrammarMode(),
+		// The session limit a measurement's budget has to equal.
+		"session_timeout_s": int(total / time.Second),
+	})
+}
+
+// containerMarkers are files a container runtime creates in every
+// container: Docker writes /.dockerenv, Podman writes /run/.containerenv.
+// A var so tests can point it at temp paths.
+var containerMarkers = []string{"/.dockerenv", "/run/.containerenv"}
+
+// isContainerized reports whether this process runs in a container.
+// ATLAS_WORKSPACE_DIR is no signal: the local (non-Docker) proxy launcher
+// sets it too (runtime.py:283). Kubernetes, and so K3s, sets
+// KUBERNETES_SERVICE_HOST in every pod, where containerd creates neither
+// marker file.
+func isContainerized() bool {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return true
+	}
+	for _, m := range containerMarkers {
+		if _, err := os.Stat(m); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func handleWorkspace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed,
+			ErrUnsupported, "method not allowed")
+		return
+	}
+	hostPath := os.Getenv("ATLAS_PROJECT_DIR")
+	containerPath := os.Getenv("ATLAS_WORKSPACE_DIR")
+	containerized := isContainerized()
+	if !filepath.IsAbs(hostPath) {
+		hostPath = ""
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"project_dir":   hostPath,
+		"working_dir":   containerPath,
+		"containerized": containerized,
 	})
 }
 

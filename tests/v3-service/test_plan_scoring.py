@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
-import main as v3main  # noqa: E402
+import main as v3main
 
 
 def _plan(command):
@@ -117,14 +117,40 @@ def test_editing_an_existing_file_is_not_penalised():
     assert not any("already exist" in r for r in reasons), reasons
 
 
-def test_the_existing_file_set_reads_the_workspace(tmp_path):
-    (tmp_path / "input.txt").write_text("199\n200\n")
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "mod.py").write_text("x = 1\n")
-    found = v3main._existing_workspace_files(str(tmp_path), {"ctx_only.py": "y = 2"})
-    assert "input.txt" in found
-    assert "sub/mod.py" in found
-    assert "ctx_only.py" in found      # what the proxy shipped counts too
+def test_the_existing_file_set_is_the_proxy_listing_and_the_context():
+    found = v3main._known_files({"ctx_only.py": "y = 2"}, ["./input.txt", "sub/mod.py"])
+    assert found == {"ctx_only.py", "input.txt", "sub/mod.py"}
+
+
+# #277: the paths were cleaned with `lstrip("./")`, which strips a set of
+# characters rather than a prefix, so the dot of a hidden name went too and
+# `.env` was recorded as `env`.
+def test_the_existing_file_set_keeps_the_dot_of_hidden_files():
+    found = v3main._known_files({".github/x.yml": ""}, [".env", "./.env", "./a.py", "././a.py"])
+    assert found == {".github/x.yml", ".env", "a.py"}
+
+
+def _create_plan(target):
+    return {
+        "steps": [
+            {"id": "s1", "action": "write_file", "target": target, "why": "create it"},
+            {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
+        ],
+        "verify_step": "s2", "rationale": "create then verify",
+    }
+
+
+def test_creating_env_is_not_flagged_when_only_dot_env_exists():
+    existing = v3main._known_files({}, [".env"])
+    _, reasons = v3main._score_plan(_create_plan("env"), "write the env file", existing)
+    assert not any("already exist" in r for r in reasons), reasons
+
+
+def test_creating_dot_env_is_flagged_when_dot_env_exists():
+    existing = v3main._known_files({}, [".env"])
+    for target in (".env", "./.env"):
+        _, reasons = v3main._score_plan(_create_plan(target), "write the env file", existing)
+        assert any("already exist" in r and ".env" in r for r in reasons), (target, reasons)
 
 
 def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them():

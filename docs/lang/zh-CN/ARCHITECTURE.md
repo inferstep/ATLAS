@@ -1,9 +1,9 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: 4f1be83 -->
+<!-- source: docs/ARCHITECTURE.md synced-through: a5021a0 -->
 > **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构
 
-ATLAS V3.1.4 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
+ATLAS V3.1.6 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
 
 ---
 
@@ -49,7 +49,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 |---|---|---|---|---|
 | **CUDA** (NVIDIA) | 支持 (Supported)（自 V3.1.0 起） | `inference/Dockerfile.v31` → `atlas-llama` | （默认） | RTX 5060 Ti 16GB（基准）。发布的镜像只针对 Blackwell（计算能力 12.0/12.1）编译；更早的代次需要本地重建 —— 见 [SETUP.md](../../SETUP.md) |
 | **ROCm / HIP** (AMD) | 社区验证 (Community-tested)（自 V3.1.1 起） | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `docker-compose.rocm.yml` | RX 7900 XTX（社区冒烟测试，GH #26） |
-| **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
+| **Metal** (Apple Silicon) | 支持 ([#32](https://github.com/inferstep/ATLAS/issues/32)) | 混合方案：原生 llama-server (Metal) + 其余组件用 Docker（macOS 无法将 GPU 直通给容器） | `docker-compose.macos.yml` | M 系列；≤16 GB 用 Q4_K_M，≥24 GB 统一内存用 Q6_K |
 | **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
 | **SYCL** (Intel Arc) | 路线图 (Roadmap) —— Intel Arc 目前使用 `vulkan` | 待定 | 待定 | — |
 
@@ -161,6 +161,31 @@ flowchart LR
 
 在默认的 `strict` 模式下，代理发送一个完整的 JSON schema —— 带 `additionalProperties: false` 的 `oneOf`，工具名从注册表中枚举 —— llama-server 在 token 生成期间将其作为语法强制执行。语法约束让畸形输出变得罕见，而非不可能：`ATLAS_GRAMMAR_MODE=loose` 只发送 `{"type":"json_object"}`（有效 JSON，不强制形态 —— 有些模型需要它），而且回复 token 上限可能在 JSON 中途截断。代理把解析当作可能失败的操作对待 —— 它会从散文/`reasoning_content` 中恢复 JSON，在执行前检测被截断的工具参数，把针对性的解析失败描述反馈回去，并在连续三次失败后中断循环。
 
+**围栏内容通道（`@fenced`）。** 整文件正文不走 JSON 通道。JSON 字符串里的代码在每一行密集内容上都付出转义压力，一个已部署的 12B 模型可测地无法承受：同一个解法以围栏 markdown 块发出时 6/6 可解析，以 JSON 字符串发出时 0/6（丢失右括号、字面量 `\n` 把多条语句熔进注释、join 丢失空格）。系统提示指示模型把 `write_file` 的 `content` 设为恰好 `@fenced`；代理随后发起一次*不受约束*的子调用（无语法、无 `response_format`），其回复就是单个围栏块中的文件，并按目标扩展名打上标签（` ```python `、` ```html `，……）。信封仍在 JSON 约束之下；只有文件正文移到纯文本。机制的细节（`proxy/agent.go::fetchFencedContent`）：子调用是临时的（永不追加进对话——在主线程看来，模型写了 `@fenced`，写入就完成了）；若回复里的文件本身含有 ` ``` `，则由一个尾部围栏锚点提取，使内部围栏不会截断它；把哨兵值*和*文件放进同一个字符串的模型，会剥掉哨兵值并使用内联内容；两次尝试，然后一次退回，请求内联内容。每次尝试都是真实的生成，并计入运行总量（最终 `done` 载荷上的 `fenced_calls` / `fenced_tokens`，每次尝试一个 `fenced_fetch` 阶段事件）。
+
+重复检测器对**模型**发出的调用做指纹，快照取在工具调用分支顶部、在围栏解析用取回的正文改写 `parsed.Args` 之前。没有这个快照，检测器读到的字节在每次尝试中都不同，而调用本身却是字节等同的——这正是那次冻结运行里七轮 `@fenced` 循环直至触顶 harness 上限而检测器全程沉默的原因。取回的字节不受影响：它们仍然驱动变更、各道门、账本和写入。目标路径会被归一化后进入签名，因此 `solve.py` 和 `./solve.py` 买不到两份额度。
+
+当某条路径的围栏配额用尽而模型再次请求该通道时，拒绝会被做成一次它可据以行动的东西：规范路径、文件可读时的当前源码（有界，或一条明确说明它不在磁盘上的注记），以及仍然可用的替代方案——整文件内联、一次定向编辑、一次读取，或模型自发的 `run_command`。每个规范路径只提供一次；别名、新的一轮，或一次无关的成功都无法重新打开它。它不发起任何生成，不运行任何命令，也不强制任何工具。持续请求的模型会落入普通的失败调用计数并停下来。
+
+当 run-first 门已经要求某个被警告过的文件必须运行，而模型却用同样的原始 `@fenced` 写入作答时，重复这一要求就不再是机制。在该复现上，模型会拿到文件的真实现状——规范路径、至多 120 行带行号的内容，以及账本若对那批字节持有一条当前失败判定时的该判定——而那次无用的调用被扣下。它运行在围栏解析之前，因此被拦截的重复不花费生成；它只读不写，不运行命令，不强制工具，每个规范路径至多触发一次，且当剩余工作预算不足 90 s 时跳过。若模型仍然重复被拦截的意图，既有的封禁与重复检测器会诚实地终结这次运行。
+
+run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展名文件的命令（`runCommandFor`：`python3`、`node`、`go run`、`java`，或 Kotlin 的 `kotlinc … && java -jar` 组合），会退出的脚本经 `run_command` 发送，提供服务的脚本经 `run_background` 发送（与前台服务重定向所用的同一个 `runsAServerLoop` 判定）。两个工具在其命令执行了该文件时都会解除被警告的标记，因此一个在后台启动、又通过其稳定窗口期回溯信息被读取的服务器脚本算作已运行。`python3 -m <module> file.py` 与 `python3 -c ...` 把文件交给另一个程序，永远不会被视为启动其服务循环。2026-09-14 在这三条规则之前实测：该门要求 `run_command python3 app.py`，重定向拒绝了它，`run_background` 从未解除标记，`python3 -m py_compile app.py` 被当作服务启动拒绝，会话以磁盘上仍然留着的 SyntaxError 结束。
+
+因为每次尝试都花费一次生成，该通道只为能够执行的调用打开。`fencedCallIsExecutable` 会运行该调用反正必须通过的那些检查——参数形状、非空路径、`validateToolWorkspacePaths`、`shouldDenyToolCall`——以真正调用它们的方式，因此它的拒绝是 `executeToolCall` 拒绝的子集。一个不可用的调用只是不被解析：哨兵值留在 `content` 里，工具用它自己的报错信息与 `MutationNone` 拒绝它，会话花费一轮而非一次生成。在该检查存在之前实测：一个 300 s 的金丝雀运行到第 36 轮什么都没写，每一轮都是一个带 `content: "@fenced"` 却没有路径的 `write_file`，每一次都打开通道，每一次失败都记在空路径的额度键上。
+
+围栏子调用可能失速：流打开了，然后在服务端视线之外生成期间什么都不发。看门狗将其切断（`fencedStalledTimeout`，约 25 s）。失速是会话的属性而非文件的属性，因此一旦某个文件的取回失速，下一个文件的取回会以同样方式失速。第一次失速取回之后，通道在本次运行剩余部分被关闭（`ctx.FencedStalls` 越过 `fencedSessionStallLimit`，由 `fencedChannelDisabledForSession` 测试）：下一个 `@fenced` 立即返回、不发起子调用，模型被引导改为内联写入文件。内联是安全的退路，因为下文的写入完整性检查如今能截获 `@fenced` 当初为规避截断而存在的那种截断。
+
+### 写入完整性检查
+
+三道检查拦住一个损坏的文件以干净写入的面目落地。每道都点名真实成因，使模型的重发能够修复它。
+
+**被未转义引号截断的写入会被拒绝。** 一个 `write_file` 的 `content` 若持有未转义的 `"`，其 JSON 字符串会提前结束；宽松解码器随后把文件剩余部分读进一个被丢弃的键，落地一个报告成功的截断文件。循环会检查解析后的编辑类工具调用中是否存在工具真实签名（经输入 schema 反射读取）之外的键、且带有泄漏文件内容的形态——过长，或持有代码标点——并拒绝它（`swallowedContentFeedback`），告知模型字符串提前结束，请转义内部引号或改用 `structural_edit`。
+
+**一个每次渲染都会 500 的 Jinja 模板会在写入时被截获。** 模板可以解析为 HTML 却在渲染时失败：`{% for x in xs %)` 用 `)` 闭合标签。`html.parser` 会放过它，服务器也会启动，但每次渲染都抛出 `TemplateSyntaxError`。沙箱语法检查也会解析 Jinja，其范围限定在真正是模板的文件（`templates/` 目录，或带 `.jinja`/`.jinja2` 的名字），且只在存在 `{%` 语句标签时进行，因此共享 `{{ }}` 的 Vue/Angular HTML 永远不会交给 Jinja 解析器；未知标签/过滤器错误（第三方扩展）会被丢弃。代理会发送文件路径，使沙箱能在直接写入门与 V3 的编译冒烟检查两处都应用该范围。
+
+**基线已可编译时，交互类任务跳过 V3 修复。** V3 的修复阶段只在没有任何生成候选通过时才会到达。对交互类任务而言，唯一的信号是「能否编译」（服务器无法在沙箱里完整运行），因此此时唯一可编译的代码就是模型自己的写入，而一个修复到可编译的候选并不比一个可编译的基线得到更多验证。基线可编译时，跳过修复并交回基线，把预算还给 agent 循环，而不是花掉会话的约 50% 去重新推导它。算法类任务保留修复：它们可以被执行，其模型生成的自测结果被记录为诊断信息。
+
+
 ### 工具
 
 `proxy/tools.go` 中注册了 16 个工具：
@@ -183,6 +208,87 @@ flowchart LR
 | `run_background` | 在 sandbox 中启动一个长时间运行的进程（例如 `python app.py`）；立即返回一个 `job_id` | 否 |
 | `tail_background` | 通过 `job_id` 获取某个后台任务新增的 stdout/stderr | 是 |
 | `stop_background` | 通过 `job_id` 对某个后台任务发送 SIGTERM/SIGKILL | 否 |
+
+### 交付物账本（观测性）
+
+`executeToolCall` 把每次调用对会话交付物所做的记录进 `AgentContext.Ledger`，以解析后的工作区路径为键。它只观测、不决策：无恢复、无拒绝、无事件。`ToolEffect` 决定处理方式。
+
+| 效果 | 记录什么 |
+|--------|------------------|
+| 直接变更（`write_file`、`edit_file`、`structural_edit`、`insert_after`、`replace_lines`） | 调用后文件被重新读取并哈希，因此记录的哈希指向磁盘上的字节而非工具提议的字节 |
+| `delete_file`、`move_file` | 路径确实消失后记一条墓碑记录，保留任何检查点字节并禁止自动恢复；移动操作对其目标做全新观测，不转移任何判定 |
+| `run_command` | 每个被跟踪路径重新哈希：未变的文件保留判定，已变的失去判定。工作区还会在前后各遍历一次（`applyShellChanges`，仅 stat，跳过依赖、缓存与构建目录）：命令创建或变更的、属于完成判定可评判类型的文件作为会话的工作进入账本；请求开始时已存在而命令将其删除的文件记入 `deleted:shell` 墓碑，完成判定将其读作一次无人批准的删除；运行创建而又被后续命令删除的文件离开账本。触及上限的遍历在摘要中留下一条注意事项 |
+| `run_background`、`stop_background` | 启动时升起一个工作区危险信号，仅在一个被回收的退出码上降下。每次调用前后像 `run_command` 一样遍历，首个存活任务启动后那次调用之后的遍历被保留为基线。一旦不再有任务可能仍在写入（完成判定回收一个已退出的任务、`stop_background` 确认一次退出，或会话结束时回收其任务），工作区在相同规则下与该基线比较；账本已记录的删除（`delete_file`、`move_file`、更早的遍历）不计在该任务头上 |
+
+证明自身未变更任何东西的分支（`MutationNone`）不记录任何内容，因此对会话从未拥有的路径的一次被拒写入不会进入账本。
+
+`ValidationKind`/`ValidationStatus` 从工具自身的结果复制，并绑定到它们所描述的哈希上；文件哈希一旦离开被验证的那个，`CurrentValidation()` 立即返回未知。字节仅在那批字节的一次显式 `passed` 上被检查点化，受每文件 256 KiB、每会话 2 MiB 的上限约束。超过上限时观测被保留，字节不被保留，`checkpoint_unavailable` 记录原因。
+
+哪些变更工具可以留下检查点，取决于它们是否对自己写入的字节产生一次显式通过，由 `TestWhichMutatorsCanEverPromoteACheckpoint` 度量：
+
+| 工具 | 能否达到 `passed` | 说明 |
+|------|------------------|------|
+| `write_file`、`edit_file`、`insert_after`、`replace_lines` | 能 | 经语法门，当沙箱可达时 |
+| `structural_edit` | 不能 | tree-sitter 拼接属于 v3-service；该工具对自己写入的字节不运行任何检查，因此报告 `syntax`/`not_run` |
+| `delete_file`、`move_file` | 不能 | 二者都不改变内容，因此都无可给定的判定 |
+
+七个变更工具的每个分支都携带自己的 `MutationStatus`：该边界在结构上被禁止对直接变更工具做分类，因此一个未分类的分支将无法与一次有意的空操作区分。`noMutation` / `errNoMutation` 标记一个未形成待写字节的分支，`refusedNoCheck` 标记一个拒绝了已就绪字节的守卫，`errFailedMutation` 标记一次被尝试过且使目标处于不确定状态的写入。`TestEvery*OutcomeIsClassified` 覆盖这些家族。
+
+#### 模型看到什么
+
+分类是服务端事实。`ToolResult.ModelFacing()` 把结果投影为 `success` / `data` / `error` 加上 V3 溯源字段，而 `MarshalText`——结果进入 `ctx.Messages` 的唯一路径——经由它。完整结构体仍为内部用途携带全部字段做序列化；该投影是一份白名单，因此新加到 `ToolResult` 的字段不会进入对话，除非有人决定不然。
+
+三处测试守住这条边界，位于 `proxy/result_contract_test.go` 与 `proxy/tool_effect_test.go`：`TestEveryModelFacingSerializationSiteIsInventoried` 在出现新的直接序列化或经未盘点路由构建的工具消息时失败，`TestModelFacingTextCarriesNoClassification` 逐结果固定投影后的字节，而 `TestModelPromptBytesAreUnchangedByClassification` 让 agent 循环跑过两个分类发生变化的分支，并把请求体与父提交对比。
+
+两个限制被如实携带而非绕开推理：`structural_edit` 成功时报告 `syntax`/`not_run`，因此无法晋升检查点；`move_file` 的跨文件系统复制路径在生产可达，但没有生产路径的测试，因为单个临时目录无法横跨两个文件系统。
+
+#### 恢复
+
+只有一个终端接有恢复逻辑：重复检测器的 stop——一个运行结束时持有它自己已证明损坏的交付物的时刻。其余十二个 `done` 发射器不受影响——一个什么也没证明的终端没有可恢复之物——若该范围扩大，`TestRestorationIsWiredToExactlyOneTerminal` 会失败。
+
+在该终端，每个交付物被重新读取、经写入路径所用的同一语法契约重新检查，并按各自情况决定。每一子句都是一个不行动的理由：
+
+| 需要满足 | 不满足的情形 |
+|----------|---------------|
+| 该路径由本会话写入 | 它从未是这里的交付物 |
+| 当前字节刚被重新读取并重新检查 | 检查器无法运行，判定未知 |
+| 该确切哈希持有一次已被证明的失败 | 当前内容可解析，或从未检查 |
+| 持有的字节存在、在界内、哈希与自身记录一致 | 被逐出、超上限或自相矛盾 |
+| 持有版本通过了*同一种*检查 | 一次结构通过不构成关于语法的证据 |
+| 两个版本不同 | 文件已持有更安全的版本 |
+| 未被墓碑化、未被禁止恢复 | 模型有意删除或移动了它 |
+| 无存活的后台危险信号 | 后台任务可能仍在写入 |
+
+写入经 `atomicReplaceFile`——变更工具所用的同一套先写后改名——随后结果被重新读取并哈希：一次无法证明自己精确落地的恢复是一个保留真实错误、不动当前字节的失败。恢复不设置进度提示、不登记会话写入、不发射工具事件、不主张 V3 溯源，也绝不把一次停止的运行变成完成——摘要按路径逐一披露哪些文件被放回、哪些被保留原样及原因、哪些无法恢复，不暗示它们一起移动过。
+
+#### 终端契约与会话预算
+
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。消费方把缺失、畸形或无法识别读作 `incomplete`，绝不读作完成（Go 侧 `NormalizeTerminalStatus`，`atlas/events.py` 侧 `terminal_status`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+
+对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
+
+被执行前工作区边界检查拒绝的一次调用按其失败调用的本义计数，因此一个工作区根目录无法打开的会话在三轮内停止，而不是把一次拒绝重复到预算耗尽。`workspacePathFields` 是每个工具把哪些参数视作路径的唯一注册表；测试直接枚举它，不保留第二份副本。
+
+工作区危险信号是一个以任务身份为键的集合，不是启动尝试的计数。一个在派发前就被工具拒绝的 `run_background` 不拥有任何东西；一个存活任务恰好拥有一个危险信号，重复的 id 无法二次升起；到稳定窗口期时已消失的任务被立即结算，走任何退出都要求的同一套被跟踪路径重哈希；一个可能已派发但未返回可用 id 的启动升起一个无人能回收的不明危险信号，因为会话无法在其不知道其中在运行什么的时候宣称工作区安静。结算一个任务只清除该任务，幂等，且不会下溢。在运行自身任务仍存活的 `done` 或 `text` 退出上，退出门在完成判定之前点名每个任务及其 `stop_background` 调用（与其他退出门一样有界），因此一个为验证工作而启动的服务器被模型停掉、其自身陈述成立；模型遗留运行中的任务仍使完成为 `background_work_unresolved`，任务名记入摘要。
+
+一个没有适用检查器的交付物仍可证明完成，但只能作为存在且最新的证据，且绝不重新标注为语法通过：路径必须是散文（`isDocumentAsset`——`stripOneFenceLayer` 一直在用的那个集合）、账本必须已拥有它、其记录必须恰好读作 `none`/`not_applicable`、且该记录必须描述此刻磁盘上的字节。不支持的语言、未知扩展名或内嵌内容的模板都落在外面，因为「未运行检查器」对这些的含义不同于对一个文本文件。
+
+运行被要求变更却从未被证明变更的路径作为未解析工作被跟踪，与交付物账本分开：账本记录会话在磁盘上拥有什么，而一个从未落地的意图不拥有任何东西。它在意图被呈交之处开启——参数已解析、路径在工作区内、权限已授予、不在拒绝清单上——这在派发之前，因此一次失败的围栏解析仍是欠账。它只在账本能对同一规范路径证明的东西上关闭：应用后字节的当前验证通过，或无检查器适用时的 `not_applicable`；删除在确认缺失时关闭；移动需要源消失且目标自身的字节被验证。以 64 条路径为界，超出即闭锁。当工作仍悬而未决，模型每代得到一次有界机会去完成它，或用 `delete_file` 显式放弃该路径；不以它的名义写入、删除或运行任何东西，散文不结算任何东西。
+
+两个出口——模型发出的 `done` 与一次文本回复——经由同一个终结器、按同一顺序抵达该判定：已存在的交付物失败保留其自身更具体的原因；否则一个被要求改变磁盘上某物而什么都没改的运行为 `incomplete` / `action_demanded_unmet`；否则一个被要求验证而从未验证的运行为 `incomplete` / `verification_demanded_unmet`；否则完成立足。这些谓词正是重写摘要的那批，因此机器可读的一半与散文不再可能互相矛盾。
+
+每个退出门以三次弹回为界，弹回用尽的门停止把运行送回，但不再停止计数。若其发现到退出时仍然成立，门记录它。关于交付工作的事实的发现使运行以 `incomplete` 结束，各自有自己的原因，除非更早的检查已拒绝退出：`claim_check_unresolved`（代码渲染的模板不存在）、`warned_file_never_run`（带解析警告写入的文件从未运行）与 `unread_citation`（回复引用了运行从未读过的文件）。已知有误报的启发式门放行完成，摘要点名它们仍发现的东西：没有匹配路由的表单或请求目标、无人调用的新增代码、未完成的计划步骤、只被以文件管道进 stdin 方式运行过的程序、以及在验证它们的运行之后变更的字节。在验证被要求之处，漂移、以及触及上次变更前启动的服务器的探测使运行未验证，因此以 `verification_demanded_unmet` 结束。`done` 事件在有未解析项时携带 `unresolved` 与按名点出的用尽之门。
+
+模型发出的 `done` 仅当运行的文件义务——它声明的加上它写入的——此刻可证明满足时才是 `completed`，经由写入路径所用的同一语法契约。若任何东西被删除或移动，完成以 `delete_intent_unestablished` 拒绝：删除是否是任务在此不可知。该原因点名完成立足于什么：`deliverables_demonstrated`，当每个可运行的交付物（可执行语言的代码与 HTML 页面）都被一次当前运行证明在工作，或无可运行之物；`deliverables_parse_only`，当其中一些仅是最新且可解析。没有工作契约时、以及对于页面，没有东西要求运行，因此 `completed` 可立足于一次解析；原因言明如此，摘要说明哪些文件没有被运行。主张超出此范围的模型陈述（「所有测试通过」「一切正常」）显示在服务器句子之后并标注为未检查。
+
+会话预算归服务器所有：总计 600 s，预留 30 s，因此工作停在 570 s。`ATLAS_AGENT_SESSION_TIMEOUT_SEC` 在 [120, 3600] 内覆盖总值；任何畸形、零、负值或越界都带一条日志回落默认。两个生命周期分开维护——响应上下存活到终结，而工作上下文（LLM、工具、门、V3、沙箱）早一个预留结束——因此停止工作的截止时刻不会杀死解释它的通道。到截止时刻服务器取消工作、只回收本会话的后台任务、重哈希被跟踪路径、原样运行 Phase 3B 恢复判定，并在预留内发射一个 `timed_out` 终端。客户端断连不是超时：工作停止、任务被回收，但没有任何东西被声称进一个已关闭的响应。Phase 2 围栏准入自动观察工作截止，因为它本已对 `ctx.Ctx` 的截止做预留。
+
+留给后续的可复现性工作，未在此修正：系统提示按 Go map 顺序渲染工具描述，因此两次运行相同代码会产生不同的提示字节。它只影响提示复现性，不影响行为；`proxy/tool_effect_test.go` 中的 `conversationBytes` 正为此省略系统消息。
+
+`SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`proxy/types.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
+
+工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`classifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`runnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。`structural_edit` 把其验证记为未运行（它对自己拼接的字节不执行任何检查），因此唯一变更是一次结构编辑的任务以 `unresolved_mutation_debt` 结束，除非别的什么东西验证了该文件：一个已知的、独立的限制。
+
 
 ### 工具选择偏差缓解
 
@@ -224,7 +330,7 @@ flowchart LR
 
 | Tier | 最大轮次 | 动作 |
 |------|-----------|--------|
-| T0（对话型） | 5 | 仅文本回复 |
+| T0（对话型） | 12 | 仅文本回复 |
 | T1（简单） | 0（无上限） | 直接写入 —— 无 V3 开销 |
 | T2（功能） | 0（无上限） | 触发 V3 pipeline |
 | T3（困难） | 0（无上限） | 触发 V3 pipeline |
@@ -248,6 +354,29 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 - 或者该文件具有可识别的源代码 / 标记语言扩展名（`.py`、`.go`、`.rs`、`.ts`、`.tsx`、`.js`、`.jsx`、`.html`、`.htm` 等）且没有触发逻辑指标 —— 在 T2 给予它疑点利益（覆盖诸如 12 行组件骨架这类极简但真实的文件）
 
 **T3（困难）** —— 目前分类器自身从不直接发出 T3；圈复杂度精炼器（`refineTierWithCC`，经由 GH #39 第 2 点的 `/internal/cyclomatic_complexity`）按 McCabe CC *升级*：CC ≥ 8 时升到 T2（包括从 T1 升级），CC ≥ 16 时升到 T3。从不降级。
+
+#### 客户端任务模式
+
+一个请求可以携带 `task_contract.task_mode`，在请求边界处校验（`work` 或 `question`；缺失与"存在但为空"保持可区分）。它做与不做什么：
+
+- **在场即权威**，但仅对一个问题：本请求是否要求一次状态变更。
+- **缺席即回退** —— 由旧有的自然语言启发式照常裁决，行为不变。旧客户端被原样接受；不为其推断或虚构任何模式。
+- **确立的是义务，而非完成。** `work` 模式说的是动作被要求；运行仍须以既有证据证明它 —— 当前哈希的交付物有效性、适用的验证、无未结算的变更债、无存活的后台危害、无失效校验、无阻塞的墓碑或权限缺陷。
+- **不授权任何破坏性操作。** `question` 模式既不允许变更，也不抹除变更债、损坏的交付物、失败的校验、后台危害或删除义务；若模型仍然变更，同样的安全与完成规则管辖那些字节。删除仍需要其自身那绑定路径与身份的确认。
+- **从不到达模型。** 任务模式不出现在任何提示中，任何模型、V3 或 lens 输出都无法设置它。一个内部畸形的模式在失败时闭合到要求工作一侧，而不是被读作问题。
+
+影子诊断记录（私有、仅观测、默认关闭 —— 见 [OPERATIONS.md](../../OPERATIONS.md#private-diagnostics-task-contract-shadow-capture)）**按记录种类**版本化，因为给其中一种加字段不得静默重定义另一种：
+
+| 记录 | 版本 | 契约 |
+| --- | --- | --- |
+| `task_contract_shadow_gate` v1 | 1 | 仅旧有观测：启发式的裁决。任务模式迁移之前采集的封存捕获属于 v1，且始终可被为其编写的分析器读取。 |
+| `task_contract_shadow_gate` v2 | 2 | v1 加上 `live_action_demand`（实际生效的裁决）与 `action_demand_source`（`legacy`、`contract_work`、`contract_question`、`contract_invalid_failed_closed`）。 |
+| `task_contract_shadow_request` | 1 | 未变 |
+| `task_contract_shadow_footer` | 1 | 未变 |
+
+`comparison` 仍描述契约与旧有机制的对比；`influences_live_decision` 仍描述观察者及其 sink 能否影响策略，且保持为 false。一次 schema 变更意味着一个新版本 —— 封闭字段集加一个为它编写的读取器 —— 从不是对既有版本的重定义，也从不是一个对未知字段耸肩放行的解析器。
+
+客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；e2e 与可靠性 harness 发送 `work`。VS Code 扩展尚不发送契约，因此其请求不获得 V3 候选（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
 
 ### Plan 模式（按轮次预检）
 
@@ -451,6 +580,13 @@ graph LR
 C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型的 `cx_normalization.json` 提供这两个值；`atlas lens build` 会从该模型带标签的 PASS/FAIL 候选中推导它们。G(x) 的判定阈值同样来自 `gx_thresholds.json`。缺少任一校准时，归一化的判定保持中性/未校准状态，而不是借用参考工件的标度。
 
 每个当前的 Lens 工件包还包含 `model_identity.json`。服务要求其中的模型名与 llama-server 的 `/v1/models` 所报告的 served-model id 匹配（该探测失败时以 `ATLAS_MODEL_NAME` 作为回退）；仅凭嵌入宽度相等无法确立两个不同模型之间的兼容性。
+
+**模型侧调用的归因。** Lens 对模型服务器的每次请求（`/embedding`、`/v1/models` 身份探测）都经由同一套传输，`geometric_lens/model_transport.py`，它转发 ATLAS 其余部分已在用的两个关联标头：`X-ATLAS-Request-ID` 与 `X-ATLAS-V3-Invocation-ID`。它们的取值只来自 Lens 中间件为当前请求绑定的身份（每个 ATLAS Python 服务都使用的同一批 ContextVars）；V3 在其打分调用上同时发送二者。没有绑定身份时标头缺席，不完整的一对保持不完整，绑定随请求结束清除，因此并发请求与后台工作无法交换或继承身份。启动与就绪工作（启动自检、一次 `/ready` 重跑）只在 `ATLAS_LENS_STARTUP_REQUEST_ID` 与 `ATLAS_LENS_STARTUP_INVOCATION_ID` 同时设置时携带身份；测试工具导出该对并在其 relay 上注册，普通部署两者皆不设。仅作归因：没有任何打分、选择、授权或完成逻辑读取这些标头，也没有任何候选字节或用户内容进入它们。
+
+**代理的直接 Lens 调用携带自己的调用身份。** 代理在一条模型侧路径上直接与 Lens 通信，逐写打分（`/internal/lens/score-per-step`），它不是一次 V3 候选调用。唯一属主 `proxy/lens_identity.go` 构建这些请求，并把绑定的 `X-ATLAS-Request-ID` 与一个仅由该请求 id 派生的、代理所有的 Lens 调用身份盖在一起：`proxy-lens:` 后跟 `sha256("atlas/proxy-lens-invocation/v1\n" + request_id)` 的前 32 个十六进制位。它是确定性的（relay 可以在任何模型侧流量之前注册该对），同一请求内的每次直接 Lens 调用相同，跨请求且区别于 V3 的 UUID 调用，且只从类型化的请求 id 派生：绝不来自散文、路径、候选字节、工具参数或模型输出，也绝不可由模型设置。它走既有的 `X-ATLAS-V3-Invocation-ID` 通道；标头名是历史遗留，值是通用的模型侧调用身份。它是一个范围标签而非凭证：没有任何东西读取它来授权一次变更、权限、候选或完成，它也从不出现在 SSE 事件、工具结果、提示或日志中。缺席或超出封闭格式（`[A-Za-z0-9._:-]{1,128}`）的请求 id 不派生调用身份。封闭的规范与向量位于 `proxy/testdata/lens_invocation_vectors.json`。
+
+**嵌入容量边界。** llama-server 在单个物理批次（`-ub`，`ATLAS_UBATCH`）中处理一次 `/embedding` 请求，并拒绝更长的输入；Lens 的每次打分都是对整个序列的一次前向。该拒绝是部署的传输限制而非对文本的评判，它与每个分数分开存放：回答以 `scored: false` 连同每个分数字段中的 `null` 与一个类型化的 `failure`（`embed_capacity`，带服务器的 `input_tokens` 与 `capacity_tokens`、`model_server_error`、`model_server_unreachable`、`embedding_contract`、NaN 或无穷值的 `nonfinite_score`、`internal`）。服务路径上不做任何截断或切分，因为切分过的输入不是工件拟合时的那个向量。v3-service 把该失败记在候选上，将其排在每个已打分者之后，只作为最后存留的已验证候选交付；代理对未打分的写入不施加任何阈值。Lens 知道的容量（经 `LLAMA_EMBED_CAPACITY_TOKENS` 声明，或从一次拒绝中观测）报告于 `/health` 与 `/ready`，且当它低于代理的生成上限时，以状态维度中的 `lens_scoring: partial` 呈现。决策记录：[ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md)。
+
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 

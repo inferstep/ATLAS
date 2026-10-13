@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 4f1be83 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 6ff5ecb -->
 > **[English](../../TROUBLESHOOTING.md)** | **[简体中文](../zh-CN/TROUBLESHOOTING.md)** | **[日本語](../ja/TROUBLESHOOTING.md)** | **한국어**
 
 > ℹ️ 영어 원본([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md))의 번역본입니다. 원본과 차이가 있을 경우 영어 원본이 우선합니다.
@@ -44,7 +44,7 @@ docker compose logs --tail 50
 }
 ```
 
-어떤 필드라도 `false`이면 해당 서비스가 문제입니다. `inference`, `lens`, `lens_ready`, `sandbox` 중 하나라도 false이면 `status`가 `"degraded"`로 바뀝니다. `lens`와 `lens_ready`의 구분 덕분에 "Lens 프로세스는 떠 있지만 `/ready` 게이트가 실패 중 — 보통 가중치 누락이나 임베딩 차원 불일치"인 경우와 "Lens HTTP에 아예 접근 불가"인 경우를 구별할 수 있습니다.
+어떤 필드라도 `false`이면 해당 서비스가 문제입니다. `inference`, `lens`, `lens_ready`, `sandbox` 중 하나라도 false이면 `status`가 `"degraded"`로 바뀝니다. `lens`는 렌즈가 응답을 하기는 하는지를 나타냅니다. `lens_ready`는 프록시가 모든 요청에 적용하는 것과 동일한 검사로, 렌즈가 점수를 산출할 수 있는지를 나타냅니다: `false`이면 `lens_reason`이 그 이유를 알려주며, `true`가 될 때까지 모든 요청이 거부됩니다([요청 거부: 렌즈가 점수를 산출할 수 없음](#요청-거부-렌즈가-점수를-산출할-수-없음) 참고).
 
 ---
 
@@ -93,8 +93,8 @@ docker compose logs --tail 50
 | `file not read yet — use read_file first before editing` | [편집 전에 파일을 읽지 않음](#편집-전에-파일을-읽지-않음) |
 | `file modified since last read — read it again before editing` | [외부에서 파일이 수정됨](#외부에서-파일이-수정됨) |
 | `You have full project context in the system prompt. Do not read more files.` | [탐색 예산 경고](#탐색-예산-경고) |
-| `"lens": false` / "Lens unavailable — verification disabled" | [Lens가 로드되지 않음 / 사용 불가](#lens가-로드되지-않음--사용-불가) |
-| 모든 후보가 `cx_energy: 0.0`, `gx_score: 0.5`를 받음 | [모든 점수가 0.5 부근](#모든-점수가-05-부근) |
+| "ATLAS needs the geometric lens for every request" / 실행이 `lens_unavailable`로 끝남 / `"lens_ready": false` | [요청 거부: 렌즈가 점수를 산출할 수 없음](#요청-거부-렌즈가-점수를-산출할-수-없음) |
+| "No gx_thresholds.json — Lens scores are uncalibrated" | [렌즈 미보정](#렌즈-미보정) |
 | lens 로그에 "embedding extraction failed" | [임베딩 추출 실패](#임베딩-추출-실패) |
 | 샌드박스가 `"error_type": "Timeout"`을 반환 | [코드 실행 타임아웃](#코드-실행-타임아웃) |
 | 특정 언어에서 샌드박스 오류 | [지원되지 않는 언어](#지원되지-않는-언어) |
@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-이전에 미지원이던 카드에서 이 방법이 동작한다면 [GH #26](https://github.com/itigges22/ATLAS/issues/26)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
+이전에 미지원이던 카드에서 이 방법이 동작한다면 [GH #26](https://github.com/inferstep/ATLAS/issues/26)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x 필요
 
@@ -436,10 +436,11 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 
 **증상:** 프록시 헬스에 `"sandbox": false`가 표시됩니다. V3 빌드 검증이 실패합니다.
 
-**해결:** 모든 서비스가 동일한 Docker 네트워크에 있는지 확인하세요. Docker Compose는 `atlas` 네트워크를 자동으로 생성합니다. 컨테이너를 수동으로 실행하는 경우:
+**해결:** 샌드박스는 `atlas`가 아니라 `sandbox-net`을 통해 접근합니다 — 실행된 코드가 나머지 스택에 닿을 수 없도록, 샌드박스는 의도적으로 `atlas` 네트워크에 속하지 않는 유일한 서비스입니다. 프록시, 렌즈, v3-service는 두 네트워크에 모두 연결됩니다. 컨테이너를 수동으로 실행하는 경우:
 ```bash
-docker network create atlas
-# Start all containers with --network atlas
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 포트 충돌
@@ -463,7 +464,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 
 ### `no kernel image is available for execution on the device` (CUDA)
 
-**해당 대상:** 사전 빌드된 `ghcr.io/itigges22/atlas-llama` 이미지를 실행하는,
+**해당 대상:** 사전 빌드된 `ghcr.io/inferstep/atlas-llama` 이미지를 실행하는,
 Blackwell보다 오래된 NVIDIA GPU — RTX 40xx (Ada), RTX 30xx (Ampere),
 RTX 20xx / T4 (Turing), GTX 10xx (Pascal), V100/A100/H100/L4.
 형제 오류인 `invalid device function`(런타임)과
@@ -481,7 +482,7 @@ RTX 20xx / T4 (Turing), GTX 10xx (Pascal), V100/A100/H100/L4.
 # Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
 nvidia-smi --query-gpu=name,compute_cap --format=csv
 # What the image was built for (Blackwell-only image prints sm_120/sm_121)
-docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+docker run --rm --entrypoint bash ghcr.io/inferstep/atlas-llama:latest \
   -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
 ```
 본인 컴퓨트 캐퍼빌리티가 12.0 미만이고 이미지가 `sm_120`/`sm_121`만
@@ -755,7 +756,7 @@ except curses.error:
 
 **무슨 일인가:** 에이전트 루프의 등급 분류기(`proxy/agent.go:classifyAgentTier`)는 하나의 질문에 답합니다: 이것은 대화인가, 작업인가? 기본값은 작업이며 T0에는 적극적인 근거가 필요합니다. 두 종류의 실수가 치르는 대가가 매우 다르기 때문입니다. 대화를 작업으로 잘못 읽으면 모델이 한 턴에 끝낼 메시지에 플래너 호출 한 번을 낭비하는 데 그치지만, 작업을 대화로 잘못 읽으면 턴이 5로 제한되고 플래닝도 건너뛰어 요청 자체가 실패합니다.
 
-메시지가 대화형으로 판정되는 경우는 12자 미만(`hi`, `thanks`, `ok`)이거나 질문 형태일 때뿐입니다 — `?`로 끝나거나 의문사(`why`, `what`, `how`, `is`, `can`, …)로 시작하는 경우. 다만 작업을 뜻하는 표현이 둘 모두를 앞서므로, `can you fix the login bug?`는 물음표가 있어도 작업입니다. 그 외에는 전부 작업입니다: `still doesn't work, try again`과 `the snake is moving way too fast, slow it down`은 파일명을 대지도, 작업 동사 목록에 맞지도 않지만 둘 다 파이프라인을 받습니다.
+메시지가 대화형으로 판정되는 경우는 12자 미만(`hi`, `thanks`, `ok`)이거나 질문 형태일 때뿐입니다 — 절을 끝내는 `?`가 있거나, 의문사(`why`, `what`, `how`, `is`, `can`, …)가 단어 단위로 문두에 오는 경우. 다만 작업을 뜻하는 표현이 둘 모두를 앞서므로, `can you fix the login bug?`는 물음표가 있어도 작업입니다. `task_mode: work`를 선언하는 클라이언트(TUI가 그렇습니다)는 결코 대화형으로 분류되지 않습니다. 그 외에는 전부 작업입니다: `still doesn't work, try again`과 `the snake is moving way too fast, slow it down`은 파일명을 대지도, 작업 동사 목록에 맞지도 않지만 둘 다 파이프라인을 받습니다.
 
 **할 일:** 짧게라도 원하는 것을 말하세요 — "yes, fix it"은 T0 게이트를 통과합니다. 후속 요청이 에이전트 루프는 돌리는데 V3가 조용하다면 요청 등급이 게이트가 아닙니다 — 파일 자체의 등급이 게이트입니다. [V3 파이프라인이 기능 파일에서 실행되지 않음](#v3-파이프라인이-기능-파일에서-실행되지-않음)을 참고하고, `docker compose logs atlas-proxy | grep -E "write_file|edit_file"`에서 파일 등급 줄(예: `[write_file] app.py → T1:simple (8 lines)`)을 확인하세요.
 
@@ -787,36 +788,35 @@ except curses.error:
 
 ## Geometric Lens 문제
 
-### Lens가 로드되지 않음 / 사용 불가
+### 요청 거부: 렌즈가 점수를 산출할 수 없음
 
-**증상:** 프록시 헬스에 `"lens": false`가 표시됩니다. 또는 시작 시 "Lens unavailable — verification disabled."가 표시됩니다.
+**증상:** 요청이 즉시 HTTP 503 `dependency_down`으로 실패합니다: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." 또는 실행이 `lens_unavailable`로 멈춥니다: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". 프록시 `/ready`에는 `"lens_ready": false`와 `lens_reason`이 표시되고, `atlas doctor`는 `status_dimensions`에서 `direct_agent: blocked`로 실패합니다.
 
-**영향:** ATLAS는 C(x)/G(x) 스코어링 없이도 동작합니다. V3 후보 선택이 샌드박스 전용 검증으로 폴백합니다.
+**영향:** 렌즈가 점수를 산출할 수 있을 때까지 어떤 요청도 실행되지 않습니다. 이는 의도된 동작입니다 — 렌즈는 필수입니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 멈춘 실행은 멈추기 전에 파일을 변경했는지 여부를 함께 알려줍니다.
 
-**해결:** Lens 헬스와 로그를 확인하세요:
+**해결:** 메시지가 원인을 지목합니다. 렌즈 헬스와 로그를 확인하세요:
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:8099/health | python3 -m json.tool
 docker compose logs geometric-lens
 ```
 
-일반적인 원인:
-- Lens가 llama-server에 연결할 수 없음 (`LLAMA_URL` 환경 변수 확인)
-- 모델 가중치 파일 누락 (서비스가 우아하게 성능 저하됨 — 사용자 정의 모델을 학습하지 않았다면 예상된 동작입니다)
+| 메시지에 나오는 이유 | 해결 |
+|---|---|
+| unreachable | 렌즈 컨테이너가 떠 있지 않거나 `ATLAS_LENS_URL`이 잘못되었습니다. `docker compose ps geometric-lens`. |
+| no C(x) / no G(x) model loaded | 서빙 중인 모델에 렌즈 가중치가 없습니다. 레지스트리 모델이라면 `atlas model install-artifacts <name>`을, 아니면 `atlas lens build`를 실행하세요([SETUP.md](SETUP.md#geometric-lens-가중치-필수)). |
+| cannot reach llama-server | 렌즈가 모델 서버에 접근할 수 없습니다. `LLAMA_URL` / `LLAMA_EMBED_URL`과 llama-server 헬스를 확인하세요. |
+| self-test failed | `/health`의 `self_test_error`를 확인하세요. |
+| drifted from the served model | [임베딩 규약 드리프트](#점수는-그럴듯한데-스케일이-크게-어긋남-임베딩-규약-드리프트)를 참고하세요. |
 
-### 모든 점수가 0.5 부근
+프록시는 렌즈의 응답을 5초간 캐시하므로, 고쳐진 렌즈는 5초 안에 수용됩니다.
 
-**증상:** 코드 품질과 무관하게 모든 후보가 `cx_energy: 0.0`과 `gx_score: 0.5`를 받습니다.
+### 렌즈 미보정
 
-**원인:** 모델 가중치가 로드되지 않았습니다. 모델이 없을 때 서비스는 중립 기본값을 반환합니다.
+**증상:** 시작 시 렌즈 로그에 `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled`가 찍히고, 상태에 `lens_calibration: uncalibrated`가 표시됩니다.
 
-**확인:**
-```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
-  -H "Content-Type: application/json" \
-  -d '{"text": "print(1)"}' | python3 -m json.tool
-```
+**영향:** 요청은 실행됩니다. 렌즈는 원시 C(x) 에너지와 G(x) 확률을 산출하며, 보정이 필요한 용도(정규화된 라우팅, 거부 및 교정 임계값)는 해당 모델의 보정 파일이 생길 때까지 꺼져 있습니다.
 
-`enabled: false` 또는 `cx_energy: 0.0`이면 모델이 로드되지 않은 것입니다. 새로 설치한 경우 예상된 동작입니다 — 모델 가중치는 저장소에 포함되어 있지 않으며 직접 학습하거나 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)에서 다운로드해야 합니다.
+**해결:** `atlas lens build`가 임계값을 보정하고 `cx_normalization.json`과 `gx_thresholds.json`을 번들에 기록합니다. [CLI.md § atlas lens](../../CLI.md#atlas-lens)를 참고하세요.
 
 ### 점수는 그럴듯한데 스케일이 크게 어긋남 (임베딩 규약 드리프트)
 
@@ -824,11 +824,11 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **원인:** 임베딩 서버가 Geometric Lens의 `C(x)`/`G(x)` 아티팩트가 학습된 것과 다른 `/embedding` 규약으로 응답하고 있습니다 — 보통 풀링 대신 토큰별, 또는 L2 정규화 대신 비정규화(‖v‖가 ~1이 아니라 ≈60). 차원은 같고 분포가 다르므로, 코스트 필드 MLP가 거대한 에너지로 외삽하고 `cx_normalized`가 포화됩니다. `--pooling mean` 없이 서빙 스택을 재빌드한 뒤에 발생합니다(llama-server에는 `--embd-normalize` 서버 플래그가 없습니다. 렌즈는 `/embedding` 본문의 `embd_normalize`로 호출마다 L2 정규화를 요청합니다).
 
-**확인:** 렌즈는 자체 테스트(부팅 시, 그리고 재시도 가능한 실패 후 `/ready`가 다시 실행할 때)에서 저장된 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
+**확인:** 아티팩트 옆에 `drift_fingerprint.json`이 있는 경우(아래 3단계 참고), 렌즈는 자체 테스트(부팅 시, 그리고 재시도 가능한 실패 후 `/ready`가 다시 실행할 때)에서 그 지문을 다시 채점합니다. `/ready`와 `/health`를 확인하세요:
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
-`fingerprint_ok: false`와 함께 기대값 대 관측값 에너지를 알려주는 `fingerprint_error`가 나오면 드리프트 신호입니다 — `/ready`는 503을 반환하고, 채점된 응답에는 `"drifted": true`가 실리며 `calibrated` 플래그가 모두 false로 강제되므로 하류에서 이를 신뢰할 수 있는 값으로 오인할 수 없습니다.
+`fingerprint_ok: false`와 함께 기대값 대 관측값 에너지를 알려주는 `fingerprint_error`가 나오면 드리프트 신호입니다 — `/ready`는 503을 반환하고, 프록시는 요청을 거부하면서 드리프트를 명시하며, 채점된 응답에는 `"drifted": true`가 실리고 `calibrated` 플래그가 모두 false로 강제되며 임계값도 실리지 않으므로, 하류에서 이를 신뢰할 수 있는 값으로 오인하거나 그에 따라 동작할 수 없습니다.
 
 **해결:**
 1. 임베딩 서버의 규약을 확인하세요. 풀링 + 정규화된 서버는 ‖v‖≈1인 평탄한 벡터를 반환합니다:
@@ -836,9 +836,9 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
-   풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다.
+   풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다. `cx_normalization.json`의 `pass_energy_mean`과 비교하세요: 서빙되는 에너지는 한 값에 머무르지 않고 그 대역에 걸쳐 분포해야 합니다.
 2. `ATLAS_EMBED_POOLING=none`(기본값. [CONFIGURATION.md](../../CONFIGURATION.md) 참고)을 설정하고, 엔트리포인트가 플래그를 고정하도록 llama-server 컨테이너를 재생성하세요. `--pooling`은 llama.cpp에서 서버 전역 설정이며, 전체 텍스트 경로와 per-step 경로를 모두 지원하는 값은 `none`뿐입니다. 풀링과 스케일은 클라이언트 측에서 처리됩니다.
-3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트의 지문 검사가 통과하고 `/ready`가 200을 반환합니다. 아티팩트가 지문보다 오래되었다면 재빌드(`atlas lens build`)가 지문을 쓰고 `embedding_contract`를 `model_identity.json`에 새깁니다.
+3. 서버가 올바른 규약으로 응답하면 부팅 자체 테스트가 통과하고 `/ready`가 200을 반환합니다. 재빌드(`atlas lens build`)는 `embedding_contract`를 `model_identity.json`에 새깁니다. 다만 드리프트 지문은 쓰지 않습니다: `geometric_lens.drift.write_fingerprint`가 존재하지만 아직 이를 호출하는 명령이 없으므로, 지문 검사는 `drift_fingerprint.json`을 직접 만들어 둔 경우에만 동작합니다.
 
 ### 임베딩 추출 실패
 
@@ -855,6 +855,22 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` 플래그는 모든 배포 모드(Compose, 베어메탈, K3s)에서 llama-server 엔트리포인트가 설정합니다 — Geometric Lens가 셀프 임베딩에 의존하므로 항상 켜져 있습니다. 레이어별 hidden-states 확장을 실어 나르는 것도 네이티브 `/embedding` 경로입니다(`/v1/embeddings`가 아님).
+
+### 후보가 `unscored`로 보고됨 (입력이 물리 배치를 초과)
+
+**증상:** 렌즈 로그에 `unscored: the input of 2055 tokens exceeds the /embedding physical batch of 2048 tokens`가 찍히거나, v3-service가 어떤 후보에 대해 `lens_unscored`를 방출하거나(`kind: embed_capacity`, `input_tokens`, `capacity_tokens`), `atlas doctor`가 `ATLAS_MAX_TOKENS`보다 낮은 임베딩 용량을 지목하며 `lens_scoring: partial`을 표시합니다.
+
+**원인:** llama-server는 하나의 임베딩 요청을 단일 물리 배치(`-ub`, `ATLAS_UBATCH`)로 처리하며, 그보다 긴 입력은 HTTP 500으로 거부합니다. 렌즈 점수는 전체 시퀀스에 대한 한 번의 순전파이므로, 렌즈는 입력을 자르거나 쪼개는 대신 해당 후보를 점수 없음으로 보고합니다: 쪼갠 입력은 뒤쪽 조각을 앞쪽 맥락 없이 임베딩하게 되어, 아티팩트가 보정된 그 벡터가 아니게 됩니다. 후보를 만들어내는 생성 예산(PlanSearch 코드 4,096 토큰, 쓰기 작업의 `ATLAS_MAX_TOKENS` 8,192)이 `atlas tier fit`이 고르는 가장 큰 마이크로 배치(2,048)보다 크므로, 기본 배포에서 긴 후보에 대해서는 예상되는 동작입니다.
+
+**영향:** 해당 후보는 자신의 샌드박스 결과를 유지한 채 점수가 매겨진 모든 후보 뒤로 순위가 밀리며, 통과한 점수 후보가 하나도 없을 때만 전달되고 `selected` 이벤트가 그 사실을 알려줍니다. 그 자리에 0.0이나 0.5가 채점되는 일은 없습니다.
+
+**확인:**
+```bash
+curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(sys.stdin)['subsystems']['lens']; print({k:v for k,v in l.items() if k.startswith('embed_capacity')})"
+```
+`embed_capacity_tokens`는 렌즈가 채점할 수 있는 가장 긴 입력이고, `embed_capacity_source`는 `declared`(`ATLAS_UBATCH`에서) 또는 `observed`(거부에서 관측, 이쪽이 우선)입니다.
+
+**해결:** `ATLAS_UBATCH`를 올리면 용량이 늘어나지만, 계산 버퍼에 대략 `ubatch × n_embd × 280` 바이트의 VRAM 비용이 듭니다(3,840차원 모델에서 4,096일 때 약 4.4 GB). `atlas tier fit`으로 크기를 정하고 llama-server를 재생성한 뒤 `--fit off`로 기동되는지 확인하세요. `ATLAS_MAX_TOKENS`를 낮추면 프록시가 렌즈에 채점을 요청하는 쓰기 크기가 제한됩니다. 둘 중 무엇도 쪼갠 입력을 채점 가능하게 만들지는 않습니다. 물리 배치를 넘어서는 채점에는 [ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md)이 설명하는 보정 작업이 필요합니다.
 
 ---
 
@@ -958,4 +974,4 @@ T2 파일에 대해서는 정상입니다. V3 파이프라인은 여러 번의 L
 1. 서비스 로그 확인: `docker compose logs <service-name>`
 2. 프록시 헬스 엔드포인트 확인: `curl http://localhost:8090/health`
 3. 모든 환경 변수는 [CONFIGURATION.md](../../CONFIGURATION.md) 참고
-4. [GitHub](https://github.com/itigges22/ATLAS/issues)에 이슈 등록
+4. [GitHub](https://github.com/inferstep/ATLAS/issues)에 이슈 등록

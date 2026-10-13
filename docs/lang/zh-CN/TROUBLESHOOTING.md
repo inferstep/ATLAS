@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 4f1be83 -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
@@ -44,7 +44,7 @@ docker compose logs --tail 50
 }
 ```
 
-如果任何字段为 `false`，则该服务存在问题。只要 `inference`、`lens`、`lens_ready` 或 `sandbox` 中任一为 false，`status` 就会翻转为 `"degraded"`。`lens` 与 `lens_ready` 的区分让你能分辨"Lens 进程在运行，但其 `/ready` 门控失败 —— 通常是权重缺失或嵌入维度不匹配"与"Lens 的 HTTP 不可达"这两种情况。
+如果任何字段为 `false`，则该服务存在问题。只要 `inference`、`lens`、`lens_ready` 或 `sandbox` 中任一为 false，`status` 就会翻转为 `"degraded"`。`lens` 表示 lens 是否有响应；`lens_ready` 表示它能否打分 —— 用的正是代理施加于每个请求的同一检查：当它为 `false` 时，`lens_reason` 说明原因，且每个请求都会被拒绝，直到它变回 `true`（见[请求被拒：Lens 无法打分](#请求被拒lens-无法打分)）。
 
 ---
 
@@ -93,8 +93,8 @@ docker compose logs --tail 50
 | `file not read yet — use read_file first before editing` | [编辑前未读取文件](#编辑前未读取文件) |
 | `file modified since last read — read it again before editing` | [文件被外部修改](#文件被外部修改) |
 | `You have full project context in the system prompt. Do not read more files.` | [探索预算警告](#探索预算警告) |
-| `"lens": false` / "Lens unavailable — verification disabled" | [Lens 未加载/不可用](#lens-未加载不可用) |
-| 每个候选都得到 `cx_energy: 0.0`、`gx_score: 0.5` | [所有分数接近 0.5](#所有分数接近-05) |
+| "ATLAS needs the geometric lens for every request" / 运行以 `lens_unavailable` 结束 / `"lens_ready": false` | [请求被拒：Lens 无法打分](#请求被拒lens-无法打分) |
+| "No gx_thresholds.json — Lens scores are uncalibrated" | [Lens 未校准](#lens-未校准) |
 | lens 日志中出现 "embedding extraction failed" | [嵌入向量提取失败](#嵌入向量提取失败) |
 | Sandbox 返回 `"error_type": "Timeout"` | [代码执行超时](#代码执行超时) |
 | Sandbox 对特定语言报错 | [语言不受支持](#语言不受支持) |
@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-如果这个方法在一张此前不受支持的卡上对你有效，请在 [GH #26](https://github.com/itigges22/ATLAS/issues/26) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
+如果这个方法在一张此前不受支持的卡上对你有效，请在 [GH #26](https://github.com/inferstep/ATLAS/issues/26) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
 
 ### RDNA4（RX 9070 / 9070 XT，gfx1200 / gfx1201）—— 需要 ROCm 7.x
 
@@ -463,7 +463,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 
 ### `no kernel image is available for execution on the device` (CUDA)
 
-**适用范围：** 比 Blackwell 更早的 NVIDIA GPU —— RTX 40xx（Ada）、RTX 30xx（Ampere）、RTX 20xx / T4（Turing）、GTX 10xx（Pascal）、V100/A100/H100/L4 —— 运行预构建的 `ghcr.io/itigges22/atlas-llama` 镜像时。同源错误 `invalid device function`（运行时）和 `nvcc fatal: unsupported gpu architecture`（本地构建）成因相同。（AMD 上的同一错误见 [ROCm 条目](#amd-gpu-不受-rocm-支持但你想试试rocm-上的-no-kernel-image)。）
+**适用范围：** 比 Blackwell 更早的 NVIDIA GPU —— RTX 40xx（Ada）、RTX 30xx（Ampere）、RTX 20xx / T4（Turing）、GTX 10xx（Pascal）、V100/A100/H100/L4 —— 运行预构建的 `ghcr.io/inferstep/atlas-llama` 镜像时。同源错误 `invalid device function`（运行时）和 `nvcc fatal: unsupported gpu architecture`（本地构建）成因相同。（AMD 上的同一错误见 [ROCm 条目](#amd-gpu-不受-rocm-支持但你想试试rocm-上的-no-kernel-image)。）
 
 **含义：** 发布的 CUDA 镜像只针对计算能力 `120;121`（仅 Blackwell）编译。llama-server 二进制不包含更早架构的 GPU 内核，其内嵌的 PTX（`compute_121`）无法向下 JIT 编译，因此第一次 CUDA 内核启动就会失败。这是镜像/GPU 不匹配，不是驱动或显存问题。
 
@@ -472,7 +472,7 @@ ATLAS_LLAMA_PORT=8081    # Different port for llama-server
 # Your GPU's compute capability (8.9 = Ada, 8.6 = Ampere, 7.5 = Turing, 12.0 = Blackwell)
 nvidia-smi --query-gpu=name,compute_cap --format=csv
 # What the image was built for (Blackwell-only image prints sm_120/sm_121)
-docker run --rm --entrypoint bash ghcr.io/itigges22/atlas-llama:latest \
+docker run --rm --entrypoint bash ghcr.io/inferstep/atlas-llama:latest \
   -c 'grep -ao "sm_[0-9]*" /usr/local/bin/llama-server | sort -u'
 ```
 如果你的计算能力低于 12.0，而镜像只列出 `sm_120`/`sm_121`，那么本条目适用。
@@ -735,7 +735,7 @@ except curses.error:
 
 **发生了什么：** agent 循环的 tier 分类器（`proxy/agent.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 5 并跳过 planning，直接让请求失败。
 
-只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以 `?` 结尾，或以疑问词（`why`、`what`、`how`、`is`、`can` 等）开头。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
+只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以结束一个子句的 `?` 结尾，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
 
 **怎么做：** 把你想要的说出来，哪怕很简短 —— "yes, fix it" 就能越过 T0 门控。如果一个跟进跑了 agent 循环但 V3 保持沉默，那么门控不在请求 tier —— 而在文件自身的 tier。见 [V3 Pipeline 未对功能文件触发](#v3-pipeline-未对功能文件触发)，并检查 `docker compose logs atlas-proxy | grep -E "write_file|edit_file"` 中的文件 tier 行（例如 `[write_file] app.py → T1:simple (8 lines)`）。
 
@@ -767,36 +767,35 @@ except curses.error:
 
 ## Geometric Lens 问题
 
-### Lens 未加载/不可用
+### 请求被拒：Lens 无法打分
 
-**现象：** 代理健康检查显示 `"lens": false`。或启动时显示 "Lens unavailable — verification disabled."
+**现象：** 请求立刻以 HTTP 503 `dependency_down` 失败："ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." 或运行以 `lens_unavailable` 停止："Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。代理 `/ready` 显示 `"lens_ready": false` 及 `lens_reason`；`atlas doctor` 的 `status_dimensions` 以 `direct_agent: blocked` 失败。
 
-**影响：** ATLAS 仍可工作，但没有 C(x)/G(x) 评分。V3 候选选择回退到仅沙箱验证。
+**影响：** 在 lens 能打分之前，任何请求都不会运行。这是有意为之：lens 是必需的（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。已停止的运行会说明它在停止前是否改过文件。
 
-**解决方法：** 检查 Lens 健康状态和日志：
+**解决方法：** 消息里写明了原因。检查 lens 健康状态和日志：
 ```bash
-curl -s http://localhost:8099/health
+curl -s http://localhost:8099/health | python3 -m json.tool
 docker compose logs geometric-lens
 ```
 
-常见原因：
-- Lens 无法连接到 llama-server（检查 `LLAMA_URL` 环境变量）
-- 模型权重文件缺失（服务会优雅降级 —— 如果你尚未训练自定义模型，这是预期行为）
+| 消息中的原因 | 修复 |
+|---|---|
+| unreachable | lens 容器已停或 `ATLAS_LENS_URL` 有误。`docker compose ps geometric-lens`。 |
+| no C(x) / no G(x) model loaded | 所服务模型没有 lens 权重。注册表模型运行 `atlas model install-artifacts <name>`，或 `atlas lens build`（见 [SETUP.md](../../SETUP.md)）。 |
+| cannot reach llama-server | lens 连不上模型服务器。检查 `LLAMA_URL` / `LLAMA_EMBED_URL` 和 llama-server 健康状态。 |
+| self-test failed | 见 `/health` 中的 `self_test_error`。 |
+| drifted from the served model | 见[嵌入约定漂移](#分数看着合理但量级严重偏离嵌入约定漂移)。 |
 
-### 所有分数接近 0.5
+代理会缓存 lens 的应答 5 秒，因此修好的 lens 会在 5 秒内被接受。
 
-**现象：** 无论代码质量如何，每个候选都得到 `cx_energy: 0.0` 和 `gx_score: 0.5`。
+### Lens 未校准
 
-**原因：** 模型权重未加载。模型缺失时，服务返回中性默认值。
+**现象：** lens 启动时记录 `No gx_thresholds.json — Lens scores are uncalibrated; threshold interventions disabled`，且状态显示 `lens_calibration: uncalibrated`。
 
-**验证方法：**
-```bash
-curl -s http://localhost:8099/internal/lens/gx-score \
-  -H "Content-Type: application/json" \
-  -d '{"text": "print(1)"}' | python3 -m json.tool
-```
+**影响：** 请求可以运行。lens 打的是原始 C(x) 能量与 G(x) 概率；校准后的用途（归一化路由、否决与纠正阈值）在该模型的校准文件存在之前保持关闭。
 
-如果返回 `enabled: false` 或 `cx_energy: 0.0`，则模型未加载。对于全新安装来说这是预期行为 —— 模型权重不包含在仓库中，需要训练或从 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 下载。
+**解决方法：** `atlas lens build` 校准阈值并把 `cx_normalization.json` 与 `gx_thresholds.json` 写入 bundle。见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)。
 
 ### 分数看着合理但量级严重偏离（嵌入约定漂移）
 
@@ -804,21 +803,21 @@ curl -s http://localhost:8099/internal/lens/gx-score \
 
 **原因：** 嵌入服务器提供的 `/embedding` 约定，与 Geometric Lens 的 `C(x)`/`G(x)` 工件训练时所用的不一致 —— 通常是逐 token 而非池化，或未归一化而非 L2 归一化（‖v‖≈60 而不是 ~1）。维度相同、分布不同；cost-field MLP 会外推出一个巨大的能量，`cx_normalized` 随之饱和。这通常发生在没有 `--pooling mean` 就重建服务栈之后（llama-server 没有 `--embd-normalize` 这个服务端标志；lens 通过 `/embedding` 请求体中的 `embd_normalize` 逐次请求 L2 归一化）。
 
-**验证：** lens 会在自检中（启动时，以及可重试的失败之后由 `/ready` 重新运行时）对存储的指纹重新打分。检查 `/ready` 和 `/health`：
+**验证：** 在工件旁放有 `drift_fingerprint.json` 的场合（见下文第 3 步），lens 会在自检中（启动时，以及可重试的失败之后由 `/ready` 重新运行时）对它重新打分。检查 `/ready` 和 `/health`：
 ```bash
 curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerprint
 ```
-出现 `fingerprint_ok: false` 以及指出期望值与观测值能量的 `fingerprint_error`，就是漂移信号 —— `/ready` 返回 503，打分响应会带上 `"drifted": true` 且所有 `calibrated` 标志被强制为 false，因此下游不会把它们误当作可信结果。
+出现 `fingerprint_ok: false` 以及指出期望值与观测值能量的 `fingerprint_error`，就是漂移信号 —— `/ready` 返回 503，代理拒绝请求并指明漂移，打分响应会带上 `"drifted": true` 且所有 `calibrated` 标志被强制为 false、不含任何阈值，因此下游既不会把它们误当作可信结果，也无法据此采取行动。
 
 **解决：**
 1. 确认嵌入服务器的约定。池化 + 归一化的服务器会返回 ‖v‖≈1 的扁平向量：
    ```bash
    curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
-     -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
+     -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
 2. 设置 `ATLAS_EMBED_POOLING=none`（默认值；见 [CONFIGURATION.md](../../CONFIGURATION.md)），并重建 llama-server 容器，让入口点固定这些标志。在 llama.cpp 中 `--pooling` 是服务器全局设置，只有 `none` 能同时满足全文路径和 per-step 路径；池化与缩放都在客户端处理。
-3. 服务器提供正确约定后，启动自检的指纹校验会通过，`/ready` 返回 200。如果工件早于指纹机制，一次重建（`atlas lens build`）会写入指纹，并把 `embedding_contract` 刻进 `model_identity.json`。
+3. 服务器提供正确约定后，启动自检通过，`/ready` 返回 200。一次重建（`atlas lens build`）会把 `embedding_contract` 刻进 `model_identity.json`。它不会写入漂移指纹：`geometric_lens.drift.write_fingerprint` 存在，但尚无任何命令调用它，因此指纹检查只在存在手工写入的 `drift_fingerprint.json` 的场合运行。
 
 ### 嵌入向量提取失败
 
@@ -835,6 +834,22 @@ curl -s http://localhost:8080/embedding \
 ```
 
 `--embeddings` 标志由 llama-server 的入口点在每种部署模式（Compose、裸机、K3s）中都会设置 —— 自嵌入始终开启，因为 Geometric Lens 依赖它。逐层 hidden-states 扩展也由原生的 `/embedding` 路径（而非 `/v1/embeddings`）承载。
+
+### 候选被标记为 `unscored`（输入超过物理批次）
+
+**现象：** lens 日志显示 `unscored: the input of 2055 tokens exceeds the /embedding physical batch of 2048 tokens`，v3-service 对某候选发出 `lens_unscored`（`kind: embed_capacity`、`input_tokens`、`capacity_tokens`），或 `atlas doctor` 显示 `lens_scoring: partial` 并指出 embed 容量低于 `ATLAS_MAX_TOKENS`。
+
+**原因：** llama-server 在单个物理批次（`-ub`，`ATLAS_UBATCH`）中处理一次嵌入请求，并以 HTTP 500 拒绝更长的输入。Lens 的每次打分是对整个序列的一次前向，因此 lens 将该候选报告为未打分，而不是截断或切分它：切分后的输入在嵌入后续片段时缺少前文的上下文，不再是工件校准时的那个向量。产生候选的生成预算（4,096 token 的 PlanSearch 代码、写文件的 `ATLAS_MAX_TOKENS` 8,192）大于 `atlas tier fit` 会选择的最大微批次（2,048），因此在默认部署上长候选出现这种情况是预期内的。
+
+**影响：** 该候选保留其沙箱结果，排在所有已打分候选之后；只有当没有任何已打分候选通过时才交付它，且 `selected` 事件会说明这一点。不会有任何东西被以 0.0 或 0.5 顶替打分。
+
+**验证：**
+```bash
+curl -s http://localhost:8099/health | python3 -c "import sys,json; l=json.load(sys.stdin)['subsystems']['lens']; print({k:v for k,v in l.items() if k.startswith('embed_capacity')})"
+```
+`embed_capacity_tokens` 是 lens 能打分的最长输入；`embed_capacity_source` 为 `declared`（来自 `ATLAS_UBATCH`）或 `observed`（来自一次拒绝，权威）。
+
+**解决：** 调大 `ATLAS_UBATCH` 可提高容量，代价是约 `ubatch × n_embd × 280` 字节的计算缓冲显存（3,840 维模型在 4,096 时约 4.4 GB）：用 `atlas tier fit` 估算、重建 llama-server、并确认它以 `--fit off` 启动。调低 `ATLAS_MAX_TOKENS` 则收窄代理请求 lens 打分的写入上限。二者都不能让切分输入变得可打分；对物理批次之外的输入打分需要 [ADR 0010](../../adr/0010-lens-capacity-boundary-is-typed.md) 描述的校准工作。
 
 ---
 
@@ -938,4 +953,4 @@ atlas bench --run-id <your-run-id> --tasks 200
 1. 查看服务日志：`docker compose logs <service-name>`
 2. 检查代理健康检查端点：`curl http://localhost:8090/health`
 3. 参见 [CONFIGURATION.md](../../CONFIGURATION.md) 了解所有环境变量
-4. 在 [GitHub](https://github.com/itigges22/ATLAS/issues) 上提交 issue
+4. 在 [GitHub](https://github.com/inferstep/ATLAS/issues) 上提交 issue

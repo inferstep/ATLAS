@@ -61,7 +61,8 @@ ATLAS_MODELS_DIR="/opt/atlas/models"
 
 # CHANGE THIS: User project workspace. hostPath-mounted at /workspace
 # in BOTH atlas-proxy and sandbox pods so file tool calls and run_command
-# both see the same files.
+# both see the same files. uninstall.sh removes this folder too when
+# --data is set.
 ATLAS_PROJECTS_DIR="/opt/atlas/data/projects"
 
 # Parent of the data paths above; uninstall.sh removes it

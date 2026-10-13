@@ -16,7 +16,6 @@ Local fixtures only. No model, no deployed service.
 from __future__ import annotations
 
 import contextlib
-import glob
 import os
 import socket
 import subprocess
@@ -25,16 +24,22 @@ import time
 
 import pytest
 
+from tests.infrastructure.bounded_commands import OWN_LIMIT, REACHED_OWN_LIMIT, allocator, flood
+from tests.infrastructure.proc_files import needs_proc, sleeping
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SANDBOX = os.path.join(ROOT, "sandbox")
 sys.path.insert(0, SANDBOX)
 
-import resource_contract as rc  # noqa: E402
+import resource_contract as rc
 
 # Unique per run. A fixed marker is contaminated by any earlier run that
 # left a process behind -- and these tests deliberately leave processes
 # running mid-test, so an aborted one always does.
 MARKER_BASE = 7300 + (os.getpid() % 900) * 10
+# The ceilings the private executor of these tests runs under.
+MEMORY_BYTES = 512 * 1024 * 1024
+OUTPUT_BYTES = 8 * 1024 * 1024
 
 
 def _free_port() -> int:
@@ -45,27 +50,15 @@ def _free_port() -> int:
 
 def _reap(seconds: int) -> None:
     """Kill any stray marker process, so one test cannot leak into the next."""
-    for d in glob.glob("/proc/[0-9]*"):
-        # Same race, plus a non-numeric /proc entry: both mean "not a process
-        # this cleanup is about", and nothing else is suppressed.
-        with contextlib.suppress(OSError, ValueError):
-            with open(d + "/cmdline", "rb") as fh:
-                if fh.read() == ("sleep\x00%d\x00" % seconds).encode():
-                    os.kill(int(os.path.basename(d)), 9)
+    for pid in sleeping(seconds):
+        # A marker that ends between the look and the kill is gone, which is what this wants.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, 9)
 
 
 def alive(seconds: int) -> int:
-    want = ("sleep\x00%d\x00" % seconds).encode()
-    n = 0
-    for d in glob.glob("/proc/[0-9]*"):
-        # A pid that vanishes between the glob and the open is the ordinary
-        # race in scanning /proc, and skipping it is the whole handling. It is
-        # named rather than swallowed: anything else raises.
-        with contextlib.suppress(OSError):
-            with open(d + "/cmdline", "rb") as fh:
-                if fh.read() == want:
-                    n += 1
-    return n
+    """How many `sleep <seconds>` processes are still running. It fails where it cannot see a process at all."""
+    return len(sleeping(seconds))
 
 
 @pytest.fixture(scope="module")
@@ -75,8 +68,8 @@ def executor():
     env = dict(os.environ,
                PORT=str(port),
                ATLAS_SANDBOX_WORKSPACE_ROOT="/tmp",
-               ATLAS_EXEC_MEMORY_BYTES=str(512 * 1024 * 1024),
-               ATLAS_EXEC_OUTPUT_BYTES=str(8 * 1024 * 1024),
+               ATLAS_EXEC_MEMORY_BYTES=str(MEMORY_BYTES),
+               ATLAS_EXEC_OUTPUT_BYTES=str(OUTPUT_BYTES),
                MAX_EXECUTION_TIME="60")
     script = (
         "import importlib.util, os, sys, uvicorn\n"
@@ -134,6 +127,7 @@ def _start_and_drop(port: int, marker: int, how: str) -> None:
         s.close()
 
 
+@needs_proc
 @pytest.mark.parametrize("how,marker", [("rst", MARKER_BASE), ("fin", MARKER_BASE + 1)])
 def test_a_caller_that_goes_away_stops_the_command(executor, how, marker):
     _reap(marker)
@@ -147,6 +141,7 @@ def test_a_caller_that_goes_away_stops_the_command(executor, how, marker):
         f"the command outlived a {how} by more than the watcher's interval")
 
 
+@needs_proc
 def test_repeated_cancellation_is_idempotent(executor):
     marker = MARKER_BASE + 2
     for _ in range(3):
@@ -171,6 +166,7 @@ def _shell(port: int, command: str, timeout: int) -> dict:
         return json.loads(resp.read())
 
 
+@needs_proc
 def test_a_healthy_neighbour_is_unaffected(executor):
     """One caller leaving does not disturb another's command."""
     import threading
@@ -194,17 +190,17 @@ def test_a_healthy_neighbour_is_unaffected(executor):
     assert alive(marker) == 0
 
 
+@needs_proc
 def test_cancellation_is_distinct_from_timeout_and_exhaustion(executor):
     """Three different endings, three different names."""
     timed = _shell(executor, "sleep 300", 3)
     assert timed["outcome"] == rc.OUTCOME_TIMED_OUT
 
-    killed = _shell(
-        executor,
-        'python3 -c "a=[]\nwhile True: a.append(bytearray(32<<20))"', 40)
+    killed = _shell(executor, allocator(32, MEMORY_BYTES), 40)
+    assert killed["exit_code"] != OWN_LIMIT, REACHED_OWN_LIMIT
     assert killed["outcome"] == rc.OUTCOME_MEMORY_EXHAUSTED
 
-    flooded = _shell(executor, "yes ABCDEFGHIJKLMNOP", 40)
+    flooded = _shell(executor, flood("ABCDEFGHIJKLMNOP", OUTPUT_BYTES), 40)
     assert flooded["outcome"] == rc.OUTCOME_OUTPUT_LIMIT
 
     # And the contract's own cancellation, which the HTTP path now reaches.
@@ -215,6 +211,7 @@ def test_cancellation_is_distinct_from_timeout_and_exhaustion(executor):
     assert got.outcome != rc.OUTCOME_TIMED_OUT
 
 
+@needs_proc
 def test_no_late_evidence_and_no_descendants_survive(executor):
     marker = MARKER_BASE + 4
     _reap(marker)
@@ -229,6 +226,7 @@ def test_no_late_evidence_and_no_descendants_survive(executor):
     assert alive(marker) == 0, "a detached descendant outlived the cancelled request"
 
 
+@needs_proc
 def test_shutdown_drains_within_the_bound(executor):
     """A shutdown does not wait for a long command, and leaves nothing."""
     port = _free_port()
