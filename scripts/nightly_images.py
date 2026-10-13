@@ -57,6 +57,12 @@ def by_digest(service: str, digest: str) -> str:
     return f"{REGISTRY}/{IMAGES[service]}@{digest}"
 
 
+def is_a_pull_of(service: str, name: str) -> bool:
+    """Whether a name is the whole name by digest that a pull of this run leaves on the image of a service."""
+    digest = name.rpartition("@")[2]
+    return bool(A_DIGEST.fullmatch(digest)) and name == by_digest(service, digest)
+
+
 def digest_in(printed: str) -> str:
     """The digest in what `docker buildx imagetools inspect --format '{{json .Manifest}}'` printed, or nothing."""
     try:
@@ -76,8 +82,7 @@ def last_pulls(folder: Path) -> dict:
     if not isinstance(written, dict):
         return {}
     return {service: name for service, name in written.items()
-            if service in IMAGES and isinstance(name, str) and name.startswith(f"{REGISTRY}/{IMAGES[service]}@")
-            and A_DIGEST.fullmatch(name.split("@", 1)[1])}
+            if service in IMAGES and isinstance(name, str) and is_a_pull_of(service, name)}
 
 
 def take(folder: Path, services, must, ended, failed) -> tuple:

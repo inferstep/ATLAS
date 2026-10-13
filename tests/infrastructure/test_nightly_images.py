@@ -111,7 +111,7 @@ def test_no_command_of_a_night_names_an_image_of_the_registry_by_a_tag_or_remove
     for args in docker:
         if args[:3] == ["buildx", "imagetools", "inspect"]:
             continue  # the question to the registry: it changes nothing on the machine
-        assert all(BY_DIGEST.fullmatch(word) for word in args if word.startswith("ghcr.io/")), args
+        assert all(BY_DIGEST.fullmatch(word) for word in args if word.split("/")[0] == "ghcr.io"), args
         assert not {"prune", "rmi", "push", "login"} & set(args), args
         if args[0] == "tag":
             assert args[2].startswith("localhost/atlas-nightly/"), args
