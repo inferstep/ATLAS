@@ -10,7 +10,7 @@
 #   1. team access: maintainers = maintain, reviewers = write, triagers = triage
 #   2. merge settings: squash or rebase only (linear history), delete merged
 #      branches, offer "update branch"
-#   3. nine rulesets, created or updated by name. One that is already the
+#   3. ten rulesets, created or updated by name. One that is already the
 #      same is left alone.
 #      - Release branches: no force-push or deletion   (dev, staging, main; no bypass)
 #      - Integration branch: pull request, linear history and merge queue
@@ -25,6 +25,9 @@
 #      - Branches: only maintainers create or push     (all branches except dev,
 #        the merge queue's branches and star-history; admins, maintainers and
 #        Dependabot bypass)
+#      - Smoke branches: only maintainers create, push or delete
+#                                                       (smoke/*; the organization's
+#        admins and maintainers bypass; no app and no repository role)
 #      - Release tags: only maintainers create         (v*)
 #      - Release tags: never move or delete            (v*; no bypass)
 #   4. removes what they replace: the rulesets with earlier names and the
@@ -108,6 +111,8 @@ ADMINS='{"actor_id":1,"actor_type":"OrganizationAdmin","bypass_mode":"always"},
 # button. It does not let anyone push.
 ADMINS_OWN_PULL_REQUEST='{"actor_id":1,"actor_type":"OrganizationAdmin","bypass_mode":"pull_request"},
         {"actor_id":'"$ADMIN_ROLE_ID"',"actor_type":"RepositoryRole","bypass_mode":"pull_request"}'
+# The admins of the organization alone, without the repository's admin role.
+ORG_ADMINS='{"actor_id":1,"actor_type":"OrganizationAdmin","bypass_mode":"always"}'
 MAINTAINERS='{"actor_id":'"$MAINTAINERS_ID"',"actor_type":"Team","bypass_mode":"always"}'
 DEPENDABOT='{"actor_id":'"$DEPENDABOT_APP_ID"',"actor_type":"Integration","bypass_mode":"always"}'
 
@@ -185,6 +190,18 @@ EOF
    "exclude":["refs/heads/star-history","refs/heads/dev","refs/heads/gh-readonly-queue/**/*"]}},
  "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],
  "bypass_actors":[$ADMINS,$MAINTAINERS,$DEPENDABOT]}
+EOF
+    # The development server builds and starts the tip of a branch
+    # `smoke/<name>` (docs/quality/gates.md, section "The smoke run of one
+    # commit"). The ruleset above lets an app and the repository's admin
+    # role push a branch of any name. This one has neither on its list. A
+    # branch under `smoke/` is under both, so only an account that is on
+    # both lists can create, push or delete it.
+    cat > "$OUT/7b-smoke-branches-maintainers-only.json" <<EOF
+{"name":"Smoke branches: only maintainers create, push or delete","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["refs/heads/smoke/*","refs/heads/smoke/**/*"],"exclude":[]}},
+ "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],
+ "bypass_actors":[$ORG_ADMINS,$MAINTAINERS]}
 EOF
     cat > "$OUT/8-release-tags-create.json" <<EOF
 {"name":"Release tags: only maintainers create","target":"tag","enforcement":"active",

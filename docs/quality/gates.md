@@ -873,6 +873,10 @@ night and gives the same "not run" answers, each with status 0.
   the head of a pull request from outside to a fetch by its id, so a fetch
   that works shows nothing. And a branch of another name can be one that a
   program pushes, with a change that no maintainer has read.
+- A rule of the repository holds the names under `smoke/` too: only the
+  organization's admins and the `maintainers` team create, push or delete
+  such a branch, and no app is on its list (`scripts/setup/rulesets.sh`).
+  The look's own guard stays as it is and does not rest on that rule.
 - The tip, and not a commit further down the branch: one push stands for
   one commit. No workflow starts on a push to a `smoke/` branch, and a test
   holds that. The run deletes nothing on GitHub; its output gives the
