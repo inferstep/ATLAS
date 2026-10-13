@@ -203,19 +203,16 @@ def test_the_edits_land_where_they_take_effect(canary, manifest, checkout):
         assert len(after) == len(before), path
 
 
-def test_plants_that_share_a_file_all_land_in_it(canary, manifest, checkout):
-    shared = ".github/workflows/test.yml"
-    plants = [plant for plant in manifest["plants"] if plant.get("path") == shared]
-    assert len(plants) == 4
-    canary.apply_plants(checkout, manifest)
-    text = (checkout / shared).read_text(encoding="utf-8")
-    for plant in plants:
-        assert plant["lines"][0] in text, plant["id"]
-        # The marker the job shows is put together when the sample runs: it is not in the workflow file as one word.
-        assert plant["shows"] not in text, plant["id"]
-    samples = yaml.safe_load(text)["jobs"]["container-smoke"]["strategy"]["matrix"]["include"]
-    assert [sample["language"] for sample in samples] == ["java", "kotlin", "ruby", "php"]
-    assert all("failed" in sample["code"] for sample in samples)
+def test_plants_that_share_a_file_all_land_in_it(canary, tmp_path):
+    # No two violations of the list share a file today. The rule is held on a made file, so that it is there when two do.
+    shared = tmp_path / "jobs.yml"
+    shared.write_text("first: one\nsecond: two\nthird: three\n", encoding="utf-8")
+    made = {"plants": [
+        {"id": "the first job", "action": "replace_line", "path": "jobs.yml", "starts_with": "first:", "lines": ["first: planted"]},
+        {"id": "the third job", "action": "replace_line", "path": "jobs.yml", "starts_with": "third:", "lines": ["third: planted"]},
+        {"id": "the end", "action": "append", "path": "jobs.yml", "lines": ["fourth: planted"]}]}
+    assert canary.apply_plants(tmp_path, made) == ["jobs.yml"]
+    assert shared.read_text(encoding="utf-8") == "first: planted\nsecond: two\nthird: planted\nfourth: planted\n"
 
 
 def test_a_planted_file_stays_valid_where_its_reader_needs_that(canary, manifest, checkout):

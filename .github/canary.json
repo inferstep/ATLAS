@@ -394,62 +394,6 @@
       "length": 120
     },
     {
-      "id": "java sandbox smoke (containerized)",
-      "red": [
-        "java sandbox smoke (containerized)"
-      ],
-      "what": "a java sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-java-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'public class Main",
-      "lines": [
-        "            code: 'public class Main { public static void main(String[] args) { System.out.println(\"canary-\" + \"java-failed\"); System.exit(1); } }'"
-      ]
-    },
-    {
-      "id": "kotlin sandbox smoke (containerized)",
-      "red": [
-        "kotlin sandbox smoke (containerized)"
-      ],
-      "what": "a kotlin sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-kotlin-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'fun main()",
-      "lines": [
-        "            code: 'fun main() { println(\"canary-\" + \"kotlin-failed\"); kotlin.system.exitProcess(1) }'"
-      ]
-    },
-    {
-      "id": "ruby sandbox smoke (containerized)",
-      "red": [
-        "ruby sandbox smoke (containerized)"
-      ],
-      "what": "a ruby sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-ruby-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'puts ",
-      "lines": [
-        "            code: 'puts \"canary-\" + \"ruby-failed\"; exit 1'"
-      ]
-    },
-    {
-      "id": "php sandbox smoke (containerized)",
-      "red": [
-        "php sandbox smoke (containerized)"
-      ],
-      "what": "a php sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-php-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: '<?php",
-      "lines": [
-        "            code: '<?php echo \"canary-\" . \"php-failed\"; exit(1);'"
-      ]
-    },
-    {
       "id": "sandbox tests (containerized)",
       "red": [
         "sandbox tests (containerized)"

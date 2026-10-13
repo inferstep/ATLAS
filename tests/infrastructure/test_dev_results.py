@@ -118,7 +118,7 @@ def test_a_run_that_does_not_end_in_time_fails_and_says_so(lookup):
     ([("go test (proxy)", "success"), ("pytest (tests/v3)", "failure")], False),
     ([("go test (proxy)", "cancelled"), ("pytest (tests/v3)", "success")], False),
     # A job that makes no report does not decide whether the coverage is real.
-    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("java sandbox smoke (containerized)", "failure")], True),
+    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("sandbox tests (containerized)", "failure")], True),
     # No report job at all: nothing shows that the tests passed.
     ([("shellcheck", "success")], False),
 ])
@@ -128,7 +128,7 @@ def test_coverage_counts_as_real_only_when_every_job_that_makes_a_report_passed(
 
 def test_the_jobs_that_did_not_pass_are_named_with_how_they_ended(lookup):
     jobs = [("go test (proxy)", "success"), ("pytest (tests/perf)", "failure"), ("go test (tui)", "cancelled"),
-            ("java sandbox smoke (containerized)", "failure")]
+            ("sandbox tests (containerized)", "failure")]
     assert lookup.not_passed(github([], jobs), "o/r", a_run()) == ["go test (tui) (cancelled)", "pytest (tests/perf) (failure)"]
     assert lookup.not_passed(github([], [("go test (proxy)", "success")]), "o/r", a_run()) == []
     assert lookup.not_passed(github([], [("shellcheck", "success")]), "o/r", a_run()) == [

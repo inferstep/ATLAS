@@ -133,7 +133,6 @@ job on this list that does not start gives no red:
 | `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
 | `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
 | `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
-| the four `sandbox smoke` jobs | The sandbox image runs Java, Kotlin, PHP and Ruby |
 | `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) |
 | `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
 | `codeql (java-kotlin)`, `ktlint + test + build` | Analysis and build of the JetBrains plugin |
@@ -236,7 +235,7 @@ Measured 2026-10-06 on commit `a413df4`, unless a row says otherwise.
 How to read the coverage rows:
 
 - In: `go test` for the proxy and the tui, the eight pytest jobs, and the
-  extension's tests. Out: the end-to-end job, the sandbox smoke jobs, the
+  extension's tests. Out: the end-to-end job, the sandbox tests, the
   installer tests and the performance gate. So the proxy number is unit-test
   coverage only.
 - The Python number merges the eight suites by file and line: a line counts
@@ -598,8 +597,9 @@ in one place.
 - The 32 need a real model server. No job on GitHub has one; the nightly
   run has.
 - The two jobs are not required checks.
-- The four `sandbox smoke` jobs send their own requests to the sandbox image.
-  They do not run these files.
+- Among the 80, a program of each of Java, Kotlin, Ruby and PHP is run and
+  is checked for its syntax. Four `sandbox smoke` jobs did that before, each
+  with a build of the same image. They are gone.
 - To run a group by hand:
   `pytest -m integration $(python scripts/tests_counted.py --files sandbox)`
   with `SANDBOX_URL` set to a running sandbox; `proxy` with
@@ -607,8 +607,8 @@ in one place.
 
 ## Docker Hub and the checks
 
-14 jobs build or run an image of Docker Hub: the five of the install matrix,
-the four `sandbox smoke` jobs, `sandbox tests (containerized)` and the four
+10 jobs build or run an image of Docker Hub: the five of the install matrix,
+`sandbox tests (containerized)` and the four
 `PR build check` jobs. When Docker Hub refuses a pull for its limit, or its
 token service does not answer, such a job is red and the change is not at
 fault. Five of them are required checks, so that red also takes a pull

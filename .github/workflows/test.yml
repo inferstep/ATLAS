@@ -494,60 +494,6 @@ jobs:
           fi
           echo "All patch checks passed."
 
-  container-smoke:
-    # One image build per language used to mean four identical `docker build
-    # ./sandbox` runs (and four chances to hit an upstream package-mirror
-    # flake). The matrix keeps the same four verdicts on one job definition.
-    name: ${{ matrix.language }} sandbox smoke (containerized)
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - language: java
-            code: 'public class Main { public static void main(String[] args) { System.out.println("ok"); } }'
-          - language: kotlin
-            code: 'fun main() { println("ok") }'
-          - language: ruby
-            code: 'puts "ok"'
-          - language: php
-            code: '<?php echo "ok";'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      # This job builds or runs an image of Docker Hub. The Docker service
-      # asks a mirror first, so a limit or a fault of Docker Hub does not turn
-      # the job red (docs/quality/gates.md, "Docker Hub and the checks").
-      # zizmor asks for the `$/` form here. actionlint, in its newest version,
-      # does not read that form yet, so the form both read is kept.
-      - uses: ./.github/actions/docker-hub-mirror  # zizmor: ignore[self-repository]
-      - name: build sandbox image
-        run: docker build -t atlas-sandbox-test ./sandbox
-      - name: start sandbox
-        run: |
-          docker run -d --name sandbox-test -p 8020:8020 atlas-sandbox-test
-          sleep 5
-      - name: smoke test /execute + /syntax-check
-        env:
-          CODE: ${{ matrix.code }}
-          LANGUAGE: ${{ matrix.language }}
-        run: |
-          # Build the request body with python so the sample code is never
-          # re-quoted by the shell — that quoting is what forced four
-          # hand-escaped copies of these two curls in the first place.
-          body="$(python3 -c 'import json,os; print(json.dumps({"code": os.environ["CODE"], "language": os.environ["LANGUAGE"]}))')"
-          for endpoint in execute syntax-check; do
-            # Save the reply, then check it: nothing downloaded is piped
-            # into an interpreter.
-            curl -sf -X POST "http://localhost:8020/$endpoint" \
-              -H 'Content-Type: application/json' -d "$body" -o reply.json
-            ENDPOINT="$endpoint" python3 -c "import json,os; e=os.environ['ENDPOINT']; d=json.load(open('reply.json')); k='success' if e=='execute' else 'valid'; assert d[k], d; print(f'PASS: /{e}')"
-          done
-      - name: cleanup
-        if: always()
-        run: docker rm -f sandbox-test || true
-
   sandbox-tests:
     # The tests that need a running sandbox service: the group `sandbox` of
     # scripts/tests_counted.py. The image is built from this commit, so the
@@ -556,7 +502,9 @@ jobs:
     # base, its tmpfs mounts, its dropped capabilities and its limits. The
     # job gives none of these itself, so a change of the stack's settings is
     # under test by itself. The languages are in the image; no test asks the
-    # runner for a tool.
+    # runner for a tool. Among the tests, a program of each of Java, Kotlin,
+    # Ruby and PHP is run and is checked for its syntax: what four jobs of
+    # their own did before, each with a build of the same image.
     name: sandbox tests (containerized)
     runs-on: ubuntu-24.04
     timeout-minutes: 20

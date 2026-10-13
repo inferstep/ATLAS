@@ -129,7 +129,7 @@ def from_docker_hub(image):
 
 
 def test_there_are_jobs_with_the_step_so_the_tests_below_hold_something():
-    assert len(WITH_THE_STEP) >= 5, NAMES
+    assert len(WITH_THE_STEP) >= 4, NAMES
 
 
 @pytest.mark.parametrize("name, key, job", [(name, key, job) for name, _events, key, job in WITH_THE_STEP], ids=NAMES)
