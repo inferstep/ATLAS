@@ -470,14 +470,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def job_log(api_root: str, repo: str, job: int, key: str) -> str:
-    """The log of one job, as text.
+def read_log_once(request: urllib.request.Request, job: int) -> str:
+    """One read of the log of a job.
 
     GitHub answers with the address of the file, on another host. That
     address is read without the token.
     """
-    request = urllib.request.Request(f"{api_root}/repos/{repo}/actions/jobs/{job}/logs",
-                                     headers={"Authorization": f"Bearer {key}", "Accept": "application/vnd.github+json"})
     try:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
             return response.read().decode("utf-8", "replace")
@@ -485,11 +483,21 @@ def job_log(api_root: str, repo: str, job: int, key: str) -> str:
         address = error.headers.get("Location", "") if error.code in (301, 302, 303, 307, 308) else ""
         if not address.startswith("https://"):
             raise RuntimeError(f"GitHub did not give the log of job {job}: {error}") from error
-    try:
-        with urllib.request.urlopen(address, timeout=60) as response:
-            return response.read().decode("utf-8", "replace")
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise RuntimeError(f"the log of job {job} could not be read: {error}") from error
+    with urllib.request.urlopen(address, timeout=60) as response:
+        return response.read().decode("utf-8", "replace")
+
+
+def job_log(api_root: str, repo: str, job: int, key: str) -> str:
+    """The log of one job, as text. A read that gets no answer is tried once more, and then no more: one read
+    that timed out made a whole check "not judged"."""
+    request = urllib.request.Request(f"{api_root}/repos/{repo}/actions/jobs/{job}/logs",
+                                     headers={"Authorization": f"Bearer {key}", "Accept": "application/vnd.github+json"})
+    for last_try in (False, True):
+        try:
+            return read_log_once(request, job)
+        except OSError as error:
+            if last_try:
+                raise RuntimeError(f"GitHub did not answer with the log of job {job}, in two tries: {error}") from error
 
 
 def find_pull(checks, repo: str, key: str, manifest: dict) -> tuple[int | None, list[Finding]]:

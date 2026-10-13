@@ -798,13 +798,17 @@ def test_the_list_is_plain_json_with_the_keys_the_script_reads():
 
 
 class _Logs(http.server.BaseHTTPRequestHandler):
-    """A stand-in for GitHub: /direct gives a log, /moved points to another address, and the headers are kept."""
+    """A stand-in for GitHub. Job 1 gives a log. Job 3 gives no answer at the first read and the log at the second.
+    Job 4 never gives an answer. Every other job points to another address. The headers are kept."""
 
     seen = []
 
     def do_GET(self):
         self.seen.append((self.path, self.headers.get("Authorization")))
-        if self.path.endswith("/actions/jobs/1/logs"):
+        times = [path for path, _ in self.seen].count(self.path)
+        if self.path.endswith("/actions/jobs/4/logs") or (self.path.endswith("/actions/jobs/3/logs") and times == 1):
+            return  # no answer: the connection ends
+        if self.path.endswith(("/actions/jobs/1/logs", "/actions/jobs/3/logs")):
             body = b"line one\ncanary_unused appears unused\n"
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
@@ -834,6 +838,13 @@ def github():
 def test_the_log_of_a_job_is_read_with_the_token(canary, github):
     assert "canary_unused appears unused" in canary.job_log(github, "o/r", 1, "a-token")
     assert _Logs.seen == [("/repos/o/r/actions/jobs/1/logs", "Bearer a-token")]
+
+
+def test_a_read_of_a_log_that_gets_no_answer_is_tried_once_more_and_then_the_words_name_github(canary, github):
+    assert "canary_unused appears unused" in canary.job_log(github, "o/r", 3, "a-token")
+    with pytest.raises(RuntimeError, match="GitHub did not answer with the log of job 4, in two tries: "):
+        canary.job_log(github, "o/r", 4, "a-token")
+    assert [path for path, _ in _Logs.seen] == ["/repos/o/r/actions/jobs/3/logs"] * 2 + ["/repos/o/r/actions/jobs/4/logs"] * 2
 
 
 def test_a_log_address_that_is_not_https_is_not_followed(canary, github):
