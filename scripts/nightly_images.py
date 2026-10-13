@@ -18,7 +18,8 @@ The server of the nightly run has a usual stack too, and other images that have 
     `<image>:dev` or `<image>:eval` is not the run's own. The name stays written down, and a later run removes
     it when no such tag is on the image any more;
   - looks at the free room first. A look of the timer that finds too little room on Docker's disk starts nothing,
-    and the usual stack is not stopped.
+    and the usual stack is not stopped. The look wants a reserve before every run, and the room of a first set on
+    top of it only while the run has not written down a pull for each of its images.
 
 What the run pulled and has not removed is written down in <dir>/night-images.json: for each service, the names
 by digest, the newest last.
@@ -42,9 +43,13 @@ RECORD = "night-images.json"
 # Where Docker keeps its images: its own folder, and the folder of containerd, which holds them where Docker uses
 # containerd's image store. A folder of this list that is not there is passed over.
 FOLDERS = ("/var/lib/docker", "/var/lib/containerd")
-# The room, in GB as `df -h` counts them, that a look wants free before it starts a run. One whole set of the five
-# images is about 4 GB compressed and 13 GB unpacked, and an image store can keep both.
-ROOM_GB = 20.0
+# The room, in GB as `df -h` counts them, that a look wants free before it starts a run.
+# The first set: the five images are about 4 GB compressed in the registry and 13 GB unpacked, and the image store
+# of containerd keeps both. A machine that has some of their layers already needs less.
+FIRST_SET_GB = 17.0
+# The reserve, before every run: for what the containers of the stack write, and for an image that grew. It is a
+# choice, not a measure.
+RESERVE_GB = 5.0
 
 
 def own_name(service: str) -> str:
@@ -154,6 +159,14 @@ def compose_file(built: dict) -> str:
     name for the registry's image. JSON is YAML. An image of this run is never looked for in a registry."""
     return json.dumps({"services": {service: {"image": built.get(service) or own_name(service), "pull_policy": "never"}
                                     for service in IMAGES}}, indent=2) + "\n"
+
+
+def room_wanted(folder: Path, first_set_gb: float, reserve_gb: float) -> float:
+    """The free room that a look wants before it starts a run: the reserve, and the room of a first set on top of
+    it while the run has not written down a pull for each of its images."""
+    written = earlier_pulls(folder)
+    has_the_set = all(written.get(service) for service in IMAGES)
+    return reserve_gb if has_the_set else first_set_gb + reserve_gb
 
 
 def room_fault(folders, needed_gb: float) -> str:

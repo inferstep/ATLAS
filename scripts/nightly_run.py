@@ -1304,7 +1304,8 @@ def what_is_due(args, now: dt.datetime) -> tuple:
     (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day. The
     same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped."""
     mode, commit, why = run_that_is_due(args, now)
-    short = images.room_fault(args.docker_folder, args.room_gb) if mode else ""
+    wanted = images.room_wanted(args.dir, args.first_set_gb, args.reserve_gb)
+    short = images.room_fault(args.docker_folder, wanted) if mode else ""
     return (None, None, short) if short else (mode, commit, why)
 
 
@@ -1372,7 +1373,9 @@ def parse(argv: list) -> argparse.Namespace:
                         help="the hours, in UTC, in which a look may start a smoke run, as in 22-23,0-5; with none, the timer starts no smoke run")
     parser.add_argument("--commit", type=full_id, default=None, help="run the three sessions for this commit of a branch, and nothing else")
     parser.add_argument("--build-seconds", type=int, default=1800, help="the time limit of one image build of a run for a commit")
-    parser.add_argument("--room-gb", type=float, default=images.ROOM_GB, help="the free room on Docker's disk, in GB, that a look of the timer wants before it starts a run")
+    parser.add_argument("--first-set-gb", type=float, default=images.FIRST_SET_GB,
+                        help="the room on Docker's disk, in GB, of the first set of the run's images: wanted free on top of the reserve until the run has pulled each image once")
+    parser.add_argument("--reserve-gb", type=float, default=images.RESERVE_GB, help="the free room on Docker's disk, in GB, that a look of the timer wants before every run")
     parser.add_argument("--docker-folder", action="append", default=[], metavar="FOLDER",
                         help="a folder whose disk holds Docker's images; with none, Docker's own folder and the one of containerd")
     parser.set_defaults(own_images=None)

@@ -263,7 +263,7 @@ class Night:
                 "--image-wait-minutes", "0", "--settle-seconds", "0", *self.room(), *more]
 
     def room(self):
-        return ["--docker-folder", str(self.root), "--room-gb", "0"]
+        return ["--docker-folder", str(self.root), "--first-set-gb", "0", "--reserve-gb", "0"]
 
     def with_the_key(self):
         """The settings of a server that has the key of the app."""

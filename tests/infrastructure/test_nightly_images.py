@@ -114,16 +114,38 @@ def test_with_no_folder_named_and_none_of_the_usual_ones_there_a_look_starts_not
     assert images.room_fault([], 0) == ""
 
 
-def test_with_too_little_room_the_night_is_not_due_so_the_usual_stack_is_not_stopped(tmp_path):
+A_SET = {service: [f"ghcr.io/inferstep/{image}@{NEW}"] for service, image in images.IMAGES.items()}
+NO_MODEL_SERVER = {service: names for service, names in A_SET.items() if service != "llama-server"}
+TOO_LITTLE = r"nothing is started: too little room on Docker's disk \(\d+ GB free, 99999 GB needed\)"
+
+
+@pytest.mark.parametrize("written, first_set, reserve, due, why", [
+    pytest.param({}, "0", "0", "night", "the night is due",
+                 id="no set yet, and room for both"),
+    pytest.param({}, "60000", "39999", None, TOO_LITTLE,
+                 id="no set yet: the room of a first set and the reserve are wanted together"),
+    pytest.param(NO_MODEL_SERVER, "60000", "39999", None, TOO_LITTLE,
+                 id="a set with one image missing is no set"),
+    pytest.param(A_SET, "99999", "0", "night", "the night is due",
+                 id="the set is there: the room of a first set is not wanted again"),
+    pytest.param(A_SET, "0", "99999", None, TOO_LITTLE,
+                 id="the set is there: the reserve is wanted"),
+])
+def test_a_look_wants_the_room_of_a_first_set_while_the_run_has_none_and_a_reserve_before_every_run(tmp_path, written, first_set, reserve, due, why):
     night = Night(tmp_path)
+    (night.dir / "night-images.json").write_text(json.dumps(written))
     noon = dt.datetime(2026, 10, 8, 12, 30, tzinfo=dt.timezone.utc)
-    settings = ["--dir", str(night.dir), "--lock", str(night.lock), "--tick", "--look", "--night-hour", "12", "--docker-folder", str(tmp_path)]
-    assert nightly.what_is_due(nightly.parse([*settings, "--room-gb", "0"]), noon) == ("night", None, "the night is due")
-    mode, commit, why = nightly.what_is_due(nightly.parse([*settings, "--room-gb", "99999"]), noon)
-    assert (mode, commit) == (None, None)
-    assert re.fullmatch(r"nothing is started: too little room on Docker's disk \(\d+ GB free, 99999 GB needed\)", why)
-    # The unit of the server gives no number, so the number of the script is the one that holds there.
-    assert nightly.parse(["--dir", str(night.dir)]).room_gb == 20
+    settings = nightly.parse(["--dir", str(night.dir), "--lock", str(night.lock), "--tick", "--look", "--night-hour", "12",
+                              "--docker-folder", str(tmp_path), "--first-set-gb", first_set, "--reserve-gb", reserve])
+    # With too little room the night is not due, so the usual stack is not stopped.
+    mode, commit, says = nightly.what_is_due(settings, noon)
+    assert (mode, commit) == (due, None)
+    assert re.fullmatch(why, says)
+
+
+def test_the_unit_of_the_server_gives_no_number_so_the_numbers_of_the_script_hold_there(tmp_path):
+    settings = nightly.parse(["--dir", str(tmp_path)])
+    assert (settings.first_set_gb, settings.reserve_gb) == (17, 5)
 
 
 def test_no_command_of_a_night_names_an_image_of_the_registry_by_a_tag_or_removes_one_that_is_not_its_own(tmp_path):
