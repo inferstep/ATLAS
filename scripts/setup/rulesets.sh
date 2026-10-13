@@ -194,9 +194,9 @@ EOF
     # The development server builds and starts the tip of a branch
     # `smoke/<name>` (docs/quality/gates.md, section "The smoke run of one
     # commit"). The ruleset above lets an app and the repository's admin
-    # role push a branch of any name. This one has neither on its list. A
-    # branch under `smoke/` is under both, so only an account that is on
-    # both lists can create, push or delete it.
+    # role push a branch of any name. This one has neither on its list, and
+    # under its three rules only the accounts on its own list create, push
+    # or delete such a branch.
     cat > "$OUT/7b-smoke-branches-maintainers-only.json" <<EOF
 {"name":"Smoke branches: only maintainers create, push or delete","target":"branch","enforcement":"active",
  "conditions":{"ref_name":{"include":["refs/heads/smoke/*","refs/heads/smoke/**/*"],"exclude":[]}},
