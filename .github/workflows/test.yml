@@ -637,6 +637,21 @@ jobs:
       - name: every sandbox test ran and passed
         run: python scripts/tests_counted.py sandbox "$RUNNER_TEMP/sandbox-tests.xml"
 
+      # One test asks the Docker engine of this runner what it removes with
+      # an image's name by digest: the group `docker` of
+      # scripts/tests_counted.py. The nightly run removes its last image that
+      # way, and a stand-in for Docker cannot show what Docker does.
+      - name: the test that needs a real Docker engine
+        # `-rP` shows what the test printed: the version of the engine and
+        # its storage driver.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files docker) -q -rsP -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/docker-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: the test of the Docker engine ran and passed
+        run: python scripts/tests_counted.py docker "$RUNNER_TEMP/docker-tests.xml"
+
       - name: the log of the sandbox, when a step failed
         if: failure()
         run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 120 sandbox

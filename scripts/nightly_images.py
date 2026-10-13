@@ -13,10 +13,15 @@ The server of the nightly run has a usual stack too, and other images that have 
     two names that the run itself gave it: the name of its own, and the name by digest that its pull left. It
     removes by no other name and never prunes. Docker deletes a layer only when no other image uses it, so an
     image of another name keeps every layer;
+  - leaves a name by digest alone while a tag of the same repository names the same image. With such a name
+    Docker removes those tags too (tried with Docker 29 and the image store of containerd), and a tag like
+    `<image>:dev` or `<image>:eval` is not the run's own. The name stays written down, and a later run removes
+    it when no such tag is on the image any more;
   - looks at the free room first. A look of the timer that finds too little room on Docker's disk starts nothing,
     and the usual stack is not stopped.
 
-What the run pulled is written down in <dir>/night-images.json: for each service, the name by digest.
+What the run pulled and has not removed is written down in <dir>/night-images.json: for each service, the names
+by digest, the newest last.
 """
 from __future__ import annotations
 
@@ -72,17 +77,43 @@ def digest_in(printed: str) -> str:
     return digest if isinstance(digest, str) and A_DIGEST.fullmatch(digest) else ""
 
 
-def last_pulls(folder: Path) -> dict:
-    """What the run wrote down at its last pulls: for each service the name by digest. A line of the file is taken
-    only when it is such a name for that service, because the run gives it to `docker image rm`."""
+def earlier_pulls(folder: Path) -> dict:
+    """What the run wrote down: for each service the names by digest that it pulled and has not removed. A name of
+    the file is taken only when it is such a name for that service, because the run gives it to `docker image rm`."""
     try:
         written = json.loads((folder / RECORD).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(written, dict):
         return {}
-    return {service: name for service, name in written.items()
-            if service in IMAGES and isinstance(name, str) and is_a_pull_of(service, name)}
+    return {service: [name for name in names if isinstance(name, str) and is_a_pull_of(service, name)]
+            for service, names in written.items() if service in IMAGES and isinstance(names, list)}
+
+
+def remove_own_name(own: str, must, ended) -> str:
+    """Remove the run's own name from the image that it stands on. Gives what happened, in words."""
+    if ended(f"the look for {own}", ["docker", "image", "inspect", "--format", "{{.Id}}", own], 60).returncode != 0:
+        return "there was none"
+    must(f"the removal of {own}", ["docker", "image", "rm", own], 300)
+    return "yes"
+
+
+def remove_pull(name: str, must, ended) -> str:
+    """Remove the name by digest that a pull of this run left, unless a tag of the same repository names the same
+    image: Docker would take that tag away with it. Gives what happened, in words; `kept` when the name stays."""
+    looked = ended(f"the look for {name}", ["docker", "image", "inspect", "--format", "{{json .RepoTags}}", name], 60)
+    if looked.returncode != 0:
+        return "there was none"
+    try:
+        names_of_the_image = [str(one) for one in json.loads(looked.stdout)]
+    except (ValueError, TypeError):
+        return "kept: what Docker said of the names of this image could not be read"
+    repository = name.split("@")[0]
+    tags = [one for one in names_of_the_image if "@" not in one and one.rpartition(":")[0] == repository]
+    if tags:
+        return f"kept: {', '.join(tags)} names the same image, and Docker would remove that tag too"
+    must(f"the removal of {name}", ["docker", "image", "rm", name], 300)
+    return "yes"
 
 
 def take(folder: Path, services, must, ended, failed) -> tuple:
@@ -94,25 +125,23 @@ def take(folder: Path, services, must, ended, failed) -> tuple:
     The three last arguments come from scripts/nightly_run.py: `must` runs a command that has to pass and gives
     its output, `ended` runs one whose status is read here, and `failed` is the error of a step that failed.
     """
-    pulls, found, removed = last_pulls(folder), {}, {}
+    pulls, found, removed = earlier_pulls(folder), {}, {}
     for service in services:
         tagged, own = f"{REGISTRY}/{IMAGES[service]}:{TAG}", own_name(service)
         digest = digest_in(must(f"the reading of the digest of {tagged}",
                                 ["docker", "buildx", "imagetools", "inspect", tagged, "--format", "{{json .Manifest}}"], 120))
         if not digest:
             raise failed(f"the reading of the digest of {tagged}: the registry's answer names no digest")
-        pulled, last = by_digest(service, digest), pulls.get(service)
-        if last and last != pulled:
+        pulled, earlier = by_digest(service, digest), pulls.get(service, [])
+        if earlier and pulled not in earlier:
             # The registry has another image. The last one goes before the new one comes, so the run holds one set.
-            for name in (own, last):
-                if ended(f"the look for {name}", ["docker", "image", "inspect", "--format", "{{.Id}}", name], 60).returncode != 0:
-                    removed[name] = "there was none"
-                    continue
-                must(f"the removal of {name}", ["docker", "image", "rm", name], 300)
-                removed[name] = "yes"
+            removed[own] = remove_own_name(own, must, ended)
+        for name in earlier:
+            if name != pulled:
+                removed[name] = remove_pull(name, must, ended)
         must(f"the pull of {pulled}", ["docker", "pull", "--quiet", pulled], 1200)
         must(f"the naming of {pulled}", ["docker", "tag", pulled, own], 60)
-        pulls[service] = pulled
+        pulls[service] = [name for name in earlier if name != pulled and removed[name].startswith("kept")] + [pulled]
         (folder / RECORD).write_text(json.dumps(pulls, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         about = json.loads(must(f"the reading of {own}", ["docker", "image", "inspect", own], 60))[0]
         found[service] = {"image": tagged, "digest": digest, "name": own,

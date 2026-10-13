@@ -265,13 +265,13 @@ def job_of(name):
     return found[0]
 
 
-@pytest.mark.parametrize("name", ["sandbox", "proxy"])
+@pytest.mark.parametrize("name", ["sandbox", "proxy", "docker"])
 def test_the_job_of_a_group_runs_its_files_and_gives_the_result_file_to_the_judge(counted, name):
     group = counted.GROUPS[name]
     job = job_of(re.fullmatch(r"the job `(.+)`", group.runs_in).group(1))
     assert "continue-on-error" not in job
     runs = [step for step in job["steps"] if "run" in step]
-    tests = [step for step in runs if "-m pytest" in step["run"]]
+    tests = [step for step in runs if "-m pytest" in step["run"] and f"--files {name})" in step["run"]]
     assert len(tests) == 1
     command = " ".join(tests[0]["run"].replace("\\\n", " ").split())
     assert f"-m integration $(python scripts/tests_counted.py --files {name})" in command

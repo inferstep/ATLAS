@@ -557,7 +557,7 @@ hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
 the mark to every test of the files it lists and to every test under
 `tests/integration/`.
 
-The marked files are in three groups, by what they need. Each group is run
+The marked files are in four groups, by what they need. Each group is run
 in one place.
 
 | File | Tests | What it needs | The job that runs it |
@@ -569,9 +569,12 @@ in one place.
 | `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_llm.py` | 32 | a running model server | the nightly run, on the development server |
+| `tests/infrastructure/test_nightly_images_docker.py` | 1 | a Docker engine and the network | the job `sandbox tests (containerized)` |
 
-- That is 125 tests in 7 files: 80 for the sandbox, 13 for the proxy and the
-  TUI, 32 for the model. `tests/integration/` holds no test.
+- That is 126 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
+  TUI, 32 for the model, and 1 that asks a real Docker engine what it
+  removes with an image's name by digest. `tests/integration/` holds no
+  test.
 - The groups, their files and their numbers are in one place:
   `scripts/tests_counted.py`. A test in the test suite holds that list, the
   hook's list, this table, the two jobs and the number of test functions in
@@ -753,6 +756,13 @@ What a run keeps on disk:
   its pull left, by no other name, and it never prunes. Docker deletes a
   layer only when no other image uses it, so an image of another name
   keeps every layer.
+- With a name by digest Docker also removes every tag of the same
+  repository that names the same image (seen with Docker 29 and the image
+  store of containerd). Such a tag, like `<image>:dev` or `<image>:eval`,
+  is not the run's own. So the run first asks Docker which names the image
+  has, and leaves the name by digest alone while a tag of the same
+  repository is among them. The name stays written down, and a later run
+  removes it when no such tag names the image any more.
 - An image that a smoke run builds is removed at the end of that run. The
   build cache that such a build leaves is not removed: it cannot be told
   from the cache of another build on the machine. `docker builder prune`

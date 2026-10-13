@@ -16,15 +16,18 @@ images = nightly.images
 OLD, NEW = "sha256:" + "a" * 64, "sha256:" + "b" * 64
 OWN = "localhost/atlas-nightly/atlas-proxy:night"
 LAST = f"ghcr.io/inferstep/atlas-proxy@{OLD}"
+TODAY = f"ghcr.io/inferstep/atlas-proxy@{NEW}"
+EVAL = "ghcr.io/inferstep/atlas-proxy:eval"
 BY_DIGEST = re.compile(r"ghcr\.io/inferstep/atlas-[a-z0-9]+@sha256:[0-9a-f]{64}")
 
 
 class Docker:
     """Stands in for the two ways the file of the images runs a command. It writes each command down. The
-    registry has the digest NEW, and the images named in `there` are on the machine."""
+    registry has the digest NEW. `there` gives, for each name that is on the machine, the names that Docker lists
+    for its image."""
 
-    def __init__(self, there=()):
-        self.commands, self.there = [], set(there)
+    def __init__(self, there=None):
+        self.commands, self.there = [], there or {}
 
     def must(self, what, argv, limit):
         self.commands.append(" ".join(argv))
@@ -36,7 +39,9 @@ class Docker:
 
     def ended(self, what, argv, limit):
         self.commands.append(" ".join(argv))
-        return SimpleNamespace(returncode=0 if argv[-1] in self.there else 1)
+        if argv[-1] not in self.there:
+            return SimpleNamespace(returncode=1, stdout="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(self.there[argv[-1]]))
 
 
 def test_an_image_is_pulled_by_its_digest_and_gets_the_runs_own_name(tmp_path):
@@ -51,26 +56,39 @@ def test_an_image_is_pulled_by_its_digest_and_gets_the_runs_own_name(tmp_path):
     ]
     assert found == {"atlas-proxy": {"image": "ghcr.io/inferstep/atlas-proxy:dev", "digest": NEW, "name": OWN, "commit": "c" * 40}}
     assert removed == {}
-    assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": f"ghcr.io/inferstep/atlas-proxy@{NEW}"}
+    assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": [TODAY]}
 
 
-@pytest.mark.parametrize("written, there, removed", [
-    ({"atlas-proxy": LAST}, [OWN, LAST], {OWN: "yes", LAST: "yes"}),
-    ({"atlas-proxy": LAST}, [LAST], {OWN: "there was none", LAST: "yes"}),
-    ({"atlas-proxy": f"ghcr.io/inferstep/atlas-proxy@{NEW}"}, [OWN], {}),
-    ({"atlas-proxy": "ghcr.io/inferstep/atlas-proxy:eval"}, [OWN, "ghcr.io/inferstep/atlas-proxy:eval"], {}),
-    ({"atlas-proxy": f"ghcr.io/inferstep/atlas-llama@{OLD}"}, [OWN, f"ghcr.io/inferstep/atlas-llama@{OLD}"], {}),
-    ({"atlas-proxy": f"example.org/inferstep/atlas-proxy@{OLD}"}, [OWN], {}),
+KEPT = f"kept: {EVAL} names the same image, and Docker would remove that tag too"
+
+
+@pytest.mark.parametrize("written, there, removed, written_after", [
+    ([LAST], {OWN: [OWN, LAST], LAST: [OWN, LAST]}, {OWN: "yes", LAST: "yes"}, [TODAY]),
+    ([LAST], {LAST: [LAST]}, {OWN: "there was none", LAST: "yes"}, [TODAY]),
+    ([TODAY], {OWN: [OWN, TODAY]}, {}, [TODAY]),
+    # Docker removes a tag of the same repository together with the name by digest, so the name stays.
+    ([LAST], {OWN: [OWN, LAST, EVAL], LAST: [OWN, LAST, EVAL]}, {OWN: "yes", LAST: KEPT}, [LAST, TODAY]),
+    ([LAST, TODAY], {OWN: [OWN, TODAY], LAST: [LAST, EVAL]}, {LAST: KEPT}, [LAST, TODAY]),
+    ([LAST, TODAY], {OWN: [OWN, TODAY], LAST: [LAST]}, {LAST: "yes"}, [TODAY]),
+    # A name of another repository on the same image is not in the way.
+    ([LAST], {OWN: [OWN, LAST], LAST: [OWN, LAST, "localhost/another/atlas-proxy:eval"]}, {OWN: "yes", LAST: "yes"}, [TODAY]),
+    # A line of the file that is no pull of this run for this service is not given to Docker.
+    ([EVAL], {OWN: [OWN], EVAL: [EVAL]}, {}, [TODAY]),
+    ([f"ghcr.io/inferstep/atlas-llama@{OLD}"], {OWN: [OWN]}, {}, [TODAY]),
+    ([f"example.org/inferstep/atlas-proxy@{OLD}"], {OWN: [OWN]}, {}, [TODAY]),
 ], ids=["the registry has another image", "its own name is gone already", "the registry has the same image",
+        "a tag of the same repository names the last image", "that tag is still there a night later",
+        "that tag is gone a night later", "a tag of another repository names the last image",
         "the file names a tag", "the file names the image of another service", "the file names another registry"])
-def test_the_last_image_goes_before_the_new_one_comes_and_only_by_a_name_that_the_run_gave_it(tmp_path, written, there, removed):
-    (tmp_path / "night-images.json").write_text(json.dumps(written))
+def test_the_last_image_goes_before_the_new_one_comes_and_only_by_a_name_that_the_run_gave_it(tmp_path, written, there, removed, written_after):
+    (tmp_path / "night-images.json").write_text(json.dumps({"atlas-proxy": written}))
     docker = Docker(there)
     assert images.take(tmp_path, ["atlas-proxy"], docker.must, docker.ended, RuntimeError)[1] == removed
     removing = [command for command in docker.commands if " rm " in command or "prune" in command]
     assert removing == [f"docker image rm {name}" for name, said in removed.items() if said == "yes"]
-    pull = docker.commands.index(f"docker pull --quiet ghcr.io/inferstep/atlas-proxy@{NEW}")
+    pull = docker.commands.index(f"docker pull --quiet {TODAY}")
     assert all(docker.commands.index(command) < pull for command in removing)
+    assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": written_after}
 
 
 @pytest.mark.parametrize("folder, needed, says", [
@@ -104,7 +122,7 @@ def test_with_too_little_room_the_night_is_not_due_so_the_usual_stack_is_not_sto
 def test_no_command_of_a_night_names_an_image_of_the_registry_by_a_tag_or_removes_one_that_is_not_its_own(tmp_path):
     night = Night(tmp_path)
     # An earlier night pulled another image of the proxy, so this night has one to remove.
-    (night.dir / "night-images.json").write_text(json.dumps({"atlas-proxy": LAST}))
+    (night.dir / "night-images.json").write_text(json.dumps({"atlas-proxy": [LAST]}))
     night.run()
     assert night.report["result"] == "passed", night.report["result"]
     docker = [call["args"] for call in night.calls() if call["tool"] == "docker"]

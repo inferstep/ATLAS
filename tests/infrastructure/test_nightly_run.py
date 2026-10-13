@@ -136,6 +136,10 @@ if args[:3] == ["buildx", "imagetools", "inspect"]:
     rounds = plan.get("digests", {}).get(name) or [hashlib.sha256(name.encode()).hexdigest()]
     print(json.dumps({"mediaType": "application/vnd.oci.image.index.v1+json",
                      "digest": "sha256:" + this_time(rounds, lambda c: c["args"] == args), "manifests": []}))
+if args[:2] == ["image", "inspect"] and "{{json .RepoTags}}" in args:
+    # The names that Docker lists for an image: the name that was asked for, and no tag of another kind.
+    print(json.dumps([args[-1]]))
+    sys.exit(0)
 if args[:2] == ["image", "inspect"]:
     name = args[-1].split("/")[-1].split(":")[0].split("@")[0]
     rounds = plan["built_from"] if isinstance(plan["built_from"], list) else [plan["built_from"]]

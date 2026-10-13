@@ -2,7 +2,7 @@
 """Whether a run of the tests that need a running service ran all of them, and passed.
 
 The plain test jobs leave these tests out: each needs a service that such a
-job does not have. They are in three groups, and each group is run in one
+job does not have. They are in four groups, and each group is run in one
 place. This file is the one list of the groups and the one judge of a run.
 
 A run of a group holds only when every test of the group was collected, none
@@ -48,6 +48,8 @@ GROUPS = {
         "tests/infrastructure/test_control_plane.py")),
     "model": Group("a running model server", "the nightly run, on the development server", 32, (
         "tests/infrastructure/test_llm.py",)),
+    "docker": Group("a Docker engine and the network", "the job `sandbox tests (containerized)`", 1, (
+        "tests/infrastructure/test_nightly_images_docker.py",)),
 }
 SHOWN = 5
 
