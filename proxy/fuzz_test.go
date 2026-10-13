@@ -32,6 +32,8 @@ func FuzzValidateShellCommand(f *testing.F) {
 		{"rm -rf __pycache__", false},
 		{"mkdir -p static/js", false},
 		{"go test ./...", false},
+		{"env ATLAS_FLAG=x bash -c 'go test ./...'", false},
+		{`env -S 'bash -c "go test ./..."'`, false},
 		{`bash -c "python app.py"`, false},
 		{"env FLASK_APP=app.py flask run", false},
 		{"nohup python app.py > app.log 2>&1 &", false},
@@ -44,28 +46,88 @@ func FuzzValidateShellCommand(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, command string) {
+		// Arbitrary bytes, including incomplete shell input, must not panic.
 		first := validateShellCommand(command)
 		if again := validateShellCommand(command); again != first {
 			t.Fatalf("command %q: result changed from %q to %q", command, first, again)
 		}
-		padded := " \t\n" + command + "\n\t "
-		if got := validateShellCommand(padded); (got != "") != (first != "") {
-			t.Fatalf("command %q: whitespace changed blocked = %t to %t", command, first != "", got != "")
+		if len(command) > 128 {
+			return
 		}
-		// Hex makes the fuzz bytes a single safe shell word, so the final
-		// rm remains an executable command rather than quoted text.
-		if len(command) <= 256 {
-			assignment := "ATLAS_FUZZ=" + hex.EncodeToString([]byte(command))
-			for _, wrapped := range []string{
-				"env " + assignment + " rm -rf /",
-				"nohup env " + assignment + " rm -rf /",
-			} {
-				if got := validateShellCommand(wrapped); got == "" {
-					t.Fatalf("command %q: catastrophic wrapped command %q was allowed", command, wrapped)
+		for _, tc := range fuzzShellCommandCases(command) {
+			for _, wrapped := range fuzzShellWrappers(tc.command, command) {
+				if got := validateShellCommand(wrapped); (got != "") != tc.blocked {
+					t.Fatalf("command %q: blocked = %t, want %t", wrapped, got != "", tc.blocked)
 				}
 			}
 		}
 	})
+}
+
+type fuzzShellCommandCase struct {
+	command string
+	blocked bool
+}
+
+func fuzzShellCommandCases(input string) []fuzzShellCommandCase {
+	pick := func(index int) byte {
+		if input == "" {
+			return 0
+		}
+		return input[index%len(input)]
+	}
+	spaces := []string{" ", "\t", "  "}
+	sep1 := spaces[int(pick(0))%len(spaces)]
+	sep2 := spaces[int(pick(1))%len(spaces)]
+	targets := []string{"/", ".", "..", "/workspace"}
+	target := targets[int(pick(2))%len(targets)]
+	var flags strings.Builder
+	flags.WriteString("-rf")
+	for i := range len(input) {
+		if input[i]&1 == 0 {
+			flags.WriteByte('r')
+		} else {
+			flags.WriteByte('f')
+		}
+	}
+	// Fuzz bytes vary a real rm command, rather than becoming quoted prose.
+	return []fuzzShellCommandCase{
+		{"rm" + sep1 + flags.String() + sep2 + target, true},
+		{"rm" + sep1 + "-rf" + sep2 + "atlas-" + hex.EncodeToString([]byte(input)), false},
+	}
+}
+
+func fuzzShellQuote(command string) string {
+	return "'" + strings.ReplaceAll(command, "'", "'\\''") + "'"
+}
+
+func fuzzShellWrappers(command, input string) []string {
+	// Hex keeps fuzz bytes in one safe environment value. No input is executed.
+	assignment := "ATLAS_FLAG=" + hex.EncodeToString([]byte(input))
+	quoted := fuzzShellQuote(command)
+	shell := "bash -c " + quoted
+	return []string{
+		command,
+		"env " + assignment + " " + command,
+		"nohup env " + assignment + " " + command,
+		"command -- " + command,
+		"nice -n 5 " + command,
+		"timeout 5s " + command,
+		"stdbuf -oL " + command,
+		shell,
+		"sh -c " + quoted,
+		"bash -lc " + quoted,
+		"eval " + quoted,
+		"( " + command + " )",
+		"echo $(" + command + ")",
+		"env " + assignment + " " + shell,
+		"nohup env " + assignment + " " + shell,
+		"sudo -u root " + shell,
+		"env -u HOME " + shell,
+		"env -S " + fuzzShellQuote(shell),
+		"env --split-string=" + fuzzShellQuote(shell),
+		"bash -c " + fuzzShellQuote(shell),
+	}
 }
 
 func FuzzExtractModelResponse(f *testing.F) {
@@ -114,6 +176,8 @@ func FuzzExtractModelResponse(f *testing.F) {
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("canonical response for %q: got %+v, err %v; want %+v", raw, got, err, want)
 		}
+		// Truncated tool-call JSON must be rejected rather than reconstructed
+		// into a call whose missing arguments would have to be guessed.
 		if got, err := extractModelResponse(string(envelope[:len(envelope)-1])); err == nil {
 			t.Fatalf("truncated canonical response for %q parsed as %+v", raw, got)
 		}
