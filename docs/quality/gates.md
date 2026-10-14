@@ -452,10 +452,13 @@ no other.
 - With a real model the commands of a session are the model's own choice,
   and each prompt is answered with yes. Record such a session in a
   container, not as a plain process of a person's machine.
-- No recording holds a word of the machine that it was made on. The sandbox
+- No recording holds a path of the machine that it was made on. The sandbox
   of a recording gets a small fixed environment. And the tool does not
-  write a recording whose text holds the home folder or the name of the
-  user who records, or the folder of the model's file.
+  write a recording whose text holds the home folder of the user who
+  records, or the folder of the model's file. The bare name of that user
+  is not looked for: it can be an ordinary word, and the text of every
+  session holds ordinary words. A bare name that a command prints is kept
+  out by the container: the user of the recording has no name there.
 
 | Command | What it does |
 |---|---|

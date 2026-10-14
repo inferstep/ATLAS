@@ -270,11 +270,12 @@ def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_wri
         record.record("real_model_edit", model_at=model_server)
 
 
-def test_the_words_of_a_machine_are_the_home_folder_and_the_name_of_the_user_and_the_folder_of_the_models_file(monkeypatch):
-    monkeypatch.setenv("HOME", "/a/home/of/someone")
-    monkeypatch.setenv("LOGNAME", "someone-who-records")
-    text = "a path /a/home/of/someone/x, a name someone-who-records, and a file in /models/of/it/file.gguf"
-    assert record.of_a_machine(text, "/models/of/it") == ["/a/home/of/someone", "/models/of/it/", "someone-who-records"]
+def test_the_words_of_a_machine_are_the_home_folder_and_the_folder_of_the_models_file_and_not_the_users_bare_name(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/runner")
+    monkeypatch.setenv("LOGNAME", "runner")
+    # The name of this user is an ordinary word, and the proxy's own prompt has it.
+    assert record.of_a_machine("watch test runner output", "/models/of/it") == []
+    assert record.of_a_machine("a path /home/runner/x and a file in /models/of/it/file.gguf", "/models/of/it") == ["/home/runner", "/models/of/it/"]
     assert record.of_a_machine("a text with /models/of/its own and nothing else", "/models/of/it") == []
 
 

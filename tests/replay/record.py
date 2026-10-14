@@ -23,15 +23,14 @@ which model it was. Such a session is one sample: the model answers in
 another way the next time. With a real model the commands of a session are
 the model's own choice, so record such a session in a container.
 
-No recording holds a word of the machine that it was made on: the sandbox
+No recording holds a path of the machine that it was made on: the sandbox
 gets a small fixed environment, and a recording whose text holds the home
-folder or the name of the user who records, or the folder of the model's
-file, is not written.
+folder of the user who records, or the folder of the model's file, is not
+written.
 """
 from __future__ import annotations
 
 import argparse
-import getpass
 import http.client
 import importlib.util
 import json
@@ -211,14 +210,11 @@ def about_the_model(port: int) -> tuple:
 
 
 def of_a_machine(text: str, model_folder: str) -> list:
-    """The words in a text that belong to a machine and to no recording: the home folder and the name of the user
-    who records, and the folder of the model's file on the model server's machine."""
-    try:
-        user = getpass.getuser()
-    except (KeyError, OSError):
-        user = ""
+    """The words in a text that belong to a machine and to no recording: the home folder of the user who records,
+    and the folder of the model's file on the model server's machine. The bare name of that user is not looked for:
+    it can be an ordinary word (`runner` is one), and the proxy's own prompt holds ordinary words."""
     folder = model_folder.rstrip("/") + "/" if model_folder.strip("/.") else ""
-    return sorted(word for word in {str(Path.home()), user, folder} if word.strip("/") and word in text)
+    return sorted(word for word in {str(Path.home()), folder} if word.strip("/") and word in text)
 
 
 def start_sandbox(root: Path, workspace_root: Path):
