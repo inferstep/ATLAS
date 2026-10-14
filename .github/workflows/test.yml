@@ -644,6 +644,10 @@ jobs:
       - name: build the proxy and the TUI
         run: |
           (cd proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
+          # Go fetches the TUI's modules first, with no cache (none would act in
+          # the merge queue). A download that breaks off in its middle is tried
+          # once more; a second failure fails the step with Go's own words.
+          (cd tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
           # The TUI tests start this file.
           (cd tui && go build -o atlas-tui .)
 
