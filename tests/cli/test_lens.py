@@ -12,6 +12,8 @@ Coverage strategy:
 
 import json
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -78,6 +80,25 @@ def test_inspect_cost_field_dim_inferred(tmp_path):
     }
     torch.save(state, tmp_path / "cost_field.pt")
     assert lens._inspect_cost_field(str(tmp_path)).dim == DIM
+
+
+def test_inspect_cost_field_loads_only_in_the_restricted_mode(tmp_path, monkeypatch):
+    (tmp_path / "cost_field.pt").write_bytes(b"a file that the restricted mode refuses")
+    modes = []
+
+    def load(path, map_location=None, weights_only=False):
+        modes.append(weights_only)
+        if weights_only:
+            raise RuntimeError("the restricted mode refuses this file")
+        return {}
+
+    # A stand-in for torch, so that the test runs in every job, also where torch is not installed.
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(load=load))
+    result = lens._inspect_cost_field(str(tmp_path))
+    assert modes == [True]
+    assert (result.present, result.dim) == (True, None)
+    assert result.error.startswith("cost_field.pt cannot be read in torch's restricted mode, so the lens service "
+                                   "would refuse it too; rebuild it with `atlas lens build`")
 
 
 def test_inspect_cost_field_dim_missing_file(tmp_path):

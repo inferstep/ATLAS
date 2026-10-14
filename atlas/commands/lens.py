@@ -95,14 +95,14 @@ def _inspect_cost_field(artifact_dir: str) -> ArtifactInspection:
         return ArtifactInspection(present=True, dim=None,
                                   torch_available=False,
                                   error="torch not installed on host")
+    # Only in torch's restricted mode, as the lens service loads it: an
+    # unrestricted load could run code from the file.
     try:
         state = torch.load(cost_path, map_location="cpu", weights_only=True)
-    except Exception:
-        try:
-            state = torch.load(cost_path, map_location="cpu")
-        except Exception as e:
-            return ArtifactInspection(present=True, dim=None,
-                                      error=f"torch.load failed: {e}")
+    except Exception as e:
+        return ArtifactInspection(present=True, dim=None,
+                                  error=f"cost_field.pt cannot be read in torch's restricted mode, so the lens service "
+                                        f"would refuse it too; rebuild it with `atlas lens build` ({e})")
     if not isinstance(state, dict):
         return ArtifactInspection(present=True, dim=None,
                                   error="state dict has unexpected shape")
