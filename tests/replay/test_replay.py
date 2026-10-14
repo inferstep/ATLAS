@@ -196,9 +196,10 @@ class _ModelServer(http.server.BaseHTTPRequestHandler):
     in small pieces, and it takes about a second for a reply, as a real one takes time: half a second before the
     first piece, and a little between the pieces."""
 
-    replies = []
+    replies, tokens = [], []
 
     def do_GET(self):
+        self.tokens.append(self.headers.get("Authorization"))
         body = json.dumps({"build_info": "b1-stand-in", "model_path": "/a/folder/of/the/server/a-model.gguf"}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -207,6 +208,7 @@ class _ModelServer(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        self.tokens.append(self.headers.get("Authorization"))
         self.rfile.read(int(self.headers["Content-Length"]))
         reply = json.dumps(self.replies.pop(0))
         lines = [json.dumps({"choices": [{"delta": {"content": reply[at:at + 9]}}]}) for at in range(0, len(reply), 9)]
@@ -227,6 +229,7 @@ class _ModelServer(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def model_server():
     """The stand-in for a model server, started; gives its port."""
+    _ModelServer.tokens.clear()
     server = http.server.HTTPServer(("127.0.0.1", 0), _ModelServer)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server.server_port
@@ -243,6 +246,8 @@ def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_w
     said = [exchange["response"]["body"] for exchange in made["exchanges"] if exchange["service"] == "model"]
     assert len(said) == 4 and all(body.count("data: ") > 5 for body in said)
     assert made["expected"]["events"][-1]["type"] == "done"
+    # The model server was asked five things, which model it is and four replies, and no token went with any.
+    assert _ModelServer.tokens == [None] * 5
 
 
 def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_when_the_reply_is_whole(model_server):
@@ -253,14 +258,17 @@ def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_whe
         # What the proxy does: it asks the stage's stand-in for the model, and reads the answer as it comes.
         connection = http.client.HTTPConnection("127.0.0.1", ports["model"], timeout=30)
         connection.request("POST", "/v1/chat/completions", "{}", {"Content-Type": "application/json"})
-        response, came = connection.getresponse(), []
-        while response.read1(65536):
+        response, came, pieces = connection.getresponse(), [], []
+        while piece := response.read1(65536):
             came.append(time.monotonic())
+            pieces.append(piece)
     finally:
         st.stop()
     # The stand-in model server takes half a second from its first piece to its last. So do the pieces here.
     assert len(came) > 5 and came[-1] - came[0] > 0.3
-    assert st.exchanges[0]["response"]["body"].endswith("data: [DONE]\n\n")
+    # What came is the reply, once, and it is what the stage keeps.
+    kept = st.exchanges[0]["response"]["body"]
+    assert b"".join(pieces).decode("utf-8") == kept and kept.endswith("data: [DONE]\n\n") and kept.count("[DONE]") == 1
 
 
 def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_written(model_server):
@@ -288,8 +296,10 @@ def test_the_sandbox_of_a_recording_gets_a_small_fixed_environment_and_nothing_o
     finally:
         sandbox.terminate()
         sandbox.communicate(timeout=10)
-    names = {line.split("=")[0] for line in json.loads(said[2])["stdout"].splitlines()}
-    assert "A_VALUE_OF_THE_PERSON_WHO_RECORDS" not in names and "PATH" in names, names
+    environment = dict(line.split("=", 1) for line in json.loads(said[2])["stdout"].splitlines() if "=" in line)
+    assert "A_VALUE_OF_THE_PERSON_WHO_RECORDS" not in environment and "PATH" in environment, environment
+    # Its home folder is a folder of the recording, and not the home of the person who records.
+    assert environment["HOME"] == str(tmp_path / "sandbox-home")
 
 
 def test_a_case_of_a_real_model_and_a_port_go_together():

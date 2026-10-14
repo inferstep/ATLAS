@@ -212,7 +212,11 @@ def about_the_model(port: int) -> tuple:
 def of_a_machine(text: str, model_folder: str) -> list:
     """The words in a text that belong to a machine and to no recording: the home folder of the user who records,
     and the folder of the model's file on the model server's machine. The bare name of that user is not looked for:
-    it can be an ordinary word (`runner` is one), and the proxy's own prompt holds ordinary words."""
+    it can be an ordinary word (`runner` is one), and the proxy's own prompt holds ordinary words.
+
+    A word of the model's reply is found only where the proxy put the reply together: in an event, or in the next
+    request. In the kept stream the reply stands in small pieces, and a word that is split over two pieces is not
+    found there."""
     folder = model_folder.rstrip("/") + "/" if model_folder.strip("/.") else ""
     return sorted(word for word in {str(Path.home()), folder} if word.strip("/") and word in text)
 
