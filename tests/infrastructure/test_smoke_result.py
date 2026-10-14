@@ -692,10 +692,15 @@ def in_a_merge(tmp_path, on_the_base, on_the_branch, text):
     repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
     repo.git("checkout", "-q", "--detach", "dev")
     repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
-    (tmp_path / "runner").mkdir()
+    return run_the_step(repo, tmp_path / "runner", base, text)
+
+
+def run_the_step(repo, runner, base, text=""):
+    """Run the commands of the job's step where the checkout of the repository stands: the merge of a branch into a base."""
+    runner.mkdir()
     return subprocess.run(["bash", "-e", "-c", step("smoke_result.py")["run"]], cwd=repo.root, capture_output=True, text=True,
                           timeout=60, check=False, env={**repo.env(text), "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
-                                                        "RUNNER_TEMP": str(tmp_path / "runner"), "BASE": base})
+                                                        "RUNNER_TEMP": str(runner), "BASE": base})
 
 
 PASSES_ALL = 'print("the copy of the change ran")\n'
@@ -713,6 +718,25 @@ def test_the_changes_copy_of_the_script_runs_only_while_the_base_has_none(tmp_pa
     done = in_a_merge(tmp_path, None, PASSES_ALL, "")
     assert done.returncode == 0
     assert "the copy of the change ran" in done.stdout
+
+
+def test_a_branch_made_before_the_recordings_is_judged_by_what_its_merge_would_bring(tmp_path):
+    # The branch was made on a base with no recording yet (as `main` has none), and its change touches no recording.
+    repo = Repo(tmp_path / "repo")
+    (repo.root / "scripts").mkdir()
+    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    repo.commit()
+    repo.git("checkout", "-q", "-b", "work")
+    (repo.root / "a change.txt").write_text("a change that touches no recording\n", encoding="utf-8")
+    repo.git("add", "-A")
+    repo.git("commit", "-q", "-m", "the change")
+    repo.git("checkout", "-q", "dev")
+    base = repo.commit(one=recording(), two=recording(task="repair a fault"))
+    repo.git("checkout", "-q", "--detach", "dev")
+    repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
+    done = run_the_step(repo, tmp_path / "runner", base)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the smoke run is not asked for" in done.stdout
 
 
 def test_the_gates_page_has_the_words_of_the_rule():
