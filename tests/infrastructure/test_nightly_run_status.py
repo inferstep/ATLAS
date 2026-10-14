@@ -20,6 +20,9 @@ from tests.infrastructure import test_nightly_run as base
 from tests.infrastructure import test_nightly_run_commit as commits
 from tests.infrastructure.test_nightly_run import APP, HEAD, INSTALLATION, KEY, SCRIPT, TOKEN, WRITER, Night, a_stand_in_for_github, nightly
 
+# The part of the run that keeps and sends the statuses: a module beside the script.
+statuses = nightly.statuses
+
 UTC = dt.timezone.utc
 REPO = "/repos/inferstep/ATLAS"
 STATUSES_OF = "GET " + REPO + "/commits/{}/statuses?per_page=100"
@@ -361,8 +364,8 @@ def test_a_call_whose_path_is_not_one_that_the_script_makes_is_not_made(path, mo
     # call goes to one of the script's own paths or it is not made.
     made = []
     monkeypatch.setattr(nightly.urllib.request, "build_opener", lambda *handlers: made.append(handlers))
-    with pytest.raises(nightly.NotSent, match="its path is not one that this script makes"):
-        nightly.github("GET", path)
+    with pytest.raises(statuses.NotSent, match="its path is not one that this script makes"):
+        statuses.github("GET", path)
     assert made == []
 
 
@@ -372,21 +375,23 @@ def test_a_call_whose_path_is_not_one_that_the_script_makes_is_not_made(path, mo
     "/repos/inferstep/ATLAS/activity?ref=refs%2Fheads%2Fsmoke%2Fa.b_c-1&per_page=5",
 ])
 def test_each_path_that_the_script_makes_is_one_that_it_takes(path):
-    assert nightly.PATHS.fullmatch(path)
+    assert statuses.PATHS.fullmatch(path)
 
 
 def test_the_script_has_one_address_of_github_and_no_way_to_give_it_another():
-    tree = ast.parse(source())
-    texts = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    # The script and the module beside it that sends the statuses, taken together.
+    sources = [source(), SCRIPT.with_name("nightly_statuses.py").read_text(encoding="utf-8")]
+    nodes = [node for text in sources for node in ast.walk(ast.parse(text))]
+    texts = [node.value for node in nodes if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     assert [text for text in texts if "api.github" in text] == ["https://api.github.com"]
-    assert nightly.GITHUB_API == "https://api.github.com"
+    assert statuses.GITHUB_API == "https://api.github.com"
     # Each call is made in one place, from that one name, and the name gets its value once.
-    (request,) = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == "urllib.request.Request"]
+    (request,) = [node for node in nodes if isinstance(node, ast.Call) and ast.unparse(node.func) == "urllib.request.Request"]
     assert ast.unparse(request.args[0]) == "f'{GITHUB_API}{path}'"
-    assert len([node for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "GITHUB_API" and isinstance(node.ctx, ast.Store)]) == 1
-    assert "urlopen" not in source()
+    assert len([node for node in nodes if isinstance(node, ast.Name) and node.id == "GITHUB_API" and isinstance(node.ctx, ast.Store)]) == 1
+    assert not [text for text in sources if "urlopen" in text]
     # The environment is read by name in one place only: what a run gives to the copy that it starts in its place.
-    assert re.findall(r"os\.environ\.\w+|os\.environ\[|getenv", source()) == ["os.environ.pop"]
+    assert re.findall(r"os\.environ\.\w+|os\.environ\[|getenv", "".join(sources)) == ["os.environ.pop"]
     assert "os.environ.pop(STARTED_AGAIN" in source()
 
 
@@ -397,7 +402,7 @@ def server(tmp_path, monkeypatch):
     with a_stand_in_for_github() as github:
         night = Night(tmp_path)
         monkeypatch.setenv("PATH", str(tmp_path / "bin"))
-        monkeypatch.setattr(nightly, "GITHUB_API", f"http://127.0.0.1:{github.port}")
+        monkeypatch.setattr(statuses, "GITHUB_API", f"http://127.0.0.1:{github.port}")
         yield night, github
 
 
@@ -419,9 +424,9 @@ def now():
 def test_an_answer_that_points_to_another_place_is_not_followed(server, moved):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
     github.plan["moved"] = moved
-    assert nightly.send_waiting(args, now()) == "not sent: GitHub answered 302; waits: 1"
+    assert statuses.send_waiting(args, now()) == "not sent: GitHub answered 302; waits: 1"
     assert github.seen[-1]["call"].startswith(moved)
     assert [call["call"] for call in github.seen if "elsewhere" in call["call"]] == []
     assert night.waits() == [to_send()]
@@ -443,7 +448,7 @@ def test_a_started_run_follows_no_answer_to_another_place_either(tmp_path):
 def test_only_a_key_file_that_nobody_but_its_owner_can_reach_is_used(tmp_path, mode, used):
     night = Night(tmp_path)
     night.key.chmod(mode)
-    assert nightly.key_fault(settings(night)) == ("" if used else OPEN)
+    assert statuses.key_fault(settings(night)) == ("" if used else OPEN)
 
 
 def test_a_key_file_that_is_open_to_the_group_is_not_used_and_the_run_goes_on(tmp_path):
@@ -468,22 +473,22 @@ def test_a_key_that_lies_in_the_folder_of_the_run_is_not_used(tmp_path):
     for place in (night.dir / "status-app.pem", night.dir / "secrets" / "status-app.pem"):
         place.write_text(KEY)
         place.chmod(0o600)
-        assert nightly.key_fault(settings(night, "--status-key", str(place))) == inside
+        assert statuses.key_fault(settings(night, "--status-key", str(place))) == inside
     # A name outside the folder that leads into it is the same file.
     (tmp_path / "a name outside").symlink_to(night.dir / "status-app.pem")
-    assert nightly.key_fault(settings(night, "--status-key", str(tmp_path / "a name outside"))) == inside
-    assert nightly.key_fault(settings(night)) == ""
+    assert statuses.key_fault(settings(night, "--status-key", str(tmp_path / "a name outside"))) == inside
+    assert statuses.key_fault(settings(night)) == ""
 
 
 def test_a_key_that_is_not_there_or_is_no_file_of_the_runs_user_is_not_used(tmp_path, monkeypatch):
     night = Night(tmp_path)
-    assert nightly.key_fault(settings(night, "--status-key", str(tmp_path / "not there.pem"))) == "no key: the file that --status-key names is not there"
-    assert nightly.key_fault(settings(night, "--status-key", str(night.key.parent))) == "the key is not used: it is not a file of the user of this run"
-    assert nightly.key_fault(settings(night, "--status-app", "")) == NO_KEY
-    assert nightly.key_fault(nightly.parse(["--dir", str(night.dir), "--status-app", APP])) == NO_KEY
-    assert nightly.key_fault(settings(night)) == ""
+    assert statuses.key_fault(settings(night, "--status-key", str(tmp_path / "not there.pem"))) == "no key: the file that --status-key names is not there"
+    assert statuses.key_fault(settings(night, "--status-key", str(night.key.parent))) == "the key is not used: it is not a file of the user of this run"
+    assert statuses.key_fault(settings(night, "--status-app", "")) == NO_KEY
+    assert statuses.key_fault(nightly.parse(["--dir", str(night.dir), "--status-app", APP])) == NO_KEY
+    assert statuses.key_fault(settings(night)) == ""
     monkeypatch.setattr(nightly.os, "getuid", lambda: night.key.stat().st_uid + 1)
-    assert nightly.key_fault(settings(night)) == "the key is not used: it is not a file of the user of this run"
+    assert statuses.key_fault(settings(night)) == "the key is not used: it is not a file of the user of this run"
 
 
 @pytest.mark.parametrize("plan, said", [
@@ -581,16 +586,16 @@ OPEN_FOLDER = ("not sent: the folder of the waiting statuses is not a folder tha
 def test_nothing_is_sent_from_a_waiting_folder_that_others_can_write_into(server, mode):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
     (night.dir / "to-send").chmod(mode)
-    assert nightly.send_waiting(args, now()) == OPEN_FOLDER
+    assert statuses.send_waiting(args, now()) == OPEN_FOLDER
     assert github.seen == []
     # Nothing of such a folder is moved either.
     assert night.waits() == [to_send()]
     assert not (night.dir / "sent").exists()
     assert not (night.dir / "not-sent").exists()
     (night.dir / "to-send").chmod(0o700)
-    assert nightly.send_waiting(args, now()) == "sent: 1"
+    assert statuses.send_waiting(args, now()) == "sent: 1"
 
 
 def test_a_waiting_folder_that_is_a_name_for_another_folder_is_not_used(server, tmp_path):
@@ -599,23 +604,23 @@ def test_a_waiting_folder_that_is_a_name_for_another_folder_is_not_used(server, 
     (tmp_path / "elsewhere").mkdir(mode=0o700)
     (tmp_path / "elsewhere" / "20261008T080003Z-server-nightly.json").write_text(json.dumps(to_send()))
     (night.dir / "to-send").symlink_to(tmp_path / "elsewhere")
-    assert nightly.send_waiting(args, now()) == OPEN_FOLDER
+    assert statuses.send_waiting(args, now()) == OPEN_FOLDER
     assert github.seen == []
     # And the status of a run is not written into it.
-    nightly.keep_for_sending(args, to_send("2" * 40), "20261009T080003Z")
+    statuses.keep_for_sending(args, to_send("2" * 40), "20261009T080003Z")
     assert len(list((tmp_path / "elsewhere").iterdir())) == 1
 
 
 def test_a_waiting_file_that_is_not_the_runs_own_is_set_aside_and_not_sent(server, tmp_path):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send("0" * 40), "20261008T080003Z")
-    nightly.keep_for_sending(args, to_send("1" * 40), "20261009T080003Z")
+    statuses.keep_for_sending(args, to_send("0" * 40), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send("1" * 40), "20261009T080003Z")
     (night.dir / "to-send" / "20261008T080003Z-server-nightly.json").chmod(0o666)
     # A name in the folder that leads to a file elsewhere.
     (tmp_path / "elsewhere.json").write_text(json.dumps(to_send("2" * 40)))
     (night.dir / "to-send" / "20261010T080003Z-server-nightly.json").symlink_to(tmp_path / "elsewhere.json")
-    assert nightly.send_waiting(args, now()) == "sent: 1; set aside after 14 days or as not written by this script: 2"
+    assert statuses.send_waiting(args, now()) == "sent: 1; set aside after 14 days or as not written by this script: 2"
     assert [call["call"] for call in github.seen] == three_calls("1" * 40)
 
 
@@ -624,10 +629,10 @@ def test_the_folders_of_the_statuses_are_made_for_the_user_of_the_run_alone(serv
     args = settings(night)
     before = os.umask(0o002)
     try:
-        nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
-        assert nightly.send_waiting(args, now()) == "sent: 1"
+        statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
+        assert statuses.send_waiting(args, now()) == "sent: 1"
         (night.dir / "to-send" / "x.json").write_text("this is not a status")
-        assert nightly.send_waiting(args, now()) == "set aside after 14 days or as not written by this script: 1"
+        assert statuses.send_waiting(args, now()) == "set aside after 14 days or as not written by this script: 1"
     finally:
         os.umask(before)
     for folder in ("to-send", "sent", "not-sent"):
@@ -655,16 +660,16 @@ def test_when_github_refuses_one_status_the_others_are_not_tried_in_that_look_an
     night, github = server
     args = settings(night)
     for n in range(3):
-        nightly.keep_for_sending(args, to_send(str(n) * 40), f"2026100{n + 1}T080003Z")
+        statuses.keep_for_sending(args, to_send(str(n) * 40), f"2026100{n + 1}T080003Z")
     github.plan["refuse"] = {"/statuses/": 500}
-    assert nightly.send_waiting(args, now()) == "not sent: GitHub answered 500; waits: 3"
+    assert statuses.send_waiting(args, now()) == "not sent: GitHub answered 500; waits: 3"
     assert [call["call"] for call in github.seen] == three_calls("0" * 40)
     github.plan["refuse"] = {}
     github.seen.clear()
-    assert nightly.send_waiting(args, now()) == "sent: 3"
+    assert statuses.send_waiting(args, now()) == "sent: 3"
     # A token of its own for each send.
     assert [call["call"] for call in github.seen] == three_calls("0" * 40) + three_calls("1" * 40) + three_calls("2" * 40)
-    assert nightly.send_waiting(args, now()) == "nothing waits"
+    assert statuses.send_waiting(args, now()) == "nothing waits"
     assert len(github.seen) == 9
     assert [status["sha"][0] for status in night.waits("sent")] == ["0", "1", "2"]
 
@@ -672,15 +677,15 @@ def test_when_github_refuses_one_status_the_others_are_not_tried_in_that_look_an
 def test_a_status_that_has_waited_for_fourteen_days_is_set_aside_and_tried_no_more(server):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
     github.plan["refuse"] = {"/installation": 401}
-    assert nightly.send_waiting(args, now() + dt.timedelta(days=13, hours=23)) == "not sent: GitHub answered 401; waits: 1"
-    assert nightly.send_waiting(args, now() + dt.timedelta(days=14, hours=1)) == "set aside after 14 days or as not written by this script: 1"
+    assert statuses.send_waiting(args, now() + dt.timedelta(days=13, hours=23)) == "not sent: GitHub answered 401; waits: 1"
+    assert statuses.send_waiting(args, now() + dt.timedelta(days=14, hours=1)) == "set aside after 14 days or as not written by this script: 1"
     assert len(github.seen) == 1
     assert night.waits() == []
     assert night.waits("sent") == []
     assert night.waits("not-sent") == [to_send()]
-    assert nightly.send_waiting(args, now()) == "nothing waits"
+    assert statuses.send_waiting(args, now()) == "nothing waits"
 
 
 @pytest.mark.parametrize("held", [
@@ -694,7 +699,7 @@ def test_a_waiting_file_that_this_script_did_not_write_is_set_aside_and_never_se
     args = settings(night)
     (night.dir / "to-send").mkdir()
     (night.dir / "to-send" / "20261008T080003Z-server-nightly.json").write_text(held)
-    assert nightly.send_waiting(args, now()) == "set aside after 14 days or as not written by this script: 1"
+    assert statuses.send_waiting(args, now()) == "set aside after 14 days or as not written by this script: 1"
     assert github.seen == []
     assert list((night.dir / "to-send").iterdir()) == []
     assert [path.read_text() for path in (night.dir / "not-sent").iterdir()] == [held]
@@ -703,8 +708,8 @@ def test_a_waiting_file_that_this_script_did_not_write_is_set_aside_and_never_se
 def test_only_the_name_the_state_and_the_text_of_a_waiting_status_are_sent(server):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(target_url="https://example.invalid/a-page", more="x"), "20261008T080003Z")
-    assert nightly.send_waiting(args, now()) == "sent: 1"
+    statuses.keep_for_sending(args, to_send(target_url="https://example.invalid/a-page", more="x"), "20261008T080003Z")
+    assert statuses.send_waiting(args, now()) == "sent: 1"
     assert github.seen[2]["call"] == f"POST {REPO}/statuses/{HEAD}"
     assert github.seen[2]["body"] == {"state": "success", "context": "server/nightly", "description": NIGHT.format(started=A_START)}
 
@@ -714,9 +719,9 @@ def test_only_the_name_the_state_and_the_text_of_a_waiting_status_are_sent(serve
 def test_an_answer_of_another_shape_makes_no_token_and_the_status_waits(server, answers):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
     github.plan.update(answers)
-    assert nightly.send_waiting(args, now()) == "not sent: GitHub gave an answer of another shape; waits: 1"
+    assert statuses.send_waiting(args, now()) == "not sent: GitHub gave an answer of another shape; waits: 1"
     assert [call["call"] for call in github.seen if "/statuses/" in call["call"]] == []
 
 
@@ -724,17 +729,17 @@ def test_an_answer_of_another_shape_makes_no_token_and_the_status_waits(server, 
 def test_a_status_that_github_took_is_sent_whatever_the_answer_looks_like(server, written):
     night, github = server
     args = settings(night)
-    nightly.keep_for_sending(args, to_send(), "20261008T080003Z")
+    statuses.keep_for_sending(args, to_send(), "20261008T080003Z")
     github.plan["written"] = written
-    assert nightly.send_waiting(args, now()) == "sent: 1"
-    assert nightly.send_waiting(args, now()) == "nothing waits"
+    assert statuses.send_waiting(args, now()) == "sent: 1"
+    assert statuses.send_waiting(args, now()) == "nothing waits"
 
 
 @pytest.mark.parametrize("given, names", [(["--status-writer", "555"], "555"), (["--status-writer", "0"], "none")])
 def test_a_send_says_which_account_wrote_the_status_when_the_settings_name_another(server, given, names):
     night, github = server
-    nightly.keep_for_sending(settings(night), to_send(), "20261008T080003Z")
-    assert nightly.send_waiting(settings(night, *given), now()) == (
+    statuses.keep_for_sending(settings(night), to_send(), "20261008T080003Z")
+    assert statuses.send_waiting(settings(night, *given), now()) == (
         f"sent: 1; the statuses of this key are written by the account {WRITER}, and --status-writer names {names}. "
         f"Fix: give --status-writer {WRITER}")
 
@@ -1457,9 +1462,9 @@ def test_the_gates_page_says_what_the_script_does_with_its_own_names_and_numbers
     timer = page.split("### The timer", 1)[1].split("### The smoke run of one commit", 1)[0]
     for name in nightly.STATUS.values():
         assert f"`{name}`" in result
-    for folder in (nightly.WAITING, nightly.SENT, nightly.GIVEN_UP):
+    for folder in (statuses.WAITING, statuses.SENT, statuses.GIVEN_UP):
         assert f"`{folder}`" in result
-    assert f"After {nightly.KEEP_TRYING_DAYS} days" in result
+    assert f"After {statuses.KEEP_TRYING_DAYS} days" in result
     defaults = nightly.parse(["--dir", "/not-used"])
     assert f"Without it the bound is {defaults.smokes_a_day}." in timer
     assert f"Its status is 0 when\n  a run is due and {nightly.NOTHING_DUE} when none is" in timer

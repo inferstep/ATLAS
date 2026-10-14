@@ -343,7 +343,8 @@ def test_the_gates_page_gives_the_steps_on_the_server_with_the_names_of_the_file
     # The tools that the script and the look start by their name are on the path of a user unit, which the page names.
     assert "What a look needs on its path: `docker`, `git` and `openssl`." in steps
     assert "The path of a look is the user unit's own, not the\npath of a login shell" in steps
-    source = (ROOT / "scripts" / "nightly_run.py").read_text(encoding="utf-8") + SCRIPT.read_text(encoding="utf-8")
+    source = "".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in ("nightly_run.py", "nightly_statuses.py"))
+    source += SCRIPT.read_text(encoding="utf-8")
     for tool in ("docker", "git", "openssl"):
         assert re.search(rf'\["{tool}"|^\s*{tool} |\$\({tool} ', source, re.M), tool
 

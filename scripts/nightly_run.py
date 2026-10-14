@@ -104,17 +104,14 @@ found nothing due.
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import datetime as dt
 import fcntl
-import http.client
 import importlib.util
 import json
 import os
 import re
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -138,6 +135,7 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/server/": "the files of the timer, which run on the server itself",
             "scripts/tests_counted.py": "the judge of the tests, which the script loads on the server itself",
             "scripts/nightly_images.py": "the images of a run, which the script loads on the server itself",
+            "scripts/nightly_statuses.py": "the sending of the statuses, which the script loads on the server itself",
             "scripts/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
             "scripts/code_quality.py": "a module of the driver, which runs on the server itself",
             "scripts/reliability_report.py": "a module of the driver, which runs on the server itself",
@@ -165,13 +163,6 @@ PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 1
 NOT_RUN = "not run: the card was in use"
 STALE = "not run: the images are not of the head of the branch yet"
 REPO_URL, BRANCH = "https://github.com/inferstep/ATLAS.git", "dev"
-REPOSITORY, GITHUB_API = "inferstep/ATLAS", "https://api.github.com"
-# The status that a run writes on the commit that ran, by the kind of run. Each name starts with `server/`: no
-# required check has such a name.
-STATUS = {"night": "server/nightly", "one commit": "server/smoke"}
-# Where a status waits until it is sent, where it lies when it is sent, and where one goes that was tried for too
-# long. All three are folders of the run's own folder.
-WAITING, SENT, GIVEN_UP, KEEP_TRYING_DAYS = "to-send", "sent", "not-sent", 14
 # The file of the run's folder that holds the time when a look found a process on the card with no lock, and for how
 # many minutes after it the looks start nothing.
 CARD_HELD, QUIET_MINUTES = "card-held-with-no-lock", 60
@@ -192,9 +183,11 @@ STAMP = "%Y%m%dT%H%M%SZ"
 NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the run, the run started the new copy in its "
                            "place, and that copy left no report")
 # The judge of a run of tests that must all run, and the list of such tests: a file beside this one. And the file
-# of the images of a run: the run's own names for them, and the room that they need.
+# of the images of a run: the run's own names for them, and the room that they need. And the file that keeps and
+# sends the statuses of a run on GitHub.
 JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
 IMAGES_FILE = JUDGE.with_name("nightly_images.py")
+STATUSES_FILE = JUDGE.with_name("nightly_statuses.py")
 
 
 def load_beside(path: Path, name: str):
@@ -207,10 +200,12 @@ def load_beside(path: Path, name: str):
 
 counted, images = load_beside(JUDGE, "atlas_tests_counted"), load_beside(IMAGES_FILE, "atlas_nightly_images")
 IMAGES, REGISTRY, TAG, REVISION, OWN_IMAGES = images.IMAGES, images.REGISTRY, images.TAG, images.REVISION, images.OWN
+statuses = load_beside(STATUSES_FILE, "atlas_nightly_statuses")
+REPOSITORY, STATUS, NotSent, github = statuses.REPOSITORY, statuses.STATUS, statuses.NotSent, statuses.github
 # The tests of the run: the group that needs a real model.
 TESTS = counted.GROUPS["model"]
-# This file and the two beside it as Python read them when the run started.
-AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE)}
+# This file and the three beside it as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -342,8 +337,8 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file or one of the two beside it: the run was started from the tree,
-    and one of the three holds other bytes now."""
+    """Whether taking the head changed this very file or one of the three beside it: the run was started from the
+    tree, and one of the four holds other bytes now."""
     own = Path(__file__).resolve()
     try:
         return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
@@ -911,47 +906,6 @@ def on_the_card(args, report: dict, folder: Path) -> None:
 
 # --- the result on GitHub ----------------------------------------------------------------------------------------
 
-class NotSent(Exception):
-    """GitHub could not be asked, or a status could not be sent now. The words say why, and they are fixed words: no
-    path, no name of a machine and nothing that a tool printed."""
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    """An answer that points to another address is not followed: the token would go there too."""
-
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-# The paths of the calls that this script makes. A value from a file, from an argument or from an answer goes into a
-# path only as letters, digits and the few signs of a commit id, a number or an encoded name of a branch.
-PATHS = re.compile(rf"/repos/{re.escape(REPOSITORY)}/(?:installation|statuses/[0-9a-f]{{40}}|commits/[0-9a-f]{{40}}/(?:statuses|pulls)\?per_page=100"
-                   r"|activity\?ref=[A-Za-z0-9._%-]+&per_page=5)|/app/installations/[0-9]+/access_tokens")
-
-
-def github(method: str, path: str, bearer: str = "", body: dict | None = None):
-    """One call to GitHub's own address, and the decoded answer. A call that reads sends no key: the repository is public."""
-    if not PATHS.fullmatch(path):
-        raise NotSent("the call was not made: its path is not one that this script makes")
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "atlas-nightly",
-               **({"Authorization": f"Bearer {bearer}"} if bearer else {})}
-    request = urllib.request.Request(f"{GITHUB_API}{path}", data=json.dumps(body).encode() if body is not None else None,
-                                     method=method, headers=headers)
-    try:
-        # No proxy of the environment either: no variable changes where the call goes.
-        with urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({})).open(request, timeout=30) as response:
-            answer = response.read()
-    except urllib.error.HTTPError as error:
-        raise NotSent(f"GitHub answered {error.code}") from None
-    except (http.client.HTTPException, OSError):
-        # A URLError and a timeout are an OSError too.
-        raise NotSent("GitHub could not be reached") from None
-    try:
-        return json.loads(answer)
-    except ValueError:
-        return None
-
-
 def counts_hold(report: dict) -> bool:
     """Whether the report holds the numbers of a run that passed: each session there with no harness defect and, for
     a night, every expected test collected and passed, none failed and none skipped."""
@@ -1010,166 +964,6 @@ def numbers_of(report: dict) -> list:
     return said + [f"{passed} of {expected} tests passed" if whole else f"tests: {passed} passed, {failed} failed, {skipped} skipped of {expected}"]
 
 
-def key_fault(args) -> str:
-    """Why the key cannot be used, or nothing. It is a file of the user of this run that nobody else can read, and
-    it lies outside the folder of the run, so no container of the stack can have it."""
-    if args.status_key is None or not args.status_app:
-        return "no key: the run was started without --status-key or without --status-app"
-    try:
-        about = args.status_key.stat()
-    except OSError:
-        return "no key: the file that --status-key names is not there"
-    if not stat.S_ISREG(about.st_mode) or about.st_uid != os.getuid():
-        return "the key is not used: it is not a file of the user of this run"
-    if about.st_mode & 0o077:
-        return "the key is not used: its file is open to the group or to others. Fix: chmod 600 on that file"
-    if args.dir.resolve() in args.status_key.resolve().parents:
-        return ("the key is not used: its file lies in the folder of the run, which the containers of the stack can "
-                "read. Fix: move it out of that folder")
-    return ""
-
-
-def base64url(raw: bytes) -> bytes:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=")
-
-
-def token_for_statuses(args) -> str:
-    """A token of the app, made for one send: for this one repository and for statuses only. It is kept nowhere.
-
-    openssl signs with the key and gets the key as the path of its file. This script never reads the key.
-    """
-    now = int(time.time())
-    unsigned = b".".join(base64url(json.dumps(part).encode()) for part in (
-        {"alg": "RS256", "typ": "JWT"}, {"iat": now - 60, "exp": now + 300, "iss": str(args.status_app)}))
-    try:
-        done = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(args.status_key)], input=unsigned,
-                              capture_output=True, timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        raise NotSent("openssl could not be started, or did not end") from None
-    if done.returncode != 0 or not done.stdout:
-        raise NotSent(f"openssl could not sign with the key (status {done.returncode})")
-    proof = (unsigned + b"." + base64url(done.stdout)).decode()
-    try:
-        installation = github("GET", f"/repos/{REPOSITORY}/installation", proof)
-        token = github("POST", f"/app/installations/{int(installation['id'])}/access_tokens", proof,
-                       {"repositories": [REPOSITORY.split("/")[1]], "permissions": {"statuses": "write"}})["token"]
-    except (KeyError, TypeError, ValueError):
-        token = None
-    if not isinstance(token, str) or not token:
-        raise NotSent("GitHub gave an answer of another shape")
-    return token
-
-
-def is_ours(status) -> bool:
-    """Whether a waiting file holds a status as this script writes it. Another file is not sent."""
-    return (isinstance(status, dict) and status.get("context") in STATUS.values() and status.get("state") in ("success", "failure")
-            and bool(re.fullmatch(r"[0-9a-f]{40}", str(status.get("sha")))) and isinstance(status.get("description"), str)
-            and len(status["description"]) <= 140)
-
-
-def not_the_runs_own(about: os.stat_result) -> bool:
-    """Whether a file or a folder is not the run's own: another user owns it, or the group or others can write it."""
-    return about.st_uid != os.getuid() or bool(about.st_mode & 0o022)
-
-
-def folder_fault(args) -> str:
-    """Why the folder of the waiting statuses cannot be used, or nothing. As for the key: it is a folder of the user
-    of this run, and nobody else can write into it. What lies in another folder is not sent."""
-    try:
-        about = (args.dir / WAITING).lstat()
-    except OSError:
-        return ""
-    if not stat.S_ISDIR(about.st_mode) or not_the_runs_own(about):
-        return ("the folder of the waiting statuses is not a folder that only the user of this run can write. Fix: "
-                "look at what lies in it; then chmod go-w on that folder")
-    return ""
-
-
-def keep_for_sending(args, status: dict, stamp: str) -> None:
-    (args.dir / WAITING).mkdir(mode=0o700, exist_ok=True)
-    if folder_fault(args):
-        return
-    place = args.dir / WAITING / f"{stamp}-{status['context'].replace('/', '-')}.json"
-    # The file is made for the user of the run alone, whatever the settings of the server give a new file.
-    with os.fdopen(os.open(place, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as out:
-        out.write(json.dumps(status, indent=2) + "\n")
-
-
-def set_aside(args, path: Path, folder: str) -> None:
-    (args.dir / folder).mkdir(mode=0o700, exist_ok=True)
-    path.replace(args.dir / folder / path.name)
-
-
-def waiting_status(path: Path, now: dt.datetime) -> dict | None:
-    """The status that a waiting file holds, or None when the file is not one to send: this script did not write it,
-    it is not a file of the run's own, or it has waited for longer than KEEP_TRYING_DAYS."""
-    try:
-        about = path.lstat()
-        status = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not stat.S_ISREG(about.st_mode) or not_the_runs_own(about):
-        return None
-    too_old = now.timestamp() - about.st_mtime > KEEP_TRYING_DAYS * 86400
-    return status if is_ours(status) and not too_old else None
-
-
-def send_one(args, status: dict) -> str:
-    """Send one status, with a token made for it. Gives a note when the account that wrote it is not the one that
-    the settings name, and else nothing. Only the name, the state and the text of the status are sent."""
-    made = github("POST", f"/repos/{REPOSITORY}/statuses/{urllib.parse.quote(str(status['sha']), safe='')}", token_for_statuses(args),
-                  {key: status[key] for key in ("state", "context", "description")})
-    creator = made.get("creator") if isinstance(made, dict) else None
-    writer = creator.get("id") if isinstance(creator, dict) else None
-    if not isinstance(writer, int) or writer == args.status_writer:
-        return ""
-    return (f"; the statuses of this key are written by the account {writer}, and --status-writer names "
-            f"{args.status_writer or 'none'}. Fix: give --status-writer {writer}")
-
-
-def send_waiting(args, now: dt.datetime) -> str:
-    """Try once to send each status that waits. Gives what happened, in fixed words.
-
-    A status that was sent is moved to the folder of the sent ones, so it is sent once. One that has waited for
-    longer than KEEP_TRYING_DAYS, or that this script did not write, is moved aside and tried no more. When GitHub
-    does not answer, the others wait for the next start too.
-    """
-    waiting = sorted((args.dir / WAITING).glob("*.json")) if (args.dir / WAITING).is_dir() else []
-    if folder_fault(args):
-        # Nothing of such a folder is sent, and nothing of it is moved.
-        return f"not sent: {folder_fault(args)}; the status of a run is then in its report only"
-    fault, sent, aside, other = key_fault(args), 0, 0, ""
-    for path in waiting:
-        status = waiting_status(path, now)
-        if status is None:
-            set_aside(args, path, GIVEN_UP)
-            aside += 1
-        elif not fault:
-            try:
-                other = send_one(args, status) or other
-            except NotSent as reason:
-                fault = str(reason)
-                continue
-            set_aside(args, path, SENT)
-            sent += 1
-    left = len(waiting) - sent - aside
-    said = [f"sent: {sent}"] if sent else []
-    said += [f"not sent: {fault}; waits: {left}"] if left else []
-    said += [f"set aside after {KEEP_TRYING_DAYS} days or as not written by this script: {aside}"] if aside else []
-    return ("; ".join(said) or "nothing waits") + other
-
-
-def send_what_waits(args, status: dict | None = None, stamp: str = "") -> str:
-    """Keep the status of a run for sending, and try once to send each status that waits. Gives what happened.
-
-    A fault of this step itself is given as words too: sending never stops a run, its report or a look of the timer.
-    """
-    try:
-        if status:
-            keep_for_sending(args, status, stamp)
-        return send_waiting(args, dt.datetime.now(dt.timezone.utc))
-    except Exception as error:  # the caller says so, and goes on
-        return f"not sent: an error of the sending step itself ({type(error).__name__})"
 
 
 def to_github(args, report: dict, folder: Path, stamp: str) -> None:
@@ -1182,7 +976,7 @@ def to_github(args, report: dict, folder: Path, stamp: str) -> None:
     except Exception as error:  # a report of another shape gets no status, and is written all the same
         status, report["status"] = None, f"no status: an error of the run itself ({type(error).__name__})"
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    report["sent"] = send_what_waits(args, status, stamp)
+    report["sent"] = statuses.send_what_waits(args, status, stamp)
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1406,7 +1200,7 @@ def one_look(args, started: dt.datetime) -> tuple:
     """One look of the timer: send what waits, and say what is due. Gives the commit that the look chose, if any,
     and the status to end with now, or None when a run starts."""
     # What waits goes out first: a run can take long. A look with nothing to run leaves no report.
-    print(f"tick: statuses: {send_what_waits(args)}")
+    print(f"tick: statuses: {statuses.send_what_waits(args)}")
     mode, chosen, why = what_is_due(args, started)
     print(f"tick: {why}")
     if args.look or not mode:

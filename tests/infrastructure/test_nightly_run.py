@@ -248,7 +248,7 @@ class Night:
             (tree / "scripts").mkdir()
             (tree / "docker-compose.yml").write_text("services: {}\n")
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
-            for beside in ("tests_counted.py", "nightly_images.py"):
+            for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py"):
                 shutil.copy(SCRIPT.with_name(beside), tree / "scripts" / beside)
         self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 32}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}

@@ -67,7 +67,7 @@ def test_the_unit_of_the_servers_timer_names_the_same_account_and_the_app_by_its
 
 
 def test_the_repository_and_the_address_are_the_same_for_the_writer_and_the_reader():
-    assert (nightly.REPOSITORY, nightly.GITHUB_API) == (smoke.REPOSITORY, smoke.GITHUB_API) == ("inferstep/ATLAS", "https://api.github.com")
+    assert (nightly.REPOSITORY, nightly.statuses.GITHUB_API) == (smoke.REPOSITORY, smoke.GITHUB_API) == ("inferstep/ATLAS", "https://api.github.com")
 
 
 def test_the_smoke_check_prints_the_text_of_each_status_of_the_server_as_it_is():

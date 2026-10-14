@@ -706,9 +706,10 @@ it off (the timer is disabled).
 Each night it:
 
 1. takes the head of `dev`. When that changes the script itself or one of
-   the two files beside it (`scripts/tests_counted.py`, the judge, and
-   `scripts/nightly_images.py`, the images), the new copy does the run, so a
-   repair of one of them acts in the night after its merge;
+   the three files beside it (`scripts/tests_counted.py`, the judge,
+   `scripts/nightly_images.py`, the images, and `scripts/nightly_statuses.py`,
+   the sending of the statuses), the new copy does the run, so a repair of
+   one of them acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
    killed leaves its stack, and Docker starts that stack again;
 3. takes the `dev` images of the registry under names of its own. It reads
