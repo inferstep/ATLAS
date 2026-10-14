@@ -732,7 +732,10 @@ Each night it:
 8. asks the services again, and writes one report: the commit, the digest
    of each image, what the services said, the seconds of each task, and the
    tests collected, passed, failed and skipped;
-9. stops its stack, also when a step failed or the time ran out.
+9. keeps the last 200 lines of each service's log in its report folder
+   (`<service>.log`), and stops its stack; both also when a step failed or
+   the time ran out. A log that cannot be had is one line of the report
+   (`logs_not_saved`) and changes neither the result nor the exit status.
 
 Steps 1 to 3 need no card. They come before the lock, and the time limit of
 30 minutes does not count them.

@@ -146,6 +146,8 @@ if args[:2] == ["image", "inspect"]:
     built = this_time(rounds, lambda c: c["args"] == args)
     print(json.dumps([{"RepoDigests": [args[2].split(":")[0] + "@sha256:" + name.encode().hex()],
                        "Config": {"Labels": {"org.opencontainers.image.revision": built.get(name, head_now())}}}]))
+if args[0] == "compose" and "logs" in args:
+    print("the last lines of the log of " + args[-1])
 if "exec" in args:
     url = args[-1]
     said = plan["answers"][("proxy" if ":8090" in url else "lens") + url[url.rindex("/"):]]
@@ -312,12 +314,14 @@ class Night:
         return [json.loads(path.read_text()) for path in sorted((self.dir / folder).glob("*.json"))]
 
     def did(self):
-        """What was called, in order, in a few words each. The questions of one round to the services are one step."""
+        """What was called, in order, in a few words each. The questions of one round to the services are one step, and
+        so are the logs of the services."""
         short = []
         for call in self.calls():
             args = call["args"]
             if call["tool"] == "docker" and args[0] == "compose":
-                step = "ask" if "exec" in args else "stack " + next(word for word in args if word in ("up", "down"))
+                step = "ask" if "exec" in args else "logs" if "logs" in args else "stack " + next(
+                    word for word in args if word in ("up", "down"))
             elif call["tool"] == "docker":
                 step = {"ps": "look", "buildx": "image digest", "pull": "image pull", "tag": "image name", "build": "image build",
                         "image": "image " + args[1]}[args[0]]
@@ -329,7 +333,7 @@ class Night:
                 step = "sign"
             else:
                 step = "driver" if "e2e-reliability" in args[0] else "tests"
-            if not (step == "ask" and short and short[-1] == "ask"):
+            if not (step in ("ask", "logs") and short and short[-1] == step):
                 short.append(step)
         return short
 
@@ -338,7 +342,7 @@ ONE_HEAD = ["git fetch", "git checkout", "git rev-parse"]
 # For each image: the registry is asked for the digest of the tag, the image is pulled by that digest, it gets the
 # run's own name, and the commit that it was built from is read.
 IMAGES = ["image digest", "image pull", "image name", "image inspect"] * 5
-WITH_THE_CARD = ["card", "stack up", "ask", "driver", "tests", "ask", "stack down"]
+WITH_THE_CARD = ["card", "stack up", "ask", "driver", "tests", "ask", "logs", "stack down"]
 
 
 def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(tmp_path):
@@ -583,7 +587,7 @@ def test_a_second_run_does_not_stop_the_stack_of_a_run_that_is_in_its_middle(tmp
     finally:
         first.communicate(timeout=60)
     assert night.report["result"] == "passed"
-    assert night.did()[-3:] == ["tests", "ask", "stack down"]
+    assert night.did()[-4:] == ["tests", "ask", "logs", "stack down"]
 
 
 def test_only_one_run_of_a_folder_goes_at_a_time(tmp_path):
@@ -615,7 +619,7 @@ def test_a_step_that_fails_ends_the_run_with_its_reason_and_the_stack_is_stopped
     assert night.done.returncode == 1
     assert night.report["result"].startswith(says), night.report["result"]
     did = night.did()
-    before_the_stop = [step for step in did if step != "stack down"]
+    before_the_stop = [step for step in did if step not in ("logs", "stack down")]
     assert before_the_stop[-1] == last_step, did
     if "stack up" in did:
         assert did[-1] == "stack down" and did.count("stack down") == 1 and night.report["stack_stopped"] == "yes"
@@ -657,7 +661,7 @@ def test_a_run_that_measured_faults_fails_and_names_each_fault(tmp_path):
     assert night.done.returncode == 1
     assert night.report["result"] == ("failed: add_function: 1 defect(s) of the harness; 13 tests were collected, and there "
                                       "are 32; 2 test(s) failed")
-    assert night.did()[-4:] == ["driver", "tests", "ask", "stack down"]
+    assert night.did()[-5:] == ["driver", "tests", "ask", "logs", "stack down"]
 
 
 def test_a_night_with_failed_tests_names_them(tmp_path):
@@ -729,6 +733,27 @@ def test_an_error_of_the_run_itself_is_in_the_report_and_the_stack_is_stopped(tm
     assert night.done.returncode == 1
     assert night.report["result"].startswith("failed: an error of the run itself, in the step: the smoke run: KeyError(")
     assert night.did()[-1] == "stack down" and night.report["stack_stopped"] == "yes"
+
+
+@pytest.mark.parametrize("fail, kept", [
+    pytest.param([], True, id="each service's log is kept"),
+    pytest.param(["logs --no-color"], False, id="a compose that gives no logs changes nothing else"),
+])
+def test_before_the_stack_is_stopped_the_log_of_each_service_is_kept_in_the_report_folder(tmp_path, fail, kept):
+    night = Night(tmp_path, fail=fail).run()
+    assert night.done.returncode == 0, night.done.stdout + night.done.stderr
+    assert night.report["result"] == "passed" and night.report["stack_stopped"] == "yes"
+    assert night.did()[-2:] == ["logs", "stack down"]
+    asked = [call["args"][call["args"].index("logs"):] for call in night.calls() if "logs" in call["args"]]
+    assert asked == [["logs", "--no-color", "--tail", "200", service] for service in nightly.IMAGES]
+    (folder,) = night.dir.glob("reports/*")
+    if kept:
+        assert {service: (folder / f"{service}.log").read_text() for service in nightly.IMAGES} == {
+            service: f"the last lines of the log of {service}\n" for service in nightly.IMAGES}
+        assert "logs_not_saved" not in night.report
+    else:
+        assert [service for service in nightly.IMAGES if (folder / f"{service}.log").exists()] == []
+        assert night.report["logs_not_saved"] == [f"{service}: status 1" for service in nightly.IMAGES]
 
 
 def test_a_stack_that_could_not_be_stopped_fails_the_run_and_the_result_says_so_first(tmp_path):
@@ -847,7 +872,7 @@ def test_a_service_that_is_not_whole_after_the_start_fails_the_run_and_no_sessio
     assert night.done.returncode == 1
     assert night.report["result"] == "failed: a service was not whole when the stack had started: " + says
     did = night.did()
-    assert did[-3:] == ["stack up", "ask", "stack down"] and "driver" not in did and "tests" not in did
+    assert did[-4:] == ["stack up", "ask", "logs", "stack down"] and "driver" not in did and "tests" not in did
     assert set(night.report["services"]["at the start"]) == set(nightly.QUESTIONS)
 
 
@@ -863,7 +888,7 @@ def test_a_service_that_is_not_whole_at_the_end_fails_the_run_and_the_result_nam
     night = Night(tmp_path, answers={"proxy/ready": [WHOLE["proxy/ready"], proxy_says(v3=False)]}).run()
     assert night.done.returncode == 1
     assert night.report["result"] == "failed: at the end of the run the proxy says that v3-service is not ready"
-    assert night.did()[-4:] == ["driver", "tests", "ask", "stack down"]
+    assert night.did()[-5:] == ["driver", "tests", "ask", "logs", "stack down"]
     assert night.report["not_whole_at_the_end"] == ["the proxy says that v3-service is not ready"]
 
 

@@ -78,7 +78,7 @@ ON_DEV = {
 SHORT = {"atlas-llama": "the model server", "atlas-lens": "the lens", "atlas-v3": "v3-service", "atlas-sandbox": "the sandbox",
          "atlas-proxy": "the proxy"}
 NOT_BUILT = ["pull the model server", "pull the lens", "pull v3-service", "pull the sandbox", "pull the proxy"]
-SESSIONS = ["card", "stack up", "ask", "driver", "ask", "stack down"]
+SESSIONS = ["card", "stack up", "ask", "driver", "ask", "logs", "stack down"]
 # The mark of the commit, the mark of the head of `dev`, and the look for a stack that an earlier run left.
 START = ["mark", "mark", "look"]
 
@@ -172,7 +172,8 @@ class OneCommit(base.Night):
             args = call["args"]
             image = SHORT.get(next((word.split("/")[-1].split(":")[0].split("@")[0] for word in args if "/atlas-" in word), ""), "")
             if call["tool"] == "docker" and args[0] == "compose":
-                step = "ask" if "exec" in args else "stack " + next(word for word in args if word in ("up", "down"))
+                step = "ask" if "exec" in args else "logs" if "logs" in args else "stack " + next(
+                    word for word in args if word in ("up", "down"))
             elif call["tool"] == "docker" and (args[:2] == ["image", "inspect"] or args[0] in ("buildx", "tag")):
                 # The reading of an image, the registry's digest of a tag, and the run's own name for a pulled
                 # image are not steps of this list: tests/infrastructure/test_nightly_images.py holds them.
@@ -183,7 +184,7 @@ class OneCommit(base.Night):
                 step = "card"
             else:
                 step = {"scripts/e2e-reliability.py": "driver", "scripts/smoke_result.py": "mark"}.get(args[0], "tests")
-            if not (step == "ask" and short and short[-1] == "ask"):
+            if not (step in ("ask", "logs") and short and short[-1] == step):
                 short.append(step)
         return short
 

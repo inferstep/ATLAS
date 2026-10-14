@@ -23,7 +23,9 @@ One run, started by a timer on the development server, in a folder of its own
      to be collected, to pass, and not to be skipped;
   8. asks the services again, and writes one report file,
      <dir>/reports/<start time>/report.json;
-  9. stops its stack. Always: also when a step failed or the time ran out.
+  9. keeps the last 200 lines of each service's log in the report folder,
+     and stops its stack. Always: also when a step failed or the time ran
+     out. A log that cannot be had changes nothing but a line of the report.
 
 Steps 1 to 3 need no card. They come before the lock, and the time limit of
 the run does not count them: each of their commands has a limit of its own.
@@ -524,6 +526,23 @@ def stop_stack(args, report: dict) -> None:
         report["result"] = f"failed: the stack was not stopped ({report['stack_stopped'][4:]}); before that: {report.get('result')}"
 
 
+def save_logs(args, report: dict, folder: Path) -> None:
+    """Keep the last lines of each service's log in the report folder: the stop that follows removes them. Best effort:
+    a log that cannot be had is a line in the report, and the run's result and status stay as they are."""
+    if not (args.dir / "run.env").is_file() or not (args.dir / "tree" / "docker-compose.yml").is_file():
+        return
+    for service in IMAGES:
+        try:
+            done = command([*compose(args), "logs", "--no-color", "--tail", "200", service], 60)
+            if done.returncode == 0:
+                (folder / f"{service}.log").write_text(done.stdout, encoding="utf-8")
+            else:
+                report.setdefault("logs_not_saved", []).append(f"{service}: status {done.returncode}")
+        except Exception as error:  # a stop, a time-out or a full disk: the stack still has to be stopped next
+            report.setdefault("logs_not_saved", []).append(f"{service}: {error!r}; the services after it were not asked")
+            return
+
+
 def read_answer(printed: str) -> dict:
     """The answer of a service from what curl printed: the body, and the status on the last line.
 
@@ -906,6 +925,7 @@ def on_the_card(args, report: dict, folder: Path) -> None:
                 with_the_card(args, report, folder)
                 report["result"] = judge(report)
         finally:
+            save_logs(args, report, folder)
             stop_stack(args, report)
 
 
