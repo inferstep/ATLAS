@@ -88,6 +88,10 @@ and can still change it in a year.
   between rows.
 - **A failure names the input, the result and what was wanted**, so that
   nobody has to run the test again to see what went wrong.
+- **Writing the inputs out in each test is right**, also when two tests
+  then look alike: the reader sees them without opening another place. Some
+  repetition is the price of a test that says everything in itself, and it
+  is worth it.
 - **A new helper only when it removes real repetition**, and only when the
   test still reads from top to bottom. A helper sets things up.
 - **No check is hidden in a helper.** The comparison stands in the test.
