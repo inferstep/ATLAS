@@ -77,7 +77,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 | `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. |
 | `bypass_v3` | bool | `false` | Optional. Disables V3 orchestration for the turn. Used by the TUI's `/demo` split-pane baseline. |
 | `disable_fresh_slot` | bool | `false` | Optional. Keeps the pre-warmed KV-cache prefix instead of requesting a fresh slot. Used by `/demo`. |
-| `sandbox_subdir` | string | `""` | Optional. An omitted value uses the whole workspace. A single bare directory name (no path separators, and neither `.` nor `..`) confines the turn to that subdirectory; `/demo` uses one per pane so concurrent sessions don't clobber each other's files. Any other value is HTTP 400 `invalid_input` with no turn. |
+| `sandbox_subdir` | string | `""` | Optional. An omitted value uses the whole workspace. A bare directory name of at most 64 characters (ASCII letters, digits, `.`, `_`, and `-`, and neither `.` nor `..`) confines the turn to that subdirectory; `/demo` uses one per pane so concurrent sessions don't clobber each other's files. Any other value is HTTP 400 `invalid_input` with no turn. |
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
 

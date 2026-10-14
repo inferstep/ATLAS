@@ -2777,17 +2777,11 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
 
-	// /demo: each pane works inside its own workspace subdir so the two
-	// concurrent sessions can't clobber each other's files and the TUI's
-	// post-run review finds each side's output where it expects it. A
-	// non-empty value is a bare name only — no separators, neither "."
-	// nor "..", and unchanged by Clean — so a path Clean would collapse
-	// (foo/../bar, ./pane, pane/) is refused instead of rewritten into
-	// another directory. An omitted value keeps the whole workspace.
+	// /demo: each pane works inside its own workspace subdir. A non-empty
+	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
 	if sub := req.SandboxSubdir; sub != "" {
-		if strings.ContainsAny(sub, "/\\") || sub == "." || sub == ".." || filepath.Clean(sub) != sub {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput,
-				`sandbox_subdir: a single bare directory name is required, with no path separators and neither "." nor ".."`)
+		if !validSandboxSubdir(sub) {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
 			return
 		}
 		workingDir = filepath.Join(workingDir, sub)
