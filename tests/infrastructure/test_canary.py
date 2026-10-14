@@ -840,9 +840,9 @@ def test_the_log_of_a_job_is_read_with_the_token(canary, github):
     assert _Logs.seen == [("/repos/o/r/actions/jobs/1/logs", "Bearer a-token")]
 
 
-def test_a_read_of_a_log_that_gets_no_answer_is_tried_once_more_and_then_the_words_name_github(canary, github):
+def test_a_read_of_a_log_that_gets_no_answer_is_tried_once_more_and_then_no_more(canary, github):
     assert "canary_unused appears unused" in canary.job_log(github, "o/r", 3, "a-token")
-    with pytest.raises(RuntimeError, match="GitHub did not answer with the log of job 4, in two tries: "):
+    with pytest.raises(RuntimeError, match="the log of job 4 could not be read, in two tries: "):
         canary.job_log(github, "o/r", 4, "a-token")
     assert [path for path, _ in _Logs.seen] == ["/repos/o/r/actions/jobs/3/logs"] * 2 + ["/repos/o/r/actions/jobs/4/logs"] * 2
 

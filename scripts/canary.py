@@ -488,8 +488,8 @@ def read_log_once(request: urllib.request.Request, job: int) -> str:
 
 
 def job_log(api_root: str, repo: str, job: int, key: str) -> str:
-    """The log of one job, as text. A read that gets no answer is tried once more, and then no more: one read
-    that timed out made a whole check "not judged"."""
+    """The log of one job, as text. A read that fails is tried once more, and then no more: one read that timed
+    out made a whole check "not judged"."""
     request = urllib.request.Request(f"{api_root}/repos/{repo}/actions/jobs/{job}/logs",
                                      headers={"Authorization": f"Bearer {key}", "Accept": "application/vnd.github+json"})
     for last_try in (False, True):
@@ -497,7 +497,7 @@ def job_log(api_root: str, repo: str, job: int, key: str) -> str:
             return read_log_once(request, job)
         except OSError as error:
             if last_try:
-                raise RuntimeError(f"GitHub did not answer with the log of job {job}, in two tries: {error}") from error
+                raise RuntimeError(f"the log of job {job} could not be read, in two tries: {error}") from error
 
 
 def find_pull(checks, repo: str, key: str, manifest: dict) -> tuple[int | None, list[Finding]]:

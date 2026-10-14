@@ -1155,9 +1155,9 @@ statuses of a commit, and nothing else.
   listed check is red for its violation. "A finding": the lines below name
   each thing and its fix. "Not judged": GitHub could not be read, so nothing
   is known. "A finding" and "Not judged" both fail the job. "Not judged" is
-  never a pass. A read of a job's log that gets no answer is tried once
-  more before the check gives up; its words then say that GitHub did not
-  answer.
+  never a pass. A read of a job's log that fails is tried once more before
+  the check gives up; its words then say that the log could not be read in
+  two tries, and give the error.
 - While the canary is as listed, that first line also says by which day it
   has to be renewed. The renew above is a step by hand, once a week, so that
   the Monday run is not red for age.
