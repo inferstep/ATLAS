@@ -572,7 +572,7 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | `ATLAS_LLM_PARALLEL` | `0` | Benchmark runner: set `1` to allow concurrent llama-server calls instead of serialized generation. |
 | `ATLAS_API_KEYS_PATH` | `./secrets/api-keys.json` | Read by the TUI to locate the bearer-token file written by `atlas init`; the token is attached to `/v1/agent` requests for forward compatibility (the proxy does not currently enforce it). |
 | `ATLAS_UPGRADE_PULL_TIMEOUT` | `3600` | Timeout (seconds) `atlas upgrade` allows for pulling the target images before the staged upgrade aborts and restores the previous release. |
-| `ATLAS_UPGRADE_SKIP_VERIFY` | (unset) | Set `1` to skip the keyless cosign signature verification `atlas upgrade` runs on each target image before applying. |
+| `ATLAS_UPGRADE_SKIP_VERIFY` | (unset) | Set `1` to skip the keyless cosign signature verification `atlas upgrade` and `atlas rollback` run on each target image before applying. |
 
 The CLI sends no generation parameters of its own beyond `atlas.client.chat_stream`'s defaults (`max_tokens=8192`, `temperature=0.6`); interactive generation runs through the proxy's agent loop (§ 2) and the TUI. No stop sequences are sent anywhere — llama-server applies the GGUF's own chat template (`--jinja`).
 

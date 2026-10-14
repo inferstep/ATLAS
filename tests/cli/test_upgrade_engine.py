@@ -160,6 +160,58 @@ def test_rollback_to_explicit_tag(tmp_path):
     res = eng.run_rollback(root, fake.as_steps(root), target_tag="v1.5.0")
     assert res["status"] == "rolled-back"
     assert eng.read_env_tag(root) == "v1.5.0"
+    # The signatures of the target tag are verified before anything is
+    # pulled or started.
+    assert [c for c in fake.calls if c[0] != "log"] == [
+        ("verify", "v1.5.0"), ("set_env_tag", "v1.5.0"), ("pull", "v1.5.0"), ("up", "v1.5.0")]
+
+
+def test_rollback_with_a_bad_signature_changes_nothing(tmp_path):
+    root = _root(tmp_path, "v2.0.0")
+    fake = FakeSteps(fail_on="verify")
+    with pytest.raises(eng.UpgradeError) as ei:
+        eng.run_rollback(root, fake.as_steps(root), target_tag="v1.5.0")
+    assert "bad signature (simulated)" in str(ei.value)
+    assert [c for c in fake.calls if c[0] != "log"] == [("verify", "v1.5.0")]
+    assert eng.read_env_tag(root) == "v2.0.0"
+
+
+def test_the_rollback_command_hands_the_engine_the_real_signature_step(tmp_path, monkeypatch):
+    from atlas.commands import rollback, upgrade
+    root = _root(tmp_path, "v2.0.0")
+    monkeypatch.setattr(rollback.cli_env, "atlas_root", lambda: root)
+    given = {}
+
+    def run_rollback(atlas_root, steps, target_tag=None):
+        given["steps"], given["tag"] = steps, target_tag
+        return {"status": "rolled-back", "target_tag": target_tag}
+
+    monkeypatch.setattr(rollback.eng, "run_rollback", run_rollback)
+    assert rollback.main(["--to", "1.5.0", "--yes"]) == 0
+    assert given["tag"] == "1.5.0"
+    assert given["steps"].verify_signatures is upgrade._verify_signatures
+
+
+@pytest.mark.parametrize("cosign_says, words", [
+    pytest.param("Error: no signatures found",
+                 "cosign found no signature it can read for ghcr.io/inferstep/atlas-proxy:3.1.6. "
+                 "Install cosign 3 or newer and try again", id="no signature it can read: install cosign 3"),
+    pytest.param("Error: none of the expected identities matched",
+                 "signature verification failed for ghcr.io/inferstep/atlas-proxy:3.1.6", id="another failed check"),
+])
+def test_a_failed_signature_check_refuses_with_words_that_fit_it(tmp_path, monkeypatch, cosign_says, words):
+    from atlas.commands import upgrade
+    root = _root(tmp_path, "v2.0.0")
+    cosign = tmp_path / "bin" / "cosign"
+    cosign.parent.mkdir()
+    cosign.write_text(f"#!/bin/sh\necho '{cosign_says}' >&2\nexit 1\n")
+    cosign.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{cosign.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.delenv("ATLAS_UPGRADE_SKIP_VERIFY", raising=False)
+    monkeypatch.setattr(upgrade, "_target_images", lambda root, tag: [f"ghcr.io/inferstep/atlas-proxy:{tag}"])
+    with pytest.raises(eng.UpgradeError) as ei:
+        upgrade._verify_signatures(root, "3.1.6")
+    assert str(ei.value).startswith(words)
 
 
 def test_rollback_without_point_errors(tmp_path):

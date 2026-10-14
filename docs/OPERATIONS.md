@@ -422,7 +422,9 @@ automates. To undo a *successful* upgrade later, `atlas rollback`
 `atlas upgrade` verifies each target image's keyless cosign signature
 before applying (best-effort: if cosign isn't installed it logs and
 continues; a signature that *fails* aborts the upgrade and the previous
-release stays in place). Override with `ATLAS_UPGRADE_SKIP_VERIFY=1`.
+release stays in place). It needs cosign 3 or newer: the images are signed
+in the bundle form that cosign 3 reads, and an older cosign finds no
+signature. Override with `ATLAS_UPGRADE_SKIP_VERIFY=1`.
 
 `atlas upgrade --to <tag> --dry-run` previews the plan (current tag +
 image digests → target, and the ordered steps) without changing
@@ -443,8 +445,10 @@ With no argument it reads the restore point written by `atlas upgrade`
 (`.atlas-upgrade/restore-point.json`) and brings the previous release
 back up. With `--to TAG`, a pull/start failure (e.g. a typo'd tag that
 doesn't exist) restores `.env` to the tag that was deployed before the
-attempt. The manual procedures below are the equivalent by hand and the
-fallback when no restore point exists.
+attempt. Either way it first verifies the target images' signatures, as
+`atlas upgrade` does; a signature that fails ends the rollback before
+anything changes. The manual procedures below are the equivalent by hand
+and the fallback when no restore point exists.
 
 ## Images
 
