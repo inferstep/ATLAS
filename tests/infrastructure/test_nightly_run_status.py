@@ -564,7 +564,8 @@ def test_a_fault_of_the_sending_step_itself_does_not_stop_the_report_or_change_t
 
 def test_a_fault_of_the_sending_step_does_not_stop_a_look_of_the_timer(tmp_path):
     night = Night(tmp_path)
-    (night.dir / "to-send").mkdir()
+    # The folder as the run makes it: only its user may write into it, whatever the umask of the machine.
+    (night.dir / "to-send").mkdir(mode=0o700)
     (night.dir / "to-send" / "20261008T080003Z-server-nightly.json").write_text("a file that this script did not write")
     (night.dir / "not-sent").write_text("a file where the folder of the statuses that are set aside would be\n")
     look(night)
@@ -692,7 +693,8 @@ def test_a_status_that_has_waited_for_fourteen_days_is_set_aside_and_tried_no_mo
 def test_a_waiting_file_that_this_script_did_not_write_is_set_aside_and_never_sent(server, held):
     night, github = server
     args = settings(night)
-    (night.dir / "to-send").mkdir()
+    # The folder as the run makes it: only its user may write into it, whatever the umask of the machine.
+    (night.dir / "to-send").mkdir(mode=0o700)
     (night.dir / "to-send" / "20261008T080003Z-server-nightly.json").write_text(held)
     assert nightly.send_waiting(args, now()) == "set aside after 14 days or as not written by this script: 1"
     assert github.seen == []

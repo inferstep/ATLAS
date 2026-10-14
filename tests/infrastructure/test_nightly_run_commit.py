@@ -861,12 +861,16 @@ def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_tha
 
 def test_every_file_of_the_repository_that_the_stack_reads_through_a_mount_is_one_that_the_run_takes_from_dev():
     # A mount that the stack may only read is an input of the stack. One that it may write is a place for its data.
+    # Only what git tracks counts: a clone can hold folders of its own, such as the secrets/ that `atlas init` makes.
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=True,
+                             timeout=60).stdout.splitlines()
     mounted = []
     for service in compose_file().values():
         for volume in service.get("volumes", []):
             assert isinstance(volume, str), f"a mount in another form than the short one is not read by this test: {volume}"
             found = re.search(r"\./[^}:]+", volume.split(":/")[0])
-            if found and volume.endswith(":ro") and (ROOT / found.group()).exists():
+            in_git = found and any(name == found.group()[2:] or name.startswith(found.group()[2:] + "/") for name in tracked)
+            if in_git and volume.endswith(":ro"):
                 mounted.append(found.group()[2:] + ("/" if (ROOT / found.group()).is_dir() else ""))
     assert sorted(mounted) == ["geometric-lens/geometric_lens/models/", "inference/entrypoint-v3.1.sh"], mounted
     for path in mounted:
