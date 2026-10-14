@@ -739,6 +739,46 @@ def test_a_branch_made_before_the_recordings_is_judged_by_what_its_merge_would_b
     assert "the smoke run is not asked for" in done.stdout
 
 
+
+# The coordinator's rows (not part of #478).
+def test_a_change_of_the_text_with_a_green_smoke_run_on_its_head_passes_in_its_merge(tmp_path):
+    # The server writes its status on the head commit of the pull request, not on the merge that the job checks out.
+    repo = Repo(tmp_path / "repo")
+    (repo.root / "scripts").mkdir()
+    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    base = repo.commit(one=recording(), two=recording(task="repair a fault"))
+    repo.git("checkout", "-q", "-b", "work")
+    head = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
+    # A started script counts the account of its own WRITER, so the status is that account's.
+    GitHub.on[head] = [a_status(by=smoke.WRITER)]
+    repo.git("checkout", "-q", "--detach", "dev")
+    repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
+    done = run_the_step(repo, tmp_path / "runner", base)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the smoke run of the server passed on the head commit" in done.stdout
+
+
+def test_a_base_that_changed_the_text_after_the_merge_was_made_asks_nothing_of_the_branch(tmp_path):
+    # GitHub made the merge on the base as it was; the base got a new text before the job started.
+    repo = Repo(tmp_path / "repo")
+    (repo.root / "scripts").mkdir()
+    (repo.root / "scripts" / "smoke_result.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    repo.commit(one=recording(), two=recording(task="repair a fault"))
+    repo.git("checkout", "-q", "-b", "work")
+    (repo.root / "a change.txt").write_text("a change that touches no recording\n", encoding="utf-8")
+    repo.git("add", "-A")
+    repo.git("commit", "-q", "-m", "the change")
+    repo.git("checkout", "-q", "--detach", "dev")
+    repo.git("merge", "-q", "--no-ff", "--no-edit", "work")
+    merge = repo.git("rev-parse", "HEAD")
+    repo.git("checkout", "-q", "dev")
+    newer_base = repo.commit(one=recording(system=NEW), two=recording(system=NEW, task="repair a fault"))
+    repo.git("checkout", "-q", "--detach", merge)
+    done = run_the_step(repo, tmp_path / "runner", newer_base)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the smoke run is not asked for" in done.stdout
+
+
 def test_the_gates_page_has_the_words_of_the_rule():
     page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
     for sentence in (

@@ -506,10 +506,11 @@ and a changed recording marks such a pull request. Two things follow:
   on the base, and none that the base's recordings had. A part that no
   request carries any more counts, and so does a part that is new in every
   request. The recordings it reads are those of what would land, the
-  merge of the pull request into its base: a branch made on an older base
-  (or on `main`, which has no recordings) is judged by its own change
-  only. The status is read on the pull request's head commit, where the
-  server writes it.
+  merge of the pull request into its base, against those of the base as
+  GitHub made that merge on it: a branch made on an older base (or on
+  `main`, which has no recordings) is judged by its own change only. The
+  status is read on the pull request's head commit, where the server
+  writes it.
 - **Any other text** (a note, a refusal or a steer that the proxy writes in
   one situation): the pull request adds or changes a recording that shows
   the text in its situation. The recording is the proof, and no smoke run is
