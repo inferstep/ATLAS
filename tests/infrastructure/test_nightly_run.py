@@ -716,6 +716,16 @@ def test_a_run_that_is_told_to_stop_stops_its_stack_and_says_so(tmp_path):
     assert night.did()[-1] == "stack down"
 
 
+def test_a_run_that_is_told_to_stop_while_it_keeps_the_logs_still_stops_its_stack(tmp_path):
+    night = Night(tmp_path, sleep={"logs --no-color": 30})
+    process = night.start()
+    night.wait_for("logs")
+    process.send_signal(signal.SIGTERM)
+    process.communicate(timeout=30)
+    assert night.did()[-1] == "stack down" and night.report["stack_stopped"] == "yes", night.did()
+    assert len(night.report["logs_not_saved"]) == 1 and "the services after it were not asked" in night.report["logs_not_saved"][0]
+
+
 def test_a_run_that_is_told_to_stop_before_it_took_the_card_writes_its_report(tmp_path):
     night = Night(tmp_path, sleep={PULL: 30})
     process = night.start()
