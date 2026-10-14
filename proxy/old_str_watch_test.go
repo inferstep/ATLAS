@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -234,6 +235,7 @@ func TestTheStreamIsCutAndTheModelIsToldWhere(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := 0; i < len(response); i += 24 {
 			end := i + 24

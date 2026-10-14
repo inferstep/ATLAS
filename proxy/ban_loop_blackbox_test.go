@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -259,6 +260,7 @@ func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		i := calls
 		calls++
 		var reply string

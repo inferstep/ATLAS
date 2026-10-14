@@ -2351,6 +2351,7 @@ func TestFencedSubCallSalvagesReasoningOnAWatchdogCut(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
+			io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 			w.Header().Set("Content-Type", "text/event-stream")
 			// The whole file arrives as reasoning_content — never as content,
 			// so progress() (content-only) never fires and the 1s
@@ -2402,6 +2403,7 @@ func TestFencedSubCallCutsAStreamThatOpensAndGoesSilent(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
+			io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 			w.Header().Set("Content-Type", "text/event-stream")
 			// Exactly what the live failure sends: the opening role frame,
 			// then silence while the server generates out of sight.

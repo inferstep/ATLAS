@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -217,6 +218,7 @@ func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		i := turns
 		turns++
