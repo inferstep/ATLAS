@@ -18,9 +18,11 @@ included in diagnostics.
 
 import os
 import stat
+import urllib.parse
 import urllib.request
 from typing import Optional, Tuple
 
+from atlas import compose
 from atlas.env import atlas_root as _find_root
 
 DEFAULT_RELATIVE_PATH = os.path.join("secrets", "service-token")
@@ -71,14 +73,58 @@ def check_file_permissions(atlas_root: Optional[str] = None
     return True, f"service token present at {path} (0600)"
 
 
+def _origin(url: str) -> tuple:
+    """(scheme, host, port) of an address; the port is 80 or 443 when the address leaves it out."""
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port or (443 if parts.scheme.lower() == "https" else 80)
+
+
+# The other names under which the CLI and the bench (atlas/bench/config.py)
+# read an address of the stack, beside the five of compose.service_url.
+OTHER_ADDRESS_NAMES = ("ATLAS_RAG_URL", "ATLAS_LLAMA_URL", "LLAMA_EMBED_URL", "LLAMA_URL", "LENS_URL")
+
+
+def _stack_origins(atlas_root: Optional[str]) -> set:
+    """The addresses of the stack's own services, read again for each request
+    (`atlas lens` sets LLAMA_EMBED_URL while it runs)."""
+    addresses = [compose.service_url(name, atlas_root) for name in ("proxy", "llama", "lens", "sandbox", "v3")]
+    addresses += [os.environ.get(name, "") for name in OTHER_ADDRESS_NAMES]
+    return {_origin(address) for address in addresses if address}
+
+
+class _TokenForTheStackOnly(urllib.request.HTTPRedirectHandler):
+    """The token goes to the stack's own addresses and to no other.
+
+    urllib runs http_request for each request, also for each step of a
+    redirect, so a redirect to another address gets no token from here.
+    A redirect to another origin also loses an Authorization that the
+    caller set itself (auth_headers(), the Hugging Face token), which
+    urllib would copy.
+    """
+
+    def __init__(self, token: str, atlas_root: Optional[str]):
+        self.token, self.atlas_root = token, atlas_root
+
+    def http_request(self, request):
+        if _origin(request.full_url) in _stack_origins(self.atlas_root) and not request.has_header(HEADER):
+            request.add_unredirected_header(HEADER, f"Bearer {self.token}")
+        return request
+
+    https_request = http_request
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and _origin(newurl) != _origin(req.full_url):
+            new.remove_header(HEADER)
+        return new
+
+
 def install_urllib_opener(atlas_root: Optional[str] = None) -> None:
     """Global opener so every CLI urllib call site (client, doctor,
-    lens, events, runtime, onboard) sends the token. urllib merges
-    addheaders under explicit per-request headers, so requests that
-    set their own Authorization keep it. No-op without a token."""
+    lens, events, runtime, onboard) sends the token to the stack's own
+    services. Requests that set their own Authorization keep it. No-op
+    without a token."""
     tok = read_token(atlas_root)
     if not tok:
         return
-    opener = urllib.request.build_opener()
-    opener.addheaders = [(HEADER, f"Bearer {tok}")]
-    urllib.request.install_opener(opener)
+    urllib.request.install_opener(urllib.request.build_opener(_TokenForTheStackOnly(tok, atlas_root)))

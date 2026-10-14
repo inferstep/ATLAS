@@ -57,14 +57,47 @@ def _load_service_token() -> str:
 
 SERVICE_TOKEN = _load_service_token()
 
-if SERVICE_TOKEN:
-    # Outbound injection: one opener covers every urllib call site
-    # (llama, lens, sandbox). urllib merges addheaders under explicit
-    # per-request headers, so requests that already set Authorization
-    # keep their own value.
-    _opener = urllib.request.build_opener()
-    _opener.addheaders = [("Authorization", f"Bearer {SERVICE_TOKEN}")]
-    urllib.request.install_opener(_opener)
+
+def _origin(url: str) -> tuple:
+    """(scheme, host, port) of an address; the port is 80 or 443 when the address leaves it out."""
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port or (443 if parts.scheme.lower() == "https" else 80)
+
+
+class _TokenForTheStackOnly(urllib.request.HTTPRedirectHandler):
+    """The token goes to the stack's own addresses (llama, lens, sandbox) and to no other.
+
+    urllib runs http_request for each request, also for each step of a
+    redirect, so a redirect to another address gets no token from here.
+    A redirect to another origin also loses an Authorization that the
+    caller set itself (llm_client's chat_completion does), which urllib
+    would copy.
+    """
+
+    def http_request(self, request):
+        stack = {_origin(INFERENCE_URL), _origin(LENS_URL), _origin(SANDBOX_URL)}
+        if _origin(request.full_url) in stack and not request.has_header("Authorization"):
+            request.add_unredirected_header("Authorization", f"Bearer {SERVICE_TOKEN}")
+        return request
+
+    https_request = http_request
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and _origin(newurl) != _origin(req.full_url):
+            new.remove_header("Authorization")
+        return new
+
+
+def install_urllib_opener() -> None:
+    """Outbound injection: one global opener covers every urllib call
+    site. A request that already sets Authorization keeps its own value.
+    No-op without a token."""
+    if SERVICE_TOKEN:
+        urllib.request.install_opener(urllib.request.build_opener(_TokenForTheStackOnly()))
+
+
+install_urllib_opener()
 
 
 REQUEST_ID_HEADER = "X-ATLAS-Request-ID"

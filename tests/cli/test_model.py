@@ -21,6 +21,8 @@ import dataclasses
 import json
 from typing import Optional
 
+import pytest
+
 from atlas.commands import model, model_registry, tier
 
 
@@ -774,11 +776,16 @@ def test_download_server_ignores_range_restarts_cleanly(tmp_path,
     assert "SHA256 verified" in out
 
 
-def test_download_sends_authorization_header_with_hf_token(tmp_path,
-                                                             monkeypatch,
-                                                             capsys):
-    """When HF_TOKEN is set, the Request must carry an Authorization header
-    with Bearer <token>."""
+@pytest.mark.parametrize("download_url, header", [
+    pytest.param(None, "Bearer hf_test_xyz", id="a download from Hugging Face carries the token"),
+    pytest.param("https://models.example.test/Qwen3.5-9B-Q6_K.gguf", None,
+                 id="a --url download from another host carries none"),
+    pytest.param("https://not-huggingface.co/Qwen3.5-9B-Q6_K.gguf", None,
+                 id="a host whose name only ends like Hugging Face's carries none"),
+])
+def test_download_sends_the_hf_token_only_to_hugging_face(tmp_path, monkeypatch, capsys, download_url, header):
+    """With HF_TOKEN set, a download from Hugging Face carries the header
+    Authorization: Bearer <token>, and a download from another host none."""
     monkeypatch.setenv("HF_TOKEN", "hf_test_xyz")
     body = b"z" * (101 * 1024 * 1024)
     expected_sha = hashlib.sha256(body).hexdigest()
@@ -790,7 +797,7 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
         model_file=original.model_file, model_display=original.model_display,
         model_size_gb=0.11,
         lens_status=original.lens_status,
-        download_url=original.download_url, sha256=expected_sha,
+        download_url=download_url or original.download_url, sha256=expected_sha,
         license=original.license, requires_hf_token=False,
         lens_artifact_dir=original.lens_artifact_dir,
         lens_artifact_files=original.lens_artifact_files,
@@ -808,10 +815,8 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0, capsys.readouterr().out
     assert len(captured) == 1
-    req = captured[0]
     # Request stores headers with capitalized first letter.
-    assert req.has_header("Authorization")
-    assert req.get_header("Authorization") == "Bearer hf_test_xyz"
+    assert captured[0].get_header("Authorization") == header
 
 
 def test_download_401_keeps_part_for_retry(tmp_path, monkeypatch, capsys):

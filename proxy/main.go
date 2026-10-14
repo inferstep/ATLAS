@@ -26,6 +26,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -1084,10 +1085,10 @@ func requireServiceToken(next http.Handler) http.Handler {
 	})
 }
 
-// tokenTransport injects the service token into outbound requests
-// (proxy -> llama/v3/lens/sandbox) unless the caller already set an
-// Authorization header (e.g. the /v1/chat passthrough forwarding a
-// client's own header).
+// tokenTransport injects the service token into outbound requests to the
+// stack's own services (proxy -> llama/v3/lens/sandbox, see isStackAddress)
+// unless the caller already set an Authorization header (e.g. the /v1/chat
+// passthrough forwarding a client's own header).
 type tokenTransport struct {
 	base http.RoundTripper
 }
@@ -1100,7 +1101,7 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req = req.Clone(req.Context())
 		req.Header.Set(requestIDHeader, id)
 	}
-	if serviceToken != "" && req.Header.Get("Authorization") == "" {
+	if serviceToken != "" && req.Header.Get("Authorization") == "" && isStackAddress(req.URL) {
 		req = req.Clone(req.Context())
 		req.Header.Set("Authorization", "Bearer "+serviceToken)
 	}
@@ -1109,6 +1110,33 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		base = http.DefaultTransport
 	}
 	return base.RoundTrip(req)
+}
+
+// isStackAddress says whether a request goes to one of the services that the
+// proxy is configured to call: same scheme, host and port. Only those get the
+// service token. The transport sees each step of a redirect as a request of
+// its own, so a redirect to any other address gets no token either.
+func isStackAddress(u *url.URL) bool {
+	stack := []string{inferenceURL, lensURL, sandboxURL, v3URL, envOr("ATLAS_LLAMA_URL", inferenceURL)}
+	for _, address := range stack {
+		configured, err := url.Parse(address)
+		if err == nil && strings.EqualFold(configured.Scheme, u.Scheme) &&
+			strings.EqualFold(configured.Hostname(), u.Hostname()) && portOf(configured) == portOf(u) {
+			return true
+		}
+	}
+	return false
+}
+
+// portOf is the port of an address, also when the address leaves it out.
+func portOf(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
 }
 
 // installTokenTransport wires outbound injection through the two

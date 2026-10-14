@@ -45,6 +45,7 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import List, Optional, Tuple
 
@@ -57,6 +58,15 @@ from atlas.commands.model_registry import Model
 # HF token resolution is shared publish machinery; the canonical resolver
 # (which also reads HUGGINGFACE_HUB_TOKEN) lives in atlas.publishing.
 from atlas.publishing import hf_token as _hf_token
+
+
+def _hf_token_for(url: str) -> Optional[str]:
+    """The Hugging Face token for a download from Hugging Face itself, and
+    None for any other address, such as a --url download from another host."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" and (parts.hostname or "").lower() == "huggingface.co" and parts.port in (None, 443):
+        return _hf_token()
+    return None
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -428,7 +438,7 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         # Content-Length so the disk check still fails fast; if the server
         # won't report it, proceed (the mid-download OSError path keeps the
         # .part for retry) rather than refuse with an arbitrary floor.
-        remote_gb = _remote_size_gb(m.download_url, _hf_token())
+        remote_gb = _remote_size_gb(m.download_url, _hf_token_for(m.download_url))
         if remote_gb > 0:
             needed = remote_gb * 1.2
             _safe_print(f"  Remote size ~{remote_gb:.1f} GB (from Content-Length)")
@@ -446,7 +456,7 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     _safe_print(f"  Downloading {m.name} ({m.model_size_gb:.1f} GB)")
     _safe_print(f"    From: {m.download_url}")
     _safe_print(f"    To:   {target}")
-    if _hf_token():
+    if _hf_token_for(m.download_url):
         _safe_print("    Auth: HF_TOKEN present (will send Authorization header)")
     _safe_print()
 
@@ -635,7 +645,7 @@ def _download_artifact(url: str, target_path: str, color: bool,
     failure. Files without a registry hash download with an explicit
     "unverified" note rather than a silent [ok].
     """
-    token = _hf_token()
+    token = _hf_token_for(url)
     req = _build_request(url, range_start=0, token=token)
     fname = os.path.basename(target_path)
     tmp_path = target_path + ".part"
@@ -827,7 +837,7 @@ def _stream_download(m: Model, target: str, color: bool,
     tmp = target + ".part"
     chunk = 1024 * 1024  # 1 MiB
     started = time.monotonic()
-    token = _hf_token()
+    token = _hf_token_for(m.download_url)
 
     # PC-056.2 item A: acquire lock before touching .part.
     lock_path = _acquire_install_lock(tmp, color)

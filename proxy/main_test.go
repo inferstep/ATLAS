@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -380,6 +381,7 @@ func TestTokenTransportInjection(t *testing.T) {
 			gotAuth = r.Header.Get("Authorization")
 		}))
 	defer srv.Close()
+	withInferenceURL(t, srv.URL)
 
 	client := &http.Client{Transport: &tokenTransport{}}
 
@@ -407,6 +409,44 @@ func TestTokenTransportInjection(t *testing.T) {
 			t.Fatalf("caller header overridden: %q", gotAuth)
 		}
 	})
+}
+
+func TestTokenTransportSendsTheTokenOnlyToAnAddressOfTheStack(t *testing.T) {
+	defer withToken(t, "atlas-st-inject")()
+	got := map[string]string{} // the Authorization that each stand-in got, by stand-in and path
+	other := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got["other"+r.URL.Path] = r.Header.Get("Authorization")
+		}))
+	defer other.Close()
+	stack := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got["stack"+r.URL.Path] = r.Header.Get("Authorization")
+			if r.URL.Path == "/moved" {
+				http.Redirect(w, r, other.URL+"/after-the-redirect", http.StatusFound)
+			}
+		}))
+	defer stack.Close()
+	// Only the stand-in "stack" is an address of the stack. The other one is on the same host, on another port.
+	withInferenceURL(t, stack.URL)
+
+	client := &http.Client{Transport: &tokenTransport{}}
+	for _, address := range []string{stack.URL + "/asked", other.URL + "/asked", stack.URL + "/moved"} {
+		resp, err := client.Get(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	want := map[string]string{
+		"stack/asked":              "Bearer atlas-st-inject",
+		"other/asked":              "",
+		"stack/moved":              "Bearer atlas-st-inject",
+		"other/after-the-redirect": "",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the token went to\n%v\nwant\n%v", got, want)
+	}
 }
 
 func TestWithRequestIDGenerates(t *testing.T) {

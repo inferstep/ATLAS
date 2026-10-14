@@ -46,19 +46,9 @@ def _auth_headers() -> dict:
     return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
-def _install_auth_opener() -> None:
-    """Cover every urllib call site in the bench pipeline with the
-    internal-auth header (urllib merges these under explicit per-request
-    headers)."""
-    tok = _service_token()
-    if not tok:
-        return
-    opener = urllib.request.build_opener()
-    opener.addheaders = [("Authorization", f"Bearer {tok}")]
-    urllib.request.install_opener(opener)
-
-
-_install_auth_opener()
+# This module installs no global opener: the process that imports it does.
+# The V3 service's is in adapters.py; the bench's is the CLI's
+# (atlas/token.py). Each sends the token only to its own stack's addresses.
 
 try:
     import httpx

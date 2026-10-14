@@ -1398,4 +1398,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # Started as `python -m atlas.bench.v3_runner`, not through `atlas`: the
+    # CLI's opener sends the service token to the stack's own addresses.
+    from atlas.token import install_urllib_opener
+    install_urllib_opener()
     main()
