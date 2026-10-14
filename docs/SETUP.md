@@ -466,8 +466,8 @@ The checks:
 | Host | tier_match | `.env` model selection matches host hardware (warn on overshoot — OOM risk — pass on match or undershoot) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 5 running and healthy |
-| Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
-| Stack | internal_auth | internal service auth: token file present with tight permissions, and live enforcement probed both ways (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
+| Stack | health/llama, lens, v3, sandbox, proxy | the `/health` endpoints return ok; for the lens, the strict `/ready` (scoring works), and when not, the reason it gives |
+| Stack | internal_auth | internal service auth: token file present with tight permissions and readable by the user the services run as, and live enforcement probed both ways at each of the proxy, the lens, the V3 service and the sandbox (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
 | Stack | status_dimensions | informational: the seven lens/ASA status dimensions from the proxy `/v1/calibration/status` (the same source the TUI badge reads); never fails the run |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag |
 | End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |

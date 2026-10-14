@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -1046,11 +1047,27 @@ func loadServiceToken() string {
 	if path == "" {
 		path = "/run/atlas-secrets/service-token"
 	}
-	data, err := os.ReadFile(path)
+	token, err := readServiceToken(path)
 	if err != nil {
-		return "" // unconfigured => auth disabled (doctor warns)
+		log.Fatal(err)
 	}
-	return strings.TrimSpace(string(data))
+	return token
+}
+
+// readServiceToken reads the token file. A file that is not there is no
+// token: auth disabled (doctor warns). A file that is there but cannot be
+// read is an error: without a token the proxy would check nothing, so it
+// stops and says why.
+func readServiceToken(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("the service token file %s cannot be read (%w), so the proxy stops rather than "+
+			"run with no check. It runs as user %d: make the file readable for that user", path, err, os.Getuid())
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // authOpenPaths never require the token: health probes are headerless

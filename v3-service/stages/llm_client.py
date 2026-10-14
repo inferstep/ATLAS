@@ -36,8 +36,14 @@ def _service_token() -> str:
         try:
             with open(path) as fh:
                 return fh.read().strip()
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError as error:
+            # The file is there but cannot be read. Without a token every
+            # call would be refused, so it stops and says why.
+            raise SystemExit(f"the service token file {path} cannot be read ({error.strerror}), so this stops rather "
+                             f"than run with no token. It runs as user {os.getuid()}: make the file readable for that "
+                             f"user.") from error
     return ""
 
 

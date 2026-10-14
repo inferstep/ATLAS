@@ -1,9 +1,12 @@
 """The lens sends its service token only to the model server's addresses, also after a redirect."""
 import http.server
+import os
 import sys
 import threading
 import urllib.request
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -58,3 +61,18 @@ def test_the_token_goes_only_to_the_model_server_and_not_on_to_another_address(m
         "model/moved-with-its-own-header": "Bearer a-stand-in-token",
         "other/after/moved-with-its-own-header": "",
     }
+
+
+def test_a_token_file_that_cannot_be_read_stops_the_lens_and_one_that_is_not_there_is_no_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(tmp_path / "not-there"))
+    assert auth_token._load() == ""
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads a file of mode 000, so the case of a file that cannot be read needs a user that is not root")
+    unreadable = tmp_path / "service-token"
+    unreadable.write_text("a-stand-in-token\n")
+    unreadable.chmod(0)
+    monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(unreadable))
+    with pytest.raises(SystemExit) as stop:
+        auth_token._load()
+    assert f"the service token file {unreadable} cannot be read (Permission denied), so the lens stops" in str(stop.value)

@@ -12,8 +12,13 @@ real CI runs. These tests cover the new check_metal_native() added in
      for non-Mac users
 """
 
+import http.server
+import io
 import json
+import os
 import sys
+import threading
+import urllib.error
 
 from atlas.commands import doctor
 
@@ -53,20 +58,88 @@ def test_e2e_smoke_uses_public_proxy_path(monkeypatch):
     assert captured["timeout"] == 60
 
 
-def test_health_endpoint_reports_degraded_as_warning(monkeypatch):
+def test_the_lens_line_asks_the_strict_address_and_names_why_the_lens_is_not_ready(monkeypatch):
     def fake_get(url, timeout=3):
-        status = "degraded" if url.endswith(":8099/health") else "ok"
-        return True, json.dumps({"status": status})
+        return True, json.dumps({"status": "ok"})
+
+    def fake_urlopen(url, timeout=5):
+        assert url == "http://127.0.0.1:8099/ready"
+        answer = json.dumps({"detail": {"ready": False, "llama_server": True, "reason": "the self-test could not embed"}})
+        raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO(answer.encode()))
 
     monkeypatch.setattr(doctor, "_http_get", fake_get)
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake_urlopen)
     # The lens URL comes from the checkout's .env at import; pin the default.
     monkeypatch.setattr(doctor, "LENS_URL", "http://127.0.0.1:8099")
 
     results = {item.name: item for item in doctor.check_health_endpoints()}
 
-    assert results["health/lens"].status == "warn"
-    assert results["health/lens"].message == "degraded"
+    assert (results["health/lens"].status, results["health/lens"].message) == ("warn", "not ready")
+    assert results["health/lens"].detail == "the self-test could not embed"
     assert results["health/proxy"].status == "pass"
+
+
+def a_token_file(tmp_path, monkeypatch):
+    """A token file as `atlas init` makes it: 0600 in a 0700 folder, of the user who runs the test."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    token = secrets / "service-token"
+    token.write_text("atlas-st-doctorfixture\n")
+    token.chmod(0o600)
+    monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(token))
+    return token
+
+
+def test_internal_auth_fails_when_the_services_run_as_a_user_who_cannot_read_the_token(tmp_path, monkeypatch):
+    token = a_token_file(tmp_path, monkeypatch)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setenv("ATLAS_PROXY_UID", str(os.getuid() + 1))
+    monkeypatch.setenv("ATLAS_SANDBOX_UID", str(os.getuid()))
+
+    (result,) = doctor.check_internal_auth(str(tmp_path))
+
+    assert result.status == "fail"
+    assert result.message == (f"the services run as user {os.getuid() + 1} (ATLAS_PROXY_UID), but {token.parent} belongs "
+                              f"to user {os.getuid()} with mode 0o700: they cannot read the token, and each stops")
+
+
+def test_internal_auth_asks_each_of_the_four_services_with_a_wrong_token_and_with_the_token(tmp_path, monkeypatch):
+    a_token_file(tmp_path, monkeypatch)
+    monkeypatch.setenv("ATLAS_PROXY_UID", str(os.getuid()))
+    monkeypatch.setenv("ATLAS_SANDBOX_UID", str(os.getuid()))
+    asked = []
+
+    class Services(http.server.BaseHTTPRequestHandler):
+        """The four services on one stand-in. The V3 service's check is off: it takes any token."""
+        def answer(self):
+            asked.append((self.command, self.path))
+            right = self.headers.get("Authorization") == "Bearer atlas-st-doctorfixture"
+            status = 200 if right or self.path == "/internal/outline" else 401
+            self.send_response(422 if status == 200 and self.path == "/internal/lens/score-text" else status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST = answer
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Services)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for name in ("PROXY_URL", "LENS_URL", "V3_URL", "SANDBOX_URL"):
+        monkeypatch.setattr(doctor, name, f"http://127.0.0.1:{server.server_port}")
+
+    results = {item.name: (item.status, item.message) for item in doctor.check_internal_auth(str(tmp_path))}
+    server.shutdown()
+
+    assert results == {
+        "internal_auth/proxy": ("pass", "enforced (wrong token 401; valid token 200)"),
+        "internal_auth/lens": ("pass", "enforced (wrong token 401; valid token 422)"),
+        "internal_auth/v3": ("warn", "token file present but the v3 accepts wrong tokens"),
+        "internal_auth/sandbox": ("pass", "enforced (wrong token 401; valid token 200)"),
+    }
+    assert sorted(set(asked)) == [("GET", "/jobs"), ("GET", "/v1/models"), ("POST", "/internal/lens/score-text"),
+                                  ("POST", "/internal/outline")]
 
 
 def test_check_model_file_requires_explicit_selection(monkeypatch, tmp_path):

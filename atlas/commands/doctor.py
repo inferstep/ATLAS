@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Tuple
@@ -474,16 +475,37 @@ def check_containers(services: List[Dict], start_hint: str = "docker compose up 
     return results
 
 
+def _check_lens_ready(url: str) -> CheckResult:
+    """The lens's strict address: /ready answers 200 only when scoring works,
+    and 503 with the reason when it does not."""
+    try:
+        with urllib.request.urlopen(url, timeout=5):
+            return CheckResult("health/lens", "pass", "ready")
+    except urllib.error.HTTPError as e:
+        try:
+            said = json.loads(e.read()).get("detail") or {}
+        except (ValueError, AttributeError):
+            said = {}
+        reason = said.get("reason") or ("llama-server not reachable from the lens"
+                                        if said.get("llama_server") is False else f"HTTP {e.code}")
+        return CheckResult("health/lens", "warn", "not ready", str(reason)[:200])
+    except Exception as e:
+        return CheckResult("health/lens", "fail", "endpoint unreachable", str(e)[:200])
+
+
 def check_health_endpoints() -> List[CheckResult]:
     endpoints = [
         ("llama",   f"{LLAMA_URL}/health"),
-        ("lens",    f"{LENS_URL}/health"),
+        ("lens",    f"{LENS_URL}/ready"),
         ("v3",      f"{V3_URL}/health"),
         ("sandbox", f"{SANDBOX_URL}/health"),
         ("proxy",   f"{PROXY_URL}/health"),
     ]
     results = []
     for name, url in endpoints:
+        if name == "lens":
+            results.append(_check_lens_ready(url))
+            continue
         ok, body = _http_get(url)
         if not ok:
             detail = body[:200]
@@ -514,75 +536,93 @@ def check_health_endpoints() -> List[CheckResult]:
     return results
 
 
+def _services_cannot_read(path: str) -> Optional[str]:
+    """Why the services cannot read the token file, or None when they can.
+
+    docker-compose.yml runs the lens, V3 and the proxy as ATLAS_PROXY_UID and
+    the sandbox as ATLAS_SANDBOX_UID; `atlas init` sets both to the installing
+    user, whose file (0600, in a 0700 folder) it is. Each service stops when
+    it cannot read the file. Linux only: other hosts map file owners into
+    the containers.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    for key in ("ATLAS_PROXY_UID", "ATLAS_SANDBOX_UID"):
+        uid = int(os.environ.get(key) or _ENV.get(key) or 1000)
+        gid = int(os.environ.get(key.replace("UID", "GID")) or _ENV.get(key.replace("UID", "GID")) or 1000)
+        for place, need in ((os.path.dirname(path), 0o1), (path, 0o4)):
+            st = os.stat(place)
+            shift = 6 if st.st_uid == uid else 3 if st.st_gid == gid else 0
+            if uid != 0 and not (st.st_mode >> shift) & need:
+                return (f"the services run as user {uid} ({key}), but {place} belongs to user {st.st_uid} "
+                        f"with mode {oct(st.st_mode & 0o777)}: they cannot read the token, and each stops")
+    return None
+
+
+def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], tok: str) -> CheckResult:
+    """One request behind the token, made twice: a wrong token must get 401,
+    and the host's token must not."""
+    def status_with(token: str) -> int:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+    check = f"internal_auth/{name}"
+    try:
+        wrong, right = status_with("atlas-doctor-wrong-token"), status_with(tok)
+    except Exception as e:
+        return CheckResult(check, "skip", f"token present; enforcement probe skipped ({type(e).__name__})")
+    if wrong != 401:
+        return CheckResult(check, "warn", f"token file present but the {name} accepts wrong tokens",
+                           f"the {name} container predates the token or lacks the secrets mount — docker compose up -d")
+    if right == 401:
+        return CheckResult(check, "fail", f"host token rejected by the {name} (rotation without restart?)",
+                           "docker compose restart  # services reload the token")
+    return CheckResult(check, "pass", f"enforced (wrong token 401; valid token {right})")
+
+
 def check_internal_auth(atlas_root: str) -> List[CheckResult]:
     """Internal service auth: token file status + live enforcement.
 
-    Three outcomes per the auth design (proxy/auth.go, ADR 0001):
+    Per the auth design (proxy/auth.go, ADR 0001):
       - no token file       -> warn (auth disabled; localhost-only model)
       - token, loose perms  -> fail (the credential is readable by others)
-      - token configured    -> probe one authenticated surface both ways:
-        an unauthenticated POST must 401 and an authenticated GET must
-        not 401 — this catches the two silent failure modes (a service
-        that never loaded the token, and a client/server token mismatch
-        after rotation without restart). Token values never appear in
-        output.
+      - token the services cannot read -> fail (each of them stops)
+      - token configured    -> probe one surface behind the token of each
+        service both ways: a wrong token must 401 and the host's token must
+        not — this catches the two silent failure modes (a service that
+        never loaded the token, and a client/server token mismatch after
+        rotation without restart). Token values never appear in output.
     """
     from atlas import token as token_mod
-    results: List[CheckResult] = []
     ok, detail = token_mod.check_file_permissions(atlas_root)
     tok = token_mod.read_token(atlas_root)
     if not tok:
-        results.append(CheckResult(
+        return [CheckResult(
             "internal_auth", "warn",
             "internal service auth disabled (no secrets/service-token)",
             "run `atlas init` (or `atlas init --rotate-token`) to enable; "
-            "services stay open-localhost until then"))
-        return results
+            "services stay open-localhost until then")]
     if not ok:
-        results.append(CheckResult("internal_auth", "fail", detail))
-        return results
-
-    # Live enforcement probe against the proxy (representative surface;
-    # /health stays open by design so probe /v1/models).
-    probe_url = f"{PROXY_URL}/v1/models"
-    try:
-        req = urllib.request.Request(probe_url, method="GET")
-        req.add_header("Authorization", "Bearer atlas-doctor-wrong-token")
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            enforced = False
-        except urllib.error.HTTPError as e:
-            enforced = (e.code == 401)
-        if not enforced:
-            results.append(CheckResult(
-                "internal_auth", "warn",
-                "token file present but the proxy accepts wrong tokens",
-                "the proxy container predates the token or lacks the "
-                "secrets mount — docker compose up -d atlas-proxy"))
-            return results
-        req2 = urllib.request.Request(probe_url, method="GET")
-        req2.add_header("Authorization", f"Bearer {tok}")
-        try:
-            urllib.request.urlopen(req2, timeout=5)
-            results.append(CheckResult(
-                "internal_auth", "pass",
-                "enabled and enforced (401 without token, 200 with)"))
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                results.append(CheckResult(
-                    "internal_auth", "fail",
-                    "host token rejected by the proxy (rotation without "
-                    "restart?)",
-                    "docker compose restart  # services reload the token"))
-            else:
-                results.append(CheckResult(
-                    "internal_auth", "pass",
-                    f"enforced (wrong token 401; valid token {e.code})"))
-    except Exception as e:
-        results.append(CheckResult(
-            "internal_auth", "skip",
-            f"token present; enforcement probe skipped ({type(e).__name__})"))
-    return results
+        return [CheckResult("internal_auth", "fail", detail)]
+    cannot = _services_cannot_read(token_mod.token_path(atlas_root))
+    if cannot:
+        return [CheckResult("internal_auth", "fail", cannot,
+                            "set ATLAS_PROXY_UID/GID and ATLAS_SANDBOX_UID/GID in .env to the ids of the "
+                            "file's owner (`atlas init` writes them), then docker compose up -d")]
+    # Each request is cheap and changes nothing. The lens's has no valid
+    # body, so with the right token it gets 422 from the route, not 401.
+    probes = [
+        ("proxy", "GET", f"{PROXY_URL}/v1/models", None),
+        ("lens", "POST", f"{LENS_URL}/internal/lens/score-text", {}),
+        ("v3", "POST", f"{V3_URL}/internal/outline", {"path": "doctor.py", "source": ""}),
+        ("sandbox", "GET", f"{SANDBOX_URL}/jobs", None),
+    ]
+    return [_probe_service_auth(name, method, url, body, tok) for name, method, url, body in probes]
 
 
 def check_status_dimensions() -> List[CheckResult]:

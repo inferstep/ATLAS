@@ -18,6 +18,12 @@ involved.
 | sandbox | `sandbox` | 1000:1000 (overridable via `ATLAS_SANDBOX_UID/GID`) | 8020 |
 | llama-server (`atlas-llama`, `inference/Dockerfile.v31`) | root (no `USER` directive) | 0:0 | 8080 (`EXPOSE`) |
 
+`docker-compose.yml` runs the proxy, the V3 service and the lens as
+`ATLAS_PROXY_UID:ATLAS_PROXY_GID`, and the sandbox as
+`ATLAS_SANDBOX_UID:ATLAS_SANDBOX_GID`: the installing user's ids, which
+`atlas init` writes. So each of them can read the service token, which
+`atlas init` makes readable for that user only (0600).
+
 The inference image is the exception to the non-root pattern: it runs as
 root inside its container, isolated by the container boundary and the
 localhost-only port publish rather than an unprivileged account.
@@ -34,8 +40,8 @@ other path (including the application code) is read-only to it.
 | Service | Writable at runtime | Why |
 |---|---|---|
 | atlas-proxy | *(none in the container fs)* | Reads config from env/mounts; the workspace and secrets are mounts; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
-| v3-service | `/data/telemetry` (the `v3-telemetry` volume), `$HOME` (`/home/appuser`) | Stage telemetry JSONL (fail-soft when the path is unwritable) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
-| geometric-lens | `$HOME` (`/home/lens`) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
+| v3-service | `/data/telemetry` (the `v3-telemetry` volume, mode 1777 in the image), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
+| geometric-lens | `$HOME` (`/tmp` under compose) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
 
 ## Dependency version recording

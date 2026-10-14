@@ -124,7 +124,10 @@ services:
     mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
       context: ./geometric-lens
+    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      - HOME=/tmp
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
       # The /embedding physical batch llama-server runs with (its `-ub`,
@@ -190,7 +193,10 @@ services:
     build:
       context: .
       dockerfile: v3-service/Dockerfile
+    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      - HOME=/tmp
       - ATLAS_INFERENCE_URL=http://llama-server:8080
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020

@@ -51,10 +51,11 @@ RUN cd /app && python -c "import main, adapters, pipeline, contract"
 # so Python never tries to write .pyc into the read-only /app.
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN useradd --create-home --uid 1001 --user-group appuser && \
-    # Pre-create the telemetry path owned by appuser: a named volume
-    # copies this ownership on first mount, so stage telemetry is
-    # writable without a root init step.
-    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry
+    # Pre-create the telemetry path: a named volume copies its owner and
+    # mode on first mount, so stage telemetry is writable without a root
+    # init step. Mode 1777, because docker-compose.yml runs the service as
+    # the installing user, not as appuser.
+    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 1777 /data/telemetry
 USER appuser
 ENV HOME=/home/appuser
 

@@ -74,6 +74,38 @@ def test_all_services_declare_restart_policy():
         )
 
 
+@pytest.mark.parametrize("service", ["geometric-lens", "v3-service", "sandbox"])
+def test_the_services_that_read_the_token_run_as_the_installing_user(service):
+    # `atlas init` makes the token file 0600 for the installing user and
+    # writes that user's ids for the proxy and the sandbox. A service that
+    # runs as its image's own user cannot read the file, and stops.
+    yaml = pytest.importorskip("yaml")
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    proxy = services["atlas-proxy"]["user"]
+    assert proxy == "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
+    assert services[service]["user"] == (proxy if service != "sandbox" else proxy.replace("PROXY", "SANDBOX"))
+
+
+@pytest.mark.parametrize("service", ["geometric-lens", "v3-service"])
+def test_the_lens_and_v3_have_a_home_that_their_user_can_write(service):
+    # The images' HOME belongs to their own user (1001); /tmp is 1777.
+    yaml = pytest.importorskip("yaml")
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    assert "HOME=/tmp" in services[service]["environment"]
+
+
+@pytest.mark.parametrize("service, dockerfile, folder", [
+    ("v3-service", "v3-service/Dockerfile", "/data/telemetry"),
+])
+def test_a_folder_that_a_service_writes_on_a_named_volume_is_writable_for_any_user(service, dockerfile, folder):
+    # A new named volume takes the owner and mode of the image's folder, and
+    # the service runs as the installing user, not as the image's own user.
+    yaml = pytest.importorskip("yaml")
+    volumes = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"][service]["volumes"]
+    assert [v for v in volumes if v.endswith(f":{folder}") and not v.startswith((".", "/", "$"))]
+    assert f"chmod 1777 {folder}" in (ROOT / dockerfile).read_text()
+
+
 def test_legacy_runtime_keys_are_upgrade_fallbacks_only():
     compose = (ROOT / "docker-compose.yml").read_text()
 

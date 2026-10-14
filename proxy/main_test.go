@@ -522,6 +522,32 @@ func TestWithRequestIDHonorsClientID(t *testing.T) {
 	}
 }
 
+func TestReadServiceTokenStopsOnAFileThatIsThereButCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	if token, err := readServiceToken(filepath.Join(dir, "not-there")); token != "" || err != nil {
+		t.Fatalf("a file that is not there: %q, %v; want no token and no error", token, err)
+	}
+	readable := filepath.Join(dir, "readable")
+	if err := os.WriteFile(readable, []byte("atlas-st-inject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := readServiceToken(readable); token != "atlas-st-inject" || err != nil {
+		t.Fatalf("a file that can be read: %q, %v; want its token", token, err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file of mode 000, so the case of a file that cannot be read needs a user that is not root")
+	}
+	unreadable := filepath.Join(dir, "service-token")
+	if err := os.WriteFile(unreadable, []byte("atlas-st-inject\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readServiceToken(unreadable)
+	want := "the service token file " + unreadable + " cannot be read"
+	if err == nil || !strings.Contains(err.Error(), want) || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("a file that cannot be read: %v; want an error that says %q", err, want)
+	}
+}
+
 func TestTokenTransportForwardsRequestID(t *testing.T) {
 	defer withToken(t, "")() // token off — isolate the ID-forwarding path
 	var got string

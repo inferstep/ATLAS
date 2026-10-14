@@ -73,18 +73,18 @@ app = FastAPI(title="ATLAS Code Execution Sandbox")
 
 
 def _load_service_token() -> str:
-    """Internal-auth token (Authorization: Bearer). Empty = auth
-    disabled (pre-token behavior; `atlas doctor` warns). Never logged.
-    This is the highest-value enforcement point in the stack — /shell
-    and /execute run arbitrary commands against the bind-mounted
-    workspace."""
+    """Internal-auth token (Authorization: Bearer). No file = auth disabled (`atlas doctor` warns). Never logged. The
+    highest-value enforcement point: /shell and /execute run commands against the bind-mounted workspace."""
     path = os.getenv("ATLAS_SERVICE_TOKEN_FILE",
                      "/run/atlas-secrets/service-token")
     try:
         with open(path) as fh:
             return fh.read().strip()
-    except OSError:
+    except FileNotFoundError:
         return ""
+    except OSError as error:  # there but unreadable: without a token the sandbox would check nothing
+        raise SystemExit(f"the service token file {path} cannot be read ({error.strerror}), so the sandbox stops rather "
+                         f"than run with no check. It runs as user {os.getuid()}: make the file readable for that user.") from error
 
 
 SERVICE_TOKEN = _load_service_token()

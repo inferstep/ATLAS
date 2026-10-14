@@ -140,12 +140,15 @@ def test_disable_value_turns_telemetry_off(monkeypatch, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_unwritable_dir_disables_without_breaking_generation(monkeypatch, tmp_path):
+def test_unwritable_dir_disables_without_breaking_generation(monkeypatch, tmp_path, capsys):
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("file, not a directory")
     monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", str(blocker / "telemetry"))
     service = _make_service(monkeypatch)
     assert service.telemetry_dir is None
+    # One line at start says so, with the repair that keeps a volume's data.
+    assert (f"docker compose run --rm --no-deps --user root v3-service chown -R {os.getuid()}:{os.getgid()} "
+            f"{blocker / 'telemetry'}") in capsys.readouterr().out
 
     result = service.run("write a real dashboard", task_id="d8-unwritable")
     assert result["phase_solved"] == "none"

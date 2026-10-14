@@ -23,8 +23,14 @@ def _load() -> str:
     try:
         with open(path) as fh:
             return fh.read().strip()
-    except OSError:
+    except FileNotFoundError:
         return ""
+    except OSError as error:
+        # The file is there but cannot be read. Without a token the service
+        # would check nothing, so it stops and says why.
+        raise SystemExit(f"the service token file {path} cannot be read ({error.strerror}), so the lens "
+                         f"stops rather than run with no check. It runs as user {os.getuid()}: make the file readable "
+                         f"for that user.") from error
 
 
 SERVICE_TOKEN = _load()

@@ -114,8 +114,7 @@ def _resolve_telemetry_dir() -> Optional[Path]:
     ``ATLAS_V3_TELEMETRY_DIR`` names the directory; a disable value
     (``0``/``off``/``none``/``disabled``/``false``) turns telemetry off;
     unset/empty falls back to ``/data/telemetry`` when writable (the
-    compose volume), else telemetry is disabled. Resolution never
-    raises — telemetry must not break generation.
+    compose volume), else telemetry is disabled. Never raises: telemetry must not break generation.
     """
     configured = os.environ.get("ATLAS_V3_TELEMETRY_DIR", "").strip()
     if configured.lower() in _TELEMETRY_DISABLE_VALUES:
@@ -129,8 +128,9 @@ def _resolve_telemetry_dir() -> Optional[Path]:
         return candidate
     except OSError as e:
         if configured:
-            print(f"  [telemetry] {candidate} not writable ({e}) — "
-                  f"stage telemetry disabled", flush=True)
+            print(f"  [telemetry] {candidate} not writable ({e}) — stage telemetry disabled. To keep its data and write it "
+                  f"again, run once on the host: docker compose run --rm --no-deps --user root v3-service chown -R "
+                  f"{os.getuid()}:{os.getgid()} {candidate}", flush=True)
         return None
 
 
