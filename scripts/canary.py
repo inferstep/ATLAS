@@ -492,12 +492,14 @@ def job_log(api_root: str, repo: str, job: int, key: str) -> str:
     out made a whole check "not judged"."""
     request = urllib.request.Request(f"{api_root}/repos/{repo}/actions/jobs/{job}/logs",
                                      headers={"Authorization": f"Bearer {key}", "Accept": "application/vnd.github+json"})
-    for last_try in (False, True):
-        try:
-            return read_log_once(request, job)
-        except OSError as error:
-            if last_try:
-                raise RuntimeError(f"the log of job {job} could not be read, in two tries: {error}") from error
+    try:
+        return read_log_once(request, job)
+    except OSError:
+        pass  # the first failure is not the end: the read is tried once more, below
+    try:
+        return read_log_once(request, job)
+    except OSError as error:
+        raise RuntimeError(f"the log of job {job} could not be read, in two tries: {error}") from error
 
 
 def find_pull(checks, repo: str, key: str, manifest: dict) -> tuple[int | None, list[Finding]]:
