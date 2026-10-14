@@ -268,7 +268,7 @@ def room_on_disk(layers: list, stacks: list) -> float:
 
 
 def room_of_a_build(service: str, must, failed) -> float:
-    """The room in GB that the build of a service's image is given: that of the whole image that the registry has
-    for the service, with no layer counted as here. What a build writes cannot be known before it; this is the
-    careful side."""
+    """The room in GB that the build of a service's image is given: that of the finished image as the registry has
+    it for the service, with no layer counted as here. What a build writes cannot be known before it. It can be
+    more than its finished image: the images that the build starts from, and its cache. The reserve is for that."""
     return room_on_disk(layers_in_the_registry(service, f"{REGISTRY}/{IMAGES[service]}:{TAG}", must, failed), [])

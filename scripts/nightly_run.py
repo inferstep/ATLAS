@@ -164,6 +164,7 @@ PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 1
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
 NOT_RUN = "not run: the card was in use"
 STALE = "not run: the images are not of the head of the branch yet"
+NO_ROOM = "not run: too little room"
 REPO_URL, BRANCH = "https://github.com/inferstep/ATLAS.git", "dev"
 # The file of the run's folder that holds the time when a look found a process on the card with no lock, and for how
 # many minutes after it the looks start nothing.
@@ -1120,9 +1121,10 @@ def not_our_own_code(tip: str) -> str:
 
 def settled(report: dict) -> bool:
     """Whether the run for a commit needs no second run: it made a status, or it did not take place for a reason that
-    the commit itself carries. A run that found the card in use, or images that were not of the head yet, settles nothing."""
+    the commit itself carries. A run that found the card in use, images that were not of the head yet, or too little
+    room on Docker's disk, settles nothing."""
     result = str(report.get("result", ""))
-    return isinstance(report.get("status"), dict) or (result.startswith("not run: ") and not result.startswith((NOT_RUN, STALE)))
+    return isinstance(report.get("status"), dict) or (result.startswith("not run: ") and not result.startswith((NOT_RUN, STALE, NO_ROOM)))
 
 
 def smoke_that_is_due(args, today: list, hour: int) -> tuple:

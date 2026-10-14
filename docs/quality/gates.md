@@ -913,9 +913,11 @@ this. One look:
     together. The measure: the five images took 17.1 GB on disk for 4.18 GB
     compressed when this was written. One image alone took between 3.3 and
     6.3 times its compressed size; the reserve is for that difference.
-  - The room of a build: that of the whole image that the registry has for
-    the service, with no layer counted as there. What a build writes
-    cannot be known before it.
+  - The room of a build: that of the finished image as the registry has
+    it for the service, with no layer counted as there. What a build
+    writes cannot be known before it. It can be more than its finished
+    image: the images that the build starts from, and its cache. The
+    reserve is for that.
   - The room is read after the last image of the service was removed: the
     removal frees room, and it can take away layers that the new image
     has too. So when a pull is refused, that last image is gone, and the

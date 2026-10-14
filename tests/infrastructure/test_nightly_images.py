@@ -85,6 +85,18 @@ def test_an_image_is_pulled_by_its_digest_and_gets_the_runs_own_name(tmp_path):
     assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": [TODAY]}
 
 
+def test_what_was_pulled_is_written_down_after_each_image_so_a_run_that_ends_in_the_middle_knows_its_images(tmp_path):
+    docker = Docker()
+
+    def room_for_the_proxy_only(step, room):
+        if "atlas-lens" in step:
+            raise LookupError(step)
+
+    with pytest.raises(LookupError, match="the pull of ghcr.io/inferstep/atlas-lens@"):
+        images.take(tmp_path, ["atlas-proxy", "geometric-lens"], docker.must, docker.ended, RuntimeError, room_for_the_proxy_only)
+    assert json.loads((tmp_path / "night-images.json").read_text()) == {"atlas-proxy": [TODAY]}
+
+
 KEPT = f"kept: {EVAL} names the same image, and Docker would remove that tag too"
 
 
@@ -129,6 +141,7 @@ def test_the_last_image_goes_before_the_new_one_comes_and_only_by_a_name_that_th
     pytest.param([], 4, id="no image here has a layer of it"),
     pytest.param([["sha256:low", "sha256:another"]], 2, id="an image here stands on the same lowest layer"),
     pytest.param([["sha256:low"], ["sha256:low", "sha256:mid", "sha256:top", "sha256:more"]], 0, id="an image here has every layer"),
+    pytest.param([["sha256:low", "sha256:mid", "sha256:top"], ["sha256:low"]], 0, id="the image that has every layer is listed first"),
     pytest.param([["sha256:another", "sha256:low", "sha256:mid", "sha256:top"]], 4, id="the same layers on another lowest layer do not count"),
 ])
 def test_the_room_of_an_image_is_that_of_its_layers_that_are_not_here_yet(stacks, compressed_gb):
