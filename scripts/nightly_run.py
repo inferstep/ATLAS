@@ -5,8 +5,8 @@ One run, started by a timer on the development server, in a folder of its own
 (--dir). Only one run of a folder goes at a time. It:
 
   1. takes the head of `dev` into <dir>/tree. When that changes this very
-     file or the judge beside it (the run was started from the tree), the
-     new copy does the run;
+     file or one of the three beside it (the judge, the images and the
+     statuses; the run was started from the tree), the new copy does the run;
   2. stops a stack of its own name that an earlier run left;
   3. takes the `dev` images of the registry under names of its own, so that
      no tag of the server moves (scripts/nightly_images.py), and compares
