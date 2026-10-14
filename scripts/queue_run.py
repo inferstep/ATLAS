@@ -48,6 +48,8 @@ class NoRun(Exception):
     """The commit has no run to take results from, or the run did not end in time."""
 
 
+# The same function is in scripts/checks_ran.py; keep the two alike. They are two copies because checks-ran.yml
+# runs the base's copy of checks_ran.py alone, with no other file of the tree beside it.
 def answer_of(request: urllib.request.Request, what: str):
     """GitHub's answer to one request, decoded, and its Link header. Tried again after WAITS when GitHub does not
     answer; an answer that says no ends it at once."""

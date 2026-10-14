@@ -308,6 +308,8 @@ def settle(read_runs: Callable[[], dict], expected: list[str], limit: float,
         pause(POLL_SECONDS)
 
 
+# The same function is in scripts/queue_run.py; keep the two alike. This file cannot import it from there:
+# checks-ran.yml runs the base's copy of this one file alone, with no other file of the tree beside it.
 def answer_of(request: urllib.request.Request, what: str):
     """GitHub's answer to one request, decoded, and its Link header. Tried again after WAITS when GitHub does not
     answer; an answer that says no ends it at once."""
