@@ -34,6 +34,10 @@ from typing import Callable, NamedTuple
 import yaml
 
 API = "https://api.github.com"
+# A short outage of GitHub is waited out. After an answer 5xx, or no answer in time, the question is asked again
+# after 10, 30, 60 and 120 seconds: the last try comes almost four minutes after the first. An answer that says no
+# (4xx) is not asked again, because it would say the same.
+WAITS = (10, 30, 60, 120)
 WORKFLOW_DIR = ".github/workflows"
 DEFAULT_TYPES = {"pull_request": ("opened", "synchronize", "reopened"), "merge_group": ("checks_requested",)}
 FILTER_KEYS = ("branches", "branches-ignore", "paths", "paths-ignore")
@@ -302,6 +306,24 @@ def settle(read_runs: Callable[[], dict], expected: list[str], limit: float,
         pause(POLL_SECONDS)
 
 
+def answer_of(request: urllib.request.Request, what: str):
+    """GitHub's answer to one request, decoded, and its Link header. Tried again after WAITS when GitHub does not
+    answer; an answer that says no ends it at once."""
+    for wait in (*WAITS, None):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response), response.headers.get("Link", "")
+        except urllib.error.HTTPError as error:
+            if error.code < 500:
+                raise RuntimeError(f"GitHub answered {what} with {error.code} {error.reason}") from error
+            last = error
+        except (urllib.error.URLError, TimeoutError) as error:
+            last = error
+        if wait is not None:
+            time.sleep(wait)
+    raise RuntimeError(f"GitHub did not answer {what} in {len(WAITS) + 1} tries over {sum(WAITS)} s: {last}") from last
+
+
 def api(path: str, token: str) -> list:
     """Every page of a GitHub API answer, decoded."""
     url, pages = f"{API}/{path}", []
@@ -309,16 +331,8 @@ def api(path: str, token: str) -> list:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     while url:
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
-                    pages.append(json.load(response))
-                    link = response.headers.get("Link", "")
-                break
-            except (urllib.error.URLError, TimeoutError) as error:
-                if attempt == 2 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
-                    raise RuntimeError(f"GitHub did not answer {url}: {error}") from error
-                time.sleep(10)
+        page, link = answer_of(urllib.request.Request(url, headers=headers), url)
+        pages.append(page)
         following = re.search(r'<([^>]+)>;\s*rel="next"', link)
         url = following.group(1) if following else ""
     return pages

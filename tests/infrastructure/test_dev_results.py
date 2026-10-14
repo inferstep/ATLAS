@@ -4,9 +4,12 @@ The workflow that does this runs only on a push to dev, so most of what can
 go wrong there is held here: the lookup of the queue's run, the shape of the
 workflows, and the steps the two upload actions share.
 """
+import http.server
 import importlib.util
+import json
 import re
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -333,3 +336,52 @@ def test_a_pull_request_that_changes_the_results_path_tries_the_lookup_and_sends
     lookup_step = next(step for step in job["steps"] if step.get("id") == "run")
     assert "scripts/queue_run.py" in lookup_step["run"] and "--plain" in lookup_step["run"]
     assert 'git rev-list --first-parent -n 5 "$BASE"' in lookup_step["run"]
+
+
+class _GitHub(http.server.BaseHTTPRequestHandler):
+    """A stand-in for GitHub's API. It answers each request with the next status of `statuses`: a page for 200, and
+    a short message for any other."""
+
+    statuses = []
+
+    def do_GET(self):
+        status = self.statuses.pop(0)
+        body = json.dumps({"total_count": 0} if status == 200 else {"message": "a planted answer"}).encode()
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_not_asked_again(lookup, monkeypatch):
+    server = http.server.HTTPServer(("127.0.0.1", 0), _GitHub)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    slept = []
+    monkeypatch.setattr(lookup, "API", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(lookup.time, "sleep", slept.append)
+    try:
+        # Two answers 5xx, then the answer: three tries, with a wait that grows.
+        _GitHub.statuses = [502, 503, 200]
+        assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30] and _GitHub.statuses == []
+        # An answer that says no is not asked again, and the words say what GitHub answered.
+        _GitHub.statuses, slept[:] = [404], []
+        with pytest.raises(RuntimeError, match=r"^GitHub answered \S+ with 404 Not Found$"):
+            lookup.api("repos/o/r/actions/runs", "a-token")
+        assert slept == [] and _GitHub.statuses == []
+        # A longer outage: five tries, almost four minutes, and the words say that GitHub did not answer.
+        _GitHub.statuses = [502] * 5
+        with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: HTTP Error 502: Bad Gateway$"):
+            lookup.api("repos/o/r/actions/runs", "a-token")
+        assert slept == [10, 30, 60, 120] and _GitHub.statuses == []
+    finally:
+        server.shutdown()
+        server.server_close()
+    # GitHub cannot be reached at all: the same tries, and the same words.
+    slept[:] = []
+    with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: <urlopen error"):
+        lookup.api("repos/o/r/actions/runs", "a-token")
+    assert slept == [10, 30, 60, 120]
