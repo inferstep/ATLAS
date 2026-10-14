@@ -193,7 +193,13 @@ jobs:
           # Makes the test gate write an LCOV report, the raw data and the
           # test results there.
           ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
-        run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+        # tests/infrastructure is the long subset: its tests run in four
+        # processes at once, one for each CPU of the runner. Every test still
+        # runs once, and the result file holds every test. The other subsets
+        # take seconds and stay in one process.
+        run: >-
+          python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+          --pytest-workers "${{ matrix.subset == 'tests/infrastructure' && 4 || 1 }}"
 
       - name: coverage total
         if: ${{ !cancelled() }}

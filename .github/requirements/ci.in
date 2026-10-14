@@ -5,6 +5,10 @@ pytest
 # Coverage output for the pytest jobs (ATLAS_COVERAGE_DIR in
 # scripts/production-readiness.py).
 pytest-cov
+# Several worker processes for one pytest run (--pytest-workers in
+# scripts/production-readiness.py). The job `pytest (tests/infrastructure)`
+# uses four.
+pytest-xdist
 pyyaml
 ruff==0.16.10
 mypy==2.4.0
