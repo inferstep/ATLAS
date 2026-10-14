@@ -535,12 +535,21 @@ def test_the_gates_page_names_the_jobs_this_check_does_not_judge(ran):
 
 class _GitHub(http.server.BaseHTTPRequestHandler):
     """A stand-in for GitHub's API. It answers each request with the next status of `statuses`: a page for 200, and
-    a short message for any other."""
+    a short message for any other. "silent" ends the connection with no answer; "broken" begins the page and ends
+    the connection in its middle."""
 
     statuses = []
 
     def do_GET(self):
         status = self.statuses.pop(0)
+        if status == "silent":
+            return
+        if status == "broken":
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b'{"total_')
+            return
         body = json.dumps({"total_count": 0} if status == 200 else {"message": "a planted answer"}).encode()
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
@@ -560,6 +569,10 @@ def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_no
     try:
         # Two answers 5xx, then the answer: three tries, with a wait that grows.
         _GitHub.statuses = [502, 503, 200]
+        assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30] and _GitHub.statuses == []
+        # A connection that ends with no answer, and an answer that breaks off in its middle, are asked again too.
+        _GitHub.statuses, slept[:] = ["silent", "broken", 200], []
         assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
         assert slept == [10, 30] and _GitHub.statuses == []
         # An answer that says no is not asked again, and the words say what GitHub answered.

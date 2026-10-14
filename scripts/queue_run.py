@@ -20,6 +20,7 @@ Usage: queue_run.py --commit SHA [--wait-minutes 30] [--plain]
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -29,7 +30,8 @@ import urllib.request
 from typing import Callable
 
 API = "https://api.github.com"
-# A short outage of GitHub is waited out. After an answer 5xx, or no answer in time, the question is asked again
+# A short outage of GitHub is waited out. After an answer 5xx, no answer in time, a connection that ends with no
+# answer, or an answer that breaks off in its middle, the question is asked again
 # after 10, 30, 60 and 120 seconds: the last try comes almost four minutes after the first. An answer that says no
 # (4xx) is not asked again, because it would say the same.
 WAITS = (10, 30, 60, 120)
@@ -57,7 +59,7 @@ def answer_of(request: urllib.request.Request, what: str):
             if error.code < 500:
                 raise RuntimeError(f"GitHub answered {what} with {error.code} {error.reason}") from error
             last = error
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
             last = error
         if wait is not None:
             time.sleep(wait)
