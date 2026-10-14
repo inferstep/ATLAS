@@ -3694,6 +3694,9 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 		turns := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case strings.HasPrefix(r.URL.Path, "/slots/"):
+				http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+				return
 			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 				return
@@ -3932,6 +3935,9 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 		turns := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
+			case strings.HasPrefix(r.URL.Path, "/slots/"):
+				http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+				return
 			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 				return

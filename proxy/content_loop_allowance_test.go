@@ -234,6 +234,9 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 	var cancel context.CancelFunc
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasPrefix(r.URL.Path, "/slots/"):
+			http.NotFound(rw, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
 			return

@@ -2395,6 +2395,7 @@ func TestFencedSubCallSalvagesReasoningOnAWatchdogCut(t *testing.T) {
 func TestFencedSubCallCutsAStreamThatOpensAndGoesSilent(t *testing.T) {
 	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "60") // the full budget
 	t.Setenv("ATLAS_FENCED_STALL_SEC", "2")          // the stalled deadline
+	testEnded := make(chan struct{})                 // so the stand-in does not outlive the test
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -2407,10 +2408,12 @@ func TestFencedSubCallCutsAStreamThatOpensAndGoesSilent(t *testing.T) {
 			sseWrite(w, `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null}}]}`)
 			select {
 			case <-r.Context().Done():
+			case <-testEnded:
 			case <-time.After(30 * time.Second):
 			}
 		}))
 	defer srv.Close()
+	defer close(testEnded)
 
 	ctx := llmTestCtx(srv.URL)
 	start := time.Now()
