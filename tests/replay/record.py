@@ -20,11 +20,18 @@ the proxy itself writes can be expected.
 The cases of REAL_MODEL have no written replies. A real model server answers
 them, at that port of this machine, and the recording keeps what it said and
 which model it was. Such a session is one sample: the model answers in
-another way the next time.
+another way the next time. With a real model the commands of a session are
+the model's own choice, so record such a session in a container.
+
+No recording holds a word of the machine that it was made on: the sandbox
+gets a small fixed environment, and a recording whose text holds the home
+folder or the name of the user who records, or the folder of the model's
+file, is not written.
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 import http.client
 import importlib.util
 import json
@@ -136,7 +143,7 @@ def scripted_model(replies: list, again: bool = False):
     """The model of a case: one written reply per call. With `again` the last reply is given to every later call."""
     calls = []
 
-    def answer(method, path, body):
+    def answer(method, path, body, _give_on):
         calls.append(path)
         if len(calls) > len(replies) and not again:
             raise RuntimeError(f"the case has {len(replies)} model replies and the proxy asked for one more")
@@ -144,7 +151,7 @@ def scripted_model(replies: list, again: bool = False):
     return answer
 
 
-def lens(method, path, body):
+def lens(method, path, body, _give_on):
     if path == "/internal/lens/score-per-step":
         return 200, "application/json", json.dumps({
             "enabled": True, "gx_available": True, "n_tokens": 12, "latency_ms": 1,
@@ -154,13 +161,29 @@ def lens(method, path, body):
     return 200, "application/json", json.dumps({"status": "ok"})
 
 
-def v3_not_available(method, path, body):
+def v3_not_available(method, path, body, _give_on):
     return 503, "text/plain", "unavailable"
+
+
+def model_server(port: int):
+    """Send each request on to a real model server, and give its answer on to the proxy piece by piece, as it comes.
+    So the proxy waits for the model as it does in a live session, and not until the whole reply is there."""
+    def answer(method, path, body, give_on):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
+        connection.request(method, path, body.encode("utf-8"), {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        kind, pieces = response.headers.get("Content-Type", "application/json"), []
+        while piece := response.read1(65536):
+            give_on(response.status, kind, piece)
+            pieces.append(piece)
+        connection.close()
+        return response.status, kind, b"".join(pieces).decode("utf-8", "replace")
+    return answer
 
 
 def pass_through(port: int, token: str):
     """Send each request on to a real service and give back its answer."""
-    def answer(method, path, body):
+    def answer(method, path, body, _give_on):
         connection = http.client.HTTPConnection("127.0.0.1", port, timeout=120)
         connection.request(method, path, body.encode("utf-8"), {"Content-Type": "application/json",
                                                                "Authorization": f"Bearer {token}"})
@@ -171,14 +194,31 @@ def pass_through(port: int, token: str):
     return answer
 
 
-def about_the_model(port: int) -> dict:
+def about_the_model(port: int) -> tuple:
     """Which model answered, for the `source` of a recording: the name of its file and the build of its server.
-    The folder of the file is left out: it is a path of the machine that the model server runs on."""
-    status, _kind, text = pass_through(port, PLACEHOLDER)("GET", "/props", "")
-    if status != 200:
-        raise SystemExit(f"the model server at port {port} did not say which model it is: /props gave status {status}")
+    And, apart from that, the folder of the file: it is a path of the machine that the model server runs on, so it
+    is left out of the source, and no recording may hold it."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    connection.request("GET", "/props")
+    response = connection.getresponse()
+    text = response.read().decode("utf-8", "replace")
+    connection.close()
+    if response.status != 200:
+        raise SystemExit(f"the model server at port {port} did not say which model it is: /props gave status {response.status}")
     said = json.loads(text)
-    return {"model": Path(str(said.get("model_path") or "not named")).name, "model_server": str(said.get("build_info") or "not named")}
+    file = Path(str(said.get("model_path") or "not named"))
+    return {"model": file.name, "model_server": str(said.get("build_info") or "not named")}, str(file.parent)
+
+
+def of_a_machine(text: str, model_folder: str) -> list:
+    """The words in a text that belong to a machine and to no recording: the home folder and the name of the user
+    who records, and the folder of the model's file on the model server's machine."""
+    try:
+        user = getpass.getuser()
+    except (KeyError, OSError):
+        user = ""
+    folder = model_folder.rstrip("/") + "/" if model_folder.strip("/.") else ""
+    return sorted(word for word in {str(Path.home()), user, folder} if word.strip("/") and word in text)
 
 
 def start_sandbox(root: Path, workspace_root: Path):
@@ -188,7 +228,10 @@ def start_sandbox(root: Path, workspace_root: Path):
     (root / "sandbox-scratch").mkdir()
     # The executor runs `python`; the interpreter that runs this recording provides it.
     path = os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")])
-    env = {**os.environ, "PATH": path, "WORKSPACE_BASE": str(root / "sandbox-scratch"), "MAX_EXECUTION_TIME": "60",
+    # A small fixed environment, as the proxy of a recording gets: a command of the session can print its
+    # environment, and what it prints is kept in the recording.
+    (root / "sandbox-home").mkdir()
+    env = {"PATH": path, "HOME": str(root / "sandbox-home"), "WORKSPACE_BASE": str(root / "sandbox-scratch"), "MAX_EXECUTION_TIME": "60",
            "ATLAS_SANDBOX_WORKSPACE_ROOT": str(workspace_root), "ATLAS_SERVICE_TOKEN_FILE": str(token)}
     process = subprocess.Popen([sys.executable, "-m", "uvicorn", "executor_server:app", "--host", "127.0.0.1",
                                 "--port", str(port), "--log-level", "error"], cwd=stage.REPO / "sandbox", env=env,
@@ -212,11 +255,11 @@ def record(name: str, model_at: int | None = None) -> dict:
         raise SystemExit(f"the case {name} " + ("takes its replies from a real model server: give its port with --model-at"
                                                 if real else "has written replies: it takes no --model-at"))
     case_ = real_model_case(name) if real else CASES[name]
-    model = pass_through(model_at, PLACEHOLDER) if real else scripted_model(case_["model"], case_["model_again"])
+    model = model_server(model_at) if real else scripted_model(case_["model"], case_["model_again"])
+    which_model, model_folder = about_the_model(model_at) if real else ({}, "")
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=stage.REPO, capture_output=True, text=True,
                             check=True).stdout.strip()
-    made = {"source": {**case_["source"], "commit": commit, **(about_the_model(model_at) if real else {})},
-            "files": case_["files"], "request": case_["request"]}
+    made = {"source": {**case_["source"], "commit": commit, **which_model}, "files": case_["files"], "request": case_["request"]}
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         binary = stage.build_proxy(root)
@@ -234,6 +277,9 @@ def record(name: str, model_at: int | None = None) -> dict:
         problems = recording.differences(made, replayed)
     if problems:
         raise SystemExit(f"the recording of {name} does not replay cleanly, so it was not written:\n  " + "\n  ".join(problems))
+    words = of_a_machine(json.dumps(made, ensure_ascii=False), model_folder)
+    if words:
+        raise SystemExit(f"the recording of {name} holds words of a machine, so it was not written: {', '.join(words)}")
     return made
 
 

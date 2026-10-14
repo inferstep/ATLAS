@@ -11,10 +11,12 @@ The tests of the harness itself come after the replays: a recording that is
 changed in one place must be reported at that place, or the net has a hole.
 """
 import copy
+import http.client
 import http.server
 import json
 import re
 import threading
+import time
 
 import pytest
 
@@ -190,41 +192,50 @@ def test_what_varies_between_runs_is_left_out_and_nothing_else(normal):
 
 
 class _ModelServer(http.server.BaseHTTPRequestHandler):
-    """A stand-in for a real model server. It says which model it is, and it gives each reply of its list as a stream
-    in small pieces, as a real one does."""
+    """A stand-in for a real model server. It says which model it is. It gives each reply of its list as a stream
+    in small pieces, and it takes about a second for a reply, as a real one takes time: half a second before the
+    first piece, and a little between the pieces."""
 
     replies = []
 
     def do_GET(self):
-        self.answer("application/json", json.dumps({"build_info": "b1-stand-in", "model_path": "/a/folder/of/the/server/a-model.gguf"}))
+        body = json.dumps({"build_info": "b1-stand-in", "model_path": "/a/folder/of/the/server/a-model.gguf"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         self.rfile.read(int(self.headers["Content-Length"]))
         reply = json.dumps(self.replies.pop(0))
         lines = [json.dumps({"choices": [{"delta": {"content": reply[at:at + 9]}}]}) for at in range(0, len(reply), 9)]
         lines += [json.dumps({"choices": [], "usage": {"total_tokens": 20, "prompt_tokens": 15, "completion_tokens": 5}}), "[DONE]"]
-        self.answer("text/event-stream", "".join(f"data: {line}\n\n" for line in lines))
-
-    def answer(self, kind, text):
-        body = text.encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        self.wfile.write(body)
+        time.sleep(0.5)
+        for line in lines:
+            self.wfile.write(f"data: {line}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            time.sleep(0.5 / len(lines))
 
     def log_message(self, *args):
         pass
 
 
-def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_which_model_it_was():
-    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, record.DONE]
+@pytest.fixture
+def model_server():
+    """The stand-in for a model server, started; gives its port."""
     server = http.server.HTTPServer(("127.0.0.1", 0), _ModelServer)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        made = record.record("real_model_edit", model_at=server.server_port)
-    finally:
-        server.shutdown()
+    yield server.server_port
+    server.shutdown()
+
+
+def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_which_model_it_was(model_server):
+    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, record.DONE]
+    made = record.record("real_model_edit", model_at=model_server)
     # The folder of the model's file is a path of the server's machine, and it is not in the recording.
     assert made["source"] == {"task": record.TASK, "kind": "e2e", "model_replies": "captured", "what": "a session that a real model answers",
                               "commit": made["source"]["commit"], "model": "a-model.gguf", "model_server": "b1-stand-in"}
@@ -232,6 +243,52 @@ def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_w
     said = [exchange["response"]["body"] for exchange in made["exchanges"] if exchange["service"] == "model"]
     assert len(said) == 4 and all(body.count("data: ") > 5 for body in said)
     assert made["expected"]["events"][-1]["type"] == "done"
+
+
+def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_when_the_reply_is_whole(model_server):
+    _ModelServer.replies = [record.READ]
+    st = stage.Stage(upstreams={"model": record.model_server(model_server)})
+    ports = st.start()
+    try:
+        # What the proxy does: it asks the stage's stand-in for the model, and reads the answer as it comes.
+        connection = http.client.HTTPConnection("127.0.0.1", ports["model"], timeout=30)
+        connection.request("POST", "/v1/chat/completions", "{}", {"Content-Type": "application/json"})
+        response, came = connection.getresponse(), []
+        while response.read1(65536):
+            came.append(time.monotonic())
+    finally:
+        st.stop()
+    # The stand-in model server takes half a second from its first piece to its last. So do the pieces here.
+    assert len(came) > 5 and came[-1] - came[0] > 0.3
+    assert st.exchanges[0]["response"]["body"].endswith("data: [DONE]\n\n")
+
+
+def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_written(model_server):
+    done = {"type": "done", "summary": "Fixed the NameError. The model is in /a/folder/of/the/server/ on my machine."}
+    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, done]
+    with pytest.raises(SystemExit, match="holds words of a machine, so it was not written: /a/folder/of/the/server/"):
+        record.record("real_model_edit", model_at=model_server)
+
+
+def test_the_words_of_a_machine_are_the_home_folder_and_the_name_of_the_user_and_the_folder_of_the_models_file(monkeypatch):
+    monkeypatch.setenv("HOME", "/a/home/of/someone")
+    monkeypatch.setenv("LOGNAME", "someone-who-records")
+    text = "a path /a/home/of/someone/x, a name someone-who-records, and a file in /models/of/it/file.gguf"
+    assert record.of_a_machine(text, "/models/of/it") == ["/a/home/of/someone", "/models/of/it/", "someone-who-records"]
+    assert record.of_a_machine("a text with /models/of/its own and nothing else", "/models/of/it") == []
+
+
+def test_the_sandbox_of_a_recording_gets_a_small_fixed_environment_and_nothing_of_the_person_who_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("A_VALUE_OF_THE_PERSON_WHO_RECORDS", "it must not come into a recording")
+    (tmp_path / "workspace").mkdir()
+    port, sandbox = record.start_sandbox(tmp_path, tmp_path / "workspace")
+    try:
+        said = record.pass_through(port, record.PLACEHOLDER)("POST", "/shell", json.dumps({"command": "env", "cwd": str(tmp_path / "workspace"), "timeout": 30}), None)
+    finally:
+        sandbox.terminate()
+        sandbox.communicate(timeout=10)
+    names = {line.split("=")[0] for line in json.loads(said[2])["stdout"].splitlines()}
+    assert "A_VALUE_OF_THE_PERSON_WHO_RECORDS" not in names and "PATH" in names, names
 
 
 def test_a_case_of_a_real_model_and_a_port_go_together():

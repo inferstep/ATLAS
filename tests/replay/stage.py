@@ -1,7 +1,9 @@
 """The stand-ins for the four services the proxy calls, and the proxy itself as a built binary.
 
 A Stage runs one HTTP server per service. In record mode each request is
-answered by a function and the exchange is kept. In play mode each request is
+answered by a function and the exchange is kept. The function gets a way to
+give a piece of its answer on to the proxy at once (`give_on`); one that does
+not use it answers whole. In play mode each request is
 compared with the next recorded request and answered with the recorded
 answer; the first request that differs is kept as the mismatch, and from then
 on the stage answers with an error, because the rest of the recording no
@@ -103,14 +105,14 @@ class Stage:
             text = text.replace(f"127.0.0.1:{port}", f"<{service}>")
         return text
 
-    def answer(self, service: str, method: str, path: str, body: str):
+    def answer(self, service: str, method: str, path: str, body: str, give_on=None):
         clocked = clocked_answer(service, method, path)
         if clocked:
             return clocked
         request = {"service": service, "method": method, "path": path, "request": self.plain(body)}
         with self.lock:
             if self.upstreams is not None:
-                status, content_type, text = self.upstreams[service](method, path, body)
+                status, content_type, text = self.upstreams[service](method, path, body, give_on)
                 self.exchanges.append({**request, "response": {"status": status, "content_type": content_type,
                                                                "body": self.plain(text)}})
                 return status, content_type, text
@@ -150,9 +152,24 @@ class Stage:
             def log_message(self, *args):
                 pass
 
+            given_on = False
+
+            def give_on(self, status: int, content_type: str, piece: bytes):
+                """Give a piece of an answer to the proxy at once, as a real service does while it still computes.
+                Such an answer names no length; it ends when the connection ends."""
+                if not self.given_on:
+                    self.send_response(status)
+                    self.send_header("Content-Type", content_type)
+                    self.end_headers()
+                    self.given_on = True
+                self.wfile.write(piece)
+                self.wfile.flush()
+
             def _serve(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)).decode("utf-8", "replace")
-                status, content_type, text = stage.answer(service, self.command, self.path, body)
+                status, content_type, text = stage.answer(service, self.command, self.path, body, self.give_on)
+                if self.given_on:
+                    return
                 data = text.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)

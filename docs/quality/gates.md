@@ -420,6 +420,11 @@ compared too.
   differ from run to run: six times and one estimate that depends on how
   long the path of the workspace is (`VARIES_IN_EVENTS` in
   `tests/replay/recording.py`). A field that is added later is compared.
+- One event is left out whole: `llm_prompt_progress`. The proxy sends it on
+  a clock of its own, every 100 ms while the model has given no first piece
+  of its reply, so how many there are follows the speed of the model. No
+  replay holds how many of them come, or when. It is the same rule as for
+  the requests that the proxy sends on its own clock.
 - A test here does not know how the proxy is built inside, so a change that
   only moves code does not touch it. A change in what the proxy sends, says
   or writes on a recorded session fails it, at the first place the run
@@ -441,6 +446,16 @@ model makes. It is one sample. The model answers in another way the next
 time, and the replay says nothing about that. The tasks for it are the e2e
 task of the seven cases and the three tasks of the nightly's smoke run, and
 no other.
+
+- The reply is given on to the proxy piece by piece, as the model server
+  sends it. So the proxy waits as in a live session.
+- With a real model the commands of a session are the model's own choice,
+  and each prompt is answered with yes. Record such a session in a
+  container, not as a plain process of a person's machine.
+- No recording holds a word of the machine that it was made on. The sandbox
+  of a recording gets a small fixed environment. And the tool does not
+  write a recording whose text holds the home folder or the name of the
+  user who records, or the folder of the model's file.
 
 | Command | What it does |
 |---|---|
