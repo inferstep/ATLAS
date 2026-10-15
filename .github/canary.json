@@ -5,7 +5,7 @@
   "ruled_branches": ["dev", "staging", "main"],
   "server": {
     "status": "server/nightly",
-    "writer": 0,
+    "writer": 340202947,
     "max_age_days": 14
   },
   "plants": [
