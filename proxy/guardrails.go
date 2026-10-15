@@ -1996,7 +1996,9 @@ func bodiesSeenInRun(ctx *AgentContext) []string {
 }
 
 // answerNamesSymbolFrom reports whether the answer accounts for a file by
-// naming something defined in it.
+// naming something defined in it. Every read file of that base name counts:
+// the caller counts files by base name, and taking the first of two would
+// leave the answer to whichever one the map gave first.
 //
 // Measured (stabilization cycle 5, audit of this guard): an answer that traced
 // the fault correctly through read_key and write_key, naming one file, was
@@ -2009,23 +2011,21 @@ func bodiesSeenInRun(ctx *AgentContext) []string {
 // of whether an answer is correct.
 func answerNamesSymbolFrom(ctx *AgentContext, base, claimText string) bool {
 	ctx.mu.Lock()
-	var source, path string
+	sources := map[string]string{}
 	for p, content := range ctx.FilesRead {
 		if filepath.Base(p) == base {
-			source, path = content, p
-			break
+			sources[p] = content
 		}
 	}
 	ctx.mu.Unlock()
-	if source == "" {
-		return false
-	}
-	for _, sym := range outlineByRegex(path, source) {
-		// Short names ("get", "id") appear in ordinary prose; requiring four
-		// characters keeps the match to something the file actually declares.
-		// Whole-word only: "price" must not be credited to the word "pricing".
-		if len(sym.Name) >= 4 && mentionsWord(claimText, sym.Name) {
-			return true
+	for path, source := range sources {
+		for _, sym := range outlineByRegex(path, source) {
+			// Short names ("get", "id") appear in ordinary prose; requiring four
+			// characters keeps the match to something the file actually declares.
+			// Whole-word only: "price" must not be credited to the word "pricing".
+			if len(sym.Name) >= 4 && mentionsWord(claimText, sym.Name) {
+				return true
+			}
 		}
 	}
 	return false

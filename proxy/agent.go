@@ -5169,7 +5169,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// This avoids consuming context window with pre-injected file dumps.
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		sb.WriteString("## Project Files Available\n")
-		for path := range filesRead {
+		for _, path := range sortedKeys(filesRead) {
 			sb.WriteString(fmt.Sprintf("- %s\n", path))
 		}
 		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")

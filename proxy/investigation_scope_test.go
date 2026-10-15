@@ -251,3 +251,18 @@ func TestAnAnswerThatExplainsViaSymbolsIsNotBounced(t *testing.T) {
 		t.Errorf("terminal %s / %s, want completed", run.terminal["status"], run.terminal["reason"])
 	}
 }
+
+// Two files of one base name were read. The guard took whichever the map gave
+// first, so an answer through the symbols of the other one was credited in one
+// run and not in the next. Every file of that name counts now.
+func TestASymbolOfEitherOfTwoFilesWithOneNameIsCreditedEachTime(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "client", "keys.py"), "def read_key(customer):\n    return customer.tier\n")
+	ctx.RecordFileRead(filepath.Join(dir, "server", "keys.py"), "def write_key(customer):\n    return customer.id\n")
+	for try := 1; try <= 100; try++ {
+		if !answerNamesSymbolFrom(ctx, "keys.py", "The value was stored under write_key, by the id.") {
+			t.Fatalf("try %d: an answer through the symbol of one of the two files was not credited", try)
+		}
+	}
+}

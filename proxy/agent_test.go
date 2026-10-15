@@ -3048,3 +3048,21 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 		t.Error("the declared tier does not reset the turn cap")
 	}
 }
+
+// With two or more files read, the system prompt listed them in the map's
+// order, so the model's input changed from run to run. They are listed in
+// sorted order, each time.
+func TestTheSystemPromptListsTheFilesReadInTheSameOrderEachTime(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	for _, name := range []string{"c.py", "a.py", "b.py"} {
+		ctx.RecordFileRead(filepath.Join(dir, name), "x = 1\n")
+	}
+	want := "## Project Files Available\n- " + filepath.Join(dir, "a.py") + "\n- " + filepath.Join(dir, "b.py") +
+		"\n- " + filepath.Join(dir, "c.py") + "\n"
+	for try := 1; try <= 100; try++ {
+		if !strings.Contains(buildSystemPrompt(ctx), want) {
+			t.Fatalf("try %d: the system prompt does not list the three files read in sorted order", try)
+		}
+	}
+}
