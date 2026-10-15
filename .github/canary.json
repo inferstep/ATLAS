@@ -6,7 +6,8 @@
   "server": {
     "status": "server/nightly",
     "writer": 340202947,
-    "max_age_days": 14
+    "look_back_days": 14,
+    "note_after_nights": 3
   },
   "plants": [
     {

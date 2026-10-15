@@ -1162,8 +1162,10 @@ and red for its own violation.
   is one machine that is not always on.
 - It reads how old the newest night of the development server is: the
   newest `server/nightly` status that the server's own account wrote on a
-  commit of `dev`. A night that started more than 14 days ago, or none in
-  that time, is a finding. While no account is set as the writer
+  commit of `dev`. When the newest night started 3 or more days ago, or
+  there is none in the last 15 days, one line of notes says for how many
+  nights there was none; it is never a finding, as the nightly run is best
+  effort. While no account is set as the writer
   (`server.writer` in the list), one line says that nothing was looked for.
   The list names the account of the app that writes the server's statuses,
   `atlas-server-results[bot]`, so the nights are looked for.

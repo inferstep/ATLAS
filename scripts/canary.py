@@ -21,9 +21,10 @@ status of 2 is not a pass: nothing was judged.
 required check of each branch that has required checks (`ruled_branches`
 in .github/canary.json) has to be bound to the app that it comes from, and
 none may be a status of the development server (a name that starts with
-`server/`). And the newest status `server/nightly` that the
-server's own account wrote on the base branch may not be older than the
-list says (`server` in .github/canary.json).
+`server/`). And it says how old the newest status `server/nightly` is that
+the server's own account wrote on the base branch (`server` in
+.github/canary.json). From 3 nights with none, a line says so. That is never
+a finding: the nightly run is best effort.
 
 In a job, `check` also writes its result to the page of the run. The first
 line there says which of the three results it is.
@@ -411,7 +412,7 @@ def newest_night(checks, repo: str, key: str, base: str, manifest: dict, now: da
     server = manifest["server"]
     if not server["writer"]:
         return {"started": None, "commits": 0, "read": False}
-    since = (now - timedelta(days=server["max_age_days"] + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (now - timedelta(days=server["look_back_days"] + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     commits = [commit for page in checks.api(f"repos/{repo}/commits?sha={base}&since={since}&per_page=100", key) for commit in page]
     for commit in commits[:NIGHT_COMMITS]:
         statuses = [status for page in checks.api(f"repos/{repo}/commits/{commit['sha']}/statuses?per_page=100", key) for status in page]
@@ -422,24 +423,24 @@ def newest_night(checks, repo: str, key: str, base: str, manifest: dict, now: da
     return {"started": None, "commits": len(commits), "read": True}
 
 
-def night_lines(manifest: dict, night: dict, base: str, now: datetime) -> tuple[list[str], list[Finding]]:
-    """What the page says about the newest night of the server, as notes, and the finding when it is too old."""
+def night_lines(manifest: dict, night: dict, base: str, now: datetime) -> list[str]:
+    """What the page says about the newest night of the server. Notes only: the nightly run is best effort, so nights
+    with none are said from `note_after_nights` on, and are never a finding."""
     server = manifest["server"]
-    name, limit = server["status"], server["max_age_days"]
+    name, back = server["status"], server["look_back_days"]
     if not night["read"]:
         return [f"the newest night of the development server was not looked for: no account is set as the writer of "
-                f"the server's statuses (`server.writer` in {MANIFEST})"], []
-    age = days_since(night["started"], now) if night["started"] else None
-    if age is not None and age <= limit:
-        return [f"the newest `{name}` status of the server on `{base}` is of a night that started {age} day(s) ago "
-                f"(`{night['started']}`, limit {limit})"], []
-    found = (f"is of a night that started {age} days ago (limit {limit})" if age is not None
-             else f"is older than {limit} days, or there is none: {min(night['commits'], NIGHT_COMMITS)} commit(s) of the last {limit + 1} days have none")
-    return [], [Finding("the nightly run", f"the newest `{name}` status of the server on `{base}` {found}. So nothing "
-                                           "shows that the head of today runs with a real model. Fix: look at the "
-                                           "development server: is it on, does its timer run, and what does the last "
-                                           "report in the folder of the run say (docs/quality/gates.md, section \"The "
-                                           "nightly run\").")]
+                f"the server's statuses (`server.writer` in {MANIFEST})"]
+    look = ("Look at the development server: is it on, does its timer run, and what does the last report in the folder "
+            "of the run say (docs/quality/gates.md, section \"The nightly run\").")
+    if night["started"] is None:
+        return [f"no night of the server for more than {back} nights: {min(night['commits'], NIGHT_COMMITS)} commit(s) "
+                f"of `{base}` of the last {back + 1} days have no `{name}` status of the server. {look}"]
+    age = days_since(night["started"], now)
+    newest = f"the newest `{name}` status of the server on `{base}` is of a night that started {age} day(s) ago (`{night['started']}`)"
+    if age < server["note_after_nights"]:
+        return [newest]
+    return [f"no night of the server for {age} nights: {newest}. {look}"]
 
 
 def token() -> str:
@@ -583,12 +584,12 @@ def check(root: Path, number: int | None) -> int:
         now = datetime.now(timezone.utc)
         pull, check_runs, required, behind, rules = gather(checks, repo, key, number, manifest)
         base = pull["base"]["ref"]
-        about_the_night, too_old = night_lines(manifest, newest_night(checks, repo, key, base, manifest, now), base, now)
+        about_the_night = night_lines(manifest, newest_night(checks, repo, key, base, manifest, now), base, now)
         # The rules of the base were read for the canary itself; the other ruled branches are read here.
         ruled = {branch: rules if branch == base else [rule for page in checks.api(f"repos/{repo}/rules/branches/{branch}?per_page=100", key)
                                                        for rule in page] for branch in manifest["ruled_branches"]}
         sources = [finding for branch, its_rules in ruled.items() for finding in source_findings(its_rules, branch)]
-        findings = judge(manifest, pull, check_runs, required, behind["since"], now) + sources + too_old
+        findings = judge(manifest, pull, check_runs, required, behind["since"], now) + sources
         where, renew = standing(manifest, behind, now)
     except (KeyError, IndexError, TypeError, AttributeError, ValueError, OSError, RuntimeError) as error:
         fix = ("  fix: run this again; when it stays so, pass the number of the canary pull request with --pr, and "

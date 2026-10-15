@@ -789,7 +789,7 @@ def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     assert set(data) == {"branch", "title", "max_age_days", "ruled_branches", "server", "plants", "not_covered", "other_checks",
                          "side_effects"}
     assert data["ruled_branches"] == ["dev", "staging", "main"]
-    assert set(data["server"]) == {"status", "writer", "max_age_days"}
+    assert set(data["server"]) == {"status", "writer", "look_back_days", "note_after_nights"}
     assert data["server"]["status"] == "server/nightly"
     # The account `atlas-server-results[bot]`, by its id; or 0 while the server has written no night, and then the
     # page says that the nights are not looked for yet. No other account, and no other kind of value.
@@ -799,7 +799,9 @@ def test_the_list_is_plain_json_with_the_keys_the_script_reads():
     page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
     not_yet = "Today the list names no account, so the nights are not looked for yet." in page
     assert not_yet == (writer == 0), "the gates page and `server.writer` in the list do not say the same about the nights"
-    assert data["server"]["max_age_days"] == 14
+    assert data["server"]["look_back_days"] == 14
+    # Nights with none are said from the third on, and never fail the check: the nightly run is best effort.
+    assert data["server"]["note_after_nights"] == 3
 
 
 class _Logs(http.server.BaseHTTPRequestHandler):
@@ -1007,7 +1009,7 @@ def test_the_newest_night_of_the_server_is_a_note_with_its_age(canary, manifest,
     status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
     assert status == 0, printed
     started = re.search(r"started (\S+);", night["description"]).group(1)
-    assert f"note the newest `server/nightly` status of the server on `dev` is of a night that started 2 day(s) ago (`{started}`, limit 14)" in printed
+    assert f"note the newest `server/nightly` status of the server on `dev` is of a night that started 2 day(s) ago (`{started}`)" in printed
     # The commits are read newest first, and the look ends at the first night of the server.
     assert github.asked_for_statuses() == [1, 2]
     (since,) = [path.split("since=")[1].split("&")[0] for path in github.asked if "commits?sha=dev" in path]
@@ -1024,10 +1026,10 @@ def test_the_newest_night_of_the_server_is_a_note_with_its_age(canary, manifest,
 def test_a_status_of_that_name_by_another_account_is_not_a_night_of_the_server(canary, manifest, monkeypatch, tmp_path, capsys, other):
     github = WithNights(with_a_writer(canary, monkeypatch, manifest), {1: [other], 2: [other]})
     status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
-    assert status == 1, printed
-    assert ("FAIL the newest `server/nightly` status of the server on `dev` is older than 14 days, or there is none: 3 commit(s) "
-            "of the last 15 days have none.") in printed
-    assert "Fix: look at the development server: is it on, does its timer run" in printed
+    assert status == 0, printed
+    assert ("note no night of the server for more than 14 nights: 3 commit(s) of `dev` of the last 15 days have no "
+            "`server/nightly` status of the server.") in printed
+    assert "Look at the development server: is it on, does its timer run" in printed
     assert github.asked_for_statuses() == [1, 2, 3]
     # The fix sends the reader to a section. The page has to have it.
     named = set(re.findall(r'section "([^"]+)"', printed))
@@ -1036,16 +1038,16 @@ def test_a_status_of_that_name_by_another_account_is_not_a_night_of_the_server(c
     assert named <= headings, f"the fix of the finding names a section that the gates page does not have: {sorted(named - headings)}"
 
 
-def test_a_night_that_started_more_than_fourteen_days_ago_is_a_finding(canary, manifest, monkeypatch, tmp_path, capsys):
-    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {3: [a_night(days=15)]})
-    status, printed, page = checked(canary, monkeypatch, tmp_path, capsys, github)
-    assert status == 1, printed
-    assert "FAIL the newest `server/nightly` status of the server on `dev` is of a night that started 15 days ago (limit 14)." in printed
-    assert page.splitlines()[2].startswith("**A finding.**")
-    in_time = WithNights(with_a_writer(canary, monkeypatch, manifest), {3: [a_night(days=14)]})
-    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, in_time)
+@pytest.mark.parametrize("days", [2, 3, 20])
+def test_from_three_nights_with_none_a_note_says_so_and_it_is_never_a_finding(canary, manifest, monkeypatch, tmp_path, capsys, days):
+    # The nightly run is best effort: a server that was off is said, and the weekly check does not wait for it.
+    github = WithNights(with_a_writer(canary, monkeypatch, manifest), {3: [a_night(days=days)]})
+    status, printed, _page = checked(canary, monkeypatch, tmp_path, capsys, github)
     assert status == 0, printed
-    assert "started 14 day(s) ago" in printed
+    assert "FAIL" not in printed
+    said = (f"note no night of the server for {days} nights: the newest `server/nightly` status of the server on `dev` is "
+            f"of a night that started {days} day(s) ago")
+    assert (said in printed) == (days >= 3), printed
 
 
 def test_the_age_of_a_night_is_read_from_the_start_time_in_its_text_and_else_from_the_time_of_the_status(canary, manifest):
@@ -1068,9 +1070,8 @@ def test_of_the_nights_on_one_commit_the_newest_counts_in_whatever_order_github_
     found = canary.newest_night(WithNights(set_, {1: nights}), REPO, "a-token", "dev", set_, datetime.now(timezone.utc))
     newest = next(night for night in nights if night is nights[order.index(2)])
     assert found["started"] == re.search(r"started (\S+);", newest["description"]).group(1)
-    notes, findings = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
-    assert findings == []
-    assert "started 2 day(s) ago" in notes[0]
+    (note,) = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
+    assert "started 2 day(s) ago" in note
 
 
 def test_the_look_for_the_newest_night_ends_after_a_fixed_number_of_commits(canary, manifest):
@@ -1079,9 +1080,8 @@ def test_the_look_for_the_newest_night_ends_after_a_fixed_number_of_commits(cana
     found = canary.newest_night(github, REPO, "a-token", "dev", set_, datetime.now(timezone.utc))
     assert found == {"started": None, "commits": canary.NIGHT_COMMITS + 5, "read": True}
     assert github.asked_for_statuses() == list(range(1, canary.NIGHT_COMMITS + 1))
-    notes, (finding,) = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
-    assert notes == []
-    assert f"{canary.NIGHT_COMMITS} commit(s) of the last 15 days have none" in finding.message
+    (note,) = canary.night_lines(set_, found, "dev", datetime.now(timezone.utc))
+    assert f"{canary.NIGHT_COMMITS} commit(s) of `dev` of the last 15 days have no `server/nightly` status" in note
 
 
 @pytest.mark.parametrize("fails", ["/commits?sha=dev", "/statuses?per_page"])
