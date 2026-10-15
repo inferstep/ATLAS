@@ -314,7 +314,7 @@ def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_n
     job = job_of("sandbox tests (containerized)")
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     docker = [line.strip() for line in commands.splitlines() if line.strip().startswith("docker ")]
-    assert len(docker) == 5
+    assert len(docker) == 6
     for line in docker:
         assert line.startswith(COMPOSE), f"`{line}` is not a command on the compose file with the job's one settings file"
     assert COMPOSE + "build sandbox" in docker
@@ -327,6 +327,45 @@ def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_n
     page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
     assert ("starts it as the stack starts it: by the `sandbox` service of the compose file, with its read-only base, its tmpfs "
             "mounts, its dropped capabilities and its limits. The job gives none of these itself") in page
+
+
+# A stand-in for `docker`. It writes each call down. A build fails as many times as the file `breaks` says, with the words
+# of the build that broke off on 15 October; every other call passes.
+DOCKER = """#!/bin/bash
+echo "$*" >> "$CALLS"
+if [ "${*: -2}" = "build sandbox" ]; then
+    left=$(cat "$BREAKS")
+    if [ "$left" -gt 0 ]; then
+        echo $((left - 1)) > "$BREAKS"
+        echo "curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2)" >&2
+        echo "tar: Unexpected EOF in archive" >&2
+        exit 1
+    fi
+fi
+"""
+
+
+@pytest.mark.parametrize("breaks, ends, builds, said", [
+    pytest.param(0, 0, 1, False, id="a build that passes is not built again"),
+    pytest.param(1, 0, 2, True, id="a build that fails once is tried again"),
+    pytest.param(2, 1, 2, True, id="a build that fails twice fails the step with docker's own words"),
+])
+def test_a_build_of_the_sandbox_image_that_fails_is_tried_once_more(tmp_path, breaks, ends, builds, said):
+    job = job_of("sandbox tests (containerized)")
+    step = next(step["run"] for step in job["steps"] if step.get("name") == "build sandbox image")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "docker").write_text(DOCKER, encoding="utf-8")
+    (tmp_path / "bin" / "docker").chmod(0o755)
+    (tmp_path / "breaks").write_text(f"{breaks}\n", encoding="utf-8")
+    # As a runner runs a step: bash, which stops at the first command that fails.
+    done = subprocess.run(["bash", "-e", "-c", step], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                          env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path),
+                               "CALLS": str(tmp_path / "calls"), "BREAKS": str(tmp_path / "breaks")})
+    assert done.returncode == ends, done.stdout + done.stderr
+    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+    assert calls == [f"compose --env-file {tmp_path}/sandbox.env build sandbox"] * builds
+    assert ("The build of the sandbox image failed. It is tried once more." in done.stdout) == said
+    assert done.stderr.count("tar: Unexpected EOF in archive") == breaks
 
 
 def test_the_settings_file_of_the_sandbox_job_holds_what_an_install_gives_and_no_limit_and_no_mount():

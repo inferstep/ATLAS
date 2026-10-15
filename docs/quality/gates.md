@@ -628,10 +628,12 @@ in one place.
   and starts it as the stack starts it: by the `sandbox` service of the
   compose file, with its read-only base, its tmpfs mounts, its dropped
   capabilities and its limits. The job gives none of these itself, so a
-  change of the stack's settings is under test by itself. It waits for the
-  service's own health answer, and runs the 80 against it. The languages
-  are in the image. No test asks the runner for `javac`, `kotlinc`, `ruby`
-  or `php`: a sandbox that cannot run a language fails its tests.
+  change of the stack's settings is under test by itself. The build
+  downloads tools from servers outside GitHub, so a build that fails is
+  tried once more. It waits for the service's own health answer, and runs
+  the 80 against it. The languages are in the image. No test asks the
+  runner for `javac`, `kotlinc`, `ruby` or `php`: a sandbox that cannot run
+  a language fails its tests.
 - `proxy and TUI tests (no model)` builds the proxy and the TUI from the
   change and starts the proxy with no service behind it. The 13 ask the
   proxy's own answers and read the TUI's own screen in a terminal. None

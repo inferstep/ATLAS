@@ -560,7 +560,15 @@ jobs:
           } > "$RUNNER_TEMP/sandbox.env"
 
       - name: build sandbox image
-        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+        run: |
+          # The build downloads tools from servers outside GitHub (go.dev among
+          # them), and a download can break off in its middle. A build that
+          # fails is tried once more; a second failure fails the step with
+          # docker's own words.
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox || {
+            echo "The build of the sandbox image failed. It is tried once more."
+            docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+          }
 
       - name: start the sandbox as the stack starts it, and wait for its health answer
         run: |
