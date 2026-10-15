@@ -1124,6 +1124,13 @@ and red for its own violation.
 - Every check that runs on the canary is in the list: with a violation, or
   under `not_covered` (a job of a workflow) or `other_checks` (the check of
   a service) with the reason why it has none.
+- Every required check has a violation that turns it red, or is under
+  `not_covered` with the reason. A check that reports its findings as notes
+  and does not fail for them, as `golangci-lint` and `hadolint` do, is under
+  `not_covered`: no violation can turn it red. Its violation still shows
+  that it reports. A test of `scripts/setup/rulesets.sh` holds this for each
+  check that the script requires, so a change of the rules cannot leave one
+  out before it is applied.
 - A check with no violation of its own that is red through the violation of
   another check is under `side_effects`, with the path. A check with no
   violation that is red and is not there is named: a red with no cause on the

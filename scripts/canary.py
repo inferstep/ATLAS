@@ -596,9 +596,10 @@ def check(root: Path, number: int | None) -> int:
         return told(2, [f"canary: cannot read the canary pull request or its checks: {error!r}", fix])
     red = sum(len(entry.get("red", [])) for entry in manifest["plants"])
     reports = sum(len(entry.get("reports", [])) for entry in manifest["plants"])
-    no_plant = len(manifest["not_covered"]) + len(manifest["other_checks"])
+    no_red = len(manifest["not_covered"]) + len(manifest["other_checks"])
     counts = (f"note pull request {number} at {pull['head']['sha'][:7]}: {red} check(s) must be red for their plant, "
-              f"{reports} must report the planted file, {no_plant} check(s) have no plant, each with its reason")
+              f"{reports} must report the planted file, {no_red} check(s) have no plant that turns them red, each with "
+              "its reason")
     lines = [counts, f"note {where}"]
     lines += [f"note {line}" for line in notes(manifest, latest_checks(check_runs)) + about_the_night]
     lines += [f"FAIL {finding.message}" for finding in findings]

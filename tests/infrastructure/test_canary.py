@@ -78,6 +78,11 @@ def required(manifest):
     return names(manifest, "red") + list(manifest["not_covered"])
 
 
+def with_no_plant(manifest):
+    """The listed checks that no plant touches. A check under `not_covered` can still have a plant that it reports."""
+    return [name for name in [*manifest["not_covered"], *manifest["other_checks"]] if name not in names(manifest, "reports")]
+
+
 def judged(canary, manifest, runs=None, required_names=None, **pull_changes):
     found = canary.judge(manifest, pull(manifest, **pull_changes), runs_as_listed(manifest) if runs is None else runs,
                          required(manifest) if required_names is None else required_names, LACKING_SINCE, NOW)
@@ -157,9 +162,9 @@ def test_every_check_that_must_be_red_has_the_text_its_log_shows(manifest):
 
 
 def test_a_check_with_no_plant_is_not_one_that_a_plant_turns_red(manifest):
-    planted = set(names(manifest, "red")) | set(names(manifest, "reports"))
-    assert planted.isdisjoint(manifest["not_covered"])
-    assert planted.isdisjoint(manifest["other_checks"])
+    red = set(names(manifest, "red"))
+    assert red.isdisjoint(manifest["not_covered"])
+    assert (red | set(names(manifest, "reports"))).isdisjoint(manifest["other_checks"])
 
 
 def test_the_title_of_the_canary_fails_the_title_check(manifest):
@@ -351,7 +356,7 @@ def test_a_check_that_ran_and_that_the_list_does_not_know_is_named(canary, manif
     message = only(judged(canary, manifest, runs_as_listed(manifest) + [new]))
     assert "`a new job` ran on the canary and the list does not know it" in message
     assert "`not_covered` with the reason" in message
-    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
+    for name in with_no_plant(manifest):
         assert judged(canary, manifest, runs_as_listed(manifest) + [{**new, "name": name}]) == [], name
 
 
@@ -368,7 +373,7 @@ def with_a_side_effect(manifest):
 def test_a_check_with_no_plant_that_does_not_pass_is_named_unless_the_list_says_why(canary, manifest, conclusion):
     listed = with_a_side_effect(manifest)
     ended = {"id": 901, "status": "completed", "conclusion": conclusion, "started_at": "2000-01-09T00:00:00Z"}
-    for name in [*listed["not_covered"], *listed["other_checks"]]:
+    for name in with_no_plant(listed):
         message = only(judged(canary, listed, runs_as_listed(listed) + [{**ended, "name": name}]))
         assert f"`{name}` ended as `{conclusion}` on the canary, and the list gives it no violation and no side effect" in message
         assert "`side_effects`" in message and "Fix:" in message
@@ -378,7 +383,7 @@ def test_a_check_with_no_plant_that_does_not_pass_is_named_unless_the_list_says_
 @pytest.mark.parametrize("conclusion", ["success", "skipped", "neutral"])
 def test_a_check_with_no_plant_that_passed_or_did_not_run_is_not_named(canary, manifest, conclusion):
     ended = {"id": 904, "status": "completed", "conclusion": conclusion, "started_at": "2000-01-09T00:00:00Z"}
-    for name in [*manifest["not_covered"], *manifest["other_checks"]]:
+    for name in with_no_plant(manifest):
         assert judged(canary, manifest, runs_as_listed(manifest) + [{**ended, "name": name}]) == [], name
 
 
@@ -399,7 +404,7 @@ def test_a_red_through_another_violation_and_a_listed_check_that_is_not_there_ge
     assert lines[0] == f"red through another check's violation, as listed: `{SIDE}`. {SIDE_REASON}"
     assert lines[0].count("no violation of its own") == 1
     absent = [line for line in lines if line.startswith("listed, and not there in this run: ")]
-    others = [*listed["not_covered"], *listed["other_checks"]]
+    others = with_no_plant(listed)
     assert sorted(line.split("`")[1] for line in absent) == sorted(others)
     assert len(lines) == 1 + len(others)
     everything = runs_as_listed(listed) + [{**red, "name": name, "conclusion": "success"} for name in [*others, SIDE]]

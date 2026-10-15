@@ -214,6 +214,17 @@ def test_every_check_required_on_dev_is_reported_by_a_job(first_run):
         assert any(p.fullmatch(check) for p in patterns), f"no workflow job reports the required check {check!r}"
 
 
+def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_red_or_the_reason_it_has_none(first_run):
+    # scripts/canary.py check asks the same of the live rules, after they are applied. Here a change of the rules
+    # meets the rule of the canary before that.
+    spec = importlib.util.spec_from_file_location("atlas_canary", REPO / "scripts" / "canary.py")
+    canary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(canary)
+    required = set().union(*(required_checks(first_run.rulesets, branch) for branch in BRANCHES))
+    findings = canary.coverage_findings(canary.load_manifest(REPO), sorted(required), ran=[])
+    assert [finding.message for finding in findings] == []
+
+
 def test_staging_and_main_require_only_checks_that_dev_requires(first_run):
     dev = required_checks(first_run.rulesets, "dev")
     for branch in ("staging", "main"):
