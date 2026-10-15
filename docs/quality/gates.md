@@ -41,8 +41,8 @@ this page: [Rules learned from review and from failures](#rules-learned-from-rev
   "this commit did not come through the merge queue; start `tests` for it by
   hand". Started by hand on `dev`, the `tests` workflow does what a push run
   does: the tests, both uploads and the cache.
-- `main` and `staging` require the same checks as `dev`, except
-  `code health (size)`, whose job is not on `main` yet.
+- `main` and `staging` require the same checks as `dev`, except the ones
+  marked (`dev` only) in the table below.
 - On a pull request from a fork, GitHub holds every run until a maintainer
   approves it ("Approve and run"). Until then the checks have no result, and
   nothing is wrong with the change; the contributor has nothing to do. If
@@ -98,7 +98,7 @@ job on this list that does not start gives no red:
 
 ## Checks on a pull request
 
-### Required (24)
+### Required (35)
 
 | Check | What it does |
 |---|---|
@@ -107,10 +107,16 @@ job on this list that does not start gives no red:
 | `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
 | `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |
 | `docker compose config` | Every compose file and overlay parses |
-| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows |
+| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows (`dev` only) |
 | `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
 | `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
 | `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
+| `codeql (javascript-typescript)` | CodeQL analysis of the VS Code extension ran to its end (`dev` only) |
+| `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job (`dev` only) |
+| `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds (`dev` only) |
+| `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint (`dev` only) |
+| `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites (`dev` only) |
+| `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) (`dev` only) |
 | `dependency review` | No new dependency with a known advisory |
 | `pr title` | The title is a conventional commit; it becomes the commit on `dev` |
 
@@ -123,18 +129,13 @@ job on this list that does not start gives no red:
 | `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) |
 | `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix |
 | `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
-| `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job |
-| `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
-| `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint |
 | `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
 | `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" |
 | `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" |
 | `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing |
 | `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
 | `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
-| `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
-| `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) |
-| `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
+| `lint + test + build` | Build of the VS Code extension |
 | `codeql (java-kotlin)`, `ktlint + test + build` | Analysis and build of the JetBrains plugin |
 | the `PR build check` jobs | Each service image builds |
 

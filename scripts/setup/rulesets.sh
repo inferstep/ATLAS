@@ -87,10 +87,15 @@ CHECKS=(
     "e2e acceptance (proxy + sandbox + fake llama)" "bootstrap via sudo for a regular user"
     "dependency review" "pr title"
 )
-# Required on dev only. The job that reports this check is not on main, and
-# a required check that no job reports blocks every pull request to the
-# branch. Move it into CHECKS when main has the job.
-DEV_ONLY_CHECKS=("code health (size)")
+# Required on dev only. A check moves into CHECKS when main and staging are
+# to require it too, and not before main has its job: a required check that
+# no job reports blocks every pull request to the branch.
+DEV_ONLY_CHECKS=(
+    "code health (size)"
+    "golangci-lint (proxy)" "golangci-lint (tui)" "hadolint (dockerfiles)" "actionlint (workflows)"
+    "zizmor (workflows)" "codeql (javascript-typescript)" "perf budget gate" "pytest (tests/concurrency)"
+    "pytest (tests/perf)" "sandbox tests (containerized)" "proxy and TUI tests (no model)"
+)
 
 checks_json() {  # the given check names, each pinned to GitHub Actions
     local first=1 c
