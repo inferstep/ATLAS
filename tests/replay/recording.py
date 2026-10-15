@@ -100,7 +100,7 @@ def run(recording: dict, binary: Path, root: Path, upstreams=None, accept=False,
         process.communicate(timeout=20)
         st.stop()
     return {"exchanges": st.exchanges, "events": plain_events(events, st), "files": files_of(workspace),
-            "mismatch": st.mismatch, "not_asked": st.not_asked(), "accepted": st.accepted}
+            "mismatch": st.mismatch, "not_asked": st.not_asked(), "accepted": st.accepted, "text_note": st.text_note}
 
 
 def first_difference(expected: str, got: str) -> str:

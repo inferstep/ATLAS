@@ -15,8 +15,11 @@ import http.client
 import http.server
 import json
 import re
+import shutil
+import subprocess
 import threading
 import time
+import warnings
 
 import pytest
 
@@ -34,11 +37,15 @@ def replay(made, proxy_binary, tmp_path):
 
 @pytest.mark.parametrize("name", recording.names())
 def test_the_proxy_does_what_the_recording_says(name, proxy_binary, tmp_path):
-    problems = replay(recording.load(name), proxy_binary, tmp_path)
+    made = recording.load(name)
+    result = recording.run(made, proxy_binary, tmp_path)
+    problems = recording.differences(made, result)
     assert not problems, (
         f"the proxy no longer behaves as recorded in tests/replay/recordings/{name}.json:\n  " + "\n  ".join(problems)
         + "\nIf the change is not meant, the proxy has a regression: fix it. If it is meant, record the session "
           "again and say in the pull request which behaviour changed and why.")
+    if result["text_note"]:
+        warnings.warn(f"tests/replay/recordings/{name}.json was {result['text_note']}", stacklevel=1)
 
 
 # --- the recordings ------------------------------------------------------------
@@ -152,6 +159,53 @@ def test_an_event_that_differs_is_named(normal, proxy_binary, tmp_path):
     problems = replay(made, proxy_binary, tmp_path)
     assert len(problems) == 1
     assert problems[0].startswith(f"event {len(made['expected']['events'])} (done) differs")
+
+
+@pytest.fixture(scope="session")
+def proxy_with_other_carried_text(tmp_path_factory):
+    """The proxy of this checkout with one word more in its system prompt: the text that every request carries."""
+    source = tmp_path_factory.mktemp("proxy-source") / "proxy"
+    shutil.copytree(stage.REPO / "proxy", source, ignore=shutil.ignore_patterns("*_test.go", "testdata"))
+    agent = source / "agent.go"
+    text = agent.read_text(encoding="utf-8")
+    assert text.count("You are ATLAS, a coding assistant") == 1
+    agent.write_text(text.replace("You are ATLAS, a coding assistant", "You are ATLAS, a careful coding assistant"), encoding="utf-8")
+    subprocess.run(["go", "build", "-o", str(source / "atlas-proxy"), "."], cwd=source, check=True)
+    return source / "atlas-proxy"
+
+
+@pytest.mark.parametrize("replies, find, put, problem", [
+    ("captured", None, None, None),
+    ("written", None, None, "request 1 to the model (POST /v1/chat/completions) differs from the recording"),
+    ("captured", "Fix the NameError in app.py", "Fix the TypeError in app.py", "TypeError"),
+], ids=["a real model's replies", "written replies", "a real model's replies and another difference"])
+def test_a_change_of_the_carried_text_holds_only_a_real_models_recording_without_those_parts(
+        normal, proxy_with_other_carried_text, tmp_path, replies, find, put, problem):
+    # A real model's replies cannot be written again from new text, so its recording is compared without the system
+    # prompt, the grammar and the schema of the reply once they changed, and the run says so. Written ones stay strict.
+    made = changed_request(normal, "model", find, put) if find else copy.deepcopy(normal)
+    made["source"]["model_replies"] = replies
+    result = recording.run(made, proxy_with_other_carried_text, tmp_path)
+    problems = recording.differences(made, result)
+    if problem is None:
+        assert problems == []
+    else:
+        assert problems and problem in problems[0], problems
+    if replies == "captured":
+        made_with, today = re.fullmatch(r"made with text ([0-9a-f]{12}), today's is ([0-9a-f]{12}); the carried parts are "
+                                        r"not compared", result["text_note"]).groups()
+        first = next(exchange for exchange in made["exchanges"] if stage.is_a_model_request(exchange))
+        assert made_with == stage.text_mark(first) != today
+    else:
+        assert result["text_note"] == ""
+
+
+def test_only_the_three_carried_parts_are_left_out_of_a_request_to_the_model(normal):
+    first = next(exchange for exchange in normal["exchanges"] if stage.is_a_model_request(exchange))
+    request = json.loads(first["request"])
+    kept = {key: value for key, value in request.items() if key not in ("grammar", "response_format")}
+    kept["messages"] = [{**request["messages"][0], "content": "<the system prompt>"}, *request["messages"][1:]]
+    assert json.loads(stage.without_the_carried_parts(first["request"])) == kept
 
 
 def test_a_file_that_differs_at_the_end_is_named(normal, proxy_binary, tmp_path):
