@@ -200,12 +200,15 @@ def test_a_change_of_the_carried_text_holds_only_a_real_models_recording_without
         assert result["text_note"] == ""
 
 
-def test_only_the_three_carried_parts_are_left_out_of_a_request_to_the_model(normal):
-    first = next(exchange for exchange in normal["exchanges"] if stage.is_a_model_request(exchange))
-    request = json.loads(first["request"])
+@pytest.mark.parametrize("name, number, part", [("normal_edit", 0, "response_format"), ("write_existing_redirected", 2, "grammar")],
+                         ids=["a request with the schema of the reply", "a request with a grammar"])
+def test_only_the_three_carried_parts_are_left_out_of_a_request_to_the_model(name, number, part):
+    exchange = [exchange for exchange in recording.load(name)["exchanges"] if stage.is_a_model_request(exchange)][number]
+    request = json.loads(exchange["request"])
+    assert part in request
     kept = {key: value for key, value in request.items() if key not in ("grammar", "response_format")}
     kept["messages"] = [{**request["messages"][0], "content": "<the system prompt>"}, *request["messages"][1:]]
-    assert json.loads(stage.without_the_carried_parts(first["request"])) == kept
+    assert json.loads(stage.without_the_carried_parts(exchange["request"])) == kept
 
 
 def test_a_file_that_differs_at_the_end_is_named(normal, proxy_binary, tmp_path):
