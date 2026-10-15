@@ -193,6 +193,16 @@ def a_report(**changes):
             "stack_stopped": "yes", "not_whole_at_the_end": [], **changes}
 
 
+def not_whole_at_the_start(**parts):
+    """The services' answers at the start, with these parts of the proxy's answer, and the lens not ready when its part
+    is not. The reason is the one that the lens gave on the night of 14 October: words of a service."""
+    reason = "lens model files missing - run `atlas lens build`"
+    proxy = {"inference": True, "lens_ready": True, "sandbox": True, "v3": True, "lens_reason": reason, **parts}
+    lens = 200 if proxy["lens_ready"] is True else 503
+    return {"the proxy's /ready": {"status": 200 if all(proxy[part] is True for part in nightly.PROXY_PARTS) else 503, "answer": proxy},
+            "the lens's /ready": {"status": lens, "answer": {"detail": {"reason": reason}}}}
+
+
 def the_tests(**numbers):
     return {**a_report()["tests"], **numbers}
 
@@ -274,6 +284,14 @@ SESSIONS = "3 of 3 sessions with no harness defect"
      "failure", f"failed; started {A_START}; ended in the step: the smoke run"),
     (a_report(result="failed: x", tasks=None, tests=None, step="/home/someone/a step that is not on the list"),
      "failure", f"failed; started {A_START}; ended in the step: not named"),
+    # The parts that were not whole at the start, by short fixed names: never the reason that a service gave.
+    (a_report(result="failed: a service was not whole when the stack had started: x", tasks=None, tests=None,
+              step="ask the services whether they are whole", services={"at the start": not_whole_at_the_start(lens_ready=False)}),
+     "failure", f"failed; started {A_START}; ended in the step: ask the services whether they are whole; not whole: lens"),
+    (a_report(result="failed: a service was not whole when the stack had started: x", tasks=None, tests=None,
+              step="ask the services whether they are whole",
+              services={"at the start": {**not_whole_at_the_start(), "the proxy's /ready": {"status": 0, "answer": "no answer: x"}}}),
+     "failure", f"failed; started {A_START}; ended in the step: ask the services whether they are whole; not whole: proxy"),
     # The numbers are those of a run that passed, so the status says in fixed words what failed.
     (a_report(result="failed: the stack was not stopped (status 1: x); before that: passed", stack_stopped="no: status 1: x"),
      "failure", f"failed; started {A_START}; {SESSIONS}; 32 of 32 tests passed; the stack was not stopped"),
@@ -314,6 +332,10 @@ def every_report():
     for step in [*nightly.STEPS, NOT_FIXED]:
         yield a_report(result=f"failed: {NOT_FIXED}", tasks=None, tests=None, step=step)
         yield a_smoke(result=f"failed: {NOT_FIXED}", tasks=[], step=step)
+    # Every part not whole at the start: the longest text of this kind.
+    nothing_whole = {"at the start": not_whole_at_the_start(inference=False, lens_ready=False, sandbox=False, v3=False)}
+    yield a_report(result=f"failed: {NOT_FIXED}", tasks=None, tests=None, step="ask the services whether they are whole", services=nothing_whole)
+    yield a_smoke(result=f"failed: {NOT_FIXED}", tasks=[], step="ask the services whether they are whole", services=nothing_whole)
 
 
 def test_the_text_of_every_status_has_fixed_words_and_numbers_only_and_fits_the_limit_of_github():

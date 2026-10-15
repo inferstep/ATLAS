@@ -1029,7 +1029,10 @@ What it needs on the server:
 - 20 GB of free room on Docker's disk before a run starts;
 - a Python with `pytest` and `httpx`, and `git` and `openssl`;
 - the file `nightly.env` in the folder, with the settings of the model for
-  that server and nothing else. The key is not in it;
+  that server, the folder of the model files and the folder of the lens's
+  files, each folder as a full path, and nothing else. The key is not in it.
+  A run with no lens folder, or with one that is not a full path, fails
+  before it starts its stack, and says which line to add;
 - the key file of the app, outside that folder, owned by that user, with
   mode 600;
 - a timer that starts the script with `--tick` every 15 minutes, with the
@@ -1066,8 +1069,13 @@ needs no change.
    repository, where no model is. Docker says where the usual model server
    takes its models from:
    `echo "ATLAS_MODELS_DIR=$(docker inspect atlas-llama-server-1 --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Source}}{{end}}{{end}}')" >> ~/atlas-nightly/nightly.env`
+   Then the folder of the lens's files, as a full path, for the same
+   reason: the run's own copy of the repository has no `cost_field.pt`
+   (git leaves it out), so a lens that reads that copy cannot score. Docker
+   says where the usual lens takes its files from:
+   `echo "ATLAS_LENS_MODELS=$(docker inspect atlas-geometric-lens-1 --format '{{range .Mounts}}{{if eq .Destination "/app/geometric_lens/models"}}{{.Source}}{{end}}{{end}}')" >> ~/atlas-nightly/nightly.env`
    Then `cat ~/atlas-nightly/nightly.env`: it has to show the file of the
-   model, its name, and a folder that starts with `/`.
+   model, its name, and two folders that start with `/`.
 4. The key of the app: `mkdir -p ~/.config/atlas-nightly`, then the key as
    the file `~/.config/atlas-nightly/status-app.pem`, then
    `chmod 600 ~/.config/atlas-nightly/status-app.pem`. The file lies outside

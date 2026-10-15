@@ -229,7 +229,8 @@ class Night:
         (root / "bin").mkdir()
         (root / "stand-ins").mkdir()
         self.dir.mkdir()
-        (self.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\nATLAS_PROXY_PORT=8090\n")
+        (self.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\nATLAS_PROXY_PORT=8090\n"
+                                              f"ATLAS_LENS_MODELS={root / 'lens-files'}\n")
         # The key lies outside the folder of the run, and only the user of the run can read it.
         self.key = root / "keys of the server" / "status-app.pem"
         self.key.parent.mkdir()
@@ -796,7 +797,7 @@ def test_without_the_servers_settings_file_the_run_fails_before_it_starts_a_stac
 ])
 def test_the_name_of_the_model_is_read_from_the_servers_settings_file(tmp_path, settings, name):
     night = Night(tmp_path)
-    (night.dir / "nightly.env").write_text(settings)
+    (night.dir / "nightly.env").write_text(settings + f"ATLAS_LENS_MODELS={tmp_path / 'lens-files'}\n")
     night.run()
     assert night.report["result"] == "passed", night.report["result"]
     tests = next(call for call in night.calls() if call["args"][:2] == ["-m", "pytest"])
@@ -811,6 +812,20 @@ def test_a_settings_file_with_no_name_of_the_model_stops_the_run_before_the_stac
     night.run()
     assert night.done.returncode == 1
     assert "nightly.env has no line `ATLAS_MODEL_NAME=<name>`" in night.report["result"] and "Fix: add the line" in night.report["result"]
+    assert "stack up" not in night.did() and "driver" not in night.did()
+
+
+@pytest.mark.parametrize("line", ["", "ATLAS_LENS_MODELS=./geometric-lens/geometric_lens/models\n", "ATLAS_LENS_MODELS=~/lens\n"],
+                         ids=["no line", "a relative folder", "a folder that compose does not expand"])
+def test_a_settings_file_with_no_full_path_of_the_lens_files_fails_the_run_before_the_stack(tmp_path, line):
+    # The run's own copy of the repository has no cost_field.pt, so a lens that reads that copy cannot score.
+    night = Night(tmp_path)
+    (night.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\n" + line)
+    night.run()
+    assert night.done.returncode == 1
+    assert night.report["result"].startswith("failed: the run's settings name no folder of lens files as a full path "
+                                             "(ATLAS_LENS_MODELS in "), night.report["result"]
+    assert "Fix: add the line with the folder that the usual lens mounts" in night.report["result"]
     assert "stack up" not in night.did() and "driver" not in night.did()
 
 
