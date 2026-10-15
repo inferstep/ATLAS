@@ -3,7 +3,7 @@
 # Pinned for reproducible builds.
 pytest==9.1.1
 requests==2.34.2
-ruff==0.16.10
+ruff==0.17.0
 mypy==2.4.0
 # executor_server's YAML syntax verification (lazy `import yaml`) —
 # absent, every YAML verify call false-fails with a ModuleNotFoundError

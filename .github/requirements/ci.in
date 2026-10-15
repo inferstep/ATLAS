@@ -10,7 +10,7 @@ pytest-cov
 # uses four.
 pytest-xdist
 pyyaml
-ruff==0.16.10
+ruff==0.17.0
 mypy==2.4.0
 yamllint
 
@@ -19,9 +19,9 @@ yamllint
 # Dependabot moves both in one pull request and makes ci.txt again.
 # From sandbox/requirements-runtime.txt: the sandbox service, which the
 # tests under tests/infrastructure start.
-fastapi==0.142.2
+fastapi==0.143.0
 defusedxml==0.7.1
-pydantic==2.13.5
+pydantic==2.14.1
 uvicorn==0.54.0
 # From sandbox/requirements-verify.txt: the sandbox's check of Jinja
 # templates. Without it the check passes everything.
