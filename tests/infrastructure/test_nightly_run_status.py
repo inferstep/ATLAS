@@ -288,6 +288,11 @@ SESSIONS = "3 of 3 sessions with no harness defect"
     (a_report(result="failed: a service was not whole when the stack had started: x", tasks=None, tests=None,
               step="ask the services whether they are whole", services={"at the start": not_whole_at_the_start(lens_ready=False)}),
      "failure", f"failed; started {A_START}; ended in the step: ask the services whether they are whole; not whole: lens"),
+    # The proxy can say that the lens is ready while the lens itself says it cannot score.
+    (a_report(result="failed: a service was not whole when the stack had started: x", tasks=None, tests=None,
+              step="ask the services whether they are whole",
+              services={"at the start": {**not_whole_at_the_start(), "the lens's /ready": {"status": 503, "answer": {}}}}),
+     "failure", f"failed; started {A_START}; ended in the step: ask the services whether they are whole; not whole: lens"),
     (a_report(result="failed: a service was not whole when the stack had started: x", tasks=None, tests=None,
               step="ask the services whether they are whole",
               services={"at the start": {**not_whole_at_the_start(), "the proxy's /ready": {"status": 0, "answer": "no answer: x"}}}),

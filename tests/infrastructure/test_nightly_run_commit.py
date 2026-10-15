@@ -742,6 +742,16 @@ def test_without_a_mark_the_run_fails_before_it_pulls_builds_or_starts_anything(
     assert run.built() == []
 
 
+def test_with_no_full_path_of_the_lens_files_the_run_fails_before_it_pulls_or_builds(tmp_path, repository):
+    run = OneCommit(tmp_path, repository)
+    (run.dir / "nightly.env").write_text("ATLAS_MODEL_FILE=model.gguf\nATLAS_MODEL_NAME=model\n")
+    run.run(repository.on_a_branch({"proxy/prompt.go": "a change\n"}))
+    assert run.done.returncode == 1, run.report["result"]
+    assert run.report["step"] == "read the settings of the server"
+    assert run.report["result"].startswith("failed: the run's settings name no folder of lens files as a full path")
+    assert run.did()[-1] == "look" and run.built() == []
+
+
 def measured(result="passed", defects=(0, 0, 0), seconds=(10.2, 11.2, 12.2)):
     return {"result": result, "commit": "c" * 40, "mark": MARK,
             "tasks": [{"task": task, "seconds": took, "passed": True, "defects": count}

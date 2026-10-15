@@ -719,7 +719,11 @@ Each night it:
    the sending of the statuses), the new copy does the run, so a repair of
    one of them acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
-   killed leaves its stack, and Docker starts that stack again;
+   killed leaves its stack, and Docker starts that stack again. Then it
+   reads the settings of the server (the name of the model, the folder of
+   the lens's files, and no token file). A wrong one ends the night here,
+   before any image, with the line to fix. The stop of a left stack comes
+   first, as it needs only the name of the model;
 3. takes the `dev` images of the registry under names of its own. It reads
    the digest of each `<image>:dev` from the registry with no pull, pulls
    the image by that digest, and names it
@@ -1032,7 +1036,7 @@ What it needs on the server:
   that server, the folder of the model files and the folder of the lens's
   files, each folder as a full path, and nothing else. The key is not in it.
   A run with no lens folder, or with one that is not a full path, fails
-  before it starts its stack, and says which line to add;
+  before it pulls an image, and says which line to add;
 - the key file of the app, outside that folder, owned by that user, with
   mode 600;
 - a timer that starts the script with `--tick` every 15 minutes, with the

@@ -171,7 +171,8 @@ CARD_HELD, QUIET_MINUTES = "card-held-with-no-lock", 60
 # The name of a smoke branch that the timer runs: one part after `smoke/`, of letters, digits, `.`, `_` and `-`.
 SMOKE_BRANCH = re.compile(r"smoke/[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # The steps of a run, as the report names the one that a run ended in. A status names a step only from this list.
-STEPS = ("start", "take the head of the branch", "stop a stack that an earlier run left", "pull the images",
+STEPS = ("start", "take the head of the branch", "stop a stack that an earlier run left", "read the settings of the server",
+         "pull the images",
          "wait for the images of the head", "take the lock of the card", "read what the card holds", "start the stack",
          "ask the services whether they are whole", "the smoke run", "the tests that need a real model",
          "ask the services again", "done", "look for the commit at the tip of a smoke branch",
@@ -377,6 +378,8 @@ def stop_a_left_stack(args) -> str:
                 ["docker", "ps", "--all", "--quiet", "--filter", f"label=com.docker.compose.project={PROJECT}"], 60).split()
     if not left:
         return "none"
+    # Compose reads no file of the stack without the name of the model, so no stop can go without it either.
+    model_name(args)
     write_settings(args)
     must("the stop of the stack that an earlier run left", [*compose(args), "down", "--volumes", "--remove-orphans"], 300)
     return f"{len(left)} container(s) of an earlier run were stopped first"
@@ -425,6 +428,8 @@ def before_the_card(args, report: dict, first_start: bool) -> None:
         raise NewScript
     now_in(report, "stop a stack that an earlier run left")
     report["left_stack"] = stop_a_left_stack(args)
+    now_in(report, "read the settings of the server")
+    check_settings(args)
     images_of_the_head(args, report)
 
 
@@ -502,18 +507,25 @@ def check_lens_folder(args) -> None:
                          "gives it in the steps on the server.")
 
 
-def write_settings(args) -> dict:
-    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
-    base = args.dir / "nightly.env"
+def check_settings(args) -> None:
+    """The settings of the server that the run's stack needs, read once before an image is pulled.
+
+    A left stack is stopped before this: its stop needs none of these but the name of the model.
+    """
     model_name(args)
     check_lens_folder(args)
-    for name in ("workspace/_reliability", "secrets", "no-deploy-record"):
-        (args.dir / name).mkdir(parents=True, exist_ok=True)
     token = args.dir / "secrets" / "service-token"
     if token.exists():
         raise StepFailed(f"{token} is there. With a token file the services of the stack ask for the token, and the "
                          "driver and the tests send none, so every session and most tests would be refused. Fix: "
                          "remove that file.")
+
+
+def write_settings(args) -> dict:
+    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
+    base = args.dir / "nightly.env"
+    for name in ("workspace/_reliability", "secrets", "no-deploy-record"):
+        (args.dir / name).mkdir(parents=True, exist_ok=True)
     # The proxy and the sandbox mount the same workspace, so both run as the user of this run.
     own = {**PORTS, "ATLAS_IMAGE_TAG": TAG, "ATLAS_PROJECT_DIR": str(args.dir / "workspace"),
            "ATLAS_SECRETS_DIR": str(args.dir / "secrets"), "ATLAS_PROXY_UID": os.getuid(), "ATLAS_PROXY_GID": os.getgid(),
@@ -843,6 +855,8 @@ def before_the_card_for_a_commit(args, report: dict, folder: Path, first_start: 
     carried_by_the_sessions(report)
     now_in(report, "stop a stack that an earlier run left")
     report["left_stack"] = stop_a_left_stack(args)
+    now_in(report, "read the settings of the server")
+    check_settings(args)
     now_in(report, "pull the images")
     report["images"] = pull_images(args, report, [service for service in IMAGES if service not in report["changed_services"]])
     report["stale"] = stale_images(report["images"], head)
