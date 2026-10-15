@@ -10,14 +10,12 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -853,9 +851,7 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// file that never parsed and was never run, reported as success (audit
 	// finding: warned state must be a terminal integrity condition, not a
 	// rewrite throttle).
-	// In sorted order: with two warned files, the map's own order would name
-	// either one, and one run would get two texts.
-	for _, p := range slices.Sorted(maps.Keys(s.pendingWarnedRun)) {
+	for _, p := range sortedKeys(s.pendingWarnedRun) {
 		if s.repairOpenFor(ctx, p) {
 			// The repair gate owns a file that still does not parse.
 			continue
