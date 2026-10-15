@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -774,7 +776,9 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 // "PATH" or "ſource" reaches the handler's field while every exact-key
 // reader (this check, the deny-list, the TUI's tool line) sees no such argument.
 func nonCanonicalArgName(fields map[string]json.RawMessage) string {
-	for k := range fields {
+	// A map gives its keys in a new order each time. With two such names one
+	// request would get two texts, so the first in sorted order is named.
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
 		for _, r := range k {
 			if r > unicode.MaxASCII || unicode.IsUpper(r) {
 				return k

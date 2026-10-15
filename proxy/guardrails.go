@@ -21,9 +21,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1026,7 +1028,10 @@ func staleServingJob(ctx *AgentContext) (jobID, path string) {
 	if ctx == nil {
 		return "", ""
 	}
-	for id, jobCmd := range ctx.BackgroundJobs {
+	// In sorted order: with two stale jobs, the map's own order would name
+	// either one, and one run would get two texts.
+	for _, id := range slices.Sorted(maps.Keys(ctx.BackgroundJobs)) {
+		jobCmd := ctx.BackgroundJobs[id]
 		started, ok := ctx.BackgroundJobStarted[id]
 		if !ok {
 			continue
@@ -1416,7 +1421,9 @@ func driftedSinceVerification(ctx *AgentContext, verified map[string]string) str
 	if ctx == nil {
 		return ""
 	}
-	for p := range ctx.SessionWrites {
+	// In sorted order: with two changed files, the map's own order would name
+	// either one, and one run would get two texts.
+	for _, p := range slices.Sorted(maps.Keys(ctx.SessionWrites)) {
 		want, seen := verified[p]
 		if !seen {
 			return p
