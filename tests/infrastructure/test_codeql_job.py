@@ -7,14 +7,14 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 # A stand-in for `./gradlew`. It writes each call down. The build fails as many times as the file `breaks` says, with
-# Gradle's words when a download breaks off; else it compiles.
+# the words of the outage of the Gradle plugin portal in the run of #473; else it compiles.
 GRADLEW = """#!/bin/bash
 echo "$*" >> "$CALLS"
 left=$(cat "$BREAKS")
 if [ "$left" -gt 0 ]; then
     echo $((left - 1)) > "$BREAKS"
     echo "FAILURE: Build failed with an exception."
-    echo "> Could not resolve io.ktor:ktor-client-core:3.6.0."
+    echo "> Could not find org.jetbrains.kotlin:kotlin-gradle-plugins-bom:2.3.20."
     exit 1
 fi
 echo "> Task :compileKotlin"
@@ -38,8 +38,8 @@ def test_a_build_of_the_plugin_that_fails_is_tried_once_more(tmp_path, breaks, e
     assert done.returncode == ends, done.stdout + done.stderr
     assert len((tmp_path / "calls").read_text(encoding="utf-8").splitlines()) == builds
     assert ("The build of the plugin failed. It is tried once more." in done.stdout) == said
-    assert done.stdout.count("Could not resolve io.ktor:ktor-client-core:3.6.0.") == breaks
+    assert done.stdout.count("Could not find org.jetbrains.kotlin:kotlin-gradle-plugins-bom:2.3.20.") == breaks
     # The check of the compile after this step reads the log, so the log is the last try's alone.
     log = (tmp_path / "kotlin-compile.log").read_text(encoding="utf-8")
     assert ("> Task :compileKotlin" in log) == (ends == 0)
-    assert ("Could not resolve" in log) == (ends == 1)
+    assert ("Could not find" in log) == (ends == 1)
