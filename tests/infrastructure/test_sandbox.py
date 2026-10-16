@@ -715,3 +715,8 @@ class TestWorkingDirectoryContract:
             timeout=60.0).json()
         assert data["success"] is False
         assert "ValueError" in data["stderr"] and "boom" in data["stderr"]
+
+
+def test_canary_must_fail():
+    # Planted by scripts/canary.py for the canary pull request. Never merge it.
+    assert 1 == 2, "canary: this test fails on purpose"

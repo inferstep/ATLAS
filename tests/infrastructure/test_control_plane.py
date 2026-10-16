@@ -76,3 +76,8 @@ def test_control_plane_errors_carry_the_api_version():
     for path, payload in (("/cancel", {}), ("/v1/permission", {})):
         _, body = _post(path, payload)
         assert body.get("api_version"), f"{path} error omitted api_version"
+
+
+def test_canary_must_fail():
+    # Planted by scripts/canary.py for the canary pull request. Never merge it.
+    assert 1 == 2, "canary: this test fails on purpose"
