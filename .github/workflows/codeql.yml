@@ -120,10 +120,18 @@ jobs:
         working-directory: extensions/jetbrains
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --no-build-cache --console=plain \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pkotlin.incremental=false \
-            :compileKotlin --rerun 2>&1 | tee kotlin-compile.log
+          # Gradle first downloads its plugins and the plugin's dependencies,
+          # and a download can break off. A build that fails is tried once
+          # more; a second failure fails the step with Gradle's own words. Each
+          # try writes kotlin-compile.log again, so the check below reads the
+          # last one.
+          build() {
+            ./gradlew --no-daemon --no-build-cache --console=plain \
+              -Pkotlin.compiler.execution.strategy=in-process \
+              -Pkotlin.incremental=false \
+              :compileKotlin --rerun 2>&1 | tee kotlin-compile.log
+          }
+          build || { echo "The build of the plugin failed. It is tried once more."; build; }
 
       # A skipped Kotlin compile extracts nothing and the leg would pass
       # while scanning zero Kotlin, so fail loudly instead. The negative
