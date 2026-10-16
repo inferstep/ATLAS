@@ -23,7 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
-from novel_tasks import build_tasks  # noqa: E402
+from novel_tasks import build_tasks
 
 SYSTEM = ("You are a Python programmer. Reply with the complete contents of "
           "solve.py in a single ```python fenced block and nothing else. The "

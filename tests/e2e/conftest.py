@@ -34,7 +34,7 @@ _TOKEN_FILE = None  # populated by the session fixture
 
 def sandbox_deps_available() -> bool:
     try:
-        import fastapi, uvicorn, defusedxml  # noqa: F401
+        import fastapi, uvicorn, defusedxml
         return True
     except ImportError:
         return False

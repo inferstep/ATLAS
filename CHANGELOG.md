@@ -4,6 +4,70 @@
 
 ## [Unreleased]
 
+### Changed: ruff catches swallowed exceptions and complex functions, and lints scripts/
+
+ruff ran Pyflakes only, and not on `scripts/`. Its settings are now in
+`pyproject.toml` and it reads `scripts/` too. Besides Pyflakes it reports a
+bare `except` and an `except` that only passes or continues (E722, S110,
+S112), a function with a complexity over 15 (C901), and a `# noqa` that no
+finding uses (RUF100).
+- The 180 markers that no finding used are removed, 155 of them
+  `# noqa: E402` for a rule that is not on.
+- The 65 findings that were there carry a marker for their rule: 37 C901, 25
+  S110, 3 S112. Repairing one leaves its marker unused, and RUF100 then asks
+  for it to go, so the list can only shrink. A new swallowed exception or a
+  new function over the limit fails the lint job.
+
+### Added: the JetBrains plugin scaffold, its Compose spike and its CI
+
+`extensions/jetbrains/` is the second IDE client ([issue #35](https://github.com/inferstep/ATLAS/issues/35)),
+scaffolded the way the VS Code extension was: the Gradle build, the gates,
+the packaging, and a Stage 1 spike that renders the tool window.
+- The spike mounts a Jewel Compose panel in the ATLAS tool window, streams
+  stub SSE frames so the UI has to recompose incrementally, and paints the
+  assistant text with the IDE's own theme. This stage has no HTTP, endpoint,
+  or protocol code — the client layer is Stage 2.
+- Compose and Jewel come from the target IDE and are never packaged:
+  `composeUI()` supplies the Compose modules (including the runtime split)
+  and, transitively, the Jewel widgets, and `plugin.xml` depends on
+  `com.intellij.modules.compose` so the platform puts them on the plugin's
+  classloader. Without that dependency the tool window failed with
+  `NoClassDefFoundError` on PyCharm 2026.1, which the tool-window test now
+  guards against.
+- Jewel's Markdown renderer is reached by module name, not by plugin id: the
+  `intellij.platform.jewel.markdown.*` modules ship in every 2026.1 product
+  but are platform content modules, so a `<depends>` on one names nothing and
+  makes the platform refuse to load the plugin. The platform declares
+  `intellij.platform.compose.markdown` with `visibility="public"`, and that
+  single module brings Compose and every Jewel Markdown module with it, so
+  the descriptor uses `<dependencies><module>`; the build names the modules
+  whose classes it compiles against, because `bundledModule` attaches the jar
+  it is given and not that module's declared dependencies. Assistant text is
+  rendered with Jewel's Markdown renderer, styled by the IDE theme through
+  `ProvideMarkdownStyling`, and confirmed on PyCharm 2026.1.
+- The plugin targets IntelliJ Platform 2026.1.3 (`sinceBuild = 261`, no
+  until-build) and pins Kotlin to language and API level 2.3: the 2026.1
+  IDE bundles the 2.3.x standard library, so bytecode from a newer level
+  would not load. `verifyPluginProjectConfiguration` checks both in the
+  gate.
+- `ktlint` is the Kotlin gate, with `.editorconfig` as the single source
+  of its rules and lines limited to 100 characters, matching the other
+  languages. Kotlin is deliberately not in `scripts/code_health.py`,
+  which scans the Go and Python trees.
+- `.github/workflows/jetbrains-plugin.yml` runs `ktlintCheck test
+  verifyPluginProjectConfiguration buildPlugin`, path-filtered to the
+  plugin tree.
+- `java-kotlin` joins the CodeQL matrix, with `build-mode: manual` and a
+  forced in-process `compileKotlin` that the leg asserts from its log, so a
+  skipped compile fails rather than scanning nothing.
+- `gradle` joins `.github/dependabot.yml`, scoped to
+  `/extensions/jetbrains`; the platform and the IntelliJ Platform Gradle
+  Plugin stay hand-managed because moving them is a compatibility
+  decision.
+- `runPyCharm`, `runWebStorm` and `runGoLand` launch sandboxed IDEs, so
+  the plugin can be smoke-tested against each product rather than
+  assuming IDEA compatibility.
+
 ### Fixed: uninstall.sh --data removed the projects folder without naming it
 
 `scripts/uninstall.sh --data` (and `--all`) removes two folders: the data

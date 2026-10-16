@@ -3948,6 +3948,7 @@ func wsRefusalFixture(t *testing.T, tool string, args map[string]interface{}) (
 			http.NotFound(w, r)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		i := turns
 		turns++

@@ -1,0 +1,69 @@
+name: jetbrains-plugin
+
+# Code-level checks for the JetBrains plugin (extensions/jetbrains/) —
+# ktlint, the tool-window tests, plugin project configuration, and a
+# distributable build. Kept out of test.yml's Go/Python matrix, like
+# vscode-extension.yml: the plugin is its own Gradle ecosystem and only
+# needs to run when its files change.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'extensions/jetbrains/**'
+      - '.github/workflows/jetbrains-plugin.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'extensions/jetbrains/**'
+      - '.github/workflows/jetbrains-plugin.yml'
+
+concurrency:
+  group: jetbrains-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ktlint + test + build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: extensions/jetbrains
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The toolchain pins Java 21, so the runner's JDK must be 21 too;
+      # IntelliJ Platform Gradle Plugin resolves the IDE against the JDK
+      # that runs the build, not against the toolchain.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      # verifyPluginProjectConfiguration checks the sinceBuild/untilBuild
+      # pair and the Kotlin API level against the target platform, so it
+      # runs before the build rather than after a bad plugin is packaged.
+      #
+      # Dependency locking is on for the configurations this command
+      # resolves (build.gradle.kts), so this step fails when
+      # gradle.lockfile is behind what the build asks for. Measured: with
+      # one locked module's line removed from the lock file, this command
+      # fails with "Resolved 'x' which is not part of the dependency lock
+      # state".
+      - name: gate
+        run: ./gradlew --no-daemon ktlintCheck test verifyPluginProjectConfiguration buildPlugin
+
+      # The lock file is held against the one command that renews it, so a
+      # lock file that the build would write differently -- a hand-edited
+      # one, or one written by a build that resolved another set of
+      # configurations -- lands here rather than on a maintainer's machine.
+      - name: lock
+        run: |
+          ./gradlew --no-daemon --write-locks ktlintCheck test verifyPluginProjectConfiguration buildPlugin
+          git diff --exit-code -- gradle.lockfile

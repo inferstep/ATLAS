@@ -51,6 +51,12 @@ are still the ones it writes.
   workflow and run it with the repository's permissions. The
   `star-history` asset branch is the one exception, because its
   workflow's token can't be exempted.
+- **Branches under `smoke/`.** Only the organization's admins and the
+  `maintainers` team can create, push or delete one. Dependabot and the
+  repository's admin role cannot. The development server builds and runs
+  the tip of such a branch
+  ([docs/quality/gates.md](docs/quality/gates.md#the-smoke-run-of-one-commit)),
+  so no program may push one.
 - **Release tags** (`v*`). Only admins and maintainers can create one,
   and nobody can move or delete one once it exists.
 
@@ -76,7 +82,8 @@ earning maintainer trust, so every rung also has hard technical limits.
 
 **Safeguards on every rung**
 
-- Every path needs a code owner's review. The security- and
+- Every path has a code owner, whose approval a pull request into
+  `staging` or `main` needs. The security- and
   release-critical paths stay with the lead even when subsystems gain
   owners: `.github/workflows/`, `scripts/`, `sandbox/`, `SECURITY.md`,
   `docs/RELEASE.md`, `docs/PUBLISHING.md` and

@@ -246,7 +246,7 @@ def _print_rebuild_required(arch: Optional[str], excerpt: str, color: bool,
 
 
 # --- main -------------------------------------------------------------------
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
     parser = argparse.ArgumentParser(
         prog="atlas onboard",
         description="Guided drop-in for a new model: arch check, rebuild gate, "

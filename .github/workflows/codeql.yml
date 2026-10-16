@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [python, go, javascript-typescript]
+        language: [python, go, javascript-typescript, java-kotlin]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -68,8 +68,29 @@ jobs:
             proxy/go.sum
             tui/go.sum
 
+      # Java/Kotlin needs a different init than the other three: Kotlin is
+      # a compiled language, so build-mode manual means we compile it
+      # ourselves further down and CodeQL observes that compile. The
+      # existing init keeps the default build mode for python, go and
+      # javascript-typescript (the JS extractor reads source directly).
+      - name: setup java
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: init codeql (java-kotlin)
+        if: matrix.language == 'java-kotlin'
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-and-quality
+
       - name: init codeql (${{ matrix.language }})
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        if: matrix.language != 'java-kotlin'
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         with:
           languages: ${{ matrix.language }}
           # security-and-quality runs the broader pack — catches both
@@ -88,7 +109,44 @@ jobs:
           (cd proxy && go build ./...)
           (cd tui   && go build ./...)
 
+      # The Kotlin plugin is a Gradle build, and CodeQL only extracts
+      # Kotlin from a compile it observes. Force the plugin's compileKotlin
+      # task to actually run: --rerun defeats the task's own up-to-date
+      # check, --no-build-cache defeats the cache, and in-process keeps the
+      # Kotlin compiler in the JVM CodeQL instruments — the Kotlin compiler
+      # daemon is a separate process that --no-daemon does not cover.
+      - name: build kotlin (forced, in-process)
+        if: matrix.language == 'java-kotlin'
+        working-directory: extensions/jetbrains
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --no-build-cache --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Pkotlin.incremental=false \
+            :compileKotlin --rerun 2>&1 | tee kotlin-compile.log
+
+      # A skipped Kotlin compile extracts nothing and the leg would pass
+      # while scanning zero Kotlin, so fail loudly instead. The negative
+      # check uses `if grep; then exit 1` rather than `! grep`, which does
+      # not fail the step under `set -e`.
+      - name: assert the kotlin compile ran
+        if: matrix.language == 'java-kotlin'
+        working-directory: extensions/jetbrains
+        run: |
+          set -euo pipefail
+          if grep -Eq '^> Task :compileKotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
+            echo "::error::the Kotlin compile was skipped (see kotlin-compile.log); CodeQL would extract nothing"
+            exit 1
+          fi
+          for task in ':compileKotlin'; do
+            if ! grep -Eq "^> Task ${task}$" kotlin-compile.log; then
+              echo "::error::$task did not run (see kotlin-compile.log)"
+              exit 1
+            fi
+          done
+          echo "ok: the Kotlin compile executed"
+
       - name: analyze
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
         with:
           category: "/language:${{ matrix.language }}"

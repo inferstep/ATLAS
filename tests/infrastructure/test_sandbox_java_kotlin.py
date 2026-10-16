@@ -4,32 +4,19 @@ Tests for Java and Kotlin sandbox executor support.
 Validates code execution, syntax checking, class name extraction,
 compile errors, and runtime errors for JVM languages.
 
-All Java tests are gated with skipif(javac is None) so CI runners
-without a JDK don't fail — the executor boots on the host runner
-which has no JDK installed.
+The code runs in the sandbox service, which has the JDK and Kotlin. No
+test here is skipped for what the machine that runs pytest has: a sandbox
+that cannot run a language fails its tests.
 """
 
 import pytest
-import shutil
 
 # importorskip, not a plain import — see test_llm.py: keeps collection
 # alive on environments without the integration deps.
 httpx = pytest.importorskip("httpx")
 
-# Reusable skipif marker for all classes that need javac.
-_requires_javac = pytest.mark.skipif(
-    shutil.which("javac") is None,
-    reason="javac not available",
-)
-
-#Reusable skipif marker for all classes that need kotlinc.
-_requires_kotlinc = pytest.mark.skipif(
-    shutil.which("kotlinc") is None,
-    reason="kotlinc not available",
-)
 
 
-@_requires_javac
 class TestJavaExecution:
     """Test Java code execution in sandbox."""
 
@@ -190,7 +177,6 @@ public class Main {
         ), f"Error should mention missing package: {error_msg}"
 
 
-@_requires_javac
 class TestJavaSyntaxCheck:
     """Test /syntax-check endpoint for Java."""
 
@@ -235,8 +221,7 @@ public class Main {
 
 
 class TestJavaLanguagesEndpoint:
-    """Test /languages reports Java — no skipif needed, endpoint
-    returns 'not installed' gracefully when javac is absent."""
+    """Test /languages reports Java."""
 
     def test_java_in_languages(self, sandbox_client: httpx.Client):
         """Java should appear in the /languages response."""
@@ -251,7 +236,7 @@ class TestJavaLanguagesEndpoint:
 
 class TestJavaPathSafety:
     """Regression tests for path-traversal rejection in /syntax-check.
-    No skipif — the guard is in Python, not javac."""
+    The guard is in Python, not javac."""
 
     def test_reject_dot_dot_filename(self, sandbox_client: httpx.Client):
         """Filename with ../ should be rejected as unsafe."""
@@ -365,7 +350,6 @@ public final class SecureApp {
 # or package-structure tests below — those cases don't exist for Kotlin.
 # Compile output is a single fat jar run via `java -jar`.
 
-@_requires_kotlinc
 class TestKotlinExecution:
     """Test Kotlin code execution in sandbox."""
 
@@ -477,7 +461,6 @@ fun main() {
         )
 
 
-@_requires_kotlinc
 class TestKotlinSyntaxCheck:
     """Test /syntax-check endpoint for Kotlin."""
 
@@ -539,8 +522,7 @@ fun main() {
 
 
 class TestKotlinLanguagesEndpoint:
-    """Test /languages reports Kotlin — no skipif needed, endpoint
-    returns 'not installed' gracefully when kotlinc is absent."""
+    """Test /languages reports Kotlin."""
 
     def test_kotlin_in_languages(self, sandbox_client: httpx.Client):
         """Kotlin should appear in the /languages response."""

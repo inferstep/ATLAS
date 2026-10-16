@@ -148,7 +148,7 @@ def required_checks(rulesets: list, branch: str) -> set:
 def test_a_dry_run_writes_nothing_to_github(first_run):
     assert first_run.calls, "the stand-in gh was not used"
     assert not [call for call in first_run.calls if "-X" in call.split("\t")]
-    assert len(first_run.rulesets) == 9
+    assert len(first_run.rulesets) == 10
 
 
 def test_no_account_can_skip_a_required_check(first_run):
@@ -179,9 +179,26 @@ def test_dev_takes_changes_only_through_the_merge_queue(first_run):
     # leave dev and the queue's own branches alone.
     for ruleset in first_run.rulesets:
         if ruleset["target"] == "branch" and "update" in rule_kinds(ruleset):
-            excluded = ruleset["conditions"]["ref_name"]["exclude"]
-            assert "refs/heads/dev" in excluded
-            assert "refs/heads/gh-readonly-queue/**/*" in excluded
+            named = ruleset["conditions"]["ref_name"]
+            if named["include"] == ["~ALL"]:
+                assert "refs/heads/dev" in named["exclude"]
+                assert "refs/heads/gh-readonly-queue/**/*" in named["exclude"]
+            else:
+                # A ruleset with a list that names its branches: each name is under smoke/, where the queue has none.
+                assert all(name.startswith("refs/heads/smoke/") for name in named["include"]), ruleset["name"]
+
+
+def test_the_smoke_rule_is_the_one_that_github_has_with_no_app_and_no_repository_role_on_its_list(first_run):
+    # The development server builds and starts the tip of a branch under smoke/, so no program may push one.
+    (rule,) = [r for r in first_run.rulesets if r["name"] == "Smoke branches: only maintainers create, push or delete"]
+    # The ruleset as GitHub gave it when it was made there, with the id of the team as the stand-in gives it.
+    live = {"id": 24947851, "name": rule["name"], "target": "branch", "source_type": "Repository", "enforcement": "active",
+            "conditions": {"ref_name": {"exclude": [], "include": ["refs/heads/smoke/*", "refs/heads/smoke/**/*"]}},
+            "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}],
+            "bypass_actors": [{"actor_id": None, "actor_type": "OrganizationAdmin", "bypass_mode": "always"},
+                              {"actor_id": 4242, "actor_type": "Team", "bypass_mode": "always"}]}
+    assert diff.differences(rule, live) == []
+    assert {actor["actor_type"] for actor in rule["bypass_actors"]} == {"OrganizationAdmin", "Team"}
 
 
 def test_every_check_required_on_dev_is_reported_by_a_job(first_run):
@@ -195,6 +212,17 @@ def test_every_check_required_on_dev_is_reported_by_a_job(first_run):
                 patterns.append(re.compile(".+".join(parts)))
     for check in sorted(required_checks(first_run.rulesets, "dev")):
         assert any(p.fullmatch(check) for p in patterns), f"no workflow job reports the required check {check!r}"
+
+
+def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_red_or_the_reason_it_has_none(first_run):
+    # scripts/canary.py check asks the same of the live rules, after they are applied. Here a change of the rules
+    # meets the rule of the canary before that.
+    spec = importlib.util.spec_from_file_location("atlas_canary", REPO / "scripts" / "canary.py")
+    canary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(canary)
+    required = set().union(*(required_checks(first_run.rulesets, branch) for branch in BRANCHES))
+    findings = canary.coverage_findings(canary.load_manifest(REPO), sorted(required), ran=[])
+    assert [finding.message for finding in findings] == []
 
 
 def test_staging_and_main_require_only_checks_that_dev_requires(first_run):
@@ -214,7 +242,7 @@ def test_the_release_step_names_rulesets_that_the_script_writes(first_run):
 
 def test_a_dry_run_says_same_when_the_live_rules_match(first_run, live_copy, tmp_path):
     run = DryRun(tmp_path / "run", live_copy)
-    assert "9 of 9 are the same as the live rulesets" in run.stdout
+    assert "10 of 10 are the same as the live rulesets" in run.stdout
     assert not [line for line in run.stdout.splitlines() if line.startswith(("  update  ", "  create  "))]
 
 
@@ -227,7 +255,7 @@ def test_a_dry_run_shows_a_bypass_that_was_added_to_the_checks(first_run, live_c
     run = DryRun(tmp_path / "run", live_copy)
     assert "update  Integration branch: required checks" in run.stdout
     assert "bypass: wants nobody, live has ['RepositoryRole:5:always']" in run.stdout
-    assert "8 of 9 are the same as the live rulesets" in run.stdout
+    assert "9 of 10 are the same as the live rulesets" in run.stdout
 
 
 def _pair():

@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import main  # noqa: E402
+import main
 
 pytestmark = pytest.mark.skipif(
     not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),

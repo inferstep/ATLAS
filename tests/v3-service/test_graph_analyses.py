@@ -10,10 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-from graph.types import (  # noqa: E402
+from graph.types import (
     CallsFact, CodeGraph, DefinesFact, ExportsFact,
 )
-from graph import analyses  # noqa: E402
+from graph import analyses
 
 
 def _graph():

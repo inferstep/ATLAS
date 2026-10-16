@@ -61,7 +61,11 @@ FIXES = {
     "go-proxy-changed-tests": "Run `go test -run '<TestName>' .` in proxy/ for a test that failed, then fix the code or the test.",
     "python-compile": "A file does not compile. Fix the syntax error at the line shown.",
     "min-python": "The code uses a form Python 3.9 cannot run. Write it in a form 3.9 accepts.",
-    "ruff": "Run `python -m ruff check <file>` and remove the undefined or redefined name it reports.",
+    "ruff": (
+        "Run `python -m ruff check <file>` and fix what it reports: an undefined or redefined"
+        " name, a swallowed exception, a function over the complexity limit, or a marker that"
+        " no finding uses."
+    ),
     "test-integrity": "Fix what tests/validate_tests.py reports about the test files.",
     "python-tests": "Run `python -m pytest <path> -x` for the first failure, then fix the code or the test.",
     "python-tests-lens": "Run `python -m pytest geometric-lens/tests -x` for the first failure, then fix the code or the test.",

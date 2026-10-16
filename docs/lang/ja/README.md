@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: 4f1be83 -->
+<!-- source: README.md synced-through: 63f33f70 -->
 > **[English](../../../README.md)** | **[简体中文](../zh-CN/README.md)** | **日本語** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -16,11 +16,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/test.yml?branch=main&label=tests" alt="Tests"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="Install matrix"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/container-scan.yml?label=container%20scan" alt="Container scan"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/verify-tags.yml?label=release%20signature" alt="Release signature"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/test.yml?branch=main&label=tests" alt="Tests"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="Install matrix"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/container-scan.yml?label=container%20scan" alt="Container scan"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/verify-tags.yml?label=release%20signature" alt="Release signature"/></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/inferstep/ATLAS"><img src="https://api.scorecard.dev/projects/github.com/inferstep/ATLAS/badge" alt="OpenSSF Scorecard"/></a>
 </p>
 
 
@@ -41,9 +42,12 @@
 
 ## 📰 最新ニュース
 
-- **2026-07-06** - **[V3.1.3 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.3)** - 本番プラットフォーム強化: 自動復元付きの段階的アップグレード/ロールバック、SQLite ステートストア（Redis を廃止）、署名付きアーティファクトマニフェスト、相関 ID 付き構造化ログ、対話式パーミッション、セッション再開、そして2回の敵対的バグ修正スイープ
-- **2026-06-17** - **[V3.1.2 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - ハードウェア対応の拡大（ROCm / Metal / Vulkan）、持ち込みモデルの Lens + ASA トレーニング、自分のワークロードからのインザループ lens 再トレーニング（その後削除。CHANGELOG を参照）、エージェント信頼性の強化
-- **2026-05-12** - **[V3.1.0 "Maia" リリース](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - ネイティブ Bubbletea TUI、ワンコマンドブートストラップ、ストリーミング Lens + ASA 活性化ステアリング、AST 対応の外科的編集
+- **2026-10-01** - **[V3.1.6 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.6)** - コマンドポリシーのセキュリティ修正（[GHSA-m9w4-p32x-chx9](https://github.com/inferstep/ATLAS/security/advisories/GHSA-m9w4-p32x-chx9)、[@Rendegou](https://github.com/Rendegou) による報告と修正）。アップグレードしてください。
+- **2026-09-29** - **[V3.1.5 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.5)** - ツール引数名のセキュリティ修正（[GHSA-c3p6-m657-h629](https://github.com/inferstep/ATLAS/security/advisories/GHSA-c3p6-m657-h629)）。アップグレードしてください。
+- **2026-09-27** - **[V3.1.4 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.4)** - inferstep/ATLAS への移行、セキュリティ修正（[GHSA-5hvw-59r4-7rcq](https://github.com/inferstep/ATLAS/security/advisories/GHSA-5hvw-59r4-7rcq)）、コントリビューター体制の整備。
+- **2026-07-06** - **[V3.1.3 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)** - 本番プラットフォーム強化: 自動復元付きの段階的アップグレード/ロールバック、SQLite ステートストア（Redis を廃止）、署名付きアーティファクトマニフェスト、相関 ID 付き構造化ログ、対話式パーミッション、セッション再開、そして2回の敵対的バグ修正スイープ
+- **2026-06-17** - **[V3.1.2 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - ハードウェア対応の拡大（ROCm / Metal / Vulkan）、持ち込みモデルの Lens + ASA トレーニング、自分のワークロードからのインザループ lens 再トレーニング（その後削除。CHANGELOG を参照）、エージェント信頼性の強化
+- **2026-05-12** - **[V3.1.0 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - ネイティブ Bubbletea TUI、ワンコマンドブートストラップ、ストリーミング Lens + ASA 活性化ステアリング、AST 対応の外科的編集
 - **2026-03-26** - [Hacker News フロントページ](https://news.ycombinator.com/item?id=47533297) - 489 ポイント、285 コメント
 - **2026-03-05** - **V3.0 リリース** - 凍結された Qwen3-14B 上のマルチフェーズ V3 パイプライン。*このリリースで公表した LiveCodeBench 74.6% は撤回しました。ベンチマークランナーは LiveCodeBench の非公開テストを一度も実行しておらず、3 つの候補のいずれか、または失敗出力を見せた修復が問題文の例に合格すればタスクを合格としていました（[撤回のお知らせ](../../reports/V3_ABLATION_STUDY.md)）。現行製品の再検証後に改めて測定します。*
 - **2026-02-18** - **[V2.0 リリース](../../../CHANGELOG.md)** - ベンチマークインフラ、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 評価スイート
@@ -54,11 +58,11 @@
      onto the `star-history` asset branch (scripts/star-history-chart.py).
      Replaces the star-history.com embed, whose shared token pool
      rate-limits unpredictably. -->
-<a href="https://github.com/itigges22/ATLAS/stargazers">
+<a href="https://github.com/inferstep/ATLAS/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" />
-   <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-light.svg" />
+   <img alt="Star history chart" src="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
 
@@ -89,8 +93,7 @@
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
    - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 選択に用いる XGBoost アンサンブル
-   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - AST 対応のコード検索とプロジェクトインデキシング
-   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling で必要な候補に計算を寄せる
+   - [パーステップスコアリング](../../API.md#geometric-lens-port-8099) - 書き込みのトークンごとの C(x)/G(x) スコアリング。モデル別に較正された閾値が介入を駆動します
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。
    - 多言語実行: Python、Rust、Go、C、Shell など
@@ -110,7 +113,7 @@
 
 ワンショットインストール:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 変化し続けるスクリプトをそのまま bash にパイプしたくない場合は、同じインストーラーをより慎重に実行する方法が2つあります:
@@ -120,7 +123,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atla
   | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
 
 # Review before running
-curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
 less atlas-bootstrap.sh
 bash atlas-bootstrap.sh
 ```
@@ -144,8 +147,8 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## ⚠️ 既知の制限事項
 
-- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
-- **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（最新ニュース参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/itigges22/ATLAS/issues/28) で追跡します。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
+- **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（最新ニュース参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/inferstep/ATLAS/issues/28) で追跡します。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。
 - **文法制約デコーディングは制約なしのデコーディングより遅くなります。**
 
@@ -156,22 +159,23 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 **V3.1.3 "Maia"** - 現在のリリース。V3.1.2 の上に本番プラットフォーム強化を実施: 自動復元付きの段階的な `atlas upgrade`/`rollback`、Redis を置き換える SQLite ステートストア ([ADR 0007](../../adr/0007-sqlite-state-store.md)。2026-09 に `dev` で、唯一の利用者だったパターンキャッシュとともに廃止)、署名付きアーティファクトマニフェスト、サービス横断の相関 ID を持つ構造化 JSON ログ、対話式パーミッションプロンプト、セッション再開、型付き設定のバリデーション/マイグレーション、2回の敵対的バグ修正スイープ（確認済み修正 33 件）。
 
 **V3.1.2 "Maia"** - V3.1.0 の基盤（TUI、ワンコマンドインストール、ストリーミング Lens + ASA）の上に、ハードウェア対応の拡大、持ち込みモデルのトレーニング、エージェント信頼性の強化を実施。
-- ハードウェア対応: llama.cpp 経由の AMD ROCm — RDNA4 / RX 9070 (gfx1200/gfx1201) を含む ([#26](https://github.com/itigges22/ATLAS/issues/26))。Apple Silicon のネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/itigges22/ATLAS/issues/32)、[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照)。AMD / Intel / Snapdragon / MoltenVK 経由の Apple / CPU をカバーする Vulkan ユニバーサルフォールバック ([#114](https://github.com/itigges22/ATLAS/issues/114))。
-- 持ち込みモデル: ローカル Lens トレーニングパイプライン (`atlas lens build`、[#100](https://github.com/itigges22/ATLAS/issues/100)) と ASA のモデル別キャリブレーション同等化 (`atlas asa check/build/publish`、[#113](https://github.com/itigges22/ATLAS/issues/113)) — 追加の GGUF 向けに Lens + ASA アーティファクトをトレーニングし、lens に同梱されるモデル別の動作閾値付きで出荷。
+- ハードウェア対応: llama.cpp 経由の AMD ROCm — RDNA4 / RX 9070 (gfx1200/gfx1201) を含む ([#26](https://github.com/inferstep/ATLAS/issues/26))。Apple Silicon のネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)、[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照)。AMD / Intel / Snapdragon / MoltenVK 経由の Apple / CPU をカバーする Vulkan ユニバーサルフォールバック ([#114](https://github.com/inferstep/ATLAS/issues/114))。
+- 持ち込みモデル: ローカル Lens トレーニングパイプライン (`atlas lens build`、[#100](https://github.com/inferstep/ATLAS/issues/100)) と ASA のモデル別キャリブレーション同等化 (`atlas asa check/build/publish`、[#113](https://github.com/inferstep/ATLAS/issues/113)) — 追加の GGUF 向けに Lens + ASA アーティファクトをトレーニングし、lens に同梱されるモデル別の動作閾値付きで出荷。
+- インザループ lens トレーニング（TUI の `/good`・`/bad`・`/deny` → `atlas lens retrain`）はこのリリースで出荷されましたが、2026-09 に `dev` で削除されました: 収集したコーパスが評価実行をトレーニングデータに混入させていたためです。詳細は CHANGELOG を参照してください。
 - エージェント信頼性: ツール結果の可視性修正、読み取り重複排除、トレースバック → 指向的編集、`move_file`、pip インストール / 大文字小文字不一致のステア、サンドボックスシェルポリシー + ホストサイズの cgroup 制限。
-- 構造的な呼び出しグラフ推論 ([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125)、[@yogthos](https://github.com/yogthos) に感謝)。ARCHITECTURE.md の zh-CN / ja / ko 翻訳 ([#25](https://github.com/itigges22/ATLAS/issues/25))。
+- 構造的な呼び出しグラフ推論 ([#39](https://github.com/inferstep/ATLAS/issues/39) / [#125](https://github.com/inferstep/ATLAS/pull/125)、[@yogthos](https://github.com/yogthos) に感謝)。ARCHITECTURE.md の zh-CN / ja / ko 翻訳 ([#25](https://github.com/inferstep/ATLAS/issues/25))。
 
-**V3.2** - 次のマイルストーン: より深いコード推論とプランニング。
-- アーキテクチャ優先のプランニングフェーズ — RPG スタイルのプラン先行・後埋め: モジュールスコープでプランを立ててから関数スコープで実装 ([#120](https://github.com/itigges22/ATLAS/issues/120)、PR [#124](https://github.com/itigges22/ATLAS/pull/124))。
-- 構造的コード推論（残り） — ソルバー支援の到達可能性に加え、「どのファイルが重要か」を多解像度で検索する構文非依存のウェーブレット分解 ([#39](https://github.com/itigges22/ATLAS/issues/39))。
-- サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/itigges22/ATLAS/issues/9))。
-- 先送りしたインフラ: 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/itigges22/ATLAS/issues/102))。K3s / Kubernetes 上の ROCm。レジストリモデルの正式ベンチマーク — LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28))。
+**V3.2** - 次のマイルストーン: より深いコード推論。
+- RPG スタイルのアーキテクチャ優先プランニングは実装され ([#120](https://github.com/inferstep/ATLAS/issues/120))、A/B 測定のうえ削除されました: 参照モデルに対する改善はなく、プランニングレイテンシは約10倍でした。[#148](https://github.com/inferstep/ATLAS/issues/148) がその記録であり、設計研究は [docs/reports/RPG_WAVELET_PLANNING_V3_2.md](../../reports/RPG_WAVELET_PLANNING_V3_2.md) にあります。
+- 構造的コード推論（残り） — 出荷済みのコールグラフレイヤーを深掘りします ([#39](https://github.com/inferstep/ATLAS/issues/39))。
+- サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/inferstep/ATLAS/issues/9))。
+- 先送りしたインフラ: 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/inferstep/ATLAS/issues/102))。K3s / Kubernetes 上の ROCm。レジストリモデルの正式ベンチマーク — LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28))。
 
 **バックログ / 協力者募集**
-- ハードウェア: ARM64 マルチアーキテクチャビルド ([#115](https://github.com/itigges22/ATLAS/issues/115))、大規模モデル向けのマルチ GPU ([#34](https://github.com/itigges22/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27))。
-- ツール: VS Code / JetBrains 拡張機能 ([#35](https://github.com/itigges22/ATLAS/issues/35))。
-- サンドボックス言語: Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30))。
-- アーキテクチャ: モデル非依存プラットフォーム ([#66](https://github.com/itigges22/ATLAS/issues/66))。
+- ハードウェア: ARM64 マルチアーキテクチャビルド ([#115](https://github.com/inferstep/ATLAS/issues/115))、大規模モデル向けのマルチ GPU ([#34](https://github.com/inferstep/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27))。
+- ツール: VS Code / JetBrains 拡張機能 ([#35](https://github.com/inferstep/ATLAS/issues/35))。
+- サンドボックス言語: Java / Kotlin ([#29](https://github.com/inferstep/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/inferstep/ATLAS/issues/30))。
+- アーキテクチャ: モデル非依存プラットフォーム ([#66](https://github.com/inferstep/ATLAS/issues/66))。
 
 ---
 
@@ -194,7 +198,7 @@ ATLAS は、一人の大学生が自由時間に、1枚のコンシューマ GPU
 
 ATLAS はオープンに開発されており、コントリビューターとコアメンテナーを歓迎します。バグ修正、アクセラレータサポート、より大きなサブシステムの作業、いずれも歓迎です。
 
-バグを見つけた、あるいは行き詰まった? **[Issue を作成してください](https://github.com/itigges22/ATLAS/issues)** — 修正の提出は必須ではありません。バグ報告とフィードバックはコードと同じくらい役に立ちます。
+バグを見つけた、あるいは行き詰まった? **[Issue を作成してください](https://github.com/inferstep/ATLAS/issues)** — 修正の提出は必須ではありません。バグ報告とフィードバックはコードと同じくらい役に立ちます。
 
 ガイドラインは **[CONTRIBUTING.md](../../../CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../MAP.md)をご覧ください。
 

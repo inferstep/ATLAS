@@ -19,7 +19,7 @@ real v3-service, fake lens, real sandbox executor.
 import pytest
 
 from tests.e2e.conftest import drive_agent_turn, start_proxy
-from tests.e2e.test_v3_lens_acceptance import (  # noqa: F401  (fixtures)
+from tests.e2e.test_v3_lens_acceptance import (  # fixtures, used by name
     CAND_A,
     _agent_body, _assert_no_human_gate_inside_v3, _payload, _write_result,
     fake_lens, fake_llama, proxy, v3_service, workspace,

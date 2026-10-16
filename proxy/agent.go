@@ -626,7 +626,7 @@ func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command strin
 	s.verifiedStandalone = false
 	s.verifiedByRedirect = ""
 	s.redRunStreak++
-	s.serverStartBlocked = blockedServerStart(result.Error + string(result.Data))
+	s.serverStartBlocked = blockedServerStart(result)
 	recordVerificationEvidence(ctx, turn, command, ev, true)
 	log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 		turn, truncateStr(command, 60), s.serverStartBlocked)
@@ -851,7 +851,7 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// file that never parsed and was never run, reported as success (audit
 	// finding: warned state must be a terminal integrity condition, not a
 	// rewrite throttle).
-	for p := range s.pendingWarnedRun {
+	for _, p := range sortedKeys(s.pendingWarnedRun) {
 		if s.repairOpenFor(ctx, p) {
 			// The repair gate owns a file that still does not parse.
 			continue
@@ -5169,7 +5169,7 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	// This avoids consuming context window with pre-injected file dumps.
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		sb.WriteString("## Project Files Available\n")
-		for path := range filesRead {
+		for _, path := range sortedKeys(filesRead) {
 			sb.WriteString(fmt.Sprintf("- %s\n", path))
 		}
 		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")

@@ -156,6 +156,31 @@ func TestAFileWrittenAfterTheSnapshotIsDrift(t *testing.T) {
 	}
 }
 
+// With two changed files, the artifact gate named whichever one the map gave
+// first, so the same run could get two texts. It names the first in sorted
+// order, each time.
+func TestOfTwoChangedFilesTheSameOneIsNamedEachTime(t *testing.T) {
+	ctx := &AgentContext{WorkingDir: t.TempDir(), SessionWrites: map[string]bool{"b.py": true, "a.py": true}}
+	for try := 1; try <= 100; try++ {
+		if got := driftedSinceVerification(ctx, map[string]string{}); got != "a.py" {
+			t.Fatalf("try %d: %q, want a.py", try, got)
+		}
+	}
+}
+
+// With two warned files, the run-first gate named whichever one the map gave
+// first. It names the first in sorted order, each time.
+func TestOfTwoWarnedFilesTheRunFirstGateNamesTheSameOneEachTime(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	for try := 1; try <= 100; try++ {
+		st := &runState{pendingWarnedRun: map[string]bool{"b.py": true, "a.py": true}}
+		gate, msg := st.exitGates(ctx, "fix the script", "Done.")
+		if gate != "run_first_gate" || !strings.HasPrefix(msg, "`a.py` is on disk with a parse warning") {
+			t.Fatalf("try %d: %s %q, want run_first_gate naming a.py", try, gate, msg)
+		}
+	}
+}
+
 // A warned landing is artifact state, not a rewrite throttle (audit
 // correction). The mark must survive everything short of an actual
 // execution attempt of the file — naming it (cat/grep/ls) proves nothing
@@ -492,7 +517,7 @@ func TestPendingWarnedRunHasOneWriter(t *testing.T) {
 				t.Errorf("agent.go:%d stores a non-true value in the warned set: %s", i+1, l)
 			}
 		}
-		if strings.HasPrefix(l, "for ") && strings.Contains(l, "range s.pendingWarnedRun") {
+		if strings.HasPrefix(l, "for ") && strings.Contains(l, "s.pendingWarnedRun") {
 			keyOnlyReads++
 		}
 	}

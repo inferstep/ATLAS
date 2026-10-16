@@ -48,6 +48,7 @@ func stubInference(t *testing.T, replies []string, tokensPer int, calls *int) *h
 			http.NotFound(w, r)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		i := *calls
 		*calls++
 		if i >= len(replies) {

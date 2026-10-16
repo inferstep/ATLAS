@@ -580,6 +580,29 @@ func TestLiveServerCoverageIsScopedToItsOwnFiles(t *testing.T) {
 	}
 }
 
+// With two jobs that serve files changed since they started, the verification
+// gate named whichever job the map gave first. It names the first by its id,
+// each time.
+func TestOfTwoStaleJobsTheSameOneIsNamedEachTime(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SessionWrites = map[string]bool{}
+	for _, name := range []string{"a.py", "b.py"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ctx.SessionWrites[path] = true
+	}
+	ctx.BackgroundJobs = map[string]string{"j1": "python b.py", "j2": "python a.py"}
+	ctx.BackgroundJobStarted = map[string]time.Time{"j1": time.Now().Add(-time.Hour), "j2": time.Now().Add(-time.Hour)}
+	for try := 1; try <= 100; try++ {
+		if job, file := staleServingJob(ctx); job != "j1" || file != "b.py" {
+			t.Fatalf("try %d: %s %s, want j1 b.py", try, job, file)
+		}
+	}
+}
+
 // P-guardrails/DEAD#1: outside yolo mode, validateRunCommand refused a
 // server started with run_background -- the tool the refusal told the model
 // to use. A foreground start through run_command is still redirected.

@@ -9,8 +9,8 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "v3-service"))
 
-import adapters  # noqa: E402
-import structured_log as sl  # noqa: E402
+import adapters
+import structured_log as sl
 
 
 def _reset():

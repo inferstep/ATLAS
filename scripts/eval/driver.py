@@ -22,12 +22,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from atlas_arm import run_atlas  # noqa: E402
-from baseline_arm import Workspace, run_baseline  # noqa: E402
-from grading import build_workspace, check_controls, grade, resolve_image  # noqa: E402
-from provenance import run_context  # noqa: E402
-from report import arm_summary, compare  # noqa: E402
-from suite import SuiteError, load_suite  # noqa: E402
+from atlas_arm import run_atlas
+from baseline_arm import Workspace, run_baseline
+from grading import build_workspace, check_controls, grade, resolve_image
+from provenance import run_context
+from report import arm_summary, compare
+from suite import SuiteError, load_suite
 
 REPO = HERE.parents[1]
 DEV_PROJECT = "atlas"  # the development stack: never measured with held-out tasks

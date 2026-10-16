@@ -19,7 +19,7 @@ import pytest
 
 V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
 sys.path.insert(0, V3)
-import pipeline  # noqa: E402
+import pipeline
 
 
 def cap(tmp_path, monkeypatch, name="pool.jsonl", trace="req-1", inv="inv-1"):

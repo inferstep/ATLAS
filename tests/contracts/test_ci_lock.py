@@ -74,6 +74,7 @@ COPIED = (
     ("sandbox/requirements-runtime.txt", None),   # every pin of the file
     ("sandbox/requirements-verify.txt", ("jinja2", "ruff", "mypy")),
     ("v3-service/requirements.txt", None),
+    ("geometric-lens/requirements.txt", ("httpx",)),
 )
 
 
@@ -118,7 +119,7 @@ def test_every_pin_that_is_a_copy_is_the_same_as_in_its_product_file():
                 "product file's pin and run scripts/ci-lock.sh.")
             assert locked[name][0] == pins[name][2:], (
                 f"{path} has {name}{pins[name]} and ci.txt holds {name}=={locked[name][0]}. Fix: run scripts/ci-lock.sh.")
-    assert seen >= 13, f"only {seen} copied pins were compared; the product files were read wrongly"
+    assert seen >= 14, f"only {seen} copied pins were compared; the product files were read wrongly"
 
 
 def test_the_lock_is_made_for_the_python_version_of_the_jobs_that_install_it():

@@ -26,6 +26,7 @@ NEWEST_PUSH_CANCELS = {
     "build-images.yml": "the images of the newest commit take the place of the older ones",
     "codeql.yml": "the analysis of the newest commit holds every finding of the older ones",
     "install-test.yml": "it tests the installer as it is now; an older commit's result is not kept",
+    "jetbrains-plugin.yml": "it builds and tests the plugin as it is now; an older commit's result is not kept",
     "sonar.yml": "the analysis of the newest commit takes the place of the older one",
 }
 

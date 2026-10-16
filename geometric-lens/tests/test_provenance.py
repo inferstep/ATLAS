@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from geometric_lens import provenance  # noqa: E402
+from geometric_lens import provenance
 
 
 def test_build_and_roundtrip(tmp_path):

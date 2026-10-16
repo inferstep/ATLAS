@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,10 +45,15 @@ func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 		return map[string]interface{}{"type": "done", "summary": "Built solve.py and verified it prints 7."}
 	}
 	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slots/") {
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		i := turns
 		turns++

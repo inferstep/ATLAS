@@ -154,7 +154,7 @@ def _select_proxy_binary(atlas_dir: str) -> Optional[str]:
     return _build_proxy(atlas_dir) if _find_go() else None
 
 
-def _kill_stale_proxy() -> None:
+def _kill_stale_proxy() -> None:  # noqa: C901
     """Reap any pre-existing atlas-proxy-v2 process before launching a new
     one. Without this, an orphaned proxy from a previous `atlas` session
     (whose parent died ungracefully — terminal closed, SIGKILL, etc.)
@@ -290,7 +290,7 @@ def _launch_local_proxy(proxy_bin: str) -> bool:
         # The OS reclaims the fd when stop_local_proxy() reaps the child
         # at atexit. CodeQL's file-not-closed alert is a false positive
         # for this pattern.
-        log_fd = open(log_path, "ab", buffering=0)  # noqa: SIM115
+        log_fd = open(log_path, "ab", buffering=0)
     except OSError as e:
         print(f"  WARN: can't open {log_path}: {e}; proxy logs disabled")
         log_fd = subprocess.DEVNULL

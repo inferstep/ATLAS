@@ -464,7 +464,7 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | `/shell` stdout truncation | 4,000 chars | Last N chars kept |
 | `/shell` stderr truncation | 2,000 chars | Last N chars kept |
 | `error_message` truncation | 500 chars | First N chars kept on `/execute` failures |
-| Timeout response | `Execution timed out after Ns` | `/execute` timeout returns `success: false`, `returncode: -1`, this message as `stderr`, and empty `stdout` |
+| Timeout response | `Execution timed out after Ns` | `/execute` timeout returns `success: false`, `timed_out: true`, `outcome: "timed_out"`, `error_type: "Timeout"`, and this message as the first line of `error_message`. `stdout` and `stderr` hold what the program wrote before it was stopped. The memory, process and output limits answer the same way, with their own `outcome`, `error_type` and first line |
 | Supported languages | 12 | python, javascript, typescript, go, rust, c, cpp, bash, html/htm, xml, json, yaml/yml |
 
 ### Background process tools

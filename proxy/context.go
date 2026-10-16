@@ -774,7 +774,7 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 // "PATH" or "ſource" reaches the handler's field while every exact-key
 // reader (this check, the deny-list, the TUI's tool line) sees no such argument.
 func nonCanonicalArgName(fields map[string]json.RawMessage) string {
-	for k := range fields {
+	for _, k := range sortedKeys(fields) {
 		for _, r := range k {
 			if r > unicode.MaxASCII || unicode.IsUpper(r) {
 				return k

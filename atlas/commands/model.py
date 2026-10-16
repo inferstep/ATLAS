@@ -293,7 +293,7 @@ def _remote_size_gb(url: str, token: Optional[str]) -> float:
         return 0.0
 
 
-def _emit_install(args: argparse.Namespace, color: bool) -> int:
+def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if getattr(args, "url", None):
         # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
         # registry entry with no SHA pin and no lens artifacts; the lens-status
@@ -513,7 +513,7 @@ def _emit_install_artifacts(args: argparse.Namespace, color: bool) -> int:
     return rc
 
 
-def _install_artifacts(m: model_registry.Model, models_dir: str,
+def _install_artifacts(m: model_registry.Model, models_dir: str,  # noqa: C901
                         color: bool, args: argparse.Namespace) -> int:
     """Download lens + asa artifacts for the given model. Returns 0 if
     everything either succeeded or had no URL to attempt, non-zero if
@@ -834,7 +834,7 @@ def _stream_download(m: Model, target: str, color: bool,
         _release_install_lock(lock_path)
 
 
-def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
+def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,  # noqa: C901
                               started: float, token: Optional[str],
                               color: bool, resume: bool) -> int:
     """The actual download logic, factored out so the lock-release in

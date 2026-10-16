@@ -190,6 +190,15 @@ def _compose_gates() -> dict[str, Gate]:
     return gates
 
 
+def _with_workers(gates: dict[str, Gate], workers: int) -> dict[str, Gate]:
+    """With more than one worker, the gate python-tests gives its tests to that many processes at once
+    (pytest-xdist). Every test still runs once, and the result file holds every test."""
+    if workers <= 1:
+        return gates
+    gate = gates["python-tests"]
+    return {**gates, "python-tests": replace(gate, command=gate.command + ("-n", str(workers)))}
+
+
 def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     python = sys.executable
     go_env = {"GOCACHE": os.environ.get("GOCACHE", "/tmp/atlas-go-cache")}
@@ -333,11 +342,8 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
                 "-m",
                 "ruff",
                 "check",
-                "--select",
-                "F",
-                "--ignore",
-                "F401,F541,F841",
                 *PYTHON_TARGETS,
+                "scripts",
             ),
             required=False,
             available=lambda: _module_available("ruff"),
@@ -524,6 +530,13 @@ def _parse_args() -> argparse.Namespace:
         metavar="PATH",
         help="override the default hermetic pytest subsets",
     )
+    parser.add_argument(
+        "--pytest-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run the tests of the gate python-tests in N processes at once (needs pytest-xdist); 1 is one process",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--list", action="store_true", help="list gate names")
     return parser.parse_args()
@@ -531,7 +544,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    gates = _with_coverage(_gates(args.pytest_path or PYTEST_PATHS))
+    gates = _with_workers(_with_coverage(_gates(args.pytest_path or PYTEST_PATHS)), args.pytest_workers)
     if args.list:
         for name, gate in gates.items():
             print(f"{name}\t{'required' if gate.required else 'optional'}")

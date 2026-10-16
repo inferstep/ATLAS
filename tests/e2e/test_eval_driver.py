@@ -13,14 +13,14 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "eval"))
 
-import atlas_arm  # noqa: E402
-import baseline_arm as B  # noqa: E402
-import driver  # noqa: E402
-import grading as G  # noqa: E402
-import provenance as P  # noqa: E402
-import report as R  # noqa: E402
-import suite as S  # noqa: E402
-from result import ArmResult  # noqa: E402
+import atlas_arm
+import baseline_arm as B
+import driver
+import grading as G
+import provenance as P
+import report as R
+import suite as S
+from result import ArmResult
 
 
 # --- a toy suite -----------------------------------------------------------------

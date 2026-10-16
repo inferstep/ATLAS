@@ -1,0 +1,12 @@
+root = true
+
+# Single source of the Kotlin formatting rules: ktlint reads this file,
+# the Gradle plugin is told nothing extra, and there is no baseline.
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+insert_final_newline = true
+charset = utf-8
+end_of_line = lf
+ktlint_code_style = ktlint_official

@@ -438,7 +438,7 @@ class V3Pipeline:
             v3["ps_num_plans"] = int(conf.get(
                 "ATLAS_V3_PLAN_SEARCH_NUM_PLANS", "3",
             ))
-        except Exception:
+        except Exception:  # noqa: S110
             # best-effort: swallow on failure (caller continues)
             pass
         return v3
@@ -484,7 +484,7 @@ class V3Pipeline:
             telemetry_dir=telemetry_dir,
         )
 
-    def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:
+    def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:  # noqa: C901
         """Run a single task through the full V3 pipeline.
 
         Returns a dict with:
@@ -594,7 +594,7 @@ class V3Pipeline:
                 emb = embed(probe_candidate["code"])
                 label = "PASS" if probe_passed_sandbox else "FAIL"
                 self._emb_writer.write(task_id, 0, label, emb)
-            except Exception:
+            except Exception:  # noqa: S110
                 # best-effort: swallow on failure (caller continues)
                 pass
             result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
@@ -807,7 +807,7 @@ class V3Pipeline:
                 emb = embed(cand["code"])
                 label = "PASS" if cand.get("passed") else "FAIL"
                 self._emb_writer.write(task_id, cand["index"], label, emb)
-            except Exception:
+            except Exception:  # noqa: S110
                 # best-effort: swallow on failure (caller continues)
                 pass
             return cand
@@ -966,7 +966,7 @@ class V3Pipeline:
                             result["code"] = repair_code
                             result["phase_solved"] = "pr_cot"
                             break
-                    except Exception:
+                    except Exception:  # noqa: S112
                         continue
             except Exception as e:
                 result["telemetry"]["pr_cot_error"] = str(e)
@@ -1043,7 +1043,7 @@ class V3Pipeline:
             event[key] = value
         try:
             append_jsonl(self.telemetry_dir / "v3_events.jsonl", event)
-        except Exception:
+        except Exception:  # noqa: S110
             # best-effort: swallow on failure (caller continues)
             pass
 
@@ -1093,7 +1093,7 @@ class V3BenchmarkRunner:
                 with open(f, 'r') as fh:
                     data = json.load(fh)
                     results[data['task_id']] = data
-            except Exception:
+            except Exception:  # noqa: S110
                 # best-effort: swallow on failure (caller continues)
                 pass
 

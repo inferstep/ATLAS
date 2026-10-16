@@ -605,7 +605,7 @@ def verify_build_command(
 INTERACTIVE_LINT_NOT_RUN = "not run: the code does not parse in this interpreter"
 
 
-def interactive_lint(code: str) -> Tuple[bool, str]:
+def interactive_lint(code: str) -> Tuple[bool, str]:  # noqa: C901
     """Heuristic checks beyond compile-OK for interactive (terminal/UI) tasks.
 
     Compile-OK is necessary but not sufficient: a snake game using

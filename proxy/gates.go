@@ -1976,22 +1976,7 @@ func revisePlan(ctx *AgentContext, originalUserMessage string, reason string) {
 	// concrete signal of "what the agent knows now" beyond the
 	// original priority-files sample.
 	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
-	for path, content := range ctx.SnapshotFilesRead() {
-		if len(pctx) >= 8 {
-			break
-		}
-		// Use relative path if possible so the planner key matches
-		// what the agent will pass to read_file/edit_file later.
-		rel := path
-		if strings.HasPrefix(path, ctx.WorkingDir+"/") {
-			rel = strings.TrimPrefix(path, ctx.WorkingDir+"/")
-		}
-		s := content
-		if len(s) > 2000 {
-			s = s[:2000] + "\n... (truncated)"
-		}
-		pctx[rel] = s
-	}
+	addFilesReadToPlanContext(ctx, pctx, 8)
 
 	req := V3PlanRequest{
 		UserMessage:    noted,

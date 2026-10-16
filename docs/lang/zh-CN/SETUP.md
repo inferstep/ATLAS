@@ -505,7 +505,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选地）卸载 K3s 节点本身。
+K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选地）卸载 K3s 节点本身。加上 `--data` 时还会删除数据目录和项目目录（你自己的项目就在那里）；加上 `--models` 时则删除模型文件。脚本在请求确认前，会先列出它将删除的每个目录及其路径。
 
 ---
 

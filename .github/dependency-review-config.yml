@@ -1,0 +1,66 @@
+# Settings of the dependency review (.github/workflows/dependency-review.yml).
+
+# A new dependency with a known vulnerability of this level, or a higher
+# one, fails the pull request.
+fail-on-severity: high
+
+# The licences a new dependency may have. ATLAS is AGPL-3.0, so a dependency
+# must be one that a work under that licence can take in: the permissive
+# licences, the weak copyleft ones, and GPL-3.0 and AGPL-3.0.
+#
+# The review reads a licence as an SPDX expression. Of "A AND B" both must be
+# here; of "A OR B" one. An "-or-later" licence passes when a later version is
+# here, so GPL-2.0-or-later passes by GPL-3.0. GPL-2.0-only is not here, and
+# neither is "GPL-2.0-or-later" as an entry: that entry would let
+# GPL-2.0-only through, which a work under AGPL-3.0 cannot take in.
+#
+# A licence that is not here fails the review. To allow one more, add it in
+# a pull request that says why a work under AGPL-3.0 can take it in.
+allow-licenses:
+  # Permissive.
+  - MIT
+  - MIT-0
+  - ISC
+  - 0BSD
+  - BSD-2-Clause
+  - BSD-2-Clause-Views
+  - BSD-3-Clause
+  - Apache-2.0
+  - Apache-2.0 WITH LLVM-exception
+  - BSL-1.0
+  - BlueOak-1.0.0
+  - Zlib
+  - Unlicense
+  - CC0-1.0
+  - PSF-2.0
+  - Python-2.0
+  - Python-2.0.1
+  # For data and text that a package carries.
+  - CC-BY-3.0
+  - CC-BY-4.0
+  # The patent grant that Go's own golang.org/x modules add to BSD-3-Clause.
+  - LicenseRef-scancode-google-patent-license-golang
+  # Weak copyleft.
+  - MPL-2.0
+  - LGPL-2.1-only
+  - LGPL-2.1-or-later
+  - LGPL-3.0-only
+  - LGPL-3.0-or-later
+  # Copyleft that AGPL-3.0 can take in.
+  - GPL-3.0-only
+  - GPL-3.0-or-later
+  - AGPL-3.0-only
+  - AGPL-3.0-or-later
+
+# Packages for which GitHub's data names no licence. Each was read by hand:
+# the licence that the package index names for it is beside it, and every
+# part of it is on the list above. A new package with no named licence fails
+# the review (scripts/licence_names.py) until it is read and added here.
+# A GitHub Action is not listed: GitHub's data names no licence for any
+# action, and an action is run by a workflow, not shipped with ATLAS.
+allow-dependencies-licenses:
+  - pkg:pypi/torch          # Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT
+  - pkg:pypi/numpy          # BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0
+  - pkg:pypi/scikit-learn   # BSD-3-Clause
+  - pkg:pypi/xgboost        # Apache-2.0
+  - pkg:pypi/setuptools     # MIT

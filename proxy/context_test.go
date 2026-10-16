@@ -385,6 +385,20 @@ func TestAnArgumentNameThatIsNotLowercaseIsRefused(t *testing.T) {
 	}
 }
 
+// With two names that are not lowercase, the refusal named whichever one the
+// map gave first, so one request got two texts: a real model's session did not
+// replay for it. The refusal names the first in sorted order, each time.
+func TestARefusalOfTwoNamesThatAreNotLowercaseNamesTheSameOneEachTime(t *testing.T) {
+	ctx := &AgentContext{WorkingDir: t.TempDir()}
+	args := json.RawMessage(`{"path":"app.py","Expected_last_line":"b","Expected_first_line":"a","content":"c"}`)
+	want := `replace_lines: argument names are lowercase, as the tool lists them; "Expected_first_line" is not`
+	for try := 1; try <= 100; try++ {
+		if got := validateToolWorkspacePaths("replace_lines", args, ctx); got != want {
+			t.Fatalf("try %d: %q, want %q", try, got, want)
+		}
+	}
+}
+
 // The ledger trims a path and the handler does not, so " /x" would be
 // checked as a file inside the workspace and recorded as /x outside it.
 func TestAPathPaddedWithWhitespaceIsRefused(t *testing.T) {

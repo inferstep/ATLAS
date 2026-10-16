@@ -2,6 +2,13 @@
   "branch": "canary/must-stay-red",
   "title": "canary: this pull request must stay red",
   "max_age_days": 14,
+  "ruled_branches": ["dev", "staging", "main"],
+  "server": {
+    "status": "server/nightly",
+    "writer": 340202947,
+    "look_back_days": 14,
+    "note_after_nights": 3
+  },
   "plants": [
     {
       "id": "pytest (tests/v3)",
@@ -259,10 +266,10 @@
       "red": [
         "docker compose config"
       ],
-      "what": "a top-level key that Compose does not know, at the end of docker-compose.yml",
+      "what": "a top-level key that Compose does not know, at the end of docker-compose.rocm.yml, an overlay file that this job validates and that no other job starts a service from",
       "shows": "canary_must_fail",
       "action": "append",
-      "path": "docker-compose.yml",
+      "path": "docker-compose.rocm.yml",
       "lines": [
         "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
         "canary_must_fail: true"
@@ -388,59 +395,37 @@
       "length": 120
     },
     {
-      "id": "java sandbox smoke (containerized)",
+      "id": "sandbox tests (containerized)",
       "red": [
-        "java sandbox smoke (containerized)"
+        "sandbox tests (containerized)"
       ],
-      "what": "a java sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-java-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'public class Main",
+      "what": "a failing test at the end of tests/infrastructure/test_sandbox.py, a file that the job runs",
+      "shows": "canary: this test fails on purpose",
+      "action": "append",
+      "path": "tests/infrastructure/test_sandbox.py",
       "lines": [
-        "            code: 'public class Main { public static void main(String[] args) { System.out.println(\"canary-\" + \"java-failed\"); System.exit(1); } }'"
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    # Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
       ]
     },
     {
-      "id": "kotlin sandbox smoke (containerized)",
+      "id": "proxy and TUI tests (no model)",
       "red": [
-        "kotlin sandbox smoke (containerized)"
+        "proxy and TUI tests (no model)"
       ],
-      "what": "a kotlin sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-kotlin-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'fun main()",
+      "what": "a failing test at the end of tests/infrastructure/test_control_plane.py, a file that the job runs",
+      "shows": "canary: this test fails on purpose",
+      "action": "append",
+      "path": "tests/infrastructure/test_control_plane.py",
       "lines": [
-        "            code: 'fun main() { println(\"canary-\" + \"kotlin-failed\"); kotlin.system.exitProcess(1) }'"
-      ]
-    },
-    {
-      "id": "ruby sandbox smoke (containerized)",
-      "red": [
-        "ruby sandbox smoke (containerized)"
-      ],
-      "what": "a ruby sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-ruby-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: 'puts ",
-      "lines": [
-        "            code: 'puts \"canary-\" + \"ruby-failed\"; exit 1'"
-      ]
-    },
-    {
-      "id": "php sandbox smoke (containerized)",
-      "red": [
-        "php sandbox smoke (containerized)"
-      ],
-      "what": "a php sample in the job's own list that prints a marker and ends with an error",
-      "shows": "canary-php-failed",
-      "action": "replace_line",
-      "path": ".github/workflows/test.yml",
-      "starts_with": "            code: '<?php",
-      "lines": [
-        "            code: '<?php echo \"canary-\" . \"php-failed\"; exit(1);'"
+        "",
+        "",
+        "def test_canary_must_fail():",
+        "    # Planted by scripts/canary.py for the canary pull request. Never merge it.",
+        "    assert 1 == 2, \"canary: this test fails on purpose\""
       ]
     },
     {
@@ -457,10 +442,16 @@
     "codeql (go)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "codeql (java-kotlin)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "golangci-lint (proxy)": "It reports a finding in new code as a note on the line. A finding does not turn it red. The plant of `go test (proxy)` shows that it still reports.",
+    "golangci-lint (tui)": "It reports a finding in new code as a note on the line. A finding does not turn it red. The plant of `go test (tui)` shows that it still reports.",
+    "hadolint (dockerfiles)": "It reports a finding as a note on the line. A finding does not turn it red. Its plant shows that it still reports.",
+    "smoke result": "It turns red only for a pull request that changes text which every request to the model carries. No planted file is such text.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
     "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",
     "sonar scan": "It sends the code to SonarQube Cloud. A finding does not turn the job red.",
     "integrity check": "It reports and does not fail for a finding.",
+    "fix tests (fail without the fix)": "It reports and does not fail for a verdict. It judges only a pull request whose title has the type `fix`, and the canary's has not.",
     "coverage upload": "It sends numbers to Codecov and judges nothing.",
     "coverage upload (extension)": "It sends numbers to Codecov and judges nothing. On the canary it is skipped: the job it needs, `lint + test + build`, is red.",
     "test results upload": "It sends numbers to Codecov and judges nothing.",
@@ -478,7 +469,8 @@
     "CodeQL": "The result of the code scanning service. A finding of the planted files does not turn it red.",
     "SonarCloud": "The result of the service's own app. A finding of the planted files does not turn it red.",
     "SonarCloud Code Analysis": "The service's quality gate. The planted files do not fail it.",
-    "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary."
+    "codecov/patch": "The service's own check of the coverage of the change. It is not there when no coverage report was sent, as on the canary.",
+    ".github/dependabot.yml": "GitHub's own check of the Dependabot settings file. No planted file changes that file."
   },
   "side_effects": {}
 }

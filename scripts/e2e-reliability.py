@@ -51,10 +51,10 @@ from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from code_quality import analyze as analyze_quality  # noqa: E402
-from reliability_report import (Stopped, log_defects, report, sibling,  # noqa: E402
+from code_quality import analyze as analyze_quality
+from reliability_report import (Stopped, log_defects, report, sibling,
                                 stop_on_signals, write_summary)
-from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream  # noqa: E402
+from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 
 # --------------------------------------------------------------------------
 # Task suite
@@ -1537,7 +1537,7 @@ def tui_handled_types() -> set[str]:
 # Runner
 # --------------------------------------------------------------------------
 
-def run_session(task: Task, rep: int, url: str, workspace: Path,
+def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
                 subdir: str, timeout: int, raw_sink=None, prompt_policy: str = "deny") -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible
@@ -1679,8 +1679,8 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     return s
 
 
-def preflight(sandbox: str, subdir: str) -> list[str]:
-    """Refuse to measure a stack that is misconfigured.
+def preflight(sandbox: str, subdir: str, project: str = "atlas", run=subprocess.run) -> list[str]:
+    """Refuse to measure a stack that is misconfigured. `project` is that stack's compose project.
 
     The proxy and the sandbox each bind a host directory at /workspace, and
     nothing in a session fails loudly when those differ: file tools write
@@ -1696,13 +1696,13 @@ def preflight(sandbox: str, subdir: str) -> list[str]:
         return problems
 
     def mount_of(container: str) -> str:
-        p = subprocess.run(
+        p = run(
             ["docker", "inspect", container, "--format",
              '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}'],
             capture_output=True, text=True, timeout=30)
         return (p.stdout or "").strip()
 
-    proxy_mount = mount_of("atlas-atlas-proxy-1")
+    proxy_mount = mount_of(f"{project or 'atlas'}-atlas-proxy-1")
     sandbox_mount = mount_of(sandbox)
     if proxy_mount and sandbox_mount and proxy_mount != sandbox_mount:
         problems.append(
@@ -1715,8 +1715,8 @@ def preflight(sandbox: str, subdir: str) -> list[str]:
     # The subdir has to be visible to the sandbox too, or every verification
     # command fails with "cwd does not exist" and the task looks unsolvable.
     if subdir:
-        p = subprocess.run(["docker", "exec", sandbox, "test", "-d",
-                            f"/workspace/{subdir}"], capture_output=True, timeout=30)
+        p = run(["docker", "exec", sandbox, "test", "-d",
+                 f"/workspace/{subdir}"], capture_output=True, timeout=30)
         if p.returncode != 0:
             problems.append(
                 f"/workspace/{subdir} does not exist inside {sandbox} — every "
@@ -1975,7 +1975,7 @@ def main() -> int:
     # required before any check leaves the host interpreter, so a run without
     # --sandbox-container behaves exactly as it did before.
     _SANDBOX_WORKDIR = f"/workspace/{args.subdir}" if args.subdir else ""
-    if problems := preflight(args.sandbox_container, args.subdir):
+    if problems := preflight(args.sandbox_container, args.subdir, args.compose_project):
         for line in problems:
             print(f"error: {line}", file=sys.stderr)
         return 2

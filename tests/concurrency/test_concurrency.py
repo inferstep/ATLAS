@@ -28,7 +28,7 @@ def test_concurrent_restore_point_writes_never_corrupt(tmp_path):
             for _ in range(20):
                 eng.write_restore_point(
                     root, f"v{i}", "vX", {"svc": f"sha{i}"}, f"stamp{i}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             errors.append(e)
 
     threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
@@ -108,7 +108,7 @@ def test_env_tag_write_is_atomic(tmp_path):
         try:
             for _ in range(30):
                 _set_env_tag(root, tag)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             errs.append(e)
 
     threads = [threading.Thread(target=writer, args=(f"v{i}",))

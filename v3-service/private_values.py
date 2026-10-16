@@ -64,6 +64,6 @@ class PrivateValueLogFilter(logging.Filter):
             if record.exc_info and not record.exc_text:
                 record.exc_text = filter_private_values(
                     logging.Formatter().formatException(record.exc_info))
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # a filtering failure must never suppress the log line
         return True

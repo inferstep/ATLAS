@@ -320,7 +320,7 @@ class ConstraintRefiner:
             for h in hypotheses:
                 try:
                     h.embedding = embed_call(h.approach)
-                except Exception:
+                except Exception:  # noqa: S110
                     # best-effort: swallow on failure (caller continues)
                     pass
 

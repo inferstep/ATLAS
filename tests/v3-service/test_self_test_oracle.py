@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
-import pipeline  # noqa: E402
+import pipeline
 
 
 def test_the_untrusted_stage_is_registered():
@@ -47,7 +47,7 @@ from types import SimpleNamespace as _NS
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "v3-service"))
 
-from stages import self_test_gen as _stg  # noqa: E402
+from stages import self_test_gen as _stg
 
 
 def _generated(inp, exp):

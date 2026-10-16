@@ -1026,13 +1026,13 @@ func staleServingJob(ctx *AgentContext) (jobID, path string) {
 	if ctx == nil {
 		return "", ""
 	}
-	for id, jobCmd := range ctx.BackgroundJobs {
+	for _, id := range sortedKeys(ctx.BackgroundJobs) {
 		started, ok := ctx.BackgroundJobStarted[id]
 		if !ok {
 			continue
 		}
 		for _, p := range changedPathsForCoverage(ctx) {
-			if !commandNamesPath(jobCmd, p) {
+			if !commandNamesPath(ctx.BackgroundJobs[id], p) {
 				continue
 			}
 			if info, err := os.Stat(p); err == nil && info.ModTime().After(started) {
@@ -1416,7 +1416,7 @@ func driftedSinceVerification(ctx *AgentContext, verified map[string]string) str
 	if ctx == nil {
 		return ""
 	}
-	for p := range ctx.SessionWrites {
+	for _, p := range sortedKeys(ctx.SessionWrites) {
 		want, seen := verified[p]
 		if !seen {
 			return p
@@ -1996,7 +1996,9 @@ func bodiesSeenInRun(ctx *AgentContext) []string {
 }
 
 // answerNamesSymbolFrom reports whether the answer accounts for a file by
-// naming something defined in it.
+// naming something defined in it. Every read file of that base name counts:
+// the caller counts files by base name, and taking the first of two would
+// leave the answer to whichever one the map gave first.
 //
 // Measured (stabilization cycle 5, audit of this guard): an answer that traced
 // the fault correctly through read_key and write_key, naming one file, was
@@ -2009,23 +2011,21 @@ func bodiesSeenInRun(ctx *AgentContext) []string {
 // of whether an answer is correct.
 func answerNamesSymbolFrom(ctx *AgentContext, base, claimText string) bool {
 	ctx.mu.Lock()
-	var source, path string
+	sources := map[string]string{}
 	for p, content := range ctx.FilesRead {
 		if filepath.Base(p) == base {
-			source, path = content, p
-			break
+			sources[p] = content
 		}
 	}
 	ctx.mu.Unlock()
-	if source == "" {
-		return false
-	}
-	for _, sym := range outlineByRegex(path, source) {
-		// Short names ("get", "id") appear in ordinary prose; requiring four
-		// characters keeps the match to something the file actually declares.
-		// Whole-word only: "price" must not be credited to the word "pricing".
-		if len(sym.Name) >= 4 && mentionsWord(claimText, sym.Name) {
-			return true
+	for path, source := range sources {
+		for _, sym := range outlineByRegex(path, source) {
+			// Short names ("get", "id") appear in ordinary prose; requiring four
+			// characters keeps the match to something the file actually declares.
+			// Whole-word only: "price" must not be credited to the word "pricing".
+			if len(sym.Name) >= 4 && mentionsWord(claimText, sym.Name) {
+				return true
+			}
 		}
 	}
 	return false
@@ -2415,25 +2415,6 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 // concrete evidence of breakage, so the message says that rather than
 // describing the request — the model has already seen the failure and needs
 // to act on it, not be told what verification is.
-// blockedServerStart reports whether a failed verification command failed
-// because it is a long-running process rather than because the code is
-// broken: it never exited (the sandbox timeout fired) or it could not bind
-// because something is already serving that port.
-//
-// The distinction decides what the verification gate says next. Treating it
-// as a red test tells the model to fix its code and re-run the command, and
-// re-running a blocking server start can never exit clean — an observed
-// session started the server correctly with run_background, was told to
-// "re-run the same command and confirm it exits clean", and spent its three
-// remaining bounces re-sending `done` because nothing it could do satisfied
-// that.
-func blockedServerStart(output string) bool {
-	low := strings.ToLower(output)
-	return strings.Contains(low, "execution timed out") ||
-		strings.Contains(low, "address already in use") ||
-		strings.Contains(low, "is in use by another program")
-}
-
 func verificationRejectionMessage(sawFailedVerification bool) string {
 	return verificationRejection(sawFailedVerification, false, "")
 }

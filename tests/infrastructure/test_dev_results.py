@@ -4,9 +4,12 @@ The workflow that does this runs only on a push to dev, so most of what can
 go wrong there is held here: the lookup of the queue's run, the shape of the
 workflows, and the steps the two upload actions share.
 """
+import http.server
 import importlib.util
+import json
 import re
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -118,7 +121,7 @@ def test_a_run_that_does_not_end_in_time_fails_and_says_so(lookup):
     ([("go test (proxy)", "success"), ("pytest (tests/v3)", "failure")], False),
     ([("go test (proxy)", "cancelled"), ("pytest (tests/v3)", "success")], False),
     # A job that makes no report does not decide whether the coverage is real.
-    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("java sandbox smoke (containerized)", "failure")], True),
+    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("sandbox tests (containerized)", "failure")], True),
     # No report job at all: nothing shows that the tests passed.
     ([("shellcheck", "success")], False),
 ])
@@ -128,7 +131,7 @@ def test_coverage_counts_as_real_only_when_every_job_that_makes_a_report_passed(
 
 def test_the_jobs_that_did_not_pass_are_named_with_how_they_ended(lookup):
     jobs = [("go test (proxy)", "success"), ("pytest (tests/perf)", "failure"), ("go test (tui)", "cancelled"),
-            ("java sandbox smoke (containerized)", "failure")]
+            ("sandbox tests (containerized)", "failure")]
     assert lookup.not_passed(github([], jobs), "o/r", a_run()) == ["go test (tui) (cancelled)", "pytest (tests/perf) (failure)"]
     assert lookup.not_passed(github([], [("go test (proxy)", "success")]), "o/r", a_run()) == []
     assert lookup.not_passed(github([], [("shellcheck", "success")]), "o/r", a_run()) == [
@@ -254,8 +257,10 @@ def uses_of(name):
 def test_both_workflows_send_through_the_same_two_actions():
     # The jobs of test.yml have the head commit of a pull request in the workspace, so they take the actions from a
     # folder that holds the workflow's own commit (tests/infrastructure/test_workflow_local_actions.py).
+    # One other action of this repository is used in test.yml, and it sends nothing: the step that gives a job a
+    # mirror of Docker Hub (tests/infrastructure/test_docker_hub_mirror.py).
     for name, folder in (("test.yml", "./workflow-commit/"), ("dev-results.yml", "./")):
-        local = [use for use in uses_of(name) if use.startswith("./")]
+        local = [use for use in uses_of(name) if use.startswith("./") and use != "./.github/actions/docker-hub-mirror"]
         assert local == [folder + ".github/actions/upload-coverage", folder + ".github/actions/upload-test-results"], name
         assert not [use for use in uses_of(name) if use.startswith("codecov/")], f"{name} sends by itself"
 
@@ -331,3 +336,65 @@ def test_a_pull_request_that_changes_the_results_path_tries_the_lookup_and_sends
     lookup_step = next(step for step in job["steps"] if step.get("id") == "run")
     assert "scripts/queue_run.py" in lookup_step["run"] and "--plain" in lookup_step["run"]
     assert 'git rev-list --first-parent -n 5 "$BASE"' in lookup_step["run"]
+
+
+class _GitHub(http.server.BaseHTTPRequestHandler):
+    """A stand-in for GitHub's API. It answers each request with the next status of `statuses`: a page for 200, and
+    a short message for any other. "silent" ends the connection with no answer; "broken" begins the page and ends
+    the connection in its middle."""
+
+    statuses = []
+
+    def do_GET(self):
+        status = self.statuses.pop(0)
+        if status == "silent":
+            return
+        if status == "broken":
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b'{"total_')
+            return
+        body = json.dumps({"total_count": 0} if status == 200 else {"message": "a planted answer"}).encode()
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_not_asked_again(lookup, monkeypatch):
+    server = http.server.HTTPServer(("127.0.0.1", 0), _GitHub)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    slept = []
+    monkeypatch.setattr(lookup, "API", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(lookup.time, "sleep", slept.append)
+    try:
+        # Two answers 5xx, then the answer: three tries, with a wait that grows.
+        _GitHub.statuses = [502, 503, 200]
+        assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30] and _GitHub.statuses == []
+        # A connection that ends with no answer, and an answer that breaks off in its middle, are asked again too.
+        _GitHub.statuses, slept[:] = ["silent", "broken", 200], []
+        assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30] and _GitHub.statuses == []
+        # An answer that says no is not asked again, and the words say what GitHub answered.
+        _GitHub.statuses, slept[:] = [404], []
+        with pytest.raises(RuntimeError, match=r"^GitHub answered \S+ with 404 Not Found$"):
+            lookup.api("repos/o/r/actions/runs", "a-token")
+        assert slept == [] and _GitHub.statuses == []
+        # A longer outage: five tries, almost four minutes, and the words say that GitHub did not answer.
+        _GitHub.statuses = [502] * 5
+        with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: HTTP Error 502: Bad Gateway$"):
+            lookup.api("repos/o/r/actions/runs", "a-token")
+        assert slept == [10, 30, 60, 120] and _GitHub.statuses == []
+    finally:
+        server.shutdown()
+        server.server_close()
+    # GitHub cannot be reached at all: the same tries, and the same words.
+    slept[:] = []
+    with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: <urlopen error"):
+        lookup.api("repos/o/r/actions/runs", "a-token")
+    assert slept == [10, 30, 60, 120]

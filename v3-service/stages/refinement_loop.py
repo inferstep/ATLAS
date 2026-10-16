@@ -219,7 +219,7 @@ class RefinementLoop:
             telemetry_dir.mkdir(parents=True, exist_ok=True)
             self._events_file = telemetry_dir / "refinement_loop_events.jsonl"
 
-    def run(self, problem: str,
+    def run(self, problem: str,  # noqa: C901
             failing_candidates: List[FailingCandidate],
             original_constraints: List[str],
             llm_call: Optional[LLMCallable] = None,
@@ -262,7 +262,7 @@ class RefinementLoop:
                 try:
                     emb = embed_call(c.code)
                     all_failed_embeddings.append(emb)
-                except Exception:
+                except Exception:  # noqa: S110
                     # best-effort: swallow on failure (caller continues)
                     pass
 
@@ -356,7 +356,7 @@ class RefinementLoop:
                     try:
                         emb = embed_call(code)
                         all_failed_embeddings.append(emb)
-                    except Exception:
+                    except Exception:  # noqa: S110
                         # best-effort: swallow on failure (caller continues)
                         pass
 

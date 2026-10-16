@@ -18,7 +18,7 @@ import threading
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "v3-service"))
-import pipeline  # noqa: E402
+import pipeline
 
 
 def open_capture(tmp_path, monkeypatch):

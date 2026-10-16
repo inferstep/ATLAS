@@ -3,9 +3,9 @@ numpy==2.4.6
 # package now pulls NCCL even on arm64; Lens never executes GPU algorithms.
 xgboost-cpu==3.2.0; sys_platform == "linux"
 xgboost==3.2.0; sys_platform != "linux"
-fastapi==0.142.2
+fastapi==0.143.0
 uvicorn==0.54.0
-pydantic==2.13.5
+pydantic==2.14.1
 httpx==0.28.1
 # tiktoken: unused in V2 (was used for V1 chunking token counting). Retained as
 # it is a transitive dependency that may be needed by future features.
