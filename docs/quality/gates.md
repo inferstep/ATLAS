@@ -98,7 +98,7 @@ job on this list that does not start gives no red:
 
 ## Checks on a pull request
 
-### Required (35)
+### Required (36)
 
 | Check | What it does |
 |---|---|
@@ -111,7 +111,7 @@ job on this list that does not start gives no red:
 | `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
 | `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
 | `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
-| `codeql (javascript-typescript)` | CodeQL analysis of the VS Code extension ran to its end (`dev` only) |
+| `codeql (javascript-typescript)`, `codeql (java-kotlin)` | CodeQL analysis of the VS Code extension and of the JetBrains plugin ran to its end (`dev` only) |
 | `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job (`dev` only) |
 | `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds (`dev` only) |
 | `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint (`dev` only) |
@@ -136,7 +136,7 @@ job on this list that does not start gives no red:
 | `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
 | `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
 | `lint + test + build` | Build of the VS Code extension |
-| `codeql (java-kotlin)`, `ktlint + test + build` | Analysis and build of the JetBrains plugin |
+| `ktlint + test + build` | Build of the JetBrains plugin |
 | the `PR build check` jobs | Each service image builds |
 
 A check that compares a change with its base compares with the base branch

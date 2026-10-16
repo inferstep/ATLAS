@@ -94,7 +94,7 @@ DEV_ONLY_CHECKS=(
     "code health (size)"
     "golangci-lint (proxy)" "golangci-lint (tui)" "hadolint (dockerfiles)" "actionlint (workflows)"
     "zizmor (workflows)" "codeql (javascript-typescript)" "perf budget gate" "pytest (tests/concurrency)"
-    "pytest (tests/perf)" "sandbox tests (containerized)" "proxy and TUI tests (no model)"
+    "pytest (tests/perf)" "sandbox tests (containerized)" "proxy and TUI tests (no model)" "codeql (java-kotlin)"
 )
 
 checks_json() {  # the given check names, each pinned to GitHub Actions
