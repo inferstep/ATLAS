@@ -512,6 +512,26 @@ func TestCancelEndpointRequiresSessionID(t *testing.T) {
 	}
 }
 
+func TestSandboxSubdirRejectsPath(t *testing.T) {
+	body, _ := json.Marshal(map[string]string{"message": "hi", "sandbox_subdir": "a/b"})
+	req := httptest.NewRequest("POST", "/v1/agent", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handleAgent(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	var env ErrorEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Error != string(ErrInvalidInput) {
+		t.Errorf("error = %q, want invalid_input", env.Error)
+	}
+	if !strings.Contains(env.Detail, "sandbox_subdir") || !strings.Contains(env.Detail, "bare directory name") {
+		t.Errorf("detail = %q, want sandbox_subdir bare directory name requirement", env.Detail)
+	}
+}
+
 // Reproduces the May 8 categorizer miss: a response starting with
 // `{"type":"tool_call"` and containing &lt;/&gt; entities was being
 // categorized as `malformed_tool` even though the html_entities

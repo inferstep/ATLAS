@@ -98,7 +98,7 @@ paths:
                   description: Tool names pre-approved for the session (skip the permission prompt)
                   items: {type: string}
                 disable_fresh_slot: {type: boolean, description: Keep the pre-warmed KV-cache prefix instead of requesting a fresh slot}
-                sandbox_subdir: {type: string, description: Confine the turn to a bare subdirectory name under the workspace}
+                sandbox_subdir: {type: string, description: "An omitted value uses the whole workspace. A bare directory name of at most 64 characters (ASCII letters, digits, dot, underscore, and dash; not . or ..) confines the turn to that subdirectory; any other value is HTTP 400 invalid_input with no turn"}
       responses:
         "200":
           description: SSE stream of events (see sse_envelope.schema.json)
