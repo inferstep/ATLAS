@@ -77,6 +77,14 @@ on:
           sha-only dispatch build.
         required: false
         default: ""
+      alias_digests:
+        description: >
+          With alias_tag, to move by digest: the lines of a release's
+          images file (ghcr.io/<owner>/atlas-<svc>@sha256:...), separated
+          by spaces. Each source tag must then point at the digest given
+          for its image, or no tag moves.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -186,17 +194,37 @@ jobs:
       - name: Create alias
         env:
           ALIAS: ${{ inputs.alias_tag }}
+          EXPECTED: ${{ inputs.alias_digests }}
         run: |
           set -euo pipefail
           SRC="${ALIAS%%=*}"; DST="${ALIAS##*=}"
           if [[ -z "$SRC" || -z "$DST" || "$SRC" == "$DST" || "$ALIAS" != *"="* ]]; then
             echo "::error::alias_tag must be SRC=DST (got '$ALIAS')"; exit 1
           fi
+          # First read the digest that each source tag points at, and
+          # compare it with the digest that was given. Only when all six
+          # are as given does a tag move, and the copy names the digest,
+          # so a source tag that moves meanwhile changes nothing.
+          found=""
           for svc in proxy v3 lens sandbox llama llama-vulkan; do
-            echo "  atlas-${svc}:${DST} <- atlas-${svc}:${SRC}"
-            docker buildx imagetools create \
-              -t "${REGISTRY}/${OWNER}/atlas-${svc}:${DST}" \
-              "${REGISTRY}/${OWNER}/atlas-${svc}:${SRC}"
+            image="${REGISTRY}/${OWNER}/atlas-${svc}"
+            digest=$(docker buildx imagetools inspect "${image}:${SRC}" --format '{{ .Manifest.Digest }}')
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::${image}:${SRC} has no digest that can be read (got '${digest}'). Fix: check that the tag ${SRC} is there for all six images."; exit 1
+            fi
+            if [[ -n "$EXPECTED" ]]; then
+              wanted=$(tr ' ' '\n' <<<"$EXPECTED" | grep -F "${image}@" || true)
+              if [[ "$wanted" != "${image}@${digest}" ]]; then
+                echo "::error::${image}:${SRC} points at ${digest}, and alias_digests gives '${wanted:-nothing for this image}'. No tag was moved. Fix: give the six lines of the release's images file, or the tag whose images they are."; exit 1
+              fi
+            fi
+            found="${found}${svc}=${digest} "
+          done
+          for pair in $found; do
+            svc="${pair%%=*}"; digest="${pair#*=}"
+            image="${REGISTRY}/${OWNER}/atlas-${svc}"
+            echo "  atlas-${svc}:${DST} <- ${image}@${digest} (was :${SRC})"
+            docker buildx imagetools create -t "${image}:${DST}" "${image}@${digest}"
           done
 
   build:
@@ -206,7 +234,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write  # keyless cosign signing via the workflow OIDC identity
+      id-token: write  # keyless cosign signing via the workflow OIDC identity, and the attestation's signature
+      attestations: write  # to keep the build attestation at GitHub
     strategy:
       fail-fast: false
       matrix:
@@ -370,6 +399,23 @@ jobs:
           DIGEST: ${{ steps.build-llama.outputs.digest || steps.build-vulkan.outputs.digest || steps.build-small.outputs.digest }}
         run: |
           cosign sign --yes "${REGISTRY}/${OWNER}/atlas-${{ matrix.service.name }}@${DIGEST}"
+
+      # A signed statement of where this image was built: the repository,
+      # the workflow, the commit and the digest. GitHub keeps it, and it is
+      # pushed beside the image. It needs three permissions of this job:
+      # `id-token` to sign as this workflow, `attestations` to keep the
+      # statement at GitHub, `packages` to push it beside the image. No
+      # storage record is made, so `artifact-metadata` is not asked for.
+      # Check an image with:
+      #   gh attestation verify oci://ghcr.io/inferstep/atlas-<svc>@<digest> --repo inferstep/ATLAS
+      - name: Attest where the image was built
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.OWNER }}/atlas-${{ matrix.service.name }}
+          subject-digest: ${{ steps.build-llama.outputs.digest || steps.build-vulkan.outputs.digest || steps.build-small.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
 
   # Phase 2: repoint the moving tags at the :sha-<short> images, but only
   # after every service built and the `tests` workflow succeeded on this
