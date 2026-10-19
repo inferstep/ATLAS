@@ -131,6 +131,10 @@ class AtlasClientTest {
                     )
 
                     withTimeout(PROMPT_TIMEOUT_MS) { collector.join() }
+                    assertTrue(
+                        proxy.permissionArrivedInTime,
+                        "the stream went on without the permission answer",
+                    )
                     assertEquals(
                         listOf("turn_start", "permission_request", "tool_result", "done"),
                         events.map { it.type },
