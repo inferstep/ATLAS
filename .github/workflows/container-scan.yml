@@ -2,8 +2,12 @@ name: Container image scan
 
 # Scans the published images for known vulnerabilities on a schedule (and
 # manually): the four service images and the two inference images that CI
-# publishes. Findings are reported; CRITICAL/HIGH in the base OS/library
-# layers should be triaged per SECURITY.md.
+# publishes, each as :dev and as the newest release. Findings are reported;
+# CRITICAL/HIGH in the base OS/library layers should be triaged per
+# SECURITY.md. A CRITICAL finding that has a fixed version turns the run red,
+# and the report job opens one issue, or updates the open one, that lists
+# them. A finding with no fix does not count (ignore-unfixed). The run blocks
+# no merge: it is not a check of a pull request.
 # Not scanned: the ROCm inference image (inference/Dockerfile.rocm). It is
 # built on the user's machine and never published, so there is no image to
 # read here.
@@ -16,24 +20,118 @@ permissions:
   contents: read
 
 jobs:
+  release:
+    name: the newest release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.newest.outputs.tag }}
+    steps:
+      - name: the tag of the newest release
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: echo "tag=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)" >> "$GITHUB_OUTPUT"
+
   trivy:
+    needs: release
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         image: [atlas-proxy, atlas-v3, atlas-lens, atlas-sandbox, atlas-llama, atlas-llama-vulkan]
+        tag: [dev, release]
     steps:
-      - name: Scan ${{ matrix.image }}:dev
+      - name: the image to scan
+        id: image
+        env:
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ matrix.tag == 'release' && needs.release.outputs.tag || 'dev' }}
+        run: echo "ref=ghcr.io/inferstep/$IMAGE:$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Scan ${{ matrix.image }}:${{ matrix.tag }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
-          image-ref: ghcr.io/inferstep/${{ matrix.image }}:dev
+          image-ref: ${{ steps.image.outputs.ref }}
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           # The CUDA inference image is about 2.8 GB compressed; the default
           # of five minutes is for the small service images.
           timeout: 30m0s
-          exit-code: '0'   # report-only for now; flip to 1 to gate
+          exit-code: '0'   # the report job decides the run's result
+
+      - name: the CRITICAL findings that have a fix, for the report job
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.ref }}
+          format: json
+          output: trivy.json
+          severity: CRITICAL
+          ignore-unfixed: true
+          timeout: 30m0s
+          exit-code: '0'
+          skip-setup-trivy: true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: trivy-${{ matrix.image }}-${{ matrix.tag }}
+          path: trivy.json
+          retention-days: 7
+
+  report:
+    name: the issue of CRITICAL findings that have a fix
+    needs: trivy
+    # A scan that failed leaves the run red by itself; the findings of the
+    # others are still reported.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      TITLE: "Image scan: CRITICAL findings that have a fix"
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: trivy-*
+          path: reports
+
+      - name: list the findings
+        id: findings
+        # One row per image, finding and package; Go binaries repeat a
+        # finding of their standard library once per binary.
+        run: |
+          jq -r '.ArtifactName as $image | .Results[]?.Vulnerabilities[]?
+            | "| `\($image)` | \(.VulnerabilityID) | \(.PkgName) \(.InstalledVersion) | \(.FixedVersion) |"' \
+            reports/*/trivy.json | sort -u > rows.md
+          echo "count=$(wc -l < rows.md)" >> "$GITHUB_OUTPUT"
+
+      - name: open or update the issue, and turn the run red
+        if: steps.findings.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COUNT: ${{ steps.findings.outputs.count }}
+        run: |
+          {
+            echo "The weekly image scan found CRITICAL findings that have a fixed version (Trivy, \`--ignore-unfixed\`). Each run that finds some updates this issue."
+            echo
+            echo "Run: $RUN"
+            echo
+            echo "| Image | Finding | Package | Fixed in |"
+            echo "|---|---|---|---|"
+            cat rows.md
+          } > body.md
+          number=$(gh issue list --repo "$REPO" --state open --search "in:title \"$TITLE\"" --json number,title \
+            | jq -r --arg title "$TITLE" 'map(select(.title == $title))[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$REPO" --body-file body.md
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body-file body.md
+          fi
+          echo "::error::$COUNT CRITICAL findings that have a fix; see the issue \"$TITLE\"."
+          exit 1
 
   attestations:
     name: SBOM + provenance attestation check
