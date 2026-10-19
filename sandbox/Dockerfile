@@ -41,7 +41,7 @@ RUN case "$(dpkg --print-architecture)" in \
       arm64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;; \
       *) echo "no Node.js archive for $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.xz" \
+    && curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.xz" \
     && echo "${sha}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
     && rm /tmp/node.tar.xz \
@@ -57,7 +57,7 @@ RUN arch="$(dpkg --print-architecture)" \
       arm64) sha="${GO_SHA256_ARM64}" ;; \
       *) echo "no Go archive for ${arch}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+    && curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
     && echo "${sha}  /tmp/go.tar.gz" | sha256sum -c - \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
     && rm /tmp/go.tar.gz
@@ -126,8 +126,8 @@ RUN rustc --version && cargo --version
 # sandbox needs all of them available for build-command verification to be
 # accurate. npm itself is updated first: the npm that comes with Node.js 20
 # carries an old tar.
-RUN npm install -g npm@11.21.1 \
-    && npm install -g typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
+RUN npm install -g --ignore-scripts npm@11.21.1 \
+    && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
 RUN tsc --version && pnpm --version && yarn --version
 
 # Install Bun for bun.lockb projects (under /opt for non-root reads),
@@ -140,7 +140,7 @@ RUN case "$(dpkg --print-architecture)" in \
       arm64) target=aarch64; sha="${BUN_SHA256_ARM64}" ;; \
       *) echo "no Bun archive for $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL -o /tmp/bun.zip \
+    && curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/bun.zip \
       "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${target}.zip" \
     && echo "${sha}  /tmp/bun.zip" | sha256sum -c - \
     && unzip -q /tmp/bun.zip -d /tmp/bun \
