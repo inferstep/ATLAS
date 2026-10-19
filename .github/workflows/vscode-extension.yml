@@ -46,7 +46,7 @@ jobs:
           cache-dependency-path: extensions/vscode/package-lock.json
 
       - name: install
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: type-check
         run: npm run check-types

@@ -1,0 +1,9 @@
+# The packages of the lens tests (the geometric-lens/tests subset of test.yml),
+# from a hashed lock: the CPU-only torch from PyTorch's index, then the lens
+# service's requirements. A package that ci.txt also holds keeps its version
+# there, because the job installs ci.txt first.
+# Make lens.txt again with scripts/ci-lock.sh.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+-c ci.txt
+-r ../../geometric-lens/requirements.txt

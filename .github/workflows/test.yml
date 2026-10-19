@@ -182,11 +182,10 @@ jobs:
         if: matrix.subset == 'geometric-lens/tests'
         # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
         # CUDA default is ~2 GB and pointless on a CPU runner), then the
-        # service requirements. xgboost tests importorskip if absent, but
-        # requirements.txt pins xgboost-cpu so they run here.
-        run: |
-          pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install -r geometric-lens/requirements.txt
+        # service requirements, from a hashed lock (see lens.in). xgboost
+        # tests importorskip if absent, but requirements.txt pins
+        # xgboost-cpu so they run here.
+        run: pip install --require-hashes -r .github/requirements/lens.txt
 
       - name: pytest
         env:

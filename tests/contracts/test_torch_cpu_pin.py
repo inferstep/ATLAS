@@ -60,25 +60,24 @@ def test_torch_preinstall_uses_cpu_index(name, dockerfile, requirements):
     )
 
 
-def test_ci_lens_job_preinstalls_the_same_torch():
-    """CI's lens test job pre-installs CPU torch the way the Dockerfile does.
+def test_ci_lens_job_installs_the_cpu_torch():
+    """CI's lens test job installs the CPU build of torch, as the Dockerfile does.
 
-    It drifted once: CI pre-installed 2.12.1 while requirements.txt pinned
-    2.13.0, so the requirements install replaced the CPU wheel with PyPI's
-    build on every run, the failure this file exists to prevent in images.
+    It installs .github/requirements/lens.txt, whose torch comes from PyTorch's
+    CPU index (a version that ends in "+cpu"); tests/contracts/test_ci_lock.py
+    holds the version to geometric-lens/requirements.txt. It drifted once: CI
+    pre-installed 2.12.1 while requirements.txt pinned 2.13.0, so the
+    requirements install replaced the CPU wheel with PyPI's build on every
+    run, the failure this file exists to prevent in images.
     """
     workflow = (REPO / ".github" / "workflows" / "test.yml").read_text()
-    ci_pin = re.search(
-        r"pip install torch==([0-9][\w.+]*) --index-url "
-        r"https://download\.pytorch\.org/whl/cpu", workflow)
-    req_pin = REQUIREMENTS_TORCH.search(
-        (REPO / "geometric-lens" / "requirements.txt").read_text())
-    assert ci_pin, "test.yml: no CPU-index torch pre-install in the lens job"
-    assert req_pin
-    assert ci_pin.group(1) == req_pin.group(1), (
-        f"test.yml pre-installs torch=={ci_pin.group(1)} but "
-        f"geometric-lens/requirements.txt pins torch=={req_pin.group(1)}. "
-        f"Keep them identical.")
+    lock = (REPO / ".github" / "requirements" / "lens.txt").read_text()
+    assert "pip install --require-hashes -r .github/requirements/lens.txt" in workflow, (
+        "test.yml: the lens job does not install .github/requirements/lens.txt")
+    torch = re.search(r"^torch==(\S+)", lock, re.MULTILINE)
+    assert torch and torch.group(1).endswith("+cpu"), (
+        f"lens.txt pins torch {torch.group(1) if torch else 'nowhere'}, not the "
+        f"build of PyTorch's CPU index. Fix: run scripts/ci-lock.sh.")
 
 
 def test_v3_service_ships_no_torch():

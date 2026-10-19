@@ -7,6 +7,7 @@ with no network and no tool: every line of ci.in stands in the lock at a
 version that fits it, every package of the lock has a hash, each pin that is
 a copy of a product file's pin is the same as there, the lock is made for
 the Python version of the jobs, and no workflow installs around the lock.
+The lock of the lens tests (lens.txt) is held to its product file too.
 
 A lock that was not made again after a change is red here. Dependabot moves
 a pin in the product file and in ci.in in one pull request and makes the
@@ -37,9 +38,9 @@ def _names(text):
     return out
 
 
-def _locked():
-    """name -> (version, number of hashes) from ci.txt. A name may carry extras in brackets."""
-    text = _read(".github", "requirements", "ci.txt")
+def _locked(lock="ci.txt"):
+    """name -> (version, number of hashes) from a lock in .github/requirements. A name may carry extras in brackets."""
+    text = _read(".github", "requirements", lock)
     locked = {}
     for block in re.split(r"\n(?=[a-z0-9])", text):
         m = re.match(r"([a-z0-9._-]+)(?:\[[^\]]*\])?==(\S+)", block.strip())
@@ -148,15 +149,31 @@ def test_the_lock_is_made_for_the_python_version_of_the_jobs_that_install_it():
 
 
 def test_no_workflow_installs_a_copied_pin_from_its_product_file():
-    loose = re.compile(r"pip install[^\n]*(sandbox/requirements-(?:runtime|verify)\.txt|v3-service/requirements\.txt)"
-                       r"|(sandbox/requirements-(?:runtime|verify)\.txt|v3-service/requirements\.txt)[^\n]*\|\s*xargs pip install")
+    product = r"(sandbox/requirements-(?:runtime|verify)\.txt|v3-service/requirements\.txt|geometric-lens/requirements\.txt)"
+    loose = re.compile(rf"pip install[^\n]*{product}|{product}[^\n]*\|\s*xargs pip install")
     wf_dir = os.path.join(ROOT, ".github", "workflows")
     for name in sorted(os.listdir(wf_dir)):
         if name.endswith((".yml", ".yaml")):
             for n, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
                 assert not loose.search(line), (
                     f"{name}:{n} installs from a product pin file, with no hashes: {line.strip()}. Fix: install "
-                    "`pip install --require-hashes -r .github/requirements/ci.txt`, which holds these pins.")
+                    "from the hashed lock that holds these pins, .github/requirements/ci.txt or lens.txt, with "
+                    "`pip install --require-hashes -r`.")
+
+
+def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
+    """lens.txt is made from geometric-lens/requirements.txt for the Linux runners. A pin there that the lock does not
+    hold at the same version means the lock was not made again after a change. The lock's torch carries the local
+    version of PyTorch's CPU index (2.14.0+cpu)."""
+    locked = _locked("lens.txt")
+    for line in _read("geometric-lens", "requirements.txt").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or 'sys_platform != "linux"' in line:
+            continue
+        name, version = re.match(r"([A-Za-z0-9._-]+)==([^;\s]+)", line).groups()
+        assert name.lower() in locked and locked[name.lower()][0].split("+")[0] == version, (
+            f"geometric-lens/requirements.txt has {name}=={version} and lens.txt holds "
+            f"{locked.get(name.lower(), ('nothing',))[0]}. Fix: run scripts/ci-lock.sh.")
 
 
 def test_every_install_of_the_lock_checks_the_hashes():

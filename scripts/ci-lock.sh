@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Make .github/requirements/ci.txt again: the hashed lock of what the CI jobs
-# install (the tools, and the packages of the product that the tests need).
-# Run it after a change to ci.in. Needs uv, which gets Python 3.12 and
-# pip-tools for the run.
+# install (the tools, and the packages of the product that the tests need),
+# and lens.txt, the lock of the lens tests. Run it after a change to ci.in,
+# lens.in or geometric-lens/requirements.txt. Needs uv, which gets Python 3.12
+# and pip-tools for the run.
 #
 # The lock is made by pip-compile, under the Python version of the CI jobs,
 # and its header names both. Dependabot reads that header: it compiles the
@@ -16,3 +17,9 @@ cd "$(dirname "$0")/../.github/requirements"
 # built packages only, so getting the tool runs no package's build script.
 uv tool run --no-build --python 3.12 --from 'pip-tools==7.6.1' --with 'click==8.2.1' \
     pip-compile --quiet --generate-hashes --output-file=ci.txt ci.in
+# The lens lock is made by uv for the Linux runners of CI, whatever machine runs
+# this: lens.in takes a package by platform (xgboost-cpu on Linux), and
+# pip-compile would choose for this machine. It takes torch from PyTorch's
+# index, so it reads two indexes.
+uv pip compile --quiet --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --generate-hashes \
+    --emit-index-url --index-strategy unsafe-best-match --output-file=lens.txt lens.in
