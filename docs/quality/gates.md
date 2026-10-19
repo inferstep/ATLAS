@@ -376,13 +376,34 @@ state was then.
 - The week in one line: 3,144 runs. A job did not pass 809 times: 17 right,
   83 false alarms, 320 outside, 172 on the canary, 210 waiting for a
   maintainer's approval, and 7 repeats. 68 of the 83 false alarms came in
-  one outage of Docker Hub, on 2026-10-09 from 21:06Z to 21:16Z. Since
-  then the jobs ask a mirror first.
+  runs that started on 2026-10-09 between 21:06Z and 21:16Z, during one
+  outage of Docker Hub (about 21:06Z to 21:30Z). Since then the jobs ask a
+  mirror first.
 - No check was over the rule. The highest were the four sandbox smoke
   jobs, at 5.1 and 4.4 false alarms per 100 runs; #465 removed them on
   2026-10-13.
 - `weekly cleanup (make the text)` is not in the tables: the count left the
   weekly jobs out.
+
+### The dry run before the pipeline (2026-10-05 to 2026-10-07)
+
+What six checks found when they were first tried on the work before the
+pipeline, before the week of counts. Here a finding is right when a change
+was the right answer to it, and a false alarm when no change was needed.
+
+| Check | Mode | Counted on | Reds or findings | Right | False alarm | Outside |
+|---|---|---|---|---|---|---|
+| Sonar's security findings that opened a review thread | blocks: every thread must be resolved | the trial of 2026-10-05 and 2026-10-06 | 8 threads | 1 | 7 | 0 |
+| Code scanning (CodeQL) alerts on a pull request | blocks: every thread must be resolved | 2026-10-07 | 3 alerts | 0 | 3 | 0 |
+| `integrity check`, lines that ask for action or approval | reports | the 30 commits of ordinary work before the pipeline | 8 lines in 7 commits | 8 | 0 | 0 |
+| golangci-lint on new Go code | reports | the 12 commits that touch Go among the last 50 before the pipeline | 3 findings in 2 commits | 2 | 1 | 0 |
+| zizmor | reports | every workflow file, at the first sorting | 25 findings | 25 | 0 | 0 |
+| actionlint | reports | every workflow file | 0 with the pinned version | 0 | 0 | 0 |
+
+- Before five repairs of the `integrity check` the same 30 commits gave 29
+  lines, 23 of them false alarms.
+- The older version of actionlint gave 4 findings, all false; the pinned
+  version reads the same files with none.
 
 ## Rules learned from review and from failures
 
