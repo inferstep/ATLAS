@@ -6,8 +6,9 @@ name: Container image scan
 # CRITICAL/HIGH in the base OS/library layers should be triaged per
 # SECURITY.md. A CRITICAL finding that has a fixed version turns the run red,
 # and the report job opens one issue, or updates the open one, that lists
-# them. A finding with no fix does not count (ignore-unfixed). The run blocks
-# no merge: it is not a check of a pull request.
+# them; a run with none closes the open issue. A finding with no fix does not
+# count (ignore-unfixed). The run blocks no merge: it is not a check of a pull
+# request.
 # Not scanned: the ROCm inference image (inference/Dockerfile.rocm). It is
 # built on the user's machine and never published, so there is no image to
 # read here.
@@ -106,14 +107,21 @@ jobs:
             reports/*/trivy.json | sort -u > rows.md
           echo "count=$(wc -l < rows.md)" >> "$GITHUB_OUTPUT"
 
-      - name: open or update the issue, and turn the run red
-        if: steps.findings.outputs.count != '0'
+      - name: open, update or close the issue; findings turn the run red
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COUNT: ${{ steps.findings.outputs.count }}
         run: |
+          number=$(gh issue list --repo "$REPO" --state open --search "in:title \"$TITLE\"" --json number,title \
+            | jq -r --arg title "$TITLE" 'map(select(.title == $title))[0].number // empty')
+          if [ "$COUNT" = "0" ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$REPO" --comment "The scan of run $RUN found no CRITICAL finding that has a fix."
+            fi
+            exit 0
+          fi
           {
             echo "The weekly image scan found CRITICAL findings that have a fixed version (Trivy, \`--ignore-unfixed\`). Each run that finds some updates this issue."
             echo
@@ -123,8 +131,6 @@ jobs:
             echo "|---|---|---|---|"
             cat rows.md
           } > body.md
-          number=$(gh issue list --repo "$REPO" --state open --search "in:title \"$TITLE\"" --json number,title \
-            | jq -r --arg title "$TITLE" 'map(select(.title == $title))[0].number // empty')
           if [ -n "$number" ]; then
             gh issue edit "$number" --repo "$REPO" --body-file body.md
           else
