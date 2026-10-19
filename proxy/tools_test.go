@@ -860,7 +860,7 @@ func TestRunLocallyEcho(t *testing.T) {
 // into model context by default). All paths are synthetic fixtures.
 
 func TestDenyReadPathReason(t *testing.T) {
-	os.Unsetenv("ATLAS_ALLOW_CREDENTIAL_READS")
+	t.Setenv("ATLAS_ALLOW_CREDENTIAL_READS", "")
 
 	blocked := []string{
 		".env",
@@ -906,15 +906,14 @@ func TestDenyReadPathReason(t *testing.T) {
 }
 
 func TestDenyReadOverride(t *testing.T) {
-	os.Setenv("ATLAS_ALLOW_CREDENTIAL_READS", "1")
-	defer os.Unsetenv("ATLAS_ALLOW_CREDENTIAL_READS")
+	t.Setenv("ATLAS_ALLOW_CREDENTIAL_READS", "1")
 	if reason := denyReadPathReason(".env"); reason != "" {
 		t.Fatalf("override not honored: %s", reason)
 	}
 }
 
 func TestShouldDenyToolCallReadFile(t *testing.T) {
-	os.Unsetenv("ATLAS_ALLOW_CREDENTIAL_READS")
+	t.Setenv("ATLAS_ALLOW_CREDENTIAL_READS", "")
 	args, _ := json.Marshal(map[string]string{"path": ".netrc"})
 	denied, reason := shouldDenyToolCall("read_file", args)
 	if !denied {

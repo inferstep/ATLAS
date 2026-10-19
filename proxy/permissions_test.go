@@ -302,7 +302,7 @@ func TestNeedsPermission(t *testing.T) {
 }
 
 func TestResolveTrustModeDefault(t *testing.T) {
-	os.Unsetenv("ATLAS_TRUST_MODE")
+	t.Setenv("ATLAS_TRUST_MODE", "")
 	if m := resolveTrustMode(); m != trustTrusted {
 		t.Fatalf("default trust mode = %q, want trusted", m)
 	}
@@ -319,12 +319,11 @@ func TestResolveTrustModeValues(t *testing.T) {
 		"nonsense":      trustTrusted, // unrecognized → safe default
 	}
 	for in, want := range cases {
-		os.Setenv("ATLAS_TRUST_MODE", in)
+		t.Setenv("ATLAS_TRUST_MODE", in)
 		if got := resolveTrustMode(); got != want {
 			t.Errorf("ATLAS_TRUST_MODE=%q → %q, want %q", in, got, want)
 		}
 	}
-	os.Unsetenv("ATLAS_TRUST_MODE")
 }
 
 func TestCommandsAllowed(t *testing.T) {
