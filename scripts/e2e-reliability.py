@@ -42,6 +42,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -863,14 +864,12 @@ def _js_parses(js: str) -> tuple[bool, str]:
     node = shutil.which("node")
     if not node:
         return True, "node unavailable — skipped"
-    tmp = Path("/tmp/.atlas_reliability_check.js")
-    tmp.write_text(js)
-    try:
-        p = subprocess.run([node, "--check", str(tmp)],
+    with tempfile.TemporaryDirectory() as folder:
+        script = Path(folder) / "check.js"
+        script.write_text(js)
+        p = subprocess.run([node, "--check", str(script)],
                            capture_output=True, text=True, timeout=30)
         return p.returncode == 0, p.stderr.strip().splitlines()[0] if p.stderr else ""
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 # Set once from --sandbox-container. The sandbox's interpreter is the one that

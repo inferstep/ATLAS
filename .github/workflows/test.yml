@@ -62,8 +62,8 @@ jobs:
           cache: false
 
       - name: point the gates at Go's own build cache folder
-        # The gate script builds in a folder of its own unless GOCACHE is
-        # set. The step below keeps Go's own folder, so the gates use that.
+        # The cache step below saves Go's own build folder. The gate script
+        # uses it when GOCACHE is unset; this step names it for every step.
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       - name: Go module and build cache

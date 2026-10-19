@@ -201,7 +201,7 @@ def _with_workers(gates: dict[str, Gate], workers: int) -> dict[str, Gate]:
 
 def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
     python = sys.executable
-    go_env = {"GOCACHE": os.environ.get("GOCACHE", "/tmp/atlas-go-cache")}
+    go_env = {"GOCACHE": os.environ.get("GOCACHE", "")}  # empty: Go's own folder for this user
     return {
         "test-integrity": Gate(
             "test-integrity",
