@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ make \
     # Bash/Shell
     bash \
-    # Node.js (via nodesource)
+    # Downloads and archives
     curl ca-certificates gnupg unzip \
     # Common CLI tools. The sandbox runs non-root on a read-only fs, so
     # nothing can be apt-installed at runtime — anything a coding task
@@ -32,15 +32,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20 LTS
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
+# Install Node.js 20 from its release archive, checked against the published SHA-256
+ARG NODE_VERSION=20.20.2
+ARG NODE_SHA256_AMD64=df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d
+ARG NODE_SHA256_ARM64=73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) arch=x64; sha="${NODE_SHA256_AMD64}" ;; \
+      arm64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;; \
+      *) echo "no Node.js archive for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.xz" \
+    && echo "${sha}  /tmp/node.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
+    && rm /tmp/node.tar.xz \
     && node --version && npm --version
 
-# Install Go 1.22
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -fsSL https://go.dev/dl/go1.22.10.linux-${ARCH}.tar.gz | tar -C /usr/local -xz
+# Install Go, checked against the published SHA-256
+ARG GO_VERSION=1.27.2
+ARG GO_SHA256_AMD64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
+RUN arch="$(dpkg --print-architecture)" \
+    && case "${arch}" in \
+      amd64) sha="${GO_SHA256_AMD64}" ;; \
+      arm64) sha="${GO_SHA256_ARM64}" ;; \
+      *) echo "no Go archive for ${arch}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+    && echo "${sha}  /tmp/go.tar.gz" | sha256sum -c - \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN go version
 
@@ -75,12 +95,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN php --version
 
-# Install Rust (rustup, stable toolchain) under /opt so the runtime
+# Install Rust (rustup, a fixed toolchain) under /opt so the runtime
 # user (non-root) can read it. RUSTUP_HOME stays /opt/rustup at runtime
 # (read-only toolchain); CARGO_HOME is repointed to the user's tmpfs
 # home by compose so registry/cache writes work on the read-only root.
+# rustup-init is checked against its published SHA-256; rustup checks the
+# toolchain it downloads.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
+ARG RUSTUP_VERSION=1.29.1
+ARG RUSTUP_SHA256_AMD64=dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+ARG RUSTUP_SHA256_ARM64=15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
+ARG RUST_VERSION=1.99.1
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) target=x86_64-unknown-linux-gnu; sha="${RUSTUP_SHA256_AMD64}" ;; \
+      arm64) target=aarch64-unknown-linux-gnu; sha="${RUSTUP_SHA256_ARM64}" ;; \
+      *) echo "no rustup-init for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/rustup-init \
+      "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${target}/rustup-init" \
+    && echo "${sha}  /tmp/rustup-init" | sha256sum -c - \
+    && chmod +x /tmp/rustup-init \
+    && /tmp/rustup-init -y --default-toolchain "${RUST_VERSION}" --profile minimal \
+    && rm /tmp/rustup-init \
     && chmod -R a+rX /opt/rustup /opt/cargo
 ENV PATH="/opt/cargo/bin:${PATH}"
 RUN rustc --version && cargo --version
@@ -88,13 +124,30 @@ RUN rustc --version && cargo --version
 # Install JavaScript/TypeScript verification tools and package managers.
 # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
 # sandbox needs all of them available for build-command verification to be
-# accurate.
-RUN npm install -g typescript tsx pnpm yarn
+# accurate. npm itself is updated first: the npm that comes with Node.js 20
+# carries an old tar.
+RUN npm install -g npm@11.21.1 \
+    && npm install -g typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
 RUN tsc --version && pnpm --version && yarn --version
 
-# Install Bun for bun.lockb projects (under /opt for non-root reads).
-ENV BUN_INSTALL=/opt/bun
-RUN curl -fsSL https://bun.sh/install | bash \
+# Install Bun for bun.lockb projects (under /opt for non-root reads),
+# checked against the published SHA-256.
+ARG BUN_VERSION=1.4.3
+ARG BUN_SHA256_AMD64=3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18
+ARG BUN_SHA256_ARM64=efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) target=x64; sha="${BUN_SHA256_AMD64}" ;; \
+      arm64) target=aarch64; sha="${BUN_SHA256_ARM64}" ;; \
+      *) echo "no Bun archive for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/bun.zip \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${target}.zip" \
+    && echo "${sha}  /tmp/bun.zip" | sha256sum -c - \
+    && unzip -q /tmp/bun.zip -d /tmp/bun \
+    && mkdir -p /opt/bun/bin \
+    && mv "/tmp/bun/bun-linux-${target}/bun" /opt/bun/bin/bun \
+    && ln -s /opt/bun/bin/bun /opt/bun/bin/bunx \
+    && rm -rf /tmp/bun.zip /tmp/bun \
     && chmod -R a+rX /opt/bun
 ENV PATH="/opt/bun/bin:${PATH}"
 RUN bun --version
