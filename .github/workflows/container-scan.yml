@@ -113,11 +113,14 @@ jobs:
           REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COUNT: ${{ steps.findings.outputs.count }}
+          # The issue is closed only after a week in which every image was
+          # scanned: an image that went unscanned has findings nobody saw.
+          SCANS: ${{ needs.trivy.result }}
         run: |
           number=$(gh issue list --repo "$REPO" --state open --search "in:title \"$TITLE\"" --json number,title \
             | jq -r --arg title "$TITLE" 'map(select(.title == $title))[0].number // empty')
           if [ "$COUNT" = "0" ]; then
-            if [ -n "$number" ]; then
+            if [ -n "$number" ] && [ "$SCANS" = "success" ]; then
               gh issue close "$number" --repo "$REPO" --comment "The scan of run $RUN found no CRITICAL finding that has a fix."
             fi
             exit 0
