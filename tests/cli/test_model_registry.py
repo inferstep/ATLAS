@@ -36,16 +36,11 @@ def test_only_published_lens_weight_bundles_are_supported_today():
     assert names == {"Qwen3.5-9B-Q6_K", "gemma-4-12b-it-Q4_K_M"}
 
 
-def test_only_9b_quants_are_publicly_installable():
-    """PC-056.1: gated entries got download_urls populated (so
-    HF_TOKEN-authenticated users CAN install them) but they're flagged
-    requires_hf_token. The "publicly installable without auth" set is
-    just the three 9B quants."""
-    public = [m for m in model_registry.REGISTRY
-               if m.can_install and not m.requires_hf_token]
-    public_names = {m.name for m in public}
-    assert public_names == {"Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K",
-                              "Qwen3.5-9B-Q8_0"}
+def test_only_9b_quants_are_installable():
+    """Only the three 9B quants have a download source."""
+    installable = {m.name for m in model_registry.REGISTRY if m.can_install}
+    assert installable == {"Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K",
+                           "Qwen3.5-9B-Q8_0"}
 
 
 def test_9b_has_verified_download_metadata():
@@ -327,23 +322,6 @@ def test_pc0561_urls_pinned_to_commit_hash():
         # Should contain the unsloth Qwen3.5 commit hash
         assert "/3885219b" in m.download_url, (
             f"{m.name} not pinned to expected commit: {m.download_url}")
-
-
-def test_pc0561_gated_entries_have_url_and_flag():
-    """PC-056.1: gated entries got download_url populated (so HF_TOKEN
-    users can install) AND requires_hf_token=True (so anonymous users
-    get the helpful message before even trying)."""
-    for name in ("Qwen3.5-7B-Q4_K_M", "Qwen3.5-14B-Q5_K_M",
-                  "Qwen3.5-32B-Q5_K_M"):
-        m = model_registry.by_name(name)
-        assert m.download_url is not None, (
-            f"{name} should now have a populated URL (PC-056.1)")
-        assert m.requires_hf_token is True, (
-            f"{name} should be flagged requires_hf_token=True")
-        assert m.is_gated is True
-        # gated still means can_install is True (URL is present); the
-        # gate is at install-time, not in the registry property.
-        assert m.can_install is True
 
 
 def test_pc0561_supported_entry_does_not_require_hf_token():

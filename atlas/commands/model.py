@@ -293,6 +293,15 @@ def _remote_size_gb(url: str, token: Optional[str]) -> float:
         return 0.0
 
 
+def _print_no_download_source(m: model_registry.Model, color: bool) -> None:
+    _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
+                f"ATLAS has no download source for this model."
+                f"{RESET if color else ''}")
+    _safe_print("  If you have a source for its .gguf file, give it with "
+                "`atlas model install --url <url>`.")
+    _safe_print(f"  Notes: {m.notes}")
+
+
 def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if getattr(args, "url", None):
         # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
@@ -359,9 +368,7 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
             _safe_print()
 
     if not m.can_install:
-        _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
-                    f"no known download URL.{RESET if color else ''}")
-        _safe_print(f"  Notes: {m.notes}")
+        _print_no_download_source(m, color)
         return 1
 
     # PC-056.1: HF_TOKEN gate for known-gated repos. Refuse early with

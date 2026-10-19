@@ -1,9 +1,11 @@
 """Model-registry artifact contract check.
 
-Every registry entry must be installable or carry a documented gated
-exception; every downloadable artifact must be hash-pinned; artifact
+Every registry entry must be installable or say in its notes why not;
+every downloadable artifact must be hash-pinned; artifact
 filenames must be ones the runtime actually consumes.
 """
+
+import re
 
 from atlas.commands import model_registry
 
@@ -28,25 +30,18 @@ def test_entries_have_identity_fields():
         assert m.asa_status in ASA_STATUSES, (m.name, m.asa_status)
 
 
-def test_public_downloads_are_hash_pinned():
-    """A download URL without requires_hf_token must carry a SHA-256 —
-    the installer verifies it, and shipping an unpinned public URL
-    reopens the unverified-download path."""
+def test_every_download_is_hash_pinned():
+    """An entry with a download URL carries its SHA-256, which the
+    installer checks; a download without one would go unchecked."""
     for m in model_registry.REGISTRY:
-        if m.download_url and not m.requires_hf_token:
-            assert m.sha256 and len(m.sha256) == 64, (
-                f"{m.name}: public download_url without a sha256 pin")
+        if m.download_url:
+            assert m.sha256 and re.fullmatch(r"[0-9a-f]{64}", m.sha256), (
+                f"{m.name}: download_url without a sha256 of 64 hex characters")
 
 
-def test_gated_entries_document_why_hash_is_absent():
-    """requires_hf_token is the documented exception for a missing
-    hash (anonymous HEAD is impossible); anything else lacking both a
-    URL and a hash must explain itself in notes."""
+def test_an_entry_without_a_download_says_why():
     for m in model_registry.REGISTRY:
-        if m.sha256 is None and not m.requires_hf_token:
-            assert m.download_url is None, (
-                f"{m.name}: has a URL but neither sha256 nor the "
-                "gated-source exception")
+        if m.download_url is None:
             assert m.notes, f"{m.name}: uninstallable with no explanation"
 
 
