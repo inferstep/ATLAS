@@ -1611,10 +1611,10 @@ func renderHeader(proxyURL, workingDir, mode string, busy bool,
 func formatEventLine(ev Envelope, width int) string {
 	ts := time.Unix(0, int64(ev.Timestamp*1e9)).Format("15:04:05")
 	color := typeColor(ev.Type)
-	typeCell := lipgloss.NewStyle().Foreground(color).Width(13).Render(ev.Type)
+	typeCell := lipgloss.NewStyle().Foreground(color).Width(13).Render(visibleControls(ev.Type))
 	stageCell := lipgloss.NewStyle().Foreground(lipgloss.Color("251")).
-		Width(14).Render(truncate(ev.Stage, 14))
-	detail := summarizePayload(ev)
+		Width(14).Render(truncate(visibleControls(ev.Stage), 14))
+	detail := visibleControls(summarizePayload(ev))
 
 	line := fmt.Sprintf("%s  %s %s %s", ts, typeCell, stageCell, detail)
 	line = strings.ReplaceAll(line, "\n", " ")
@@ -1690,19 +1690,6 @@ func summarizePayload(ev Envelope) string {
 		return truncate(d, 80)
 	}
 	return ""
-}
-
-func truncate(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	if n <= 1 {
-		return s[:n]
-	}
-	return s[:n-1] + "…"
 }
 
 func truncateAny(v interface{}, n int) string {

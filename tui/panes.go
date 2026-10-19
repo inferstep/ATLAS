@@ -117,12 +117,12 @@ func renderPipelinePane(p *pipelineState, height, width, scroll int) (string, []
 
 func renderPipelineRow(s *stageStatus, width int) string {
 	icon, style := stageIcon(s)
-	name := lipgloss.NewStyle().Width(16).Render(truncate(s.Name, 16))
+	name := lipgloss.NewStyle().Width(16).Render(truncate(visibleControls(s.Name), 16))
 	status := style.Width(8).Render(stageStatusLabel(s))
 	// Truncate to the cell width — content wider than the Width(8) cell
 	// would soft-wrap and push the whole row onto a second line.
 	dur := dimStyle.Width(8).Render(truncate(formatDuration(s.Duration()), 8))
-	detail := dimStyle.Render(truncate(s.Detail, max(0, width-40)))
+	detail := dimStyle.Render(truncate(visibleControls(s.Detail), max(0, width-40)))
 	return fmt.Sprintf("%s  %s %s %s %s", icon, name, status, dur, detail)
 }
 
@@ -358,6 +358,8 @@ func renderChatPane(chat []chatMessage, renderer *glamour.TermRenderer,
 // renderChatMessage formats one chat row into a list of display lines.
 func renderChatMessage(m chatMessage, renderer *glamour.TermRenderer,
 	width int) []string {
+	m.Body, m.Meta = visibleControls(m.Body), visibleControls(m.Meta)
+	m.Status, m.Reason = visibleControls(m.Status), visibleControls(m.Reason)
 	switch m.Role {
 	case roleUser:
 		header := chatUserStyle.Render("you")
@@ -447,11 +449,14 @@ func renderMarkdown(body string, r *glamour.TermRenderer) []string {
 	if r == nil {
 		return wrapPlain(body, 80)
 	}
-	out, err := r.Render(body)
+	// The renderer turns a numeric character reference such as "&#27;" into
+	// the character itself, so a reference to a marked character goes in as
+	// the reference to the mark.
+	out, err := r.Render(withMarkedReferences(body))
 	if err != nil {
 		return wrapPlain(body, 80)
 	}
-	out = strings.TrimRight(out, "\n")
+	out = visibleControlsKeepingStyles(strings.TrimRight(out, "\n"))
 	return strings.Split(out, "\n")
 }
 
@@ -527,7 +532,7 @@ func renderStatsPane(p *pipelineState, width int,
 	lastTurnTokens, totalTokens, maxTokens int) string {
 	parts := []string{}
 	if active := p.activeStage(); active != nil {
-		parts = append(parts, runStyle.Render(fmt.Sprintf("● %s", active.Name)))
+		parts = append(parts, runStyle.Render(fmt.Sprintf("● %s", visibleControls(active.Name))))
 	}
 	if p.currentTurn > 0 {
 		parts = append(parts, fmt.Sprintf("turn:%d", p.currentTurn))
@@ -665,10 +670,10 @@ func permPromptLines(pp *permPrompt, innerW, maxRows int) []string {
 	title := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("214")).Bold(true).
 		Render("⚠ Permission required")
-	tool := chatToolStyle.Render("tool · " + pp.toolName)
-	msg := pp.message
+	toolName, msg := visibleControls(pp.toolName), visibleControls(pp.message)
+	tool := chatToolStyle.Render("tool · " + toolName)
 	if strings.TrimSpace(msg) == "" {
-		msg = "Allow " + pp.toolName + "?"
+		msg = "Allow " + toolName + "?"
 	}
 	var body []string
 	for _, ln := range strings.Split(msg, "\n") {
@@ -1251,7 +1256,7 @@ func renderFilesPane(entries []fileEntry, modified map[string]bool,
 	rows := []string{header}
 	for _, e := range entries {
 		indent := strings.Repeat("  ", e.Depth)
-		name := filepath.Base(e.RelPath)
+		name := visibleControls(filepath.Base(e.RelPath))
 		var marker string
 		var styled string
 		switch {

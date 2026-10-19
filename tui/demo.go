@@ -1071,7 +1071,7 @@ func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int
 		if maxCols > 0 && len(line) > maxCols {
 			line = line[:maxCols-1] + "…"
 		}
-		lines = append(lines, line)
+		lines = append(lines, visibleControls(line))
 	}
 	total := len(lines)
 
