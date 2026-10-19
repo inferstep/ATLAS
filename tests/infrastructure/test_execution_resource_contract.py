@@ -198,6 +198,22 @@ def test_a_command_near_the_limit_completes(small):
     assert r.success and r.returncode == 0
 
 
+# The optional address-space ceiling (address_space_multiple) is a limit the
+# kernel holds the child to. The child asks for address space with a mapping
+# it never touches, so it uses no memory even when the ceiling is not there.
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux holds a process to RLIMIT_AS; macOS does not")
+@pytest.mark.parametrize("map_mib, mapped", [(16, True), (128, False)])
+def test_the_address_space_ceiling_stops_a_child_above_it(map_mib, mapped):
+    contract = rc.ResourceContract(wall_seconds=20, memory_bytes=64 * MiB, max_processes=16,
+                                   output_bytes=1 * MiB, address_space_multiple=1.0)
+    contract.validate()
+    r = run(f"python3 -c \"import mmap; mmap.mmap(-1, {map_mib} << 20); print('mapped')\"", contract)
+    if mapped:
+        assert r.returncode == 0 and "mapped" in r.stdout, r.stderr
+    else:
+        assert r.returncode != 0 and "Cannot allocate memory" in r.stderr, (r.returncode, r.stdout)
+
+
 def test_an_ordinary_failure_is_not_a_resource_event(small):
     r = run("exit 3", small)
     assert r.outcome == rc.OUTCOME_COMPLETED
