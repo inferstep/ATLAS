@@ -28,7 +28,7 @@ RUN mkdir -p /app/config /app/secrets
 
 # Non-root application account created inside this image. /app files stay
 # root-owned + world-readable (COPY default). HOME is a writable home for
-# library caches (numpy/torch config, tiktoken); bytecode caching is
+# library caches (numpy/torch config); bytecode caching is
 # disabled so Python never tries to write .pyc into /app.
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --gid 1001 lens \

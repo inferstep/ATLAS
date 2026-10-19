@@ -29,7 +29,7 @@ Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 the sandbox's template check); `torch` (BSD-style,
 lens + v3-service images and the `train` extra); `defusedxml` (PSF);
 `tree-sitter` + grammar packages (MIT); `python-multipart`
-(Apache-2.0); `tiktoken` (MIT); `gguf` (MIT); `huggingface_hub`
+(Apache-2.0); `gguf` (MIT); `huggingface_hub`
 (Apache-2.0); `psutil` (BSD-3); `pytest`, `ruff`, `mypy`, `requests`
 (sandbox verify helpers — MIT/Apache-2.0). Pinned in the per-service
 `requirements*.txt` files and `pyproject.toml` extras. The core CLI is
