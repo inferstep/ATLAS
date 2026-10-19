@@ -32,10 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20 from its release archive, checked against the published SHA-256
-ARG NODE_VERSION=20.20.2
-ARG NODE_SHA256_AMD64=df770b2a6f130ed8627c9782c988fda9669fa23898329a61a871e32f965e007d
-ARG NODE_SHA256_ARM64=73093db209e4e9e09dd7d15a47aeaab1b74833830df03efa5f942a1122c5fa71
+# Install Node.js 24 LTS (supported to 2028-04-30) from its release archive,
+# checked against the published SHA-256
+ARG NODE_VERSION=24.22.0
+ARG NODE_SHA256_AMD64=cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008
+ARG NODE_SHA256_ARM64=fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143
 RUN case "$(dpkg --print-architecture)" in \
       amd64) arch=x64; sha="${NODE_SHA256_AMD64}" ;; \
       arm64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;; \
@@ -124,10 +125,8 @@ RUN rustc --version && cargo --version
 # Install JavaScript/TypeScript verification tools and package managers.
 # Project detection may select npm, pnpm, yarn, or bun from lockfiles; the
 # sandbox needs all of them available for build-command verification to be
-# accurate. npm itself is updated first: the npm that comes with Node.js 20
-# carries an old tar.
-RUN npm install -g --ignore-scripts npm@11.21.1 \
-    && npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
+# accurate.
+RUN npm install -g --ignore-scripts typescript@7.0.2 tsx@4.23.15 pnpm@12.14.0 yarn@1.22.22
 RUN tsc --version && pnpm --version && yarn --version
 
 # Install Bun for bun.lockb projects (under /opt for non-root reads),

@@ -69,9 +69,6 @@ These are deliberately unpinned, for the reasons recorded here:
   OS healthcheck tool on a digest-pinned base. Exact `apt` version pins
   fight distro security patching and the base digest already fixes the
   snapshot.
-- **`nodejs`** in the sandbox — installed from NodeSource; its major
-  version is fixed by the `setup_20.x` NodeSource script hardcoded in
-  the Dockerfile, not an `apt` pin.
 
 ### Reproducibility caveat (Alpine)
 

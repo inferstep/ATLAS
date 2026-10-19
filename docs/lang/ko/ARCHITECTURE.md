@@ -472,7 +472,7 @@ C(x) 정규화는 `sigmoid(steepness × (energy - midpoint))`입니다. 선택�
 graph LR
     subgraph executors["Language Executors"]
         Py["Python\npylint (0-10) + pytest"]
-        JS["JavaScript\nNode.js 20"]
+        JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
         Java["Java 21\njavac + java -cp"]

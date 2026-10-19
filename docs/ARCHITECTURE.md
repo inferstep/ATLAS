@@ -860,7 +860,7 @@ Isolated code execution with compilation, testing, and linting.
 graph LR
     subgraph executors["Language Executors"]
         Py["Python\npylint (0-10) + pytest"]
-        JS["JavaScript\nNode.js 20"]
+        JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
