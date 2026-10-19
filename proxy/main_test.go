@@ -196,6 +196,37 @@ func TestPassthroughRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+// The handler as the server runs it, from the function that main uses: a
+// request with no token is refused before its route, and a body over the limit
+// is refused before it is passed on.
+func TestTheServersHandlerChecksTheTokenAndTheSizeOfTheBody(t *testing.T) {
+	defer withToken(t, "atlas-st-testfixture")()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+	for _, c := range []struct {
+		name, token, body string
+		want              int
+	}{
+		{"no token", "", "{}", http.StatusUnauthorized},
+		{"a body over the limit", "atlas-st-testfixture", strings.Repeat("x", maxRequestBodyBytes+1), http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(c.body))
+			if c.token != "" {
+				req.Header.Set("Authorization", "Bearer "+c.token)
+			}
+			rec := httptest.NewRecorder()
+			newServerHandler().ServeHTTP(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, c.want, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestWriteErrorEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeError(rec, 400, ErrInvalidInput, "bad thing")
