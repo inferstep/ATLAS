@@ -225,18 +225,19 @@ func TestAssetLintStaysInsideTheWorkspace(t *testing.T) {
 }
 
 func TestExecutionSettingStaysInsideTheWorkspace(t *testing.T) {
-	const setting = "[execution]\ntarget = \"host\"\n"
-	t.Setenv("ATLAS_VERIFY_IN", "")
+	const setting = "[execution]\ntarget = \"sandbox\"\n"
+	t.Setenv("ATLAS_VERIFY_IN", "host")
+	t.Setenv("ATLAS_TRUST_MODE", "fully-trusted")
 
 	linked := t.TempDir()
 	linkOutOfWorkspace(t, linked, filepath.Join(".atlas", "config.toml"), setting)
-	if got := resolveVerifyTarget(linked); got != "sandbox" {
-		t.Errorf("resolveVerifyTarget = %q with a settings file outside the workspace, want sandbox", got)
+	if got := resolveVerifyTarget(linked); got != "host" {
+		t.Errorf("resolveVerifyTarget = %q with a settings file outside the workspace, want host", got)
 	}
 
 	regular := t.TempDir()
 	writeInWorkspace(t, regular, filepath.Join(".atlas", "config.toml"), setting)
-	if got := resolveVerifyTarget(regular); got != "host" {
-		t.Errorf("resolveVerifyTarget = %q with a regular settings file, want host", got)
+	if got := resolveVerifyTarget(regular); got != "sandbox" {
+		t.Errorf("resolveVerifyTarget = %q with a regular settings file, want sandbox", got)
 	}
 }

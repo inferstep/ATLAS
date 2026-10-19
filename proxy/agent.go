@@ -5605,11 +5605,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 	ctx.LensURL = lensURL
 	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
 
-	// Opt-in host execution for run_command. Per-project config
-	// (.atlas/config.toml: [execution] target = "host") wins over the
-	// global env var so users can flip behaviour without touching the
-	// proxy environment. Either source can downgrade to "sandbox"
-	// explicitly. Default stays sandbox.
+	// Host execution for run_command only when the operator chooses it;
+	// the workspace's settings file may only choose the sandbox. See
+	// resolveVerifyTarget. Default stays sandbox.
 	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
 	ctx.TrustMode = resolveTrustMode()
 

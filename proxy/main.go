@@ -71,20 +71,18 @@ func envOr(key, fallback string) string {
 // resolveVerifyTarget returns "host" when run_command should bypass
 // the sandbox and execute on the host, or "sandbox" otherwise.
 //
-// Resolution order (later wins):
-//  1. ATLAS_VERIFY_IN env var ("host" or "sandbox")
-//  2. Per-project .atlas/config.toml — looks for `target = "host"` or
-//     `target = "sandbox"` under an [execution] header. Trivially
-//     parsed (no real TOML lib) so we don't take a dep just for one
-//     setting; refuse to be clever about quoting.
+// Only the operator chooses the host: ATLAS_VERIFY_IN=host together with
+// ATLAS_TRUST_MODE=fully-trusted. The workspace's .atlas/config.toml may
+// choose the sandbox with `target = "sandbox"` under an [execution]
+// header, but not the host, because the files of a workspace are not the
+// operator's choice. A file that names the host is ignored, with a log
+// line. The file is parsed by hand (no TOML library) for this one setting.
 //
-// Default: "sandbox" (the safer path). Per-project config is the
-// usual customization point for working codebases that need host
-// execution; the env var is for one-off sessions and CI.
+// Default: "sandbox".
 func resolveVerifyTarget(workingDir string) string {
-	target := strings.ToLower(os.Getenv("ATLAS_VERIFY_IN"))
-	if target != "host" && target != "sandbox" {
-		target = "sandbox"
+	target := "sandbox"
+	if strings.ToLower(envOr("ATLAS_VERIFY_IN", "")) == "host" && resolveTrustMode().hostExecutionAllowed() {
+		target = "host"
 	}
 	if workingDir == "" {
 		return target
@@ -111,8 +109,13 @@ func resolveVerifyTarget(workingDir string) string {
 			continue
 		}
 		val := strings.ToLower(strings.Trim(strings.TrimSpace(parts[1]), `"'`))
-		if val == "host" || val == "sandbox" {
-			return val
+		if val == "sandbox" {
+			return "sandbox"
+		}
+		if val == "host" {
+			log.Printf("[execution] .atlas/config.toml names target = \"host\"; ignored: " +
+				"only the operator chooses the host, with ATLAS_VERIFY_IN=host and ATLAS_TRUST_MODE=fully-trusted")
+			return target
 		}
 	}
 	return target

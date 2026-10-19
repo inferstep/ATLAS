@@ -4751,8 +4751,8 @@ func runCommandTool() *ToolDef {
 			// read_file / list_directory still work. validateShellCommand
 			// upstream is the gate; this is the executor.
 			//
-			// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host
-			// or per-project config), we BYPASS the sandbox and execute
+			// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host with
+			// ATLAS_TRUST_MODE=fully-trusted), we BYPASS the sandbox and execute
 			// on the host directly. This is the right call for working
 			// codebases that depend on host-side state — the user's
 			// installed venv binaries, system tools, env vars,

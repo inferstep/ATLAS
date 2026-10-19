@@ -1227,11 +1227,11 @@ type AgentContext struct {
 	PlanRevisions int
 
 	// VerifyOnHost flips run_command from sandbox-routing to local
-	// host execution. Set from ATLAS_VERIFY_IN=host or
-	// per-project .atlas/config.toml. The default (false) is the
-	// safer sandbox path; opt-in is for working codebases that
-	// depend on host services (DBs, env vars, system tools) the
-	// sandbox can't see. Shell-op guardrails still apply either way.
+	// host execution. Set only from ATLAS_VERIFY_IN=host together with
+	// ATLAS_TRUST_MODE=fully-trusted; a workspace's .atlas/config.toml
+	// may choose only the sandbox. The default (false) is the safer path;
+	// opt-in is for codebases that depend on host services (DBs, env vars,
+	// system tools) the sandbox can't see. Guardrails apply either way.
 	VerifyOnHost bool
 
 	// TrustMode gates command execution (untrusted refuses; trusted =

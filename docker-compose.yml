@@ -494,8 +494,9 @@ services:
       # PC-192: opt-in host execution for run_command. Set to "host"
       # to bypass the sandbox container and run verifications on the
       # host (works when proxy runs locally, not in Docker — Docker
-      # proxy can only see its own container fs). Per-project override
-      # via /workspace/.atlas/config.toml [execution] target=host.
+      # proxy can only see its own container fs). It needs
+      # ATLAS_TRUST_MODE=fully-trusted too; a workspace's
+      # .atlas/config.toml may choose only the sandbox.
       - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
       # PC-200: turn cap override. Tier defaults: T0=5, T1-T3 uncapped
       # (the error-loop breaker and done-gates bound runaway turns). Set
