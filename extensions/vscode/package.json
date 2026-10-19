@@ -75,13 +75,13 @@
         "atlas.proxyUrl": {
           "type": "string",
           "default": "http://127.0.0.1:8090",
-          "scope": "machine-overridable",
+          "scope": "machine",
           "description": "Base URL of the ATLAS proxy. Defaults to the IPv4 loopback rather than 'localhost': the proxy binds 127.0.0.1 only, and on hosts whose resolver prefers IPv6 'localhost' resolves to ::1 first, where nothing is listening, so the request hangs until it times out."
         },
         "atlas.serviceToken": {
           "type": "string",
           "default": "",
-          "scope": "machine-overridable",
+          "scope": "machine",
           "description": "Dev-override bearer token for the ATLAS proxy. Prefer the 'ATLAS: Set Service Token' command (stores in SecretStorage) \u2014 this field is plaintext in settings.json."
         },
         "atlas.permissionMode": {
@@ -92,7 +92,7 @@
             "yolo"
           ],
           "default": "default",
-          "scope": "machine-overridable",
+          "scope": "machine",
           "enumDescriptions": [
             "Pause and prompt for every file-write tool call.",
             "Auto-allow edit/write tools, still prompt for other sensitive actions.",

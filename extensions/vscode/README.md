@@ -28,6 +28,8 @@ The TUI (`tui/`) is the reference client; the extension mirrors its session conv
 * `atlas.permissionMode` — `default` / `accept-edits` / `yolo`
 * `atlas.statusBar.enabled`, `atlas.statusBar.pollIntervalSec` — status bar connectivity polling
 
+`atlas.proxyUrl`, `atlas.serviceToken` and `atlas.permissionMode` are machine-wide: a workspace or folder setting cannot change them, as in the JetBrains plugin, which keeps them at the application level. So every folder uses the same proxy address.
+
 ## Commands
 
 * `ATLAS: Open Chat`
