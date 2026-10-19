@@ -122,22 +122,22 @@ job on this list that does not start gives no red:
 
 ### Not required (they report, and a red one is a reason to look)
 
-| Check | What it does |
-|---|---|
-| `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
-| `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue |
-| `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) |
-| `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix |
-| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
-| `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
-| `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" |
-| `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" |
-| `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing |
-| `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
-| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
-| `lint + test + build` | Build of the VS Code extension |
-| `ktlint + test + build` | Build of the JetBrains plugin |
-| the `PR build check` jobs | Each service image builds |
+| Check | What it does | Why it reports and does not block |
+|---|---|---|
+| `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped | It waits for every other job, so as a required check it would be the last job of every merge, and a fault in GitHub's own answers would hold a merge (seen on 2026-10-13). |
+| `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue | It starts only when `proxy/` or `tests/replay/` changes; GitHub waits without end for a required check that does not start. |
+| `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) | It reads a status that the development server writes, and that server is best effort: a merge must not wait on it. |
+| `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix | It runs only on a pull request of the type `fix`, and does not start in the merge queue. |
+| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents | What it finds are things for a maintainer to confirm, not faults; a form that fails only on "needs action" is not built. |
+| `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code | Report only, by the maintainers' decision of 2026-10-06. |
+| `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" | It runs once a week, and on a pull request only when its own files change. |
+| `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" | The same: once a week, and when its own files change. |
+| `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing | It starts only when its own files change. |
+| `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository | They send numbers to Codecov; a refused upload says nothing about the change, and Codecov's statuses show numbers and fail nothing. |
+| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it | The same: a report to Codecov; a refused upload turns only this job red. |
+| `lint + test + build` | Build of the VS Code extension | It starts only when the VS Code extension's files change. |
+| `ktlint + test + build` | Build of the JetBrains plugin | It starts only when the JetBrains plugin's files change. |
+| the `PR build check` jobs | Each service image builds | They do not start in the merge queue. |
 
 A check that compares a change with its base compares with the base branch
 as it is now: the first parent of the merge commit that the job checks out.
@@ -284,52 +284,105 @@ How to read the coverage rows:
 
 ## What the checks found so far
 
-For each check that reports, or that blocks by another rule: how often it
-was red or made a finding, and how many of those were right. A check
-becomes required, or is switched off, on these numbers.
+For each check: how often its runs ended red in one week, and how many of
+those reds were right. A check becomes required, or is switched off, on
+these numbers.
 
-- **Right:** a change was the right answer to the red or the finding.
-- **False alarm:** no change was needed.
-- **Outside:** the cause was not in the change (the network, the runner, a
-  cancelled run).
-- The maintainers keep the count. This is its state on 2026-10-07. A week of
-  counts, in which every red of every pull request is sorted, runs from
-  2026-10-07 to 2026-10-14; the table gets its next state then.
+The week of counts ran from 2026-10-07 21:26Z to 2026-10-14 21:26Z. Every
+red of every run in it was judged by hand. The next state of these tables
+comes at the monthly review (mid-November).
 
-| Check | Mode | Counted on | Reds or findings | Right | False alarm | Outside |
-|---|---|---|---|---|---|---|
-| Sonar's gate on a pull request | reports | every pull request into `dev` since 2026-10-06 | 4 red pull requests | 4 | 0 | 0 |
-| Sonar's security findings that opened a review thread | blocks: every thread must be resolved | the trial of 2026-10-05 and 2026-10-06 | 8 threads | 1 | 7 | 0 |
-| Code scanning (CodeQL) alerts on a pull request | blocks: every thread must be resolved | 2026-10-07 | 3 alerts | 0 | 3 | 0 |
-| `integrity check`, lines that ask for action or approval | reports | the 30 commits of ordinary work before the pipeline | 8 lines in 7 commits | 8 | 0 | 0 |
-| `integrity check`, in the week of counts | reports | pull requests since 2026-10-07 | 14 lines on one pull request | 14 | 0 | 0 |
-| `checks ran` | reports | every pull request and merge group since #303 | 2 red | 0 | 2 | 0 |
-| golangci-lint on new Go code | reports | the 12 commits that touch Go among the last 50 before the pipeline | 3 findings in 2 commits | 2 | 1 | 0 |
-| zizmor | reports | every workflow file, at the first sorting | 25 findings | 25 | 0 | 0 |
-| actionlint | reports | every workflow file | 0 with the pinned version | 0 | 0 | 0 |
-| hadolint | reports | 8 Dockerfiles | 37 findings, none at the level "error" | not sorted yet | not sorted yet | 0 |
-| The two upload jobs of `tests` | reports | pull requests since 2026-10-07 | 1 red | 0 | 1 | 0 |
-| A required check that was red for another reason than the change | required | merge groups and pull requests since 2026-10-07 | 2 (the install matrix) | 0 | 0 | 2 |
-| A merge group that failed | required | every merge group on `dev` | 1 | 1 | 0 | 0 |
+- **Runs:** the runs of the job that ended passed or failed: on pull
+  requests, in the merge queue, on pushes and on other events.
+- **Right:** red, and the change had the fault.
+- **False alarm:** red, and the change had no such fault.
+- **Outside:** a cause outside the change, mostly a newer push that
+  cancelled the run.
+- A red on the canary pull request is red on purpose, and is not counted.
+- The rule, fixed before the week: under 10 false alarms per 100 runs.
 
-- Sonar's seven false alarms came from four rules: two that read a
-  maintainer script's own command-line arguments as input from outside
-  (S8705: 3, S8707: 2), and two for workflow files (S8545: 1, S8541: 1). All
-  four are off since. The three CodeQL alerts were two texts of a list with
-  no comma between them, and a host name in a test: each was removed by
-  writing the line in another way.
-- Before five repairs of the `integrity check` the same 30 commits gave 29
-  lines, 23 of them false alarms.
-- The two reds of `checks ran` were a fault in its reading of the list of
-  runs (repaired by #344) and a run that waited for a maintainer's approval.
-- The older version of actionlint gave 4 findings, all false; the pinned
-  version reads the same files with none.
-- The red of the upload jobs came from the pipeline itself and not from the
-  pull request it stood on; #415 repaired the cause.
-- The two reds of the install matrix were the network; the installer now
-  tries a failed download again (#406).
-- Not in the table: the replay job (no red so far), and Codecov's statuses
-  and CodeScene, which show numbers and fail nothing.
+### Required now (36)
+
+24 of these were required during the week; the other 12 became required on
+2026-10-15 and 2026-10-17. The counts are of the week, whatever a check's
+state was then.
+
+| Check | Runs | Right | False alarm | Outside | False alarms per 100 runs |
+|---|---|---|---|---|---|
+| `go test (proxy)` | 191 | 0 | 0 | 11 | 0.0 |
+| `go test (tui)` | 199 | 0 | 0 | 3 | 0.0 |
+| `pytest (tests/v3)` | 199 | 0 | 1 | 3 | 0.5 |
+| `pytest (tests/cli)` | 197 | 0 | 0 | 5 | 0.0 |
+| `shellcheck` | 200 | 0 | 0 | 2 | 0.0 |
+| `docker compose config` | 200 | 0 | 0 | 2 | 0.0 |
+| `yamllint (workflows)` | 199 | 0 | 0 | 3 | 0.0 |
+| `bootstrap on ubuntu-22.04` | 235 | 0 | 8 | 7 | 3.4 |
+| `bootstrap on ubuntu-24.04` | 234 | 0 | 8 | 8 | 3.4 |
+| `bootstrap on debian-12` | 236 | 0 | 8 | 6 | 3.4 |
+| `bootstrap on rockylinux-9` | 230 | 0 | 1 | 12 | 0.4 |
+| `ruff (python lint)` | 199 | 0 | 0 | 3 | 0.0 |
+| `codeql (python)` | 232 | 0 | 0 | 19 | 0.0 |
+| `codeql (go)` | 235 | 0 | 0 | 15 | 0.0 |
+| `pytest (tests/v3-service)` | 199 | 0 | 0 | 3 | 0.0 |
+| `pytest (tests/contracts)` | 199 | 1 | 0 | 3 | 0.0 |
+| `pytest (tests/infrastructure)` | 197 | 3 | 0 | 5 | 0.0 |
+| `pytest (geometric-lens/tests)` | 198 | 0 | 0 | 4 | 0.0 |
+| `llama.cpp patches apply to pinned SHA` | 200 | 0 | 0 | 2 | 0.0 |
+| `e2e acceptance (proxy + sandbox + fake llama)` | 199 | 0 | 0 | 3 | 0.0 |
+| `bootstrap via sudo for a regular user` | 235 | 0 | 8 | 7 | 3.4 |
+| `dependency review` | 195 | 0 | 0 | 0 | 0.0 |
+| `pr title` | 275 | 1 | 0 | 0 | 0.0 |
+| `code health (size)` | 191 | 0 | 0 | 3 | 0.0 |
+| `golangci-lint (proxy)` | 189 | 0 | 0 | 1 | 0.0 |
+| `golangci-lint (tui)` | 189 | 0 | 0 | 1 | 0.0 |
+| `hadolint (dockerfiles)` | 190 | 0 | 0 | 0 | 0.0 |
+| `actionlint (workflows)` | 190 | 0 | 0 | 0 | 0.0 |
+| `zizmor (workflows)` | 188 | 0 | 0 | 2 | 0.0 |
+| `codeql (javascript-typescript)` | 228 | 0 | 0 | 15 | 0.0 |
+| `perf budget gate` | 200 | 0 | 0 | 2 | 0.0 |
+| `pytest (tests/concurrency)` | 197 | 0 | 0 | 5 | 0.0 |
+| `pytest (tests/perf)` | 197 | 0 | 0 | 5 | 0.0 |
+| `sandbox tests (containerized)` | 98 | 0 | 4 | 0 | 4.1 |
+| `proxy and TUI tests (no model)` | 98 | 0 | 1 | 0 | 1.0 |
+| `codeql (java-kotlin)` | 124 | 0 | 1 | 15 | 0.8 |
+
+### Not required
+
+| Check | Runs | Right | False alarm | Outside | False alarms per 100 runs |
+|---|---|---|---|---|---|
+| `checks ran` | 176 | 0 | 2 | 14 | 1.1 |
+| `replay (proxy)` | 75 | 1 | 0 | 0 | 0.0 |
+| `smoke result` | 126 | 0 | 1 | 0 | 0.8 |
+| `fix tests (fail without the fix)` | 108 | 0 | 0 | 2 | 0.0 |
+| `integrity check` | 190 | 0 | 0 | 0 | 0.0 |
+| `sonar scan` | 144 | 0 | 0 | 7 | 0.0 |
+| `canary check (reads only)` | 9 | 1 | 0 | 0 | 0.0 |
+| `dev results lookup (sends nothing)` | 6 | 0 | 0 | 0 | 0.0 |
+| `coverage upload` | 110 | 0 | 0 | 13 | 0.0 |
+| `coverage upload (extension)` | 2 | 0 | 0 | 0 | 0.0 |
+| `test results upload` | 119 | 0 | 1 | 13 | 0.8 |
+| `test results upload (extension)` | 7 | 0 | 0 | 0 | 0.0 |
+| `lint + test + build` | 7 | 0 | 0 | 0 | 0.0 |
+| `ktlint + test + build` | 11 | 0 | 0 | 1 | 0.0 |
+| `PR build check (lens)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (proxy)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (sandbox)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (v3)` | 132 | 0 | 0 | 0 | 0.0 |
+
+- Checks that a service writes, counted on the pull-request runs of its
+  scan: SonarCloud Code Analysis, 8 right, 2 false alarms and 6 repeats of
+  another red; GitHub code scanning of SonarCloud, 1 right, 2 false alarms
+  and 1 repeat; GitHub code scanning of CodeQL, 1 right and 2 false alarms.
+- The week in one line: 3,144 runs. A job did not pass 809 times: 17 right,
+  83 false alarms, 320 outside, 172 on the canary, 210 waiting for a
+  maintainer's approval, and 7 repeats. 68 of the 83 false alarms came in
+  one outage of Docker Hub, on 2026-10-09 from 21:06Z to 21:16Z. Since
+  then the jobs ask a mirror first.
+- No check was over the rule. The highest were the four sandbox smoke
+  jobs, at 5.1 and 4.4 false alarms per 100 runs; #465 removed them on
+  2026-10-13.
+- `weekly cleanup (make the text)` is not in the tables: the count left the
+  weekly jobs out.
 
 ## Rules learned from review and from failures
 

@@ -70,19 +70,16 @@ def test_a_rule_is_written_once_and_a_rule_of_the_guide_is_pointed_to():
         assert anchor in anchors_of(PAGE.read_text(encoding="utf-8")), f"the section links to #{anchor}, which the page does not have"
 
 
-def test_the_gates_page_has_the_two_rounds_line_and_the_counts_with_their_date():
+def test_the_gates_page_has_the_two_rounds_line_and_the_week_of_counts_with_its_dates():
     page = " ".join(PAGE.read_text(encoding="utf-8").split())
     assert "After two red CI rounds on the same pull request, stop and rethink the change before a third push." in page
-    assert "## What the checks found so far" in page and "This is its state on 2026-10-07." in page
-    table = re.findall(r"^\| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$",
-                       PAGE.read_text(encoding="utf-8"), re.M)
-    counts = [row for row in table if row[0] not in ("Check", "---") and row[1].strip() in (
-        "reports", "required", "blocks: every thread must be resolved")]
-    assert len(counts) == 13, [row[0] for row in counts]
-    for check, _mode, _on, found, right, false, outside in counts:
-        numbers = [right, false, outside]
-        if "not sorted yet" in numbers:
-            continue
-        total = int(re.match(r"\d+", found).group(0))
-        assert sum(int(number) for number in numbers) == total, (
-            f"the row `{check.strip()}` gives {found.strip()}, and its three columns add up to another number")
+    assert "## What the checks found so far" in page
+    assert "The week of counts ran from 2026-10-07 21:26Z to 2026-10-14 21:26Z." in page
+    assert "comes at the monthly review (mid-November)." in page
+    # The rows of the two tables of the week: the check, its runs, right, false alarm, outside, false alarms per 100 runs.
+    rows = re.findall(r"^\| (`[^|]+`) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+\.\d) \|$", PAGE.read_text(encoding="utf-8"), re.M)
+    assert len(rows) == 36 + 18, [row[0] for row in rows]
+    for check, runs, right, false, _outside, per_100 in rows:
+        assert int(right) + int(false) <= int(runs), f"the row {check} gives more right reds and false alarms than runs"
+        assert per_100 == f"{100 * int(false) / int(runs):.1f}", (
+            f"the row {check} gives {per_100} false alarms per 100 runs, and {false} of {runs} runs is another number")
