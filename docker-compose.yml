@@ -453,6 +453,7 @@ services:
       # Security + observability knobs read in-container; without these
       # passthroughs a .env setting silently does nothing (doc-audit fix).
       - ATLAS_TRUST_MODE=${ATLAS_TRUST_MODE:-}
+      - ATLAS_ALLOWED_ORIGINS=${ATLAS_ALLOWED_ORIGINS:-}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - ATLAS_ALLOW_CREDENTIAL_READS=${ATLAS_ALLOW_CREDENTIAL_READS:-}
       - ATLAS_PERMISSION_TIMEOUT_SEC=${ATLAS_PERMISSION_TIMEOUT_SEC:-}

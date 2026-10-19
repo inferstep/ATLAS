@@ -240,8 +240,49 @@ func TestTheServersHandlerChecksTheTokenAndTheSizeOfTheBody(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
 			if c.token != "" {
 				req.Header.Set("Authorization", "Bearer "+c.token)
+			}
+			rec := httptest.NewRecorder()
+			newServerHandler().ServeHTTP(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, c.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// The clients send each POST as application/json and no Origin header, as in
+// the first row; the server refuses a POST of another type, and a request
+// from a web page unless the operator put its origin on the list.
+func TestTheServerTakesOnlyRequestsOfTheFormItsClientsSend(t *testing.T) {
+	defer withToken(t, "")()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+	for _, c := range []struct {
+		name, method, path, contentType, origin, allowedOrigins string
+		want                                                    int
+	}{
+		{"a POST as the clients send it", http.MethodPost, "/v1/chat/completions", "application/json", "", "", http.StatusOK},
+		{"JSON with a charset", http.MethodPost, "/v1/chat/completions", "application/json; charset=utf-8", "", "", http.StatusOK},
+		{"a GET with no type", http.MethodGet, "/version", "", "", "", http.StatusOK},
+		{"a POST of plain text", http.MethodPost, "/v1/chat/completions", "text/plain", "", "", http.StatusUnsupportedMediaType},
+		{"a POST with no type", http.MethodPost, "/v1/chat/completions", "", "", "", http.StatusUnsupportedMediaType},
+		{"an origin, with the list empty as by default", http.MethodPost, "/v1/chat/completions", "application/json", "http://localhost:3000", "", http.StatusForbidden},
+		{"an origin on the list", http.MethodPost, "/v1/chat/completions", "application/json", "http://localhost:3000", "http://other.test, http://localhost:3000", http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("ATLAS_ALLOWED_ORIGINS", c.allowedOrigins)
+			req := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+			if c.contentType != "" {
+				req.Header.Set("Content-Type", c.contentType)
+			}
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
 			}
 			rec := httptest.NewRecorder()
 			newServerHandler().ServeHTTP(rec, req)

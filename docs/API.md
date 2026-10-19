@@ -50,6 +50,8 @@ The main entry point. Wraps llama-server with an agent loop, grammar-constrained
 
 **Catch-all:** any unmatched path is proxied directly to llama-server.
 
+**Requests:** send each POST body with `Content-Type: application/json`; a POST of another type gets 415. A request that carries an `Origin` header gets 403 unless its origin is on `ATLAS_ALLOWED_ORIGINS` (see [Configuration](CONFIGURATION.md)).
+
 ---
 
 ### POST /v1/agent
