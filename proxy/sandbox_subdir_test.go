@@ -18,6 +18,7 @@ func TestValidSandboxSubdir(t *testing.T) {
 		{"a b", false},
 		{"a\nb", false},
 		{"a\x01b", false},
+		{"café", false}, // a letter outside ASCII
 		{"", false},
 		{strings.Repeat("a", 65), false},
 		{strings.Repeat("a", 64), true},
