@@ -4913,7 +4913,7 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 		Outcome         string `json:"outcome"`
 		PeakMemoryBytes int    `json:"peak_memory_bytes"`
 	}
-	if err := json.NewDecoder(body).Decode(&sr); err != nil {
+	if err := json.NewDecoder(serviceAnswer(body)).Decode(&sr); err != nil {
 		return fmt.Errorf("decode sandbox response: %w", err)
 	}
 	stdout := truncateStr(sr.Stdout, 8000)
