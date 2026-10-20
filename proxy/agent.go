@@ -3746,7 +3746,7 @@ func probeSlot(ctx context.Context, client *http.Client, llamaURL string) (int, 
 		return 0, 0, true
 	}
 	var slots []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&slots); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&slots); err != nil {
 		return 0, 0, true
 	}
 	for _, s := range slots {
@@ -4209,7 +4209,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(serviceAnswer(resp.Body))
 		return "", 0, fmt.Errorf("LLM returned %d: %s",
 			resp.StatusCode, truncateStr(string(respBody), 500))
 	}

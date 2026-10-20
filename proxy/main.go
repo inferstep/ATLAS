@@ -439,7 +439,7 @@ func openShadowSink() (*shadowSink, error) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return nil, fmt.Errorf("shadow capture dir: %w", err)
 	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("shadow capture: %w", err)
 	}

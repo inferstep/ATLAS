@@ -284,7 +284,7 @@ func checkStructuralUnresolved(ctx *AgentContext, path, content string) ([]strin
 		return nil, false // fail-open
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		noteCheckServiceUnavailable(ctx, "unresolved-name", "response unreadable")
 		return nil, false
@@ -674,7 +674,7 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 		Status  string   `json:"status"`
 		Outcome string   `json:"outcome"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
 		return checkOutcome{Status: ValidationNotRun, Detail: "sandbox response was undecodable", ProducerUnavailable: true}
 	}
 	// The sandbox answered, and its checker was stopped before a verdict (a
@@ -817,7 +817,7 @@ func embeddedScriptOutcome(ctx *AgentContext, path, content, previous string) ch
 		OK       bool                    `json:"ok"`
 		Findings []embeddedScriptFinding `json:"findings"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
 		return checkOutcome{Status: ValidationNotRun, Detail: "response was undecodable"}
 	}
 	if !out.OK {
@@ -997,7 +997,7 @@ func foreignBackgroundJobHint(ctx *AgentContext) string {
 			Running bool   `json:"running"`
 		} `json:"jobs"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
 		return ""
 	}
 	var sb strings.Builder
@@ -2715,7 +2715,7 @@ func postOrphanCheck(ctx *AgentContext, rel, previous, current string) []orphane
 	var out struct {
 		Orphans []orphanedSymbol `json:"orphans"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
 		return nil
 	}
 	return out.Orphans
@@ -2849,7 +2849,7 @@ func sandboxReadProbe(ctx *AgentContext) (string, bool) {
 	var out struct {
 		Stdout string `json:"stdout"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil {
 		return "", false
 	}
 	return out.Stdout, true

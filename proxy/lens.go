@@ -151,7 +151,7 @@ func scoreContentForAgent(ctx context.Context, lensURL, content string) (lensPer
 		return zero, false, "it did not answer: " + truncateStr(err.Error(), 160)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return zero, false, "its answer could not be read"
 	}
@@ -585,7 +585,7 @@ func probeLensStatus(ctx context.Context, lensBaseURL string) LensStatus {
 		return out
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return out
 	}

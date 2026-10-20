@@ -614,7 +614,7 @@ func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool
 		return nil, false, nil
 	}
 	var out OutlineOutput
-	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Supported {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil || !out.Supported {
 		return nil, false, nil
 	}
 	return out.Symbols, true, out.EmbeddedRegions
@@ -3244,7 +3244,7 @@ func structuralEditTool() *ToolDef {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
 			}
 			defer resp.Body.Close()
-			respBytes, err := io.ReadAll(resp.Body)
+			respBytes, err := io.ReadAll(serviceAnswer(resp.Body))
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: read v3 response: %w", err))
 			}
@@ -4883,7 +4883,7 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 		var errBody struct {
 			Detail string `json:"detail"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		_ = json.NewDecoder(serviceAnswer(resp.Body)).Decode(&errBody)
 		return RunCommandOutput{
 			Stderr:   fmt.Sprintf("sandbox /shell %d: %s", resp.StatusCode, errBody.Detail),
 			ExitCode: 1,
@@ -5142,7 +5142,7 @@ func cyclomaticComplexity(ctx *AgentContext, path, source string) (int, bool) {
 		return 0, false
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return 0, false
 	}
@@ -5703,7 +5703,7 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		var d struct {
 			Detail string `json:"detail"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&d)
+		_ = json.NewDecoder(serviceAnswer(resp.Body)).Decode(&d)
 		if d.Detail != "" {
 			return "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, d.Detail)
 		}
@@ -5713,7 +5713,7 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		JobID string `json:"job_id"`
 		PID   int    `json:"pid"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return "", 0, err
 	}
 	return out.JobID, out.PID, nil
@@ -5744,7 +5744,7 @@ func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBack
 		return TailBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out TailBackgroundOutput
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return TailBackgroundOutput{}, err
 	}
 	return out, nil
@@ -5776,7 +5776,7 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 		return StopBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out StopBackgroundOutput
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return StopBackgroundOutput{}, err
 	}
 	return out, nil
@@ -6321,7 +6321,7 @@ func sandboxListBackground(ctx *AgentContext) ([]sandboxJobState, error) {
 	var out struct {
 		Jobs []sandboxJobState `json:"jobs"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out.Jobs, nil

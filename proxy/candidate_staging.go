@@ -249,7 +249,7 @@ func stagingRun(ctx *AgentContext, command string, overlay map[string]string,
 			DigestTruncated bool              `json:"digest_truncated"`
 		} `json:"observation"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&sr) != nil {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&sr) != nil {
 		return stagingObservation{}, false
 	}
 	obs := stagingObservation{

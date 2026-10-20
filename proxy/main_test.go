@@ -1613,6 +1613,25 @@ func TestShadowSinkDisabledByDefault(t *testing.T) {
 
 // Initialization refuses anything it cannot own: an existing destination, or
 // one outside the capture root.
+// The capture records how ATLAS judged the requests of each session, so only
+// its owner may read it.
+func TestShadowCaptureFileIsReadableByItsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	shadowEnv(t, dir, "mode.jsonl")
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	t.Cleanup(func() { _ = sink.close(context.Background(), time.Second) })
+	info, err := os.Stat(filepath.Join(dir, "mode.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("the capture file has mode %o, want 600", info.Mode().Perm())
+	}
+}
+
 func TestShadowSinkInitializationRefusals(t *testing.T) {
 	t.Run("existing destination", func(t *testing.T) {
 		dir := t.TempDir()

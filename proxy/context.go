@@ -243,7 +243,7 @@ func resolveProjectSymbols(ctx *AgentContext, fileMap map[string]string, symbols
 		return zero, false
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return zero, false
 	}
