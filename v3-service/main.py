@@ -27,6 +27,10 @@ WATCH_POLL_SEC = 0.25
 
 # The proxy forwards this; absence is normal for direct callers.
 REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
+# The largest request body a route takes. The largest real one is a file with
+# its project context, a few MiB; 64 MiB is far above that, and keeps a
+# request without end from filling the service's memory.
+MAX_REQUEST_BODY_BYTES = 64 << 20
 import os
 import sys
 from pathlib import Path
@@ -223,6 +227,9 @@ class V3Handler(BaseHTTPRequestHandler):
         from structured_log import set_request_id as _set_rid
         _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
         if not self._authorized():
+            return
+        if int(self.headers.get("Content-Length", 0)) > MAX_REQUEST_BODY_BYTES:
+            self._json_response(413, {"error": f"request body over {MAX_REQUEST_BODY_BYTES} bytes"})
             return
         if self.path == "/v3/generate":
             self._handle_generate()
