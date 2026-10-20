@@ -25,18 +25,26 @@ vi.mock('vscode', () => ({
 import { AtlasApiError, type AtlasClient } from '../src/client/atlasClient';
 import { StatusBar } from '../src/ui/statusBar';
 
+const refused = () => Promise.reject(new AtlasApiError(401, { error: 'unauthorized' }, ''));
+const answered = () => Promise.resolve({ lens: { verdict: 'ok' }, asa: { verdict: 'ok' } });
+const failed = () => Promise.reject(new Error('connection refused'));
+
 describe('the status bar', () => {
 	it.each([
-		['a calibration call refused with 401', () => Promise.reject(new AtlasApiError(401, { error: 'unauthorized' }, '')), '$(circle-slash) ATLAS'],
-		['a calibration call that answers', () => Promise.resolve({ lens: { verdict: 'ok' }, asa: { verdict: 'ok' } }), '$(check) ATLAS'],
-		['a calibration call that fails another way', () => Promise.reject(new Error('connection refused')), '$(check) ATLAS'],
-	])('with /ready passing and %s', async (_case, calibration, shown) => {
+		['a calibration call refused with 401', [refused], '$(circle-slash) ATLAS'],
+		['a calibration call that answers', [answered], '$(check) ATLAS'],
+		['a calibration call that fails another way', [failed], '$(check) ATLAS'],
+		['a 401, then a call that fails another way', [refused, failed], '$(circle-slash) ATLAS'],
+	])('with /ready passing and %s', async (_case, calibrations, shown) => {
+		const answers = [...calibrations];
 		const client = {
 			getReady: () => Promise.resolve({ ready: true, inference: true, lens_ready: true, sandbox: true, v3: true }),
-			getCalibrationStatus: calibration,
+			getCalibrationStatus: () => answers.shift()!(),
 		} as unknown as AtlasClient;
 		const bar = new StatusBar(() => Promise.resolve(client));
-		await bar.refresh();
+		for (let refresh = 0; refresh < calibrations.length; refresh++) {
+			await bar.refresh();
+		}
 		expect(item.text).toBe(shown);
 		bar.dispose();
 	});

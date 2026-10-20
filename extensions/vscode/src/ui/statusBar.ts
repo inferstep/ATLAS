@@ -116,7 +116,11 @@ export class StatusBar implements vscode.Disposable {
 			this.tokenRejected = false;
 		} catch (error) {
 			this.calibrationLine = ''; // proxy down or pre-auth — tooltip just omits it
-			this.tokenRejected = error instanceof AtlasApiError && error.status === 401;
+			// Only an answer clears a rejection; an error of another kind, such
+			// as a timeout, says nothing about the token.
+			if (error instanceof AtlasApiError && error.status === 401) {
+				this.tokenRejected = true;
+			}
 		}
 		if (this.tokenRejected) {
 			this.render('unauthorized', TOKEN_REJECTED);
