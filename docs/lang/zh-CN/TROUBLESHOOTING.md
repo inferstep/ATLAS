@@ -436,10 +436,11 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 
 **现象：** 代理健康检查显示 `"sandbox": false`。V3 构建验证失败。
 
-**解决方法：** 确保所有服务在同一个 Docker 网络上。Docker Compose 会自动创建 `atlas` 网络。如果手动运行容器：
+**解决方法：** Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
 ```bash
-docker network create atlas
-# Start all containers with --network atlas
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 端口冲突

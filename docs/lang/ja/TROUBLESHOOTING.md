@@ -433,10 +433,11 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 
 **症状:** プロキシのヘルスが `"sandbox": false` を表示する。V3 のビルド検証が失敗する。
 
-**修正:** すべてのサービスが同じ Docker ネットワーク上にあることを確認してください。Docker Compose は `atlas` ネットワークを自動的に作成します。コンテナを手動で実行している場合:
+**修正:** サンドボックスには `atlas` ではなく `sandbox-net` 経由で到達します — 実行されたコードがスタックの他の部分に届かないよう、サンドボックスは意図的に `atlas` ネットワークに参加しない唯一のサービスです。プロキシ、レンズ、v3-service は両方のネットワークに接続されています。コンテナを手動で実行している場合:
 ```bash
-docker network create atlas
-# Start all containers with --network atlas
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### ポート競合
