@@ -4,6 +4,7 @@ Each rule gets a change that must be reported and a near miss that must not.
 """
 import importlib.util
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "integrity_check.py"
 TASKS = {"flask_pause", "offbyone"}
@@ -598,7 +600,60 @@ def test_a_script_under_test_and_the_replay_harness_are_ordinary_files(ic, path)
     assert whats(ic, diff(path, added=["x=1"])) == []
 
 
-SCRIPT_NAME = re.compile(r"scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
+# Leading folders are part of the name: extensions/jetbrains/scripts/x.sh is not scripts/x.sh.
+SCRIPT_NAME = re.compile(r"(?:[A-Za-z0-9_.-]+/)*scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
+
+
+def strings_in(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from strings_in(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from strings_in(value)
+
+
+def scripts_a_workflow_names(text):
+    """The scripts a workflow names, each by its path from the repository's root.
+
+    A step's run command names a script from the step's working directory: its own, else
+    its job's defaults.run.working-directory, else the workflow's. Any other text of the
+    workflow, such as an input or a path filter, names it from the root.
+    """
+    workflow = yaml.safe_load(text)
+
+    def default_directory(node):
+        return ((node.get("defaults") or {}).get("run") or {}).get("working-directory", "")
+
+    runs = []  # (working directory, command)
+    for job in (workflow.get("jobs") or {}).values():
+        job_directory = default_directory(job) or default_directory(workflow)
+        for step in job.get("steps") or []:
+            if "run" in step:
+                runs.append((step.get("working-directory") or job_directory, step["run"]))
+    named = {posixpath.normpath(posixpath.join(directory, name))
+             for directory, command in runs for name in SCRIPT_NAME.findall(command)}
+    commands = {command for _, command in runs}
+    named |= {posixpath.normpath(name) for text in strings_in(workflow) if text not in commands
+              for name in SCRIPT_NAME.findall(text)}
+    return named
+
+
+@pytest.mark.parametrize("job, named", [
+    ({"steps": [{"run": "python scripts/verify.py"}]}, "scripts/verify.py"),
+    ({"steps": [{"working-directory": "extensions/jetbrains", "run": "bash scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"defaults": {"run": {"working-directory": "extensions/jetbrains"}},
+      "steps": [{"run": "bash scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"steps": [{"run": "bash extensions/jetbrains/scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+], ids=["a root script", "named from the step's working directory", "named from the job's working directory",
+        "named by its full path"])
+def test_a_workflow_names_a_script_by_its_path_from_the_root(job, named):
+    assert scripts_a_workflow_names(yaml.safe_dump({"jobs": {"a": job}})) == {named}
 
 
 def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
@@ -610,7 +665,7 @@ def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
     """
     root = SCRIPT.parents[1]
     named = {name for workflow in sorted((root / ".github" / "workflows").glob("*.yml"))
-             for name in SCRIPT_NAME.findall(workflow.read_text(encoding="utf-8"))}
+             for name in scripts_a_workflow_names(workflow.read_text(encoding="utf-8"))}
     gate_scripts = [name for name in sorted(named) if name.startswith(ic.GATE_FILES) and (root / name).is_file()]
     named |= {name for script in gate_scripts for name in SCRIPT_NAME.findall((root / script).read_text(encoding="utf-8"))
               if (root / name).is_file()}
