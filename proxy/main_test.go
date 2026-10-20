@@ -621,6 +621,14 @@ func TestClampGenerationBody(t *testing.T) {
 		}
 	})
 
+	t.Run("an object with a number too large for a float64 gets max_tokens", func(t *testing.T) {
+		huge := "1" + strings.Repeat("0", 400)
+		out := string(clampGenerationBody("/v1/chat/completions", []byte(`{"seed":`+huge+`}`)))
+		if !strings.Contains(out, `"max_tokens":8192`) || !strings.Contains(out, `"seed":`+huge) {
+			t.Fatalf("want max_tokens=8192 and the number as written, got %s", out)
+		}
+	})
+
 	t.Run("non-generation paths and bad JSON pass through", func(t *testing.T) {
 		for _, c := range []struct{ path, body string }{
 			{"/health", `{}`},

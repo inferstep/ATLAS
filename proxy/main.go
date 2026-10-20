@@ -292,15 +292,18 @@ func clampGenerationBody(path string, body []byte) []byte {
 	default:
 		return body
 	}
-	var req map[string]interface{}
+	// Raw values: a number too large for a float64 still decodes, and every
+	// value the clamp does not touch is sent on as it was written.
+	var req map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil || req == nil {
 		return body
 	}
 	ceiling := maxCompletionTokens()
-	if v, ok := req[key].(float64); ok && v > 0 && v <= float64(ceiling) {
+	var v float64
+	if json.Unmarshal(req[key], &v) == nil && v > 0 && v <= float64(ceiling) {
 		return body
 	}
-	req[key] = ceiling
+	req[key] = json.RawMessage(strconv.Itoa(ceiling))
 	clamped, err := json.Marshal(req)
 	if err != nil {
 		return body
