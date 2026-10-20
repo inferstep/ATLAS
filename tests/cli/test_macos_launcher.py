@@ -35,6 +35,8 @@ def test_launcher_accepts_disabled_asa_on_macos_bash(tmp_path):
         "KV_CACHE_TYPE_V": "f16",
         "ATLAS_BATCH": "512",
         "ATLAS_UBATCH": "256",
+        # The launcher keeps its slots in $TMPDIR/atlas-slots.
+        "TMPDIR": str(tmp_path),
     })
     result = subprocess.run(
         ["/bin/bash", str(LAUNCHER)],

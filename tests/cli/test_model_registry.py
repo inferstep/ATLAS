@@ -388,8 +388,9 @@ def test_verify_installed_mismatch_detects_corruption(tmp_path):
 # PC-056.1 Lens artifact resolution + presence
 # ---------------------------------------------------------------------------
 
-def test_lens_artifact_dir_for_uses_default_when_unset(tmp_path):
+def test_lens_artifact_dir_for_uses_default_when_unset(tmp_path, monkeypatch):
     """Default resolution: <atlas_root>/geometric-lens/geometric_lens/models"""
+    monkeypatch.delenv("ATLAS_LENS_MODELS", raising=False)
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     d = model_registry.lens_artifact_dir_for(m, str(tmp_path))
     assert d.endswith("geometric-lens/geometric_lens/models")
@@ -418,35 +419,27 @@ def test_lens_artifact_dir_for_reads_compose_dotenv(monkeypatch, tmp_path):
         artifact_dir)
 
 
-def test_lens_artifacts_present_ok_when_files_exist(tmp_path):
+def test_lens_artifacts_present_ok_when_files_exist(tmp_path, monkeypatch):
     """Set up a fake artifact dir with the required .pt files, point
     ATLAS_LENS_MODELS at it, expect ok=True."""
     art_dir = tmp_path / "lens-models"
     art_dir.mkdir()
     (art_dir / "cost_field.pt").write_bytes(b"x")
     (art_dir / "model_identity.json").write_text('{"model": "Qwen3.5-9B-Q6_K", "embedding_dim": 4096}')
-    import os
-    os.environ["ATLAS_LENS_MODELS"] = str(art_dir)
-    try:
-        m = model_registry.by_name("Qwen3.5-9B-Q6_K")
-        state = model_registry.lens_artifacts_present(m, str(tmp_path))
-        assert state["ok"] is True
-        assert state["missing_files"] == []
-    finally:
-        del os.environ["ATLAS_LENS_MODELS"]
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(art_dir))
+    m = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    state = model_registry.lens_artifacts_present(m, str(tmp_path))
+    assert state["ok"] is True
+    assert state["missing_files"] == []
 
 
-def test_lens_artifacts_present_missing_files_listed(tmp_path):
+def test_lens_artifacts_present_missing_files_listed(tmp_path, monkeypatch):
     """No .pt files at the expected path → both should be in missing_files."""
-    import os
-    os.environ["ATLAS_LENS_MODELS"] = str(tmp_path / "nonexistent")
-    try:
-        m = model_registry.by_name("Qwen3.5-9B-Q6_K")
-        state = model_registry.lens_artifacts_present(m, str(tmp_path))
-        assert state["ok"] is False
-        assert "cost_field.pt" in state["missing_files"]
-    finally:
-        del os.environ["ATLAS_LENS_MODELS"]
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "nonexistent"))
+    m = model_registry.by_name("Qwen3.5-9B-Q6_K")
+    state = model_registry.lens_artifacts_present(m, str(tmp_path))
+    assert state["ok"] is False
+    assert "cost_field.pt" in state["missing_files"]
 
 
 def test_lens_artifacts_present_skips_unsupported_models(tmp_path):

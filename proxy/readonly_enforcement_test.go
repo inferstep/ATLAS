@@ -1,6 +1,11 @@
 package main
 
-import ("encoding/json"; "os"; "path/filepath"; "testing")
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // The guarantee that matters: a mutating call under a read-only request must
 // leave the file on disk UNCHANGED, proven through executeToolCall (the real
@@ -9,7 +14,9 @@ func TestReadOnlyRequestLeavesTheFileUntouchedThroughRealDispatch(t *testing.T) 
 	dir := t.TempDir()
 	target := filepath.Join(dir, "orders.py")
 	const original = "def apply_discount(total, pct):\n    return total * (1 - pct/100)\n"
-	if err := os.WriteFile(target, []byte(original), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := NewAgentContext(dir, Tier0Conversational)
 	ctx.HumanTask = "In orders.py, what does apply_discount do? Just explain — do not change any code."

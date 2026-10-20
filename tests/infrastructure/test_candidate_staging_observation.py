@@ -18,7 +18,6 @@ way to know what the client declared.
 """
 import hashlib
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -30,13 +29,16 @@ SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
 
 
 @pytest.fixture(scope="module")
-def executor(tmp_path_factory):
+def executor(tmp_path_factory, request):
     root = tmp_path_factory.mktemp("ws-staging")
     (root / "baseline.py").write_text("BASE = 1\n")
     (root / "input.txt").write_text("7\n")
     base = tmp_path_factory.mktemp("sandbox-base")
-    os.environ["ATLAS_SANDBOX_WORKSPACE_ROOT"] = str(root)
-    os.environ["WORKSPACE_BASE"] = str(base)
+    # Put the environment back after the module, also when the import fails.
+    env = pytest.MonkeyPatch()
+    request.addfinalizer(env.undo)
+    env.setenv("ATLAS_SANDBOX_WORKSPACE_ROOT", str(root))
+    env.setenv("WORKSPACE_BASE", str(base))
     sys.path.insert(0, str(SANDBOX_DIR))
     spec = importlib.util.spec_from_file_location(
         "executor_server_staging", SANDBOX_DIR / "executor_server.py")

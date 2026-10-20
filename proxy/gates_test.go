@@ -2002,16 +2002,16 @@ func sandboxLikeSyntaxStub(t *testing.T, seen *[]string) *httptest.Server {
 func TestWorkspaceRelativeNameMatchesWhatTheSandboxAccepts(t *testing.T) {
 	ctx := NewAgentContext("/workspace/_reliability", Tier2Medium)
 	for _, c := range []struct {
-		in       string
-		want     string
-		wantOK   bool
+		in     string
+		want   string
+		wantOK bool
 	}{
-		{"solve.py", "solve.py", true},                                        // already relative
-		{"templates/index.html", "templates/index.html", true},                // scoping preserved
-		{"/workspace/_reliability/solve.py", "solve.py", true},                // the completion path's spelling
+		{"solve.py", "solve.py", true},                         // already relative
+		{"templates/index.html", "templates/index.html", true}, // scoping preserved
+		{"/workspace/_reliability/solve.py", "solve.py", true}, // the completion path's spelling
 		{"/workspace/_reliability/templates/index.html", "templates/index.html", true},
-		{"/etc/passwd", "", false},                                            // outside the workspace
-		{"../escape.py", "", false},                                           // escapes
+		{"/etc/passwd", "", false},  // outside the workspace
+		{"../escape.py", "", false}, // escapes
 	} {
 		got, ok := workspaceRelativeName(ctx, c.in)
 		if ok != c.wantOK || got != c.want {
