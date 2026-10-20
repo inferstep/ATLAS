@@ -7664,21 +7664,7 @@ func recoverTruncatedText(raw string) (string, bool) {
 	for j := 0; j < len(rest); j++ {
 		c := rest[j]
 		if c == '\\' && j+1 < len(rest) {
-			switch rest[j+1] {
-			case 'n':
-				sb.WriteByte('\n')
-			case 't':
-				sb.WriteByte('\t')
-			case 'r':
-				sb.WriteByte('\r')
-			case '"':
-				sb.WriteByte('"')
-			case '\\':
-				sb.WriteByte('\\')
-			default:
-				sb.WriteByte(rest[j+1])
-			}
-			j++
+			j += writeJSONEscape(&sb, rest[j:]) - 1
 			continue
 		}
 		if c == '"' {
