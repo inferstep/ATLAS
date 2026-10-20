@@ -34,12 +34,13 @@ def executor(tmp_path_factory, request):
     (root / "baseline.py").write_text("BASE = 1\n")
     (root / "input.txt").write_text("7\n")
     base = tmp_path_factory.mktemp("sandbox-base")
-    # Put the environment back after the module, also when the import fails.
+    # Put the environment and sys.path back after the module, also when the
+    # import fails.
     env = pytest.MonkeyPatch()
     request.addfinalizer(env.undo)
     env.setenv("ATLAS_SANDBOX_WORKSPACE_ROOT", str(root))
     env.setenv("WORKSPACE_BASE", str(base))
-    sys.path.insert(0, str(SANDBOX_DIR))
+    env.syspath_prepend(str(SANDBOX_DIR))
     spec = importlib.util.spec_from_file_location(
         "executor_server_staging", SANDBOX_DIR / "executor_server.py")
     mod = importlib.util.module_from_spec(spec)

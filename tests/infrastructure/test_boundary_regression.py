@@ -22,11 +22,12 @@ SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
 def executor(tmp_path_factory, request):
     """Import executor_server with WORKSPACE_ROOT pointed at a temp dir."""
     root = tmp_path_factory.mktemp("ws-root")
-    # Put the environment back after the module, also when the import fails.
+    # Put the environment and sys.path back after the module, also when the
+    # import fails.
     env = pytest.MonkeyPatch()
     request.addfinalizer(env.undo)
     env.setenv("ATLAS_SANDBOX_WORKSPACE_ROOT", str(root))
-    sys.path.insert(0, str(SANDBOX_DIR))
+    env.syspath_prepend(str(SANDBOX_DIR))
     spec = importlib.util.spec_from_file_location(
         "executor_server_bt", SANDBOX_DIR / "executor_server.py")
     mod = importlib.util.module_from_spec(spec)
