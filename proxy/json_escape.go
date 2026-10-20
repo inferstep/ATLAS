@@ -11,7 +11,9 @@ import (
 // stands for, and returns how many bytes of s it took. s starts with a
 // backslash. A \uXXXX escape is decoded, and two that form a UTF-16 surrogate
 // pair are one character; a surrogate alone is U+FFFD, as encoding/json reads
-// it. An escape it does not know stands for its letter.
+// it. \b and \f stay the letters b and f, unlike encoding/json, so that no
+// backspace or form feed reaches a terminal. An escape it does not know stands
+// for its letter.
 func writeJSONEscape(sb *strings.Builder, s string) int {
 	switch s[1] {
 	case 'n':
