@@ -150,7 +150,7 @@ func TestPassthroughPreservesRequestURI(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	withInferenceURL(t, upstream.URL)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?stream=true&n=2", strings.NewReader("payload"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?stream=true&n=2", strings.NewReader(`{"max_tokens":512}`))
 	req.Header.Set("X-Client", "atlas-test")
 	rec := httptest.NewRecorder()
 
@@ -165,7 +165,7 @@ func TestPassthroughPreservesRequestURI(t *testing.T) {
 	if gotRequestURI != "/v1/chat/completions?stream=true&n=2" {
 		t.Fatalf("request URI = %q", gotRequestURI)
 	}
-	if gotBody != "payload" {
+	if gotBody != `{"max_tokens":512}` {
 		t.Fatalf("body = %q", gotBody)
 	}
 	if rec.Header().Get("X-Upstream") != "seen" {
@@ -193,6 +193,31 @@ func TestPassthroughRejectsOversizedBody(t *testing.T) {
 	}
 	if upstreamCalled {
 		t.Fatalf("oversized request reached upstream")
+	}
+}
+
+// The proxy cannot bound a generation body that it cannot read, so such a body
+// is refused and not sent on: one that is not JSON, and one nested deeper than
+// encoding/json reads (10,000 levels).
+func TestAGenerationBodyThatIsNotOneJSONObjectIsRefused(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+
+	deep := strings.Repeat(`{"a":`, 10001) + "1" + strings.Repeat("}", 10001)
+	for _, body := range []string{`not json`, deep} {
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("a body of %d bytes got %d, want %d", len(body), rec.Code, http.StatusBadRequest)
+		}
+	}
+	if upstreamCalled {
+		t.Fatalf("a refused body reached upstream")
 	}
 }
 
@@ -573,7 +598,7 @@ func TestClampGenerationBody(t *testing.T) {
 	}
 
 	t.Run("missing max_tokens gets the default ceiling", func(t *testing.T) {
-		out := clampGenerationBody("/v1/chat/completions",
+		out, _ := clampGenerationBody("/v1/chat/completions",
 			[]byte(`{"messages":[{"role":"user","content":"hi"}]}`))
 		if v, ok := get(out, "max_tokens"); !ok || v != 8192 {
 			t.Fatalf("want max_tokens=8192, got %v (present=%v)", v, ok)
@@ -582,28 +607,28 @@ func TestClampGenerationBody(t *testing.T) {
 
 	t.Run("in-range value passes through untouched", func(t *testing.T) {
 		in := []byte(`{"max_tokens":512}`)
-		out := clampGenerationBody("/v1/chat/completions", in)
+		out, _ := clampGenerationBody("/v1/chat/completions", in)
 		if string(out) != string(in) {
 			t.Fatalf("in-range body modified: %s", out)
 		}
 	})
 
 	t.Run("unlimited sentinel -1 is clamped", func(t *testing.T) {
-		out := clampGenerationBody("/v1/completions", []byte(`{"max_tokens":-1}`))
+		out, _ := clampGenerationBody("/v1/completions", []byte(`{"max_tokens":-1}`))
 		if v, _ := get(out, "max_tokens"); v != 8192 {
 			t.Fatalf("want clamp to 8192, got %v", v)
 		}
 	})
 
 	t.Run("above-ceiling value is clamped", func(t *testing.T) {
-		out := clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":900000}`))
+		out, _ := clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":900000}`))
 		if v, _ := get(out, "max_tokens"); v != 8192 {
 			t.Fatalf("want clamp to 8192, got %v", v)
 		}
 	})
 
 	t.Run("llama-native endpoints use n_predict", func(t *testing.T) {
-		out := clampGenerationBody("/completion", []byte(`{"prompt":"x"}`))
+		out, _ := clampGenerationBody("/completion", []byte(`{"prompt":"x"}`))
 		if v, ok := get(out, "n_predict"); !ok || v != 8192 {
 			t.Fatalf("want n_predict=8192, got %v (present=%v)", v, ok)
 		}
@@ -611,11 +636,11 @@ func TestClampGenerationBody(t *testing.T) {
 
 	t.Run("env override sets the ceiling", func(t *testing.T) {
 		t.Setenv("ATLAS_MAX_COMPLETION_TOKENS", "1024")
-		out := clampGenerationBody("/v1/chat/completions", []byte(`{}`))
+		out, _ := clampGenerationBody("/v1/chat/completions", []byte(`{}`))
 		if v, _ := get(out, "max_tokens"); v != 1024 {
 			t.Fatalf("want max_tokens=1024, got %v", v)
 		}
-		out = clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":2048}`))
+		out, _ = clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":2048}`))
 		if v, _ := get(out, "max_tokens"); v != 1024 {
 			t.Fatalf("want clamp to 1024, got %v", v)
 		}
@@ -623,20 +648,21 @@ func TestClampGenerationBody(t *testing.T) {
 
 	t.Run("an object with a number too large for a float64 gets max_tokens", func(t *testing.T) {
 		huge := "1" + strings.Repeat("0", 400)
-		out := string(clampGenerationBody("/v1/chat/completions", []byte(`{"seed":`+huge+`}`)))
+		clamped, _ := clampGenerationBody("/v1/chat/completions", []byte(`{"seed":`+huge+`}`))
+		out := string(clamped)
 		if !strings.Contains(out, `"max_tokens":8192`) || !strings.Contains(out, `"seed":`+huge) {
 			t.Fatalf("want max_tokens=8192 and the number as written, got %s", out)
 		}
 	})
 
-	t.Run("non-generation paths and bad JSON pass through", func(t *testing.T) {
+	t.Run("non-generation paths pass through", func(t *testing.T) {
 		for _, c := range []struct{ path, body string }{
 			{"/health", `{}`},
 			{"/slots", `{"max_tokens":-1}`},
-			{"/v1/chat/completions", `not json`},
+			{"/slots", `not json`},
 		} {
-			out := clampGenerationBody(c.path, []byte(c.body))
-			if string(out) != c.body {
+			out, ok := clampGenerationBody(c.path, []byte(c.body))
+			if !ok || string(out) != c.body {
 				t.Fatalf("%s: body modified: %s", c.path, out)
 			}
 		}

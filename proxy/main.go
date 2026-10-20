@@ -280,9 +280,10 @@ func maxCompletionTokens() int {
 // Missing, non-positive (-1 means "unlimited" to llama), or
 // above-ceiling values are set to the ceiling. OpenAI-style endpoints
 // carry the bound as max_tokens; llama-native /completion(s) and
-// /infill as n_predict. Non-generation paths and unparseable bodies
-// pass through unchanged — this is a guarantee, not a validator.
-func clampGenerationBody(path string, body []byte) []byte {
+// /infill as n_predict. Non-generation paths pass through unchanged.
+// A generation body that is not one JSON object is refused (ok is
+// false): the proxy cannot bound what it cannot read.
+func clampGenerationBody(path string, body []byte) (clamped []byte, ok bool) {
 	var key string
 	switch path {
 	case "/v1/chat/completions", "/v1/completions":
@@ -290,25 +291,22 @@ func clampGenerationBody(path string, body []byte) []byte {
 	case "/completion", "/completions", "/infill":
 		key = "n_predict"
 	default:
-		return body
+		return body, true
 	}
 	// Raw values: a number too large for a float64 still decodes, and every
 	// value the clamp does not touch is sent on as it was written.
 	var req map[string]json.RawMessage
 	if err := json.Unmarshal(body, &req); err != nil || req == nil {
-		return body
+		return nil, false
 	}
 	ceiling := maxCompletionTokens()
 	var v float64
 	if json.Unmarshal(req[key], &v) == nil && v > 0 && v <= float64(ceiling) {
-		return body
+		return body, true
 	}
 	req[key] = json.RawMessage(strconv.Itoa(ceiling))
 	clamped, err := json.Marshal(req)
-	if err != nil {
-		return body
-	}
-	return clamped
+	return clamped, err == nil
 }
 
 func handlePassthrough(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +320,12 @@ func handlePassthrough(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		body = clampGenerationBody(r.URL.Path, body)
+		clamped, ok := clampGenerationBody(r.URL.Path, body)
+		if !ok {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, "a generation request body must be one JSON object")
+			return
+		}
+		body = clamped
 	}
 	upstreamURL := inferenceURL + r.URL.RequestURI()
 	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(body))
