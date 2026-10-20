@@ -57,15 +57,16 @@ this page: [Rules learned from review and from failures](#rules-learned-from-rev
 
 - A job with no condition must have run. That holds for every job definition
   in the workflow files that has no `if:` of its own.
-- 17 job definitions have an `if:` of their own, so they may be skipped by
+- 18 job definitions have an `if:` of their own, so they may be skipped by
   design, and `checks ran` does not report one of them as missing. Every
-  other job is judged for absence. The table below names the 17. On a pull
+  other job is judged for absence. The table below names the 18. On a pull
   request five of them count: Sonar's scan, the `PR build check`, `coverage upload`,
   `test results upload` and `test results upload (extension)`. If one of
   these does not start at all, nothing says so. The rest run only on other
   events: the four bot jobs, the three image jobs of a push, the release
-  file job, the scorecard, the staging record, the star chart and the job
-  that writes the weekly cleanup's issue.
+  file job, the scorecard, the staging record, the star chart, the job that
+  writes the weekly cleanup's issue and the job that writes the image scan's
+  issue.
 - For a job with a matrix, one reported leg is enough. The required checks
   cover the required legs by name. A leg that is not required can be missing
   unseen.
@@ -87,6 +88,7 @@ job on this list that does not start gives no red:
 | `bot-stale-claims.yml` | `stale` |
 | `bot-sync.yml` | `sync` |
 | `build-images.yml` | `pr-build`, `alias`, `build`, `promote` |
+| `container-scan.yml` | `report` |
 | `release-files.yml` | `sign` |
 | `scorecard.yml` | `analysis` |
 | `sonar.yml` | `scan` |
