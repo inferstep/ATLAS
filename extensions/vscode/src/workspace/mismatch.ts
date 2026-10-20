@@ -182,16 +182,6 @@ export class MismatchDetector {
 		this.pending.set(tool, queue);
 	}
 
-	/** A permission_denied consumed a tool_call that will never get a
-	 * tool_result (the proxy skips execution entirely) — drop its pre-op
-	 * state so the next allowed call of the same tool pairs correctly. */
-	recordDenied(tool: string): void {
-		const queue = this.pending.get(tool);
-		if (queue && queue.length > 0) {
-			queue.shift();
-		}
-	}
-
 	/** Check a tool_result against its captured pre-op state. Failed results
 	 * only consume the queue entry — the proxy made no change to verify. */
 	async recordToolResult(tool: string, success: boolean): Promise<void> {

@@ -184,24 +184,6 @@
 		}
 	}
 
-	/** A denied call never gets a tool_result — consume its pending chip so
-	 * the next allowed call of the same tool pairs with its own chip. */
-	function denyToolChip(tool) {
-		const queue = pendingChips.get(tool);
-		const chip = queue && queue.length > 0 ? queue.shift() : null;
-		if (!chip) {
-			return;
-		}
-		chip.classList.remove('pending');
-		chip.classList.add('fail');
-		const status = chip.querySelector('.chip-status');
-		status.textContent = '✗';
-		const detail = document.createElement('div');
-		detail.className = 'chip-error';
-		detail.textContent = 'denied';
-		chip.appendChild(detail);
-	}
-
 	/** Turn-end backstop: calls rejected before execution (truncated args,
 	 * workspace-boundary gate) emit neither tool_result nor
 	 * permission_denied, so their chips would spin forever. */
@@ -337,9 +319,6 @@
 				break;
 			case 'toolResult':
 				resolveToolChip(message.tool, message.success, message.elapsed, message.error, message.diffId, message.summary);
-				break;
-			case 'toolDenied':
-				denyToolChip(message.tool);
 				break;
 			case 'doneSummary': {
 				// The run's outcome: a marker colored by status, the reason, and

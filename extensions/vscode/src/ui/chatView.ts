@@ -56,7 +56,6 @@ type OutboundMessage =
 	| { type: 'reasoningDelta'; text: string }
 	| { type: 'toolCall'; name: string; detail: string }
 	| { type: 'toolResult'; tool: string; success: boolean; elapsed?: string; error?: string; diffId?: number; summary?: string }
-	| { type: 'toolDenied'; tool: string }
 	| ({ type: 'doneSummary' } & DoneOutcome)
 	| { type: 'note'; text: string }
 	| { type: 'badge'; text: string }
@@ -349,13 +348,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// path renders NO row to avoid duplicating this event).
 				const payload = data as PermissionDeniedEventData;
 				this.permissions.handleDenied(payload.tool);
-				// A denied call gets NO tool_result (proxy/agent.go emits
-				// permission_denied then continues the loop), so every FIFO
-				// keyed on tool name must consume its entry here or the next
-				// allowed call of the same tool pairs with stale state.
-				this.snapshots.get(payload.tool)?.shift();
-				this.mismatch.recordDenied(payload.tool);
-				this.post({ type: 'toolDenied', tool: payload.tool });
+				// The proxy answers a denial with permission_denied and then a
+				// tool_result whose success is false (proxy/agent.go), so that
+				// result consumes the snapshot, the pre-op state and the chip,
+				// as for any failed call. A stream that ends before it leaves
+				// nothing behind: the turn's end clears all three.
 				this.post({ type: 'note', text: `Permission denied for '${payload.tool}'.` });
 				break;
 			}

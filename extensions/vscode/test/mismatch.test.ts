@@ -174,26 +174,22 @@ describe('MismatchDetector', () => {
 		expect(firedCount()).toBe(1);
 	});
 
-	it('recordDenied consumes the pending op so the next allowed call pairs correctly', async () => {
+	it("a denied call's failed result consumes its pending op, so the next allowed call pairs with its own", async () => {
 		const stats = new Map<string, PathStat>([
 			['a.py', at(1)],
 			['b.py', at(1)],
 		]);
 		const { d, firedCount } = detector(stats);
-		// Denied edit: tool_call captured pre-op state, but the proxy emits
-		// permission_denied and NO tool_result.
+		// Denied edit: tool_call captured pre-op state; the proxy follows the
+		// denial with a tool_result whose success is false.
 		await d.recordToolCall('edit_file', { path: 'a.py' });
-		d.recordDenied('edit_file');
+		await d.recordToolResult('edit_file', false);
 		// Allowed edit of b.py: must pair with ITS pre-op state, not a.py's.
+		// a.py is gone by then, so a pairing with a.py's state would warn.
 		await d.recordToolCall('edit_file', { path: 'b.py' });
 		stats.set('b.py', at(2));
+		stats.delete('a.py');
 		await d.recordToolResult('edit_file', true);
-		expect(firedCount()).toBe(0);
-	});
-
-	it('recordDenied with nothing pending is a no-op', () => {
-		const { d, firedCount } = detector(new Map());
-		d.recordDenied('edit_file');
 		expect(firedCount()).toBe(0);
 	});
 
