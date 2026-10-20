@@ -1,5 +1,6 @@
-"""The V3 service takes a request body up to MAX_REQUEST_BODY_BYTES and refuses
-a larger one with 413, before any route reads it."""
+"""The V3 service takes a request body up to MAX_REQUEST_BODY_BYTES, refuses a
+larger one with 413, and a Content-Length that is not a whole number of 0 or
+more with 400, before any route reads it."""
 
 import http.client
 import sys
@@ -16,10 +17,12 @@ import main
 
 
 @pytest.mark.parametrize("length, status", [
-    (main.MAX_REQUEST_BODY_BYTES, 200),
-    (main.MAX_REQUEST_BODY_BYTES + 1, 413),
+    (str(main.MAX_REQUEST_BODY_BYTES), 200),
+    (str(main.MAX_REQUEST_BODY_BYTES + 1), 413),
+    ("-1", 400),
+    ("abc", 400),
 ])
-def test_a_request_body_over_the_bound_is_refused(monkeypatch, length, status):
+def test_the_request_body_length_is_checked_before_any_route(monkeypatch, length, status):
     monkeypatch.setattr(adapters, "SERVICE_TOKEN", "")
     server = ThreadingHTTPServer(("127.0.0.1", 0), main.V3Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -27,7 +30,7 @@ def test_a_request_body_over_the_bound_is_refused(monkeypatch, length, status):
         # Only the header is sent: /health reads no body, so the bound decides alone.
         connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
         connection.putrequest("POST", "/health")
-        connection.putheader("Content-Length", str(length))
+        connection.putheader("Content-Length", length)
         connection.endheaders()
         assert connection.getresponse().status == status
         connection.close()
