@@ -298,30 +298,6 @@ func reasoningOnlyStub(t *testing.T, stop <-chan struct{}) *httptest.Server {
 	}))
 }
 
-func TestZeroByteFencedStreamIsCutAtTheFirstContentBound(t *testing.T) {
-	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
-	stop := make(chan struct{})
-	defer close(stop)
-	srv := reasoningOnlyStub(t, stop)
-	defer srv.Close()
-
-	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-	ctx.InferenceURL = srv.URL
-	ctx.Ctx = context.Background()
-
-	start := time.Now()
-	out, _, err := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
-		0.2, rawEmissionSentinel)
-	elapsed := time.Since(start)
-	if elapsed > 20*time.Second {
-		t.Fatalf("stream was not bounded: %v", elapsed)
-	}
-	if extractFencedContent(out) != "" {
-		t.Errorf("a reasoning-only stream must not yield content: %q", out)
-	}
-	t.Logf("bounded in %v (err=%v)", elapsed, err)
-}
-
 // A slow but continuously progressing payload must survive: each content
 // chunk resets the idle timer, so total elapsed far exceeding the idle bound
 // is fine as long as the gaps do not.
@@ -361,12 +337,16 @@ func TestSlowButProgressingFencedPayloadSurvives(t *testing.T) {
 	}
 }
 
-// Reasoning is not progress. A stream that reasons past the idle bound and
-// only then emits content is still cut, because the first-content bound
-// governs until real bytes arrive.
+// Reasoning is not progress. A stream that only reasons, the zero-byte shape,
+// is cut by the stalled bound that its first frame arms, and gives no content.
+// The idle bound is ten minutes and the reasoning budget is off, so if a
+// reasoning frame re-armed the watchdog, nothing would cut the stream before
+// the session's minute ends, and that end is not a watchdog cut. How fast the
+// frames come does not change the result.
 func TestReasoningDoesNotResetTheProgressTimer(t *testing.T) {
-	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
-	t.Setenv("ATLAS_FENCED_IDLE_SEC", "30")
+	t.Setenv("ATLAS_FENCED_STALL_SEC", "1")
+	t.Setenv("ATLAS_FENCED_IDLE_SEC", "600")
+	t.Setenv("ATLAS_REASONING_BUDGET", "0")
 	stop := make(chan struct{})
 	defer close(stop)
 	srv := reasoningOnlyStub(t, stop)
@@ -374,11 +354,16 @@ func TestReasoningDoesNotResetTheProgressTimer(t *testing.T) {
 
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	ctx.InferenceURL = srv.URL
-	ctx.Ctx = context.Background()
-	start := time.Now()
-	callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}}, 0.2, rawEmissionSentinel)
-	if el := time.Since(start); el > 20*time.Second {
-		t.Fatalf("reasoning kept the stream alive past the first-content bound: %v", el)
+	session, endSession := context.WithTimeout(context.Background(), time.Minute)
+	defer endSession()
+	ctx.Ctx = session
+	out, _, _ := callLLMOnceWithGrammar(ctx, []AgentMessage{{Role: "user", Content: "x"}},
+		0.2, rawEmissionSentinel)
+	if cut := ctx.LastFencedStream.Cut; cut != "stalled" {
+		t.Errorf("watchdog cut = %q, want %q", cut, "stalled")
+	}
+	if extractFencedContent(out) != "" {
+		t.Errorf("a reasoning-only stream must not yield content: %q", out)
 	}
 }
 
@@ -777,7 +762,9 @@ func TestFencedAllowanceIsKeyedOnTheCanonicalPath(t *testing.T) {
 }
 
 func TestWatchdogCancelsOnlyTheChildAndChargesTheAllowance(t *testing.T) {
-	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "1")
+	// The stub's first frame comes at once, so the stalled bound is the one
+	// that cuts. At its default, the reasoning budget ends the stream first.
+	t.Setenv("ATLAS_FENCED_STALL_SEC", "1")
 	stop := make(chan struct{})
 	defer close(stop)
 	srv := reasoningOnlyStub(t, stop)
@@ -799,8 +786,10 @@ func TestWatchdogCancelsOnlyTheChildAndChargesTheAllowance(t *testing.T) {
 	if n := ctx.FencedFailures[fencedKey(ctx, "solve.py")]; n == 0 {
 		t.Error("watchdog cancellation consumed no allowance")
 	}
-	if !fencedBudgetExhausted(ctx, "solve.py") {
-		t.Error("two cancelled attempts should exhaust the path's allowance")
+	// One stall turns the channel off for the session, so the next
+	// write_file does not start the fetch again.
+	if !fencedChannelDisabledForSession(ctx) {
+		t.Error("a watchdog stall did not turn the fenced channel off")
 	}
 }
 
