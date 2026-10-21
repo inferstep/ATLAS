@@ -51,90 +51,52 @@ SRC = (
 )
 
 
-def _shapes(rel_lines, col):
-    """The three ways a model writes one node, from its column-0 form."""
-    pad = " " * col
-    return {
-        "col0": "\n".join(rel_lines),
-        "original_indent": "\n".join(pad + line if line else line for line in rel_lines),
-        "first_line_bare": rel_lines[0] + "\n"
-        + "\n".join(pad + line if line else line for line in rel_lines[1:]),
-    }
-
-
-def _expected(old_node, rel_lines, col):
-    """SRC with old_node (as it sits in the file, from its first non-blank
-    character) replaced by rel_lines placed at column `col`."""
-    pad = " " * col
-    new_node = rel_lines[0] + "\n" + "\n".join(pad + line if line else line for line in rel_lines[1:])
-    assert SRC.count(old_node) == 1
-    return SRC.replace(old_node, new_node)
-
-
-def _assert_applied(res, want):
+@pytest.mark.parametrize("shape", ["col0", "original_indent", "first_line_bare"])
+@pytest.mark.parametrize("selector, old_node, new_lines, column", [
+    pytest.param("function:deposit",
+                 "def deposit(self, amount):\n"
+                 "        self.balance += amount\n"
+                 "        return self.balance",
+                 ["def deposit(self, amount):",
+                  "    if amount <= 0:",
+                  "        raise ValueError('amount must be positive')",
+                  "    self.balance += amount",
+                  "    return self.balance"],
+                 4, id="method"),
+    pytest.param("function:doubled",
+                 "@property\n"
+                 "    def doubled(self):\n"
+                 "        return self.balance * 2",
+                 ["@property", "def doubled(self):", "    return self.balance * 3"],
+                 4, id="decorated-method"),  # decorator and def stay on one column
+    pytest.param("function:fetch",
+                 "async def fetch(self):\n"
+                 "        return self.balance",
+                 ["async def fetch(self):", "    return self.balance + 0"],
+                 4, id="async-method"),
+    pytest.param("function:label",
+                 "def label(self):\n"
+                 "            return 'acct'",
+                 ["def label(self):", "    return 'account'"],
+                 8, id="method-of-a-nested-class"),
+])
+def test_a_method_lands_at_its_column_whatever_its_indentation(selector, old_node, new_lines, column, shape):
+    pad = " " * column
+    # The three ways a model writes one node. The last one is what the splice
+    # needs, because the node's line keeps its own indentation.
+    first_line_bare = "\n".join([new_lines[0]] + [pad + line for line in new_lines[1:]])
+    content = {
+        "col0": "\n".join(new_lines),
+        "original_indent": "\n".join(pad + line for line in new_lines),
+        "first_line_bare": first_line_bare,
+    }[shape]
+    res = structural_edit("acct.py", SRC, selector, content)
     assert res["success"] is True, res.get("error")
-    assert res["new_content"] == want
+    assert res["new_content"] == SRC.replace(old_node, first_line_bare)
     compile(res["new_content"], "acct.py", "exec")
-
-
-DEPOSIT_OLD = ("def deposit(self, amount):\n"
-               "        self.balance += amount\n"
-               "        return self.balance")
-DEPOSIT_NEW = [
-    "def deposit(self, amount):",
-    "    if amount <= 0:",
-    "        raise ValueError('amount must be positive')",
-    "    self.balance += amount",
-    "    return self.balance",
-]
-
-
-@pytest.mark.parametrize("shape", ["col0", "original_indent", "first_line_bare"])
-def test_method_replacement_lands_at_the_method_column_whatever_its_indentation(shape):
-    content = _shapes(DEPOSIT_NEW, 4)[shape]
-    res = structural_edit("acct.py", SRC, "function:deposit", content)
-    _assert_applied(res, _expected(DEPOSIT_OLD, DEPOSIT_NEW, 4))
-    # still a method of Account, and nothing else moved
-    cls = ast.parse(res["new_content"]).body[0]
-    names = [n.name for n in cls.body]
-    assert names == ["__init__", "deposit", "doubled", "fetch", "Meta"]
-
-
-DOUBLED_OLD = ("@property\n"
-               "    def doubled(self):\n"
-               "        return self.balance * 2")
-DOUBLED_NEW = ["@property", "def doubled(self):", "    return self.balance * 3"]
-
-
-@pytest.mark.parametrize("shape", ["col0", "original_indent", "first_line_bare"])
-def test_decorated_method_keeps_decorator_and_def_on_one_column(shape):
-    content = _shapes(DOUBLED_NEW, 4)[shape]
-    res = structural_edit("acct.py", SRC, "function:doubled", content)
-    _assert_applied(res, _expected(DOUBLED_OLD, DOUBLED_NEW, 4))
-
-
-FETCH_OLD = ("async def fetch(self):\n"
-             "        return self.balance")
-FETCH_NEW = ["async def fetch(self):", "    return self.balance + 0"]
-
-
-@pytest.mark.parametrize("shape", ["col0", "original_indent", "first_line_bare"])
-def test_async_method(shape):
-    content = _shapes(FETCH_NEW, 4)[shape]
-    res = structural_edit("acct.py", SRC, "function:fetch", content)
-    _assert_applied(res, _expected(FETCH_OLD, FETCH_NEW, 4))
-
-
-LABEL_OLD = ("def label(self):\n"
-             "            return 'acct'")
-LABEL_NEW = ["def label(self):", "    return 'account'"]
-
-
-@pytest.mark.parametrize("shape", ["col0", "original_indent", "first_line_bare"])
-def test_method_of_a_nested_class(shape):
-    content = _shapes(LABEL_NEW, 8)[shape]
-    res = structural_edit("acct.py", SRC, "function:label", content)
-    _assert_applied(res, _expected(LABEL_OLD, LABEL_NEW, 8))
+    # still methods of Account, and nothing else moved
+    account = ast.parse(res["new_content"]).body[0]
+    assert [n.name for n in account.body] == ["__init__", "deposit", "doubled", "fetch", "Meta"]
 
 
 def test_multiline_string_inside_a_method_is_not_reindented():
@@ -152,13 +114,13 @@ def test_multiline_string_inside_a_method_is_not_reindented():
             "        return '''\n<b>\n  total\n</b>\n'''") in res["new_content"]
 
 
-@pytest.mark.parametrize("lead", ["\n", "# v2\n"])
+@pytest.mark.parametrize("lead", ["\n", "# v2\n"], ids=["blank-line-first", "comment-first"])
 def test_a_method_never_leaves_its_class(lead):
     """A column-0 method behind a blank line or a comment. Spliced as sent,
     the node line's whitespace goes to that first row, the def lands at column
     0 and closes the class, and the file still compiles. Re-based, the method
     stays in Account."""
-    content = lead + "\n".join(DEPOSIT_NEW)
+    content = lead + "def deposit(self, amount):\n    self.balance += amount * 2\n    return self.balance"
     res = structural_edit("acct.py", SRC, "function:deposit", content)
     assert res["success"] is True, res.get("error")
     tree = ast.parse(res["new_content"])
@@ -168,20 +130,10 @@ def test_a_method_never_leaves_its_class(lead):
 
 def test_top_level_function_is_unchanged():
     """A column-0 node is spliced as sent."""
-    rel = ["def top(x):", "    return x + 2"]
-    res = structural_edit("acct.py", SRC, "function:top", "\n".join(rel))
-    _assert_applied(res, SRC.replace("def top(x):\n    return x + 1",
-                                     "def top(x):\n    return x + 2"))
-
-
-def test_first_line_bare_shape_is_byte_identical_to_a_plain_splice():
-    """A replacement that already carries the indentation the splice needs is
-    not touched."""
-    content = _shapes(DEPOSIT_NEW, 4)["first_line_bare"]
-    res = structural_edit("acct.py", SRC, "function:deposit", content)
-    start = SRC.index("def deposit")
-    end = start + len(DEPOSIT_OLD)
-    assert res["new_content"] == SRC[:start] + content + SRC[end:]
+    res = structural_edit("acct.py", SRC, "function:top", "def top(x):\n    return x + 2")
+    assert res["success"] is True, res.get("error")
+    assert res["new_content"] == SRC.replace("return x + 1", "return x + 2")
+    compile(res["new_content"], "acct.py", "exec")
 
 
 def test_tab_indented_file_with_space_indented_replacement_is_refused_not_guessed():
@@ -189,7 +141,7 @@ def test_tab_indented_file_with_space_indented_replacement_is_refused_not_guesse
     res = structural_edit("t.py", src, "function:m", "def m(self):\n    return 2")
     assert res["success"] is False
     assert "tab" in res["error"].lower()
-    assert "was NOT modified" in res["error"] or "not modified" in res["error"].lower()
+    assert "not modified" in res["error"].lower()
 
 
 def test_tab_indented_file_with_tab_indented_replacement_applies():

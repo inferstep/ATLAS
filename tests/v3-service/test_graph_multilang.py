@@ -52,6 +52,7 @@ GOLDEN = {
 
 class TestJsGoldenParity:
     def test_matches_chiasmus(self):
+        # The exact call list also shows that `new Pipeline()` is not a call.
         g = extract_file("pipe.js", JS_FIXTURE)
         got = {
             "defines": sorted([[d.name, d.kind] for d in g.defines]),
@@ -60,11 +61,6 @@ class TestJsGoldenParity:
         }
         for key, expected in GOLDEN.items():
             assert got[key] == sorted(expected), f"{key} diverged from chiasmus"
-
-    def test_new_expression_not_a_call(self):
-        # `new Pipeline()` must not appear as a call edge.
-        g = extract_file("pipe.js", JS_FIXTURE)
-        assert all(c.callee != "Pipeline" for c in g.calls)
 
     def test_method_contains(self):
         g = extract_file("pipe.js", JS_FIXTURE)

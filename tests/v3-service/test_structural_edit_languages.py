@@ -69,52 +69,41 @@ class Game {
 """
 
 
-def _edit(path, src, selector):
-    return symbols.structural_edit(path, src, selector, "REPLACED\n")
-
-
-@pytest.mark.parametrize("path,src,selector", [
-    ("main.go", GO, "function:Add"),          # plain func
-    ("main.go", GO, "function:Handle"),       # method — a different node
-    ("main.go", GO, "type:Server"),
-    ("app.ts", TS, "function:render"),        # declaration
-    ("app.ts", TS, "function:helper"),        # arrow assigned to a const
-    ("app.ts", TS, "function:legacy"),        # function expression
-    ("app.ts", TS, "class:Board"),
-    ("app.tsx", TS, "function:render"),
-    ("game.js", JS, "function:draw"),
-    ("game.js", JS, "function:tick"),         # arrow
-    ("game.js", JS, "class:Game"),
+@pytest.mark.parametrize("path, src, selector", [
+    pytest.param("main.go", GO, "function:Add", id="go-func"),
+    pytest.param("main.go", GO, "function:Handle", id="go-method-is-a-different-node"),
+    pytest.param("main.go", GO, "type:Server", id="go-type"),
+    pytest.param("app.ts", TS, "function:render", id="ts-function-declaration"),
+    pytest.param("app.ts", TS, "function:helper", id="ts-arrow-assigned-to-a-const"),
+    pytest.param("app.ts", TS, "function:legacy", id="ts-function-expression"),
+    pytest.param("app.ts", TS, "class:Board", id="ts-class"),
+    pytest.param("app.tsx", TS, "function:render", id="tsx-function-declaration"),
+    pytest.param("game.js", JS, "function:draw", id="js-function-declaration"),
+    pytest.param("game.js", JS, "function:tick", id="js-arrow-assigned-to-a-const"),
+    pytest.param("game.js", JS, "class:Game", id="js-class"),
 ])
 def test_selector_resolves(path, src, selector):
-    out = _edit(path, src, selector)
+    out = symbols.structural_edit(path, src, selector, "REPLACED\n")
     assert out.get("success"), out.get("error")
     assert "REPLACED" in out["new_content"]
 
 
-def test_a_language_without_a_grammar_says_what_is_supported():
-    out = _edit("main.rs", "fn main() {}\n", "function:main")
-    assert not out["success"]
+@pytest.mark.parametrize("path, src, selector, error_mentions", [
     # The advertised list is built from the grammars that imported, so a
     # build missing one never offers it.
-    assert ".go" in out["error"] and ".py" in out["error"]
-    assert "edit_file" in out["error"]
-
-
-def test_an_unknown_selector_names_what_the_language_takes():
-    out = _edit("main.go", GO, "<div>")
+    pytest.param("main.rs", "fn main() {}\n", "function:main", [".go", ".py", "edit_file"],
+                 id="a-language-without-a-grammar-says-what-is-supported"),
+    pytest.param("main.go", GO, "<div>", ["function:NAME"],
+                 id="an-unknown-selector-names-what-the-language-takes"),
+    pytest.param("main.go", GO, "function:Missing", ["matched 0 nodes"],
+                 id="a-missing-symbol"),
+    # Single-match enforcement still applies: two nodes matching one selector
+    # must fail rather than pick one.
+    pytest.param("main.go", GO + "\nfunc Handle(x int) {}\n", "function:Handle", ["matched 2 nodes"],
+                 id="a-go-method-and-func-of-the-same-name"),
+])
+def test_a_selector_that_cannot_apply_fails_and_says_why(path, src, selector, error_mentions):
+    out = symbols.structural_edit(path, src, selector, "REPLACED\n")
     assert not out["success"]
-    assert "function:NAME" in out["error"]
-
-
-def test_a_missing_symbol_is_not_a_silent_success():
-    out = _edit("main.go", GO, "function:Missing")
-    assert not out["success"]
-
-
-def test_go_method_and_func_of_the_same_name_are_ambiguous():
-    """Single-match enforcement still applies: two nodes matching one
-    selector must fail rather than pick one."""
-    src = GO + "\nfunc Handle(x int) {}\n"
-    out = _edit("main.go", src, "function:Handle")
-    assert not out["success"]
+    for text in error_mentions:
+        assert text in out["error"]

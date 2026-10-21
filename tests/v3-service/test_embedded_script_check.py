@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import main
+import symbols
 
 pytestmark = pytest.mark.skipif(
     not getattr(main, "_EMBEDDED_SCRIPT_AVAILABLE", False),
@@ -73,16 +74,25 @@ def flask_app(handler: str) -> str:
     )
 
 
-def check(path, source):
-    return main.embedded_script_check(path, source)
+BROKEN_HTML = (
+    "<!DOCTYPE html>\n<html>\n<body>\n"
+    '  <div id="app"></div>\n'
+    "  <script>\n"
+    "    function boot() {\n"
+    "      const el = document.getElementById('app'));\n"
+    "    }\n"
+    "  </script>\n"
+    "</body>\n</html>\n"
+)
 
 
 # --- the bug --------------------------------------------------------------
 
 def test_stray_paren_in_python_template_string_is_rejected():
     source = flask_app(BROKEN_HANDLER)
-    res = check("app.py", source)
+    res = main.embedded_script_check("app.py", source)
     assert res["ok"], res
+    # Exactly one finding: the template's CSS, canvas and event wiring add no noise.
     assert len(res["findings"]) == 1, res
     f = res["findings"][0]
     # The line number must be the line of the .py FILE, not of the string.
@@ -96,228 +106,165 @@ def test_stray_paren_in_python_template_string_is_rejected():
     assert "delete the stray `)`" in f["hint"]
 
 
-def test_corrected_python_template_string_passes():
-    res = check("app.py", flask_app(FIXED_HANDLER))
-    assert res["ok"] and res["findings"] == [], res
+# --- a broken block in an HTML carrier --------------------------------------
 
-
-def test_real_dogfood_file_shape_reports_one_finding_only():
-    """The surrounding template (CSS, canvas, event wiring) must not add noise —
-    exactly one finding, the real one."""
-    res = check("app.py", flask_app(BROKEN_HANDLER))
-    assert [f["message"] for f in res["findings"]] == ["unexpected `)`"]
-
-
-# --- .html / .jinja carriers ----------------------------------------------
-
-BROKEN_HTML = (
-    "<!DOCTYPE html>\n<html>\n<body>\n"
-    '  <div id="app"></div>\n'
-    "  <script>\n"
-    "    function boot() {\n"
-    "      const el = document.getElementById('app'));\n"
-    "    }\n"
-    "  </script>\n"
-    "</body>\n</html>\n"
-)
-
-
-def test_broken_script_in_html_file_is_rejected():
-    res = check("templates/index.html", BROKEN_HTML)
-    assert res["ok"] and len(res["findings"]) == 1, res
-    f = res["findings"][0]
-    assert f["line"] == 7 and f["message"] == "unexpected `)`"
-    assert f["where"] == "the <script> block"
-
-
-def test_jinja_extension_is_carried_too():
-    res = check("templates/page.jinja2", BROKEN_HTML)
-    assert res["ok"] and len(res["findings"]) == 1, res
-
-
-def test_clean_html_file_passes():
-    res = check("templates/index.html", BROKEN_HTML.replace("('app'));", "('app');"))
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_missing_brace_is_reported_as_missing():
-    html = ("<html><body><script>\n"
-            "function boot() {\n"
-            "  const x = 1;\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and len(res["findings"]) == 1, res
-    assert "missing" in res["findings"][0]["message"]
+@pytest.mark.parametrize("path, source, kind, line, message, where", [
+    pytest.param("templates/index.html", BROKEN_HTML,
+                 "javascript", 7, "unexpected `)`", "the <script> block",
+                 id="a script in an .html file"),
+    pytest.param("templates/page.jinja2", BROKEN_HTML,
+                 "javascript", 7, "unexpected `)`", "the <script> block",
+                 id="a script in a .jinja2 template"),
+    pytest.param("index.html",
+                 '<html><body><script type="module">\n'
+                 "  import { a } from './a.js'));\n"
+                 "</script></body></html>\n",
+                 "javascript", 2, "unexpected `))`", "the <script> block",
+                 id="a module script is still JavaScript"),
+    pytest.param("index.html",
+                 "<html><body><script>\n"
+                 "function boot() {\n"
+                 "  const x = 1;\n"
+                 "</script></body></html>\n",
+                 "javascript", 3, "a `}` is missing", "the <script> block",
+                 id="a missing brace is reported as missing"),
+    pytest.param("index.html",
+                 "<html><head><style>\n"
+                 "  body { margin: 0;\n"
+                 "  .score { font-size: 32px; }\n"
+                 "</style></head></html>\n",
+                 "css", 2, "a `{` that is never closed", "the <style> block",
+                 id="an unclosed CSS rule"),
+    pytest.param("index.html",
+                 "<html><head><style>\n"
+                 "  body { margin: 0; }}\n"
+                 "</style></head></html>\n",
+                 "css", 2, "an extra `}`", "the <style> block",
+                 id="an extra CSS brace"),
+])
+def test_a_broken_block_is_reported_once(path, source, kind, line, message, where):
+    res = main.embedded_script_check(path, source)
+    assert res["ok"], res
+    assert [(f["kind"], f["line"], f["message"], f["where"]) for f in res["findings"]] == [
+        (kind, line, message, where)]
 
 
 # --- false-positive budget ------------------------------------------------
 
-def test_script_src_without_body_passes():
-    html = ('<html><body>\n'
-            '  <script src="/static/game.js"></script>\n'
-            '  <script src="/static/other.js">\n  </script>\n'
-            '</body></html>\n')
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
+NOT_JAVASCRIPT = ('<html><body><script type="%s">\n'
+                  '  { "not": "javascript", }\n'
+                  "</script></body></html>\n")
 
 
-def test_jinja_placeholders_in_js_pass():
-    html = ("<html><body><script>\n"
-            "  const user = '{{ current_user.name }}';\n"
-            "  fetch('{{ url_for(\"api\") }}').then(r => r.json());\n"
-            "  const cfg = {{ config_json }};\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_jinja_statement_tags_in_js_pass():
-    """{% %} wraps arbitrary control flow — undecidable, so never a finding."""
-    html = ("<html><body><script>\n"
-            "  {% if debug %}\n"
-            "  console.log('debug');\n"
-            "  {% endif %}\n"
-            "  let n = 1;\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_python_file_without_html_passes_untouched():
-    source = (
-        "import math\n"
-        "\n"
-        "def area(r):\n"
-        "    return math.pi * r ** 2\n"
-        "\n"
-        "MESSAGE = 'no markup here at all'\n"
-    )
-    res = check("calc.py", source)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_unsupported_extension_passes():
-    for path in ("game.js", "style.css", "notes.md", "data.json"):
-        res = check(path, "function f( {")
-        assert res["ok"] and res["findings"] == [], path
-
-
-def test_non_js_script_type_is_skipped():
-    """A <script type=...> body that isn't JavaScript must never be JS-parsed."""
-    for stype in ("text/template", "application/json", "importmap", "text/x-handlebars"):
-        html = ('<html><body><script type="%s">\n'
-                '  { "not": "javascript", }\n'
-                "</script></body></html>\n" % stype)
-        res = check("index.html", html)
-        assert res["ok"] and res["findings"] == [], stype
-
-
-def test_module_type_is_still_checked():
-    html = ('<html><body><script type="module">\n'
-            "  import { a } from './a.js'));\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and len(res["findings"]) == 1, res
-
-
-def test_closing_script_tag_inside_js_string_reports_nothing():
-    """A literal `</script>` in a JS string truncates tree-sitter-html's raw
-    text; the tag-count imbalance must suppress the phantom error."""
-    html = ("<html><body><script>\n"
-            "  document.write('</script>');\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_python_fstring_template_is_skipped():
-    """In an f-string the braces are Python's, so the source bytes are not
-    what the browser receives."""
-    source = (
-        'NAME = "x"\n'
-        'HTML = f"""\n'
-        "<html><body><script>\n"
-        "  const n = '{NAME}'));\n"
-        "</script></body></html>\n"
-        '"""\n'
-    )
-    res = check("app.py", source)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_python_string_with_escapes_is_skipped():
-    """Python renders `\\n` before the browser sees it, so parsing the source
-    bytes would be parsing something the page never receives."""
-    source = (
-        'HTML = """\n'
-        "<html><body><script>\n"
-        "  const s = 'a\\nb'));\n"
-        "</script></body></html>\n"
-        '"""\n'
-    )
-    res = check("app.py", source)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_concatenated_python_strings_are_skipped():
-    source = (
-        'HTML = ("<html><body><script>"\n'
-        '        "  const x = 1));"\n'
-        '        "</script></body></html>")\n'
-    )
-    res = check("app.py", source)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_js_block_inside_block_is_not_masked_into_an_error():
-    """`{{` is legal JavaScript (a block inside a block). The raw parse runs
-    first, so placeholder masking can only ever remove findings."""
-    html = ("<html><body><script>\n"
-            "  function f() {{ return 1; }}\n"
-            "</script></body></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
-
-
-# --- embedded CSS ---------------------------------------------------------
-
-def test_unclosed_css_rule_is_reported():
-    html = ("<html><head><style>\n"
-            "  body { margin: 0;\n"
-            "  .score { font-size: 32px; }\n"
-            "</style></head></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and len(res["findings"]) == 1, res
-    f = res["findings"][0]
-    assert f["kind"] == "css" and f["line"] == 2
-    assert "<style>" in f["where"]
-
-
-def test_extra_css_brace_is_reported():
-    html = ("<html><head><style>\n"
-            "  body { margin: 0; }}\n"
-            "</style></head></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and len(res["findings"]) == 1, res
-    assert res["findings"][0]["message"] == "an extra `}`"
-
-
-def test_css_braces_in_strings_and_comments_pass():
-    html = ("<html><head><style>\n"
-            '  .a::after { content: "}"; }\n'
-            "  /* .b { commented out */\n"
-            "  .c { color: red; }\n"
-            "</style></head></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_templated_css_is_skipped():
-    html = ("<html><head><style>\n"
-            "  body { color: {{ theme.fg }};\n"
-            "</style></head></html>\n")
-    res = check("index.html", html)
-    assert res["ok"] and res["findings"] == [], res
+@pytest.mark.parametrize("path, source", [
+    pytest.param("app.py", flask_app(FIXED_HANDLER), id="the corrected template string"),
+    pytest.param("templates/index.html", BROKEN_HTML.replace("('app'));", "('app');"),
+                 id="the corrected html file"),
+    # The browser ignores the inline body of a script that has a src.
+    pytest.param("index.html",
+                 "<html><body>\n"
+                 '  <script src="/static/game.js"></script>\n'
+                 '  <script src="/static/other.js">\n'
+                 "    this is not JavaScript (\n"
+                 "  </script>\n"
+                 "</body></html>\n",
+                 id="a src script, empty or with an inline body"),
+    pytest.param("index.html",
+                 "<html><body><script>\n"
+                 "  const user = '{{ current_user.name }}';\n"
+                 "  fetch('{{ url_for(\"api\") }}').then(r => r.json());\n"
+                 "  const cfg = {{ config_json }};\n"
+                 "</script></body></html>\n",
+                 id="Jinja placeholders in JavaScript"),
+    # {% %} wraps arbitrary control flow: undecidable, so never a finding.
+    pytest.param("index.html",
+                 "<html><body><script>\n"
+                 "  {% if debug %}\n"
+                 "  console.log('debug');\n"
+                 "  {% endif %}\n"
+                 "  let n = 1;\n"
+                 "</script></body></html>\n",
+                 id="Jinja statement tags in JavaScript"),
+    # A <script type=...> body that is not JavaScript must never be JS-parsed.
+    pytest.param("index.html", NOT_JAVASCRIPT % "text/template", id="a text/template script"),
+    pytest.param("index.html", NOT_JAVASCRIPT % "application/json", id="an application/json script"),
+    pytest.param("index.html", NOT_JAVASCRIPT % "importmap", id="an importmap script"),
+    pytest.param("index.html", NOT_JAVASCRIPT % "text/x-handlebars", id="a text/x-handlebars script"),
+    # A literal `</script>` in a JS string truncates tree-sitter-html's raw
+    # text; the tag-count imbalance must suppress the phantom error.
+    pytest.param("index.html",
+                 "<html><body><script>\n"
+                 "  document.write('</script>');\n"
+                 "</script></body></html>\n",
+                 id="a closing script tag inside a JS string"),
+    # `{{` is legal JavaScript (a block inside a block). The raw parse runs
+    # first, so placeholder masking can only ever remove findings.
+    pytest.param("index.html",
+                 "<html><body><script>\n"
+                 "  function f() {{ return 1; }}\n"
+                 "</script></body></html>\n",
+                 id="a JS block inside a block"),
+    pytest.param("index.html",
+                 "<html><head><style>\n"
+                 '  .a::after { content: "}"; }\n'
+                 "  /* .b { commented out */\n"
+                 "  .c { color: red; }\n"
+                 "</style></head></html>\n",
+                 id="CSS braces in strings and comments"),
+    pytest.param("index.html",
+                 "<html><head><style>\n"
+                 "  body { color: {{ theme.fg }};\n"
+                 "</style></head></html>\n",
+                 id="templated CSS"),
+    pytest.param("calc.py",
+                 "import math\n"
+                 "\n"
+                 "def area(r):\n"
+                 "    return math.pi * r ** 2\n"
+                 "\n"
+                 "MESSAGE = 'no markup here at all'\n",
+                 id="a Python file without HTML"),
+    # In an f-string the braces are Python's, so the source bytes are not
+    # what the browser receives.
+    pytest.param("app.py",
+                 'NAME = "x"\n'
+                 'HTML = f"""\n'
+                 "<html><body><script>\n"
+                 "  const n = '{NAME}'));\n"
+                 "</script></body></html>\n"
+                 '"""\n',
+                 id="a Python f-string"),
+    # Python renders `\n` before the browser sees it, so parsing the source
+    # bytes would be parsing something the page never receives.
+    pytest.param("app.py",
+                 'HTML = """\n'
+                 "<html><body><script>\n"
+                 "  const s = 'a\\nb'));\n"
+                 "</script></body></html>\n"
+                 '"""\n',
+                 id="a Python string with escapes"),
+    # Each literal of a concatenation holds only part of the document, so none
+    # is checked, not even one that holds a whole broken block.
+    pytest.param("app.py",
+                 'HTML = ("<html><body><script>  const x = 1));</script>"\n'
+                 '        "</body></html>")\n',
+                 id="concatenated Python strings"),
+    pytest.param("game.js", "function f( {", id="a .js file"),
+    pytest.param("style.css", "function f( {", id="a .css file"),
+    pytest.param("notes.md", BROKEN_HTML, id="HTML in a .md file"),
+    pytest.param("data.json", "function f( {", id="a .json file"),
+    # The gate blocks on positive findings only, so input it cannot read is clean.
+    pytest.param("app.py", "", id="an empty Python file"),
+    pytest.param("index.html", "", id="an empty html file"),
+    pytest.param("app.py", "def f(", id="Python that does not parse"),
+    pytest.param("index.html", "<script>", id="an unterminated script tag"),
+    pytest.param("app.py", "HTML = '<script>'", id="an unterminated script tag in a Python string"),
+    pytest.param("app.py", flask_app(BROKEN_HANDLER) + "\n# " + "x" * (symbols._EMBEDDED_MAX_BYTES + 1),
+                 id="a source over the size cap is not parsed"),
+])
+def test_reports_nothing(path, source):
+    res = main.embedded_script_check(path, source)
+    assert res["ok"] is True and res["findings"] == [], res
 
 
 # --- fail-soft ------------------------------------------------------------
@@ -325,28 +272,9 @@ def test_templated_css_is_skipped():
 def test_missing_grammar_reports_not_ok_never_raises(monkeypatch):
     """A build without tree-sitter-javascript must degrade to ok:false (the
     caller fails open), not crash the endpoint."""
-    import symbols
     monkeypatch.setattr(symbols, "_EMBEDDED_SCRIPT_AVAILABLE", False)
     res = symbols.embedded_script_check("app.py", flask_app(BROKEN_HANDLER))
     assert res["ok"] is False and "error" in res
-
-
-def test_oversized_source_is_skipped_not_parsed():
-    import symbols
-    padding = "\n# " + "x" * (symbols._EMBEDDED_MAX_BYTES + 1)
-    res = check("app.py", flask_app(BROKEN_HANDLER) + padding)
-    assert res["ok"] and res["findings"] == [], res
-
-
-def test_empty_and_malformed_inputs_do_not_raise():
-    """Empty content, unparseable Python and an unterminated <script> tag all
-    have to come back clean — the gate blocks on positive findings only."""
-    for path, source in (("app.py", ""), ("index.html", ""),
-                         ("app.py", "def f("), ("index.html", "<script>"),
-                         ("app.py", "HTML = '<script>'")):
-        res = check(path, source)
-        assert res["ok"] is True, (path, res)
-        assert res["findings"] == [], (path, res)
 
 
 # --- stopped render loop -----------------------------------------------------
@@ -389,37 +317,6 @@ def test_a_loop_downgraded_to_a_single_shot_is_reported():
     assert "setTimeout(draw, delay)" in f["text"]
 
 
-def test_the_same_content_without_the_pre_edit_file_reports_nothing():
-    """The comparison IS the check — one version alone cannot tell a dead loop
-    from a deliberate one-shot."""
-    assert main.embedded_script_check("app.py", ONE_SHOT)["findings"] == []
-
-
-def test_a_loop_that_rearms_itself_is_not_reported():
-    rearmed = _flask_page('        setTimeout(draw, 100);').replace(
-        "            score += 1;",
-        "            score += 1;\n            setTimeout(draw, 100 - score);")
-    assert main.embedded_script_check("app.py", rearmed, RECURRING)["findings"] == []
-
-
-def test_a_new_delayed_one_shot_is_not_reported():
-    added = _flask_page('        setInterval(draw, 100);\n'
-                        '        function banner() { score = 0; }\n'
-                        '        setTimeout(banner, 3000);')
-    assert main.embedded_script_check("app.py", added, RECURRING)["findings"] == []
-
-
-def test_removing_the_loop_outright_is_not_reported():
-    """Deleting a loop is a decision; leaving one scheduled once is a slip."""
-    removed = _flask_page('        // no loop here')
-    assert main.embedded_script_check("app.py", removed, RECURRING)["findings"] == []
-
-
-def test_a_file_that_never_looped_reports_nothing():
-    plain = _flask_page('        setTimeout(draw, 100);')
-    assert main.embedded_script_check("app.py", plain, _flask_page('        draw();'))["findings"] == []
-
-
 # --- duplicate lexical binding ------------------------------------------------
 #
 # 2026-08-02 dogfooding: a replace_lines edit appended a second `let score = 0`
@@ -435,35 +332,6 @@ def test_a_repeated_let_in_one_scope_is_reported():
     assert len(findings) == 1, findings
     assert findings[0]["defect"] == "redeclaration"
     assert "`score`" in findings[0]["message"]
-
-
-def test_shadowing_in_an_inner_scope_is_legal():
-    shadowed = _flask_page(
-        '        function reset() {\n'
-        '            let score = 0;\n'
-        '            return score;\n'
-        '        }\n'
-        '        setInterval(draw, 100);')
-    assert main.embedded_script_check("app.py", shadowed)["findings"] == []
-
-
-def test_var_and_function_redeclaration_are_left_alone():
-    """Legal JavaScript, however untidy — the check only reports what the
-    engine actually refuses."""
-    loose = _flask_page(
-        '        var score = 1;\n'
-        '        var score = 2;\n'
-        '        function draw() {}\n'
-        '        setInterval(draw, 100);')
-    assert main.embedded_script_check("app.py", loose)["findings"] == []
-
-
-def test_the_same_name_in_two_sibling_blocks_is_legal():
-    siblings = _flask_page(
-        '        if (true) { let n = 1; }\n'
-        '        if (true) { let n = 2; }\n'
-        '        setInterval(draw, 100);')
-    assert main.embedded_script_check("app.py", siblings)["findings"] == []
 
 
 def test_a_missing_brace_names_the_block_that_was_left_open():
@@ -495,3 +363,43 @@ def test_a_stray_closer_carries_no_opener():
     findings = main.embedded_script_check("app.py", src)["findings"]
     assert len(findings) == 1, findings
     assert "opened_line" not in findings[0], findings[0]
+
+
+# --- what neither check reports ---------------------------------------------
+
+@pytest.mark.parametrize("content, previous", [
+    # The comparison IS the check: one version alone cannot tell a dead loop
+    # from a deliberate one-shot.
+    pytest.param(ONE_SHOT, "", id="a one-shot without the pre-edit file"),
+    pytest.param(_flask_page('        setTimeout(draw, 100);').replace(
+                     "            score += 1;",
+                     "            score += 1;\n            setTimeout(draw, 100 - score);"),
+                 RECURRING, id="a loop that re-arms itself"),
+    pytest.param(_flask_page('        setInterval(draw, 100);\n'
+                             '        function banner() { score = 0; }\n'
+                             '        setTimeout(banner, 3000);'),
+                 RECURRING, id="a new delayed one-shot beside the loop"),
+    # Deleting a loop is a decision; leaving one scheduled once is a slip.
+    pytest.param(_flask_page('        // no loop here'), RECURRING, id="the loop removed outright"),
+    pytest.param(_flask_page('        setTimeout(draw, 100);'), _flask_page('        draw();'),
+                 id="a file that never looped"),
+    pytest.param(_flask_page('        function reset() {\n'
+                             '            let score = 0;\n'
+                             '            return score;\n'
+                             '        }\n'
+                             '        setInterval(draw, 100);'),
+                 "", id="a let shadowed in an inner scope"),
+    # Legal JavaScript, however untidy: the check only reports what the engine
+    # actually refuses.
+    pytest.param(_flask_page('        var score = 1;\n'
+                             '        var score = 2;\n'
+                             '        function draw() {}\n'
+                             '        setInterval(draw, 100);'),
+                 "", id="var and function declared twice"),
+    pytest.param(_flask_page('        if (true) { let n = 1; }\n'
+                             '        if (true) { let n = 2; }\n'
+                             '        setInterval(draw, 100);'),
+                 "", id="the same let in two sibling blocks"),
+])
+def test_no_stopped_loop_or_redeclaration_is_reported(content, previous):
+    assert main.embedded_script_check("app.py", content, previous)["findings"] == []

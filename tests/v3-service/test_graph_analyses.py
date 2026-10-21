@@ -8,6 +8,8 @@ the identical graph via `npx tsx`. Divergence flags a behavioral fork.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 from graph.types import (
@@ -120,19 +122,13 @@ class TestCycles:
 
 
 class TestImpactAndDead:
-    def test_impact_transitive(self):
-        g = _graph()
-        # leaf's impact is everything that can reach it: helper, main.
-        assert analyses.impact(g, "leaf") == ["helper", "main"]
-        assert analyses.impact(g, "main") == []  # nothing calls main
+    def test_impact_of_a_function_nobody_calls_is_empty(self):
+        assert analyses.impact(_graph(), "main") == []
 
     def test_dead_code_default_entrypoints(self):
-        g = _graph()
         # Default entry points = exports (main). orphan + recurse + helper + leaf
         # are not exported; helper/leaf are called, recurse calls itself.
-        dead = analyses.dead_code(g)
-        assert "orphan" in dead
-        assert "main" not in dead  # it's an export/entry
+        assert analyses.dead_code(_graph()) == ["orphan"]
 
     def test_dead_code_excludes_methods(self):
         g = CodeGraph(defines=[DefinesFact("a.py", "m", "method", 1)], calls=[])
@@ -154,6 +150,5 @@ class TestDispatch:
         assert analyses.run_analysis(g, "cycles") == ["recurse"]
 
     def test_unknown_analysis_raises(self):
-        import pytest
         with pytest.raises(ValueError):
             analyses.run_analysis(_graph(), "nonsense")

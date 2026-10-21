@@ -18,147 +18,95 @@ from symbols import _extract_python_call_targets
 pytestmark = pytest.mark.skipif(not extraction_available(),
                                 reason="tree-sitter Python grammar not installed")
 
-
-def _unresolved(cand_code, project=None, strict=True):
-    r = graph.unresolved_calls("cand.py", cand_code, project or {}, strict=strict)
-    assert r["ok"]
-    return r["unresolved"], r
+HELPER = "def helper():\n    return 1\n"
 
 
-class TestDirectCallNames:
-    def test_identifier_calls_only(self):
-        code = "def f():\n    g()\n    obj.method()\n    h(x)\n"
-        names = _extract_python_call_targets(code.encode("utf-8"))
-        assert "g" in names and "h" in names
-        assert "method" not in names  # attribute call skipped
+def test_identifier_calls_only():
+    code = "def f():\n    g()\n    obj.method()\n    h(x)\n"
+    names = _extract_python_call_targets(code.encode("utf-8"))
+    assert "g" in names and "h" in names
+    assert "method" not in names  # attribute call skipped
 
 
-class TestResolution:
-    def test_local_and_builtin_resolve(self):
-        code = "def helper():\n    return 1\n\ndef main():\n    helper()\n    print(len([]))\n"
-        unresolved, _ = _unresolved(code)
-        assert unresolved == []
-
-    def test_from_import_resolves(self):
-        code = "from pkg.util import helper\n\ndef main():\n    return helper()\n"
-        unresolved, _ = _unresolved(code, {"pkg/util.py": "def helper():\n    return 1\n"})
-        assert unresolved == []
-
-    def test_bare_unimported_project_symbol_flagged_in_strict(self):
-        # helper exists in the project but is NOT imported by the candidate.
-        # Strict mode flags it (a real NameError); this is the deepening over
-        # the shipped veto, which accepted it via the project-symbol set.
-        code = "def main():\n    return helper()\n"
-        project = {"other.py": "def helper():\n    return 1\n"}
-        strict_unres, _ = _unresolved(code, project, strict=True)
-        assert "helper" in strict_unres
-        # Non-strict restores the old lenient behavior.
-        lax_unres, _ = _unresolved(code, project, strict=False)
-        assert lax_unres == []
-
-    def test_wildcard_resolved_to_module_exports(self):
-        # `from mod import *` where mod defines `helper` -> helper resolves;
-        # an unknown name still flags (we know mod's actual exports).
-        code = "from pkg.mod import *\n\ndef main():\n    helper()\n    missing()\n"
-        project = {"pkg/mod.py": "def helper():\n    return 1\n"}
-        unresolved, r = _unresolved(code, project, strict=True)
-        assert r["lenient"] is False
-        assert "helper" not in unresolved
-        assert "missing" in unresolved
-
-    def test_wildcard_unresolved_module_is_lenient(self):
-        # `from os import *` (stdlib, no in-batch file) -> can't know exports,
-        # so nothing is flagged.
-        code = "from os import *\n\ndef main():\n    getcwd()\n    whatever()\n"
-        unresolved, r = _unresolved(code, {}, strict=True)
-        assert r["lenient"] is True
-        assert unresolved == []
-
-    def test_attribute_calls_never_flagged(self):
-        # os.path.join() -> attribute call, out of scope, must not be flagged
-        # even though `join` is neither local nor imported.
-        code = "import os\n\ndef main():\n    return os.path.join('a', 'b')\n"
-        unresolved, _ = _unresolved(code, {})
-        assert unresolved == []
-
-    def test_unparseable_candidate(self):
-        # extraction yields no calls; nothing to flag.
-        unresolved, r = _unresolved("def (:\n  broken")
-        assert unresolved == []
+@pytest.mark.parametrize("code, project, expected", [
+    pytest.param("def helper():\n    return 1\n\ndef main():\n    helper()\n    print(len([]))\n",
+                 {}, [], id="local-def-and-builtins"),
+    pytest.param("from pkg.util import helper\n\ndef main():\n    return helper()\n",
+                 {"pkg/util.py": HELPER}, [], id="from-import"),
+    # os.path.join() is an attribute call: out of scope, although `join` is
+    # neither local nor imported.
+    pytest.param("import os\n\ndef main():\n    return os.path.join('a', 'b')\n",
+                 {}, [], id="attribute-call"),
+    pytest.param("def (:\n  broken", {}, [], id="unparseable-candidate"),
+    # Names bound by means other than def/class are not flagged.
+    pytest.param("def m():\n    x = lambda: 1\n    return x()\n", {}, [], id="assigned-lambda"),
+    # `something` is read, not called, so the veto does not look at it.
+    pytest.param("make = something\nhandler = make()\n\ndef m():\n    return handler()\n",
+                 {}, [], id="module-level-assignment"),
+    pytest.param("def run(cb):\n    return cb()\n", {}, [], id="parameter-callback"),
+    pytest.param("def apply(fn, x):\n    return fn(x)\n", {}, [], id="higher-order-parameter"),
+    pytest.param("def m(items):\n"
+                 "    for f in items:\n"
+                 "        f()\n"
+                 "    with open('x') as fh:\n"
+                 "        fh()\n"
+                 "    if (g := items[0]):\n"
+                 "        g()\n",
+                 {}, [], id="for-with-and-walrus-targets"),
+    pytest.param("def m(items):\n    return [f() for f in items]\n", {}, [],
+                 id="comprehension-target"),
+    # `import a.b.c` binds `a` only, so a bare `c()` is not bound.
+    pytest.param("import xml.etree.ElementTree\n\ndef m():\n    ElementTree()\n",
+                 {}, ["ElementTree"], id="dotted-import-binds-only-its-top-package"),
+    # helper exists in the project but is NOT imported: a real NameError. This
+    # is the deepening over the shipped veto, which accepted any project symbol.
+    pytest.param("def main():\n    return helper()\n", {"other.py": HELPER}, ["helper"],
+                 id="project-symbol-not-imported"),
+])
+def test_unresolved_calls_in_strict_mode(code, project, expected):
+    result = graph.unresolved_calls("cand.py", code, project)
+    assert result["ok"]
+    assert result["unresolved"] == expected
 
 
-class TestNoFalsePositives:
-    """Names bound by means other than def/class must not be flagged."""
-
-    def test_assigned_callable(self):
-        # x = lambda ...; x()  — x is an assignment target, not a def.
-        unresolved, _ = _unresolved("def m():\n    x = lambda: 1\n    return x()\n")
-        assert unresolved == []
-
-    def test_module_level_assigned_callable(self):
-        code = "make = something\nhandler = make()\n\ndef m():\n    return handler()\n"
-        # `something` is a bare name read (not bound) — but it's not a *call*
-        # here, so it isn't in scope for the veto; handler/make are assigned.
-        unresolved, _ = _unresolved(code)
-        assert "handler" not in unresolved and "make" not in unresolved
-
-    def test_function_parameter_callback(self):
-        # def run(cb): return cb()  — cb is a parameter.
-        unresolved, _ = _unresolved("def run(cb):\n    return cb()\n")
-        assert unresolved == []
-
-    def test_higher_order(self):
-        unresolved, _ = _unresolved("def apply(fn, x):\n    return fn(x)\n")
-        assert unresolved == []
-
-    def test_loop_and_with_and_walrus_targets(self):
-        code = (
-            "def m(items):\n"
-            "    for f in items:\n"
-            "        f()\n"
-            "    with open('x') as fh:\n"
-            "        fh()\n"
-            "    if (g := items[0]):\n"
-            "        g()\n"
-        )
-        unresolved, _ = _unresolved(code)
-        assert unresolved == []
-
-    def test_comprehension_target(self):
-        unresolved, _ = _unresolved("def m(items):\n    return [f() for f in items]\n")
-        assert unresolved == []
-
-    def test_dotted_import_binds_top_package_only(self):
-        # `import a.b.c` binds `a`; a bare `c()` is NOT bound and should flag,
-        # while `a` (used as a.b.c.x attribute) is fine. Confirms first-segment
-        # binding, not last.
-        unresolved, _ = _unresolved("import xml.etree.ElementTree\n\ndef m():\n    ElementTree()\n")
-        assert "ElementTree" in unresolved
-
-    def test_still_flags_genuinely_unbound(self):
-        # Regression guard: the deepening still works after the FP fix.
-        unresolved, _ = _unresolved("def m():\n    return helper()\n",
-                                    {"other.py": "def helper():\n    return 1\n"})
-        assert "helper" in unresolved
+def test_non_strict_mode_accepts_a_project_symbol_that_is_not_imported():
+    result = graph.unresolved_calls("cand.py", "def main():\n    return helper()\n",
+                                    {"other.py": HELPER}, strict=False)
+    assert result["ok"]
+    assert result["unresolved"] == []
 
 
-class TestPythonOnly:
-    """The resolver parses with the Python grammar, which reads any text
-    tolerantly. An HTML page whose <script> called setInterval came back with
-    setInterval and `function` unresolved, so the page with working JavaScript
-    was vetoed and a static one kept. It answers only for Python now."""
+@pytest.mark.parametrize("code, project, lenient, expected", [
+    # The module is in the batch: its defs resolve and an unknown name is flagged.
+    pytest.param("from pkg.mod import *\n\ndef main():\n    helper()\n    missing()\n",
+                 {"pkg/mod.py": HELPER}, False, ["missing"], id="from-a-project-module"),
+    # The module is not in the batch (stdlib): its names are unknown, so
+    # nothing is flagged.
+    pytest.param("from os import *\n\ndef main():\n    getcwd()\n    whatever()\n",
+                 {}, True, [], id="from-an-unknown-module"),
+])
+def test_wildcard_import(code, project, lenient, expected):
+    result = graph.unresolved_calls("cand.py", code, project)
+    assert result["ok"]
+    assert result["lenient"] is lenient
+    assert result["unresolved"] == expected
 
-    PAGE = ("<!DOCTYPE html>\n<html><body><canvas id='c'></canvas>\n"
-            "<script>function draw() {}\nsetInterval(draw, 100);</script>\n"
-            "</body></html>\n")
 
-    @pytest.mark.parametrize("path, code", [
-        ("templates/index.html", PAGE),
-        ("static/app.js", "fetch('/api').then(r => r.json());\n"),
-        ("main.go", "package main\nfunc main() { helper() }\n"),
-    ])
-    def test_non_python_is_not_resolved(self, path, code):
-        r = graph.unresolved_calls(path, code, {"app.py": "def index():\n    pass\n"})
-        assert r["ok"] is False
-        assert "Python only" in r["error"]
-        assert "unresolved" not in r
+# The resolver parses with the Python grammar, which reads any text
+# tolerantly. An HTML page whose <script> called setInterval came back with
+# setInterval and `function` unresolved, so the page with working JavaScript
+# was vetoed and a static one kept. It answers only for Python now.
+@pytest.mark.parametrize("path, code", [
+    pytest.param("templates/index.html",
+                 "<!DOCTYPE html>\n<html><body><canvas id='c'></canvas>\n"
+                 "<script>function draw() {}\nsetInterval(draw, 100);</script>\n"
+                 "</body></html>\n",
+                 id="html-page"),
+    pytest.param("static/app.js", "fetch('/api').then(r => r.json());\n", id="javascript"),
+    pytest.param("main.go", "package main\nfunc main() { helper() }\n", id="go"),
+])
+def test_non_python_is_not_resolved(path, code):
+    r = graph.unresolved_calls(path, code, {"app.py": "def index():\n    pass\n"})
+    assert r["ok"] is False
+    assert "Python only" in r["error"]
+    assert "unresolved" not in r

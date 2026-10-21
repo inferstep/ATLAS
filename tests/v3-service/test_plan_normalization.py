@@ -13,6 +13,8 @@ cannot fail on an inert page.
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import planning
@@ -62,101 +64,49 @@ def test_an_edit_to_a_preexisting_file_is_untouched():
     assert not notes
 
 
-def test_a_real_verification_is_not_penalised():
+# Each plan writes app.py, then runs `command` as its verify step, saying why.
+@pytest.mark.parametrize("command, why, setup_only", [
+    # Observed live after the first fix: the planner routed around the command
+    # patterns by writing its own server.py, and `python3 server.py` reads as
+    # an ordinary script run. The intent is stated in `why`.
+    pytest.param("python3 server.py", "Start the server to verify the game loads in a browser.",
+                 True, id="start-the-server"),
+    # Three winning plans in a row said "the X starts" and were scored as real
+    # verification while their "Start the X" siblings were flagged (acceptance
+    # runs, 2026-09-15). The words are the same intent in either order.
+    pytest.param("python3 app.py", "Verify the application starts without errors.",
+                 True, id="the-application-starts"),
+    pytest.param("node server.js", "Verify the server starts successfully.",
+                 True, id="the-server-starts"),
+    pytest.param("python3 -m pip install -r requirements.txt && python3 app.py",
+                 "Verify the application starts correctly.",
+                 True, id="install-then-the-application-starts"),
+    pytest.param("node server.js", "Check that the service is running on port 3000.",
+                 True, id="the-service-is-running"),
+    pytest.param("python3 app.py", "Make sure the app comes up.",
+                 True, id="the-app-comes-up"),
+    # A program run for its output is real verification, and a file name such
+    # as app.py says nothing.
+    pytest.param("python3 app.py", "Run the app and check that it prints the settlement table.",
+                 False, id="app-run-for-its-output"),
+    pytest.param("python3 solve.py", "Verify the output is 7.",
+                 False, id="script-run-for-its-output"),
+    pytest.param("pytest tests/", "Run the test suite for the application.",
+                 False, id="test-suite"),
+    pytest.param("curl -X POST -d 'name=Ana' http://127.0.0.1:5000/add && curl http://127.0.0.1:5000/",
+                 "Add a person through the app and verify the page lists them.",
+                 False, id="post-then-read-the-page"),
+])
+def test_a_verify_step_that_only_starts_the_app_is_setup(command, why, setup_only):
     plan = {
-        "steps": [
-            {"id": "s1", "action": "write_file", "target": "solve.py", "why": "Write it."},
-            {"id": "s2", "action": "run_command", "target": "python3 solve.py", "why": "Run it."},
-        ],
-        "verify_step": "s2",
-    }
-    out, _ = planning.normalize_plan(dict(plan))
-    assert not out.get("verify_is_setup_only")
-
-
-def test_a_custom_server_script_is_still_setup():
-    """Observed live after the first fix: the planner routed around the
-    command patterns by writing its own server.py, and `python3 server.py`
-    reads as an ordinary script invocation. The intent is stated in `why`."""
-    plan = {
-        "steps": [
-            {"id": "s1", "action": "write_file", "target": "index.html", "why": "Page."},
-            {"id": "s2", "action": "write_file", "target": "server.py", "why": "A simple server."},
-            {"id": "s3", "action": "run_command", "target": "python3 server.py",
-             "why": "Start the server to verify the game loads in a browser."},
-        ],
-        "verify_step": "s3",
-    }
-    out, notes = planning.normalize_plan(dict(plan))
-    assert out.get("verify_is_setup_only") is True, notes
-
-
-def test_running_a_program_for_its_output_is_real_verification():
-    plan = {
-        "steps": [
-            {"id": "s1", "action": "write_file", "target": "solve.py", "why": "Write it."},
-            {"id": "s2", "action": "run_command", "target": "python3 solve.py",
-             "why": "Run it and confirm it prints the answer."},
-        ],
-        "verify_step": "s2",
-    }
-    out, _ = planning.normalize_plan(dict(plan))
-    assert not out.get("verify_is_setup_only")
-
-
-def test_a_cli_app_named_app_py_is_not_mistaken_for_a_server():
-    """Filenames say nothing. A CLI application named app.py is verified by
-    running it, and matching the name alone would penalise the correct plan."""
-    plan = {
-        "steps": [
-            {"id": "s1", "action": "write_file", "target": "app.py", "why": "The CLI tool."},
-            {"id": "s2", "action": "run_command", "target": "python app.py",
-             "why": "Run it and confirm it prints the report."},
-        ],
-        "verify_step": "s2",
-    }
-    out, notes = planning.normalize_plan(dict(plan))
-    assert not out.get("verify_is_setup_only"), notes
-    score, reasons = planning._score_plan(out, "build me a report tool")
-    assert not any("setup, not verification" in r for r in reasons), reasons
-
-
-def _plan_with_verify(target, why):
-    return {
         "steps": [
             {"id": "s1", "action": "write_file", "target": "app.py", "why": "create the app"},
-            {"id": "s2", "action": "run_command", "target": target, "why": why},
+            {"id": "s2", "action": "run_command", "target": command, "why": why},
         ],
         "verify_step": "s2",
         "rationale": "r",
     }
-
-
-def test_intent_phrased_noun_first_is_still_a_server_start():
-    """Three winning plans in a row said "the X starts" and were scored as real
-    verification while their "Start the X" siblings were flagged (acceptance
-    runs, 2026-09-15). The words are the same intent in either order."""
-    for target, why in [
-        ("python3 app.py", "Verify the application starts without errors."),
-        ("node server.js", "Verify the server starts successfully."),
-        ("python3 -m pip install -r requirements.txt && python3 app.py",
-         "Verify the application starts correctly."),
-        ("node server.js", "Check that the service is running on port 3000."),
-        ("python3 app.py", "Make sure the app comes up."),
-    ]:
-        out, notes = planning.normalize_plan(_plan_with_verify(target, why))
-        assert out.get("verify_is_setup_only") is True, (target, why, notes)
-
-
-def test_running_a_program_and_checking_its_output_is_not_a_start():
-    """The negatives the old order already protected must survive the wider
-    match: a script run for its output, and an app whose name says nothing."""
-    for target, why in [
-        ("python3 app.py", "Run the app and check that it prints the settlement table."),
-        ("python3 solve.py", "Verify the output is 7."),
-        ("pytest tests/", "Run the test suite for the application."),
-        ("curl -X POST -d 'name=Ana' http://127.0.0.1:5000/add && curl http://127.0.0.1:5000/",
-         "Add a person through the app and verify the page lists them."),
-    ]:
-        out, notes = planning.normalize_plan(_plan_with_verify(target, why))
-        assert not out.get("verify_is_setup_only"), (target, why, notes)
+    out, notes = planning.normalize_plan(plan)
+    assert out.get("verify_is_setup_only", False) is setup_only, notes
+    _, reasons = planning._score_plan(out, "build the app")
+    assert any("setup, not verification" in r for r in reasons) is setup_only, reasons

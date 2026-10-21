@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
 
 import main as v3main
+import planning
 
 
 def _plan(command):
@@ -24,37 +25,40 @@ def _plan(command):
     }
 
 
-def test_plan_scorer_credits_running_the_program():
-    for command in (
-        "pytest -q",
-        "python3 solve.py",
-        "curl -sf http://localhost:8000/",
-        "npm test",
-        "go test ./...",
-        "java App.java",
-        "./run.sh",
-        "pytest -q && ruff check .",
-    ):
-        _, reasons = v3main._score_plan(_plan(command), "fix solve.py")
-        assert "verify_step references a real verification command" in reasons, command
+@pytest.mark.parametrize("command", [
+    "pytest -q",
+    "python3 solve.py",
+    "curl -sf http://localhost:8000/",
+    "npm test",
+    "go test ./...",
+    "java App.java",
+    "./run.sh",
+    "pytest -q && ruff check .",
+])
+def test_plan_scorer_credits_running_the_program(command):
+    _, reasons = v3main._score_plan(_plan(command), "fix solve.py")
+    assert "verify_step references a real verification command" in reasons
 
 
-def test_plan_scorer_does_not_credit_a_static_check_as_verification():
-    # The agent loop does not count these as verification
-    # (proxy/command_evidence.go), so a plan whose verify step is one of them
-    # must not outrank a plan that runs the program.
-    for command in (
-        "markdownlint README.md",
-        "shellcheck scripts/setup.sh",
-        "golangci-lint run ./...",
-        "python3 -m py_compile solve.py",
-        "npm run build",
-        "go build ./...",
-        "node --check app.js",
-    ):
-        _, reasons = v3main._score_plan(_plan(command), "fix README.md")
-        assert "verify_step references a real verification command" not in reasons, command
-        assert any("well formed" in r for r in reasons), (command, reasons)
+# The agent loop does not count these as verification
+# (proxy/command_evidence.go), so a plan whose verify step is one of them
+# must not outrank a plan that runs the program.
+@pytest.mark.parametrize("command", [
+    "markdownlint README.md",
+    "shellcheck scripts/setup.sh",
+    "golangci-lint run ./...",
+    "python3 -m py_compile solve.py",
+    "npm run build",
+    "go build ./...",
+    "node --check app.js",
+])
+def test_plan_scorer_does_not_credit_a_static_check_as_verification(command):
+    _, reasons = v3main._score_plan(_plan(command), "fix README.md")
+    assert "verify_step references a real verification command" not in reasons
+    assert any("well formed" in r for r in reasons), reasons
+
+
+def test_running_the_program_scores_above_linting_it():
     lint, _ = v3main._score_plan(_plan("ruff check solve.py"), "fix solve.py")
     run, _ = v3main._score_plan(_plan("python3 solve.py"), "fix solve.py")
     assert run == pytest.approx(lint + 0.2)
@@ -77,80 +81,67 @@ def test_plan_scorer_does_not_treat_recon_as_verification():
 # responses. aoc_course executed the same step successfully and corrupted the
 # fixture. Both plans scored 1.00, because nothing looked at what was there.
 
-_CLOBBER_PLAN = {
-    "steps": [
-        {"id": "s1", "action": "write_file", "target": "input.txt",
-         "why": "create the necessary input data"},
-        {"id": "s2", "action": "write_file", "target": "solve.py", "why": "the solution"},
-        {"id": "s3", "action": "run_command", "target": "python solve.py", "why": "verify"},
-    ],
-    "verify_step": "s3",
-    "rationale": "creates input, implements, verifies",
-}
-
-
 def test_a_plan_that_recreates_an_existing_file_scores_below_one_that_does_not():
-    clean, _ = v3main._score_plan(_CLOBBER_PLAN, "solve the puzzle", frozenset())
-    clobber, reasons = v3main._score_plan(
-        _CLOBBER_PLAN, "solve the puzzle", {"input.txt"})
-    assert clobber < clean, (clobber, clean)
-    assert any("already exist" in r for r in reasons), reasons
-    assert any("input.txt" in r for r in reasons), reasons
-
-
-def test_creating_a_genuinely_new_file_is_not_penalised():
-    _, reasons = v3main._score_plan(
-        _CLOBBER_PLAN, "solve the puzzle", {"README.md", "notes.txt"})
-    assert not any("already exist" in r for r in reasons), reasons
-
-
-def test_editing_an_existing_file_is_not_penalised():
-    """Only CREATE actions clobber. Editing what is there is the correct plan."""
     plan = {
         "steps": [
-            {"id": "s1", "action": "edit_file", "target": "input.txt", "why": "fix a line"},
+            {"id": "s1", "action": "write_file", "target": "input.txt",
+             "why": "create the necessary input data"},
+            {"id": "s2", "action": "write_file", "target": "solve.py", "why": "the solution"},
+            {"id": "s3", "action": "run_command", "target": "python solve.py", "why": "verify"},
+        ],
+        "verify_step": "s3",
+        "rationale": "creates input, implements, verifies",
+    }
+    clean, _ = v3main._score_plan(plan, "solve the puzzle", frozenset())
+    clobber, reasons = v3main._score_plan(plan, "solve the puzzle", {"input.txt"})
+    assert clobber < clean, (clobber, clean)
+    assert any("already exist" in r and "input.txt" in r for r in reasons), reasons
+
+
+@pytest.mark.parametrize("action, target, workspace", [
+    pytest.param("write_file", "input.txt", ["README.md", "notes.txt"], id="creating-a-new-file"),
+    # Only CREATE actions clobber. Editing what is there is the correct plan.
+    pytest.param("edit_file", "input.txt", ["input.txt"], id="editing-an-existing-file"),
+    # #277: `env` and `.env` are different files.
+    pytest.param("write_file", "env", [".env"], id="creating-env-when-only-dot-env-exists"),
+])
+def test_a_plan_that_creates_nothing_existing_is_not_penalised(action, target, workspace):
+    plan = {
+        "steps": [
+            {"id": "s1", "action": action, "target": target, "why": "create or fix it"},
             {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
         ],
-        "verify_step": "s2", "rationale": "edit then verify",
+        "verify_step": "s2", "rationale": "change then verify",
     }
-    _, reasons = v3main._score_plan(plan, "fix input.txt", {"input.txt"})
+    _, reasons = v3main._score_plan(plan, "fix it", v3main._known_files({}, workspace))
     assert not any("already exist" in r for r in reasons), reasons
-
-
-def test_the_existing_file_set_is_the_proxy_listing_and_the_context():
-    found = v3main._known_files({"ctx_only.py": "y = 2"}, ["./input.txt", "sub/mod.py"])
-    assert found == {"ctx_only.py", "input.txt", "sub/mod.py"}
 
 
 # #277: the paths were cleaned with `lstrip("./")`, which strips a set of
 # characters rather than a prefix, so the dot of a hidden name went too and
 # `.env` was recorded as `env`.
-def test_the_existing_file_set_keeps_the_dot_of_hidden_files():
-    found = v3main._known_files({".github/x.yml": ""}, [".env", "./.env", "./a.py", "././a.py"])
-    assert found == {".github/x.yml", ".env", "a.py"}
-
-
-def _create_plan(target):
-    return {
+@pytest.mark.parametrize("target", [".env", "./.env"])
+def test_creating_dot_env_is_flagged_when_dot_env_exists(target):
+    plan = {
         "steps": [
             {"id": "s1", "action": "write_file", "target": target, "why": "create it"},
             {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
         ],
         "verify_step": "s2", "rationale": "create then verify",
     }
+    _, reasons = v3main._score_plan(plan, "write the env file", v3main._known_files({}, [".env"]))
+    assert any("already exist" in r and ".env" in r for r in reasons), reasons
 
 
-def test_creating_env_is_not_flagged_when_only_dot_env_exists():
-    existing = v3main._known_files({}, [".env"])
-    _, reasons = v3main._score_plan(_create_plan("env"), "write the env file", existing)
-    assert not any("already exist" in r for r in reasons), reasons
-
-
-def test_creating_dot_env_is_flagged_when_dot_env_exists():
-    existing = v3main._known_files({}, [".env"])
-    for target in (".env", "./.env"):
-        _, reasons = v3main._score_plan(_create_plan(target), "write the env file", existing)
-        assert any("already exist" in r and ".env" in r for r in reasons), (target, reasons)
+@pytest.mark.parametrize("context, listing, expected", [
+    pytest.param({"ctx_only.py": "y = 2"}, ["./input.txt", "sub/mod.py"],
+                 {"ctx_only.py", "input.txt", "sub/mod.py"}, id="listing-and-context"),
+    # #277: a hidden name keeps its dot.
+    pytest.param({".github/x.yml": ""}, [".env", "./.env", "./a.py", "././a.py"],
+                 {".github/x.yml", ".env", "a.py"}, id="hidden-files-keep-their-dot"),
+])
+def test_the_existing_file_set_is_the_proxy_listing_and_the_context(context, listing, expected):
+    assert v3main._known_files(context, listing) == expected
 
 
 def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them():
@@ -158,7 +149,6 @@ def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them(
     three aoc_sonar candidates opened with `write_file input.txt` and scored
     1.00 apiece, so the penalty had nothing to prefer. Naming the files in the
     prompt stops them being proposed."""
-    import planning
     prompt = planning._build_plan_prompt(
         "solve the sonar puzzle", "/workspace", {}, ["input.txt", "README.md"])
     assert "input.txt" in prompt
@@ -168,6 +158,5 @@ def test_the_prompt_names_existing_files_so_no_candidate_proposes_creating_them(
 
 
 def test_the_prompt_is_unchanged_when_the_workspace_is_empty():
-    import planning
     prompt = planning._build_plan_prompt("build me a site", "/workspace", {}, [])
     assert "ALREADY EXIST" not in prompt

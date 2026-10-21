@@ -17,15 +17,15 @@ import main
 
 
 @pytest.mark.parametrize("value, want", [
-    (40_000, 40_000.0),
-    (1500.5, 1500.5),
-    (None, None),
-    (0, None),
-    (-5, None),
-    (True, None),
-    ("40000", None),
-    (float("nan"), None),
-    (float("inf"), None),
+    pytest.param(40_000, 40_000.0, id="an integer"),
+    pytest.param(1500.5, 1500.5, id="a float"),
+    pytest.param(None, None, id="absent"),
+    pytest.param(0, None, id="zero"),
+    pytest.param(-5, None, id="negative"),
+    pytest.param(True, None, id="a bool"),
+    pytest.param("40000", None, id="a string"),
+    pytest.param(float("nan"), None, id="NaN"),
+    pytest.param(float("inf"), None, id="infinity"),
 ])
 def test_only_a_positive_number_is_a_cap(value, want):
     assert main._positive_budget_ms(value) == want
