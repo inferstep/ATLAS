@@ -12,14 +12,14 @@ pre-built binary.
 import os
 import socket
 import subprocess
-import threading
 import time
-from pathlib import Path
+import urllib.request
 
 import pytest
 
+from tests.cli.event_harness import iter_events
+
 PROXY_BINARY = os.environ.get("ATLAS_PROXY_BINARY", "/tmp/test-atlas-proxy")
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 pytestmark = pytest.mark.skipif(
@@ -29,45 +29,28 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _free_port() -> int:
-    """Bind 0.0.0.0:0, read back the assigned port, close. Race-y but
-    fine for a single-test launch."""
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _wait_for_port(port: int, timeout: float = 3.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        with socket.socket() as s:
-            s.settimeout(0.1)
-            try:
-                s.connect(("127.0.0.1", port))
-                return True
-            except (ConnectionRefusedError, socket.timeout):
-                time.sleep(0.05)
-    return False
-
-
 @pytest.fixture
 def running_proxy():
-    port = _free_port()
-    env = {**os.environ,
-           "ATLAS_PROXY_PORT": str(port),
-           "ATLAS_KEEP_LLAMA_WARM": "0"}
+    """Start the proxy on a free port, wait until it listens, yield the port."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
     proc = subprocess.Popen(
         [PROXY_BINARY],
-        env=env,
+        env={**os.environ, "ATLAS_PROXY_PORT": str(port), "ATLAS_KEEP_LLAMA_WARM": "0"},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if not _wait_for_port(port):
-        proc.terminate()
-        pytest.fail(f"proxy didn't bind {port} within 3s")
     try:
+        deadline = time.time() + 3.0
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.1).close()
+                break
+            except OSError:
+                if time.time() > deadline:
+                    pytest.fail(f"proxy didn't bind {port} within 3s")
+                time.sleep(0.05)
         yield port
     finally:
         proc.terminate()
@@ -77,44 +60,19 @@ def running_proxy():
             proc.kill()
 
 
-def test_iter_events_connects_and_receives_initial_sentinel(running_proxy):
-    """Connect with iter_events to a live proxy; the immediate
-    `: connected` SSE comment must NOT appear as a typed event
-    (it's a control frame). The connection must stay open without
-    parse errors."""
-    from tests.cli.event_harness import iter_events
-    url = f"http://127.0.0.1:{running_proxy}/events"
-
-    # iter_events returns a generator. Pull next() with a thread-side
-    # timeout so the test fails fast if iter_events errors immediately.
-    error: list = []
-
-    def consume():
-        try:
-            iter_events(url, timeout=2.0)
-            # No envelopes are emitted in a quiet proxy, so the iterator
-            # would block. The whole point of this test is that
-            # iter_events doesn't raise on the `: connected` sentinel.
-            # We give it 0.5s to either error out or sit idle.
-            time.sleep(0.5)
-        except Exception as e:
-            error.append(repr(e))
-
-    t = threading.Thread(target=consume, daemon=True)
-    t.start()
-    t.join(timeout=2.0)
-
-    assert error == [], f"iter_events raised on connect: {error[0]}"
+def test_iter_events_skips_the_connected_sentinel_of_a_live_proxy(running_proxy):
+    """A quiet proxy sends only the `: connected` comment (heartbeats come
+    every 15 s). iter_events must not turn it into an event or fail on it:
+    the first read just waits until the 0.5 s read timeout."""
+    events = iter_events(f"http://127.0.0.1:{running_proxy}/events", timeout=0.5)
+    with pytest.raises(socket.timeout):
+        next(events)
 
 
-def test_live_proxy_emits_envelope_when_broker_emit_called(running_proxy):
-    """End-to-end: connect via iter_events, fire an envelope inside
-    the proxy by hitting an endpoint that triggers Emit() in the
-    agent loop, verify the typed Event arrives on the consumer side.
-
-    Today no endpoint Emits without a real LLM behind it, so this
-    test is a placeholder for future TUI integration. Marked skip
-    rather than removed so the contract is documented."""
+def test_live_proxy_emits_envelope_when_broker_emit_called():
+    """Placeholder for the end-to-end case: a typed Event fired by Emit() in
+    the proxy's agent loop arrives through iter_events. No endpoint emits
+    without a real LLM behind it, so it stays skipped to document the contract."""
     pytest.skip("requires llama-server + sandbox + lens to drive an "
                 "agent loop end-to-end; will land with TUI integration test")
 
@@ -126,10 +84,8 @@ def test_live_proxy_events_endpoint_returns_correct_content_type(running_proxy):
     Uses readline() rather than read(N) — the SSE stream is line-based,
     and read(64) would block waiting for more bytes that won't arrive
     until either an envelope event or the 15s heartbeat fires."""
-    import urllib.request
     url = f"http://127.0.0.1:{running_proxy}/events"
-    req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=2.0) as resp:
+    with urllib.request.urlopen(url, timeout=2.0) as resp:
         assert resp.status == 200
         ct = resp.headers.get("Content-Type", "")
         assert ct == "text/event-stream", f"got {ct!r}"

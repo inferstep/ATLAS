@@ -10,13 +10,6 @@ from atlas import __main__ as main_mod
 from atlas import env as cli_env
 
 
-def _metal_root(tmp_path):
-    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
-    (tmp_path / ".env").write_text("ATLAS_BACKEND=metal\n")
-    return str(tmp_path)
-
-
 def test_unknown_subcommand_prints_usage_and_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["atlas", "bogus-subcommand"])
     with pytest.raises(SystemExit) as exc:
@@ -40,10 +33,12 @@ def test_help_flag_prints_usage_and_exits_0(monkeypatch, capsys):
 
 def test_compose_subcommand_passes_through_to_docker_compose(
         monkeypatch, tmp_path):
-    root = _metal_root(tmp_path)
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
+    (tmp_path / ".env").write_text("ATLAS_BACKEND=metal\n")
     calls = []
 
-    monkeypatch.setattr(cli_env, "atlas_root", lambda: root)
+    monkeypatch.setattr(cli_env, "atlas_root", lambda: str(tmp_path))
     monkeypatch.setattr(subprocess, "call",
                         lambda cmd, **kwargs: calls.append(cmd) or 0)
     monkeypatch.setattr(sys, "argv", ["atlas", "compose", "ps"])

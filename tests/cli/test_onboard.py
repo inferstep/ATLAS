@@ -1,5 +1,9 @@
 """Model onboarding tests for backend-specific inference lifecycles."""
 
+import pytest
+
+from atlas.commands import fit as fit_module
+from atlas.commands import model as model_cmd
 from atlas.commands import onboard
 
 
@@ -41,46 +45,31 @@ def test_nonmetal_log_inspection_uses_backend_overlay(monkeypatch, tmp_path):
     ]]
 
 
-def test_url_flow_with_apply_writes_env_keys(monkeypatch, capsys):
-    """`atlas onboard --url ... --apply` writes ATLAS_MODEL_FILE +
-    ATLAS_MODEL_NAME into .env after the download instead of only telling
-    the user to hand-edit."""
-    from atlas.commands import model as model_cmd
-    from atlas.commands import fit as fit_module
-
+@pytest.mark.parametrize("flags, expected_env_writes, expected_texts", [
+    (["--apply"],
+     [{"ATLAS_MODEL_FILE": "My-Model-Q4_K_M.gguf", "ATLAS_MODEL_NAME": "My-Model-Q4_K_M"}],
+     ["to /fake/.env", "Re-run `atlas onboard`"]),
+    ([],
+     [],
+     ["set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in .env", "pass --apply"]),
+], ids=["apply-writes-env", "no-apply-keeps-hand-edit-instructions"])
+def test_url_download_writes_env_only_with_apply(
+        monkeypatch, capsys, flags, expected_env_writes, expected_texts):
+    """After `atlas onboard --url ...` downloads the model, --apply writes
+    ATLAS_MODEL_FILE + ATLAS_MODEL_NAME into .env. Without it (declined or
+    not interactive) .env is left alone and the hand-edit steps are printed."""
     monkeypatch.setattr(model_cmd, "main", lambda argv: 0)
-    written = {}
+    env_writes = []
 
     def fake_write_env(values):
-        written.update(values)
+        env_writes.append(values)
         return "/fake/.env"
-
     monkeypatch.setattr(fit_module, "_write_env", fake_write_env)
+
     rc = onboard.main(["--url", "https://example.com/My-Model-Q4_K_M.gguf",
-                       "--apply", "--no-color"])
+                       *flags, "--no-color"])
     assert rc == 0
-    assert written["ATLAS_MODEL_FILE"] == "My-Model-Q4_K_M.gguf"
-    assert written["ATLAS_MODEL_NAME"] == "My-Model-Q4_K_M"
+    assert env_writes == expected_env_writes
     out = capsys.readouterr().out
-    assert "/fake/.env" in out
-    assert "re-run" in out.lower()
-
-
-def test_url_flow_without_apply_keeps_manual_instructions(monkeypatch,
-                                                            capsys):
-    """Declined/non-interactive: the printed hand-edit fallback stays."""
-    from atlas.commands import model as model_cmd
-    from atlas.commands import fit as fit_module
-
-    monkeypatch.setattr(model_cmd, "main", lambda argv: 0)
-
-    def unexpected_write(values):
-        raise AssertionError(".env must not be written without consent")
-
-    monkeypatch.setattr(fit_module, "_write_env", unexpected_write)
-    rc = onboard.main(["--url", "https://example.com/My-Model-Q4_K_M.gguf",
-                       "--no-color"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "ATLAS_MODEL_FILE + ATLAS_MODEL_NAME" in out
-    assert "--apply" in out
+    for text in expected_texts:
+        assert text in out

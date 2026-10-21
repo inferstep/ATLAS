@@ -1,10 +1,17 @@
 """Runtime sizing invariants not tied to a particular model family."""
 
+import pytest
+
 from atlas.commands.fit import GIB, GGUFMeta, fit_runtime_knobs
 
 
-def _model() -> GGUFMeta:
-    return GGUFMeta(
+@pytest.mark.parametrize("vram_gib, fits, ubatch", [
+    (13, True, 1024),
+    (10, False, 512),
+], ids=["fits-in-13-gib", "unfit-in-10-gib"])
+def test_fit_keeps_embedding_batch_equal_to_microbatch(vram_gib, fits, ubatch):
+    """Even an unfit result reports a batch geometry the server can run."""
+    model = GGUFMeta(
         path="fixture.gguf", file_size=int(7 * GIB), architecture="fixture",
         n_layers=32, n_embd=4096, n_head=16, head_dim=256, v_len=256,
         k_len_swa=256, v_len_swa=256, kv_heads=[4] * 32,
@@ -12,15 +19,8 @@ def _model() -> GGUFMeta:
         swa_note="full attention",
     )
 
+    result = fit_runtime_knobs(model, vram_gib=vram_gib, slots=1)
 
-def test_fit_keeps_embedding_batch_equal_to_microbatch():
-    result = fit_runtime_knobs(_model(), vram_gib=13, slots=1)
-    assert result.fits is True
-    assert result.ubatch == 1024
+    assert result.fits is fits
+    assert result.ubatch == ubatch
     assert result.batch == result.ubatch
-
-
-def test_unfit_result_still_reports_runnable_batch_geometry():
-    result = fit_runtime_knobs(_model(), vram_gib=10, slots=1)
-    assert result.fits is False
-    assert result.batch == result.ubatch == 512

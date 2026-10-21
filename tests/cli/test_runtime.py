@@ -1,11 +1,16 @@
 """Proxy runtime tests — compose lifecycle behind ensure_proxy()."""
 
+import io
+import urllib.request
 from types import SimpleNamespace
+
+import pytest
 
 from atlas import runtime
 
 
 def _metal_root(tmp_path):
+    """A checkout on the Metal backend, so compose needs the macOS overlay."""
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
     (tmp_path / ".env").write_text("ATLAS_BACKEND=metal\n")
@@ -44,58 +49,27 @@ def test_compose_ownership_check_keeps_macos_overlay(monkeypatch, tmp_path):
     assert "docker-compose.macos.yml" in calls[0]
 
 
-def test_proxy_capability_parser_rejects_old_or_malformed_payload(monkeypatch):
-    class Response:
+@pytest.mark.parametrize(
+    ("health_body", "capabilities", "supports_demo"),
+    [
+        # A proxy older than the capability contract.
+        (b'{"status":"ok"}', set(), False),
+        (b"not json", set(), False),
+        (b'{"capabilities":["demo_raw_completion_v1"]}',
+         {"demo_raw_completion_v1"}, True),
+    ],
+    ids=["old-proxy", "malformed-answer", "demo-contract"],
+)
+def test_proxy_capabilities_come_from_its_health_answer(
+        monkeypatch, health_body, capabilities, supports_demo):
+    class HealthAnswer(io.BytesIO):  # BytesIO gives read() and `with`
         status = 200
 
-        def __init__(self, body):
-            self.body = body
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self, _limit):
-            return self.body
-
-    import urllib.request
-
-    monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
-        lambda *args, **kwargs: Response(b'{"status":"ok"}'),
-    )
-    assert runtime._proxy_capabilities("http://proxy") == set()
-
-    monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
-        lambda *args, **kwargs: Response(b"not json"),
-    )
-    assert runtime._proxy_capabilities("http://proxy") == set()
-
-
-def test_proxy_capability_parser_accepts_demo_contract(monkeypatch):
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self, _limit):
-            return b'{"capabilities":["demo_raw_completion_v1"]}'
-
-    import urllib.request
-
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *args, **kwargs: HealthAnswer(health_body))
+    assert runtime._proxy_capabilities("http://proxy") == capabilities
     assert runtime._proxy_supports_capability(
-        runtime.DEMO_RAW_CAPABILITY, "http://proxy"
-    )
+        runtime.DEMO_RAW_CAPABILITY, "http://proxy") is supports_demo
 
 
 def test_ensure_proxy_repairs_reachable_stale_proxy(monkeypatch, tmp_path):

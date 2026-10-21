@@ -1,166 +1,104 @@
-"""Tests for atlas.commands.tier (PC-055 + PC-055.1 + PC-055.2).
-
-These tests cover the bugs we caught across paranoid passes — keeping
-them as regression coverage means the next bug is caught by `pytest`
-instead of by re-reading the module. Specifically:
-
-  - multi-GPU pick-max (caught in PC-055 second paranoid pass)
-  - vram=0 + has_gpu=True classified as cpu (PC-055 second paranoid pass)
-  - install_dir plumbed to disk probe (PC-055.1 first paranoid pass)
-  - RAM warn (within 15%) vs fail (past threshold) — semantics check
-  - cpu tier returned for no-GPU hosts
-  - PC-055.2 split: model fields removed from TierProfile, present on
-    ModelRecommendation; reverse lookup tier_for_model works.
-
-Tests are intentionally small + use monkeypatch rather than mock
-frameworks. The probe surface is deliberately narrow (4 _read_* helpers)
-specifically so it's testable without nvidia-smi or real disks.
+"""Tests for atlas.commands.tier: GPU detection, tier choice and the
+per-tier minimums. The GPU vendor tools are faked with monkeypatch, so no
+test needs nvidia-smi or rocm-smi.
 """
 
+import dataclasses
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 
 from atlas.commands import tier, model_registry
 
 
-# ---------------------------------------------------------------------------
-# Helpers — build a Probe without touching the host
-# ---------------------------------------------------------------------------
-
-def make_probe(**overrides) -> tier.Probe:
-    """Default to a comfortable medium-tier host; override per test."""
-    defaults = dict(
-        has_gpu=True, gpu_name="Test GPU", vram_gb=16.0, gpu_count=1,
-        system_ram_gb=32.0, cpu_cores=8, disk_free_gb=100.0,
-        platform="linux",
-    )
-    defaults.update(overrides)
-    return tier.Probe(**defaults)
+# A host that meets every medium-tier minimum (16 GB VRAM, 16 GB RAM,
+# 4 cores, 25 GB disk) with room to spare.
+COMFORTABLE_HOST = tier.Probe(
+    has_gpu=True, gpu_name="Test GPU", vram_gb=16.0, gpu_count=1,
+    system_ram_gb=32.0, cpu_cores=8, disk_free_gb=100.0, platform="linux")
 
 
-# ---------------------------------------------------------------------------
-# classify() — tier selection
-# ---------------------------------------------------------------------------
+# --- classify(): the tier a GPU lands in -------------------------------------
 
-def test_classify_no_gpu_returns_cpu():
-    p = make_probe(has_gpu=False, gpu_name=None, vram_gb=0.0, gpu_count=0)
-    assert tier.classify(p).tier == "cpu"
-
-
-def test_classify_has_gpu_but_zero_vram_returns_cpu():
-    """Rare nvidia-smi failure mode — device enumerates but mem query fails.
-    Without the `or vram_gb <= 0` guard we'd hand full small-tier settings
-    to a non-functional GPU. (PC-055 second paranoid pass.)"""
-    p = make_probe(has_gpu=True, vram_gb=0.0, gpu_count=1)
-    assert tier.classify(p).tier == "cpu"
-
-
-@pytest.mark.parametrize("vram_gb,expected", [
-    (8.0,  "small"),
-    (11.9, "small"),
-    (12.0, "medium"),
-    (16.0, "medium"),
-    (19.9, "medium"),
-    (20.0, "large"),
-    (24.0, "large"),
-    (31.9, "large"),
-    (32.0, "xlarge"),
-    (48.0, "xlarge"),
-    (80.0, "xlarge"),
+@pytest.mark.parametrize("has_gpu, vram_gb, expected", [
+    pytest.param(False, 0.0, "cpu", id="no-gpu"),
+    # nvidia-smi can list a GPU and still fail the memory query. Small-tier
+    # settings must not go to a GPU that does not work (PC-055).
+    pytest.param(True, 0.0, "cpu", id="gpu-with-zero-vram"),
+    # Each band is half-open [min, max). The exact breakpoints are where an
+    # off-by-one would show.
+    (True, 8.0, "small"),
+    (True, 11.9, "small"),
+    (True, 12.0, "medium"),
+    (True, 16.0, "medium"),
+    (True, 19.9, "medium"),
+    (True, 20.0, "large"),
+    (True, 24.0, "large"),
+    (True, 31.9, "large"),
+    (True, 32.0, "xlarge"),
+    (True, 48.0, "xlarge"),
+    (True, 80.0, "xlarge"),
 ])
-def test_classify_band_breakpoints(vram_gb, expected):
-    """Each tier band is half-open [min, max). Exact-breakpoint values
-    are the highest-risk for off-by-one bugs."""
-    p = make_probe(vram_gb=vram_gb)
-    assert tier.classify(p).tier == expected
+def test_classify_picks_the_tier_for_the_vram(has_gpu, vram_gb, expected):
+    probe = tier.Probe(has_gpu=has_gpu, vram_gb=vram_gb)
+    assert tier.classify(probe).tier == expected
 
 
-def test_classify_below_smallest_band_returns_warned_small():
-    """4 GB GPU is below the small tier's 8 GB minimum. We return a
-    cloned small tier with a warning baked into `notes` so the user
-    sees what to upgrade to. (Documented behavior, not a bug.)"""
-    p = make_probe(vram_gb=4.0)
-    t = tier.classify(p)
+def test_a_gpu_below_the_small_tier_gets_small_with_a_warning():
+    """A 4 GB GPU is below small's 8 GB minimum. It still gets the small
+    tier, with a warning in notes, so the user sees what to upgrade to."""
+    t = tier.classify(tier.Probe(has_gpu=True, vram_gb=4.0))
     assert t.tier == "small"
     assert "below" in t.notes.lower()
     assert "OOM" in t.notes
 
 
-# ---------------------------------------------------------------------------
-# Multi-GPU pick-max (regression test for PC-055 second paranoid pass)
-# ---------------------------------------------------------------------------
+# --- GPU detection -----------------------------------------------------------
 
-def test_read_nvidia_smi_picks_max_vram(monkeypatch):
-    """Hybrid-graphics workstation: iGPU 8 GB enumerated first + A6000 48 GB
-    second. primary_gpu() on the _read_nvidia_smi result must pick the
-    A6000 (max VRAM), not the iGPU (first). Pre-fix: classified as small
-    (took iGPU). Post-fix: classified as xlarge (took A6000)."""
-    # Columns: index, name, memory.total (MiB), compute_cap
-    fake_stdout = "0, Intel iGPU, 8192, 7.5\n1, NVIDIA RTX A6000, 49152, 8.6\n"
-
-    class FakeRun:
-        returncode = 0
-        stdout = fake_stdout
-
+def test_nvidia_smi_lists_every_gpu_and_the_largest_is_primary(monkeypatch):
+    """Hybrid-graphics workstation: an 8 GB iGPU listed first, a 48 GB A6000
+    second. Taking the first GPU put this host in the small tier (PC-055)."""
+    # Columns: index, name, memory.total (MiB), compute capability
+    nvidia_smi_output = "0, Intel iGPU, 8192, 7.5\n1, NVIDIA RTX A6000, 49152, 8.6\n"
+    ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=nvidia_smi_output)
     monkeypatch.setattr(tier.shutil, "which", lambda _: "/usr/bin/nvidia-smi")
-    monkeypatch.setattr(tier.subprocess, "run",
-                        lambda *a, **kw: FakeRun())
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
     gpus = tier._read_nvidia_smi()
-    assert len(gpus) == 2
-    assert {g.name for g in gpus} == {"Intel iGPU", "NVIDIA RTX A6000"}
+    assert [g.name for g in gpus] == ["Intel iGPU", "NVIDIA RTX A6000"]
     primary = tier.primary_gpu(gpus)
-    assert primary is not None
     assert primary.name == "NVIDIA RTX A6000"
     assert primary.vram_gb == pytest.approx(48.0, rel=0.01)
     assert primary.compute_target == "86"
 
 
-def test_read_nvidia_smi_no_smi_binary(monkeypatch):
+def test_no_vendor_tools_means_no_gpus(monkeypatch):
     monkeypatch.setattr(tier.shutil, "which", lambda _: None)
-    assert tier._read_nvidia_smi() == []
-
-
-def test_detect_gpu_returns_empty_when_no_vendor_tools(monkeypatch):
-    """All three vendor SMI binaries missing → detect_gpu returns []."""
-    monkeypatch.setattr(tier.shutil, "which", lambda _: None)
-    monkeypatch.setattr(sys, "platform", "linux")  # avoid Apple branch
+    monkeypatch.setattr(sys, "platform", "linux")  # skip the Apple probe
     assert tier.detect_gpu() == []
 
 
-def test_primary_gpu_honors_vendor_override():
-    """User has NVIDIA + AMD. Override forces AMD selection regardless of VRAM."""
+def test_a_vendor_override_picks_that_vendor():
+    """With NVIDIA and AMD present, the override picks AMD even though
+    NVIDIA has as much VRAM."""
     gpus = [
-        tier.GPUInfo(vendor="nvidia", name="RTX 4090", vram_gb=24.0,
-                     compute_target="89", index=0),
-        tier.GPUInfo(vendor="amd", name="RX 7900 XTX", vram_gb=24.0,
-                     compute_target="gfx1100", index=0),
+        tier.GPUInfo(vendor="nvidia", name="RTX 4090", vram_gb=24.0),
+        tier.GPUInfo(vendor="amd", name="RX 7900 XTX", vram_gb=24.0),
     ]
-    # No override → largest VRAM wins, ties go to whichever max() sees first
-    # (insertion order: NVIDIA). With equal VRAM the tie-break is incidental.
-    pick_default = tier.primary_gpu(gpus)
-    assert pick_default is not None
-    # Vendor override pins to AMD even when NVIDIA has the same/more VRAM
-    pick_amd = tier.primary_gpu(gpus, override_vendor="amd")
-    assert pick_amd is not None and pick_amd.vendor == "amd"
+    assert tier.primary_gpu(gpus, override_vendor="amd").vendor == "amd"
 
 
-def test_read_rocm_smi_parses_json(monkeypatch):
-    """rocm-smi --json output is parsed across schema variants."""
-    fake_json = (
-        '{"card0": {"Card Series": "Radeon RX 7900 XTX", '
-        '"VRAM Total Memory (B)": "25753026560"}}'
-    )
-
-    class FakeRun:
-        returncode = 0
-        stdout = fake_json
-
+def test_rocm_smi_json_gives_the_amd_gpu(monkeypatch):
+    rocm_smi_json = ('{"card0": {"Card Series": "Radeon RX 7900 XTX", '
+                     '"VRAM Total Memory (B)": "25753026560"}}')
+    ran = subprocess.CompletedProcess(args=[], returncode=0, stdout=rocm_smi_json)
     monkeypatch.setattr(tier.shutil, "which",
                         lambda x: "/opt/rocm/bin/rocm-smi" if x == "rocm-smi" else None)
-    monkeypatch.setattr(tier.subprocess, "run",
-                        lambda *a, **kw: FakeRun())
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: ran)
+
     gpus = tier._read_rocm_smi()
     assert len(gpus) == 1
     assert gpus[0].vendor == "amd"
@@ -169,195 +107,123 @@ def test_read_rocm_smi_parses_json(monkeypatch):
     assert gpus[0].compute_target == "gfx1100"
 
 
-# ---------------------------------------------------------------------------
-# evaluate_constraints — RAM warn vs fail semantics
-# ---------------------------------------------------------------------------
+# --- evaluate_constraints(): pass, warn or fail ------------------------------
 
-def _check(checks, name):
-    return next(c for c in checks if c.name == name)
-
-
-def test_constraints_all_pass_on_comfortable_host():
-    p = make_probe(vram_gb=16.0, system_ram_gb=32.0, cpu_cores=8,
-                   disk_free_gb=100.0)
-    t = tier.by_name("medium")
-    checks = tier.evaluate_constraints(p, t)
-    assert tier.overall_status(checks) == "pass"
+def test_a_comfortable_host_passes_every_medium_check():
+    checks = tier.evaluate_constraints(COMFORTABLE_HOST, tier.by_name("medium"))
     assert all(c.status == "pass" for c in checks)
+    assert tier.overall_status(checks) == "pass"
 
 
-def test_constraints_ram_warn_within_15pct():
-    """medium tier needs 16 GB RAM. 14 GB = 87.5% of 16 → within 15% → warn."""
-    p = make_probe(system_ram_gb=14.0)
-    t = tier.by_name("medium")
-    c = _check(tier.evaluate_constraints(p, t), "system_ram")
-    assert c.status == "warn"
+@pytest.mark.parametrize("change, tier_name, check_name, expected", [
+    # medium needs 16 GB RAM: 14 GB is within 15% of that, 8 GB is not.
+    pytest.param({"system_ram_gb": 14.0}, "medium", "system_ram", "warn",
+                 id="ram-within-15pct-warns"),
+    pytest.param({"system_ram_gb": 8.0}, "medium", "system_ram", "fail",
+                 id="ram-past-15pct-fails"),
+    # Too few cores makes ATLAS slow, not out of memory: always warn, never
+    # fail, even with 1 core where xlarge needs 16 (PC-055.1).
+    pytest.param({"cpu_cores": 2}, "medium", "cpu_cores", "warn",
+                 id="cpu-shortage-warns"),
+    pytest.param({"cpu_cores": 1}, "xlarge", "cpu_cores", "warn",
+                 id="large-cpu-shortage-still-warns"),
+])
+def test_a_shortage_warns_or_fails(change, tier_name, check_name, expected):
+    host = dataclasses.replace(COMFORTABLE_HOST, **change)
+    checks = tier.evaluate_constraints(host, tier.by_name(tier_name))
+    status_by_name = {c.name: c.status for c in checks}
+    assert status_by_name[check_name] == expected
 
 
-def test_constraints_ram_fail_past_threshold():
-    """medium tier needs 16 GB RAM. 8 GB = 50% → past 15% threshold → fail."""
-    p = make_probe(system_ram_gb=8.0)
-    t = tier.by_name("medium")
-    c = _check(tier.evaluate_constraints(p, t), "system_ram")
-    assert c.status == "fail"
+def test_overall_status_is_the_worst_check():
+    """RAM warns and disk fails: the overall status is fail, not warn."""
+    host = dataclasses.replace(COMFORTABLE_HOST, system_ram_gb=14.0, disk_free_gb=5.0)
+    checks = tier.evaluate_constraints(host, tier.by_name("medium"))
+    assert tier.overall_status(checks) == "fail"
 
 
-def test_constraints_cpu_shortage_is_warn_not_fail():
-    """CPU shortage = slow, not OOM. Always warn (never fail).
-    Documented status semantics (PC-055.1)."""
-    p = make_probe(cpu_cores=2)  # medium needs 4
-    t = tier.by_name("medium")
-    c = _check(tier.evaluate_constraints(p, t), "cpu_cores")
-    assert c.status == "warn"
-    # Even a brutal CPU shortage stays warn — confirms intent, not threshold luck.
-    p2 = make_probe(cpu_cores=1)
-    t2 = tier.by_name("xlarge")  # needs 16
-    c2 = _check(tier.evaluate_constraints(p2, t2), "cpu_cores")
-    assert c2.status == "warn"
+# --- probe() -----------------------------------------------------------------
 
-
-def test_overall_status_picks_worst_case():
-    """RAM=warn + disk=fail must reduce to fail (not warn)."""
-    p = make_probe(system_ram_gb=14.0, disk_free_gb=5.0)
-    t = tier.by_name("medium")
-    assert tier.overall_status(tier.evaluate_constraints(p, t)) == "fail"
-
-
-# ---------------------------------------------------------------------------
-# install_dir plumbing (regression test for PC-055.1 paranoid pass)
-# ---------------------------------------------------------------------------
-
-def test_probe_install_dir_used_for_disk_check(monkeypatch):
-    """If install_dir is provided + exists, disk_free is measured against
-    it (not /). Pre-fix: doctor's tier_constraints called probe() without
-    install_dir, so users with /opt/atlas on /data mount got misleading
-    disk_free against /."""
-    captured = {}
+@pytest.mark.parametrize("install_dir, measured_path", [
+    pytest.param(tempfile.gettempdir(), tempfile.gettempdir(),
+                 id="existing-install-dir"),
+    pytest.param("/nonexistent/path/does/not/exist", "/",
+                 id="missing-install-dir-falls-back-to-root"),
+])
+def test_probe_measures_free_disk_where_atlas_is_installed(
+        monkeypatch, install_dir, measured_path):
+    """doctor once measured / for an install on another mount, such as
+    /opt/atlas on /data (PC-055.1)."""
+    measured = []
 
     def fake_disk_usage(path):
-        captured["path"] = path
-        # Return any plausible value — we only care about the path.
-        class S: free = 50 * (1024 ** 3)
-        return S()
+        measured.append(path)
+        return SimpleNamespace(free=50 * 1024 ** 3)
 
     monkeypatch.setattr(tier.shutil, "disk_usage", fake_disk_usage)
-    with tempfile.TemporaryDirectory() as td:
-        tier.probe(install_dir=td)
-        assert captured["path"] == td
+    tier.probe(install_dir=install_dir)
+    assert measured == [measured_path]
 
 
-def test_probe_install_dir_falls_back_when_path_missing(monkeypatch):
-    """A non-existent install_dir must fall back to / rather than crash."""
-    captured = {}
-
-    def fake_disk_usage(path):
-        captured["path"] = path
-        class S: free = 50 * (1024 ** 3)
-        return S()
-
-    monkeypatch.setattr(tier.shutil, "disk_usage", fake_disk_usage)
-    tier.probe(install_dir="/nonexistent/path/does/not/exist")
-    assert captured["path"] == "/"
+@pytest.mark.parametrize("machine", ["aarch64", "x86_64"])
+def test_probe_reports_the_system_arch(monkeypatch, machine):
+    """init and doctor filter backends on Probe.system_arch, so probe must
+    take it from the machine string and not fall back to a default."""
+    monkeypatch.setattr(tier, "detect_gpu", lambda: [])
+    monkeypatch.setattr(tier.platform, "machine", lambda: machine)
+    assert tier.probe().system_arch == machine
 
 
-# ---------------------------------------------------------------------------
-# PC-055.2 split — TierProfile is hardware-only, model lives elsewhere
-# ---------------------------------------------------------------------------
-
-def test_tier_profile_has_no_model_fields():
-    """The split removed model_file/model_display/model_size_gb from
-    TierProfile. If they reappear, someone's regressing the layering."""
-    t = tier.by_name("medium")
-    for field in ("model_file", "model_display", "model_size_gb"):
-        assert not hasattr(t, field), (
-            f"TierProfile.{field} should live in model_registry, "
-            "not on the tier (PC-055.2 split).")
-
-
-def test_tier_env_vars_excludes_model_keys():
-    """Tier renders runtime knobs only; model env vars come from
-    ModelRecommendation.env_vars()."""
-    env = tier.by_name("medium").env_vars()
-    assert "ATLAS_MODEL_FILE" not in env
-    assert "ATLAS_MODEL_NAME" not in env
-    assert "ATLAS_CTX_SIZE" in env
-    assert "ATLAS_PARALLEL_SLOTS" in env
-    assert "ATLAS_KV_TYPE_K" in env
-    assert "ATLAS_KV_TYPE_V" in env
-
-
-def test_model_registry_recommendation_for_each_gpu_tier():
-    """Every GPU tier should have a model recommendation. The 'cpu' tier
-    intentionally has no recommendation in PC-056's honest registry —
-    ATLAS requires a CUDA GPU and there's no GGUF model to recommend
-    for CPU-only hosts. tier.py renders that as 'N/A — install a CUDA
-    GPU' from the TierProfile.notes field, not from a recommendation."""
-    for t in tier.TIERS:
-        rec = model_registry.for_tier(t.tier)
-        if t.tier == "cpu":
-            assert rec is None, "cpu tier should not have a model recommendation"
-            continue
-        assert rec is not None, f"missing recommendation for tier {t.tier!r}"
-        assert rec.tier == t.tier
-
-
-def test_model_recommendation_reverse_lookup_roundtrip():
-    """Forward + reverse lookups must agree — used by doctor.check_tier_match."""
-    for tier_name in ("small", "medium", "large", "xlarge"):
-        rec = model_registry.for_tier(tier_name)
-        assert model_registry.tier_for_model(rec.model_file) == tier_name
-
-
-def test_model_recommendation_unknown_returns_none():
-    assert model_registry.for_tier("nonexistent") is None
-    assert model_registry.tier_for_model("not-a-real.gguf") is None
-
-
-# ---------------------------------------------------------------------------
-# arch_detect (#115) — arm64 multi-arch foundation
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("machine_raw, expected", [
-    ("x86_64",  "x86_64"),
-    ("amd64",   "x86_64"),
-    ("x64",     "x86_64"),
-    ("X86_64",  "x86_64"),   # case-insensitive
+@pytest.mark.parametrize("machine, expected", [
+    ("x86_64", "x86_64"),
+    ("amd64", "x86_64"),
+    ("x64", "x86_64"),
+    ("X86_64", "x86_64"),   # case-insensitive
     ("aarch64", "aarch64"),
-    ("arm64",   "aarch64"),
-    ("ARM64",   "aarch64"),
-    ("armv7l",  "other"),
+    ("arm64", "aarch64"),
+    ("ARM64", "aarch64"),
+    ("armv7l", "other"),
     ("ppc64le", "other"),
     ("riscv64", "other"),
-    ("",        "other"),
+    ("", "other"),
 ])
-def test_arch_detect_normalizes_machine_string(monkeypatch, machine_raw, expected):
-    """Cover the platform.machine() output forms we've actually seen
-    across NVIDIA sbsa (aarch64), Mac arm64, Windows amd64, and the
-    long tail of niche arches."""
-    monkeypatch.setattr(tier.platform, "machine", lambda: machine_raw)
+def test_arch_detect_normalizes_the_machine_string(monkeypatch, machine, expected):
+    """The platform.machine() forms seen on NVIDIA sbsa, Mac arm64,
+    Windows amd64 and the long tail of niche arches."""
+    monkeypatch.setattr(tier.platform, "machine", lambda: machine)
     assert tier.arch_detect() == expected
 
 
-def test_probe_includes_system_arch(monkeypatch):
-    """Probe must surface system_arch so init.py + doctor.py can filter
-    backends without re-implementing the platform detection logic."""
-    monkeypatch.setattr(tier, "detect_gpu", lambda: [])
-    monkeypatch.setattr(tier, "_read_system_ram_gb", lambda: 16.0)
-    monkeypatch.setattr(tier, "_read_cpu_cores", lambda: 4)
-    monkeypatch.setattr(tier, "_read_disk_free_gb", lambda *_: 50.0)
-    monkeypatch.setattr(tier.platform, "machine", lambda: "aarch64")
-    p = tier.probe()
-    assert p.system_arch == "aarch64"
+# --- tiers hold hardware settings; models live in model_registry (PC-055.2) --
+
+def test_tier_profile_has_no_model_fields():
+    t = tier.by_name("medium")
+    for field in ("model_file", "model_display", "model_size_gb"):
+        assert not hasattr(t, field), f"TierProfile.{field} belongs in model_registry"
 
 
-def test_probe_default_arch_is_x86_64_on_typical_host(monkeypatch):
-    """Sanity: don't accidentally flip the default arch when the host
-    is a normal x86 box. This guards against a regression where a None
-    or empty machine string silently became 'aarch64'."""
-    monkeypatch.setattr(tier, "detect_gpu", lambda: [])
-    monkeypatch.setattr(tier, "_read_system_ram_gb", lambda: 16.0)
-    monkeypatch.setattr(tier, "_read_cpu_cores", lambda: 4)
-    monkeypatch.setattr(tier, "_read_disk_free_gb", lambda *_: 50.0)
-    monkeypatch.setattr(tier.platform, "machine", lambda: "x86_64")
-    p = tier.probe()
-    assert p.system_arch == "x86_64"
+def test_tier_env_vars_hold_runtime_settings_and_no_model():
+    env = tier.by_name("medium").env_vars()
+    assert "ATLAS_MODEL_FILE" not in env
+    assert "ATLAS_MODEL_NAME" not in env
+    for key in ("ATLAS_CTX_SIZE", "ATLAS_PARALLEL_SLOTS",
+                "ATLAS_KV_TYPE_K", "ATLAS_KV_TYPE_V"):
+        assert key in env
+
+
+def test_each_gpu_tier_has_a_model_that_maps_back_to_it():
+    """doctor.check_tier_match needs the forward and reverse lookups to
+    agree. The cpu tier has no model: ATLAS needs a GPU (PC-056)."""
+    for t in tier.TIERS:
+        rec = model_registry.for_tier(t.tier)
+        if t.tier == "cpu":
+            assert rec is None
+        else:
+            assert rec is not None, f"no model for tier {t.tier!r}"
+            assert rec.tier == t.tier
+            assert model_registry.tier_for_model(rec.model_file) == t.tier
+
+
+def test_unknown_names_have_no_model():
+    assert model_registry.for_tier("nonexistent") is None
+    assert model_registry.tier_for_model("not-a-real.gguf") is None
