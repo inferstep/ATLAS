@@ -5,13 +5,12 @@ import (
 	"testing"
 )
 
-// An honest refusal must still be attributable.
+// A refusal must still be attributable.
 //
 // target_not_declared is refused before any candidate-evidence identity is
-// minted, so the decision carried an empty invocation and candidate instance.
-// Measured live in v6: three refusals in two requests, none of which could be
-// joined to the route entry that produced it, and a reader could not tell a
-// refusal from a route entry whose decision went missing.
+// minted, so the decision has no invocation and no candidate instance. It
+// must still name the route entry that produced it; otherwise a reader cannot
+// tell a refusal from a route entry whose decision went missing.
 
 func attrCtx(t *testing.T, request string) *AgentContext {
 	t.Helper()

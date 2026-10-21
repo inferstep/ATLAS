@@ -7,14 +7,11 @@ import (
 )
 
 // Pre-delivery authorization, authorized target identity, and post-delivery
-// settlement — three questions that used to be one, and could not all be
-// answered at once.
+// settlement are three separate questions, asked at different times.
 //
-// The premise that broke: artifact_exists was a required obligation with a
-// syntax floor. Nothing evidences a file's existence before the candidate
-// lands. Delivery needs authorization. Authorization needed the obligation
-// met. Every structured task with a declared output was unsatisfiable by
-// construction, and each step of the loop looked reasonable alone.
+// Nothing can show that a file exists before the candidate lands, and
+// delivery needs authorization. If authorization also needed existence, every
+// task with a declared output could never be satisfied.
 
 func rolesFixture(t *testing.T, contract string, files map[string]string) (*AgentContext, []taskObligation) {
 	t.Helper()
@@ -32,14 +29,6 @@ func rolesFixture(t *testing.T, contract string, files map[string]string) (*Agen
 		resolveOutputObligation(ctx, "Create it."),
 		resolveVerificationObligation(ctx))
 	return ctx, obs
-}
-
-func kindsPresent(obs []taskObligation) map[string]bool {
-	out := map[string]bool{}
-	for _, o := range obs {
-		out[o.Kind] = true
-	}
-	return out
 }
 
 // --- the split itself --------------------------------------------------------
@@ -114,8 +103,10 @@ func TestANewDocumentOutputOwesNoFabricatedSyntax(t *testing.T) {
 	if !targetIsAuthorized(obs, resolved) {
 		t.Error("the declared document is not an authorized target")
 	}
-	if kindsPresent(obs)[ObligationSyntacticValidity] {
-		t.Error("a class the gate does not govern was given a syntax obligation")
+	for _, o := range obs {
+		if o.Kind == ObligationSyntacticValidity {
+			t.Error("a class the gate does not govern was given a syntax obligation")
+		}
 	}
 	// No prerequisite, so no floor. That is a real answer, not an open door:
 	// authorization additionally requires a satisfied prerequisite, and a task
@@ -126,32 +117,17 @@ func TestANewDocumentOutputOwesNoFabricatedSyntax(t *testing.T) {
 	if len(authorizationPrerequisites(obs)) != 0 {
 		t.Error("a document with no declared verification owes a prerequisite")
 	}
+	// Naming a path says what may be replaced, never that any bytes belong in
+	// it: being a target completes no settlement while the file is absent.
+	if ok, _ := settlementIsComplete(ctx, obs, ""); ok {
+		t.Error("an absent artifact settled its own existence")
+	}
 	// And it is not impossible: declaring a command gives it a path.
 	_, withCmd := rolesFixture(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"],`+
 			`"verification_knowledge":"declared","verification":["mdl notes.md"]}`, nil)
 	if got := authorizationFloor(withCmd); got != VerificationKindRuntime {
 		t.Errorf("a declared command gave the document floor %q, want runtime", got)
-	}
-}
-
-// TestTargetIdentityIsNeverEvidence pins the converse rule: naming a path says
-// what may be replaced, never that any particular bytes belong in it.
-func TestTargetIdentityIsNeverEvidence(t *testing.T) {
-	ctx, obs := rolesFixture(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
-		nil)
-	resolved := resolveAgentPath(ctx, "notes.md")
-	if !targetIsAuthorized(obs, resolved) {
-		t.Fatal("fixture is wrong")
-	}
-	// Being a target satisfies nothing: there is no prerequisite it meets and
-	// no settlement it completes while the file is absent.
-	if len(authorizationPrerequisites(obs)) != 0 {
-		t.Error("target identity produced a prerequisite")
-	}
-	if ok, _ := settlementIsComplete(ctx, obs, ""); ok {
-		t.Error("an absent artifact settled its own existence")
 	}
 }
 
@@ -313,7 +289,7 @@ func TestDeclaredEmptyOutputsAuthorizeNoTarget(t *testing.T) {
 	}
 }
 
-// --- legacy traffic is untouched ---------------------------------------------
+// --- contractless traffic authorizes nothing ---------------------------------
 
 func TestContractlessAndUnspecifiedTrafficAuthorizeNothing(t *testing.T) {
 	for _, body := range []string{

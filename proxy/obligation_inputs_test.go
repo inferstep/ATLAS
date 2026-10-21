@@ -7,12 +7,10 @@ import (
 
 // A file the task says to read is an input, not something the run owes.
 //
-// The legacy heuristic took any filename within 70 characters after a write
-// verb as an output, so "Write solve.py that reads input.txt" owed input.txt.
-// The run never writes an input, so the ledger never owns it and it can never
-// be demonstrated. Measured in stabilization cycle 2 (stabilization2/C): 12 aoc
-// sessions, in both arms, wrote only solve.py, ran it, printed the correct
-// answer and ended incomplete / deliverables_not_demonstrated.
+// In "Write solve.py that reads input.txt", input.txt follows a write verb but
+// is not an output. The run never writes an input, so the ledger never owns it
+// and it can never be demonstrated: a run that owed it would end incomplete
+// after printing the correct answer.
 
 func TestAFileTheTaskReadsIsNotAnOutputObligation(t *testing.T) {
 	for prompt, want := range map[string]string{

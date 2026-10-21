@@ -136,36 +136,27 @@ func TestV3StageToEventCoversPlanStages(t *testing.T) {
 // content", so every failure path must return, not hang.
 // ---------------------------------------------------------------------------
 
+// The default is 300s because PlanSearch spends two LLM calls per candidate:
+// three candidates cost about 162s at about 22s per call, before the probe and
+// self-test that come first.
 func TestV3CallTimeout(t *testing.T) {
-	// 300s, not 180s: PlanSearch spends two LLM calls per candidate, so k=3
-	// costs ~162s at the measured ~22s per call before the probe and
-	// self-test that precede it. At 180s, sessions spent a median 207s on
-	// generation alone and phase-3 repair was skipped 19 times with 7-9s
-	// left.
-	t.Run("default is 300s", func(t *testing.T) {
-		t.Setenv("ATLAS_V3_TIMEOUT", "")
-		if d := v3CallTimeout(); d != 300*time.Second {
-			t.Errorf("default = %v", d)
-		}
-	})
-	t.Run("env override in seconds", func(t *testing.T) {
-		t.Setenv("ATLAS_V3_TIMEOUT", "30")
-		if d := v3CallTimeout(); d != 30*time.Second {
-			t.Errorf("override = %v", d)
-		}
-	})
-	t.Run("zero disables the cap", func(t *testing.T) {
-		t.Setenv("ATLAS_V3_TIMEOUT", "0")
-		if d := v3CallTimeout(); d != 0 {
-			t.Errorf("0 should disable, got %v", d)
-		}
-	})
-	t.Run("garbage falls back to default", func(t *testing.T) {
-		t.Setenv("ATLAS_V3_TIMEOUT", "soon")
-		if d := v3CallTimeout(); d != 300*time.Second {
-			t.Errorf("garbage value gave %v", d)
-		}
-	})
+	for _, tc := range []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"default is 300s", "", 300 * time.Second},
+		{"override in seconds", "30", 30 * time.Second},
+		{"zero turns the cap off", "0", 0},
+		{"a value that is not a number gives the default", "soon", 300 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ATLAS_V3_TIMEOUT", tc.env)
+			if got := v3CallTimeout(); got != tc.want {
+				t.Errorf("ATLAS_V3_TIMEOUT=%q gave %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
 }
 
 func fakeGenerateServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
@@ -259,8 +250,8 @@ func TestCallV3GenerateStreamingMissingResultIsAnError(t *testing.T) {
 }
 
 func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testing.T) {
-	// An unmarshal failure used to be discarded, leaving result nil and
-	// reporting the same message as a stream that sent nothing at all.
+	// A result that does not decode must say so, and must not read like a
+	// stream that sent nothing at all.
 	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		sseLines(w, `event: result`, `data: {not json`, ``, `data: [DONE]`, ``)
@@ -274,87 +265,94 @@ func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testin
 	}
 }
 
-func TestCallV3GenerateStreamingTimeoutFires(t *testing.T) {
-	t.Setenv("ATLAS_V3_TIMEOUT", "1")
-	// `release` unblocks the stalled handler after the call returns:
-	// srv.Close() waits for active handlers, and server-side disconnect
-	// detection isn't reliable enough to end the stall on its own.
-	release := make(chan struct{})
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-		select { // stall past the cap
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	defer srv.Close()
-	// LIFO: runs before srv.Close(), releasing the stalled handler.
-	defer close(release)
+// A stalled V3 stream must end with an error at the first of: the configured
+// cap, half of the session's remaining time, or the user's cancel.
+func TestCallV3GenerateStreamingEndsAStalledStream(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		timeoutEnv  string        // ATLAS_V3_TIMEOUT, in seconds
+		session     time.Duration // time left in the session; 0 means no deadline
+		cancelAfter time.Duration // the user cancels after this; 0 means never
+		within      time.Duration // the call must return before this
+		namesTheCap bool          // the error names the cap, not an empty stream
+	}{
+		{name: "the configured cap fires",
+			timeoutEnv: "1", within: 5 * time.Second, namesTheCap: true},
+		// Half of a long session is far above the cap, so the cap applies.
+		{name: "the cap bounds a long session",
+			timeoutEnv: "1", session: 10 * time.Minute, within: 5 * time.Second, namesTheCap: true},
+		// With 6s left, V3 may have 3s, not 300s, so the run keeps as much
+		// again for the work still to do.
+		{name: "half of a short session",
+			timeoutEnv: "300", session: 6 * time.Second, within: 5 * time.Second, namesTheCap: true},
+		// The user presses Ctrl-C during a long PlanSearch.
+		{name: "cancel aborts",
+			timeoutEnv: "", cancelAfter: 150 * time.Millisecond, within: 3 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ATLAS_V3_TIMEOUT", tc.timeoutEnv)
+			// release unblocks the stalled handler after the call returns:
+			// srv.Close waits for active handlers, and the server does not
+			// always see the client hang up.
+			release := make(chan struct{})
+			srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			})
+			defer srv.Close()
+			defer close(release) // deferred calls run last-in first-out, so this runs before srv.Close
 
-	start := time.Now()
-	_, err := callV3GenerateStreaming(context.Background(), srv.URL,
-		V3GenerateRequest{}, nil)
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("stalled V3 run did not time out")
-	}
-	if elapsed > 5*time.Second {
-		t.Errorf("timeout took %v with a 1s cap", elapsed)
-	}
-	// The cap firing and V3 finishing empty are different events with
-	// different fixes, and both reported the same sentence. Measured
-	// 2026-08-03: five caps in one run read as V3 producing nothing,
-	// while it was still working and its output was being discarded.
-	if strings.Contains(err.Error(), "without sending a result event") {
-		t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
-	}
-	if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
-		t.Errorf("the error should name the cap that fired:\n%s", err)
-	}
-}
+			sessionCtx := context.Background()
+			if tc.session > 0 {
+				var cancel context.CancelFunc
+				sessionCtx, cancel = context.WithTimeout(sessionCtx, tc.session)
+				defer cancel()
+			}
+			callCtx := sessionCtx
+			if tc.cancelAfter > 0 {
+				var cancel context.CancelFunc
+				callCtx, cancel = context.WithCancel(sessionCtx)
+				defer cancel()
+				time.AfterFunc(tc.cancelAfter, cancel)
+			}
 
-func TestCallV3GenerateStreamingCancelAborts(t *testing.T) {
-	// User Ctrl-C: cancelling the request context must abort a stalled
-	// stream promptly — the regression this guards is the "ctrl-c does
-	// not stop it" multi-minute PlanSearch hang.
-	release := make(chan struct{})
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	defer srv.Close()
-	// LIFO: runs before srv.Close(), releasing the stalled handler.
-	defer close(release)
+			start := time.Now()
+			_, err := callV3GenerateStreaming(callCtx, srv.URL, V3GenerateRequest{}, nil)
+			elapsed := time.Since(start)
 
-	reqCtx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	_, err := callV3GenerateStreaming(reqCtx, srv.URL, V3GenerateRequest{}, nil)
-	if err == nil {
-		t.Fatal("cancelled V3 run returned no error")
-	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("cancel took %v to unblock", elapsed)
+			if err == nil {
+				t.Fatal("a stalled V3 run returned no error")
+			}
+			if elapsed > tc.within {
+				t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), tc.within)
+			}
+			if tc.session > 0 && sessionCtx.Err() != nil {
+				t.Errorf("V3 used up the whole session: %v", sessionCtx.Err())
+			}
+			// The cap firing and V3 finishing empty are different events with
+			// different fixes, so they must not share one message.
+			if tc.namesTheCap {
+				if strings.Contains(err.Error(), "without sending a result event") {
+					t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
+				}
+				if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
+					t.Errorf("the error does not name the cap that fired:\n%s", err)
+				}
+			}
+		})
 	}
 }
 
 // generatePlan is the agent loop's entry into V3 planning. The transport
-// under it is covered above; what is only here is the progress callback it
-// installs, and that callback exists to drop token-level events. The
-// planner asks for 3 candidates and the LLM emits ~150 token deltas each,
-// so forwarding them verbatim puts ~450 v3_plan rows into the TUI's
-// pipeline pane for one plan — the same flood that had to be fixed once
-// already for V3 generation. Only the structural stages belong on the
-// stream.
+// under it is covered above; this test covers the progress callback it
+// installs, which drops token-level events. The planner asks for 3 candidates
+// and the LLM emits about 150 token deltas each, so passing them on would put
+// about 450 v3_plan rows into the TUI's pipeline pane for one plan. Only the
+// structural stages belong on the stream.
 func TestGeneratePlanDropsTokenNoiseFromTheStream(t *testing.T) {
 	var sse []string
 	add := func(line string) { sse = append(sse, line, "") }
@@ -427,11 +425,9 @@ func TestGeneratePlanWithoutV3URLIsNil(t *testing.T) {
 	}
 }
 
-// V3 must generate against the human's request, never a harness note.
-// ATLAS rides correctives/manifests on user-role messages for chat-template
-// compatibility, so "last user turn" is the wrong question to ask the
-// conversation (third-party audit finding: V3 received "run the program
-// standalone" as its task).
+// V3 must generate against the human's request, never a system note. ATLAS
+// sends correctives and manifests as user-role messages for chat-template
+// compatibility, so "the last user turn" can be a note instead of the task.
 func TestLatestUserMessagePrefersHumanTask(t *testing.T) {
 	ctx := &AgentContext{
 		HumanTask: "write a debounce filter over readings.txt",
@@ -459,59 +455,37 @@ func TestLatestUserMessageFallbackSkipsSyntheticNotes(t *testing.T) {
 	}
 }
 
-// Authorization to replace the caller's content is the ENVELOPE, never
-// `passed` and never the mere presence of `code`. `passed` collapses a compile
-// smoke, a partial oracle score and a complete one into one boolean, so it can
-// no longer stand for any of them.
-//
-// The previous version of this test reimplemented the condition inline, so
-// it tested the intended expression rather than production code — and stayed
-// green while improveContentWithV3 still took Code unconditionally. It now
-// calls the shared helper both paths use.
+// `passed` authorizes nothing: it puts a compile check, a partial oracle score
+// and a complete one into one boolean. Without an evidence envelope no
+// response is authorized, and a response with no code leaves the caller's
+// bytes.
 func TestAuthorizedV3ReplacementIsTheOnlyGate(t *testing.T) {
 	baseline := "def solve():\n    return 41\n"
 	alternative := "def solve():\n    return 42  # best_record, not verified\n"
 
 	for _, tc := range []struct {
-		name       string
-		result     *V3GenerateResponse
-		want       string
-		authorized bool
+		name         string
+		result       *V3GenerateResponse
+		wantProposal string
 	}{
-		{"passing without evidence is refused",
-			&V3GenerateResponse{Passed: true, Code: alternative}, baseline, false},
-		{"unverified candidate is refused",
-			&V3GenerateResponse{Passed: false, Code: alternative}, baseline, false},
-		{"passing but empty falls back",
-			&V3GenerateResponse{Passed: true, Code: ""}, baseline, false},
-		{"unverified and empty falls back",
-			&V3GenerateResponse{Passed: false, Code: ""}, baseline, false},
-		{"nil result falls back", nil, baseline, false},
+		{"passed, no evidence", &V3GenerateResponse{Passed: true, Code: alternative}, alternative},
+		{"not passed, no evidence", &V3GenerateResponse{Passed: false, Code: alternative}, alternative},
+		{"passed, no code", &V3GenerateResponse{Passed: true, Code: ""}, baseline},
+		{"not passed, no code", &V3GenerateResponse{Passed: false, Code: ""}, baseline},
+		{"no result", nil, baseline},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// The service's own verdict, which authorizes nothing anywhere:
-			// this table now pins what the predicate SAYS, not what it
-			// permits. No production path consults it.
-			if got, _ := v3DeliveryAuthorized(tc.result, codeOf(tc.result)); got != tc.authorized {
-				t.Fatalf("v3DeliveryAuthorized = %v, want %v", got, tc.authorized)
+			if authorized, _ := v3DeliveryAuthorized(tc.result, codeOf(tc.result)); authorized {
+				t.Error("v3DeliveryAuthorized = true without an evidence envelope")
 			}
-			// And the bytes a refused verdict leaves behind are the caller's.
-			if !tc.authorized {
-				if got, _ := proposedV3Candidate(tc.result, baseline); tc.want == baseline &&
-					got != baseline && codeOf(tc.result) == "" {
-					t.Fatalf("a refusal returned %q, not the baseline", got)
-				}
+			if got, _ := proposedV3Candidate(tc.result, baseline); got != tc.wantProposal {
+				t.Errorf("proposedV3Candidate = %q, want %q", got, tc.wantProposal)
 			}
 		})
 	}
 }
 
-// Provenance must describe the FINAL bytes, not the initial response.
-//
-// The previous test here asserted `V3EditMetadata{}.Used == false`, which
-// only proves Go's zero value is false — it never called either delivery
-// function. That is the fourth mirror-test in this workstream, so this one
-// drives the real gates.
+// Provenance must describe the final bytes, not the first response.
 func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
 	// A candidate that PASSED but is refused downstream: HTML replaced by
 	// JavaScript, which the language-swap gate rejects.
@@ -522,7 +496,6 @@ func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
 		t.Fatal("fixture invalid: the gate must reject JS replacing HTML")
 	}
 
-	// The transition the production path now uses.
 	code, authorized, fellBack := revokeV3(htmlBaseline, "language swap", "index.html")
 	if code != htmlBaseline {
 		t.Fatalf("baseline not restored: %q", code)
@@ -640,21 +613,20 @@ func editV3ServerWithEdit(t *testing.T, candidate string, passed bool,
 	}))
 }
 
-// The shared boundary, driven through improveContentWithV3 itself: every
-// envelope state, and what the caller is handed for it.
-func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
+// improveContentWithV3 is driven with every envelope state. Materially
+// different bytes are a proposal in every case: the service offers them and
+// the route decides. No envelope state changes what the caller is handed.
+func TestEditPathCarriesTheCandidateWhateverTheEnvelopeSays(t *testing.T) {
 	candidate := "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r ** 2\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"
 
 	for _, c := range []struct {
-		name      string
-		passed    bool
-		omit      bool
-		mutate    func(map[string]interface{})
-		delivered bool
+		name   string
+		passed bool
+		omit   bool // send no envelope at all
+		mutate func(map[string]interface{})
 	}{
-		{name: "verified winner with an exact hash", passed: true, delivered: true},
-		// The envelope is authoritative in both directions.
-		{name: "not passed, verified winner", passed: false, delivered: true},
+		{name: "verified winner with an exact hash", passed: true},
+		{name: "not passed, verified winner", passed: false},
 		{name: "passed, no envelope", passed: true, omit: true},
 		{name: "passed, unknown wire version", passed: true, mutate: func(e map[string]interface{}) {
 			e["wire_version"] = "99.0.0"
@@ -686,7 +658,6 @@ func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
 				"1111111111111111111111111111111111111111111111111111111111111111"
 		}},
 	} {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "app.py")
@@ -704,19 +675,12 @@ func TestEditPathDeliversOnlyAuthorizedCandidates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("improveContentWithV3: %v", err)
 			}
-			// Materially different bytes are a PROPOSAL in every row: the
-			// service offers them and the route decides. What the envelope
-			// state changes is the certification that travels with them, which
-			// is the delivery rule for a request that declared nothing.
 			if out != candidate {
 				t.Fatalf("the proposal was not carried: %q", out)
 			}
 			if !meta.Used {
 				t.Error("a proposal lost the pipeline that produced it")
 			}
-			// Whatever the envelope said, the metadata carries no
-			// certification: there is no field for the service to authorize
-			// through and no route that would read one.
 		})
 	}
 }
@@ -768,48 +732,42 @@ func TestEditPathRevokesWhenSanitisationChangesTheBytes(t *testing.T) {
 	}
 }
 
-// Every production edit tool, driven through its real handler. Each one has to
-// prove it cannot bypass the shared boundary: an unauthorized candidate must
-// leave the caller's own edit on disk with no provenance, and an authorized one
-// must arrive intact.
+// Every production edit tool, driven through its real handler. The request
+// declares no outputs, so no envelope can license a replacement: the caller's
+// own edit stays on disk whatever V3 offers, and an unauthorized candidate
+// leaves no V3 provenance on the result.
 func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
-	// The file every tool edits, and the candidate V3 offers instead.
+	// The file every tool edits.
 	const original = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
 
 	for _, tool := range []struct {
 		name string
-		args func(edited string) map[string]interface{}
-		// the bytes the tool itself produces, before V3 is consulted
+		args map[string]interface{}
+		// the bytes the tool itself produces, before V3 is asked
 		edited string
-		// what V3 offers instead: a variant of the SAME span, so the drift
-		// gate has nothing to object to and authorization is what decides.
+		// what V3 offers instead: a variant of the same span, so the drift
+		// gate has nothing to object to and authorization is what decides
 		candidate string
 	}{
 		{name: "edit_file",
 			edited:    strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative')", 1),
 			candidate: strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative radius')", 1),
-			args: func(string) map[string]interface{} {
-				return map[string]interface{}{"path": "app.py",
-					"old_str": "raise ValueError('neg')",
-					"new_str": "raise ValueError('negative')"}
-			}},
+			args: map[string]interface{}{"path": "app.py",
+				"old_str": "raise ValueError('neg')",
+				"new_str": "raise ValueError('negative')"}},
 		{name: "insert_after",
 			edited:    strings.Replace(original, "import math\n", "import math\nimport sys\n", 1),
 			candidate: strings.Replace(original, "import math\n", "import math\nimport sys  # v3\n", 1),
-			args: func(string) map[string]interface{} {
-				return map[string]interface{}{"path": "app.py", "line": 1,
-					"content": "import sys"}
-			}},
+			args: map[string]interface{}{"path": "app.py", "line": 1,
+				"content": "import sys"}},
 		{name: "replace_lines",
 			edited:    strings.Replace(original, "    return math.pi * r * r", "    return math.pi * r ** 2", 1),
 			candidate: strings.Replace(original, "    return math.pi * r * r", "    return math.pi * pow(r, 2)", 1),
-			args: func(string) map[string]interface{} {
-				return map[string]interface{}{"path": "app.py",
-					"start_line": 7, "end_line": 7,
-					"expected_first_line": "    return math.pi * r * r",
-					"expected_last_line":  "    return math.pi * r * r",
-					"content":             "    return math.pi * r ** 2"}
-			}},
+			args: map[string]interface{}{"path": "app.py",
+				"start_line": 7, "end_line": 7,
+				"expected_first_line": "    return math.pi * r * r",
+				"expected_last_line":  "    return math.pi * r * r",
+				"content":             "    return math.pi * r ** 2"}},
 		{name: "structural_edit",
 			edited: strings.Replace(original,
 				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
@@ -817,20 +775,14 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 			candidate: strings.Replace(original,
 				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
 				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2.0 * math.pi * r\n", 1),
-			args: func(string) map[string]interface{} {
-				return map[string]interface{}{"path": "app.py",
-					"selector": "function:edge",
-					"content":  "def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"}
-			}},
+			args: map[string]interface{}{"path": "app.py",
+				"selector": "function:edge",
+				"content":  "def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"}},
 	} {
-		tool := tool
-		candidate := tool.candidate
-
 		for _, mode := range []struct {
 			name       string
 			authorized bool
 		}{{"authorized candidate", true}, {"unauthorized candidate", false}} {
-			mode := mode
 			t.Run(tool.name+"/"+mode.name, func(t *testing.T) {
 				dir := t.TempDir()
 				path := filepath.Join(dir, "app.py")
@@ -839,15 +791,15 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 				}
 				var env map[string]interface{}
 				if mode.authorized {
-					env = envelopeFor(t, candidate, nil)
+					env = envelopeFor(t, tool.candidate, nil)
 				} else {
 					// passed=true, and an envelope that authorizes nothing.
-					env = envelopeFor(t, candidate, func(e map[string]interface{}) {
+					env = envelopeFor(t, tool.candidate, func(e map[string]interface{}) {
 						e["evaluation"].(map[string]interface{})["closure_eligible"] = false
 						e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
 					})
 				}
-				srv := editV3ServerWithEdit(t, candidate, true, env, tool.edited)
+				srv := editV3ServerWithEdit(t, tool.candidate, true, env, tool.edited)
 				defer srv.Close()
 
 				ctx := writeGateCtx(t, srv.URL, srv.URL, dir)
@@ -856,59 +808,26 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 				ctx.SessionWrites["app.py"] = true
 				ctx.RecordFileRead(path, original)
 
-				args, _ := json.Marshal(tool.args(tool.edited))
+				args, _ := json.Marshal(tool.args)
 				res := executeToolCall(tool.name, args, ctx)
 				if !res.Success {
 					t.Fatalf("%s failed: %s", tool.name, res.Error)
 				}
 				onDisk, _ := os.ReadFile(path)
-
-				if mode.authorized {
-					// The envelope is a proposal, not proxy authority. This
-					// request states no output knowledge, so no typed
-					// authorization exists to license a replacement and the
-					// caller's own edit is what stays -- the same rule the
-					// new-file route has always applied to a contractless
-					// request, now applied to the edit routes as well.
-					if string(onDisk) != tool.edited {
-						t.Fatalf("a service envelope landed bytes for a request that "+
-							"declared no outputs:\n got %q\nwant the caller's edit %q",
-							onDisk, tool.edited)
-					}
-					return
-				}
 				if string(onDisk) != tool.edited {
-					t.Fatalf("unauthorized bytes reached disk:\n got %q\nwant the caller's edit %q",
+					t.Fatalf("V3's candidate replaced the caller's edit:\n got %q\nwant %q",
 						onDisk, tool.edited)
 				}
+				if mode.authorized {
+					return
+				}
+				// The "V3 verified this edit" nudge reads these fields, so
+				// empty fields keep it quiet.
 				if res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
 					res.PhaseSolved != "" || len(res.VerificationEvidence) != 0 {
 					t.Errorf("baseline edit carries V3 provenance: %+v", res)
 				}
-				// The agent's "V3 verified this edit" nudge keys off exactly
-				// these fields, so an empty set is what keeps it quiet.
-				if res.V3Used && verifiedPhase(res.PhaseSolved) {
-					t.Error("an unauthorized edit would fire the V3-verified nudge")
-				}
 			})
-		}
-	}
-}
-
-// The nudge fires on V3Used plus a verified phase, and nothing else. A
-// baseline fallback must not satisfy it.
-func TestTheV3VerifiedNudgeFollowsAuthorization(t *testing.T) {
-	authorized := &ToolResult{Success: true, V3Used: true, PhaseSolved: "phase1"}
-	if !(authorized.Success && authorized.V3Used && verifiedPhase(authorized.PhaseSolved)) {
-		t.Error("an authorized delivery must be able to fire the nudge")
-	}
-	for _, res := range []*ToolResult{
-		{Success: true},
-		{Success: true, PhaseSolved: "phase1"},
-		{Success: true, V3Used: true, PhaseSolved: ""},
-	} {
-		if res.Success && res.V3Used && verifiedPhase(res.PhaseSolved) {
-			t.Errorf("a delivery without provenance would fire the nudge: %+v", res)
 		}
 	}
 }
@@ -962,51 +881,9 @@ func codeOf(result *V3GenerateResponse) string {
 	return result.Code
 }
 
-// V3's cap is a per-call ceiling, not a claim on the whole session. Measured
-// 2026-09-14: the pipeline spent 295s of a 570s work budget repairing the
-// FIRST of five files, and the run ended with one file and no verification,
-// while the same prompt with a cheap first file delivered five files in 248s.
-// One file may take at most half of what is left, so the run always keeps as
-// much again for the work still to do.
-func TestCallV3GenerateStreamingLeavesHalfTheSessionForTheRestOfTheRun(t *testing.T) {
-	t.Setenv("ATLAS_V3_TIMEOUT", "300") // the configured ceiling, far above what remains
-	release := make(chan struct{})
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	defer srv.Close()
-	defer close(release)
-
-	// A session with 6s of work left: V3 may have 3s, not 300s.
-	sessionCtx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-
-	start := time.Now()
-	_, err := callV3GenerateStreaming(sessionCtx, srv.URL, V3GenerateRequest{}, nil)
-	elapsed := time.Since(start)
-	t.Logf("V3 returned after %v (err=%v)", elapsed.Round(time.Millisecond), err)
-
-	if err == nil {
-		t.Fatal("a stalled V3 run returned success")
-	}
-	if elapsed > 5*time.Second {
-		t.Errorf("V3 consumed %v of a 6s session; it must stop near the 3s half-share",
-			elapsed.Round(time.Millisecond))
-	}
-	// The session itself must survive: the point is that time is left over.
-	if sessionCtx.Err() != nil {
-		t.Errorf("V3 used up the whole session context: %v", sessionCtx.Err())
-	}
-}
-
 // The service plans its phases against the cap this call actually has. Told
-// nothing, it planned a 300s run inside a call the bridge had cut to half of
-// the session's remaining time, and started work the bridge then abandoned.
+// nothing, it plans a 300s run inside a call the bridge may cut to half of
+// the session's remaining time.
 func TestCallV3GenerateStreamingSendsTheCapItApplies(t *testing.T) {
 	var got []map[string]interface{}
 	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1046,33 +923,5 @@ func TestCallV3GenerateStreamingSendsTheCapItApplies(t *testing.T) {
 	}
 	if v, ok := got[2]["budget_ms"]; ok {
 		t.Errorf("an uncapped call sent budget_ms=%v", v)
-	}
-}
-
-// The ceiling still applies when the session has plenty of room: half of a
-// large remainder must not exceed the configured cap.
-func TestCallV3GenerateStreamingKeepsItsCeilingWhenTheSessionIsLong(t *testing.T) {
-	t.Setenv("ATLAS_V3_TIMEOUT", "1")
-	release := make(chan struct{})
-	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-		select {
-		case <-r.Context().Done():
-		case <-release:
-		}
-	})
-	defer srv.Close()
-	defer close(release)
-
-	sessionCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	start := time.Now()
-	_, err := callV3GenerateStreaming(sessionCtx, srv.URL, V3GenerateRequest{}, nil)
-	if err == nil {
-		t.Fatal("stalled V3 run did not time out")
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("the 1s configured cap did not bound a long session: %v", elapsed)
 	}
 }
