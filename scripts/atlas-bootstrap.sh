@@ -1148,12 +1148,20 @@ install_go() {
         return 1
     fi
 
-    # Verify SHA-256 checksum before extraction (https://go.dev/dl/)
+    # Verify SHA-256 before extraction. The checksum is fetched for the exact
+    # version and archive being downloaded, because ATLAS_GO_VERSION may select
+    # any release: a hash pinned to 1.26.6 would refuse every other version.
+    # https://go.dev/dl/?mode=json&include=all lists the sha256 of every file.
     local go_sha256
-    case "$arch" in
-        amd64) go_sha256="708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89" ;;
-        arm64) go_sha256="d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e" ;;
-    esac
+    go_sha256=$(curl -fsSL --proto '=https' --tlsv1.2 "https://go.dev/dl/?mode=json&include=all" \
+        | grep -A 5 "\"filename\": \"go${install_version}.linux-${arch}.tar.gz\"" \
+        | grep -o '"sha256": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+    if [[ -z "$go_sha256" ]]; then
+        log_err "Could not fetch the official checksum for $go_url."
+        log_err "  Refusing to install an unverified archive — atlas-tui will need manual install."
+        rm -f "$tmp"
+        return 1
+    fi
     local computed_sha256
     computed_sha256=$(sha256sum "$tmp" | awk '{print $1}')
     if [[ "$computed_sha256" != "$go_sha256" ]]; then
