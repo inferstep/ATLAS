@@ -13,34 +13,37 @@ import io
 import json
 from unittest.mock import patch
 
+import pytest
+
 import scoring
 
 
-def _response(payload):
-    return io.BytesIO(json.dumps(payload).encode())
-
-
-def _score(payload):
+def score_with_lens_answer(answer):
+    """Per-step score of a small candidate, with the lens answering `answer`."""
     with patch("urllib.request.urlopen") as urlopen:
-        urlopen.return_value.__enter__.return_value = _response(payload)
+        urlopen.return_value.__enter__.return_value = io.BytesIO(json.dumps(answer).encode())
         return scoring.score_candidate_per_step("def f():\n    return 1\n")
 
 
-def test_zero_tokens_reports_no_signal_not_a_neutral_score():
-    """The exact shape served under `--pooling mean`: enabled, 200 OK,
-    n_tokens 0, empty aggregate. It carries the failure and no number."""
-    out = _score({
-        "enabled": True,
-        "n_tokens": 0,
-        "aggregate": {},
-        "error": "ValueError: per-step evaluation failed",
-    })
+@pytest.mark.parametrize("answer", [
+    # The exact shape served under `--pooling mean`: enabled, 200 OK,
+    # n_tokens 0, empty aggregate, and an error that says why.
+    pytest.param({"enabled": True, "n_tokens": 0, "aggregate": {},
+                  "error": "ValueError: per-step evaluation failed"},
+                 id="with the error"),
+    # The same answer with no stated reason.
+    pytest.param({"enabled": True, "n_tokens": 0, "aggregate": {}},
+                 id="with no reason"),
+])
+def test_zero_tokens_reports_no_signal_not_a_neutral_score(answer):
+    """It carries the failure and no number."""
+    out = score_with_lens_answer(answer)
     assert set(out) == {"failure"}
     assert out["failure"]["kind"] == "lens_error"
 
 
 def test_real_scores_survive():
-    out = _score({
+    out = score_with_lens_answer({
         "enabled": True,
         "n_tokens": 12,
         "gx_available": True,
@@ -61,6 +64,5 @@ def test_real_scores_survive():
 def test_a_disabled_lens_is_unavailable():
     """The lens is required: switched off, it stops the run instead of
     reporting no signal."""
-    import pytest
     with pytest.raises(scoring.LensUnavailable):
-        _score({"enabled": False})
+        score_with_lens_answer({"enabled": False})
