@@ -308,7 +308,11 @@ install_k3s() {
     fi
 
     log_info "Installing K3s..."
-    curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+    local k3s_installer
+    k3s_installer=$(mktemp)
+    curl -fsSL --proto '=https' --tlsv1.2 https://get.k3s.io -o "$k3s_installer"
+    INSTALL_K3S_VERSION="v1.36.5+k3s1" sh "$k3s_installer" --write-kubeconfig-mode 644
+    rm -f "$k3s_installer"
 
     # Wait for K3s to be ready
     log_info "Waiting for K3s to be ready..."
@@ -352,7 +356,13 @@ install_gpu_operator() {
     # Add Helm repo
     if ! command -v helm &> /dev/null; then
         log_info "Installing Helm..."
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        local helm_installer
+        helm_installer=$(mktemp)
+        curl -fsSL --proto '=https' --tlsv1.2 \
+            https://raw.githubusercontent.com/helm/helm/v3.22.1/scripts/get-helm-3 \
+            -o "$helm_installer"
+        bash "$helm_installer"
+        rm -f "$helm_installer"
     fi
 
     helm repo add nvidia https://helm.ngc.nvidia.com/nvidia || true
@@ -362,6 +372,7 @@ install_gpu_operator() {
     kubectl create namespace gpu-operator || true
     helm install gpu-operator nvidia/gpu-operator \
         --namespace gpu-operator \
+        --version v26.7.2 \
         --set driver.enabled=false \
         --wait --timeout 10m
 

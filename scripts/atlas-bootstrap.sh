@@ -568,8 +568,7 @@ install_nvidia_driver_libs() {
 
             # Make sure EPEL is present (dkms lives there).
             if ! rpm -q epel-release &>/dev/null; then
-                $SUDO dnf install -y \
-                    "https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm" \
+                $SUDO dnf install -y epel-release \
                     >/dev/null 2>&1 || log_warn "EPEL install failed (continuing)"
             fi
 
@@ -628,10 +627,10 @@ install_nvidia_toolkit() {
     case "$DISTRO_FAMILY" in
         debian)
             # Add NVIDIA's repo
-            curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+            curl -fsSL --proto '=https' --tlsv1.2 https://nvidia.github.io/libnvidia-container/gpgkey \
                 | $SUDO gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null \
                 || die "Failed to add NVIDIA GPG key."
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+            curl -fsSL --proto '=https' --tlsv1.2 https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
                 | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
                 | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
             $SUDO $PKG update -y >/dev/null
@@ -639,7 +638,7 @@ install_nvidia_toolkit() {
                 || die "nvidia-container-toolkit install failed."
             ;;
         rhel)
-            curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
+            curl -fsSL --proto '=https' --tlsv1.2 https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo \
                 | $SUDO tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null
             $SUDO $PKG install -y nvidia-container-toolkit >/dev/null \
                 || die "nvidia-container-toolkit install failed."
@@ -1267,9 +1266,33 @@ install_go() {
     local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
     local tmp="$ATLAS_RUN_DIR/atlas-go.tar.gz"
     log_info "  Downloading $go_url…"
-    if ! curl -fL -# -o "$tmp" "$go_url"; then
+    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp" "$go_url"; then
         log_warn "Go download failed — atlas-tui binary will need manual install."
         log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
+        return 1
+    fi
+
+    # Verify SHA-256 before extraction. The checksum is fetched for the exact
+    # version and archive being downloaded, because ATLAS_GO_VERSION may select
+    # any release: a hash pinned to 1.26.6 would refuse every other version.
+    # https://go.dev/dl/?mode=json&include=all lists the sha256 of every file.
+    local go_sha256
+    go_sha256=$(curl -fsSL --proto '=https' --tlsv1.2 "https://go.dev/dl/?mode=json&include=all" \
+        | grep -A 5 "\"filename\": \"go${install_version}.linux-${arch}.tar.gz\"" \
+        | grep -o '"sha256": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+    if [[ -z "$go_sha256" ]]; then
+        log_err "Could not fetch the official checksum for $go_url."
+        log_err "  Refusing to install an unverified archive — atlas-tui will need manual install."
+        rm -f "$tmp"
+        return 1
+    fi
+    local computed_sha256
+    computed_sha256=$(sha256sum "$tmp" | awk '{print $1}')
+    if [[ "$computed_sha256" != "$go_sha256" ]]; then
+        log_err "Go archive checksum verification failed!"
+        log_err "  Expected: $go_sha256"
+        log_err "  Computed: $computed_sha256"
+        rm -f "$tmp"
         return 1
     fi
 
