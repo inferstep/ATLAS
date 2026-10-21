@@ -273,51 +273,97 @@ func TestAFailingCommandAuthorizesNothing(t *testing.T) {
 	}
 }
 
-func TestATimingOutCommandAuthorizesNothing(t *testing.T) {
+func TestACommandThatRewritesTheCandidateAuthorizesNothing(t *testing.T) {
 	stub := newStubSandbox(t)
-	stub.script("sleep 999", stubEffect{ExitCode: -1, TimedOut: true})
+	stub.script("pytest -q", stubEffect{ExitCode: 0, WriteTarget: "print(8)\n"})
 	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "sleep 999")
+	req := liveStagingReq(t, ctx, "pytest -q")
 	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingTimedOut {
-		t.Errorf("outcome %q, want timed_out", res.Commands[0].Outcome)
+	if res.Commands[0].Outcome != stagingMutatedTarget {
+		t.Errorf("outcome %q, want mutated_target", res.Commands[0].Outcome)
+	}
+	if !res.Commands[0].MutatedTarget {
+		t.Error("the mutation was not recorded")
 	}
 	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("a timeout authorized")
+		t.Error("a command that rewrote its own subject authorized")
+	}
+	if valid, why := res.validateAgainst(req); !valid {
+		t.Errorf("the mutation result is internally inconsistent: %s", why)
 	}
 }
 
-func TestARefusedCommandNeverReachesTheExecutor(t *testing.T) {
-	stub := newStubSandbox(t)
-	ctx := stagingCtx(t, stub)
-	// The existing safety gate's own catastrophic case.
-	req := liveStagingReq(t, ctx, "rm -rf /")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingRefused {
-		t.Errorf("outcome %q, want refused", res.Commands[0].Outcome)
-	}
-	if seen := stub.commandsSeen(); len(seen) != 0 {
-		t.Errorf("a refused command was executed: %v", seen)
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("a refused command authorized")
-	}
-}
-
-func TestABackgroundingCommandIsRefusedBeforeItRuns(t *testing.T) {
-	stub := newStubSandbox(t)
-	ctx := stagingCtx(t, stub)
-	for _, cmd := range []string{
-		"pytest -q &", "nohup pytest -q", "setsid pytest -q", "pytest -q & ",
+// A command that reached the executor, but whose run shows nothing about the
+// candidate, gets its own outcome and authorizes nothing.
+func TestARunThatProvesNothingAuthorizesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		effect stubEffect
+		want   stagingCommandOutcome
+	}{
+		{"it times out", stubEffect{ExitCode: -1, TimedOut: true}, stagingTimedOut},
+		{"it changes an input", stubEffect{ExitCode: 0, WriteOther: "rewritten"}, stagingMutatedWorkspace},
+		{"the workspace cannot be described", stubEffect{ExitCode: 0, Truncated: true}, stagingUnobservable},
+		// The overlay did not take: the target holds something else.
+		{"the staged bytes are not the candidate", stubEffect{ExitCode: 0, StagedAs: "SOMETHING ELSE\n"}, stagingUnobservable},
+		{"the executor refuses the request", stubEffect{HTTPStatus: http.StatusBadRequest}, stagingUnobservable},
 	} {
-		req := liveStagingReq(t, ctx, cmd)
-		res, _ := stageCandidate(ctx, req)
-		if res.Commands[0].Outcome != stagingRefused {
-			t.Errorf("%q outcome %q, want refused", cmd, res.Commands[0].Outcome)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newStubSandbox(t)
+			stub.script("pytest -q", tc.effect)
+			ctx := stagingCtx(t, stub)
+			req := liveStagingReq(t, ctx, "pytest -q")
+
+			res, _ := stageCandidate(ctx, req)
+
+			if res.Commands[0].Outcome != tc.want {
+				t.Errorf("outcome %q, want %q", res.Commands[0].Outcome, tc.want)
+			}
+			if got := res.authorizingOutcomes(); len(got) != 0 {
+				t.Errorf("it authorized %v", got)
+			}
+		})
 	}
-	if seen := stub.commandsSeen(); len(seen) != 0 {
-		t.Errorf("a backgrounding command was executed: %v", seen)
+}
+
+// A command refused on this side is never sent to the executor.
+func TestARefusedCommandNeverReachesTheExecutor(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		// target replaces the staged target path when it is set.
+		target string
+	}{
+		{"the safety gate refuses it", "rm -rf /", ""},
+		{"it ends in an ampersand", "pytest -q &", ""},
+		{"it ends in an ampersand and a space", "pytest -q & ", ""},
+		{"it uses nohup", "nohup pytest -q", ""},
+		{"it uses setsid", "setsid pytest -q", ""},
+		{"its target is outside the workspace", "pytest -q", "/etc/passwd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newStubSandbox(t)
+			ctx := stagingCtx(t, stub)
+			req := liveStagingReq(t, ctx, tc.command)
+			if tc.target != "" {
+				req.Identity.TargetPath = tc.target
+			}
+
+			res, ok := stageCandidate(ctx, req)
+
+			if !ok {
+				t.Fatal("no result")
+			}
+			if res.Commands[0].Outcome != stagingRefused {
+				t.Errorf("outcome %q, want refused", res.Commands[0].Outcome)
+			}
+			if seen := stub.commandsSeen(); len(seen) != 0 {
+				t.Errorf("a refused command was executed: %v", seen)
+			}
+			if got := res.authorizingOutcomes(); len(got) != 0 {
+				t.Errorf("a refused command authorized %v", got)
+			}
+		})
 	}
 }
 
@@ -345,83 +391,6 @@ func TestACancelledRunStopsAndAuthorizesNothing(t *testing.T) {
 	}
 	if seen := stub.commandsSeen(); len(seen) != 0 {
 		t.Errorf("a cancelled run executed %v", seen)
-	}
-}
-
-func TestACommandThatRewritesTheCandidateAuthorizesNothing(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("pytest -q", stubEffect{ExitCode: 0, WriteTarget: "print(8)\n"})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingMutatedTarget {
-		t.Errorf("outcome %q, want mutated_target", res.Commands[0].Outcome)
-	}
-	if !res.Commands[0].MutatedTarget {
-		t.Error("the mutation was not recorded")
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("a command that rewrote its own subject authorized")
-	}
-	if valid, why := res.validateAgainst(req); !valid {
-		t.Errorf("the mutation result is internally inconsistent: %s", why)
-	}
-}
-
-func TestACommandThatChangesAnInputAuthorizesNothing(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("pytest -q", stubEffect{ExitCode: 0, WriteOther: "rewritten"})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingMutatedWorkspace {
-		t.Errorf("outcome %q, want mutated_workspace", res.Commands[0].Outcome)
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("a command that changed its inputs authorized")
-	}
-}
-
-func TestAnUnobservableWorkspaceAuthorizesNothing(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("pytest -q", stubEffect{ExitCode: 0, Truncated: true})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingUnobservable {
-		t.Errorf("outcome %q, want unobservable", res.Commands[0].Outcome)
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("an unobservable run authorized")
-	}
-}
-
-func TestTheStagedBytesMustBeTheCandidate(t *testing.T) {
-	stub := newStubSandbox(t)
-	// The overlay did not take: the target holds something else.
-	stub.script("pytest -q", stubEffect{ExitCode: 0, StagedAs: "SOMETHING ELSE\n"})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome != stagingUnobservable {
-		t.Errorf("outcome %q, want unobservable", res.Commands[0].Outcome)
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("a command that ran against other bytes authorized")
-	}
-}
-
-func TestAnExecutorRefusalIsNotAPass(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("pytest -q", stubEffect{HTTPStatus: http.StatusBadRequest})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	res, _ := stageCandidate(ctx, req)
-	if res.Commands[0].Outcome == stagingExitedZero {
-		t.Error("an executor refusal was read as a pass")
-	}
-	if len(res.authorizingOutcomes()) != 0 {
-		t.Error("an executor refusal authorized")
 	}
 }
 
@@ -483,32 +452,12 @@ func TestCommandsRunInOrderAndKeepTheirOwnIdentity(t *testing.T) {
 	if len(res.authorizingOutcomes()) != 3 {
 		t.Error("three passing commands did not produce three authorizations")
 	}
-	// And each names its own obligation: one command's pass never stands in
-	// for another's.
+	// Each result names its own obligation: one command's pass never stands
+	// in for another's.
 	for i, c := range res.Commands {
 		if c.ObligationID != req.Commands[i].ObligationID {
 			t.Errorf("result %d names another command's obligation", i)
 		}
-	}
-}
-
-func TestTheSetStopsAtTheBudgetRatherThanRunningPartOfIt(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("a", stubEffect{ExitCode: 0})
-	stub.script("b", stubEffect{ExitCode: 0})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "a", "b")
-	// A budget already spent.
-	req.Budget.TotalTimeoutSec = 1
-	req.Budget.PerCommandTimeoutSec = 1
-	if ok, why := req.validate(); !ok {
-		t.Fatalf("fixture: %s", why)
-	}
-	res, _ := stageCandidate(ctx, req)
-	// Whatever ran, the set is not complete and nothing partial is authorized
-	// as if it were the whole obligation.
-	if res.Complete && len(res.Commands) != len(req.Commands) {
-		t.Error("a partial set claimed to be complete")
 	}
 }
 
@@ -525,6 +474,41 @@ func TestAnOverBudgetSetIsRefusedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
+// TestASetThatRanOutOfBudgetPartWayIsNotComplete is the case the budget exists
+// for: the first command ran, the second had no time left, and the result
+// must not read as the whole obligation discharged.
+func TestASetThatRanOutOfBudgetPartWayIsNotComplete(t *testing.T) {
+	stub := newStubSandbox(t)
+	stub.script("slow", stubEffect{ExitCode: 0, SleepMS: 1200})
+	stub.script("after", stubEffect{ExitCode: 0})
+	ctx := stagingCtx(t, stub)
+	req := liveStagingReq(t, ctx, "slow", "after")
+	req.Budget.TotalTimeoutSec = 1
+	req.Budget.PerCommandTimeoutSec = 1
+	if ok, why := req.validate(); !ok {
+		t.Fatalf("fixture: %s", why)
+	}
+
+	res, ok := stageCandidate(ctx, req)
+	if !ok {
+		t.Fatal("no result")
+	}
+	if res.Commands[1].Outcome != stagingBudgetExceeded {
+		t.Fatalf("second outcome %q, want budget_exceeded", res.Commands[1].Outcome)
+	}
+	if res.Complete {
+		t.Error("a set with an unrun command claimed to be complete")
+	}
+	if seen := stub.commandsSeen(); len(seen) != 1 || seen[0] != "slow" {
+		t.Errorf("ran %v; the unbudgeted command should not have run", seen)
+	}
+	// The command that ran is still reported as it ended. On its own it cannot
+	// discharge a two-command obligation, and Complete is what says so.
+	if res.Commands[0].Outcome != stagingExitedZero {
+		t.Errorf("first outcome %q", res.Commands[0].Outcome)
+	}
+}
+
 // --- isolation --------------------------------------------------------------------
 
 func TestStagingNeverWritesTheProductionWorkspace(t *testing.T) {
@@ -537,6 +521,7 @@ func TestStagingNeverWritesTheProductionWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := liveStagingReq(t, ctx, "pytest -q")
+
 	stageCandidate(ctx, req)
 
 	after, err := os.ReadFile(target)
@@ -544,10 +529,7 @@ func TestStagingNeverWritesTheProductionWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(after) != string(before) {
-		t.Error("staging wrote the candidate into the real workspace")
-	}
-	if string(after) == stagedCode {
-		t.Error("the candidate landed on disk")
+		t.Errorf("staging wrote %q into the real workspace", after)
 	}
 }
 
@@ -555,17 +537,19 @@ func TestParallelCandidatesDoNotShareStagingState(t *testing.T) {
 	stub := newStubSandbox(t)
 	stub.script("pytest -q", stubEffect{ExitCode: 0})
 	ctx := stagingCtx(t, stub)
+	requests := make([]stagingRequest, 4)
+	for i := range requests {
+		requests[i] = liveStagingReq(t, ctx, "pytest -q")
+		requests[i].Identity.CandidateInstanceID = "req-stage:inv:1:cand-" + string(rune('a'+i))
+	}
 
 	var wg sync.WaitGroup
-	results := make([]stagingResult, 4)
-	for i := 0; i < 4; i++ {
+	results := make([]stagingResult, len(requests))
+	for i := range requests {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			req := liveStagingReq(t, ctx, "pytest -q")
-			req.Identity.CandidateInstanceID = "req-stage:inv:1:cand-" + string(rune('a'+i))
-			res, _ := stageCandidate(ctx, req)
-			results[i] = res
+			results[i], _ = stageCandidate(ctx, requests[i])
 		}(i)
 	}
 	wg.Wait()
@@ -677,10 +661,9 @@ func TestTheStagingRequestSendsOnlyWhatTheInvocationNeeds(t *testing.T) {
 	}
 }
 
-// TestTheExecutorCannotDeclareItsOwnResultTrusted pins the trust boundary from
-// the proxy side: whatever the executor says about authority is ignored,
-// because the only thing read out of its answer is hashes, an exit code and
-// two flags.
+// TestTheExecutorCannotDeclareItsOwnResultTrusted holds the trust boundary
+// from the proxy side: whatever the executor says about authority is ignored,
+// because only hashes, an exit code and two flags are read from its answer.
 func TestTheExecutorCannotDeclareItsOwnResultTrusted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -704,12 +687,9 @@ func TestTheExecutorCannotDeclareItsOwnResultTrusted(t *testing.T) {
 	req := liveStagingReq(t, ctx, "pytest -q")
 	res, _ := stageCandidate(ctx, req)
 
-	// The forged envelope also names an `outcome` -- "exited_zero", a word from
-	// the STAGING vocabulary rather than the executor's. It is not a member of
-	// the execution vocabulary this build reads, so it canonicalises to
-	// unclassified and the command is recorded as unobserved: an executor
-	// speaking a language this build cannot check has demonstrated nothing,
-	// which is a stronger answer than scoring its exit code.
+	// "exited_zero" is a staging word, not an execution outcome. The executor's
+	// outcome is read as unclassified, so the run shows nothing and its exit
+	// code is never scored.
 	if res.Commands[0].Outcome != stagingUnobservable {
 		t.Errorf("outcome %q; the executor's own claim was believed", res.Commands[0].Outcome)
 	}
@@ -721,57 +701,5 @@ func TestTheExecutorCannotDeclareItsOwnResultTrusted(t *testing.T) {
 		if strings.Contains(string(blob), banned) {
 			t.Errorf("the executor's claim survived into the result: %q", banned)
 		}
-	}
-}
-
-func TestATargetOutsideTheWorkspaceIsRefused(t *testing.T) {
-	stub := newStubSandbox(t)
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "pytest -q")
-	req.Identity.TargetPath = "/etc/passwd"
-	res, ok := stageCandidate(ctx, req)
-	if !ok {
-		t.Fatal("no result")
-	}
-	if res.Commands[0].Outcome != stagingRefused {
-		t.Errorf("outcome %q, want refused", res.Commands[0].Outcome)
-	}
-	if seen := stub.commandsSeen(); len(seen) != 0 {
-		t.Errorf("an escaping target executed %v", seen)
-	}
-}
-
-// TestASetThatRanOutOfBudgetPartWayIsNotComplete is the case the whole budget
-// exists for: the first command was allowed to run, the second was not, and
-// what came back must not read as the client's obligation discharged.
-func TestASetThatRanOutOfBudgetPartWayIsNotComplete(t *testing.T) {
-	stub := newStubSandbox(t)
-	stub.script("slow", stubEffect{ExitCode: 0, SleepMS: 1200})
-	stub.script("after", stubEffect{ExitCode: 0})
-	ctx := stagingCtx(t, stub)
-	req := liveStagingReq(t, ctx, "slow", "after")
-	req.Budget.TotalTimeoutSec = 1
-	req.Budget.PerCommandTimeoutSec = 1
-	if ok, why := req.validate(); !ok {
-		t.Fatalf("fixture: %s", why)
-	}
-
-	res, ok := stageCandidate(ctx, req)
-	if !ok {
-		t.Fatal("no result")
-	}
-	if res.Commands[1].Outcome != stagingBudgetExceeded {
-		t.Fatalf("second outcome %q, want budget_exceeded", res.Commands[1].Outcome)
-	}
-	if res.Complete {
-		t.Error("a set with an unrun command claimed to be complete")
-	}
-	if seen := stub.commandsSeen(); len(seen) != 1 || seen[0] != "slow" {
-		t.Errorf("ran %v; the unbudgeted command should not have run", seen)
-	}
-	// The one that did run is still reported honestly -- but on its own it
-	// cannot discharge a two-command obligation, and Complete is what says so.
-	if res.Commands[0].Outcome != stagingExitedZero {
-		t.Errorf("first outcome %q", res.Commands[0].Outcome)
 	}
 }

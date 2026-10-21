@@ -131,51 +131,76 @@ const workContract = `{"task_mode":"work","output_knowledge":"declared",` +
 
 // --- one rule over one candidate --------------------------------------------
 
-// No declared verification, a safe selected candidate: the exact bytes land.
+// No declared verification, a safe selected candidate: the exact bytes land,
+// terminator and all.
+//
+// Every hash in the chain -- the service's selected hash, the authorization
+// identity, the grant, the disk read -- is computed from the same string, so a
+// candidate that ends in two newlines lands with two, and one that ends in
+// none lands with none. This is the delivery half of the exact-byte contract
+// whose extraction half lives in the V3 service.
 func TestAutomaticDeliversTheSelectedCandidate(t *testing.T) {
-	w := newAutomaticWorld(t, workContract, routeWinner, nil, true)
-	res, err := w.write(t)
-	if err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if res == nil || !res.Success {
-		t.Fatalf("delivery failed: %+v", res)
-	}
-	if got := w.disk(t); got != routeWinner {
-		t.Fatalf("disk holds %q, want the selected candidate", got)
-	}
-	if res.AuthorizedDeliveryHash != contentSHA256(routeWinner) {
-		t.Error("the result does not name the authorization it spent")
-	}
-	if liveGrantCount(w.ctx) != 0 {
-		t.Error("the grant was not spent")
+	for _, tc := range []struct {
+		name   string
+		winner string
+	}{
+		{"one final newline", routeWinner},
+		{"two trailing newlines", routeWinner + "\n"},
+		{"no final newline", strings.TrimSuffix(routeWinner, "\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newAutomaticWorld(t, workContract, tc.winner, nil, true)
+
+			res, err := w.write(t)
+
+			if err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			if res == nil || !res.Success {
+				t.Fatalf("delivery failed: %+v", res)
+			}
+			if got := w.disk(t); got != tc.winner {
+				t.Fatalf("disk holds %q, want the exact candidate %q", got, tc.winner)
+			}
+			if res.AuthorizedDeliveryHash != contentSHA256(tc.winner) {
+				t.Errorf("authorization names %s, disk bytes hash to %s",
+					res.AuthorizedDeliveryHash, contentSHA256(tc.winner))
+			}
+			if got := contentSHA256(w.disk(t)); got != *w.selected {
+				t.Errorf("disk hash %s is not the selected hash %s", got, *w.selected)
+			}
+			if liveGrantCount(w.ctx) != 0 {
+				t.Error("the grant was not spent")
+			}
+		})
 	}
 }
 
 // An older client may still send a candidate_policy. Every spelling gets the
 // same rule and lands the same bytes: nothing a request says selects a mode.
+// TestAnUnsupportedAdapterDoesNotBlockAutomaticDelivery is the same request
+// without the field.
 func TestEveryOlderPolicySpellingLandsTheSameBytes(t *testing.T) {
-	for _, policy := range []string{"", "strict", "advisory", "automatic_v3"} {
-		contract := workContract
-		if policy != "" {
-			contract = strings.TrimSuffix(workContract, "}") + `,"candidate_policy":"` + policy + `"}`
-		}
-		w := newAutomaticWorld(t, contract, routeWinner, nil, false)
-		if _, err := w.write(t); err != nil {
-			t.Fatalf("%q: write failed: %v", policy, err)
-		}
-		if got := w.disk(t); got != routeWinner {
-			t.Errorf("%q: disk holds %q, want the selected candidate", policy, got)
-		}
+	for _, policy := range []string{"strict", "advisory", "automatic_v3"} {
+		t.Run(policy, func(t *testing.T) {
+			contract := strings.TrimSuffix(workContract, "}") + `,"candidate_policy":"` + policy + `"}`
+			w := newAutomaticWorld(t, contract, routeWinner, nil, false)
+			if _, err := w.write(t); err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			if got := w.disk(t); got != routeWinner {
+				t.Errorf("disk holds %q, want the selected candidate", got)
+			}
+		})
 	}
 }
 
 // The delivery decision reads which basis earned a grant, not the eligibility
-// answer: the mint can still refuse what eligibility allowed. Before, the
-// decision said "delivers", the mint refused, and nothing at all was written.
+// answer: the mint can still refuse what eligibility allowed. A decision that
+// said "delivers" over a refused mint would write nothing at all.
 func TestTheDecisionReadsTheGrantNotTheEligibility(t *testing.T) {
 	w := newAutomaticWorld(t, workContract, routeWinner, nil, true)
-	// The request can no longer deliver: minting refuses from here on.
+	// The request's grants are retired, so minting refuses from here on.
 	retireAuthorizationGrants(w.ctx, grantTerminal)
 	recs := captureShadow(t, func() {
 		res, err := w.write(t)
@@ -201,35 +226,9 @@ func TestTheDecisionReadsTheGrantNotTheEligibility(t *testing.T) {
 
 // --- selection identity, not score ------------------------------------------
 
-// The proxy delivers the bytes the selection NAMED. A service whose winning
-// score points elsewhere changes nothing: identity decides.
-func TestOnlyTheNamedWinnerIsDelivered(t *testing.T) {
-	w := newAutomaticWorld(t, workContract, routeWinner, nil, true)
-	if _, err := w.write(t); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.disk(t); got != routeWinner {
-		t.Fatalf("disk holds %q", got)
-	}
-	// And when the service names a candidate that is not what arrived, nothing
-	// lands: the bytes in hand won nothing.
-	other := newAutomaticWorld(t, workContract, routeWinner, nil, true)
-	*other.selected = contentSHA256("def solve(v):\n    return 0\n")
-	ok, why := automaticDeliveryAllowed(automaticEligibilityInput{
-		SelectedCandidateID: *other.selected,
-		CandidateHash:       contentSHA256(routeWinner),
-		Identity: V3EvidenceProvenance{RequestID: "r", InvocationID: "i",
-			CandidateInstanceID: "c", WorkspaceStateHash: "w",
-			CandidateHash: contentSHA256(routeWinner)},
-		Scope: automaticTestScope(t),
-	})
-	if ok || why != automaticNotTheWinner {
-		t.Errorf("a candidate the service did not name was eligible (%v, %q)", ok, why)
-	}
-}
-
-// A missing, blank or legacy selection identity fails closed.
-func TestAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
+// The proxy delivers only the bytes the selection NAMED. A selection identity
+// that is missing, blank, incomplete or names other bytes fails closed.
+func TestAWrongOrAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 	base := automaticEligibilityInput{
 		SelectedCandidateID: contentSHA256(routeWinner),
 		CandidateHash:       contentSHA256(routeWinner),
@@ -251,6 +250,10 @@ func TestAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 			automaticNoSelection},
 		{"blank selection", func(i *automaticEligibilityInput) { i.SelectedCandidateID = "   " },
 			automaticNoSelection},
+		// The bytes in hand won nothing when the service named other bytes.
+		{"selection names other bytes", func(i *automaticEligibilityInput) {
+			i.SelectedCandidateID = contentSHA256("def solve(v):\n    return 0\n")
+		}, automaticNotTheWinner},
 		{"no candidate hash", func(i *automaticEligibilityInput) { i.CandidateHash = "" },
 			automaticIdentityIncomplete},
 		{"no request id", func(i *automaticEligibilityInput) { i.Identity.RequestID = "" },
@@ -288,22 +291,27 @@ func TestAmbiguousSelectionIdentityFailsClosed(t *testing.T) {
 // --- absence of an oracle is not failure -------------------------------------
 
 // An adapter that cannot measure this class is unavailable evidence, not
-// failed evidence. With no declared requirement, the candidate may still land.
+// failed evidence. With no declared requirement, the candidate may still land,
+// and its label says it landed under the automatic rule: a user reviewing the
+// diff is told where the bytes came from, and nothing about how good they are.
 func TestAnUnsupportedAdapterDoesNotBlockAutomaticDelivery(t *testing.T) {
 	w := newAutomaticWorld(t, workContract, routeWinner, nil, false)
-	if _, err := w.write(t); err != nil {
+	res, err := w.write(t)
+	if err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 	if got := w.disk(t); got != routeWinner {
-		t.Errorf("an unsupported adapter blocked an otherwise safe candidate: %q", got)
+		t.Fatalf("an unsupported adapter blocked an otherwise safe candidate: %q", got)
+	}
+	if res.DeliveryProvenance != DeliveryFromAutomaticV3 {
+		t.Errorf("provenance %q, want %q", res.DeliveryProvenance, DeliveryFromAutomaticV3)
 	}
 }
 
 // --- declared requirements stay binding --------------------------------------
 
 // A declared command binds whether the client named the output or the
-// model's own call did. Both targets are staged and checked; before, the
-// model-named one was never staged, so its candidate could never land.
+// model's own call did. Both targets are staged and checked.
 func TestADeclaredCheckStaysBinding(t *testing.T) {
 	contracts := map[string]string{
 		"declared output": `{"task_mode":"work","output_knowledge":"declared",` +
@@ -406,33 +414,6 @@ func TestCaptureOnlySuppressesAutomaticDelivery(t *testing.T) {
 	}
 }
 
-// --- provenance --------------------------------------------------------------
-
-// The label matches the bytes. A user reviewing the diff is told where they
-// came from and under which rule, and nothing about how good they are.
-func TestProvenanceMatchesTheBytesOnDisk(t *testing.T) {
-	w := newAutomaticWorld(t, workContract, routeWinner, nil, true)
-	if _, err := w.write(t); err != nil {
-		t.Fatal(err)
-	}
-	if w.disk(t) != routeWinner {
-		t.Fatal("the candidate did not land")
-	}
-	if got := deliveryProvenanceFor(candidatePolicyOutcome{
-		Decision: PolicyCandidateAutomaticV3, Delivers: true}); got != DeliveryFromAutomaticV3 {
-		t.Errorf("provenance %q", got)
-	}
-	// A decision that did not deliver never claims a candidate origin.
-	for _, d := range []candidatePolicyDecision{
-		PolicyBaselineRetained, PolicyCandidateRejectedHardVeto,
-		PolicyCandidateAutomaticV3,
-	} {
-		if got := deliveryProvenanceFor(candidatePolicyOutcome{Decision: d}); got != DeliveryFromModelProposal {
-			t.Errorf("%s claimed %q without delivering", d, got)
-		}
-	}
-}
-
 // --- structural ownership -----------------------------------------------------
 
 // Every automatic candidate goes through the shared authorization owner and
@@ -525,40 +506,5 @@ func TestNoCandidateApprovalSurfaceExists(t *testing.T) {
 				t.Errorf("%s carries a candidate-approval surface: %s", n, banned)
 			}
 		}
-	}
-}
-
-// The bytes on disk are the bytes the selection path named, terminator and
-// all. Every hash in the chain -- the service's selected hash, the
-// authorization identity, the grant, the disk read -- is computed from the
-// same string, so a candidate that ends in two newlines lands with two, and
-// one that ends in none lands with none. This is the delivery half of the
-// exact-byte contract whose extraction half lives in the V3 service.
-func TestDeliveryKeepsTheCandidatesTrailingBytes(t *testing.T) {
-	for name, winner := range map[string]string{
-		"one final newline":     routeWinner,
-		"two trailing newlines": routeWinner + "\n",
-		"no final newline":      strings.TrimSuffix(routeWinner, "\n"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			w := newAutomaticWorld(t, workContract, winner, nil, true)
-			res, err := w.write(t)
-			if err != nil {
-				t.Fatalf("write failed: %v", err)
-			}
-			if res == nil || !res.Success {
-				t.Fatalf("delivery failed: %+v", res)
-			}
-			if got := w.disk(t); got != winner {
-				t.Fatalf("disk holds %q, want the exact candidate %q", got, winner)
-			}
-			if res.AuthorizedDeliveryHash != contentSHA256(winner) {
-				t.Errorf("authorization names %s, disk bytes hash to %s",
-					res.AuthorizedDeliveryHash, contentSHA256(winner))
-			}
-			if got := contentSHA256(w.disk(t)); got != *w.selected {
-				t.Errorf("disk hash %s is not the selected hash %s", got, *w.selected)
-			}
-		})
 	}
 }

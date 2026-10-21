@@ -13,33 +13,30 @@ import (
 
 // A mutation the producer never saw has to say so.
 //
-// These reproduce the corrected eligibility pilot's own shapes. Nine of its
-// twenty-four families mutated the workspace and produced not one production
-// record about the candidate route, because every predicate that turns a
-// mutation away returns before a route entry exists. Each case below is one
-// of those families, reduced to the file that silenced it.
+// Every predicate that turns a mutation away returns before a route entry
+// exists, so without a bypass record such a mutation leaves no production
+// record about the candidate route at all. Each case below is one such
+// shape, reduced to a single small file.
 
 // bypassWorld drives a real edit or write with a producer that is configured
 // and must not be called. If generation runs, the fixture fails: these are
 // skips, and a skip that reaches the pipeline is not the case under test.
 type bypassWorld struct {
-	ctx  *AgentContext
-	dir  string
-	v3   *int
-	sand *int
+	ctx *AgentContext
+	dir string
+	v3  *int
 }
 
 func newBypassWorld(t *testing.T) *bypassWorld {
 	t.Helper()
 	dir := t.TempDir()
-	v3Calls, sandCalls := 0, 0
+	v3Calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/v3/"):
 			v3Calls++
 			http.Error(w, "the producer must not be consulted here", http.StatusTeapot)
 		case r.URL.Path == "/internal/cyclomatic_complexity":
-			sandCalls++
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
 		case r.URL.Path == "/internal/structural_check":
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
@@ -54,28 +51,27 @@ func newBypassWorld(t *testing.T) *bypassWorld {
 	ctx.PermissionMode = PermissionYolo
 	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-bypass")
 	ctx.V3URL, ctx.SandboxURL = srv.URL, srv.URL
-	return &bypassWorld{ctx: ctx, dir: dir, v3: &v3Calls, sand: &sandCalls}
+	return &bypassWorld{ctx: ctx, dir: dir, v3: &v3Calls}
 }
 
 func bypassRecords(recs []map[string]interface{}) []map[string]interface{} {
 	return recordsOfKind(recs, "candidate_generation_bypass")
 }
 
-// The pilot's own repair fixtures: a few lines of Python or Go, edited in
-// place, and never seen by the producer. Nothing in production said why.
+// A few lines of Python or Go, edited in place and never seen by the
+// producer, record why the producer was skipped.
 func TestAnEditTheProducerNeverSawSaysWhyItWasSkipped(t *testing.T) {
 	cases := []struct {
 		name, file, original, edited, want string
 	}{{
-		// pilot_case_insensitive_repair: registry.py, six lines.
+		// Six lines of Python.
 		name:     "a file below the tier floor",
 		file:     "registry.py",
 		original: "REG = {}\n\n\ndef find(name):\n    return REG.get(name)\n",
 		edited:   "REG = {}\n\n\ndef find(name):\n    return REG.get(name.lower())\n",
 		want:     string(bypassTierBelowThreshold),
 	}, {
-		// pilot_go_dedupe_repair: slices.go, eighteen lines — over the tier
-		// floor, under the edit floor.
+		// Eighteen lines of Go: over the tier floor, under the edit floor.
 		name:     "a file over the tier floor and under the edit floor",
 		file:     "slices.go",
 		original: "package main\n\nimport \"fmt\"\n\nfunc Dedupe(in []string) []string {\n\tseen := map[string]bool{}\n\tout := []string{}\n\tfor _, v := range in {\n\t\tif seen[v] {\n\t\t\tcontinue\n\t\t}\n\t\tout = append(out, v)\n\t}\n\treturn out\n}\n\nfunc main() {\n\tfmt.Println(Dedupe(nil))\n}\n",
@@ -117,8 +113,8 @@ func TestAnEditTheProducerNeverSawSaysWhyItWasSkipped(t *testing.T) {
 	}
 }
 
-// pilot_router_and_handlers: two new Python files of seven and nine lines,
-// written through write_file, neither of which reached the producer.
+// A new Python file of a few lines, written through write_file, never reaches
+// the producer and records why.
 func TestANewFileBelowTheTierFloorSaysWhyItWasSkipped(t *testing.T) {
 	w := newBypassWorld(t)
 	const body = "def route(p):\n    if p == \"/\":\n        return home\n    return miss\n"

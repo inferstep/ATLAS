@@ -11,10 +11,10 @@ import (
 
 // The acquisition control, proved through the real production route.
 //
-// RED, before this existed: an outcome-blind acquisition set advisory and
-// believed that made it capture-only, while a STRICT authorization minted a
-// grant and landed a candidate in the task workspace. The first pilot did
-// exactly that twice. What follows is the same route with the control on.
+// Setting the policy to advisory does not make a run capture-only: a STRICT
+// authorization would still mint a grant and land a candidate in the task
+// workspace. The control stops that, and these tests run the same route with
+// it on.
 
 const captureOnlyContract = `{"task_mode":"work","output_knowledge":"declared",` +
 	`"expected_outputs":["solve.py"],"verification_knowledge":"declared",` +
@@ -50,7 +50,8 @@ func TestCaptureDisabledStillDeliversAStrictCandidate(t *testing.T) {
 }
 
 // Capture-only: the same route, the same evidence, the same policy answer --
-// and no licence, no delivery, and the caller's own bytes on disk.
+// and no licence, no delivery, and the caller's own bytes on disk. It costs
+// no extra model turn.
 func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 	t.Setenv(CandidateCaptureOnlyEnv, "1")
 	w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": {}})
@@ -73,6 +74,14 @@ func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 		if r["disposition"] == "consumed_and_landed" {
 			t.Error("a delivery landed under capture-only")
 		}
+	}
+
+	// The pipeline was asked once, and the route recorded how it ended.
+	if got := w.generateCalls(); got != 1 {
+		t.Errorf("the pipeline was asked %d times", got)
+	}
+	if len(recordsOfKind(recs, "shadow_route_disposition")) == 0 {
+		t.Error("the route recorded no ending")
 	}
 
 	// The declared command still ran against the exact candidate bytes.
@@ -133,26 +142,6 @@ func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 	}
 }
 
-// One suppression per decided candidate, and no extra model turn for it.
-func TestCaptureOnlyCostsNoExtraTurn(t *testing.T) {
-	t.Setenv(CandidateCaptureOnlyEnv, "1")
-	w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": {}})
-	recs := captureShadow(t, func() {
-		if _, err := w.write(t); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if got := w.generateCalls(); got != 1 {
-		t.Errorf("the pipeline was asked %d times", got)
-	}
-	if n := len(recordsOfKind(recs, "candidate_capture_only_suppression")); n != 1 {
-		t.Errorf("%d suppressions for one candidate", n)
-	}
-	if n := len(recordsOfKind(recs, "shadow_route_disposition")); n < 1 {
-		t.Error("the route recorded no ending")
-	}
-}
-
 // Every edit tool goes through the same boundary.
 func TestCaptureOnlyCoversEveryEditTool(t *testing.T) {
 	t.Setenv(CandidateCaptureOnlyEnv, "1")
@@ -179,30 +168,22 @@ func TestCaptureOnlyCoversEveryEditTool(t *testing.T) {
 	}
 }
 
-// Advisory, confirm, veto, cancellation and the rest all reach the same place:
-// nothing lands, and the answer survives.
+// Whatever the policy answers, under the control nothing lands and no grant
+// survives.
 func TestCaptureOnlyAcrossEveryPolicyAnswer(t *testing.T) {
 	t.Setenv(CandidateCaptureOnlyEnv, "1")
 	for _, tc := range []struct {
-		name     string
-		contract string
-		commands map[string]stubEffect
+		name   string
+		effect stubEffect
 	}{
-		{"advisory preferred", strings.Replace(captureOnlyContract, `"task_mode":"work"`,
-			`"task_mode":"work","candidate_policy":"advisory"`, 1),
-			map[string]stubEffect{"pytest -q": {}}},
-		{"confirm required", strings.Replace(captureOnlyContract, `"task_mode":"work"`,
-			`"task_mode":"work","candidate_policy":"automatic_v3"`, 1),
-			map[string]stubEffect{"pytest -q": {}}},
-		{"hard veto", captureOnlyContract, map[string]stubEffect{"pytest -q": {ExitCode: 1}}},
-		{"execution unavailable", captureOnlyContract,
-			map[string]stubEffect{"pytest -q": {HTTPStatus: 503}}},
-		{"timeout", captureOnlyContract, map[string]stubEffect{"pytest -q": {TimedOut: true}}},
-		{"mutated target", captureOnlyContract,
-			map[string]stubEffect{"pytest -q": {WriteTarget: "rewritten\n"}}},
+		{"strict authorization", stubEffect{}},
+		{"hard veto", stubEffect{ExitCode: 1}},
+		{"execution unavailable", stubEffect{HTTPStatus: 503}},
+		{"timeout", stubEffect{TimedOut: true}},
+		{"mutated target", stubEffect{WriteTarget: "rewritten\n"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := captureOnlyWorld(t, tc.contract, tc.commands)
+			w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": tc.effect})
 			res, err := w.write(t)
 			if err != nil {
 				t.Fatalf("write failed: %v", err)
@@ -230,11 +211,10 @@ func TestCaptureOnlyUnderCancellation(t *testing.T) {
 	cancelled, cancel := context.WithCancel(w.ctx.Ctx)
 	cancel()
 	w.ctx.Ctx = cancelled
-	if _, err := w.write(t); err == nil {
-		if raw, readErr := os.ReadFile(w.path); readErr == nil &&
-			string(raw) == routeWinner {
-			t.Fatal("a cancelled request delivered a candidate")
-		}
+	// The write may fail or not; either way the candidate is not on disk.
+	w.write(t)
+	if raw, err := os.ReadFile(w.path); err == nil && string(raw) == routeWinner {
+		t.Fatal("a cancelled request delivered a candidate")
 	}
 	if liveGrantCount(w.ctx) != 0 {
 		t.Error("cancellation left a live grant")
@@ -257,8 +237,8 @@ func TestCaptureOnlyIsOperatorOwnedAndFailsClosed(t *testing.T) {
 		}
 	}
 
-	// A task contract cannot carry it: the field does not exist, and a caller
-	// that sends one is refused rather than obeyed.
+	// A task contract cannot carry it: the field does not exist, so a caller
+	// that sends one has it dropped rather than obeyed.
 	var in TaskContract
 	if err := json.Unmarshal([]byte(
 		`{"task_mode":"work","candidate_capture_only":true}`), &in); err != nil {

@@ -10,8 +10,8 @@ import (
 )
 
 // The safety rules follow what a tool does, not its name. Keyed on names,
-// run_background ran any command without the deny-list or a prompt,
-// search_files read credential files and followed symlinks out of the
+// run_background would run any command without the deny-list or a prompt,
+// search_files would read credential files and follow symlinks out of the
 // workspace, and a credential file could be moved to a readable name.
 
 func commandArgs(cmd string) json.RawMessage {
@@ -87,7 +87,7 @@ func TestEveryToolIsUnderThePolicyForWhatItDoes(t *testing.T) {
 		}
 	}
 	if !needsPermission(ask, "delete_file", json.RawMessage(`{}`)) {
-		t.Error("delete_file stopped asking")
+		t.Error("delete_file does not ask")
 	}
 }
 
@@ -162,7 +162,7 @@ func TestACredentialFileCannotBeMovedToAReadableName(t *testing.T) {
 }
 
 // Approval is the only per-command control, so the prompt shows the whole
-// command. Cut at 100 bytes, the tail of a chain was never seen.
+// command. Cut short, it would hide the tail of a chain.
 func TestApprovalShowsTheWholeCommand(t *testing.T) {
 	long := "cd tests && python3 -m pytest -q test_api.py test_models.py test_views.py 2>&1 | tail -n 40 && cd .. && rm -rf src/legacy data/ && git checkout -- ."
 	for _, tool := range []string{"run_command", "run_background"} {

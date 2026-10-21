@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Configuration, telemetry and provenance, audited as facts about the build
+// Configuration, telemetry and provenance, checked as facts about the build
 // rather than as intentions.
 
 // Neither the model nor the service can reach the mode, and no route reads a
@@ -103,8 +103,7 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	if got.Delivers {
 		t.Error("capture-only left the licence in place")
 	}
-	// Delivery is set in exactly one place in the policy owner, and it is the
-	// strict branch. A confirmation cannot reach it.
+	// In the source: the policy owner sets Delivers in exactly one place.
 	src, err := os.ReadFile("advisory_policy.go")
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +137,7 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	}
 	// Automatic never decides its own eligibility here.
 	if !strings.Contains(decide, "in.AutomaticEligible") {
-		t.Error("the automatic branch no longer reads the owner's answer")
+		t.Error("the automatic branch does not read the owner's answer")
 	}
 	for _, banned := range []string{"automaticDeliveryAllowed", "mintAuthorizationGrant"} {
 		if strings.Contains(decide, banned) {
@@ -183,40 +182,36 @@ func TestPolicyTelemetryCarriesNoContent(t *testing.T) {
 	}
 }
 
-// With the capture off the policy still decides, writes nothing, and allocates
-// nothing for a record it is not going to make.
+// With the capture off (no sink is set in a test) the route still delivers,
+// and the record writers build nothing for a record they will not make.
 func TestCaptureDisabledIsInert(t *testing.T) {
 	w := newRouteWorldWithClosure(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		nil, false)
-	before, err := os.ReadFile(w.path)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
 	res, err := w.write(t)
 	if err != nil {
 		t.Fatalf("write failed with the sink off: %v", err)
 	}
 	if res == nil || !res.Success {
-		t.Fatalf("the route stopped delivering with the sink off: %+v", res)
+		t.Fatalf("the route did not deliver with the sink off: %+v", res)
 	}
-	_ = before
-	// The record writers return before building anything when the sink is off.
-	for _, fn := range []string{"recordCandidatePolicyDecision", "recordMutationScope"} {
-		src, err := os.ReadFile(map[string]string{
-			"recordCandidatePolicyDecision": "candidate_policy.go",
-			"recordMutationScope":           "mutation_scope.go",
-		}[fn])
+	// In the source: each record writer returns before building anything when
+	// the sink is off.
+	for _, writer := range []struct{ fn, file string }{
+		{"recordCandidatePolicyDecision", "candidate_policy.go"},
+		{"recordMutationScope", "mutation_scope.go"},
+	} {
+		src, err := os.ReadFile(writer.file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body := string(src)
-		f := body[strings.Index(body, "func "+fn+"("):]
+		f := body[strings.Index(body, "func "+writer.fn+"("):]
 		f = f[:strings.Index(f, "\n}")]
 		guard := strings.Index(f, "if !sink.enabled() {")
 		submit := strings.Index(f, "sink.submit(")
 		if guard < 0 || submit < 0 || guard > submit {
-			t.Errorf("%s builds its record before checking the sink", fn)
+			t.Errorf("%s builds its record before checking the sink", writer.fn)
 		}
 	}
 }

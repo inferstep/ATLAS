@@ -172,23 +172,17 @@ func TestAStagingResultFailsClosed(t *testing.T) {
 		{"workspace flag contradicts the hashes", func(r *stagingResult) {
 			r.Commands[0].MutatedWorkspace = true
 		}},
+		{"one command reported twice", func(r *stagingResult) {
+			r.Commands[1].CommandIdentity = r.Commands[0].CommandIdentity
+			r.Commands[1].ObligationID = r.Commands[0].ObligationID
+			r.Commands[1].Index = r.Commands[0].Index
+		}},
 	} {
 		res := stagingRes(base, stagingExitedZero, stagingExitedZero)
 		c.mut(&res)
 		if ok, _ := res.validateAgainst(base); ok {
 			t.Errorf("%s was accepted", c.name)
 		}
-	}
-}
-
-func TestADuplicateResultCommandIsRefused(t *testing.T) {
-	req := stagingReq("pytest -q", "ruff check .")
-	res := stagingRes(req, stagingExitedZero, stagingExitedZero)
-	res.Commands[1].CommandIdentity = res.Commands[0].CommandIdentity
-	res.Commands[1].ObligationID = res.Commands[0].ObligationID
-	res.Commands[1].Index = res.Commands[0].Index
-	if ok, _ := res.validateAgainst(req); ok {
-		t.Error("one command reported twice was accepted")
 	}
 }
 
