@@ -12,89 +12,93 @@ import (
 	"testing"
 )
 
-// A successful edit that nobody verified stays incomplete: the fact that the
-// path changed is not evidence that it is right.
-func TestAnUnverifiedEditStaysIncomplete(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
-		"Change helper in mod.py.",
-		script(stepRead("mod.py"),
-			stepEdit("mod.py", "    return 1\n", "    return 2\n"),
-			stepDone("edited mod.py")),
-		editLoopOptions{})
-	if !r.tracked("mod.py") {
-		t.Fatalf("the landed edit is not in the ledger: %s", r.describe())
+// The work completes only when a passing run covers the file's current bytes.
+// A run that came before the last write or edit speaks for bytes that are
+// gone. A file that changed is not evidence that it is right.
+//
+// The fresh.py rows use a file the session creates: write_file over a user
+// file the session did not author is refused by the overwrite guard (see
+// TestAnEditDoesNotMakeAUserFileTheModelsOwnDraft).
+func TestOnlyARunOverTheCurrentBytesCompletesTheWork(t *testing.T) {
+	helperReturning := func(n string) string {
+		return strings.Replace(accountingSeed, "    return 1\n", "    return "+n+"\n", 1)
 	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("an unverified edit completed: %s", r.describe())
-	}
-	if r.terminal["reason"] != "verification_demanded_unmet" {
-		t.Errorf("reason %q, want the verification demand to own the terminal", r.terminal["reason"])
-	}
-}
+	userFile := map[string]string{"mod.py": accountingSeed}
+	noFiles := map[string]string{}
+	for _, tc := range []struct {
+		name         string
+		seed         map[string]string
+		prompt       string
+		steps        []map[string]interface{}
+		file         string
+		wantDisk     string
+		wantTerminal [2]string // status, reason
+	}{
+		{"edit, no run", userFile, "Change helper in mod.py.",
+			[]map[string]interface{}{
+				stepRead("mod.py"),
+				stepEdit("mod.py", "    return 1\n", "    return 2\n"),
+				stepDone("edited mod.py")},
+			"mod.py", helperReturning("2"), [2]string{"incomplete", "verification_demanded_unmet"}},
+		{"edit, run, edit", userFile, "Change helper in mod.py and check it.",
+			[]map[string]interface{}{
+				stepRead("mod.py"),
+				stepEdit("mod.py", "    return 1\n", "    return 2\n"),
+				stepRun("python3 mod.py"),
+				stepEdit("mod.py", "    return 2\n", "    return 3\n"),
+				stepDone("edited mod.py twice")},
+			"mod.py", helperReturning("3"), [2]string{"incomplete", "verification_demanded_unmet"}},
+		{"edit, edit, run", userFile, "Change helper in mod.py and check it.",
+			[]map[string]interface{}{
+				stepRead("mod.py"),
+				stepEdit("mod.py", "    return 1\n", "    return 2\n"),
+				stepEdit("mod.py", "    return 2\n", "    return 3\n"),
+				stepRun("python3 mod.py"),
+				stepDone("edited mod.py twice and ran it")},
+			"mod.py", helperReturning("3"), [2]string{"completed", "deliverables_demonstrated"}},
+		{"write, edit, run, write", noFiles, "Create fresh.py and check it.",
+			[]map[string]interface{}{
+				stepWrite("fresh.py", accountingSeed),
+				stepRead("fresh.py"),
+				stepEdit("fresh.py", "    return 1\n", "    return 2\n"),
+				stepRun("python3 fresh.py"),
+				stepWrite("fresh.py", helperReturning("7")),
+				stepDone("rewrote fresh.py")},
+			"fresh.py", helperReturning("7"), [2]string{"incomplete", "verification_demanded_unmet"}},
+		{"write, run, edit", noFiles, "Create fresh.py and check it.",
+			[]map[string]interface{}{
+				stepWrite("fresh.py", accountingSeed),
+				stepRun("python3 fresh.py"),
+				stepRead("fresh.py"),
+				stepEdit("fresh.py", "    return 1\n", "    return 8\n"),
+				stepDone("wrote and edited fresh.py")},
+			"fresh.py", helperReturning("8"), [2]string{"incomplete", "verification_demanded_unmet"}},
+		{"write, edit, run", noFiles, "Create fresh.py and check it.",
+			[]map[string]interface{}{
+				stepWrite("fresh.py", accountingSeed),
+				stepRead("fresh.py"),
+				stepEdit("fresh.py", "    return 1\n", "    return 8\n"),
+				stepRun("python3 fresh.py"),
+				stepDone("wrote, edited and ran fresh.py")},
+			"fresh.py", helperReturning("8"), [2]string{"completed", "deliverables_demonstrated"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := editLoopFixture(t, tc.seed, tuiStrictWork, tc.prompt, script(tc.steps...), editLoopOptions{})
 
-// A verification of bytes that were edited again afterwards speaks for stale
-// bytes; the current generation is unverified and the run stays incomplete.
-func TestVerificationOfStaleBytesDoesNotComplete(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
-		"Change helper in mod.py and check it.",
-		script(stepRead("mod.py"),
-			stepEdit("mod.py", "    return 1\n", "    return 2\n"),
-			stepRun("python3 mod.py"),
-			stepEdit("mod.py", "    return 2\n", "    return 3\n"),
-			stepDone("edited mod.py twice")),
-		editLoopOptions{})
-	if !strings.Contains(r.disk(t, "mod.py"), "return 3") {
-		t.Fatalf("the second edit did not land: %s", r.describe())
-	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("a run verified before the last edit completed: %s", r.describe())
-	}
-}
-
-// Several edits of one path, then one run over the final bytes: the coverage
-// is of the current generation and the run completes.
-func TestSeveralEditsOfOnePathAreCoveredByOneCurrentRun(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
-		"Change helper in mod.py and check it.",
-		script(stepRead("mod.py"),
-			stepEdit("mod.py", "    return 1\n", "    return 2\n"),
-			stepEdit("mod.py", "    return 2\n", "    return 3\n"),
-			stepRun("python3 mod.py"),
-			stepDone("edited mod.py twice and ran it")),
-		editLoopOptions{})
-	disk := r.disk(t, "mod.py")
-	if !strings.Contains(disk, "return 3") {
-		t.Fatalf("the second edit did not land: %s", r.describe())
-	}
-	if h := r.ledgerHash("mod.py"); h != hashBytes([]byte(disk)) {
-		t.Fatalf("ledger hash %q is not the current bytes", h)
-	}
-	if r.terminal["status"] != "completed" {
-		t.Fatalf("terminal %q/%q, want completed: %s", r.terminal["status"], r.terminal["reason"], r.describe())
-	}
-}
-
-// An edit, a passing run, then a write_file over the same path: the run spoke
-// for bytes that are gone, and the write needs its own verification. The file
-// is one the session created: write_file over a user file the session only
-// edited is still steered to the edit tools by the overwrite guard, which this
-// change leaves exactly as it was (see TestSuccessClearsSteeringState).
-func TestAnEditThenAWriteNeedsAFreshVerification(t *testing.T) {
-	rewritten := strings.Replace(accountingSeed, "    return 1\n", "    return 7\n", 1)
-	r := editLoopFixture(t, map[string]string{}, tuiStrictWork,
-		"Create fresh.py and check it.",
-		script(stepWrite("fresh.py", accountingSeed),
-			stepRead("fresh.py"),
-			stepEdit("fresh.py", "    return 1\n", "    return 2\n"),
-			stepRun("python3 fresh.py"),
-			stepWrite("fresh.py", rewritten),
-			stepDone("rewrote fresh.py")),
-		editLoopOptions{})
-	if r.disk(t, "fresh.py") != rewritten {
-		t.Fatalf("the rewrite did not land: %s", r.describe())
-	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("a rewrite after the only run completed: %s", r.describe())
+			disk := r.disk(t, tc.file)
+			if disk != tc.wantDisk {
+				t.Fatalf("the last write or edit did not land: %s", r.describe())
+			}
+			if !r.tracked(tc.file) {
+				t.Fatalf("the landed change is not in the ledger: %s", r.describe())
+			}
+			if h := r.ledgerHash(tc.file); h != hashBytes([]byte(disk)) {
+				t.Fatalf("ledger hash %q is not the current bytes", h)
+			}
+			if got := [2]string{r.terminal["status"], r.terminal["reason"]}; got != tc.wantTerminal {
+				t.Errorf("terminal %q, want %q: %s", got, tc.wantTerminal, r.describe())
+			}
+		})
 	}
 }
 
@@ -120,83 +124,35 @@ func TestAnEditDoesNotMakeAUserFileTheModelsOwnDraft(t *testing.T) {
 	}
 }
 
-// A write of a new file, a passing run, then an edit of it: the run spoke for
-// bytes that are gone, and the edit needs its own verification. (write_file
-// over an existing file the session did not author is refused by the overwrite
-// guard, unchanged here, so the file is one the session creates.)
-func TestAWriteThenAnEditNeedsAFreshVerification(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{}, tuiStrictWork,
-		"Create fresh.py and check it.",
-		script(stepWrite("fresh.py", accountingSeed),
-			stepRun("python3 fresh.py"),
-			stepRead("fresh.py"),
-			stepEdit("fresh.py", "    return 1\n", "    return 8\n"),
-			stepDone("wrote and edited fresh.py")),
-		editLoopOptions{})
-	if !strings.Contains(r.disk(t, "fresh.py"), "return 8") {
-		t.Fatalf("the edit after the write did not land: %s", r.describe())
-	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("an edit after the only run completed: %s", r.describe())
-	}
-}
+// An edit that lands nothing registers nothing, and the work cannot complete
+// on it. A refused edit (its anchor is not in the file) and a no-op edit are
+// both refused before they touch the disk.
+func TestAnEditThatLandsNothingRegistersNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		old, new string
+	}{
+		{"anchor not found", "    return 42\n", "    return 2\n"},
+		{"no-op", "    return 1\n", "    return 1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
+				"Change helper in mod.py.",
+				script(stepRead("mod.py"),
+					stepEdit("mod.py", tc.old, tc.new),
+					stepDone("edited mod.py")),
+				editLoopOptions{})
 
-// The same order with the run last completes: the run covers the current bytes.
-func TestAWriteThenAnEditThenARunCompletes(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{}, tuiStrictWork,
-		"Create fresh.py and check it.",
-		script(stepWrite("fresh.py", accountingSeed),
-			stepRead("fresh.py"),
-			stepEdit("fresh.py", "    return 1\n", "    return 8\n"),
-			stepRun("python3 fresh.py"),
-			stepDone("wrote, edited and ran fresh.py")),
-		editLoopOptions{})
-	disk := r.disk(t, "fresh.py")
-	if !strings.Contains(disk, "return 8") {
-		t.Fatalf("the edit did not land: %s", r.describe())
-	}
-	if h := r.ledgerHash("fresh.py"); h != hashBytes([]byte(disk)) {
-		t.Fatalf("ledger hash %q is not the current bytes", h)
-	}
-	if r.terminal["status"] != "completed" {
-		t.Fatalf("terminal %q/%q, want completed: %s", r.terminal["status"], r.terminal["reason"], r.describe())
-	}
-}
-
-// A refused edit (anchor not found) registers nothing and the run cannot
-// complete on it.
-func TestARefusedEditRegistersNoSessionWrite(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
-		"Change helper in mod.py.",
-		script(stepRead("mod.py"),
-			stepEdit("mod.py", "    return 42\n", "    return 2\n"),
-			stepDone("edited mod.py")),
-		editLoopOptions{})
-	if r.tracked("mod.py") || len(changedPathsForCoverage(r.ctx)) != 0 {
-		t.Fatalf("a refused edit became a coverable change: %s", r.describe())
-	}
-	if r.disk(t, "mod.py") != accountingSeed {
-		t.Fatal("a refused edit changed the file")
-	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("a run with a refused edit completed: %s", r.describe())
-	}
-}
-
-// A no-op edit is refused before it touches disk: no productive change, no
-// session write.
-func TestANoOpEditRegistersNothing(t *testing.T) {
-	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,
-		"Change helper in mod.py.",
-		script(stepRead("mod.py"),
-			stepEdit("mod.py", "    return 1\n", "    return 1\n"),
-			stepDone("edited mod.py")),
-		editLoopOptions{})
-	if r.tracked("mod.py") || len(changedPathsForCoverage(r.ctx)) != 0 {
-		t.Fatalf("a no-op edit became a coverable change: %s", r.describe())
-	}
-	if r.terminal["status"] == "completed" {
-		t.Fatalf("a run whose only edit was a no-op completed: %s", r.describe())
+			if r.tracked("mod.py") || len(changedPathsForCoverage(r.ctx)) != 0 {
+				t.Fatalf("an edit that landed nothing became a coverable change: %s", r.describe())
+			}
+			if r.disk(t, "mod.py") != accountingSeed {
+				t.Fatal("an edit that landed nothing changed the file")
+			}
+			if r.terminal["status"] == "completed" {
+				t.Fatalf("a run whose only edit landed nothing completed: %s", r.describe())
+			}
+		})
 	}
 }
 
@@ -235,33 +191,39 @@ func TestAliasSpellingsAreOneChangedPath(t *testing.T) {
 // edit is accounted for like any other.
 func TestOlderPolicySpellingsGetTheSameEditAndStillAccount(t *testing.T) {
 	winner := strings.Replace(accountingSeed, "    return 1\n", "    return 9\n", 1)
-	for _, contract := range []string{tuiStrictWork, tuiAdvisoryContract} {
-		r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, contract,
-			"Change helper in mod.py and check it.",
-			script(stepRead("mod.py"),
-				stepEdit("mod.py", "    return 1\n", "    return 2\n"),
-				stepRun("python3 mod.py"),
-				stepDone("edited and ran mod.py")),
-			editLoopOptions{v3Winner: winner})
-		disk := r.disk(t, "mod.py")
-		if !strings.Contains(disk, "return 9") {
-			t.Fatalf("%s: disk holds %q, want the selected candidate", contract, disk[len(disk)-80:])
-		}
-		if !r.tracked("mod.py") {
-			t.Errorf("%s: the landed edit is not in the ledger", contract)
-		}
-		if r.terminal["status"] != "completed" {
-			t.Errorf("%s: terminal %q/%q, want completed: %s", contract,
-				r.terminal["status"], r.terminal["reason"], r.describe())
-		}
+	for _, tc := range []struct {
+		name     string
+		contract string
+	}{
+		{"strict", tuiStrictWork},
+		{"advisory", tuiAdvisoryContract},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tc.contract,
+				"Change helper in mod.py and check it.",
+				script(stepRead("mod.py"),
+					stepEdit("mod.py", "    return 1\n", "    return 2\n"),
+					stepRun("python3 mod.py"),
+					stepDone("edited and ran mod.py")),
+				editLoopOptions{v3Winner: winner})
+			disk := r.disk(t, "mod.py")
+			if !strings.Contains(disk, "return 9") {
+				t.Fatalf("disk holds %q, want the selected candidate", disk[len(disk)-80:])
+			}
+			if !r.tracked("mod.py") {
+				t.Error("the landed edit is not in the ledger")
+			}
+			if r.terminal["status"] != "completed" {
+				t.Errorf("terminal %q/%q, want completed: %s", r.terminal["status"], r.terminal["reason"], r.describe())
+			}
+		})
 	}
 }
 
 // A cancelled request on the pipeline path lands nothing and registers
 // nothing: the route reports the cancellation and the tool writes no bytes.
-// (Cancellation is observed by the route and by the agent loop, which stops
-// dispatching tools; a tool asked to land its own bytes with no producer in
-// play does so, so the direct path is not where a cancelled edit is refused.)
+// The tier bypass path is not where a cancelled edit is refused: there the
+// agent loop stops dispatching tools.
 func TestACancelledEditRegistersNothing(t *testing.T) {
 	requirePython3(t)
 	dir := t.TempDir()
@@ -274,8 +236,8 @@ func TestACancelledEditRegistersNothing(t *testing.T) {
 	// A producer address the route will try: the request is cancelled before
 	// dispatch, so nothing is ever sent to it.
 	ctx.V3URL = "http://127.0.0.1:9"
-	// Generation runs only where a candidate could be delivered (C2); declared
-	// outputs make this session one, so the fixture still reaches the V3 route.
+	// Generation runs only where a candidate could be delivered. Declared
+	// outputs make this session one, so the edit reaches the V3 route.
 	ctx.TaskContract = declaredOutputs("mod.py")
 	c, cancel := context.WithCancel(context.WithValue(context.Background(), requestIDKey, "req-cancel"))
 	ctx.Ctx = c

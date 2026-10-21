@@ -12,12 +12,11 @@ import (
 
 // One owner decides where an obligation came from.
 //
-// Two sources can name the files a run must produce, and merging them is what
-// broke the fifty-task benchmark: the prose heuristic reads a seventy-character
-// window before a filename, so "Write solve.py that reads input.txt" made the
-// INPUT file a deliverable. A path the session only reads owns nothing and can
-// never be demonstrated, so every one of those runs was refused completion
-// before any verification, action-demand, hazard or debt logic was consulted.
+// Two sources can name the files a run must produce, and they must never be
+// merged. The prose heuristic reads a window of text before a filename, so
+// "Write solve.py that reads input.txt" makes the INPUT file a deliverable. A
+// path the session only reads owns nothing and can never be demonstrated, so
+// a run with it in its set could never complete.
 //
 // The rule is not "prefer the contract". It is: a caller that SAYS it knows is
 // the authority, and a caller that says nothing gets the heuristic unchanged.
@@ -44,122 +43,72 @@ func declaredVerification(cmds ...string) *TaskContract {
 		VerificationKnowledge: KnowledgeDeclared, Verification: &c}
 }
 
-// --- outputs ----------------------------------------------------------------
-
 const proseNamesTwo = "Write solve.py that reads input.txt"
 
-func TestNoContractKeepsTheLegacyHeuristicExactly(t *testing.T) {
-	d := resolveOutputObligation(ctxWith(nil), proseNamesTwo)
-	if d.Source != ObligationSourceLegacy {
-		t.Fatalf("source=%q", d.Source)
-	}
-	if d.KnowledgeSpecified {
-		t.Error("a missing contract claimed specified knowledge")
-	}
-	want := expectedOutputPaths(proseNamesTwo)
-	if strings.Join(d.Items, "|") != strings.Join(want, "|") {
-		t.Fatalf("legacy set changed: %v want %v", d.Items, want)
-	}
-}
-
-func TestUnspecifiedKnowledgeKeepsTheLegacyHeuristicExactly(t *testing.T) {
-	tc := &TaskContract{TaskMode: TaskModeWork,
-		OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified}
-	d := resolveOutputObligation(ctxWith(tc), proseNamesTwo)
-	if d.Source != ObligationSourceLegacy || d.KnowledgeSpecified {
-		t.Fatalf("source=%q specified=%v", d.Source, d.KnowledgeSpecified)
-	}
-	if strings.Join(d.Items, "|") != strings.Join(expectedOutputPaths(proseNamesTwo), "|") {
-		t.Fatalf("legacy set changed: %v", d.Items)
-	}
-}
-
-func TestDeclaredOutputsAreUsedExactlyAndNeverUnioned(t *testing.T) {
-	d := resolveOutputObligation(ctxWith(declaredOutputs("solve.py")), proseNamesTwo)
-	if d.Source != ObligationSourceContractDeclared || !d.KnowledgeSpecified {
-		t.Fatalf("source=%q specified=%v", d.Source, d.KnowledgeSpecified)
-	}
-	if strings.Join(d.Items, "|") != "solve.py" {
-		t.Fatalf("declared set is %v, want exactly [solve.py]", d.Items)
-	}
-	// The prose names input.txt too. A union would bring it back.
-	for _, p := range d.Items {
-		if p == "input.txt" {
-			t.Fatal("the prose heuristic was unioned into a declared set")
-		}
+// The output obligation is either the declared list, exactly, or the prose
+// heuristic, exactly. The last two rows cannot arrive through validation; if
+// they ever did, they must not be read as declared authority.
+func TestTheOutputObligationComesFromExactlyOneSource(t *testing.T) {
+	legacy := expectedOutputPaths(proseNamesTwo)
+	for _, tc := range []struct {
+		name          string
+		contract      *TaskContract
+		wantSource    ObligationSource
+		wantSpecified bool
+		wantItems     []string
+	}{
+		{"no contract", nil, ObligationSourceLegacy, false, legacy},
+		{"unspecified knowledge", &TaskContract{TaskMode: TaskModeWork,
+			OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified},
+			ObligationSourceLegacy, false, legacy},
+		{"only verification declared", declaredVerification("pytest"), ObligationSourceLegacy, false, legacy},
+		// The prose names input.txt too. A union would bring it back.
+		{"declared", declaredOutputs("solve.py"), ObligationSourceContractDeclared, true, []string{"solve.py"}},
+		{"declared empty", declaredOutputs(), ObligationSourceContractDeclared, true, nil},
+		{"unrecognised knowledge value", &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: "sideways"},
+			ObligationSourceLegacy, false, legacy},
+		{"declared with no list", &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: KnowledgeDeclared},
+			ObligationSourceLegacy, false, legacy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := resolveOutputObligation(ctxWith(tc.contract), proseNamesTwo)
+			if d.Source != tc.wantSource || d.KnowledgeSpecified != tc.wantSpecified {
+				t.Fatalf("source=%q specified=%v, want %q %v", d.Source, d.KnowledgeSpecified, tc.wantSource, tc.wantSpecified)
+			}
+			if strings.Join(d.Items, "|") != strings.Join(tc.wantItems, "|") {
+				t.Fatalf("items %v, want %v", d.Items, tc.wantItems)
+			}
+		})
 	}
 }
 
-func TestDeclaredEmptyOutputsCreateNoObligation(t *testing.T) {
-	d := resolveOutputObligation(ctxWith(declaredOutputs()), proseNamesTwo)
-	if d.Source != ObligationSourceContractDeclared || !d.KnowledgeSpecified {
-		t.Fatalf("source=%q specified=%v", d.Source, d.KnowledgeSpecified)
-	}
-	if len(d.Items) != 0 {
-		t.Fatalf("authoritative none produced %v", d.Items)
-	}
-}
-
-// --- verification -----------------------------------------------------------
-
-func TestVerificationKnowledgeIsIndependentOfOutputs(t *testing.T) {
-	o := resolveOutputObligation(ctxWith(declaredVerification("pytest")), proseNamesTwo)
-	if o.Source != ObligationSourceLegacy {
-		t.Errorf("declaring verification changed the OUTPUT source to %q", o.Source)
-	}
-	v := resolveVerificationObligation(ctxWith(declaredOutputs("a.py")))
-	if v.Source != ObligationSourceLegacy {
-		t.Errorf("declaring outputs changed the VERIFICATION source to %q", v.Source)
-	}
-}
-
-func TestDeclaredVerificationIsUsedExactly(t *testing.T) {
-	d := resolveVerificationObligation(ctxWith(declaredVerification("go test ./...", "pytest")))
-	if d.Source != ObligationSourceContractDeclared || !d.KnowledgeSpecified {
-		t.Fatalf("source=%q specified=%v", d.Source, d.KnowledgeSpecified)
-	}
-	if strings.Join(d.Items, "|") != "go test ./...|pytest" {
-		t.Fatalf("commands=%v", d.Items)
+// The verification obligation is either the declared commands, exactly, or
+// the legacy decision. Declaring outputs does not change it.
+func TestTheVerificationObligationComesFromExactlyOneSource(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		contract      *TaskContract
+		wantSource    ObligationSource
+		wantSpecified bool
+		wantItems     []string
+	}{
+		{"no contract", nil, ObligationSourceLegacy, false, nil},
+		{"only outputs declared", declaredOutputs("a.py"), ObligationSourceLegacy, false, nil},
+		{"declared", declaredVerification("go test ./...", "pytest"),
+			ObligationSourceContractDeclared, true, []string{"go test ./...", "pytest"}},
+		{"declared empty", declaredVerification(), ObligationSourceContractDeclared, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := resolveVerificationObligation(ctxWith(tc.contract))
+			if d.Source != tc.wantSource || d.KnowledgeSpecified != tc.wantSpecified {
+				t.Fatalf("source=%q specified=%v, want %q %v", d.Source, d.KnowledgeSpecified, tc.wantSource, tc.wantSpecified)
+			}
+			if strings.Join(d.Items, "|") != strings.Join(tc.wantItems, "|") {
+				t.Fatalf("items %v, want %v", d.Items, tc.wantItems)
+			}
+		})
 	}
 }
-
-func TestDeclaredEmptyVerificationCreatesNoObligation(t *testing.T) {
-	d := resolveVerificationObligation(ctxWith(declaredVerification()))
-	if !d.KnowledgeSpecified || len(d.Items) != 0 {
-		t.Fatalf("specified=%v items=%v", d.KnowledgeSpecified, d.Items)
-	}
-}
-
-func TestNoContractLeavesVerificationLegacy(t *testing.T) {
-	d := resolveVerificationObligation(ctxWith(nil))
-	if d.Source != ObligationSourceLegacy || d.KnowledgeSpecified || len(d.Items) != 0 {
-		t.Fatalf("%+v", d)
-	}
-}
-
-// --- fail closed ------------------------------------------------------------
-
-func TestAnUnrecognisedKnowledgeValueFallsBackToLegacy(t *testing.T) {
-	// Cannot arrive through validation; if it ever did, it must not grant
-	// declared authority.
-	tc := &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: "sideways"}
-	d := resolveOutputObligation(ctxWith(tc), proseNamesTwo)
-	if d.Source != ObligationSourceLegacy || d.KnowledgeSpecified {
-		t.Fatalf("an unknown knowledge value granted authority: %+v", d)
-	}
-}
-
-func TestDeclaredWithNoListFallsBackToLegacy(t *testing.T) {
-	// Also unreachable through validation. Contradictory state must not be
-	// read as authoritative none.
-	tc := &TaskContract{TaskMode: TaskModeWork, OutputKnowledge: KnowledgeDeclared}
-	d := resolveOutputObligation(ctxWith(tc), proseNamesTwo)
-	if d.Source != ObligationSourceLegacy || d.KnowledgeSpecified {
-		t.Fatalf("declared-without-a-list was treated as authority: %+v", d)
-	}
-}
-
-// --- request-bound identity -------------------------------------------------
 
 func TestADecisionCarriesItsRequestIdentity(t *testing.T) {
 	c := ctxWith(declaredOutputs("a.py"))

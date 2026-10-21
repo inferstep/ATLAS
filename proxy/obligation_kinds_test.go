@@ -166,29 +166,10 @@ func TestObligationIDsArePinned(t *testing.T) {
 
 // --- derivation from the validated request ----------------------------------
 
+// A declared output owes existence, and the syntax the live gate already
+// requires. The syntax obligation uses the gate's own extension table, so a
+// class the gate does not govern (notes.txt) owes existence but no syntax.
 func TestADeclaredOutputOwesExistenceAndTheSyntaxTheGateAlreadyRequires(t *testing.T) {
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.TaskContract = mustContract(t, dir,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`)
-
-	obs := obligationsFor(t, ctx)
-	resolved := resolveAgentPath(ctx, "solve.py")
-	if _, ok := hasKindFor(obs, ObligationArtifactExists, resolved); !ok {
-		t.Errorf("no existence obligation for the declared output: %v", kindsOf(obs))
-	}
-	syn, ok := hasKindFor(obs, ObligationSyntacticValidity, resolved)
-	if !ok {
-		t.Fatalf("no syntax obligation for a .py deliverable: %v", kindsOf(obs))
-	}
-	if syn.RequiredStrength != "syntax" {
-		t.Errorf("syntax obligation floor %q", syn.RequiredStrength)
-	}
-}
-
-// TestTheSyntaxObligationUsesTheGatesOwnTable pins that there is no second
-// extension table: a class the live gate does not govern owes no syntax.
-func TestTheSyntaxObligationUsesTheGatesOwnTable(t *testing.T) {
 	dir := t.TempDir()
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.TaskContract = mustContract(t, dir,
@@ -196,20 +177,20 @@ func TestTheSyntaxObligationUsesTheGatesOwnTable(t *testing.T) {
 			`"expected_outputs":["notes.txt","solve.py"]}`)
 
 	obs := obligationsFor(t, ctx)
-	if _, ok := hasKindFor(obs, ObligationSyntacticValidity,
-		resolveAgentPath(ctx, "notes.txt")); ok {
-		t.Error("a class the syntax gate does not govern owes syntax")
-	}
-	if _, ok := hasKindFor(obs, ObligationSyntacticValidity,
-		resolveAgentPath(ctx, "solve.py")); !ok {
-		t.Error("a class the syntax gate does govern owes none")
-	}
-	// Existence is owed for both: it does not depend on the gate.
 	for _, p := range []string{"notes.txt", "solve.py"} {
-		if _, ok := hasKindFor(obs, ObligationArtifactExists,
-			resolveAgentPath(ctx, p)); !ok {
-			t.Errorf("%s owes no existence obligation", p)
+		if _, ok := hasKindFor(obs, ObligationArtifactExists, resolveAgentPath(ctx, p)); !ok {
+			t.Errorf("%s owes no existence obligation: %v", p, kindsOf(obs))
 		}
+	}
+	syn, ok := hasKindFor(obs, ObligationSyntacticValidity, resolveAgentPath(ctx, "solve.py"))
+	if !ok {
+		t.Fatalf("no syntax obligation for a .py deliverable: %v", kindsOf(obs))
+	}
+	if syn.RequiredStrength != "syntax" {
+		t.Errorf("syntax obligation floor %q", syn.RequiredStrength)
+	}
+	if _, ok := hasKindFor(obs, ObligationSyntacticValidity, resolveAgentPath(ctx, "notes.txt")); ok {
+		t.Error("a class the syntax gate does not govern owes syntax")
 	}
 }
 
@@ -221,23 +202,24 @@ func TestEachDeclaredCommandIsItsOwnExactObligation(t *testing.T) {
 			`"verification":["pytest -q","ruff check ."]}`)
 
 	obs := obligationsFor(t, ctx)
-	for _, cmd := range []string{"pytest -q", "ruff check ."} {
-		o, ok := hasKindFor(obs, ObligationDeclaredCommand, cmd)
-		if !ok {
-			t.Fatalf("no obligation for declared command %q", cmd)
-		}
-		// Declared without a type, so each carries the runtime floor rather
-		// than a behavioral one nobody stated.
+	pytest, ok := hasKindFor(obs, ObligationDeclaredCommand, "pytest -q")
+	if !ok {
+		t.Fatal(`no obligation for declared command "pytest -q"`)
+	}
+	ruff, ok := hasKindFor(obs, ObligationDeclaredCommand, "ruff check .")
+	if !ok {
+		t.Fatal(`no obligation for declared command "ruff check ."`)
+	}
+	// Declared without a type, so each carries the runtime floor rather than a
+	// behavioral one nobody stated.
+	for _, o := range []taskObligation{pytest, ruff} {
 		if o.RequiredStrength != VerificationKindRuntime {
-			t.Errorf("%q floor %q, want runtime", cmd, o.RequiredStrength)
+			t.Errorf("%q floor %q, want runtime", o.Subject, o.RequiredStrength)
 		}
 	}
 	// Two commands are two obligations, never one satisfied twice.
-	if a, _ := hasKindFor(obs, ObligationDeclaredCommand, "pytest -q"); true {
-		b, _ := hasKindFor(obs, ObligationDeclaredCommand, "ruff check .")
-		if a.ID == b.ID {
-			t.Error("two declared commands share one obligation id")
-		}
+	if pytest.ID == ruff.ID {
+		t.Error("two declared commands share one obligation id")
 	}
 }
 
@@ -339,18 +321,28 @@ func TestAnAbsentFileIsNoBaseline(t *testing.T) {
 
 // --- legacy traffic creates no structured authority --------------------------
 
-func TestUnspecifiedKnowledgeCreatesNoStructuredObligation(t *testing.T) {
-	dir := t.TempDir()
-	for _, body := range []string{
-		`{"task_mode":"work"}`,
-		`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
-		`{"task_mode":"question"}`,
+// A contract that states no knowledge, or declares empty lists, owes nothing:
+// never everything, and never a structured obligation guessed from elsewhere.
+func TestAContractThatDeclaresNoOutputOrCommandOwesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		contract string
+	}{
+		{"work, no knowledge stated", `{"task_mode":"work"}`},
+		{"knowledge unspecified",
+			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`},
+		{"question", `{"task_mode":"question"}`},
+		{"declared empty", `{"task_mode":"work","output_knowledge":"declared","expected_outputs":[],` +
+			`"verification_knowledge":"declared","verification":[]}`},
 	} {
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.TaskContract = mustContract(t, dir, body)
-		if obs := obligationsFor(t, ctx); len(obs) != 0 {
-			t.Errorf("%s produced structured obligations %v", body, kindsOf(obs))
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.TaskContract = mustContract(t, dir, tc.contract)
+			if obs := obligationsFor(t, ctx); len(obs) != 0 {
+				t.Errorf("structured obligations %v, want none", kindsOf(obs))
+			}
+		})
 	}
 }
 
@@ -373,17 +365,6 @@ func TestContractlessProseNeverBecomesAStructuredObligation(t *testing.T) {
 	// The heuristic itself is untouched: legacy completion still sees it.
 	if len(legacy.Items) == 0 {
 		t.Error("the legacy heuristic stopped producing its own items")
-	}
-}
-
-func TestDeclaredEmptyKnowledgeOwesNothingRatherThanEverything(t *testing.T) {
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.TaskContract = mustContract(t, dir,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":[],`+
-			`"verification_knowledge":"declared","verification":[]}`)
-	if obs := obligationsFor(t, ctx); len(obs) != 0 {
-		t.Errorf("authoritative none produced %v", kindsOf(obs))
 	}
 }
 

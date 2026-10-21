@@ -9,17 +9,11 @@ import (
 	"testing"
 )
 
-// Two distinct filesystem failures through the real write_file dispatch.
-// writeFileDirect writes `path + ".atlas.tmp"` then renames it over `path`,
-// and returns (nil, err) on either failure -- so no ToolResult is built at
-// the mutation site. One is synthesized generically by executeToolCall's
-// error branch, which is why both cases arrive at the boundary UNCLASSIFIED.
-//
-// These fixtures pin present behavior. They deliberately do NOT assert a
-// classification: the generic error branch cannot know whether a mutation
-// began, so classifying there would be a guess. The correct owner is
-// writeFileDirect, which knows which operation failed -- recorded as a
-// finding rather than changed here.
+// Two filesystem failures through the real write_file dispatch.
+// writeFileDirect writes `path + ".atlas.tmp"`, then renames it over `path`,
+// and returns (nil, err) on either failure. The error carries the
+// classification, because only writeFileDirect knows which operation failed;
+// executeToolCall's error branch builds the result from it.
 func TestWriteFileFilesystemFailures(t *testing.T) {
 	t.Run("temp-write-fails", func(t *testing.T) {
 		dir := t.TempDir()
@@ -152,10 +146,11 @@ func TestParentDirPathIsRefusedPreDispatch(t *testing.T) {
 	}
 }
 
-// Producer-level proof for the MkdirAll site. Dispatch refuses this shape
-// earlier (see above), so the branch is exercised at the layer that owns the
-// evidence. Transport of the same carrier is proven independently by the
-// temp-write and rename tests, which do run end-to-end.
+// The parent-directory branch of writeFileDirect, called directly: dispatch
+// refuses this path shape earlier (see above), so the branch can only be
+// reached here. Callers, V3's among them, test `err != nil || res == nil ||
+// !res.Success`, so a failed write must stay (nil, err), and its error must
+// carry a failed mutation status, never an applied one.
 func TestWriteFileDirectParentDirFailureCarriesClassification(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
@@ -193,25 +188,6 @@ func TestWriteFileDirectParentDirFailureCarriesClassification(t *testing.T) {
 	}
 }
 
-// V3 callers branch on err != nil. A failed write must stay an error there so
-// success metadata can never be attached to it.
-func TestFailedWriteStaysAnErrorForV3Callers(t *testing.T) {
-	dir := t.TempDir()
-	blocker := filepath.Join(dir, "blocker")
-	os.WriteFile(blocker, []byte("x"), 0o644)
-
-	res, err := writeFileDirect(filepath.Join(blocker, "sub", "f.py"), "A = 1\n")
-	// This is the exact shape every caller tests: `if err != nil || res == nil
-	// || !res.Success`. All three must hold so no caller can proceed.
-	if err == nil || res != nil {
-		t.Fatalf("a failed write must surface as (nil, err); got res=%+v err=%v", res, err)
-	}
-	var ce *classifiedError
-	if errors.As(err, &ce) && ce.mutationStatus.Applied() {
-		t.Fatal("a failed write must never carry an applied mutation status")
-	}
-}
-
 // A generic (untyped) error from a read-only tool must stay Unknown-derived:
 // the boundary classifies it by EFFECT (none), never as MutationFailed.
 func TestUntypedErrorDoesNotBecomeFailedMutation(t *testing.T) {
@@ -221,9 +197,6 @@ func TestUntypedErrorDoesNotBecomeFailedMutation(t *testing.T) {
 	ctx.StreamFn = func(string, interface{}) {}
 	args, _ := json.Marshal(map[string]string{"path": "nope.txt"})
 	res := executeToolCall("read_file", args, ctx)
-	if res.MutationStatus == MutationFailed {
-		t.Fatal("a read-only tool's failure must never be MutationFailed")
-	}
 	if res.MutationStatus != MutationNone {
 		t.Errorf("MutationStatus = %q, want none (effect-derived)", res.MutationStatus)
 	}

@@ -10,10 +10,9 @@ import (
 
 // Literal edit arguments are applied exactly as sent.
 //
-// edit_file used to strip read_file's "N<tab>" display prefix from old_str and
-// new_str whenever the stripped old_str matched, and report nothing. In
-// stabilization cycle 2 (smallrung_toml rep 2) that rewrote an 18-line
-// replacement silently. The contract now:
+// read_file shows each line with an "N<tab>" display prefix. Stripping copied
+// prefixes from old_str and new_str in silence can rewrite a long replacement
+// without anyone noticing. The contract:
 //   - old_str and new_str are applied as sent; text that really starts with
 //     "N<tab>" (tab-separated data) edits normally;
 //   - when only the prefix-free old_str matches, nothing changes, and the
@@ -116,8 +115,8 @@ func TestMultilineUnicodeAndEscapesEditExactlyWithSurroundingBytesUnchanged(t *t
 	}
 }
 
-// The inherited failure, with the arguments captured in stabilization cycle 2.
-// At 8ec94b6 this edit applied with both arguments rewritten.
+// A prefixed edit with arguments captured from a real model run. Stripping the
+// prefixes would apply it with both arguments rewritten.
 func TestTheCapturedPrefixedEditIsRefusedNotRewritten(t *testing.T) {
 	raw, err := os.ReadFile("testdata/captured_prefixed_edit.json")
 	if err != nil {
@@ -209,20 +208,16 @@ func TestAPrefixedEditRecoversThroughTheLoop(t *testing.T) {
 	if !run.told("start_line 2, end_line 2") {
 		t.Error("the refusal the model saw did not name the replace_lines range")
 	}
-	if got := func() string { s, _ := run.disk(t, "geo.py"); return s }(); got != "def area(r):\n    return math.pi * r * r\n" {
+	got, _ := run.disk(t, "geo.py")
+	if got != "def area(r):\n    return math.pi * r * r\n" {
 		t.Errorf("bytes after recovery: %q", got)
 	}
 }
 
-// A no-op edit is refused with the span's location as it stands now.
-//
-// Measured (cycle 7 refusal audit, family O): edit_file refused at turns 11,
-// 14 and 16 for identical old_str/new_str, against a file last read at turn 5
-// and edited successfully several times since, alternating with a
-// structural_edit that changed nothing, until the run stopped on repeated
-// refusals. The refusal sent the run to `replace_lines` "with the line numbers
-// read_file printed" — numbers that were by then stale. Where those bytes sit
-// is something the call already knows.
+// A no-op edit is refused with the span's location as it stands now. The
+// line numbers read_file printed may be stale after later edits, and a run
+// sent back to them can loop on refusals. Where those bytes sit is something
+// the call already knows.
 func TestANoOpEditIsRefusedWithTheSpansCurrentLines(t *testing.T) {
 	file := "def area(r):\n    return 3.14 * r * r\n\n\ndef perimeter(r):\n    return 2 * 3.14 * r\n"
 	ctx, path := exactEditWorld(t, "geo.py", file)

@@ -14,13 +14,11 @@ import (
 	"testing"
 )
 
-// A syntax gate on a NEW file substitutes the harness's judgement for
-// execution's, and forbids the one loop that measurably works: write it, run
-// it, read the real traceback, fix it. The no-tool baseline arm, whose only
-// feedback IS the traceback, resolves its own syntax errors at 85-100%.
-// Under the rejection the model retried blind, resent byte-identical
-// content, and the repetition breaker ended the session: three AoC sessions
-// and a novel-arm session all finished as "solve.py was never created".
+// A syntax gate on a NEW file would put the proxy's judgement in place of
+// execution's, and forbid the loop that works: write it, run it, read the real
+// traceback, fix it. Under a rejection the model retries blind, resends the
+// same content, and the repetition breaker ends the session with no file at
+// all. So broken content to a new file lands, with a warning.
 //
 // On an EXISTING file the gate stays: it stops working code being clobbered.
 
@@ -51,14 +49,11 @@ func TestBrokenContentToANewFileLandsWithAWarning(t *testing.T) {
 	}
 }
 
-// The strict syntax gate on existing files protects WORKING code. When the
-// file on disk is itself unparseable, rejecting an imperfect fix guarantees
-// the broken version survives: measured twice on the novel benchmark, a
-// broken first draft landed, the corrective write carried a new syntax slip,
-// and the model re-sent identical content until the repetition breaker ended
-// the session with the original stump still on disk.
+// The syntax gate on an existing file protects WORKING code. When the file on
+// disk is itself unparseable, rejecting an imperfect fix guarantees that the
+// broken version survives, so the fix lands.
 //
-// Both tests need T2-sized content (def/loop/if) or classifyFileTier routes
+// Both tests need T2-sized content (def/loop/if), or classifyFileTier routes
 // them down the ungated T1 path and the gate under test never runs.
 
 func t2Body(marker string) string {
@@ -77,7 +72,7 @@ func TestARepairOfABrokenFileLandsEvenWhenImperfect(t *testing.T) {
 	// decides before any V3 request, so nothing ever calls this address.
 	ctx := writeGateCtx(t, "http://127.0.0.1:1", sb.URL, dir)
 
-	// A broken file is already on disk (landed via fail-forward earlier).
+	// A broken file is already on disk, as a warned new file leaves it.
 	if err := os.WriteFile(filepath.Join(dir, "s.py"), []byte(t2Body("**1**")), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -119,15 +114,17 @@ func TestAWorkingFileIsStillProtectedFromBrokenContent(t *testing.T) {
 	}
 }
 
-// Verification is of bytes, not of a moment. The session-level booleans could
-// say "verified" while the file on disk was a later, never-executed rewrite —
-// the shared root of the verify-then-modify and warned-write holes (audit
-// finding: evidence must be a contract tied to the final artifact).
+// Verification is of bytes, not of a moment. A file whose bytes changed after
+// the verification snapshot is drift, and so is a file the snapshot never saw.
 func TestDriftAfterVerificationIsNamed(t *testing.T) {
 	dir := t.TempDir()
 	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
 	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	// Verified before this file was ever written: absent from the snapshot.
+	if got := driftedSinceVerification(ctx, map[string]string{}); got != "solve.py" {
+		t.Fatalf("a never-verified artifact is drift by definition, got %q", got)
 	}
 	snap := sessionWriteHashes(ctx)
 	if len(snap) != 1 {
@@ -144,21 +141,8 @@ func TestDriftAfterVerificationIsNamed(t *testing.T) {
 	}
 }
 
-func TestAFileWrittenAfterTheSnapshotIsDrift(t *testing.T) {
-	dir := t.TempDir()
-	ctx := &AgentContext{WorkingDir: dir, SessionWrites: map[string]bool{"solve.py": true}}
-	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(1)\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Verified before this file was ever written: absent from the snapshot.
-	if got := driftedSinceVerification(ctx, map[string]string{}); got != "solve.py" {
-		t.Fatalf("a never-verified artifact is drift by definition, got %q", got)
-	}
-}
-
-// With two changed files, the artifact gate named whichever one the map gave
-// first, so the same run could get two texts. It names the first in sorted
-// order, each time.
+// With two changed files, the artifact gate names the first in sorted order,
+// every time, so one run never gets two different texts.
 func TestOfTwoChangedFilesTheSameOneIsNamedEachTime(t *testing.T) {
 	ctx := &AgentContext{WorkingDir: t.TempDir(), SessionWrites: map[string]bool{"b.py": true, "a.py": true}}
 	for try := 1; try <= 100; try++ {
@@ -168,8 +152,8 @@ func TestOfTwoChangedFilesTheSameOneIsNamedEachTime(t *testing.T) {
 	}
 }
 
-// With two warned files, the run-first gate named whichever one the map gave
-// first. It names the first in sorted order, each time.
+// With two warned files, the run-first gate names the first in sorted order,
+// every time.
 func TestOfTwoWarnedFilesTheRunFirstGateNamesTheSameOneEachTime(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	for try := 1; try <= 100; try++ {
@@ -181,10 +165,10 @@ func TestOfTwoWarnedFilesTheRunFirstGateNamesTheSameOneEachTime(t *testing.T) {
 	}
 }
 
-// A warned landing is artifact state, not a rewrite throttle (audit
-// correction). The mark must survive everything short of an actual
-// execution attempt of the file — naming it (cat/grep/ls) proves nothing
-// about runtime behavior and must not discharge it.
+// A warned landing is artifact state, not a rewrite throttle. The mark must
+// survive everything short of an actual execution attempt of the file: naming
+// it (cat/grep/ls) proves nothing about runtime behavior and must not
+// discharge it.
 func TestExecutionAttemptDischarge(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -221,33 +205,21 @@ func TestExecutionAttemptDischarge(t *testing.T) {
 	}
 }
 
-// --- The warned mark is a set, not a map of booleans ------------------------
+// --- The warned mark is a set of active warnings -----------------------------
 //
-// pendingWarnedRun is written with BOTH values -- a clean landing stores false
-// -- and the exit gate reads it by ranging over keys, without looking at the
-// value. So a file that parses, whose exact current hash carries syntax/passed,
-// is announced to the model as "on disk with a parse warning ... as written it
-// cannot work". Retained in the frozen Stage-1 run: overlay1 and overlay2 both
-// took that gate at turn 1 over a first write that parses, and both then spent
-// the session rewriting a file that was already valid.
-//
-// The two mid-loop readers ask for the value and are correct; only the exit
-// gate is key-only. The fix is to give the map one meaning.
+// The exit gate ranges over pendingWarnedRun's keys without looking at the
+// values, so the set must hold only active warnings. A clean landing stored as
+// false would announce a file that parses as "on disk with a parse warning",
+// and the model would spend the session rewriting a valid file. The two
+// mid-loop readers ask for the value.
 
 // warnedRunFixture drives the real loop with a genuine Python syntax check and
 // reports every exit gate the session emitted over a warned file:
-// run_first_gate, or repair_gate, which owns a warned file that still does
-// not parse (#214).
-func warnedRunFixture(t *testing.T, plan func(i int) map[string]interface{}) (
-	*AgentContext, string, map[string]int, map[string]string, []string) {
-	t.Helper()
-	return warnedRunFixtureIn(t, plan, false)
-}
-
-// warnedRunFixtureIn is warnedRunFixture with a choice of executor. Sandbox
-// mode answers the background-job endpoints, which is the only route a
-// server script is allowed to run through.
-func warnedRunFixtureIn(t *testing.T, plan func(i int) map[string]interface{}, sandbox bool) (
+// run_first_gate, or repair_gate, which owns a warned file that still does not
+// parse. With sandbox set, commands run in the sandbox stub, which answers the
+// background-job endpoints: the only route a server script may run through.
+// Otherwise they run on the host.
+func warnedRunFixture(t *testing.T, plan func(i int) map[string]interface{}, sandbox bool) (
 	*AgentContext, string, map[string]int, map[string]string, []string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -367,16 +339,17 @@ func writeCall(path, content string) map[string]interface{} {
 		"args": map[string]string{"path": path, "content": content}}
 }
 
-// The matrix: what the mark should say after each landing sequence.
+// What the mark says after each landing sequence.
 func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 	for _, c := range []struct {
 		name      string
+		sandbox   bool
 		plan      func(i int) map[string]interface{}
 		wantGates bool
 		wantDisk  string
 	}{
 		{
-			// false: a clean landing is not a warning.
+			// A clean landing is not a warning.
 			name: "clean landing",
 			plan: func(i int) map[string]interface{} {
 				if i == 0 {
@@ -387,7 +360,7 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			wantGates: false, wantDisk: warnedRunValid,
 		},
 		{
-			// true: a genuine warning still gates.
+			// A genuine warning still gates.
 			name: "warned landing",
 			plan: func(i int) map[string]interface{} {
 				if i == 0 {
@@ -398,10 +371,9 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			wantGates: true, wantDisk: warnedRunBroken,
 		},
 		{
-			// true -> false: running it discharges the mark, and the clean
-			// rewrite that follows must not re-arm it. (A rewrite BEFORE the
-			// run is bounced on purpose -- the warned version has to be
-			// executed first -- so this is the reachable ordering.)
+			// Running it discharges the mark, and the clean rewrite that
+			// follows must not re-arm it. (A rewrite BEFORE the run is bounced
+			// on purpose: the warned version has to be executed first.)
 			name: "warned, run, then clean rewrite",
 			plan: func(i int) map[string]interface{} {
 				switch i {
@@ -418,10 +390,30 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			wantGates: false, wantDisk: warnedRunValid,
 		},
 		{
-			// false -> true: a clean landing on one path must not mask a
-			// genuine warning that arrives after it. (A warned rewrite of the
-			// SAME path is unreachable by design: over valid bytes the
-			// healthy-baseline gate refuses invalid content outright.)
+			// A background run is a run. The foreground-server gate sends
+			// every server script to run_background, and its settle window
+			// returns the same traceback run_command would.
+			name:    "warned, background run, then clean rewrite",
+			sandbox: true,
+			plan: func(i int) map[string]interface{} {
+				switch i {
+				case 0:
+					return writeCall("solve.py", warnedRunBroken)
+				case 1:
+					return map[string]interface{}{"type": "tool_call", "name": "run_background",
+						"args": map[string]string{"command": "python3 solve.py"}}
+				case 2:
+					return writeCall("solve.py", warnedRunValid)
+				}
+				return map[string]interface{}{"type": "done", "summary": "fixed solve.py"}
+			},
+			wantGates: false, wantDisk: warnedRunValid,
+		},
+		{
+			// A clean landing on one path must not mask a genuine warning
+			// that arrives after it. (A warned rewrite of the SAME path cannot
+			// happen: over valid bytes the healthy-baseline gate refuses
+			// invalid content outright.)
 			name: "clean landing then a warned landing elsewhere",
 			plan: func(i int) map[string]interface{} {
 				switch i {
@@ -436,16 +428,12 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ctx, dir, census, terminal, gates := warnedRunFixture(t, c.plan)
-			got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
-			t.Logf("%s: warned-file exit gates=%d status=%q reason=%q",
-				c.name, len(gates), terminal["status"], terminal["reason"])
-			for _, g := range gates {
-				t.Logf("   GATE[%d] %s", len(g), g)
-			}
+			ctx, dir, census, terminal, gates := warnedRunFixture(t, c.plan, c.sandbox)
 			if (len(gates) > 0) != c.wantGates {
-				t.Errorf("%d warned-file exit gate events, want any=%v", len(gates), c.wantGates)
+				t.Errorf("%d warned-file exit gate events %q, want any=%v (terminal %q/%q)",
+					len(gates), gates, c.wantGates, terminal["status"], terminal["reason"])
 			}
+			got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
 			if string(got) != c.wantDisk {
 				t.Errorf("solve.py on disk is not what the sequence wrote: %q", got)
 			}
@@ -454,7 +442,11 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			}
 			// The gate never invents a warning about bytes the ledger says
 			// are fine.
-			if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d != nil && !c.wantGates {
+			if !c.wantGates {
+				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+				if d == nil {
+					t.Fatal("solve.py is not in the ledger")
+				}
 				if _, status := d.CurrentValidation(); status != ValidationPassed {
 					t.Errorf("solve.py should be exact-hash passed, got %s", status)
 				}
@@ -530,43 +522,6 @@ func TestPendingWarnedRunHasOneWriter(t *testing.T) {
 	t.Logf("warned set: %d assignment, %d key-only reader(s)", assigns, keyOnlyReads)
 }
 
-// --- A background run is a run --------------------------------------------
-//
-// The foreground-server gate sends every server script to run_background, and
-// its settle window returns the same traceback run_command would. The mark
-// that only run_command could discharge left such a file permanently "never
-// run": the model started it, read the SyntaxError, and had every fix refused
-// for not having run the file (dev scenario, 2026-09-14).
-func TestBackgroundRunDischargesTheWarnedMark(t *testing.T) {
-	plan := func(i int) map[string]interface{} {
-		switch i {
-		case 0:
-			return writeCall("solve.py", warnedRunBroken)
-		case 1:
-			return map[string]interface{}{"type": "tool_call", "name": "run_background",
-				"args": map[string]string{"command": "python3 solve.py"}}
-		case 2:
-			return writeCall("solve.py", warnedRunValid)
-		}
-		return map[string]interface{}{"type": "done", "summary": "fixed solve.py"}
-	}
-	_, dir, census, terminal, gates := warnedRunFixtureIn(t, plan, true)
-	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
-	t.Logf("run_first_gates=%d status=%q reason=%q", len(gates), terminal["status"], terminal["reason"])
-	for _, g := range gates {
-		t.Logf("   GATE %s", g)
-	}
-	if len(gates) != 0 {
-		t.Errorf("the rewrite after a background run was gated %d time(s)", len(gates))
-	}
-	if string(got) != warnedRunValid {
-		t.Errorf("solve.py on disk is not the clean rewrite: %q", got)
-	}
-	if census["done"] != 1 {
-		t.Errorf("%d terminal events", census["done"])
-	}
-}
-
 // --- The gate names a call the tools will accept ---------------------------
 //
 // `run_command python3 app.py` is refused by the foreground-server redirect
@@ -590,9 +545,9 @@ func TestRunFirstInstructionNamesTheToolThatCanRunTheFile(t *testing.T) {
 		t.Fatalf("fixture app.py is not detected as a server; the test proves nothing")
 	}
 
-	script := runFirstInstruction(ctx, "solve.py")
-	if !strings.Contains(script, "run_command") || !strings.Contains(script, "python3 solve.py") {
-		t.Errorf("plain script must be run with run_command: %s", script)
+	plain := runFirstInstruction(ctx, "solve.py")
+	if !strings.Contains(plain, "run_command") || !strings.Contains(plain, "python3 solve.py") {
+		t.Errorf("plain script must be run with run_command: %s", plain)
 	}
 	if got := runFirstInstruction(ctx, "server.js"); !strings.Contains(got, "node server.js") {
 		t.Errorf("a .js file is run with node: %s", got)
