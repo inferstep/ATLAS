@@ -2,7 +2,7 @@
 
 The wire format itself (EVENT_TYPES, Event, parse_envelope) lives in
 atlas.events; test_events.py checks this reader offline and
-test_events_live.py runs it against a real proxy.
+tests/e2e/test_events_live.py runs it against a real proxy.
 """
 
 import urllib.request

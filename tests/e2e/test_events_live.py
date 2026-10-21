@@ -1,40 +1,28 @@
-"""Live cross-language integration tests for the event protocol (PC-061).
+"""The event protocol across the Go and Python boundary (PC-061), against a running proxy.
 
-These tests start a real atlas-proxy binary and exercise iter_events()
-against /events via HTTP. They prove the full producer → SSE wire →
-consumer pipeline works across the Go/Python boundary.
-
-Skipped automatically when the proxy binary isn't available — keeps
-the unit-test suite lean and the integration tests opt-in via a
-pre-built binary.
+These tests start the real atlas-proxy binary and read its /events stream over HTTP with
+iter_events from tests/cli/event_harness.py: the producer, the SSE wire and the consumer
+are tested together.
 """
 
 import os
 import socket
 import subprocess
-import time
 import urllib.request
 
 import pytest
 
 from tests.cli.event_harness import iter_events
 
-PROXY_BINARY = os.environ.get("ATLAS_PROXY_BINARY", "/tmp/test-atlas-proxy")
+from .conftest import PROXY_BINARY, SKIP_NO_PROXY_BINARY, free_port, proxy_binary_available, wait_for_port
 
-
-pytestmark = pytest.mark.skipif(
-    not os.path.isfile(PROXY_BINARY) or not os.access(PROXY_BINARY, os.X_OK),
-    reason=f"atlas-proxy binary not available at {PROXY_BINARY} "
-           f"— run `cd proxy && go build -o {PROXY_BINARY} .` first",
-)
+pytestmark = pytest.mark.skipif(not proxy_binary_available(), reason=SKIP_NO_PROXY_BINARY)
 
 
 @pytest.fixture
 def running_proxy():
     """Start the proxy on a free port, wait until it listens, yield the port."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
+    port = free_port()
     proc = subprocess.Popen(
         [PROXY_BINARY],
         env={**os.environ, "ATLAS_PROXY_PORT": str(port), "ATLAS_KEEP_LLAMA_WARM": "0"},
@@ -42,15 +30,7 @@ def running_proxy():
         stderr=subprocess.DEVNULL,
     )
     try:
-        deadline = time.time() + 3.0
-        while True:
-            try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.1).close()
-                break
-            except OSError:
-                if time.time() > deadline:
-                    pytest.fail(f"proxy didn't bind {port} within 3s")
-                time.sleep(0.05)
+        wait_for_port(port)
         yield port
     finally:
         proc.terminate()
@@ -67,14 +47,6 @@ def test_iter_events_skips_the_connected_sentinel_of_a_live_proxy(running_proxy)
     events = iter_events(f"http://127.0.0.1:{running_proxy}/events", timeout=0.5)
     with pytest.raises(socket.timeout):
         next(events)
-
-
-def test_live_proxy_emits_envelope_when_broker_emit_called():
-    """Placeholder for the end-to-end case: a typed Event fired by Emit() in
-    the proxy's agent loop arrives through iter_events. No endpoint emits
-    without a real LLM behind it, so it stays skipped to document the contract."""
-    pytest.skip("requires llama-server + sandbox + lens to drive an "
-                "agent loop end-to-end; will land with TUI integration test")
 
 
 def test_live_proxy_events_endpoint_returns_correct_content_type(running_proxy):
