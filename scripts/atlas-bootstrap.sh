@@ -1295,7 +1295,15 @@ build_atlas_tui() {
     # only does so silently — and if Go isn't on PATH for that shell yet
     # (because .bashrc wasn't sourced) the user just gets "binary not found
     # and Go is not available". Pre-building dodges both.
-    if ! command -v go &>/dev/null && [[ ! -x /usr/local/go/bin/go ]]; then
+    #
+    # The Go that install_go() checked or installed, found the same way: the
+    # one on the path, else the one under /usr/local/go.
+    local go_cmd
+    go_cmd=$(command -v go 2>/dev/null || true)
+    if [[ -z "$go_cmd" && -x /usr/local/go/bin/go ]]; then
+        go_cmd="/usr/local/go/bin/go"
+    fi
+    if [[ -z "$go_cmd" ]]; then
         log_warn "Go not available — skipping atlas-tui build."
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
         return 1
@@ -1313,22 +1321,20 @@ build_atlas_tui() {
 
     # GOTOOLCHAIN=auto (Go 1.21+ default) handles the tui's go.mod
     # requirement of Go 1.26+ — auto-downloads the newer toolchain even
-    # if the installed go is 1.24. PATH includes /usr/local/go/bin from
-    # install_go() above.
+    # if the installed go is 1.24.
     #
     # The modules are downloaded in a step of their own, which is tried again
     # when it fails. The build then needs no network, and a compile error is
     # not tried again.
     #
-    # The path is set inside double quotes: inside single quotes `$PATH`
-    # stays as that text, and a Go that is on the path, and not under
-    # /usr/local/go, is not found.
+    # Go is run by its full path: through sudo, the target user's command
+    # gets sudo's own PATH, which may not hold the Go found above.
     set +e
     retry_download "The Go module download" --not-if "$GO_NOT_A_NETWORK_ERROR" -- \
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
     local rc=${PIPESTATUS[0]}
     if [[ $rc -eq 0 ]]; then
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
         rc=${PIPESTATUS[0]}
     fi
     set -e

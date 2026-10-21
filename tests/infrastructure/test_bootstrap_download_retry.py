@@ -220,8 +220,10 @@ if [ "$1" = "build" ]; then
 fi
 """, encoding="utf-8")
     (tmp_path / "go").chmod(0o755)
-    body = (function("build_atlas_tui") + 'run_as_target() { "$@"; }\n' + f'target_home_dir() {{ echo "{tmp_path}/home"; }}\n'
-            + f'ATLAS_INSTALL_DIR="{tmp_path}"\n' + 'build_atlas_tui && echo "built" || echo "not built"\n')
+    # Like sudo, the stand-in for the target user's command gives that command a PATH of its own,
+    # which does not hold the stand-in go: the script must run the go it found itself.
+    body = (function("build_atlas_tui") + 'run_as_target() { env PATH=/usr/bin:/bin "$@"; }\n'
+            + f'target_home_dir() {{ echo "{tmp_path}/home"; }}\n' + f'ATLAS_INSTALL_DIR="{tmp_path}"\n' + 'build_atlas_tui && echo "built" || echo "not built"\n')
     done = run(tmp_path, body)
     asked = (tmp_path / "go.asked").read_text().splitlines() if (tmp_path / "go.asked").exists() else []
     return done, [line.split(" -o ")[0] for line in asked]
@@ -239,8 +241,6 @@ def test_the_build_finds_a_go_that_is_on_the_path_and_not_under_usr_local(tmp_pa
     done, asked = tui_build(tmp_path, 0, "", build_fails=0)
     assert "command not found" not in done.stdout + done.stderr
     assert asked == ["mod download", "build"] and done.stdout.rstrip().endswith("built")
-    lines = [line for line in TEXT.splitlines() if "/usr/local/go/bin:" in line and " go " in line and "sh -c" in line]
-    assert len(lines) == 2 and all("PATH=\\\"/usr/local/go/bin:\\$PATH\\\" go" in line for line in lines), lines
 
 
 def test_a_compile_error_is_not_tried_again(tmp_path):
@@ -274,6 +274,6 @@ def test_the_wait_between_two_tries_is_kept(tmp_path):
 def test_only_the_download_steps_of_the_script_go_through_the_retry():
     through = re.findall(r'retry_download "([^"]+)"', TEXT.split("\nretry_download() {", 1)[1])
     assert through == ["The pip and setuptools download", "The download for the ATLAS CLI install", "The Go module download"]
-    build = re.search(r"^.*\bgo build -o '\$out'.*$", TEXT, re.M).group(0)
+    build = re.search(r"^.*'\$go_cmd' build -o '\$out'.*$", TEXT, re.M).group(0)
     assert "retry_download" not in build
-    assert TEXT.index("go mod download\"") < TEXT.index("go build -o '$out'")
+    assert TEXT.index("'$go_cmd' mod download\"") < TEXT.index("'$go_cmd' build -o '$out'")
