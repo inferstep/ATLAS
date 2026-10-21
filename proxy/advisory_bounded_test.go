@@ -13,9 +13,13 @@ import (
 // The failure mode a preference policy invites is not a wrong answer, it is an
 // endless search for a better one: another candidate, another refinement, one
 // more round until something clears the bar. Every ceiling that stops that is
-// asserted here, and the last two are the ones that matter most -- a rejected
-// candidate costs the caller nothing extra, and the route ends exactly once
-// whatever the policy decided.
+// asserted here. Two matter most: a rejected candidate costs the caller nothing
+// extra, and the route ends once whatever the policy decided.
+
+// advisoryContract declares one output and one command. The tests below make
+// the command fail or time out, so the candidate is refused.
+const advisoryContract = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
+	`"verification_knowledge":"declared","verification":["pytest -q"]}`
 
 // Every bound the candidate path runs under is a value, not a hope.
 func TestCandidatePathBoundsAreFinite(t *testing.T) {
@@ -45,9 +49,7 @@ func TestCandidatePathBoundsAreFinite(t *testing.T) {
 // A rejected candidate costs the caller no extra model turn. The route answers
 // the one tool call it was given, with the caller's own content.
 func TestRejectionAddsNoModelTurn(t *testing.T) {
-	w := newRouteWorldWithClosure(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+	w := newRouteWorldWithClosure(t, advisoryContract,
 		map[string]stubEffect{"pytest -q": {ExitCode: 1}}, false)
 	res, err := w.write(t)
 	if err != nil {
@@ -71,9 +73,7 @@ func TestRejectionAddsNoModelTurn(t *testing.T) {
 // The same proposal arriving again is one route entry per attempt with one
 // ending each, and no accumulation of live grants.
 func TestRepeatedProposalsStayBounded(t *testing.T) {
-	w := newRouteWorldWithClosure(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+	w := newRouteWorldWithClosure(t, advisoryContract,
 		map[string]stubEffect{"pytest -q": {ExitCode: 1}}, false)
 	for i := 0; i < 5; i++ {
 		if _, err := w.write(t); err != nil {
@@ -120,9 +120,7 @@ func TestCancellationStopsThePolicy(t *testing.T) {
 // When the budget is gone, the baseline is retained and the answer says so.
 // Nothing here waits for certainty.
 func TestExhaustedBudgetRetainsTheBaselineTruthfully(t *testing.T) {
-	w := newRouteWorldWithClosure(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
+	w := newRouteWorldWithClosure(t, advisoryContract,
 		map[string]stubEffect{"pytest -q": {TimedOut: true}}, false)
 	res, err := w.write(t)
 	if err != nil {
@@ -176,7 +174,7 @@ func TestAdvisoryDoesNotWeakenDeliverySafety(t *testing.T) {
 	for _, required := range []string{"consumeAuthorizationGrant", "contentSHA256",
 		"recordDeliverySettlement"} {
 		if !strings.Contains(body, required) {
-			t.Errorf("the delivery owner no longer calls %s", required)
+			t.Errorf("the delivery owner does not call %s", required)
 		}
 	}
 	// The policy is not consulted inside the delivery owner: by the time bytes

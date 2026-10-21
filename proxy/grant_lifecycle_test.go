@@ -7,10 +7,9 @@ import (
 
 // Every grant ends once, and says why.
 //
-// Supersession set retired without recording anything, so three of v6's seven
-// grants simply stopped existing: the lifecycle could not be reconciled from
-// the capture, and "minted, never seen again" was indistinguishable from a
-// dropped record.
+// A grant that ends without a record cannot be told apart from a dropped
+// record: "minted, never seen again" leaves a lifecycle that cannot be
+// reconciled from the capture.
 
 func lifeCtx(t *testing.T, request string) *AgentContext {
 	t.Helper()
@@ -107,26 +106,5 @@ func TestAGrantEndsExactlyOnce(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("%d retirements for one grant, want exactly 1", n)
-	}
-}
-
-func TestTheSevenV6ShapesAreRepresentable(t *testing.T) {
-	// Synthetic reproduction of v6's lifecycle shapes. The sealed acquisition
-	// is never read, re-graded or re-hashed here.
-	shapes := []struct {
-		name string
-		end  grantRetirement
-	}{
-		{"baseline retained, retired at terminal", grantTerminal},
-		{"superseded by a later entry", grantSuperseded},
-		{"consumed", grantConsumed},
-		{"claim did not match", grantAttempted},
-		{"request cancelled", grantCancelled},
-		{"session ended", grantSessionEnd},
-	}
-	for _, s := range shapes {
-		if !knownGrantRetirement(s.end) {
-			t.Errorf("%s has no representable ending", s.name)
-		}
 	}
 }

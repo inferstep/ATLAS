@@ -15,10 +15,10 @@ import (
 
 // Spending an authorization on actual bytes.
 //
-// The grant tests prove a licence can be issued and spent once. These prove
-// what happens at the filesystem: the exact authorized bytes land or nothing
-// does, a write that fails claims nothing, and a delivery that does not settle
-// is never reported as one.
+// The grant tests prove a grant can be issued and spent once. These prove what
+// happens at the filesystem: the exact authorized bytes land or nothing does, a
+// write that fails claims nothing, and a delivery that does not settle is never
+// reported as one.
 
 // deliveryWorld is an authorized candidate with a live grant, ready to spend.
 type deliveryWorld struct {
@@ -49,8 +49,6 @@ func (w *deliveryWorld) onDisk(t *testing.T) string {
 	return string(b)
 }
 
-const deliveredCode = "print(42)\n"
-
 // --- the authorized case ---------------------------------------------------------
 
 func TestAnAuthorizedCandidateLandsByteForByte(t *testing.T) {
@@ -75,118 +73,121 @@ func TestAnAuthorizedCandidateLandsByteForByte(t *testing.T) {
 	if !res.Success {
 		t.Error("a settled delivery is not reported successful")
 	}
-	// And the licence is spent: a second delivery of the same bytes refuses.
+	// The grant is spent: a second delivery of the same bytes refuses.
 	if _, out2, err2 := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err2 == nil {
 		t.Errorf("a spent grant delivered again (%+v)", out2)
 	}
 }
 
+// No trailing newline, odd whitespace, and shapes a normaliser would be tempted
+// to fix. What was authorized is what must land.
 func TestDeliveryWritesTheBytesUnaltered(t *testing.T) {
-	// No trailing newline, odd whitespace, and a shape a normaliser would be
-	// tempted to fix. What was authorized is what must land.
-	for _, body := range []string{
-		"x = 1", "x = 1\n\n\n", "\tif True:\n\t\tpass\n", "print('a')\r\nprint('b')\r\n",
+	for _, tc := range []struct{ name, body string }{
+		{"no trailing newline", "x = 1"},
+		{"extra trailing newlines", "x = 1\n\n\n"},
+		{"tabs", "\tif True:\n\t\tpass\n"},
+		{"windows line endings", "print('a')\r\nprint('b')\r\n"},
 	} {
-		w := newGrantWorldWithCode(t, body)
-		g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
-		if !ok {
-			t.Fatalf("%q: no grant (%s)", body, why)
-		}
-		check := fallbackSyntaxOutcomeFor(w.ctx, w.path, body).aggregate()
-		_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, body, g, check, nil, true)
-		if err != nil || !out.Delivered {
-			t.Fatalf("%q: not delivered (%s, %v)", body, out.Reason, err)
-		}
-		got, err := os.ReadFile(w.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(got) != body {
-			t.Errorf("delivery altered the bytes: wrote %q, disk holds %q", body, string(got))
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGrantWorldWithCode(t, tc.body)
+			g := w.mint(t)
+			check := fallbackSyntaxOutcomeFor(w.ctx, w.path, tc.body).aggregate()
+			_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, tc.body, g, check, nil, true)
+			if err != nil || !out.Delivered {
+				t.Fatalf("not delivered (%s, %v)", out.Reason, err)
+			}
+			got, err := os.ReadFile(w.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.body {
+				t.Errorf("delivery altered the bytes: wrote %q, disk holds %q", tc.body, string(got))
+			}
+		})
 	}
 }
 
 // --- refused before anything moves -----------------------------------------------
 
-func TestABeforeWriteMismatchMutatesNothing(t *testing.T) {
-	for name, mutate := range map[string]func(*deliveryWorld) (string, string){
-		"other bytes": func(w *deliveryWorld) (string, string) {
-			return w.path, deliveredCode
-		},
-		"another path": func(w *deliveryWorld) (string, string) {
-			return w.ctx.WorkingDir + "/elsewhere.py", w.code
-		},
+// Each row changes one thing between the authorization and the write. The
+// delivery refuses, claims nothing, and leaves the target as it was. A refusal
+// checked before the grant is taken leaves the grant live, so the honest
+// delivery can still happen; a refusal at consumption spends it.
+func TestARefusedDeliveryLeavesTheTargetAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// change returns the path, bytes and grant the delivery is asked for.
+		change     func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant)
+		wantReason string
+		liveGrants int
+	}{
+		{"other bytes", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			return w.path, "print(42)\n", w.grant
+		}, "candidate_hash_mismatch", 1},
+		{"another path", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			return w.ctx.WorkingDir + "/elsewhere.py", w.code, w.grant
+		}, "target_mismatch", 1},
+		{"no grant", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			return w.path, w.code, nil
+		}, "no authorization", 1},
+		// The shape a normaliser or a repair pass would produce: the grant
+		// names bytes other than the ones written.
+		{"the grant names other bytes", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			w.ctx.grantMu.Lock()
+			w.ctx.grants[w.grant.ID].CandidateHash = contentSHA256("something else\n")
+			forged := *w.ctx.grants[w.grant.ID]
+			w.ctx.grantMu.Unlock()
+			return w.path, w.code, &forged
+		}, "candidate_hash_mismatch", 1},
+		{"the target was rewritten", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			if err := os.WriteFile(w.path, []byte("SOMEONE ELSE = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return w.path, w.code, w.grant
+		}, "", 0},
+		// A delivery must not bring back a file that was deliberately removed.
+		{"the target was tombstoned", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			tombstoneDeliverable(w.ctx, w.path, "deleted")
+			return w.path, w.code, w.grant
+		}, "", 0},
+		{"the request was cancelled", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			cancelled, cancel := context.WithCancel(
+				context.WithValue(context.Background(), requestIDKey, requestIDOf(w.ctx)))
+			cancel()
+			w.ctx.Ctx = cancelled
+			return w.path, w.code, w.grant
+		}, "", 0},
+		// The run finished. A grant from during the run cannot outlive it.
+		{"the terminal was emitted", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
+			retireAuthorizationGrants(w.ctx, grantTerminal)
+			return w.path, w.code, w.grant
+		}, "", 0},
 	} {
-		w := newDeliveryWorld(t)
-		before := w.onDisk(t)
-		path, code := mutate(w)
-		res, out, err := deliverAuthorizedCandidate(w.ctx, path, code, w.grant, w.check, nil, true)
-		if err == nil {
-			t.Errorf("%s: delivery was allowed", name)
-		}
-		if res != nil {
-			t.Errorf("%s: a refused delivery produced a result", name)
-		}
-		if out.Delivered {
-			t.Errorf("%s: a refusal claimed delivery", name)
-		}
-		if got := w.onDisk(t); got != before {
-			t.Errorf("%s: the target was mutated", name)
-		}
-		// The grant is untouched, so the honest delivery can still happen.
-		if liveGrantCount(w.ctx) != 1 {
-			t.Errorf("%s: a refused delivery spent the grant", name)
-		}
-	}
-}
+		t.Run(tc.name, func(t *testing.T) {
+			w := newDeliveryWorld(t)
+			path, code, grant := tc.change(t, w)
+			before := w.onDisk(t)
 
-func TestAnInterveningMutationRefusesTheDelivery(t *testing.T) {
-	w := newDeliveryWorld(t)
-	// Something rewrote the target between the authorization and the write.
-	if err := os.WriteFile(w.path, []byte("SOMEONE ELSE = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	res, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true)
-	if err == nil || res != nil || out.Delivered {
-		t.Fatal("a delivery ran against a target that had changed underneath it")
-	}
-	if got := w.onDisk(t); got != "SOMEONE ELSE = 1\n" {
-		t.Error("the refused delivery mutated the target anyway")
-	}
-}
-
-func TestATombstonedTargetRefusesTheDelivery(t *testing.T) {
-	w := newDeliveryWorld(t)
-	tombstoneDeliverable(w.ctx, w.path, "deleted")
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err == nil {
-		t.Errorf("a delivery resurrected a deliberately removed file (%+v)", out)
-	}
-}
-
-func TestACancelledRequestDeliversNothing(t *testing.T) {
-	w := newDeliveryWorld(t)
-	before := w.onDisk(t)
-	cancelled, cancel := context.WithCancel(
-		context.WithValue(context.Background(), requestIDKey, requestIDOf(w.ctx)))
-	cancel()
-	w.ctx.Ctx = cancelled
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, w.grant, w.check, nil, true); err == nil {
-		t.Errorf("a cancelled request delivered (%+v)", out)
-	}
-	if got := w.onDisk(t); got != before {
-		t.Error("a cancelled request mutated the target")
-	}
-}
-
-func TestDeliveryWithoutAGrantRefuses(t *testing.T) {
-	w := newDeliveryWorld(t)
-	before := w.onDisk(t)
-	if _, _, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, nil, w.check, nil, true); err == nil {
-		t.Error("a delivery with no authorization at all was allowed")
-	}
-	if got := w.onDisk(t); got != before {
-		t.Error("an unauthorized delivery mutated the target")
+			res, out, err := deliverAuthorizedCandidate(w.ctx, path, code, grant, w.check, nil, true)
+			if err == nil {
+				t.Error("the delivery was allowed")
+			}
+			if res != nil {
+				t.Error("a refused delivery produced a result")
+			}
+			if out.Delivered {
+				t.Error("a refusal claimed delivery")
+			}
+			if !strings.Contains(out.Reason, tc.wantReason) {
+				t.Errorf("reason %q, want %q", out.Reason, tc.wantReason)
+			}
+			if got := w.onDisk(t); got != before {
+				t.Errorf("the target was mutated: disk holds %q", got)
+			}
+			if n := liveGrantCount(w.ctx); n != tc.liveGrants {
+				t.Errorf("%d live grants after the refusal, want %d", n, tc.liveGrants)
+			}
+		})
 	}
 }
 
@@ -221,10 +222,9 @@ func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	w := newAuthWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", authPy, true)
-	// A demonstrably-valid checkpoint to return to, established BEFORE
-	// anything is authorized: the grant binds the target's ledger generation,
-	// so putting a checkpoint in afterwards would be exactly the intervening
-	// change the delivery is meant to refuse.
+	// A valid checkpoint to return to, set before anything is authorized. The
+	// grant binds the target's ledger generation, so a checkpoint added later
+	// would be the very intervening change the delivery must refuse.
 	observeDeliverable(w.ctx, w.path, []byte(authPy),
 		ValidationKindSyntax, ValidationPassed, "")
 
@@ -241,10 +241,10 @@ func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	if out.Delivered {
 		t.Fatal("a failed delivery was reported delivered")
 	}
-	// Whether restoration was possible is the restorer's call; what must hold
-	// either way is that the outcome says so truthfully and nothing claims a
-	// delivery. When it did restore, disk holds the checkpoint -- rehashed by
-	// the restorer, not asserted from the ledger.
+	// Whether restoration was possible is the restorer's call. Either way the
+	// outcome must say so truthfully and nothing may claim a delivery. When it
+	// did restore, disk holds the checkpoint, hashed again by the restorer
+	// rather than taken from the ledger.
 	if !out.Restored && out.Reason == "" {
 		t.Error("no restoration and no reason")
 	}
@@ -259,35 +259,13 @@ func TestRestorationRehashesRatherThanTrustingTheLedger(t *testing.T) {
 	}
 }
 
-func TestBytesThatDoNotLandAreNotDelivered(t *testing.T) {
-	w := newDeliveryWorld(t)
-	// A grant whose candidate hash names bytes other than the ones written.
-	// This is the shape a normaliser or a repair pass would produce, and the
-	// delivery has to notice rather than report success.
-	w.ctx.grantMu.Lock()
-	w.ctx.grants[w.grant.ID].CandidateHash = contentSHA256("something else\n")
-	forged := *w.ctx.grants[w.grant.ID]
-	w.ctx.grantMu.Unlock()
-
-	_, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, &forged, w.check, nil, true)
-	if err == nil {
-		t.Fatal("bytes that are not the authorized ones were delivered")
-	}
-	if out.Delivered {
-		t.Error("a mismatch claimed delivery")
-	}
-	if out.Reason != "candidate_hash_mismatch" {
-		t.Errorf("reason %q, want candidate_hash_mismatch", out.Reason)
-	}
-}
-
 // --- what the delivery reports ----------------------------------------------------
 
 func TestTheDeliveryResultIsSeparateFromThePoolLabel(t *testing.T) {
 	// `delivered` in a V3 pool record is the service describing what it
 	// selected, written before anything reached this filesystem. The live
 	// result is a statement about disk, made afterwards, by the side that
-	// wrote it. A test reads both names to keep them from converging.
+	// wrote it. This test reads both names to keep them from converging.
 	src, err := os.ReadFile("candidate_delivery.go")
 	if err != nil {
 		t.Fatal(err)
@@ -310,10 +288,7 @@ func TestTheDeliveryResultIsSeparateFromThePoolLabel(t *testing.T) {
 func TestTheDeliveryOwnerLeaksNoContent(t *testing.T) {
 	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
 	w := newGrantWorldWithCode(t, secret)
-	g, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
-	if !ok {
-		t.Fatalf("no grant: %s", why)
-	}
+	g := w.mint(t)
 	failed := checkOutcome{Status: ValidationFailed, Detail: "SyntaxError: line 1"}
 	_, out, _ := deliverAuthorizedCandidate(w.ctx, w.path, secret, g, failed, nil, true)
 	for _, needle := range []string{secret, "hunter2", "TOKEN", "print(7)", "SyntaxError"} {
@@ -473,93 +448,59 @@ func (w *routeWorld) disk(t *testing.T) string {
 	return string(b)
 }
 
-func TestTheTypedRouteDeliversAnAuthorizedWinner(t *testing.T) {
-	w := newRouteWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`, nil)
-	res, err := w.write(t)
-	if err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if res == nil || !res.Success {
-		t.Fatalf("delivery failed: %+v", res)
-	}
-	if got := w.disk(t); got != routeWinner {
-		t.Errorf("disk holds %q, want the authorized winner", got)
-	}
-	if res.AuthorizedDeliveryHash != contentSHA256(routeWinner) {
-		t.Error("the result does not name the authorization it spent")
-	}
-	if !res.V3Used {
-		t.Error("a delivered candidate does not report the pipeline that produced it")
-	}
-	if liveGrantCount(w.ctx) != 0 {
-		t.Error("the grant was not spent")
-	}
-}
-
-func TestATypedRefusalKeepsTheCallersContent(t *testing.T) {
-	// A declared command with no staging result: the obligation is owed, so
-	// the typed answer refuses and the caller's own content is kept.
-	w := newRouteWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest -q"]}`,
-		map[string]stubEffect{"pytest -q": {ExitCode: 1}})
-	res, err := w.write(t)
-	if err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	if res == nil || !res.Success {
-		t.Fatalf("the caller's own content was not written: %+v", res)
-	}
-	if got := w.disk(t); got != routeBaseline {
-		t.Errorf("disk holds %q, want the caller's own content", got)
-	}
-	if res.V3Used {
-		t.Error("a refused candidate reported V3 provenance")
-	}
-	if res.AuthorizedDeliveryHash != "" {
-		t.Error("a refused candidate named an authorization")
-	}
-	if liveGrantCount(w.ctx) != 0 {
-		t.Error("a refusal left a live grant behind")
-	}
-}
-
-// A request with no contract, or a question, keeps the MODEL's bytes.
-//
-// It used to keep the service's, on the service's own closure verdict, which
-// is the producer of a candidate certifying that candidate. There is no target
-// the client named and no work the model's own call could ground, so nothing
-// here can be authorized against, and the honest answer is the caller's own
-// content. A work request is different: its own call names the target.
-func TestContractlessTrafficKeepsItsPreviousRoute(t *testing.T) {
-	for _, contract := range []string{"", `{"task_mode":"question"}`} {
-		w := newRouteWorld(t, contract, nil)
-		res, err := w.write(t)
-		if err != nil {
-			t.Fatalf("%q: write failed: %v", contract, err)
-		}
-		if res == nil || !res.Success {
-			t.Fatalf("%q: delivery failed: %+v", contract, res)
-		}
-		// The model's own bytes land, through the model's own path, exactly as
-		// if the pipeline had not run. No licence is minted and none is spent.
-		if got := w.disk(t); got != routeBaseline {
-			t.Errorf("%q: disk holds %q, want the caller's own content", contract, got)
-		}
-		if res.AuthorizedDeliveryHash != "" {
-			t.Errorf("%q: contractless traffic spent an authorization", contract)
-		}
-		if res.V3Used {
-			t.Errorf("%q: the service's own verdict delivered a candidate", contract)
-		}
-		if res.DeliveryProvenance != DeliveryFromModelProposal {
-			t.Errorf("%q: provenance %q, want the model's own proposal",
-				contract, res.DeliveryProvenance)
-		}
-		if liveGrantCount(w.ctx) != 0 {
-			t.Errorf("%q: a licence outlived a contractless request", contract)
-		}
+// The service's winner lands only through a typed authorization. When the typed
+// answer refuses, or the request has no contract or is a question, the caller's
+// own bytes land through the model's own path, as if the pipeline had not run.
+// A request with no contract names no target and grounds no work, so nothing
+// can be authorized against it; letting the service's own closure verdict
+// deliver would be the producer of a candidate certifying that candidate.
+func TestTheRouteDeliversOnlyAnAuthorizedWinner(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		contract string
+		commands map[string]stubEffect
+		wantDisk string
+		wantV3   bool
+	}{
+		{"declared output", `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
+			nil, routeWinner, true},
+		// The declared command fails, so the obligation is owed and the typed
+		// answer refuses.
+		{"declared command that fails", `{"task_mode":"work","output_knowledge":"declared",` +
+			`"expected_outputs":["solve.py"],"verification_knowledge":"declared","verification":["pytest -q"]}`,
+			map[string]stubEffect{"pytest -q": {ExitCode: 1}}, routeBaseline, false},
+		{"no contract", "", nil, routeBaseline, false},
+		{"a question", `{"task_mode":"question"}`, nil, routeBaseline, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newRouteWorld(t, tc.contract, tc.commands)
+			res, err := w.write(t)
+			if err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			if res == nil || !res.Success {
+				t.Fatalf("the write did not succeed: %+v", res)
+			}
+			if got := w.disk(t); got != tc.wantDisk {
+				t.Errorf("disk holds %q, want %q", got, tc.wantDisk)
+			}
+			if res.V3Used != tc.wantV3 {
+				t.Errorf("V3Used=%v, want %v", res.V3Used, tc.wantV3)
+			}
+			wantHash := ""
+			if tc.wantV3 {
+				wantHash = contentSHA256(routeWinner)
+			}
+			if res.AuthorizedDeliveryHash != wantHash {
+				t.Errorf("the result names authorization %q, want %q", res.AuthorizedDeliveryHash, wantHash)
+			}
+			if !tc.wantV3 && res.DeliveryProvenance != DeliveryFromModelProposal {
+				t.Errorf("provenance %q, want the model's own proposal", res.DeliveryProvenance)
+			}
+			if liveGrantCount(w.ctx) != 0 {
+				t.Error("a grant was left live after the write")
+			}
+		})
 	}
 }
 
@@ -582,35 +523,6 @@ func TestOneCandidateGetsOneAuthorizationAnswer(t *testing.T) {
 	}
 	if consumed != 1 {
 		t.Errorf("%d grants consumed for one candidate, want exactly one", consumed)
-	}
-}
-
-func TestNothingIsDeliveredAfterTerminalEmission(t *testing.T) {
-	w := newGrantWorld(t)
-	w.mint(t)
-	// The run finished. Whatever else is true, a licence granted during it
-	// cannot outlive it.
-	retireAuthorizationGrants(w.ctx, grantTerminal)
-	check := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-	before, err := os.ReadFile(w.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.ctx.grantMu.Lock()
-	var g *authorizationGrant
-	for _, held := range w.ctx.grants {
-		g = held
-	}
-	w.ctx.grantMu.Unlock()
-	if _, out, err := deliverAuthorizedCandidate(w.ctx, w.path, w.code, g, check, nil, true); err == nil {
-		t.Errorf("a candidate landed after the terminal (%+v)", out)
-	}
-	after, err := os.ReadFile(w.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(before) {
-		t.Error("a post-terminal delivery mutated the target")
 	}
 }
 
@@ -658,12 +570,11 @@ func TestRetirementSitsAtTheEmissionNotTheVerdict(t *testing.T) {
 	}
 }
 
-// TestADebtRecoveryBounceCanStillDeliver is the case that moved it: the run
-// did not end, so the licence machinery must still work.
+// finalizeCompletion runs and the loop continues: a debt-recovery bounce. The
+// run did not end, so grants must still work.
 func TestADebtRecoveryBounceCanStillDeliver(t *testing.T) {
 	w := newGrantWorld(t)
 	g := w.mint(t)
-	// finalizeCompletion runs and the loop continues. Nothing was emitted.
 	st := &runState{}
 	finalizeCompletion(w.ctx, st, "make it fast", "")
 	w.ctx.grantMu.Lock()
