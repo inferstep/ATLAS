@@ -73,13 +73,10 @@ def pull_request(head, base):
 
 def test_the_base_of_a_pull_request_is_the_base_branch_as_it_is_now(rule, moved):
     root, began, now, head = moved
-    assert rule.base_of(root, "pull_request", pull_request(head, began)) == now
-    assert now != began
-
-
-def test_compared_with_that_base_a_check_sees_only_the_branchs_own_files(rule, moved):
-    root, began, _, head = moved
     base = rule.base_of(root, "pull_request", pull_request(head, began))
+    assert base == now
+    assert now != began
+    # Compared with that base a check sees only the branch's own files.
     assert git(root, "diff", "--name-only", f"{base}...HEAD").split() == ["docs/API.md"]
     # The base the event names gives the base branch's later changes as well: the fault this rule removes.
     assert git(root, "diff", "--name-only", f"{began}...HEAD").split() == [
@@ -172,7 +169,7 @@ def base_step():
     return next(step["run"] for step in workflow["jobs"]["integrity"]["steps"] if step.get("id") == "base")
 
 
-def base_step_run(root, payload, tmp_path):
+def run_base_step(root, payload, tmp_path):
     """Run that step in a checkout, as a job of a pull request does. Gives the ended command and what it wrote."""
     event, output = tmp_path / "event.json", tmp_path / "output"
     event.write_text(json.dumps(payload), encoding="utf-8")
@@ -185,10 +182,9 @@ def base_step_run(root, payload, tmp_path):
     return done, output.read_text(encoding="utf-8")
 
 
-def run_base_step(root, payload, tmp_path):
-    """The same, as the status of the step and what it wrote."""
-    done, wrote = base_step_run(root, payload, tmp_path)
-    return done.returncode, wrote
+# The rule as this change has it, and a copy of it that a change could write to choose its own base.
+RULE = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
+A_RULE_THAT_GIVES_ANOTHER_BASE = "print('0' * 40)\n"
 
 
 def with_the_rule(tmp_path, on_the_base, on_the_branch):
@@ -205,32 +201,28 @@ def with_the_rule(tmp_path, on_the_base, on_the_branch):
     return root, began, head
 
 
-def test_the_base_branchs_copy_of_the_rule_gives_the_base_when_a_change_rewrites_the_rule(tmp_path):
-    real = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
-    root, base, head = with_the_rule(tmp_path, real, "print('0' * 40)\n")
-    assert run_base_step(root, pull_request(head, base), tmp_path) == (0, f"sha={base}\n")
-
-
-def test_the_changes_copy_of_the_rule_runs_only_while_the_base_has_none(tmp_path):
-    real = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
-    root, base, head = with_the_rule(tmp_path, None, real)
-    assert run_base_step(root, pull_request(head, base), tmp_path) == (0, f"sha={base}\n")
+@pytest.mark.parametrize("on_the_base, on_the_branch", [
+    pytest.param(RULE, A_RULE_THAT_GIVES_ANOTHER_BASE, id="a change that rewrites the rule: the base branch's copy runs"),
+    pytest.param(None, RULE, id="a base branch with no copy: the change's copy runs"),
+])
+def test_which_copy_of_the_rule_the_base_step_runs(tmp_path, on_the_base, on_the_branch):
+    root, base, head = with_the_rule(tmp_path, on_the_base, on_the_branch)
+    done, wrote = run_base_step(root, pull_request(head, base), tmp_path)
+    assert (done.returncode, wrote) == (0, f"sha={base}\n")
 
 
 def test_the_step_stops_and_gives_no_base_when_the_rule_stops(tmp_path):
-    real = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
-    root, base, _ = with_the_rule(tmp_path, real, real + "# the branch's own line\n")
-    status, wrote = run_base_step(root, pull_request("0" * 40, base), tmp_path)
-    assert status != 0
+    root, base, _ = with_the_rule(tmp_path, RULE, RULE + "# the branch's own line\n")
+    done, wrote = run_base_step(root, pull_request("0" * 40, base), tmp_path)
+    assert done.returncode != 0
     assert wrote == ""
 
 
 def test_in_a_checkout_without_the_parent_the_step_stops_and_runs_no_copy_of_the_rule(tmp_path):
-    real = (ROOT / "scripts" / "change_base.py").read_text(encoding="utf-8")
-    root, base, head = with_the_rule(tmp_path, real, "print('0' * 40)\n")
+    root, base, head = with_the_rule(tmp_path, RULE, A_RULE_THAT_GIVES_ANOTHER_BASE)
     shallow = tmp_path / "shallow"
     git(tmp_path, "clone", "-q", "--depth", "1", root.as_uri(), str(shallow))
-    done, wrote = base_step_run(shallow, pull_request(head, base), tmp_path)
+    done, wrote = run_base_step(shallow, pull_request(head, base), tmp_path)
     assert done.returncode == 1
     assert wrote == ""
     assert "::error::The parent of the checked-out commit is not in this checkout" in done.stdout
@@ -240,10 +232,11 @@ def test_in_a_checkout_without_the_parent_the_step_stops_and_runs_no_copy_of_the
 @pytest.mark.parametrize("name", USERS)
 def test_the_checkout_that_the_base_step_reads_from_has_the_parent_commits(name):
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
-    for job_name, job in workflow["jobs"].items():
-        steps = job["steps"]
-        if not any(step.get("id") == "base" for step in steps):
-            continue
+    reading = {job_name: job["steps"] for job_name, job in workflow["jobs"].items()
+               if any(step.get("id") == "base" for step in job["steps"])}
+    assert reading, (f"{name} runs scripts/change_base.py, and no job of it has a step with the id `base`, so this test "
+                     "holds nothing of it. Fix: give the step that reads the base the id `base`.")
+    for job_name, steps in reading.items():
         settings = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@")).get("with") or {}
         depth = settings.get("fetch-depth", 1)
         assert depth == 0 or depth >= 2, (
@@ -257,11 +250,11 @@ def test_the_checkout_that_the_base_step_reads_from_has_the_parent_commits(name)
 @pytest.mark.parametrize("name", USERS)
 def test_each_workflow_that_compares_with_the_base_takes_it_from_the_one_rule(name):
     workflow = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
-    for job in workflow["jobs"].values():
-        steps = job["steps"]
+    comparing = [job["steps"] for job in workflow["jobs"].values() if "steps.base.outputs.sha" in json.dumps(job["steps"])]
+    assert comparing, (f"{name} runs scripts/change_base.py, and no step of it uses `steps.base.outputs.sha`, so this test "
+                       "holds nothing of it. Fix: give the comparison the output of the step `base`.")
+    for steps in comparing:
         using = [n for n, step in enumerate(steps) if "steps.base.outputs.sha" in json.dumps(step)]
-        if not using:
-            continue
         rule_step = next(n for n, step in enumerate(steps) if step.get("id") == "base")
         assert steps[rule_step]["run"] == base_step()
         assert rule_step < min(using)

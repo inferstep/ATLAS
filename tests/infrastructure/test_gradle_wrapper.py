@@ -86,8 +86,18 @@ def plain_settings(raw, name):
     return settings, findings
 
 
-def settings_findings(name, settings):
-    """What is held of the settings, and the Gradle version that they name (None when the address does not say)."""
+def wrapper_findings(folder, sums, name):
+    """The findings for one wrapper folder: its settings, and its jar against the published sum of its version."""
+    jar, settings_file = folder / JAR, folder / SETTINGS
+    missing = [f"`{name}` has no `{one.name}`. A wrapper is the jar and its settings together, and one of them alone "
+               "cannot be held. Fix: make the wrapper again with Gradle, or take the folder out."
+               for one in (jar, settings_file) if not one.is_file()]
+    if missing:
+        return missing
+    settings, not_plain = plain_settings(settings_file.read_bytes(), name)
+    if not_plain:
+        # Nothing else is said of such a file: what this test would read from it is not what the wrapper reads.
+        return not_plain
     findings = []
     address = settings.get("distributionUrl", "")
     found = ADDRESS.fullmatch(address)
@@ -106,25 +116,10 @@ def settings_findings(name, settings):
         findings.append(
             f"`{name}/{SETTINGS}`: `validateDistributionUrl` is not `true`. With it the wrapper checks the address "
             "of the distribution before it downloads. Fix: set `validateDistributionUrl=true`.")
-    return findings, found["version"] if found else None
-
-
-def wrapper_findings(folder, sums, name):
-    """The findings for one wrapper folder: its settings, and its jar against the published sum of its version."""
-    jar, settings = folder / JAR, folder / SETTINGS
-    missing = [f"`{name}` has no `{one.name}`. A wrapper is the jar and its settings together, and one of them alone "
-               "cannot be held. Fix: make the wrapper again with Gradle, or take the folder out."
-               for one in (jar, settings) if not one.is_file()]
-    if missing:
-        return missing
-    plain, not_plain = plain_settings(settings.read_bytes(), name)
-    if not_plain:
-        # Nothing else is said of such a file: what this test would read from it is not what the wrapper reads.
-        return not_plain
-    findings, version = settings_findings(name, plain)
-    if version is None:
+    if not found:
+        # The address names no version, so there is no sum to hold the jar against.
         return findings
-    has = hashlib.sha256(jar.read_bytes()).hexdigest()
+    version, has = found["version"], hashlib.sha256(jar.read_bytes()).hexdigest()
     if version not in sums:
         findings.append(
             f"`{name}/{JAR}` is for Gradle {version}, and `{SUMS.name}` has no line for that version. So the jar is "
@@ -145,10 +140,6 @@ def wrapper_folders(tracked):
     return sorted({str(Path(name).parent) for name in tracked if Path(name).name in (JAR, SETTINGS)})
 
 
-def tracked_files():
-    return subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
-
-
 def test_the_list_of_published_sums_reads():
     sums, findings = published(SUMS.read_text(encoding="utf-8"))
     assert not findings, "\n".join(findings)
@@ -157,7 +148,7 @@ def test_the_list_of_published_sums_reads():
 
 def test_each_wrapper_of_the_repository_is_the_published_one():
     sums, _ = published(SUMS.read_text(encoding="utf-8"))
-    folders = wrapper_folders(tracked_files())
+    folders = wrapper_folders(subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines())
     assert folders, ("No Gradle wrapper was found among the tracked files, so this test holds nothing. Fix: when "
                      "the repository has no Gradle build any more, take this file and its list out.")
     findings = [finding for name in folders for finding in wrapper_findings(ROOT / name, sums, name)]
@@ -176,105 +167,112 @@ GOOD = {
 }
 
 
-def as_text(without=(), **changed):
+def settings_text(without=(), **changed):
+    """The good settings as the file has them, with some changed or left out."""
     keys = {key: value for key, value in {**GOOD, **changed}.items() if key not in without}
     return "".join(f"{key}={value}\n" for key, value in keys.items())
 
 
-def a_wrapper(tmp_path, jar=A_JAR, without=(), raw=None, **changed):
-    """The findings for a wrapper made here: the good settings with some changed or left out, or the bytes `raw`."""
+def findings_for_a_wrapper(tmp_path, settings, jar=A_JAR):
+    """The findings for a wrapper made here, of this settings text and this jar. None: the wrapper has no such file."""
     folder = tmp_path / "gradle" / "wrapper"
     folder.mkdir(parents=True)
     if jar is not None:
         (folder / JAR).write_bytes(jar)
-    if changed.get("settings", True) is not None:
-        (folder / SETTINGS).write_bytes(as_text(without, **changed).encode() if raw is None else raw)
+    if settings is not None:
+        (folder / SETTINGS).write_bytes(settings.encode())
     return wrapper_findings(folder, SUMS_HERE, "gradle/wrapper")
 
 
-def test_the_published_jar_with_the_settings_of_today_has_no_finding(tmp_path):
-    assert a_wrapper(tmp_path) == []
+@pytest.mark.parametrize("address", [
+    pytest.param("https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip", id="the binaries, as today"),
+    pytest.param("https\\://services.gradle.org/distributions/gradle-9.8.0-all.zip", id="the binaries and the sources"),
+])
+def test_the_published_jar_with_good_settings_has_no_finding(tmp_path, address):
+    assert findings_for_a_wrapper(tmp_path, settings_text(distributionUrl=address)) == []
 
 
-def test_the_all_distribution_of_the_same_version_has_no_finding(tmp_path):
-    assert a_wrapper(tmp_path, distributionUrl="https\\://services.gradle.org/distributions/gradle-9.8.0-all.zip") == []
-
-
-@pytest.mark.parametrize("jar", [
-    A_JAR[:-1] + b"1", A_JAR + b"\x00", A_JAR[1:], b"", b"another jar",
-], ids=["one byte changed", "one byte more", "one byte less", "empty", "the jar of another version"])
-def test_a_jar_that_is_not_the_published_one_is_found(tmp_path, jar):
-    findings = a_wrapper(tmp_path, jar=jar)
-    assert len(findings) == 1 and "is not the wrapper jar that Gradle published for 9.8.0" in findings[0], findings
-    assert SUMS_HERE["9.8.0"] in findings[0] and hashlib.sha256(jar).hexdigest() in findings[0]
+@pytest.mark.parametrize("jar, version", [
+    pytest.param(A_JAR[:-1] + b"1", "9.8.0", id="one byte changed"),
+    pytest.param(A_JAR + b"\x00", "9.8.0", id="one byte more"),
+    pytest.param(A_JAR[1:], "9.8.0", id="one byte less"),
+    pytest.param(b"", "9.8.0", id="empty"),
+    pytest.param(b"another jar", "9.8.0", id="the jar of another version"),
+    pytest.param(A_JAR, "9.8.1", id="settings of another version than the jar"),
+])
+def test_a_jar_that_is_not_the_published_one_of_the_version_in_the_settings_is_found(tmp_path, jar, version):
+    settings = settings_text(distributionUrl=f"https\\://services.gradle.org/distributions/gradle-{version}-bin.zip")
+    findings = findings_for_a_wrapper(tmp_path, settings, jar=jar)
+    assert len(findings) == 1 and f"is not the wrapper jar that Gradle published for {version}" in findings[0], findings
+    assert SUMS_HERE[version] in findings[0] and hashlib.sha256(jar).hexdigest() in findings[0]
     assert "Fix:" in findings[0] and "not with this wrapper" in findings[0]
-
-
-def test_the_jar_of_one_version_with_the_settings_of_another_is_found(tmp_path):
-    findings = a_wrapper(tmp_path, distributionUrl="https\\://services.gradle.org/distributions/gradle-9.8.1-bin.zip")
-    assert len(findings) == 1 and "published for 9.8.1" in findings[0], findings
 
 
 @pytest.mark.parametrize("version", ["9.7.0", "9.9", "10.0.0-rc-1"])
 def test_a_version_with_no_line_is_found_and_the_message_says_what_to_do(tmp_path, version):
-    findings = a_wrapper(tmp_path, distributionUrl=f"https\\://services.gradle.org/distributions/gradle-{version}-bin.zip")
+    settings = settings_text(distributionUrl=f"https\\://services.gradle.org/distributions/gradle-{version}-bin.zip")
+    findings = findings_for_a_wrapper(tmp_path, settings)
     assert len(findings) == 1 and "has no line for that version" in findings[0], findings
     assert f"`{version} <sum>`" in findings[0] and PAGE in findings[0] and "a maintainer adds one line" in findings[0]
     assert "in a pull request of its own that merges first" in findings[0]
     assert hashlib.sha256(A_JAR).hexdigest() in findings[0]
 
 
-@pytest.mark.parametrize("address", [
-    "https\\://example.org/distributions/gradle-9.8.0-bin.zip",
-    "https\\://services.gradle.org.example.org/distributions/gradle-9.8.0-bin.zip",
-    "https\\://example.org/services.gradle.org/distributions/gradle-9.8.0-bin.zip",
-    "http\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip",
-    "https\\://services.gradle.org/distributions-snapshots/gradle-9.8.0-bin.zip",
-    "https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip?from=elsewhere",
-    "https\\://services.gradle.org/distributions/../other/gradle-9.8.0-bin.zip",
-    "https\\://services.gradle.org/distributions/gradle-9.8.0-20261012000000+0000-bin.zip",
-    "https\\://services.gradle.org/distributions/gradle-9.8.0-src.zip",
-    "https\\://user@services.gradle.org/distributions/gradle-9.8.0-bin.zip",
-    "",
+@pytest.mark.parametrize("settings, words", [
+    pytest.param(settings_text(distributionUrl="https\\://example.org/distributions/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="an address of another host"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org.example.org/distributions/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="a host whose name starts as Gradle's"),
+    pytest.param(settings_text(distributionUrl="https\\://example.org/services.gradle.org/distributions/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="Gradle's host in the path of another"),
+    pytest.param(settings_text(distributionUrl="http\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="http with no tls"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org/distributions-snapshots/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="a snapshot"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip?from=elsewhere"),
+                 "`distributionUrl` is", id="a query after the file"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org/distributions/../other/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="a path that leaves the folder"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org/distributions/gradle-9.8.0-20261012000000+0000-bin.zip"),
+                 "`distributionUrl` is", id="a nightly build"),
+    pytest.param(settings_text(distributionUrl="https\\://services.gradle.org/distributions/gradle-9.8.0-src.zip"),
+                 "`distributionUrl` is", id="the sources only"),
+    pytest.param(settings_text(distributionUrl="https\\://user@services.gradle.org/distributions/gradle-9.8.0-bin.zip"),
+                 "`distributionUrl` is", id="a user before the host"),
+    pytest.param(settings_text(distributionUrl=""), "`distributionUrl` is", id="an empty address"),
+    pytest.param(settings_text(without=("distributionUrl",)), "`distributionUrl` is `(not set)`", id="no address"),
+    pytest.param(settings_text(without=("distributionSha256Sum",)), "`distributionSha256Sum` is not set", id="no sum"),
+    pytest.param(settings_text(distributionSha256Sum=""), "`distributionSha256Sum` is not set", id="an empty sum"),
+    pytest.param(settings_text(distributionSha256Sum="ab" * 31), "`distributionSha256Sum` is not set", id="a sum of 62 digits"),
+    pytest.param(settings_text(distributionSha256Sum="AB" * 32), "`distributionSha256Sum` is not set", id="a sum in capitals"),
+    pytest.param(settings_text(distributionSha256Sum="zz" * 32), "`distributionSha256Sum` is not set", id="a sum that is not hex"),
+    pytest.param(settings_text(without=("validateDistributionUrl",)), "`validateDistributionUrl` is not `true`",
+                 id="no check of the address"),
+    pytest.param(settings_text(validateDistributionUrl="false"), "`validateDistributionUrl` is not `true`",
+                 id="the check of the address set to false"),
+    pytest.param(settings_text(validateDistributionUrl=""), "`validateDistributionUrl` is not `true`",
+                 id="the check of the address set to nothing"),
+    pytest.param(settings_text(validateDistributionUrl="True"), "`validateDistributionUrl` is not `true`",
+                 id="the check of the address set to True"),
 ])
-def test_an_address_that_is_not_gradles_own_for_one_version_is_found(tmp_path, address):
-    findings = a_wrapper(tmp_path, distributionUrl=address)
-    assert len(findings) == 1 and "`distributionUrl` is" in findings[0] and "Fix:" in findings[0], findings
-
-
-def test_settings_with_no_address_are_found(tmp_path):
-    findings = a_wrapper(tmp_path, without=("distributionUrl",))
-    assert len(findings) == 1 and "`distributionUrl` is `(not set)`" in findings[0], findings
-
-
-@pytest.mark.parametrize("change", [
-    {"without": ("distributionSha256Sum",)}, {"distributionSha256Sum": ""}, {"distributionSha256Sum": "ab" * 31},
-    {"distributionSha256Sum": "AB" * 32}, {"distributionSha256Sum": "zz" * 32},
-])
-def test_a_distribution_sum_that_is_not_set_is_found(tmp_path, change):
-    findings = a_wrapper(tmp_path, **change)
-    assert len(findings) == 1 and "`distributionSha256Sum` is not set" in findings[0] and "Fix:" in findings[0], findings
-
-
-@pytest.mark.parametrize("change", [
-    {"without": ("validateDistributionUrl",)}, {"validateDistributionUrl": "false"}, {"validateDistributionUrl": ""},
-    {"validateDistributionUrl": "True"},
-])
-def test_a_wrapper_that_does_not_check_the_address_is_found(tmp_path, change):
-    findings = a_wrapper(tmp_path, **change)
-    assert len(findings) == 1 and "`validateDistributionUrl` is not `true`" in findings[0], findings
+def test_a_setting_that_is_not_as_today_is_found(tmp_path, settings, words):
+    findings = findings_for_a_wrapper(tmp_path, settings)
+    assert len(findings) == 1 and words in findings[0] and "Fix:" in findings[0], findings
 
 
 def test_each_wrong_setting_has_a_finding_of_its_own(tmp_path):
-    findings = a_wrapper(tmp_path, jar=b"changed", without=("distributionSha256Sum", "validateDistributionUrl"))
+    settings = settings_text(without=("distributionSha256Sum", "validateDistributionUrl"))
+    findings = findings_for_a_wrapper(tmp_path, settings, jar=b"changed")
     assert len(findings) == 3, findings
 
 
-def test_a_jar_with_no_settings_and_settings_with_no_jar_are_found(tmp_path):
-    no_settings = a_wrapper(tmp_path / "a", settings=None)
-    no_jar = a_wrapper(tmp_path / "b", jar=None)
-    assert len(no_settings) == 1 and f"has no `{SETTINGS}`" in no_settings[0], no_settings
-    assert len(no_jar) == 1 and f"has no `{JAR}`" in no_jar[0], no_jar
+@pytest.mark.parametrize("jar, settings, missing", [
+    pytest.param(A_JAR, None, SETTINGS, id="a jar with no settings"),
+    pytest.param(None, settings_text(), JAR, id="settings with no jar"),
+])
+def test_a_wrapper_with_one_of_its_two_files_is_found(tmp_path, jar, settings, missing):
+    findings = findings_for_a_wrapper(tmp_path, settings, jar=jar)
+    assert len(findings) == 1 and f"has no `{missing}`" in findings[0], findings
 
 
 def test_every_folder_with_a_jar_or_with_settings_is_a_wrapper():
@@ -286,15 +284,16 @@ def test_every_folder_with_a_jar_or_with_settings_is_a_wrapper():
 
 
 @pytest.mark.parametrize("text, versions, words", [
-    ("# a comment\n\n9.8.0 " + "a" * 64 + "\n9.8.1 " + "b" * 64 + "\n", ["9.8.0", "9.8.1"], []),
-    ("9.8.0 " + "a" * 64 + "\n9.8.0 " + "a" * 64 + "\n", ["9.8.0"], []),
-    ("9.8.0 " + "a" * 64 + "\n9.8.0 " + "b" * 64 + "\n", ["9.8.0"], ["two sums"]),
-    ("9.8.0 " + "a" * 63 + "\n", [], ["Line 1"]),
-    ("9.8.0 " + "A" * 64 + "\n", [], ["Line 1"]),
-    ("9.8.0  " + "a" * 64 + "\n", [], ["Line 1"]),
-    ("9.8.0\n" + "a" * 64 + "\n", [], ["Line 1", "Line 2"]),
-    ("gradle-9.8.0 " + "a" * 64 + "\n", [], ["Line 1"]),
-    ("9.8.0 " + "a" * 64 + " # the wrapper\n", [], ["Line 1"]),
+    pytest.param("# a comment\n\n9.8.0 " + "a" * 64 + "\n9.8.1 " + "b" * 64 + "\n", ["9.8.0", "9.8.1"], [],
+                 id="two versions, a comment and an empty line"),
+    pytest.param("9.8.0 " + "a" * 64 + "\n9.8.0 " + "a" * 64 + "\n", ["9.8.0"], [], id="the same line twice"),
+    pytest.param("9.8.0 " + "a" * 64 + "\n9.8.0 " + "b" * 64 + "\n", ["9.8.0"], ["two sums"], id="a version with two sums"),
+    pytest.param("9.8.0 " + "a" * 63 + "\n", [], ["Line 1"], id="a sum of 63 digits"),
+    pytest.param("9.8.0 " + "A" * 64 + "\n", [], ["Line 1"], id="a sum in capitals"),
+    pytest.param("9.8.0  " + "a" * 64 + "\n", [], ["Line 1"], id="two spaces"),
+    pytest.param("9.8.0\n" + "a" * 64 + "\n", [], ["Line 1", "Line 2"], id="the version and the sum on two lines"),
+    pytest.param("gradle-9.8.0 " + "a" * 64 + "\n", [], ["Line 1"], id="a word before the version"),
+    pytest.param("9.8.0 " + "a" * 64 + " # the wrapper\n", [], ["Line 1"], id="a comment after the sum"),
 ])
 def test_the_list_takes_a_version_and_a_sum_on_a_line_and_nothing_else(text, versions, words):
     sums, findings = published(text)
@@ -315,31 +314,32 @@ validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
 """
+# The settings that the wrapper takes from that file.
+ITS_SETTINGS = {
+    "distributionBase": "GRADLE_USER_HOME", "distributionPath": "wrapper/dists",
+    "distributionUrl": "https://services.gradle.org/distributions/gradle-9.8.0-bin.zip",
+    "distributionSha256Sum": "bafd5ce9cfaea0fbccfdc8439a1ac42fbd4cd9c89dc9a988228d8a2639a58e6c",
+    "networkTimeout": "10000", "retries": "0", "retryBackOffMs": "500", "validateDistributionUrl": "true",
+    "zipStoreBase": "GRADLE_USER_HOME", "zipStorePath": "wrapper/dists",
+}
 
 
-def test_the_settings_are_read_as_the_wrapper_writes_them():
-    settings, findings = plain_settings(AS_GRADLE_WRITES_IT.encode(), "gradle/wrapper")
-    assert findings == []
-    assert len(settings) == 10 and settings["retries"] == "0" and settings["validateDistributionUrl"] == "true"
-    assert settings["distributionUrl"] == "https://services.gradle.org/distributions/gradle-9.8.0-bin.zip"
+@pytest.mark.parametrize("text, settings", [
+    pytest.param(AS_GRADLE_WRITES_IT, ITS_SETTINGS, id="as Gradle 9.8.0 writes it"),
+    pytest.param(AS_GRADLE_WRITES_IT.replace("9.8.0", "9.8.1"),
+                 {**ITS_SETTINGS, "distributionUrl": "https://services.gradle.org/distributions/gradle-9.8.1-bin.zip"},
+                 id="as Gradle 9.8.1 writes it"),
+    pytest.param("#Mon Oct 12 16:00:00 UTC 2026\n" + AS_GRADLE_WRITES_IT, ITS_SETTINGS, id="with the date line of an older Gradle"),
+    pytest.param(AS_GRADLE_WRITES_IT.replace("\n", "\r\n"), ITS_SETTINGS, id="with the line ends of Windows"),
+    pytest.param(AS_GRADLE_WRITES_IT.replace("networkTimeout", "\n# a comment, with spaces\nnetworkTimeout"), ITS_SETTINGS,
+                 id="with an empty line and a comment"),
+    pytest.param(AS_GRADLE_WRITES_IT.rstrip("\n"), ITS_SETTINGS, id="with no line end at the end"),
+])
+def test_a_settings_file_in_the_plain_form_is_read_with_no_finding(text, settings):
+    assert plain_settings(text.encode(), "gradle/wrapper") == (settings, [])
 
 
-@pytest.mark.parametrize("text", [
-    AS_GRADLE_WRITES_IT,
-    AS_GRADLE_WRITES_IT.replace("9.8.0", "9.8.1"),
-    "#Mon Oct 12 16:00:00 UTC 2026\n" + AS_GRADLE_WRITES_IT,
-    AS_GRADLE_WRITES_IT.replace("\n", "\r\n"),
-    AS_GRADLE_WRITES_IT.replace("networkTimeout", "\n# a comment, with spaces\nnetworkTimeout"),
-    AS_GRADLE_WRITES_IT.rstrip("\n"),
-], ids=["as Gradle 9.8.0 writes it", "as Gradle 9.8.1 writes it", "with the date line of an older Gradle",
-        "with the line ends of Windows", "with an empty line and a comment", "with no line end at the end"])
-def test_a_settings_file_in_the_plain_form_has_no_finding(text):
-    settings, findings = plain_settings(text.encode(), "gradle/wrapper")
-    assert findings == [] and len(settings) == 10
-    assert settings == plain_settings(AS_GRADLE_WRITES_IT.replace("9.8.0", settings["distributionUrl"][-13:-8]).encode(), "")[0]
-
-
-GOOD_TEXT = as_text()
+GOOD_TEXT = settings_text()
 URL_LINE = "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.8.0-bin.zip\n"
 ELSEWHERE = "https\\://example.org/distributions/gradle-9.8.0-bin.zip"
 # Each row: bytes that Java's reader takes as settings, and that give the wrapper another address, or no check of
@@ -356,24 +356,24 @@ NOT_PLAIN = {
     "a second line with a space before the equals sign": GOOD_TEXT + "validateDistributionUrl =false\n",
     "a second line after a carriage return in a comment": GOOD_TEXT + "#a note\rvalidateDistributionUrl=false\n",
     "a second line after a form feed": GOOD_TEXT + "\x0cvalidateDistributionUrl=false\n",
-    "the one line of a key, with a space as the separator": as_text(without=("validateDistributionUrl",)) + "validateDistributionUrl true\n",
-    "the one line of the address, with a space as the separator": as_text(without=("distributionUrl",)) + URL_LINE.replace("=", " ", 1),
+    "the one line of a key, with a space as the separator": settings_text(without=("validateDistributionUrl",)) + "validateDistributionUrl true\n",
+    "the one line of the address, with a space as the separator": settings_text(without=("distributionUrl",)) + URL_LINE.replace("=", " ", 1),
     "a value that goes on in the next line": GOOD_TEXT.replace("/distributions/gradle-9.8.0-bin.zip", "/distributions/\\\n    gradle-9.8.0-bin.zip"),
-    "a value with a space after it": as_text(validateDistributionUrl="true "),
-    "a value that is written with an escape": as_text(validateDistributionUrl="\\u0074rue"),
+    "a value with a space after it": settings_text(validateDistributionUrl="true "),
+    "a value that is written with an escape": settings_text(validateDistributionUrl="\\u0074rue"),
     "a backslash before the backslash of the colon": GOOD_TEXT.replace("https\\:", "https\\\\:"),
-    "a value with a letter that is not ASCII": as_text(distributionBase="GRADLE_USER_HOM\u00c9"),
+    "a value with a letter that is not ASCII": settings_text(distributionBase="GRADLE_USER_HOM\u00c9"),
     "a key with a sign in it": GOOD_TEXT + "validate.DistributionUrl=false\n",
     "a line with no key": GOOD_TEXT + "=false\n",
     "a comment that starts with an exclamation mark": GOOD_TEXT + "!validateDistributionUrl=false\n",
     "a comment with spaces before it": GOOD_TEXT + "  # a note\n",
-    "a value with a space before it": as_text(validateDistributionUrl=" true"),
+    "a value with a space before it": settings_text(validateDistributionUrl=" true"),
 }
 
 
 @pytest.mark.parametrize("text", NOT_PLAIN.values(), ids=NOT_PLAIN.keys())
 def test_a_settings_file_that_is_not_in_the_plain_form_is_found(tmp_path, text):
-    findings = a_wrapper(tmp_path, raw=text.encode())
+    findings = findings_for_a_wrapper(tmp_path, text)
     assert findings and all("is not in the plain form" in finding and "Fix:" in finding for finding in findings), findings
     assert all("Java's own reader" in finding for finding in findings)
 
@@ -386,12 +386,12 @@ def test_a_settings_file_that_is_not_in_the_plain_form_is_found(tmp_path, text):
 ], ids=["the check of the address", "the address", "the same address again", "the sum of the distribution"])
 def test_a_key_that_stands_twice_is_found(tmp_path, line, key):
     for place, text in enumerate((GOOD_TEXT + line, line + GOOD_TEXT)):
-        findings = a_wrapper(tmp_path / str(place), raw=text.encode())
+        findings = findings_for_a_wrapper(tmp_path / str(place), text)
         assert len(findings) == 1 and f"gives `{key}` a second time" in findings[0] and "Fix:" in findings[0], findings
 
 
 def test_a_file_that_is_not_plain_gets_no_other_finding(tmp_path):
     # The jar is another one too, and nothing is said of it: what the test would read is not what the wrapper reads.
-    findings = a_wrapper(tmp_path, jar=b"changed", raw=(GOOD_TEXT + "validateDistributionUrl:false\n").encode())
+    findings = findings_for_a_wrapper(tmp_path, GOOD_TEXT + "validateDistributionUrl:false\n", jar=b"changed")
     assert len(findings) == 1 and "line 5, is not in the plain form" in findings[0], findings
     assert "'validateDistributionUrl:false'" in findings[0]

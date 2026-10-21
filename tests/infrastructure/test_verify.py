@@ -14,6 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "verify.py"
 ALWAYS = ["test-integrity", "dockerfile-sources"]
+PYTHON = ["python-compile", "min-python", "ruff"]
+SENDERS = "tests/contracts/test_api_version_contract.py"
+CHANGED_TEST = "tests/v3-service/test_structural_edit.py"
 
 
 @pytest.fixture(scope="module")
@@ -26,63 +29,43 @@ def verify():
     sys.modules.pop(spec.name, None)
 
 
-def test_a_document_change_runs_only_the_checks_of_the_whole_tree(verify):
-    assert verify.select(["README.md"], full=False) == (ALWAYS, [], False)
-
-
-def test_a_proxy_change_runs_the_go_gates_and_leaves_the_slow_suite_to_full(verify):
-    gates, suites, lens = verify.select(["proxy/agent.go"], full=False)
-    assert gates == ALWAYS + ["go-proxy-vet", "go-proxy-staticcheck"]
-    assert suites == ["tests/replay"]
-    assert not lens
-    gates, suites, _ = verify.select(["proxy/agent.go"], full=True)
-    assert "go-proxy-test" in gates
-    assert suites == ["tests/replay", "tests/e2e"]
-
-
-def test_a_file_that_sends_to_the_agent_runs_the_test_that_lists_the_senders(verify):
-    contract = "tests/contracts/test_api_version_contract.py"
-    assert contract in verify.select(["tests/replay/stage.py"], full=False)[1]
-    assert contract not in verify.select(["tests/replay/recording.py"], full=False)[1]
-    assert verify.select(["atlas/cli.py", "tests/replay/stage.py"], full=False)[1].count(contract) == 0
-
-
-def test_a_tui_change_runs_its_tests_too(verify):
-    gates, _, _ = verify.select(["tui/chat.go"], full=False)
-    assert gates == ALWAYS + ["go-tui-vet", "go-tui-staticcheck", "go-tui-test"]
-
-
-def test_a_python_change_runs_the_python_gates_and_the_suites_of_its_folder(verify):
-    gates, suites, lens = verify.select(["v3-service/symbols.py"], full=False)
-    assert gates == ALWAYS + ["python-compile", "min-python", "ruff"]
-    assert suites == ["tests/v3-service", "tests/v3"]
-    assert not lens
-    assert verify.select(["atlas/commands/doctor.py"], full=False)[1] == ["tests/cli", "tests/contracts"]
-
-
-def test_a_slow_suite_waits_for_full(verify):
-    assert verify.select(["sandbox/executor_server.py"], full=False)[1] == []
-    assert verify.select(["sandbox/executor_server.py"], full=True)[1] == ["tests/infrastructure"]
-
-
-def test_a_changed_test_file_is_run_itself_once(verify):
-    path = "tests/v3-service/test_structural_edit.py"
-    assert verify.select([path], full=False)[1] == [path]
-    # Its suite already runs it when the code it covers changed too.
-    assert verify.select(["v3-service/symbols.py", path], full=False)[1] == ["tests/v3-service", "tests/v3"]
-
-
-def test_the_lens_suite_runs_in_its_own_process(verify):
-    assert verify.select(["geometric-lens/main.py"], full=False)[2] is True
-
-
-@pytest.mark.parametrize("path, gate", [
-    ("scripts/install.sh", "shellcheck"),
-    (".github/workflows/test.yml", "workflow-yaml"),
-    ("docker-compose.rocm.yml", "compose-rocm"),
+# Each row: the changed files and whether --full is given; then the gates it picks besides ALWAYS, the pytest
+# paths it runs, and whether the lens suite runs in its own process.
+@pytest.mark.parametrize("changed, full, gates, suites, lens", [
+    pytest.param(["README.md"], False, [], [], False, id="a document runs only the checks of the whole tree"),
+    pytest.param(["proxy/agent.go"], False, ["go-proxy-vet", "go-proxy-staticcheck"], ["tests/replay"], False,
+                 id="a proxy change runs the Go gates and leaves the slow suite to --full"),
+    pytest.param(["proxy/agent.go"], True, ["go-proxy-vet", "go-proxy-staticcheck", "go-proxy-test"],
+                 ["tests/replay", "tests/e2e"], False,
+                 id="a proxy change with --full runs the proxy tests and the slow suite"),
+    pytest.param(["tui/chat.go"], False, ["go-tui-vet", "go-tui-staticcheck", "go-tui-test"], [], False,
+                 id="a TUI change runs its tests too"),
+    pytest.param(["v3-service/symbols.py"], False, PYTHON, ["tests/v3-service", "tests/v3"], False,
+                 id="a Python change runs the Python gates and the suites of its folder"),
+    pytest.param(["atlas/commands/doctor.py"], False, PYTHON, ["tests/cli", "tests/contracts"], False,
+                 id="a change in atlas runs the suites of atlas"),
+    pytest.param(["sandbox/executor_server.py"], False, PYTHON, [], False, id="a slow suite waits for --full"),
+    pytest.param(["sandbox/executor_server.py"], True, PYTHON, ["tests/infrastructure"], False,
+                 id="a slow suite runs with --full"),
+    pytest.param([CHANGED_TEST], False, PYTHON, [CHANGED_TEST], False, id="a changed test file is run itself"),
+    pytest.param(["v3-service/symbols.py", CHANGED_TEST], False, PYTHON, ["tests/v3-service", "tests/v3"], False,
+                 id="a changed test file is not run again when its suite runs"),
+    pytest.param(["tests/replay/stage.py"], False, PYTHON, [SENDERS], False,
+                 id="a file that sends to the agent runs the test that lists the senders"),
+    pytest.param(["tests/replay/recording.py"], False, PYTHON, [], False,
+                 id="a file that does not send to the agent does not run that test"),
+    pytest.param(["atlas/cli.py", "tests/replay/stage.py"], False, PYTHON, ["tests/cli", "tests/contracts"], False,
+                 id="the test that lists the senders is not added when its suite already runs"),
+    pytest.param(["geometric-lens/main.py"], False, PYTHON, [], True,
+                 id="a lens change runs the lens suite in its own process"),
+    pytest.param(["scripts/install.sh"], False, ["shellcheck"], [], False, id="a shell script picks shellcheck"),
+    pytest.param([".github/workflows/test.yml"], False, ["workflow-yaml"], [], False, id="a workflow picks the YAML check"),
+    pytest.param(["docker-compose.rocm.yml"], False,
+                 ["compose", "compose-rocm", "compose-vulkan", "compose-cpu", "compose-macos"], [], False,
+                 id="a compose file picks every compose check"),
 ])
-def test_other_file_types_pick_their_gate(verify, path, gate):
-    assert gate in verify.select([path], full=False)[0]
+def test_a_change_picks_the_gates_and_suites_that_cover_its_files(verify, changed, full, gates, suites, lens):
+    assert verify.select(changed, full) == (ALWAYS + gates, suites, lens)
 
 
 def test_every_gate_it_can_pick_exists_and_has_a_fix(verify):
@@ -124,12 +107,6 @@ def test_a_base_that_reads_as_an_option_is_refused():
     done = subprocess.run([sys.executable, str(SCRIPT), "--base=--not-a-branch"], capture_output=True, text=True, check=False)
     assert done.returncode == 2
     assert "Not a valid object name" in done.stderr
-    assert "fix:" in done.stderr
-
-
-def test_a_base_it_cannot_read_is_an_error_with_a_fix(verify):
-    done = subprocess.run([sys.executable, str(SCRIPT), "--base", "no-such-branch"], capture_output=True, text=True, check=False)
-    assert done.returncode == 2
     assert "fix:" in done.stderr
 
 

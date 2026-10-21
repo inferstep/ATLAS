@@ -75,12 +75,6 @@ def result_file(folder, tests):
     return result
 
 
-def group_of(counted, monkeypatch, expected):
-    """Give the group `sandbox` this number of tests for the test, and nothing else of it another value."""
-    group = counted.GROUPS["sandbox"]
-    monkeypatch.setitem(counted.GROUPS, "sandbox", group._replace(expected=expected))
-
-
 # --- reading a result file ----------------------------------------------------------------------------------------
 
 def test_the_numbers_of_a_result_file_that_pytest_wrote(counted, tmp_path):
@@ -116,11 +110,6 @@ def test_the_suites_of_a_result_file_are_added_up(counted):
     assert (numbers["collected"], numbers["failed"], numbers["skipped"], numbers["passed"]) == (9, 2, 2, 5)
 
 
-def test_a_file_with_no_suite_is_not_a_result_file(counted):
-    with pytest.raises(counted.Unreadable):
-        counted.read("<html>not found</html>")
-
-
 # --- what keeps a run from holding --------------------------------------------------------------------------------
 
 def numbers(collected=4, failed=0, skipped=0, failed_tests=(), skip_reasons=None):
@@ -129,21 +118,27 @@ def numbers(collected=4, failed=0, skipped=0, failed_tests=(), skip_reasons=None
 
 
 @pytest.mark.parametrize("measured, says", [
-    (numbers(), []),
-    (numbers(collected=3), ["3 tests were collected, and there are 4"]),
-    (numbers(collected=5), ["5 tests were collected, and there are 4"]),
-    (numbers(failed=2, failed_tests=["test_a", "test_b"]), ["2 test(s) failed (test_a; test_b)"]),
-    (numbers(failed=1), ["1 test(s) failed"]),
-    (numbers(collected=8, failed=7, failed_tests=["a", "b", "c", "d", "e", "f", "g"]),
-     ["8 tests were collected, and there are 4", "7 test(s) failed (a; b; c; d; e; and 2 more test(s))"]),
+    pytest.param(numbers(), [], id="all ran and passed"),
+    pytest.param(numbers(collected=3), ["3 tests were collected, and there are 4"], id="fewer were collected"),
+    pytest.param(numbers(collected=5), ["5 tests were collected, and there are 4"], id="more were collected"),
+    pytest.param(numbers(failed=2, failed_tests=["test_a", "test_b"]), ["2 test(s) failed (test_a; test_b)"],
+                 id="failed tests with their names"),
+    pytest.param(numbers(failed=1), ["1 test(s) failed"], id="a failed test with no name"),
+    pytest.param(numbers(collected=8, failed=7, failed_tests=["a", "b", "c", "d", "e", "f", "g"]),
+                 ["8 tests were collected, and there are 4", "7 test(s) failed (a; b; c; d; e; and 2 more test(s))"],
+                 id="more failed tests than are named"),
     # A skipped test counts as collected: all 4 are there, and 2 of them were not run.
-    (numbers(skipped=2, skip_reasons={"the service is not there": 2}), ["2 test(s) were skipped (2: the service is not there)"]),
-    (numbers(skipped=2), ["2 test(s) were skipped (the result file gives no reason)"]),
-    (numbers(collected=9, skipped=8, skip_reasons={"one": 2, "two": 2, "three": 1, "four": 1, "five": 1, "six": 1}),
-     ["9 tests were collected, and there are 4",
-      "8 test(s) were skipped (2: one; 2: two; 1: three; 1: four; 1: five; and 1 more reason(s))"]),
-    (numbers(collected=3, failed=1, skipped=1, failed_tests=["test_a"], skip_reasons={"no tool": 1}),
-     ["3 tests were collected, and there are 4", "1 test(s) failed (test_a)", "1 test(s) were skipped (1: no tool)"]),
+    pytest.param(numbers(skipped=2, skip_reasons={"the service is not there": 2}),
+                 ["2 test(s) were skipped (2: the service is not there)"], id="skipped tests with their reason"),
+    pytest.param(numbers(skipped=2), ["2 test(s) were skipped (the result file gives no reason)"],
+                 id="skipped tests with no reason"),
+    pytest.param(numbers(collected=9, skipped=8, skip_reasons={"one": 2, "two": 2, "three": 1, "four": 1, "five": 1, "six": 1}),
+                 ["9 tests were collected, and there are 4",
+                  "8 test(s) were skipped (2: one; 2: two; 1: three; 1: four; 1: five; and 1 more reason(s))"],
+                 id="more skip reasons than are named"),
+    pytest.param(numbers(collected=3, failed=1, skipped=1, failed_tests=["test_a"], skip_reasons={"no tool": 1}),
+                 ["3 tests were collected, and there are 4", "1 test(s) failed (test_a)", "1 test(s) were skipped (1: no tool)"],
+                 id="each fault at once"),
 ])
 def test_each_thing_that_keeps_a_run_from_holding_is_named(counted, measured, says):
     assert counted.faults(measured, 4) == says
@@ -152,7 +147,7 @@ def test_each_thing_that_keeps_a_run_from_holding_is_named(counted, measured, sa
 # --- the command --------------------------------------------------------------------------------------------------
 
 def test_a_run_in_which_every_test_of_the_group_ran_and_passed_holds(counted, tmp_path, monkeypatch, capsys):
-    group_of(counted, monkeypatch, 2)
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=2))
     assert counted.main(["sandbox", str(result_file(tmp_path, PASSES))]) == 0
     assert capsys.readouterr().out == "tests counted: all 2 tests that need a running sandbox service ran and passed.\n"
 
@@ -164,7 +159,7 @@ def test_a_run_with_a_skipped_test_does_not_hold_though_pytest_ended_with_status
     done = subprocess.run([sys.executable, "-m", "pytest", "test_made.py", "-q", "-p", "no:cacheprovider", "--rootdir", str(folder)],
                           cwd=folder, capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, "pytest itself calls such a run a success"
-    group_of(counted, monkeypatch, 3)
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=3))
     assert counted.main(["sandbox", str(result)]) == 1
     said = capsys.readouterr().out
     assert said.startswith("::error title=tests counted::the run of the tests that need a running sandbox service does not hold: ")
@@ -172,18 +167,18 @@ def test_a_run_with_a_skipped_test_does_not_hold_though_pytest_ended_with_status
     assert "Fix: " in said
 
 
-@pytest.mark.parametrize("tests, expected, says", [
-    (PASSES, 3, "2 tests were collected, and there are 3"),
-    (PASSES + "\n\ndef test_three():\n    assert 1 == 2\n", 3, "1 test(s) failed (test_three)"),
+@pytest.mark.parametrize("tests, says", [
+    pytest.param(PASSES, "2 tests were collected, and there are 3", id="a test less"),
+    pytest.param(PASSES + "\n\ndef test_three():\n    assert 1 == 2\n", "1 test(s) failed (test_three)", id="a failed test"),
 ])
-def test_a_run_with_a_failed_test_or_with_another_number_of_tests_does_not_hold(counted, tmp_path, monkeypatch, capsys, tests,
-                                                                                expected, says):
-    group_of(counted, monkeypatch, expected)
+def test_a_run_with_a_failed_test_or_with_another_number_of_tests_does_not_hold(counted, tmp_path, monkeypatch, capsys,
+                                                                                tests, says):
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=3))
     assert counted.main(["sandbox", str(result_file(tmp_path, tests))]) == 1
     assert says in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("written", [None, "", "pytest could not start"])
+@pytest.mark.parametrize("written", [None, "", "pytest could not start"], ids=["no file", "an empty file", "a file with no suite"])
 def test_a_result_file_that_cannot_be_read_is_not_a_pass(counted, tmp_path, capsys, written):
     result = tmp_path / "result.xml"
     if written is not None:
@@ -195,8 +190,14 @@ def test_a_result_file_that_cannot_be_read_is_not_a_pass(counted, tmp_path, caps
     assert "so no test is known to have run. Fix: " in said
 
 
-@pytest.mark.parametrize("arguments", [[], ["sandbox"], ["no-such-group", "result.xml"], ["--files"], ["--files", "no-such-group"],
-                                       ["sandbox", "result.xml", "one more"]])
+@pytest.mark.parametrize("arguments", [
+    pytest.param([], id="nothing"),
+    pytest.param(["sandbox"], id="a group with no result file"),
+    pytest.param(["no-such-group", "result.xml"], id="a group that is not one"),
+    pytest.param(["--files"], id="files of no group"),
+    pytest.param(["--files", "no-such-group"], id="files of a group that is not one"),
+    pytest.param(["sandbox", "result.xml", "one more"], id="one argument more"),
+])
 def test_a_call_that_names_no_group_is_refused(counted, capsys, arguments):
     assert counted.main(arguments) == 2
     said = capsys.readouterr().err

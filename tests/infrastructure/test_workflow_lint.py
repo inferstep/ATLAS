@@ -16,28 +16,21 @@ LINT = ROOT / ".github" / "workflows" / "workflow-lint.yml"
 KEEPS_TOKEN = "# zizmor: ignore[artipacked]"
 
 
-def checkout_steps(text: str) -> list[dict]:
-    """Every actions/checkout step of a workflow, as the mapping of its keys."""
-    jobs = (yaml.safe_load(text) or {}).get("jobs") or {}
-    return [step for job in jobs.values() for step in job.get("steps") or []
-            if str(step.get("uses", "")).startswith("actions/checkout@")]
-
-
-def keeps_token_with_a_reason(text: str) -> int:
-    """How many lines keep the token and carry the marker, with a comment line of reason above."""
-    lines = text.splitlines()
-    return sum(1 for n, line in enumerate(lines)
-               if re.match(r"\s*persist-credentials: true\s+" + re.escape(KEEPS_TOKEN), line)
-               and n > 0 and lines[n - 1].strip().startswith("# "))
-
-
 def checkout_problems(name: str, text: str) -> list[str]:
-    steps = checkout_steps(text)
-    kept = [step for step in steps if (step.get("with") or {}).get("persist-credentials") is not False]
-    if len(kept) == keeps_token_with_a_reason(text):
+    """A message when a checkout step of this workflow keeps the job's token and no line says why."""
+    jobs = (yaml.safe_load(text) or {}).get("jobs") or {}
+    kept = [step for job in jobs.values() for step in job.get("steps") or []
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+            and (step.get("with") or {}).get("persist-credentials") is not False]
+    # A step says why when its line carries the marker and the line above it is a comment that gives the reason.
+    lines = text.splitlines()
+    said_why = sum(1 for n, line in enumerate(lines)
+                   if re.match(r"\s*persist-credentials: true\s+" + re.escape(KEEPS_TOKEN), line)
+                   and n > 0 and lines[n - 1].strip().startswith("# "))
+    if len(kept) == said_why:
         return []
     return [(f"{name}: {len(kept)} checkout step(s) keep the job's token in the checkout's git settings, and "
-             f"{keeps_token_with_a_reason(text)} of them say why. Fix: add `persist-credentials: false` under `with:` "
+             f"{said_why} of them say why. Fix: add `persist-credentials: false` under `with:` "
              f"of the step. If a later step must push with the token, write `persist-credentials: true  {KEEPS_TOKEN}` "
              "with a comment line above it that gives the reason.")]
 
@@ -55,14 +48,18 @@ STEP = "jobs:\n  one:\n    steps:\n      - uses: actions/checkout@0123  # v1\n"
 
 
 @pytest.mark.parametrize("step, found", [
-    (STEP, 1),
-    (STEP + "        with:\n          fetch-depth: 0\n", 1),
-    (STEP + "        with:\n          persist-credentials: true\n", 1),
-    (STEP + "        with:\n          persist-credentials: true  # zizmor: ignore[artipacked]\n", 1),
-    (STEP + "        with:\n          persist-credentials: false\n", 0),
-    (STEP + "        with:\n          # The job pushes to this branch.\n"
-            "          persist-credentials: true  # zizmor: ignore[artipacked]\n", 0),
-    ("jobs:\n  one:\n    steps:\n      - uses: actions/setup-go@0123  # v1\n", 0),
+    pytest.param(STEP, 1, id="no with: the token is kept"),
+    pytest.param(STEP + "        with:\n          fetch-depth: 0\n", 1, id="no persist-credentials: the token is kept"),
+    pytest.param(STEP + "        with:\n          persist-credentials: true\n", 1,
+                 id="persist-credentials true without the marker"),
+    pytest.param(STEP + "        with:\n          persist-credentials: true  # zizmor: ignore[artipacked]\n", 1,
+                 id="the marker without a comment of reason above it"),
+    pytest.param(STEP + "        with:\n          persist-credentials: false\n", 0,
+                 id="persist-credentials false: the token is dropped"),
+    pytest.param(STEP + "        with:\n          # The job pushes to this branch.\n"
+                        "          persist-credentials: true  # zizmor: ignore[artipacked]\n", 0,
+                 id="the marker with a comment of reason above it"),
+    pytest.param("jobs:\n  one:\n    steps:\n      - uses: actions/setup-go@0123  # v1\n", 0, id="not a checkout step"),
 ])
 def test_the_checkout_rule_names_a_step_that_keeps_the_token(step, found):
     assert len(checkout_problems("x.yml", step)) == found
@@ -74,7 +71,8 @@ def test_a_checkout_problem_says_how_to_fix_it():
     assert "Fix: add `persist-credentials: false`" in message
 
 
-@pytest.mark.parametrize("tool, version", [("ZIZMOR", r"v\d+\.\d+\.\d+"), ("ACTIONLINT", r"\d+\.\d+\.\d+")])
+@pytest.mark.parametrize("tool, version", [("ZIZMOR", r"v\d+\.\d+\.\d+"), ("ACTIONLINT", r"\d+\.\d+\.\d+")],
+                         ids=["zizmor", "actionlint"])
 def test_each_tool_is_held_against_a_recorded_checksum(tool, version):
     text = LINT.read_text(encoding="utf-8")
     assert re.search(rf"^ +{tool}_VERSION: {version}$", text, re.MULTILINE)
@@ -85,9 +83,9 @@ def test_each_tool_is_held_against_a_recorded_checksum(tool, version):
 def test_a_finding_fails_each_job():
     jobs = yaml.safe_load(LINT.read_text(encoding="utf-8"))["jobs"]
     assert set(jobs) == {"zizmor", "actionlint"}
-    for name, binary in (("zizmor", "zizmor"), ("actionlint", "actionlint")):
+    for name in ("zizmor", "actionlint"):
         run = jobs[name]["steps"][-1]["run"]
-        assert re.search(rf'if ! "\$RUNNER_TEMP/bin/{binary}" [^\n]*"\$\{{files\[@\]\}}"; then', run)
+        assert re.search(rf'if ! "\$RUNNER_TEMP/bin/{name}" [^\n]*"\$\{{files\[@\]\}}"; then', run)
         assert run.count("exit 1") == 2
         assert "continue-on-error" not in jobs[name]
         assert "continue-on-error" not in jobs[name]["steps"][-1]

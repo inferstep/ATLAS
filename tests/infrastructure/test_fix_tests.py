@@ -129,52 +129,77 @@ def verdicts(fix, root, base, tools):
     return {test.name: name for test, name, _ in rows}, rows, notes, product
 
 
-def test_a_test_that_fails_by_an_assertion_without_the_fix_guards_it(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
-    found, rows, _, product = verdicts(fix, root, base, tools)
-    assert found == {"test_add_adds": "fails on the base"}
-    assert "an assertion" in rows[0][2]
-    assert product == "code"
+GO_FIXED = {"proxy/calc.go": "package p\n\nfunc newHelper() int { return 5 }\n", "proxy/go_answers.json": "{}"}
 
 
-def test_a_planted_test_that_passes_without_the_fix_is_the_finding(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")})
-    found, _, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_gives_a_number": "passes on the base too"}
+def go_test(name, body):
+    return f"package p\n\nimport \"testing\"\n\nfunc {name}(t *testing.T) {{\n\t{body}\n}}\n"
 
 
-def test_a_test_that_stops_on_a_missing_name_needs_the_fixs_code(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_double_doubles():\n    assert calc.double(4) == 8\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_double_doubles": "needs the fix's code"}
-    assert "AttributeError" in rows[0][2]
-
-
-def test_a_new_test_file_that_does_not_import_without_the_fix_needs_the_fixs_code(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_double.py":
-                       PATH_LINE + "from calc import double\n\n\ndef test_double_doubles():\n    assert double(4) == 8\n"})
-    found, _, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_double_doubles": "needs the fix's code"}
-
-
-def test_a_test_that_fails_with_the_fix_too_is_said_so(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_is_wrong():\n    assert calc.add(2, 3) == 6\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_is_wrong": "not judged here"}
-    assert rows[0][2].startswith("it fails on the base and with the fix: an assertion, raised in the test: ")
-    assert "assert 5 == 6" in rows[0][2]
-
-
-def test_a_test_that_passes_on_the_base_and_fails_with_the_fix_is_said_so(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_still_subtracts():\n    assert calc.add(5, 3) == 2\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_still_subtracts": "fails with the fix"}
-    assert "assert 8 == 2" in rows[0][2]
+@pytest.mark.parametrize("fix_files, test_name, its_class, reason", [
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")},
+                 "test_add_adds", "fails on the base", "it guards the fix: an assertion, raised in the test: assert",
+                 id="fails by an assertion on the base"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_add_gives_a_number():\n    assert isinstance(calc.add(2, 3), int)\n")},
+                 "test_add_gives_a_number", "passes on the base too", "it does not guard the fix",
+                 id="passes on the base too"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_double_doubles():\n    assert calc.double(4) == 8\n")},
+                 "test_double_doubles", "needs the fix's code",
+                 "on the base the test cannot run as written: AttributeError", id="calls a function only the fix adds"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_double.py":
+                  PATH_LINE + "from calc import double\n\n\ndef test_double_doubles():\n    assert double(4) == 8\n"},
+                 "test_double_doubles", "needs the fix's code", "on the base the test cannot run as written",
+                 id="a new test file that does not import on the base"),
+    pytest.param({"proxy/calc.py": "def add(a, b, round_to=None):\n    return a + b\n",
+                  "proxy/tests/test_calc.py": new_test(
+                      "def test_add_takes_a_rounding():\n    assert calc.add(2, 3, round_to=0) == 5\n")},
+                 "test_add_takes_a_rounding", "needs the fix's code",
+                 "on the base the test cannot run as written: TypeError: add() got an unexpected keyword argument "
+                 "'round_to'", id="a call that does not fit the base's function"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_add_is_wrong():\n    assert calc.add(2, 3) == 6\n")},
+                 "test_add_is_wrong", "not judged here",
+                 "it fails on the base and with the fix: an assertion, raised in the test: assert 5 == 6",
+                 id="fails with the fix too"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_add_still_subtracts():\n    assert calc.add(5, 3) == 2\n")},
+                 "test_add_still_subtracts", "fails with the fix", "an assertion, raised in the test: assert 8 == 2",
+                 id="passes on the base and fails with the fix"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+                  "@pytest.mark.parametrize('pair', [(2, 3), (4, 1)], "
+                  "ids=['two and three - small', 'four [and] one'])\n"
+                  "def test_add_adds(pair):\n    assert calc.add(*pair) == sum(pair)\n")},
+                 "test_add_adds", "fails on the base", "it guards the fix: an assertion, raised in the test: assert",
+                 id="a parametrized test is one test whatever its cases are called"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
+                  "def test_add_adds_from_another_folder(tmp_path, monkeypatch):\n    monkeypatch.chdir(tmp_path)\n"
+                  "    assert calc.add(2, 3) == 5\n")},
+                 "test_add_adds_from_another_folder", "fails on the base",
+                 "it guards the fix: an assertion, raised in the test: assert",
+                 id="changes its folder and still fails in the test"),
+    pytest.param({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
+                  "@pytest.mark.skip(reason='needs a terminal')\n"
+                  "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")},
+                 "test_add_adds", "not judged here", "skipped (needs a terminal)", id="skipped"),
+    pytest.param({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")},
+                 "TestAdds", "fails on the base", "it guards the fix: an assertion, raised in the test: want 5, got -1",
+                 id="a Go test that fails on the base"),
+    pytest.param({**GO_FIXED, "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }")},
+                 "TestUsesNewCode", "needs the fix's code",
+                 "on the base the test cannot run as written: ./x_test.go:6:5: undefined: newHelper",
+                 id="a Go test that does not build on the base"),
+    pytest.param({**GO_FIXED, "proxy/go_answers.json": json.dumps({"TestAdds": "skip"}),
+                  "proxy/calc_test.go": go_test("TestAdds", "t.Skip()")},
+                 "TestAdds", "not judged here", "skipped (needs a terminal)", id="a skipped Go test"),
+])
+def test_a_test_of_the_fix_gets_its_class_and_the_reason(fix, repo, tools, fix_files, test_name, its_class, reason):
+    root, base = repo(fix_files)
+    rows, _, _ = fix.judge(root, base, tools, 120)
+    assert [(test.name, name) for test, name, _ in rows] == [(test_name, its_class)]
+    assert rows[0][2].startswith(reason)
 
 
 def test_only_the_tests_the_change_touches_are_run_and_each_gets_its_own_class(fix, repo, tools):
@@ -185,15 +210,6 @@ def test_only_the_tests_the_change_touches_are_run_and_each_gets_its_own_class(f
     found, _, _, _ = verdicts(fix, root, base, tools)
     assert found == {"test_add_adds": "fails on the base", "test_add_gives_a_number": "passes on the base too",
                      "test_double_doubles": "needs the fix's code"}
-
-
-def test_a_parametrized_test_is_one_test_whatever_its_cases_are_called(fix, repo, tools):
-    cases = "@pytest.mark.parametrize('pair', [(2, 3), (4, 1)], ids=['two and three - small', 'four [and] one'])\n"
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
-        cases + "def test_add_adds(pair):\n    assert calc.add(*pair) == sum(pair)\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_adds": "fails on the base"}
-    assert "an assertion" in rows[0][2]
 
 
 def test_a_test_the_fix_only_changes_is_told_apart_from_a_test_it_adds(fix, repo, tools):
@@ -208,42 +224,49 @@ def test_a_test_the_fix_only_changes_is_told_apart_from_a_test_it_adds(fix, repo
     assert sorted(fix.is_finding(test, name, True) for test, name, _ in rows) == [False, False]
 
 
-def test_a_call_that_does_not_fit_the_bases_function_needs_the_fixs_code(fix, repo, tools):
-    fixed = "def add(a, b, round_to=None):\n    return a + b\n"
-    root, base = repo({"proxy/calc.py": fixed, "proxy/tests/test_calc.py": new_test(
-        "def test_add_takes_a_rounding():\n    assert calc.add(2, 3, round_to=0) == 5\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_takes_a_rounding": "needs the fix's code"}
-    assert "unexpected keyword argument 'round_to'" in rows[0][2]
-
-
-def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind_and_place(fix, repo, tools):
-    faulty = "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS[name]\n"
-    fixed = "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS.get(name, 0)\n"
-    root, _ = repo({"proxy/limits.py": faulty})
+@pytest.mark.parametrize("faulty, fixed, said", [
+    pytest.param({"proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS[name]\n"},
+                 {"proxy/limits.py": "LIMITS = {}\n\n\ndef limit(name):\n    return LIMITS.get(name, 0)\n",
+                  "proxy/tests/test_limits.py": PATH_LINE + "import limits\n\n\n"
+                  "def test_an_unknown_name_has_no_limit():\n    assert limits.limit('x') == 0\n"},
+                 "an error (KeyError), raised in product code (proxy/limits.py)", id="raised in product code"),
+    pytest.param({"proxy/keep.py": "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"},
+                 {"proxy/keep.py": "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n"
+                                   "        shutil.copyfile(src, dst)\n",
+                  "proxy/tests/test_keep.py": PATH_LINE + "import keep\n\n\n"
+                  "def test_a_file_that_is_not_there_is_left_out(tmp_path):\n"
+                  "    keep.keep(str(tmp_path / 'none'), str(tmp_path / 'copy'))\n"},
+                 "an error (FileNotFoundError), raised in the standard library (shutil.py), called from proxy/keep.py",
+                 id="raised in the standard library"),
+])
+def test_an_error_the_fault_itself_raises_is_a_failure_on_the_base_with_its_kind_and_place(fix, repo, tools, faulty,
+                                                                                         fixed, said):
+    root, _ = repo(faulty)
     base = git(root, "rev-parse", "HEAD")
-    commit(root, {"proxy/limits.py": fixed, "proxy/tests/test_limits.py":
-                  PATH_LINE + "import limits\n\n\ndef test_an_unknown_name_has_no_limit():\n"
-                  "    assert limits.limit('x') == 0\n"}, "fix")
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_an_unknown_name_has_no_limit": "fails on the base"}
-    assert "an error (KeyError), raised in product code (proxy/limits.py)" in rows[0][2]
+    commit(root, fixed, "fix")
+    rows, _, _ = fix.judge(root, base, tools, 120)
+    assert [name for _, name, _ in rows] == ["fails on the base"]
+    assert said in rows[0][2]
 
 
 @pytest.mark.parametrize("frames, said", [
-    (["proxy/tests/test_limits.py"], "in the test"),
-    (["proxy/tests/test_limits.py", "proxy/limits.py"], "in product code (proxy/limits.py)"),
-    (["tests/e2e/test_driver.py", "scripts/driver.py", "/usr/local/lib/python3.12/dataclasses.py"],
-     "in the standard library (dataclasses.py), called from scripts/driver.py"),
-    (["tests/e2e/test_driver.py", "/usr/lib/python3.12/shutil.py"], "in the standard library (shutil.py), called from the test"),
-    (["tests/test_x.py", "proxy/calc.py", "/home/u/.local/lib/python3.12/site-packages/yaml/scanner.py"],
-     "in an installed package (scanner.py), called from proxy/calc.py"),
-    (["/usr/lib/python3/dist-packages/_pytest/python.py"], "in an installed package (python.py)"),
+    pytest.param(["proxy/tests/test_limits.py"], "in the test", id="a test file"),
+    pytest.param(["proxy/tests/test_limits.py", "proxy/limits.py"], "in product code (proxy/limits.py)",
+                 id="product code"),
+    pytest.param(["tests/e2e/test_driver.py", "scripts/driver.py", "/usr/local/lib/python3.12/dataclasses.py"],
+                 "in the standard library (dataclasses.py), called from scripts/driver.py",
+                 id="the standard library, called from a script"),
+    pytest.param(["tests/e2e/test_driver.py", "/usr/lib/python3.12/shutil.py"],
+                 "in the standard library (shutil.py), called from the test",
+                 id="the standard library, called from the test"),
+    pytest.param(["tests/test_x.py", "proxy/calc.py", "/home/u/.local/lib/python3.12/site-packages/yaml/scanner.py"],
+                 "in an installed package (scanner.py), called from proxy/calc.py",
+                 id="an installed package, called from product code"),
+    pytest.param(["/usr/lib/python3/dist-packages/_pytest/python.py"], "in an installed package (python.py)",
+                 id="an installed package alone"),
 ])
 def test_a_file_outside_the_repository_is_not_called_product_code(fix, frames, said):
-    def is_test(path):
-        return "/tests/" in f"/{path}"
-    assert fix.place(frames, is_test) == said
+    assert fix.place(frames, lambda path: "/tests/" in f"/{path}") == said
 
 
 def test_a_file_of_the_tree_that_pytest_names_by_its_whole_path_is_still_a_file_of_the_repository(fix, tmp_path):
@@ -252,23 +275,10 @@ def test_a_file_of_the_tree_that_pytest_names_by_its_whole_path_is_still_a_file_
     output = (f"_________ test_a _________\n{tree}/tests/test_x.py:9: in test_a\n    assert f() == 1\n"
               f"_________ test_b _________\n{tree}/tests/test_x.py:14: in test_b\n    g()\n{tree}/proxy/calc.py:3: in g\n"
               f"_________ test_c _________\ntests/test_x.py:20: in test_c\n    h()\n/usr/lib/python3.12/shutil.py:5: in h\n")
-
-    def is_test(path):
-        return "/tests/" in f"/{path}"
-    assert fix.raised_where(output, is_test, tree) == {
+    assert fix.raised_where(output, lambda path: "/tests/" in f"/{path}", tree) == {
         "test_a": "in the test", "test_b": "in product code (proxy/calc.py)",
         "test_c": "in the standard library (shutil.py), called from the test"}
     assert fix.from_the_root(str(tree) + "-other/tests/test_x.py", tree) == str(tree) + "-other/tests/test_x.py"
-
-
-def test_a_test_that_changes_its_folder_and_fails_is_still_said_to_fail_in_the_test(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_adds_from_another_folder(tmp_path, monkeypatch):\n    monkeypatch.chdir(tmp_path)\n"
-        "    assert calc.add(2, 3) == 5\n")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"test_add_adds_from_another_folder": "fails on the base"}
-    assert "an assertion, raised in the test: " in rows[0][2]
-    assert "standard library" not in rows[0][2]
 
 
 def test_a_test_that_asks_the_product_in_a_new_process_gets_the_tree_that_is_tested(fix, repo, tools, monkeypatch):
@@ -316,20 +326,6 @@ def test_a_run_for_an_edit_of_a_pull_request_cancels_no_run_in_any_workflow():
     assert "fix-tests.yml" in starts_for_an_edit, "this test no longer finds the workflows that start for an edit"
 
 
-def test_an_error_raised_in_the_standard_library_names_it_and_the_file_that_called_it(fix, repo, tools):
-    faulty = "import shutil\n\n\ndef keep(src, dst):\n    shutil.copyfile(src, dst)\n"
-    fixed = "import os\nimport shutil\n\n\ndef keep(src, dst):\n    if os.path.exists(src):\n        shutil.copyfile(src, dst)\n"
-    root, _ = repo({"proxy/keep.py": faulty})
-    base = git(root, "rev-parse", "HEAD")
-    commit(root, {"proxy/keep.py": fixed, "proxy/tests/test_keep.py":
-                  PATH_LINE + "import keep\n\n\ndef test_a_file_that_is_not_there_is_left_out(tmp_path):\n"
-                  "    keep.keep(str(tmp_path / 'none'), str(tmp_path / 'copy'))\n"}, "fix")
-    _, rows, _, _ = verdicts(fix, root, base, tools)
-    assert rows[0][1] == "fails on the base"
-    assert "an error (FileNotFoundError), raised in the standard library (shutil.py), called from proxy/keep.py" in rows[0][2]
-    assert "product code (/" not in rows[0][2]
-
-
 LOADS_A_SCRIPT = """import importlib.util, pathlib
 
 
@@ -359,39 +355,33 @@ def test_a_test_that_stops_on_a_file_the_fix_adds_needs_the_fixs_code(fix, repo,
     assert "the base has no scripts/tool.py, a file the fix adds" in detail
     # A file that is missing on the base and on the pull request alike is not something the fix brings.
     assert found["test_a_file_that_was_never_there_is_read"] == "not judged here"
-    assert fix.failure("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/notes/old.txt'",
-                       added=["scripts/tool.py"]).state == "fail"
-    assert fix.failure("python3: can't open file '/tmp/base/scripts/tool.py': [Errno 2] No such file or directory",
-                       added=["scripts/tool.py"]).state == "missing"
-    assert fix.failure("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/other_tool.py'",
-                       added=["tool.py"]).state == "fail"
 
 
-def test_a_failed_assertion_is_said_to_be_raised_in_the_test(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": new_test(
-        "def test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
-    _, rows, _, _ = verdicts(fix, root, base, tools)
-    assert rows[0][2].startswith("it guards the fix: an assertion, raised in the test: assert")
-
-
-def test_an_attribute_error_on_a_wrong_value_is_a_failure_and_not_a_missing_name(fix):
-    wrong = fix.failure("AttributeError: 'NoneType' object has no attribute 'name'", "in product code (proxy/x.py)")
-    assert wrong.state == "fail"
-    assert wrong.detail.startswith("an error (AttributeError), raised in product code (proxy/x.py)")
-    for text in ("AttributeError: module 'calc' has no attribute 'double'",
-                 "AttributeError: type object 'Session' has no attribute 'prompts'",
-                 "NameError: name 'double' is not defined", "ImportError: cannot import name 'double' from 'calc'",
-                 "fixture 'tools' not found", "TypeError: add() takes 2 positional arguments but 3 were given",
-                 "TypeError: add() missing 1 required positional argument: 'b'"):
-        assert fix.failure(text).state == "missing", text
-    assert fix.failure("TypeError: unsupported operand type(s) for +: 'int' and 'str'").state == "fail"
-
-
-def test_a_skipped_test_is_not_judged_and_its_reason_is_given(fix, repo, tools):
-    root, base = repo({"proxy/calc.py": FIXED, "proxy/tests/test_calc.py": "import pytest\n" + new_test(
-        "@pytest.mark.skip(reason='needs a terminal')\ndef test_add_adds():\n    assert calc.add(2, 3) == 5\n")})
-    _, rows, _, _ = verdicts(fix, root, base, tools)
-    assert [(name, detail) for _, name, detail in rows] == [("not judged here", "skipped (needs a terminal)")]
+# "missing": the test cannot run as written on the base, because it needs a name or a file that only the fix brings.
+@pytest.mark.parametrize("text, added, state", [
+    pytest.param("AttributeError: 'NoneType' object has no attribute 'name'", [], "fail",
+                 id="an attribute of a wrong value"),
+    pytest.param("AttributeError: module 'calc' has no attribute 'double'", [], "missing", id="a name a module lacks"),
+    pytest.param("AttributeError: type object 'Session' has no attribute 'prompts'", [], "missing",
+                 id="a name a class lacks"),
+    pytest.param("NameError: name 'double' is not defined", [], "missing", id="a name that is not defined"),
+    pytest.param("ImportError: cannot import name 'double' from 'calc'", [], "missing", id="a name it cannot import"),
+    pytest.param("fixture 'tools' not found", [], "missing", id="a fixture that is not there"),
+    pytest.param("TypeError: add() takes 2 positional arguments but 3 were given", [], "missing",
+                 id="one argument too many"),
+    pytest.param("TypeError: add() missing 1 required positional argument: 'b'", [], "missing",
+                 id="one argument too few"),
+    pytest.param("TypeError: unsupported operand type(s) for +: 'int' and 'str'", [], "fail",
+                 id="a value of a wrong type"),
+    pytest.param("python3: can't open file '/tmp/base/scripts/tool.py': [Errno 2] No such file or directory",
+                 ["scripts/tool.py"], "missing", id="a file the fix adds"),
+    pytest.param("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/notes/old.txt'", ["scripts/tool.py"],
+                 "fail", id="a file the fix does not add"),
+    pytest.param("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/other_tool.py'", ["tool.py"], "fail",
+                 id="a file whose name only ends like one the fix adds"),
+])
+def test_a_failure_is_missing_only_for_a_name_or_a_file_that_the_fix_brings(fix, text, added, state):
+    assert fix.failure(text, added=added).state == state
 
 
 def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
@@ -402,21 +392,17 @@ def test_a_fix_with_no_new_or_changed_test_has_nothing_to_run(fix, repo, tools):
         "fix tests: a fix of product code. No test: this fix adds or changes no test, so there is nothing to run."]
 
 
-def test_a_fix_outside_product_code_is_named_as_such(fix, repo, tools):
-    root, base = repo({"scripts/tool.py": "x = 1\n"})
-    rows, notes, product = fix.judge(root, base, tools, 120)
-    assert product == "outside"
-    assert fix.summary(rows, notes, product)[0].startswith("fix tests: a fix outside product code (CI, docs or scripts).")
-
-
 @pytest.mark.parametrize("files, kind", [
-    ({"proxy/Dockerfile": "FROM scratch\n", "inference/Dockerfile.v31": "FROM scratch\n"}, "folder"),
-    ({"proxy/Dockerfile": "FROM scratch\n", "proxy/calc.py": FIXED}, "code"),
-    ({"proxy/tests/test_calc.py": OLD_TEST + "\n\ndef test_more():\n    assert calc.add(0, 0) == 0\n"}, "outside"),
-    ({"docs/CLI.md": "text\n", ".github/workflows/x.yml": "on: push\n"}, "outside"),
+    pytest.param({"proxy/Dockerfile": "FROM scratch\n", "inference/Dockerfile.v31": "FROM scratch\n"}, "folder",
+                 id="only build files of product folders"),
+    pytest.param({"proxy/Dockerfile": "FROM scratch\n", "proxy/calc.py": FIXED}, "code",
+                 id="a build file and product code"),
+    pytest.param({"proxy/tests/test_calc.py": OLD_TEST + "\n\ndef test_more():\n    assert calc.add(0, 0) == 0\n"},
+                 "outside", id="only a test of a product folder"),
+    pytest.param({"docs/CLI.md": "text\n", ".github/workflows/x.yml": "on: push\n"}, "outside", id="docs and CI"),
+    pytest.param({"scripts/tool.py": "x = 1\n"}, "outside", id="a script"),
 ])
-def test_a_fix_that_changes_only_a_build_file_of_a_product_folder_is_not_called_outside_product_code(fix, repo, tools, files,
-                                                                                                    kind):
+def test_a_fix_is_named_by_what_it_changes(fix, repo, tools, files, kind):
     root, base = repo(files)
     _, _, product = fix.judge(root, base, tools, 120)
     assert product == kind
@@ -424,20 +410,6 @@ def test_a_fix_that_changes_only_a_build_file_of_a_product_folder_is_not_called_
     assert line.startswith("fix tests: " + fix.CHANGES[kind] + ". ")
     assert ("outside product code" in line) is (kind == "outside")
     assert ("a build or settings file" in line) is (kind == "folder")
-
-
-GO_FIXED = {"proxy/calc.go": "package p\n\nfunc newHelper() int { return 5 }\n", "proxy/go_answers.json": "{}"}
-
-
-def go_test(name, body):
-    return f"package p\n\nimport \"testing\"\n\nfunc {name}(t *testing.T) {{\n\t{body}\n}}\n"
-
-
-def test_a_go_test_is_judged_through_go_test(fix, repo, tools):
-    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"TestAdds": "fails on the base"}
-    assert "an assertion" in rows[0][2]
 
 
 def test_the_go_stand_in_starts_where_the_path_of_python_holds_a_space(fix, repo, tmp_path):
@@ -450,13 +422,6 @@ def test_the_go_stand_in_starts_where_the_path_of_python_holds_a_space(fix, repo
     assert found == {"TestAdds": "fails on the base"}
 
 
-def test_a_go_test_that_does_not_build_without_the_fix_needs_the_fixs_code(fix, repo, tools):
-    root, base = repo({**GO_FIXED, "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }")})
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"TestUsesNewCode": "needs the fix's code"}
-    assert "undefined: newHelper" in rows[0][2]
-
-
 def test_a_go_test_file_that_uses_only_old_code_is_judged_alone_when_the_package_does_not_build(fix, repo, tools):
     root, base = repo({**GO_FIXED,
                        "proxy/new_test.go": go_test("TestUsesNewCode", "if newHelper() != 5 { t.Fatal() }"),
@@ -466,27 +431,20 @@ def test_a_go_test_file_that_uses_only_old_code_is_judged_alone_when_the_package
     assert notes == []
 
 
-def test_a_go_panic_is_a_failure_with_the_place_it_was_raised(fix, repo, tools, monkeypatch):
-    root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
-    original = fix.run_go
-
-    def panics_on_the_base(tree, tests, go, limit):
-        if tree != root:
-            (tree / "proxy" / "go_answers.json").write_text(json.dumps({"TestAdds": "panic"}), encoding="utf-8")
-        return original(tree, tests, go, limit)
-    monkeypatch.setattr(fix, "run_go", panics_on_the_base)
-    found, rows, _, _ = verdicts(fix, root, base, tools)
-    assert found == {"TestAdds": "fails on the base"}
-    assert "an error (panic), raised in product code (calc.go): panic: runtime error" in rows[0][2]
-
-
 @pytest.mark.parametrize("answer, said", [
-    ("fail", "an assertion, raised in the test: want 5, got -1"),
-    ("subfail", "an assertion, raised in the test: status = 3, want an active vector"),
-    ("silent", "an assertion, raised in the test: the test reported a failure, and its output has no message"),
+    pytest.param("fail", "an assertion, raised in the test: want 5, got -1", id="the test's own message"),
+    pytest.param("subfail", "an assertion, raised in the test: status = 3, want an active vector",
+                 id="the message of a subtest"),
+    pytest.param("silent",
+                 "an assertion, raised in the test: the test reported a failure, and its output has no message",
+                 id="no message"),
+    pytest.param("panic",
+                 "an error (panic), raised in product code (calc.go): panic: runtime error: "
+                 "index out of range [recovered]",
+                 id="a panic, with the place it was raised"),
 ])
-def test_a_go_failure_keeps_the_tests_own_message_also_from_a_subtest_and_says_when_there_is_none(fix, repo, tools,
-                                                                                                 monkeypatch, answer, said):
+def test_a_go_failure_keeps_the_tests_own_message_or_the_panic_and_says_when_there_is_none(fix, repo, tools,
+                                                                                          monkeypatch, answer, said):
     root, base = repo({**GO_FIXED, "proxy/calc_test.go": go_test("TestAdds", "if add(2, 3) != 5 { t.Fatal() }")})
     original = fix.run_go
 
@@ -519,13 +477,6 @@ def test_the_output_of_another_go_test_whose_name_starts_the_same_is_not_taken(f
         "TestAddsMore": "it guards the fix: an assertion, raised in the test: want 5, got -1"}
 
 
-def test_a_skipped_go_test_is_not_judged_and_its_reason_is_given(fix, repo, tools):
-    root, base = repo({**GO_FIXED, "proxy/go_answers.json": json.dumps({"TestAdds": "skip"}),
-                       "proxy/calc_test.go": go_test("TestAdds", "t.Skip()")})
-    _, rows, _, _ = verdicts(fix, root, base, tools)
-    assert [(name, detail) for _, name, detail in rows] == [("not judged here", "skipped (needs a terminal)")]
-
-
 def test_more_go_test_files_than_the_limit_are_not_tried_one_by_one_and_that_is_said(fix, repo, tools, monkeypatch):
     monkeypatch.setattr(fix, "ISOLATE_AT_MOST", 1)
     root, base = repo({**GO_FIXED,
@@ -537,19 +488,18 @@ def test_more_go_test_files_than_the_limit_are_not_tried_one_by_one_and_that_is_
                       "(the limit is 1)")]
 
 
-def test_a_typescript_test_file_is_named_as_not_judged(fix, repo, tools):
-    root, base = repo({"extensions/vscode/test/sse.test.ts": "it('parses', () => {});\n"})
+@pytest.mark.parametrize("files, note", [
+    pytest.param({"extensions/vscode/test/sse.test.ts": "it('parses', () => {});\n"},
+                 "extensions/vscode/test/sse.test.ts: a TypeScript or JavaScript test file; this check does not read "
+                 "those yet", id="a TypeScript test file"),
+    pytest.param({"geometric-lens/tests/test_score.py": "def test_scores():\n    assert True\n"},
+                 "geometric-lens/tests/test_score.py: the packages its tests need are not installed in this job",
+                 id="a test whose packages the job does not install"),
+])
+def test_a_test_file_this_check_cannot_run_is_named_as_not_judged(fix, repo, tools, files, note):
+    root, base = repo(files)
     rows, notes, _ = fix.judge(root, base, tools, 120)
-    assert rows == []
-    assert notes == [("extensions/vscode/test/sse.test.ts: a TypeScript or JavaScript test file; this check does not "
-                      "read those yet")]
-
-
-def test_a_test_whose_packages_the_job_does_not_install_is_named_as_not_judged(fix, repo, tools):
-    root, base = repo({"geometric-lens/tests/test_score.py": "def test_scores():\n    assert True\n"})
-    rows, notes, _ = fix.judge(root, base, tools, 120)
-    assert rows == []
-    assert notes == ["geometric-lens/tests/test_score.py: the packages its tests need are not installed in this job"]
+    assert (rows, notes) == ([], [note])
 
 
 def test_the_lines_a_change_touches_are_read_from_the_diff(fix, repo):
@@ -569,25 +519,24 @@ def test_a_test_that_only_loses_a_line_is_a_changed_test(fix, repo, tools):
         ("test_add_takes_two_numbers", False, "passes on the base too")]
 
 
-def test_python_tests_are_found_by_the_lines_of_their_function_and_its_decorators(fix):
-    source = ("import pytest\n\n\n@pytest.mark.parametrize('n', [1, 2])\ndef test_a(n):\n    assert n\n\n\n"
-              "class TestGroup:\n    def test_b(self):\n        assert True\n\n\ndef helper():\n    return 1\n")
-    def names(lines):
-        return [t.name for t in fix.python_tests("tests/test_x.py", source) if lines & set(range(t.line, t.last + 1))]
-    assert names({4}) == ["test_a"]
-    assert names({6}) == ["test_a"]
-    assert names({11}) == ["TestGroup::test_b"]
-    assert names({15}) == []
-    assert names({1}) == []
+PYTHON_TEST_FILE = ("import pytest\n\n\n@pytest.mark.parametrize('n', [1, 2])\ndef test_a(n):\n    assert n\n\n\n"
+                    "class TestGroup:\n    def test_b(self):\n        assert True\n\n\ndef helper():\n    return 1\n")
+GO_TEST_FILE = ("package p\n\nfunc TestA(t *testing.T) {\n\tx()\n}\n\nfunc helper() {\n}\n\n"
+                "func TestB(t *testing.T) { y() }\n")
 
 
-def test_go_tests_are_found_by_the_lines_of_their_function(fix):
-    source = "package p\n\nfunc TestA(t *testing.T) {\n\tx()\n}\n\nfunc helper() {\n}\n\nfunc TestB(t *testing.T) { y() }\n"
-    def names(lines):
-        return [t.name for t in fix.go_tests("p/x_test.go", source) if lines & set(range(t.line, t.last + 1))]
-    assert names({4}) == ["TestA"]
-    assert names({7}) == []
-    assert names({10}) == ["TestB"]
+@pytest.mark.parametrize("path, source, line, names", [
+    pytest.param("tests/test_x.py", PYTHON_TEST_FILE, 4, ["test_a"], id="python: a decorator"),
+    pytest.param("tests/test_x.py", PYTHON_TEST_FILE, 6, ["test_a"], id="python: the body"),
+    pytest.param("tests/test_x.py", PYTHON_TEST_FILE, 11, ["TestGroup::test_b"], id="python: a method of a test class"),
+    pytest.param("tests/test_x.py", PYTHON_TEST_FILE, 15, [], id="python: a helper"),
+    pytest.param("tests/test_x.py", PYTHON_TEST_FILE, 1, [], id="python: an import"),
+    pytest.param("p/x_test.go", GO_TEST_FILE, 4, ["TestA"], id="go: the body"),
+    pytest.param("p/x_test.go", GO_TEST_FILE, 7, [], id="go: a helper"),
+    pytest.param("p/x_test.go", GO_TEST_FILE, 10, ["TestB"], id="go: a test on one line"),
+])
+def test_a_test_is_found_by_the_lines_of_its_function_and_its_decorators(fix, path, source, line, names):
+    assert [test.name for test in fix.tests_of(path, source) if test.line <= line <= test.last] == names
 
 
 @pytest.mark.parametrize("base, head, name", [
@@ -626,19 +575,27 @@ def test_the_summary_counts_each_class_apart_and_new_tests_apart_from_changed_on
 
 
 @pytest.mark.parametrize("names, new, line", [
-    (("fails on the base", "needs the fix's code"), True, "Guarded: 1 test(s) fail on the base."),
-    (("needs the fix's code", "needs the fix's code"), True,
-     "Cannot tell: every test needs code or a file the fix adds, so none could run on the base."),
-    (("passes on the base too", "needs the fix's code"), True,
-     "Not shown: 1 test(s) ran on the base and none failed. 1 more need code or a file the fix adds."),
-    (("passes on the base too", "passes on the base too", "not judged here"), True,
-     "Not shown: 2 test(s) ran on the base and none failed."),
-    (("passes on the base too",), False, "Not shown: 1 test(s) ran on the base and none failed."),
-    (("not judged here",), True, "Cannot tell: no test of the fix could be judged on the base (0 need the fix's code)."),
-    (("needs the fix's code", "not judged here", "fails with the fix"), True,
-     "Cannot tell: no test of the fix could be judged on the base (1 need the fix's code)."),
-    (("fails on the base", "passes on the base too", "passes on the base too"), True, "Guarded: 1 test(s) fail on the base."),
-    ((), True, "No test: this fix adds or changes no test, so there is nothing to run."),
+    pytest.param(("fails on the base", "needs the fix's code"), True, "Guarded: 1 test(s) fail on the base.",
+                 id="one fails on the base"),
+    pytest.param(("fails on the base", "passes on the base too", "passes on the base too"), True,
+                 "Guarded: 1 test(s) fail on the base.", id="one fails on the base beside two that pass"),
+    pytest.param(("passes on the base too", "needs the fix's code"), True,
+                 "Not shown: 1 test(s) ran on the base and none failed. 1 more need code or a file the fix adds.",
+                 id="one passes on the base, one needs code"),
+    pytest.param(("passes on the base too", "passes on the base too", "not judged here"), True,
+                 "Not shown: 2 test(s) ran on the base and none failed.", id="two pass on the base, one not judged"),
+    pytest.param(("passes on the base too",), False, "Not shown: 1 test(s) ran on the base and none failed.",
+                 id="a changed test passes on the base"),
+    pytest.param(("needs the fix's code", "needs the fix's code"), True,
+                 "Cannot tell: every test needs code or a file the fix adds, so none could run on the base.",
+                 id="every test needs code"),
+    pytest.param(("not judged here",), True,
+                 "Cannot tell: no test of the fix could be judged on the base (0 need the fix's code).",
+                 id="the only test is not judged"),
+    pytest.param(("needs the fix's code", "not judged here", "fails with the fix"), True,
+                 "Cannot tell: no test of the fix could be judged on the base (1 need the fix's code).",
+                 id="none judged, one needs code"),
+    pytest.param((), True, "No test: this fix adds or changes no test, so there is nothing to run.", id="no test"),
 ])
 def test_the_headline_says_how_far_the_fix_is_shown_to_be_guarded(fix, names, new, line):
     assert fix.headline(rows_of(fix, *names, new=new), "code") == f"fix tests: a fix of product code. {line}"
@@ -685,10 +642,10 @@ def test_a_finding_is_reported_and_does_not_fail_the_job(fix, repo, capsys):
     assert "::warning file=proxy/tests/test_calc.py," in out
 
 
-def test_a_pull_request_that_is_not_a_fix_has_nothing_to_check(fix, capsys):
-    for title in ("feat(proxy): a new tool", "docs: fix a typo", "refactor(tui): fix the layout code"):
-        assert fix.main(["--base", "HEAD", "--title", title]) == 0
-        assert "nothing to check" in capsys.readouterr().out
+@pytest.mark.parametrize("title", ["feat(proxy): a new tool", "docs: fix a typo", "refactor(tui): fix the layout code"])
+def test_a_pull_request_that_is_not_a_fix_has_nothing_to_check(fix, capsys, title):
+    assert fix.main(["--base", "HEAD", "--title", title]) == 0
+    assert "nothing to check" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("title", ["fix: the thing", "fix(proxy): the thing", "fix(proxy)!: the thing"])

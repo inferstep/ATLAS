@@ -26,14 +26,11 @@ def gates_module():
     sys.modules.pop(spec.name, None)
 
 
-def test_without_the_variable_no_gate_changes(gates_module, monkeypatch):
+@pytest.mark.parametrize("value", [None, "  "], ids=["not set", "only spaces"])
+def test_without_a_directory_in_the_variable_no_gate_changes(gates_module, monkeypatch, value):
     monkeypatch.delenv(gates_module.COVERAGE_DIR_ENV, raising=False)
-    plain = gates_module._gates(("tests/cli",))
-    assert gates_module._with_coverage(dict(plain)) == plain
-
-
-def test_an_empty_value_is_not_a_directory(gates_module, monkeypatch):
-    monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, "  ")
+    if value is not None:
+        monkeypatch.setenv(gates_module.COVERAGE_DIR_ENV, value)
     plain = gates_module._gates(("tests/cli",))
     assert gates_module._with_coverage(dict(plain)) == plain
 
@@ -145,14 +142,12 @@ def test_the_go_report_is_valid_xml_whatever_a_test_prints(gates_module):
     assert ElementTree.fromstring(xml).find("testsuite/testcase/failure").text == "ab[31m<&>"
 
 
-def test_a_gate_with_a_result_file_writes_it_and_is_judged_by_the_text(gates_module, tmp_path):
+@pytest.mark.parametrize("code, status", [(0, "passed"), (1, "failed")], ids=["exit status 0", "exit status 1"])
+def test_a_gate_with_a_result_file_writes_it_and_is_judged_by_the_text(gates_module, tmp_path, code, status):
     target = tmp_path / "go-x.junit.xml"
-    for code, status in ((0, "passed"), (1, "failed")):
-        gate = gates_module.Gate("fake", (sys.executable, "-c", f"print({STREAM!r}); raise SystemExit({code})"),
-                                 junit=target)
-        result = gates_module._run_gate(gate, force_required=False)
-        assert result.status == status
-        assert result.output.splitlines()[-1] == f"FAIL\t{PKG}\t1.221s"
-        assert ElementTree.fromstring(target.read_text(encoding="utf-8")).find("testsuite").get("tests") == "3"
-        target.unlink()
+    gate = gates_module.Gate("fake", (sys.executable, "-c", f"print({STREAM!r}); raise SystemExit({code})"), junit=target)
+    result = gates_module._run_gate(gate, force_required=False)
+    assert result.status == status
+    assert result.output.splitlines()[-1] == f"FAIL\t{PKG}\t1.221s"
+    assert ElementTree.fromstring(target.read_text(encoding="utf-8")).find("testsuite").get("tests") == "3"
 
