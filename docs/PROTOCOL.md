@@ -200,7 +200,7 @@ ev = parse_envelope(blob)      # one frame → Event
 print(ev.type, ev.stage, ev.payload)
 ```
 
-The streaming consumer helpers (`iter_sse_lines`, `iter_events`, `is_terminal`, `collect`, `assert_monotonic`) live in the test harness, `tests/cli/event_harness.py` — they are assertion tooling for the suite, not part of the shipped package.
+The streaming consumer helpers (`iter_sse_lines`, `iter_events`) live in the test harness, `tests/cli/event_harness.py` — they are tooling for the suite, not part of the shipped package.
 
 ## Stage names from v3-service
 
