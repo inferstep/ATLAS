@@ -116,11 +116,6 @@ def images_run(command_text):
     return found
 
 
-def built_by(job):
-    """The names that a job gives to the images it builds itself: those are not pulled."""
-    return {name for step in job["steps"] for name in re.findall(r"\bdocker\s+build\b[^\n]*?\s-t\s+(\S+)", step.get("run", ""))}
-
-
 def from_docker_hub(image):
     """Whether the name of an image is one of Docker Hub: no registry before the first `/`, or Docker Hub's own."""
     first = image.split("/")[0]
@@ -164,10 +159,12 @@ def test_the_list_of_jobs_that_start_for_no_change_names_only_jobs_that_are_ther
 
 
 @pytest.mark.parametrize("text, images", [
-    ("docker run --rm ubuntu:24.04 true", ["ubuntu:24.04"]),
-    ("docker run --rm \\\n  -v \"$PWD\":/atlas:ro \\\n  -w /work \\\n  -e A=1 \\\n  debian:12 \\\n  bash -c 'x'", ["debian:12"]),
-    ("docker run -d --name one -p 8020:8020 built-here\nsleep 5\ndocker run --rm --network=host alpine:3 ls", ["built-here", "alpine:3"]),
-    ("docker build -t x .\ndocker compose up -d", []),
+    pytest.param("docker run --rm ubuntu:24.04 true", ["ubuntu:24.04"], id="one line"),
+    pytest.param("docker run --rm \\\n  -v \"$PWD\":/atlas:ro \\\n  -w /work \\\n  -e A=1 \\\n  debian:12 \\\n  bash -c 'x'", ["debian:12"],
+                 id="flags with values, over lines that end with a backslash"),
+    pytest.param("docker run -d --name one -p 8020:8020 built-here\nsleep 5\ndocker run --rm --network=host alpine:3 ls",
+                 ["built-here", "alpine:3"], id="two runs, and a flag with its value after ="),
+    pytest.param("docker build -t x .\ndocker compose up -d", [], id="no docker run"),
 ])
 def test_the_image_of_a_docker_run_is_read_from_the_text_of_a_step(text, images):
     assert images_run(text) == images
@@ -182,10 +179,12 @@ def test_a_flag_of_docker_run_that_this_test_does_not_know_is_not_passed_over():
 def test_the_step_is_given_the_very_images_of_docker_hub_that_the_job_runs(name, key, job):
     # An image that the job runs and the step was not given has Docker Hub as its one source again, with no sign.
     (step,) = the_step_of(job)
+    # The images that the job builds itself are not pulled.
+    built = {tag for one in job["steps"] for tag in re.findall(r"\bdocker\s+build\b[^\n]*?\s-t\s+(\S+)", one.get("run", ""))}
     for values in copies_of(job):
         given = filled(str(step.get("with", {}).get("images", "")), values).split()
         run = [image for one in job["steps"] for image in images_run(filled(one.get("run", ""), values))]
-        of_the_hub = sorted({image for image in run if image not in built_by(job) and from_docker_hub(image)})
+        of_the_hub = sorted({image for image in run if image not in built and from_docker_hub(image)})
         assert sorted(given) == of_the_hub, (
             f"{name}: the job `{key}` runs {of_the_hub} of Docker Hub, and its mirror step is given {sorted(given)}. "
             "An image that is run and not given is pulled from Docker Hub alone. Fix: give the step, under "
@@ -195,10 +194,16 @@ def test_the_step_is_given_the_very_images_of_docker_hub_that_the_job_runs(name,
 
 
 @pytest.mark.parametrize("image, hub", [
-    ("postgres:16", True), ("ubuntu", True), ("library/redis:7", True), ("rockylinux/rockylinux:9", True),
-    ("docker.io/library/redis", True), ("index.docker.io/library/redis", True),
-    ("ghcr.io/inferstep/atlas-sandbox:dev", False), ("mcr.microsoft.com/playwright:v1", False),
-    ("localhost:5000/thing", False), ("mirror.gcr.io/library/ubuntu:24.04", False),
+    pytest.param("postgres:16", True, id="a name and a tag"),
+    pytest.param("ubuntu", True, id="a name alone"),
+    pytest.param("library/redis:7", True, id="library before the name"),
+    pytest.param("rockylinux/rockylinux:9", True, id="an image of a user"),
+    pytest.param("docker.io/library/redis", True, id="docker.io"),
+    pytest.param("index.docker.io/library/redis", True, id="index.docker.io"),
+    pytest.param("ghcr.io/inferstep/atlas-sandbox:dev", False, id="ghcr.io"),
+    pytest.param("mcr.microsoft.com/playwright:v1", False, id="mcr.microsoft.com"),
+    pytest.param("localhost:5000/thing", False, id="localhost with a port"),
+    pytest.param("mirror.gcr.io/library/ubuntu:24.04", False, id="the name at the mirror"),
 ])
 def test_an_image_name_is_read_as_docker_hubs_or_not(image, hub):
     assert from_docker_hub(image) is hub
@@ -243,43 +248,36 @@ def test_each_builder_job_sets_its_builder_up_from_the_mirror_first_and_from_doc
             assert step["with"]["buildkitd-config-inline"] == BUILDERS_MIRROR, fix
 
 
-def test_the_mirror_is_one_address_with_https_and_no_path():
-    assert re.fullmatch(r"https://[a-z0-9.-]+", mirror.MIRROR)
-
-
 # --- the script -----------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("before", ["", "   \n", "{}", '{"exec-opts": ["native.cgroupdriver=cgroupfs"], "cgroup-parent": "/actions_job"}',
-                                    '{"registry-mirrors": ["https://another.example"], "debug": true}',
-                                    '{"insecure-registries": ["10.0.0.1:5000"], "features": {"containerd-snapshotter": true}}'])
+@pytest.mark.parametrize("before", [
+    pytest.param("", id="no settings, as on a runner"),
+    pytest.param("   \n", id="only white space"),
+    pytest.param("{}", id="an empty object"),
+    pytest.param('{"exec-opts": ["native.cgroupdriver=cgroupfs"], "cgroup-parent": "/actions_job"}', id="other settings"),
+    pytest.param('{"registry-mirrors": ["https://another.example"], "debug": true}', id="another mirror"),
+    pytest.param('{"insecure-registries": ["10.0.0.1:5000"], "features": {"containerd-snapshotter": true}}', id="an object inside"),
+])
 def test_the_settings_get_the_one_mirror_and_every_other_key_stays(before):
     old = json.loads(before) if before.strip() else {}
     new = json.loads(mirror.with_the_mirror(before))
-    assert new["registry-mirrors"] == ["https://mirror.gcr.io"]
-    assert {key: value for key, value in new.items() if key != "registry-mirrors"} == \
-        {key: value for key, value in old.items() if key != "registry-mirrors"}
-
-
-def filtered(text):
-    """Run the script as the step runs it: the settings go in as text, the new settings come out as text."""
-    return subprocess.run([sys.executable, str(SCRIPT)], input=text, capture_output=True, text=True, timeout=60, check=False)
-
-
-def test_with_no_settings_as_on_a_runner_the_script_prints_the_one_key():
-    done = filtered("")
+    assert new == {**old, "registry-mirrors": ["https://mirror.gcr.io"]}
+    # The step runs the script with the settings as its input, and takes its output as the new settings.
+    done = subprocess.run([sys.executable, str(SCRIPT)], input=before, capture_output=True, text=True, timeout=60, check=False)
     assert done.returncode == 0, done.stderr
-    assert json.loads(done.stdout) == {"registry-mirrors": ["https://mirror.gcr.io"]}
+    assert json.loads(done.stdout) == new
 
 
-def test_settings_that_are_there_keep_their_keys():
-    done = filtered('{"debug": true, "dns": ["10.0.0.2"]}')
-    assert done.returncode == 0, done.stderr
-    assert json.loads(done.stdout) == {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]}
-
-
-@pytest.mark.parametrize("content", ["[1]", '"text"', "7", "null", "{not json", '{"a": 1} trailing'])
+@pytest.mark.parametrize("content", [
+    pytest.param("[1]", id="a list"),
+    pytest.param('"text"', id="a string"),
+    pytest.param("7", id="a number"),
+    pytest.param("null", id="null"),
+    pytest.param("{not json", id="not JSON"),
+    pytest.param('{"a": 1} trailing', id="an object and more text"),
+])
 def test_settings_that_are_not_one_object_print_nothing_and_the_message_says_the_fix(content):
-    done = filtered(content)
+    done = subprocess.run([sys.executable, str(SCRIPT)], input=content, capture_output=True, text=True, timeout=60, check=False)
     assert done.returncode == 1
     assert done.stdout == ""
     assert "were not changed" in done.stderr
@@ -295,9 +293,17 @@ def test_the_script_opens_no_file():
 
 
 @pytest.mark.parametrize("named, has", [
-    ('["https://mirror.gcr.io/"]', True), ('["https://mirror.gcr.io"]', True), ('["https://a.example/", "https://mirror.gcr.io/"]', True),
-    ("[]", False), ("null", False), ("", False), ("not json", False), ('"https://mirror.gcr.io/"', False),
-    ('["https://mirror.gcr.io.other.example/"]', False), ('["http://mirror.gcr.io/"]', False), ('[["https://mirror.gcr.io/"]]', False),
+    pytest.param('["https://mirror.gcr.io/"]', True, id="the mirror with a slash at its end, as docker info writes it"),
+    pytest.param('["https://mirror.gcr.io"]', True, id="the mirror"),
+    pytest.param('["https://a.example/", "https://mirror.gcr.io/"]', True, id="the mirror after another one"),
+    pytest.param("[]", False, id="no mirror"),
+    pytest.param("null", False, id="null"),
+    pytest.param("", False, id="nothing"),
+    pytest.param("not json", False, id="not JSON"),
+    pytest.param('"https://mirror.gcr.io/"', False, id="the mirror, not in a list"),
+    pytest.param('["https://mirror.gcr.io.other.example/"]', False, id="a host that starts like the mirror"),
+    pytest.param('["http://mirror.gcr.io/"]', False, id="the mirror by http"),
+    pytest.param('[["https://mirror.gcr.io/"]]', False, id="the mirror in a list inside the list"),
 ])
 def test_the_running_service_has_the_mirror_only_when_it_names_it(named, has):
     assert mirror.asked_first(named) is has
@@ -306,10 +312,11 @@ def test_the_running_service_has_the_mirror_only_when_it_names_it(named, has):
 
 
 @pytest.mark.parametrize("image, there", [
-    ("ubuntu:22.04", "mirror.gcr.io/library/ubuntu:22.04"), ("debian:12", "mirror.gcr.io/library/debian:12"),
-    ("rockylinux/rockylinux:9", "mirror.gcr.io/rockylinux/rockylinux:9"),
-    ("docker.io/library/ubuntu:24.04", "mirror.gcr.io/library/ubuntu:24.04"),
-    ("moby/buildkit:buildx-stable-1", "mirror.gcr.io/moby/buildkit:buildx-stable-1"),
+    pytest.param("ubuntu:22.04", "mirror.gcr.io/library/ubuntu:22.04", id="ubuntu"),
+    pytest.param("debian:12", "mirror.gcr.io/library/debian:12", id="debian"),
+    pytest.param("rockylinux/rockylinux:9", "mirror.gcr.io/rockylinux/rockylinux:9", id="an image of a user"),
+    pytest.param("docker.io/library/ubuntu:24.04", "mirror.gcr.io/library/ubuntu:24.04", id="with docker.io"),
+    pytest.param("moby/buildkit:buildx-stable-1", "mirror.gcr.io/moby/buildkit:buildx-stable-1", id="the image of the builder"),
 ])
 def test_an_image_of_docker_hub_has_its_name_at_the_mirror(image, there):
     assert mirror.at_the_mirror(image) == there
@@ -317,9 +324,22 @@ def test_an_image_of_docker_hub_has_its_name_at_the_mirror(image, there):
     assert (done.returncode, done.stdout) == (0, there + "\n")
 
 
-@pytest.mark.parametrize("image", ["ghcr.io/inferstep/atlas-sandbox:dev", "localhost:5000/x:1", "ubuntu", "ubuntu:", ":22.04",
-                                   "python:3.13-slim@sha256:" + "a" * 64, "a/b/c:1", "ubuntu:22.04; true", "ubuntu:22.04 debian:12",
-                                   "UBUNTU:22.04", "../ubuntu:22.04", "$(id):1", "ubuntu:22.04\n", ""])
+@pytest.mark.parametrize("image", [
+    pytest.param("ghcr.io/inferstep/atlas-sandbox:dev", id="another registry"),
+    pytest.param("localhost:5000/x:1", id="localhost with a port"),
+    pytest.param("ubuntu", id="no tag"),
+    pytest.param("ubuntu:", id="an empty tag"),
+    pytest.param(":22.04", id="no name"),
+    pytest.param("python:3.13-slim@sha256:" + "a" * 64, id="a digest"),
+    pytest.param("a/b/c:1", id="three parts"),
+    pytest.param("ubuntu:22.04; true", id="a command after the name"),
+    pytest.param("ubuntu:22.04 debian:12", id="two names"),
+    pytest.param("UBUNTU:22.04", id="capitals"),
+    pytest.param("../ubuntu:22.04", id="a folder up"),
+    pytest.param("$(id):1", id="a command in the name"),
+    pytest.param("ubuntu:22.04\n", id="a new line at its end"),
+    pytest.param("", id="empty"),
+])
 def test_another_name_is_not_asked_of_the_mirror_and_the_message_says_the_fix(image):
     with pytest.raises(ValueError, match="is not a name of Docker Hub with a tag"):
         mirror.at_the_mirror(image)
@@ -329,7 +349,13 @@ def test_another_name_is_not_asked_of_the_mirror_and_the_message_says_the_fix(im
     assert "Fix:" in done.stderr
 
 
-@pytest.mark.parametrize("arguments", [["a file"], ["--other", "x"], ["a", "b"], ["--asked-first"], ["--at-the-mirror"]])
+@pytest.mark.parametrize("arguments", [
+    pytest.param(["a file"], id="the name of a file"),
+    pytest.param(["--other", "x"], id="an option that is not there"),
+    pytest.param(["a", "b"], id="two words"),
+    pytest.param(["--asked-first"], id="--asked-first with no value"),
+    pytest.param(["--at-the-mirror"], id="--at-the-mirror with no value"),
+])
 def test_another_call_of_the_script_writes_nothing_and_says_how_it_is_called(tmp_path, arguments):
     done = subprocess.run([sys.executable, str(SCRIPT), *arguments], input="{}", capture_output=True, text=True, timeout=60, check=False,
                           cwd=tmp_path)
@@ -352,18 +378,11 @@ def stand_in(folder, name, body):
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-INFO = 'echo \'["https://mirror.gcr.io/"]\''
-
-
-RUNS_NOTHING = 'echo "sudo $*" >> "$CALLS"\nexit 97'
-
-
-def run_a_step(tmp_path, number, restart="exit 0", docker=INFO, content=None, images="", settings=None, sudo='exec "$@"'):
+def run_a_step(tmp_path, number, restart="exit 0", docker="echo '[\"https://mirror.gcr.io/\"]'", content=None, images="",
+               settings=None, sudo='exec "$@"'):
     """Run the shell of one step of the action. `sudo` runs its command as it is, `systemctl` and `docker` answer as
-    the test says, and the settings file is one of the test's own, in the folder for temporary files.
-
-    A test that names a file outside that folder gives `sudo` as RUNS_NOTHING: when the step does not refuse the
-    name, the test is red and still nothing was done to that file."""
+    the test says (`docker info` names the mirror by default), and the settings file is one of the test's own, in the
+    folder for temporary files."""
     tools = tmp_path / "tools"
     tools.mkdir()
     (tmp_path / "temporary").mkdir()
@@ -388,23 +407,22 @@ def run_a_step(tmp_path, number, restart="exit 0", docker=INFO, content=None, im
     return done, calls, settings
 
 
-def test_the_first_step_sets_the_mirror_starts_the_service_again_and_asks_it(tmp_path):
-    done, calls, settings = run_a_step(tmp_path, 0)
+@pytest.mark.parametrize("content, written", [
+    pytest.param(None, {"registry-mirrors": ["https://mirror.gcr.io"]}, id="no settings file, as on a runner"),
+    pytest.param('{"debug": true, "dns": ["10.0.0.2"]}\n', {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]},
+                 id="a settings file with other keys"),
+])
+def test_the_first_step_sets_the_mirror_starts_the_service_again_and_asks_it(tmp_path, content, written):
+    done, calls, settings = run_a_step(tmp_path, 0, content=content)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert json.loads(settings.read_text(encoding="utf-8")) == {"registry-mirrors": ["https://mirror.gcr.io"]}
+    assert json.loads(settings.read_text(encoding="utf-8")) == written
+    assert stat.S_IMODE(settings.stat().st_mode) == 0o644
     assert calls == ["systemctl restart docker", "docker info --format {{json .RegistryConfig.Mirrors}}"]
     assert "The Docker service asks the mirror first and Docker Hub second." in done.stdout
     assert "::error::" not in done.stdout
     # The file that the step made for the new settings is gone again.
     assert sorted(path.name for path in (tmp_path / "temporary").iterdir()) == ["docker"]
     assert sorted(path.name for path in settings.parent.iterdir()) == ["daemon.json"]
-
-
-def test_the_first_step_keeps_the_other_settings_of_a_file_that_is_there(tmp_path):
-    done, _calls, settings = run_a_step(tmp_path, 0, content='{"debug": true, "dns": ["10.0.0.2"]}\n')
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert json.loads(settings.read_text(encoding="utf-8")) == {"debug": True, "dns": ["10.0.0.2"], "registry-mirrors": ["https://mirror.gcr.io"]}
-    assert stat.S_IMODE(settings.stat().st_mode) == 0o644
 
 
 def test_when_the_service_does_not_start_again_the_step_fails_and_nothing_asks_docker(tmp_path):
@@ -422,7 +440,11 @@ def test_when_the_service_gives_no_answer_after_its_start_the_step_fails(tmp_pat
     assert "::error::The Docker service gave no answer in 30 seconds" in done.stdout
 
 
-@pytest.mark.parametrize("docker", ["echo '[]'", "echo null", "echo '[\"https://another.example/\"]'"])
+@pytest.mark.parametrize("docker", [
+    pytest.param("echo '[]'", id="no mirror"),
+    pytest.param("echo null", id="null"),
+    pytest.param("echo '[\"https://another.example/\"]'", id="another mirror"),
+])
 def test_when_the_running_service_does_not_name_the_mirror_the_step_fails(tmp_path, docker):
     done, _calls, _settings = run_a_step(tmp_path, 0, docker=docker)
     assert done.returncode == 1
@@ -464,18 +486,32 @@ def test_with_no_image_given_the_second_step_asks_docker_for_nothing(tmp_path):
     assert calls == []
 
 
-@pytest.mark.parametrize("images", ["ghcr.io/inferstep/atlas-sandbox:dev", "ubuntu", "ubuntu:22.04 python@sha256:" + "a" * 64])
+@pytest.mark.parametrize("images", [
+    pytest.param("ghcr.io/inferstep/atlas-sandbox:dev", id="another registry"),
+    pytest.param("ubuntu", id="no tag"),
+    pytest.param("ubuntu:22.04 python@sha256:" + "a" * 64, id="a digest after a good name"),
+])
 def test_an_image_that_the_mirror_cannot_be_asked_for_fails_the_step(tmp_path, images):
     done, _calls, _settings = run_a_step(tmp_path, 1, images=images)
     assert done.returncode == 1
     assert "::error::The step was given an image that it cannot ask the mirror for" in done.stdout
 
 
-@pytest.mark.parametrize("named", ["{here}/outside/daemon.json", "{here}/temporary/../outside/daemon.json",
-                                   "{here}/temporary/docker/../../outside.json", "/etc/passwd", "/etc/docker/other.json",
-                                   "/etc/docker/daemon.json/../../passwd", "daemon.json", "./daemon.json"])
+@pytest.mark.parametrize("named", [
+    pytest.param("{here}/outside/daemon.json", id="outside the temporary folder"),
+    pytest.param("{here}/temporary/../outside/daemon.json", id="up out of the temporary folder"),
+    pytest.param("{here}/temporary/docker/../../outside.json", id="two folders up"),
+    pytest.param("/etc/passwd", id="/etc/passwd"),
+    pytest.param("/etc/docker/other.json", id="another file of the service"),
+    pytest.param("/etc/docker/daemon.json/../../passwd", id="up from the settings file"),
+    pytest.param("daemon.json", id="a name with no folder"),
+    pytest.param("./daemon.json", id="a name in the current folder"),
+])
 def test_the_step_writes_no_other_file_than_the_settings_of_the_service_or_one_in_the_temporary_folder(tmp_path, named):
-    done, calls, _settings = run_a_step(tmp_path, 0, settings=Path(named.format(here=tmp_path)), sudo=RUNS_NOTHING)
+    # `sudo` runs nothing here: when the step does not refuse the name, the test is red and still nothing was done
+    # to that file.
+    done, calls, _settings = run_a_step(tmp_path, 0, settings=Path(named.format(here=tmp_path)),
+                                        sudo='echo "sudo $*" >> "$CALLS"\nexit 97')
     assert done.returncode == 1
     assert "::error::This step writes the settings file of the Docker service and no other file" in done.stdout
     assert calls == []

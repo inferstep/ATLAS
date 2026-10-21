@@ -19,12 +19,8 @@ DIGEST_OF_THE_PUSH = ("${{ steps.build-llama.outputs.digest || steps.build-vulka
                       "steps.build-small.outputs.digest }}")
 
 
-def steps_of(job):
-    return JOBS[job]["steps"]
-
-
 def test_the_build_job_attests_the_digest_of_its_own_push_after_every_way_it_builds():
-    steps = steps_of("build")
+    steps = JOBS["build"]["steps"]
     ids = [step.get("id") for step in steps]
     (at,) = [n for n, step in enumerate(steps) if str(step.get("uses") or "").startswith("actions/attest@")]
     for build in ("build-llama", "build-vulkan", "build-small"):
@@ -49,7 +45,7 @@ def test_only_the_build_job_may_write_attestations_and_it_has_no_permission_it_d
 
 def test_a_pull_request_makes_no_attestation():
     assert "github.event_name != 'pull_request'" in JOBS["build"]["if"]
-    assert not [step for step in steps_of("pr-build") if "attest" in str(step.get("uses") or "")]
+    assert not [step for step in JOBS["pr-build"]["steps"] if "attest" in str(step.get("uses") or "")]
 
 
 # --- the move of a tag by hand ---------------------------------------------------------------------------------
@@ -60,35 +56,6 @@ def digest(service, tag):
 
 def lines_for(tag, **other):
     return " ".join(f"ghcr.io/inferstep/atlas-{svc}@{other.get(svc.replace('-', '_'), digest(svc, tag))}" for svc in SERVICES)
-
-
-def alias(tmp_path, alias_tag, digests="", missing=()):
-    """Run the script of the alias job. Gives (the run, the tags that were moved as {image:tag -> source})."""
-    (script,) = [step["run"] for step in steps_of("alias") if step.get("name") == "Create alias"]
-    source_tag = alias_tag.split("=")[0]
-    # What the registry answers: one line "<image>:<tag> <digest>" for each image that has the source tag.
-    answers = tmp_path / "answers"
-    answers.write_text("".join(f"ghcr.io/inferstep/atlas-{svc}:{source_tag} {digest(svc, source_tag)}\n"
-                               for svc in SERVICES if svc not in missing))
-    calls = tmp_path / "calls"
-    stand_in = f"""docker() {{
-  echo "$*" >> "{calls}"
-  if [ "$3" = inspect ]; then
-    while read -r name answer; do
-      if [ "$name" = "$4" ]; then echo "$answer"; fi
-    done < "{answers}"
-  fi
-}}
-"""
-    done = subprocess.run(["bash", "-c", stand_in + script], cwd=tmp_path, capture_output=True, text=True, timeout=30,
-                          env={"PATH": "/usr/bin:/bin", "ALIAS": alias_tag, "EXPECTED": digests, "REGISTRY": "ghcr.io",
-                               "OWNER": "inferstep"})
-    made = {}
-    for line in calls.read_text().splitlines() if calls.exists() else []:
-        words = line.split()
-        if words[2] == "create":
-            made[words[words.index("-t") + 1]] = words[-1]
-    return done, made
 
 
 EVERY_TAG_TO_ITS_DIGEST = {f"ghcr.io/inferstep/atlas-{svc}:latest": f"ghcr.io/inferstep/atlas-{svc}@{digest(svc, '3.1.6')}"
@@ -112,14 +79,33 @@ EVERY_TAG_TO_ITS_DIGEST = {f"ghcr.io/inferstep/atlas-{svc}:latest": f"ghcr.io/in
                  id="one image does not have the source tag"),
 ])
 def test_a_tag_moves_by_hand_only_to_a_digest_and_only_when_all_six_are_as_given(tmp_path, given, missing, ends, says, moved):
-    done, made = alias(tmp_path, "3.1.6=latest", digests=given, missing=missing)
+    (script,) = [step["run"] for step in JOBS["alias"]["steps"] if step.get("name") == "Create alias"]
+    # What the registry answers: one line "<image>:3.1.6 <digest>" for each image that has the source tag.
+    answers = tmp_path / "answers"
+    answers.write_text("".join(f"ghcr.io/inferstep/atlas-{svc}:3.1.6 {digest(svc, '3.1.6')}\n" for svc in SERVICES if svc not in missing))
+    calls = tmp_path / "calls"
+    calls.write_text("")
+    stand_in = f"""docker() {{
+  echo "$*" >> "{calls}"
+  if [ "$3" = inspect ]; then
+    while read -r name answer; do
+      if [ "$name" = "$4" ]; then echo "$answer"; fi
+    done < "{answers}"
+  fi
+}}
+"""
+    done = subprocess.run(["bash", "-c", stand_in + script], cwd=tmp_path, capture_output=True, text=True, timeout=30,
+                          env={"PATH": "/usr/bin:/bin", "ALIAS": "3.1.6=latest", "EXPECTED": given, "REGISTRY": "ghcr.io",
+                               "OWNER": "inferstep"})
     assert done.returncode == ends, done.stdout + done.stderr
     assert says in done.stdout, done.stdout + done.stderr
-    assert made == moved
+    # Each call "buildx imagetools create -t <image>:<tag> <image>@<digest>" moves one tag.
+    calls_made = [line.split() for line in calls.read_text().splitlines()]
+    assert {words[words.index("-t") + 1]: words[-1] for words in calls_made if words[2] == "create"} == moved
 
 
 def test_the_job_that_moves_a_tag_by_hand_waits_for_the_release_owners_approval_and_takes_the_digests():
     assert JOBS["alias"]["environment"] == "production"
-    (step,) = [step for step in steps_of("alias") if step.get("name") == "Create alias"]
+    (step,) = [step for step in JOBS["alias"]["steps"] if step.get("name") == "Create alias"]
     assert step["env"] == {"ALIAS": "${{ inputs.alias_tag }}", "EXPECTED": "${{ inputs.alias_digests }}"}
     assert set(WORKFLOW[True]["workflow_dispatch"]["inputs"]) == {"alias_tag", "alias_digests"}
