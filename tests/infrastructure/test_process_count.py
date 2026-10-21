@@ -27,21 +27,6 @@ def a_place(root: Path, processes: dict[int, bytes]) -> str:
     return str(root)
 
 
-def shown(marker: int, seconds: float = 5.0) -> list[int]:
-    """The marker's processes as soon as the count shows one, or what it shows when the time is over.
-
-    For a moment after a process starts, /proc shows it with no command line
-    yet. The wait ends by the clock, so a marker that never shows fails the
-    test that asks for it.
-    """
-    end = time.monotonic() + seconds
-    while True:
-        found = proc_files.sleeping(marker)
-        if found or time.monotonic() >= end:
-            return found
-        time.sleep(0.01)
-
-
 def test_a_place_that_shows_this_process_is_counted_in(tmp_path):
     root = a_place(tmp_path, {os.getpid(): b"python\x00-m\x00pytest\x00", 4242: b"sleep\x00777\x00",
                               4243: b"sleep\x007777\x00", 4244: b"sleep\x00777\x00extra\x00"})
@@ -51,9 +36,9 @@ def test_a_place_that_shows_this_process_is_counted_in(tmp_path):
 
 
 @pytest.mark.parametrize("processes", [
-    {},
-    {4242: b"sleep\x00777\x00"},
-    {os.getpid(): b""},
+    pytest.param({}, id="no-process"),
+    pytest.param({4242: b"sleep\x00777\x00"}, id="only-another-process"),
+    pytest.param({os.getpid(): b""}, id="this-process-with-no-command-line"),
 ])
 def test_a_place_that_does_not_show_this_process_cannot_be_counted_in(tmp_path, processes):
     root = a_place(tmp_path, processes)
@@ -69,31 +54,20 @@ def test_a_place_that_is_not_there_cannot_be_counted_in(tmp_path):
         proc_files.sleeping(777, str(tmp_path / "no-such-place"))
 
 
-def test_where_proc_is_missing_the_count_fails_and_does_not_say_zero():
-    if proc_files.proc_is_there():
-        assert proc_files.sleeping(987654321) == []
-    else:
-        with pytest.raises(proc_files.CannotLook):
-            proc_files.sleeping(987654321)
-
-
 @needs_proc
 def test_a_process_that_runs_is_seen_and_is_gone_when_it_ends():
     marker = 6100 + os.getpid() % 800
     running = subprocess.Popen(["sleep", str(marker)])
     try:
-        assert shown(marker) == [running.pid]
+        # For a moment after a process starts, /proc shows it with no command line yet. The wait ends by the clock.
+        deadline = time.monotonic() + 5
+        while not proc_files.sleeping(marker) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert proc_files.sleeping(marker) == [running.pid]
     finally:
         running.kill()
         running.wait(timeout=10)
     assert proc_files.sleeping(marker) == []
-
-
-@needs_proc
-def test_the_wait_for_a_marker_ends_by_the_clock():
-    start = time.monotonic()
-    assert shown(987654321, seconds=0.05) == []
-    assert time.monotonic() - start < 3
 
 
 @pytest.mark.parametrize("name", COUNTING_TESTS)

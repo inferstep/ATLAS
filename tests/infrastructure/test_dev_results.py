@@ -43,6 +43,14 @@ def triggers(name):
     return workflow(name)[True]
 
 
+def steps_of(name, job):
+    return workflow(name)["jobs"][job]["steps"]
+
+
+def cache_step(steps):
+    return next(step for step in steps if str(step.get("uses", "")).startswith("actions/cache@"))
+
+
 # --- the lookup of the queue's run ------------------------------------------------------
 
 def a_run(run_id=7, status="completed", conclusion="success", sha=SHA, created="2000-01-01T00:00:00Z"):
@@ -116,26 +124,26 @@ def test_a_run_that_does_not_end_in_time_fails_and_says_so(lookup):
     assert clock.now == 600
 
 
-@pytest.mark.parametrize("jobs, passed", [
-    ([("go test (proxy)", "success"), ("go test (tui)", "success"), ("pytest (tests/v3)", "success")], True),
-    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "failure")], False),
-    ([("go test (proxy)", "cancelled"), ("pytest (tests/v3)", "success")], False),
+@pytest.mark.parametrize("jobs, passed, not_passed", [
+    pytest.param([("go test (proxy)", "success"), ("go test (tui)", "success"), ("pytest (tests/v3)", "success")], True, [],
+                 id="every report job passed"),
+    pytest.param([("go test (proxy)", "success"), ("pytest (tests/v3)", "failure")], False, ["pytest (tests/v3) (failure)"],
+                 id="a report job failed"),
+    pytest.param([("go test (proxy)", "cancelled"), ("pytest (tests/v3)", "success")], False, ["go test (proxy) (cancelled)"],
+                 id="a report job was cancelled"),
     # A job that makes no report does not decide whether the coverage is real.
-    ([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("sandbox tests (containerized)", "failure")], True),
+    pytest.param([("go test (proxy)", "success"), ("pytest (tests/v3)", "success"), ("sandbox tests (containerized)", "failure")],
+                 True, [], id="a job that makes no report failed"),
+    pytest.param([("go test (proxy)", "success"), ("pytest (tests/perf)", "failure"), ("go test (tui)", "cancelled"),
+                  ("sandbox tests (containerized)", "failure")],
+                 False, ["go test (tui) (cancelled)", "pytest (tests/perf) (failure)"], id="several did not pass, named in order"),
     # No report job at all: nothing shows that the tests passed.
-    ([("shellcheck", "success")], False),
+    pytest.param([("shellcheck", "success")], False, ["no job of that run makes a coverage report"], id="no report job"),
 ])
-def test_coverage_counts_as_real_only_when_every_job_that_makes_a_report_passed(lookup, jobs, passed):
+def test_coverage_counts_as_real_only_when_every_job_that_makes_a_report_passed(lookup, jobs, passed, not_passed):
     assert lookup.tests_passed(github([], jobs), "o/r", a_run()) is passed
-
-
-def test_the_jobs_that_did_not_pass_are_named_with_how_they_ended(lookup):
-    jobs = [("go test (proxy)", "success"), ("pytest (tests/perf)", "failure"), ("go test (tui)", "cancelled"),
-            ("sandbox tests (containerized)", "failure")]
-    assert lookup.not_passed(github([], jobs), "o/r", a_run()) == ["go test (tui) (cancelled)", "pytest (tests/perf) (failure)"]
-    assert lookup.not_passed(github([], [("go test (proxy)", "success")]), "o/r", a_run()) == []
-    assert lookup.not_passed(github([], [("shellcheck", "success")]), "o/r", a_run()) == [
-        "no job of that run makes a coverage report"]
+    # The jobs that did not pass are named with how they ended.
+    assert lookup.not_passed(github([], jobs), "o/r", a_run()) == not_passed
 
 
 def test_the_report_jobs_the_lookup_reads_are_the_jobs_the_coverage_upload_needs(lookup):
@@ -164,8 +172,7 @@ def test_a_run_started_by_hand_sends_its_results_and_saves_the_cache_as_a_push_r
     jobs = workflow("test.yml")["jobs"]
     assert jobs["coverage-upload"]["if"] == "github.event_name != 'merge_group'"
     assert jobs["test-results-upload"]["if"] == "${{ !cancelled() && github.event_name != 'merge_group' }}"
-    cache = next(step for step in jobs["go-tests"]["steps"] if str(step.get("uses", "")).startswith("actions/cache@"))
-    assert cache["if"] == "github.event_name != 'merge_group'"
+    assert cache_step(jobs["go-tests"]["steps"])["if"] == "github.event_name != 'merge_group'"
 
 
 # --- the workflow of a push to dev --------------------------------------------------------
@@ -174,10 +181,6 @@ def test_the_results_workflow_runs_on_a_push_to_dev_and_on_nothing_else():
     assert triggers("dev-results.yml") == {"push": {"branches": ["dev"]}}
     assert workflow("dev-results.yml")["concurrency"] == {"group": "dev-results-${{ github.sha }}",
                                                          "cancel-in-progress": False}
-
-
-def steps_of(name, job):
-    return workflow(name)["jobs"][job]["steps"]
 
 
 def test_the_results_job_finds_the_run_then_takes_its_reports_then_sends_them():
@@ -211,10 +214,6 @@ def test_no_report_of_the_queues_run_fails_the_job_and_does_not_read_as_nothing_
     assert "if" not in step and "continue-on-error" not in step
 
 
-def cache_step(steps):
-    return next(step for step in steps if str(step.get("uses", "")).startswith("actions/cache@"))
-
-
 def test_the_cache_job_saves_under_the_key_and_folders_that_the_pull_request_jobs_read():
     mine, theirs = steps_of("dev-results.yml", "go-cache"), steps_of("test.yml", "go-tests")
     assert cache_step(mine)["with"] == cache_step(theirs)["with"]
@@ -234,41 +233,39 @@ def test_the_cache_job_builds_only_when_no_cache_was_found():
     assert cache_step(steps_of("dev-results.yml", "go-cache"))["id"] == "cache"
 
 
-def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_run(tmp_path):
+@pytest.mark.parametrize("module", ["proxy", "tui"])
+def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_run(tmp_path, module):
     build, gates = load("go_test_build"), load("production-readiness")
-    for module in ("proxy", "tui"):
-        command, folder, env = build.build_command(module, str(tmp_path))
-        gate = gates._gates(())[f"go-{module}-test"]
-        assert command[:2] == ["go", "test"] and command[-3:] == ["-run", "^$", "./..."]
-        assert "-json" not in command
-        without = [part for part in command[:-3] + ["./..."] if not part.startswith("-cover")]
-        assert without == list(gate.command), "the build flags differ from the gate's"
-        assert f"-coverprofile={tmp_path.resolve() / ('go-' + module + '.out')}" in command and "-covermode=atomic" in command
-        assert folder == ROOT / module
-        assert "GOCACHE" in env
+    command, folder, env = build.build_command(module, str(tmp_path))
+    gate = gates._gates(())[f"go-{module}-test"]
+    assert command[:2] == ["go", "test"] and command[-3:] == ["-run", "^$", "./..."]
+    assert "-json" not in command
+    without = [part for part in command[:-3] + ["./..."] if not part.startswith("-cover")]
+    assert without == list(gate.command), "the build flags differ from the gate's"
+    assert f"-coverprofile={tmp_path.resolve() / ('go-' + module + '.out')}" in command and "-covermode=atomic" in command
+    assert folder == ROOT / module
+    assert "GOCACHE" in env
 
 
 # --- the upload steps, in one place ---------------------------------------------------------
 
-def uses_of(name):
-    return [str(step.get("uses", "")) for job in workflow(name)["jobs"].values() for step in job.get("steps") or []]
-
-
-def test_both_workflows_send_through_the_same_two_actions():
+@pytest.mark.parametrize("name, folder", [("test.yml", "./workflow-commit/"), ("dev-results.yml", "./")],
+                         ids=["test.yml", "dev-results.yml"])
+def test_both_workflows_send_through_the_same_two_actions(name, folder):
     # The jobs of test.yml have the head commit of a pull request in the workspace, so they take the actions from a
     # folder that holds the workflow's own commit (tests/infrastructure/test_workflow_local_actions.py).
     # One other action of this repository is used in test.yml, and it sends nothing: the step that gives a job a
     # mirror of Docker Hub (tests/infrastructure/test_docker_hub_mirror.py).
-    for name, folder in (("test.yml", "./workflow-commit/"), ("dev-results.yml", "./")):
-        local = [use for use in uses_of(name) if use.startswith("./") and use != "./.github/actions/docker-hub-mirror"]
-        assert local == [folder + ".github/actions/upload-coverage", folder + ".github/actions/upload-test-results"], name
-        assert not [use for use in uses_of(name) if use.startswith("codecov/")], f"{name} sends by itself"
+    uses = [str(step.get("uses", "")) for job in workflow(name)["jobs"].values() for step in job.get("steps") or []]
+    local = [use for use in uses if use.startswith("./") and use != "./.github/actions/docker-hub-mirror"]
+    assert local == [folder + ".github/actions/upload-coverage", folder + ".github/actions/upload-test-results"]
+    assert not [use for use in uses if use.startswith("codecov/")], f"{name} sends by itself"
 
 
 @pytest.mark.parametrize("action, flags, kind", [
     ("upload-coverage", ["go-proxy", "go-tui", "python"], None),
     ("upload-test-results", ["go-proxy", "go-tui", "python"], "test_results"),
-])
+], ids=["upload-coverage", "upload-test-results"])
 def test_an_upload_action_sends_each_report_with_its_flag_and_fails_when_an_upload_is_refused(action, flags, kind):
     steps = yaml.safe_load((ACTIONS / action / "action.yml").read_text(encoding="utf-8"))["runs"]["steps"]
     uploads = [step for step in steps if str(step.get("uses", "")).startswith("codecov/codecov-action@")]

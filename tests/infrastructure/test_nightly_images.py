@@ -149,9 +149,10 @@ def test_the_room_of_an_image_is_that_of_its_layers_that_are_not_here_yet(stacks
 
 
 @pytest.mark.parametrize("folder, needed, says", [
-    ("", 0, ""),
-    ("", 99999, r"too little room on Docker's disk \([\d.]+ GB free, 99999\.0 GB needed\)"),
-    ("not there", 0, r"the free room of Docker's disk could not be read at `.*not there`\. Fix: .*"),
+    pytest.param("", 0, "", id="room enough"),
+    pytest.param("", 99999, r"too little room on Docker's disk \([\d.]+ GB free, 99999\.0 GB needed\)", id="too little room"),
+    pytest.param("not there", 0, r"the free room of Docker's disk could not be read at `.*not there`\. Fix: .*",
+                 id="a folder that is not there"),
 ])
 def test_the_free_room_of_dockers_disk_is_read_at_its_folder(tmp_path, folder, needed, says):
     assert re.fullmatch(says, images.room_fault([str(tmp_path / folder)], needed))
@@ -212,8 +213,7 @@ def test_no_command_of_a_night_names_an_image_of_the_registry_by_a_tag_or_remove
             continue  # the question to the registry: it changes nothing on the machine
         assert all(BY_DIGEST.fullmatch(word) for word in args if word.split("/")[0] == "ghcr.io"), args
         assert not {"prune", "rmi", "push", "login"} & set(args), args
-        if args[0] == "tag":
-            assert args[2].startswith("localhost/atlas-nightly/"), args
+    assert [args[2] for args in docker if args[0] == "tag"] == OWN_NAMES
     assert [args[2:] for args in docker if args[:2] == ["image", "rm"]] == [[OWN], [LAST]]
     # The stack runs the five images under the run's own names.
     services = json.loads(next(night.dir.glob("reports/*/own-images.yml")).read_text())["services"]

@@ -5,6 +5,7 @@ No test here reaches docker or the nightly run. The script is started with a pat
 test: `docker`, and a command in the place of the nightly run. Each writes down how it was called and answers from a
 small plan. Every run has a time limit.
 """
+import datetime as dt
 import json
 import os
 import re
@@ -87,23 +88,22 @@ ASKED = ["the-nightly-run", "--dir", "a folder", "--tick", "--look"]
 RAN = ["the-nightly-run", "--dir", "a folder", "--tick"]
 
 
-def test_when_nothing_is_due_the_usual_stack_is_not_touched_and_the_look_ends_with_status_0(tmp_path):
-    look = Look(tmp_path, look=3, running=["c3", "c2", "c1"]).look()
-    assert look.done.returncode == 0, look.done.stdout + look.done.stderr
-    assert look.calls() == [ASKED]
-    assert not look.marker.exists()
-
-
-@pytest.mark.parametrize("status", [1, 2, 4, 255])
-def test_a_look_that_ends_with_another_status_than_0_or_3_is_passed_on_and_nothing_is_stopped_or_run(tmp_path, status):
+@pytest.mark.parametrize("answer, status", [
+    pytest.param(3, 0, id="3-nothing-is-due"),
+    pytest.param(1, 1, id="1"),
     # Status 2: the settings of the nightly run cannot be used. As "nothing due" nobody would see it.
-    look = Look(tmp_path, look=status, running=["c3", "c2", "c1"]).look()
-    assert look.done.returncode == status
+    pytest.param(2, 2, id="2-the-settings-cannot-be-used"),
+    pytest.param(4, 4, id="4"),
+    pytest.param(255, 255, id="255"),
+])
+def test_when_no_run_is_due_the_usual_stack_is_not_touched_and_a_status_other_than_3_is_passed_on(tmp_path, answer, status):
+    look = Look(tmp_path, look=answer, running=["c3", "c2", "c1"]).look()
+    assert look.done.returncode == status, look.done.stdout + look.done.stderr
     assert look.calls() == [ASKED]
     assert not look.marker.exists()
 
 
-@pytest.mark.parametrize("run", [0, 1])
+@pytest.mark.parametrize("run", [pytest.param(0, id="the-run-passes"), pytest.param(1, id="the-run-fails")])
 def test_when_a_run_is_due_the_usual_stack_is_stopped_the_run_is_made_and_the_stack_is_started_again(tmp_path, run):
     look = Look(tmp_path, look=0, run=run, running=["c3", "c2", "c1"]).look()
     # Also when the run failed, and the status of the look is the status of the run.
@@ -114,24 +114,11 @@ def test_when_a_run_is_due_the_usual_stack_is_stopped_the_run_is_made_and_the_st
     assert not look.marker.exists()
 
 
-def test_the_containers_of_the_usual_stack_are_found_by_its_project_and_nothing_else_is_stopped(tmp_path):
-    look = Look(tmp_path, look=0, running=["c1"]).look()
-    assert look.calls()[1] == PS
-    assert [call for call in look.calls() if call[:2] == ["docker", "stop"]] == [["docker", "stop", "c1"]]
-    assert {call[1] for call in look.calls() if call[0] == "docker"} == {"ps", "stop", "start"}
-
-
 def test_when_the_usual_stack_does_not_run_nothing_is_stopped_and_nothing_is_started_after_the_run(tmp_path):
     look = Look(tmp_path, look=0, running=[]).look()
     assert look.done.returncode == 0
     assert look.calls() == [ASKED, PS, RAN]
     assert not look.marker.exists()
-
-
-def test_the_step_after_a_look_does_nothing_when_nothing_was_stopped(tmp_path):
-    look = Look(tmp_path).look("after")
-    assert look.done.returncode == 0
-    assert look.calls() == []
 
 
 def test_the_step_after_a_look_starts_again_what_a_look_that_did_not_end_had_stopped(tmp_path):
@@ -142,7 +129,7 @@ def test_the_step_after_a_look_starts_again_what_a_look_that_did_not_end_had_sto
     assert look.calls() == [["docker", "start", "c1"], ["docker", "start", "c2"], ["docker", "start", "c3"]]
     assert not look.marker.exists()
     # A second call finds nothing to do.
-    look.look("after")
+    assert look.look("after").done.returncode == 0
     assert len(look.calls()) == 3
 
 
@@ -156,15 +143,10 @@ def test_a_look_first_starts_again_what_an_earlier_look_left_stopped(tmp_path):
     assert look.calls() == [["docker", "start", "c1"], ["docker", "start", "c2"], ASKED]
     assert not look.marker.exists()
     assert "nightly_look.sh: the usual stack runs again: 2 container(s) that a look had stopped were started." in look.done.stdout
-    # It is started once: the look after that finds no marker file and starts nothing.
+    # It is started once: the look after that finds no marker file, starts nothing and says nothing.
     look.look()
-    assert look.calls()[3:] == [ASKED]
-    assert "the usual stack runs again" not in look.done.stdout
-
-
-def test_a_look_with_no_marker_file_says_nothing_about_the_usual_stack(tmp_path):
-    look = Look(tmp_path, look=3).look()
     assert look.done.returncode == 0
+    assert look.calls()[3:] == [ASKED]
     assert look.done.stdout == ""
 
 
@@ -211,10 +193,10 @@ def test_a_look_that_is_told_to_stop_waits_for_the_run_and_then_starts_the_usual
 
 
 @pytest.mark.parametrize("words, said", [
-    (["run", "atlas"], "three words are needed"),
-    (["now", "atlas", "a-marker"], "the first word is 'run' or 'after', not 'now'"),
-    (["run", "atlas", "a-marker", "the-nightly-run"], "the command of the nightly run comes after --"),
-    (["run", "atlas", "a-marker", "--"], "no command of the nightly run was given"),
+    pytest.param(["run", "atlas"], "three words are needed", id="two-words"),
+    pytest.param(["now", "atlas", "a-marker"], "the first word is 'run' or 'after', not 'now'", id="another-first-word"),
+    pytest.param(["run", "atlas", "a-marker", "the-nightly-run"], "the command of the nightly run comes after --", id="no-dashes"),
+    pytest.param(["run", "atlas", "a-marker", "--"], "no command of the nightly run was given", id="no-command"),
 ])
 def test_a_call_in_another_form_ends_with_status_2_and_says_the_usage(tmp_path, words, said):
     look = Look(tmp_path, look=0, running=["c1"])
@@ -252,11 +234,9 @@ def test_the_timer_starts_one_look_every_15_minutes():
 def test_the_unit_has_no_condition_and_gives_nothing_through_the_environment():
     names = [name for name, _value in settings(UNIT)]
     assert names == ["Description", "Type", "TimeoutStartSec", "TimeoutStopSec", "ExecStart", "ExecStopPost"]
-    # A condition that ends with 1 to 254 skips the unit with no failure: a look whose settings cannot be used would
-    # be skipped in silence. And the path of the key is an argument, never a value of the environment.
-    text = UNIT.read_text(encoding="utf-8")
-    for word in ("ExecCondition", "Environment", "PassEnvironment", "LoadCredential", "SetCredential"):
-        assert not re.search(rf"^{word}\w*=", text, re.M), word
+    # So there is no ExecCondition: a condition that ends with 1 to 254 skips the unit with no failure, and a look whose
+    # settings cannot be used would be skipped in silence. And no Environment, PassEnvironment, LoadCredential or
+    # SetCredential: the path of the key is an argument, never a value of the environment.
     assert one(UNIT, "Type") == "oneshot"
 
 
@@ -280,8 +260,6 @@ def test_the_unit_starts_the_script_of_the_look_from_the_tree_of_the_run_and_sta
     driver = (ROOT / "scripts" / "e2e-reliability.py").read_text(encoding="utf-8")
     assert 'ap.add_argument("--compose-project", default="atlas",' in driver
     assert nightly.PROJECT == "atlas-nightly"
-    # The files that the timer runs on the server itself are those of `dev`: a smoke commit that changes one is not run.
-    assert nightly.FROM_DEV["scripts/server/"] == "the files of the timer, which run on the server itself"
 
 
 def test_the_arguments_of_the_unit_are_arguments_of_the_script_and_the_key_lies_outside_the_folder_of_the_run():
@@ -313,12 +291,11 @@ def test_a_look_that_is_told_to_stop_has_the_time_to_stop_the_stack_of_the_run()
     assert in_seconds(one(UNIT, "TimeoutStartSec")) >= (defaults.image_wait_minutes + defaults.limit_minutes) * 60 * 2
 
 
-@pytest.mark.parametrize("path", [UNIT, TIMER, SCRIPT])
+@pytest.mark.parametrize("path", [UNIT, TIMER, SCRIPT], ids=[UNIT.name, TIMER.name, SCRIPT.name])
 def test_no_file_of_the_timer_names_a_path_or_a_machine_of_a_server(path):
     text = path.read_text(encoding="utf-8")
     # Every place is under the home folder of the user (%h).
-    for word in re.findall(r"(?<![\w%.<])/(?:home|root|srv|opt|var|mnt|data|Users)/\S*", text):
-        raise AssertionError(f"{path.name} names the path {word}")
+    assert re.findall(r"(?<![\w%.<])/(?:home|root|srv|opt|var|mnt|data|Users)/\S*", text) == []
     assert not re.search(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", text)
     assert not re.search(r"\w@\w", text), "a name of a user at a machine"
 
@@ -374,8 +351,10 @@ def test_with_the_real_script_of_the_run_a_card_that_is_held_with_no_lock_stops_
     with base.a_stand_in_for_github() as github:
         night = base.Night(tmp_path, github=github.port, left=["c1"], card=["4242, 9000"], smoke_tips=[status.tip("a-change")])
         github.plan.update(activity={"refs/heads/smoke/a-change": status.by()}, pulls={status.COMMIT: [status.a_pull()]})
+        # The hour of the night is twelve hours from now, so the night is not due.
+        night_hour = str((dt.datetime.now(dt.timezone.utc).hour + 12) % 24)
         run = ["sh", str(SCRIPT), "run", "atlas", str(tmp_path / "stopped"), "--",
-               *night.command("--tick", "--night-hour", status.far_hour(), "--smoke-by", "a-maintainer", "--smoke-hours", "0-23",
+               *night.command("--tick", "--night-hour", night_hour, "--smoke-by", "a-maintainer", "--smoke-hours", "0-23",
                               *night.with_the_key())]
         env = {**night.env(), "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"}
         first = subprocess.run(run, env=env, capture_output=True, text=True, timeout=90)

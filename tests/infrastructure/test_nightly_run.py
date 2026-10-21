@@ -401,12 +401,12 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
 def test_the_stack_has_a_name_and_ports_of_its_own_and_the_driver_and_the_tests_are_sent_to_it(tmp_path):
     night = Night(tmp_path).run()
     calls = night.calls()
-    for call in calls:
-        if call["tool"] == "docker" and call["args"][0] == "compose":
-            args = call["args"]
-            assert args[args.index("-p") + 1] == "atlas-nightly"
-            assert args[args.index("--env-file") + 1] == str(night.dir / "run.env")
-            assert args[args.index("-f") + 1] == str(night.dir / "tree" / "docker-compose.yml")
+    compose_calls = [call["args"] for call in calls if call["tool"] == "docker" and "compose" in call["args"]]
+    assert compose_calls, "the run called compose not once"
+    for args in compose_calls:
+        assert args[args.index("-p") + 1] == "atlas-nightly"
+        assert args[args.index("--env-file") + 1] == str(night.dir / "run.env")
+        assert args[args.index("-f") + 1] == str(night.dir / "tree" / "docker-compose.yml")
     settings = (night.dir / "run.env").read_text().splitlines()
     # The server's own settings come first, and the run's settings after them, so a port of the server's file does not hold.
     assert settings[0] == "ATLAS_MODEL_FILE=model.gguf" and settings.index("ATLAS_PROXY_PORT=8090") < settings.index("ATLAS_PROXY_PORT=18090")
@@ -457,10 +457,14 @@ def stale(image, built_from=OLD[:12]):
     return f"not run: the images are not of the head of the branch yet (ghcr.io/inferstep/{image}:dev was built from {built_from})"
 
 
-def test_with_an_image_that_was_not_built_from_the_head_the_night_is_not_run_and_that_is_no_failure(tmp_path):
-    night = Night(tmp_path, built_from={"atlas-sandbox": OLD}).run()
+@pytest.mark.parametrize("built_from, says", [
+    pytest.param({"atlas-sandbox": OLD}, stale("atlas-sandbox"), id="an image built from another commit"),
+    pytest.param({"atlas-proxy": ""}, stale("atlas-proxy", "no named commit"), id="an image that names no commit"),
+])
+def test_with_an_image_that_was_not_built_from_the_head_the_night_is_not_run_and_that_is_no_failure(tmp_path, built_from, says):
+    night = Night(tmp_path, built_from=built_from).run()
     assert night.done.returncode == 0
-    assert night.report["result"] == stale("atlas-sandbox")
+    assert night.report["result"] == says
     did = night.did()
     assert "card" not in did and "stack up" not in did and "driver" not in did and "tests" not in did
     assert "tasks" not in night.report and "tests" not in night.report and "stack_stopped" not in night.report
@@ -481,11 +485,6 @@ def test_each_of_the_five_images_is_compared_with_the_head(service):
     images[service]["commit"] = OLD
     assert nightly.stale_images(images, HEAD) == [f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev was built from {OLD[:12]}"]
     assert nightly.judge({"stale": nightly.stale_images(images, HEAD)}) == stale(nightly.IMAGES[service])
-
-
-def test_an_image_that_names_no_commit_is_not_of_the_head(tmp_path):
-    night = Night(tmp_path, built_from={"atlas-proxy": ""}).run()
-    assert night.report["result"] == stale("atlas-proxy", "no named commit")
 
 
 def test_images_that_come_some_minutes_after_the_push_are_waited_for(tmp_path):
@@ -560,11 +559,6 @@ def test_without_nvidia_smi_the_run_goes_on_and_the_report_says_that_the_card_wa
     (tmp_path / "bin" / "nvidia-smi").unlink()
     night.run()
     assert night.report["result"] == "passed" and night.report["card"].startswith("not read: nvidia-smi gave no answer")
-
-
-def test_the_card_is_read_after_a_left_stack_is_stopped_and_before_the_stack_is_started(tmp_path):
-    did = Night(tmp_path, left=["0a1b2c3d4e5f"]).run().did()
-    assert did.index("stack down") < did.index("card") < did.index("stack up")
 
 
 def test_a_run_holds_the_lock_while_its_stack_runs(tmp_path):
@@ -889,29 +883,36 @@ def test_the_stand_ins_start_where_the_path_of_python_holds_a_space(tmp_path):
 
 # --- whether the services are whole -------------------------------------------------------------------------------
 
-def answers(**other):
-    """The answers of whole services, as the run keeps them, with these other ones in their place."""
-    whole = {name: {"status": WHOLE[key][0], "answer": WHOLE[key][1]}
-             for name, key in zip(nightly.QUESTIONS, ("proxy/ready", "lens/ready", "lens/health"))}
-    return {**whole, **{name: {"status": said[0], "answer": said[1]} for name, said in other.items()}}
+def answers(name="", said=None):
+    """The answers of whole services, as the run keeps them, with this answer of one service in place of its whole one."""
+    kept = {question: {"status": WHOLE[key][0], "answer": WHOLE[key][1]}
+            for question, key in zip(nightly.QUESTIONS, ("proxy/ready", "lens/ready", "lens/health"))}
+    if name:
+        kept[name] = {"status": said[0], "answer": said[1]}
+    return kept
 
 
 @pytest.mark.parametrize("said, faults", [
-    (answers(), []),
-    (answers(**{"the proxy's /ready": proxy_says(lens_ready=False, lens_reason="it has no C(x) model loaded")}),
-     ["the proxy says that the lens is not ready (it has no C(x) model loaded)"]),
-    (answers(**{"the proxy's /ready": proxy_says(sandbox=False)}), ["the proxy says that the sandbox is not ready"]),
-    (answers(**{"the proxy's /ready": proxy_says(inference=False, v3=False)}),
-     ["the proxy says that the model server is not ready", "the proxy says that v3-service is not ready"]),
+    pytest.param(answers(), [], id="whole services"),
+    pytest.param(answers("the proxy's /ready", proxy_says(lens_ready=False, lens_reason="it has no C(x) model loaded")),
+                 ["the proxy says that the lens is not ready (it has no C(x) model loaded)"], id="the proxy: the lens"),
+    pytest.param(answers("the proxy's /ready", proxy_says(sandbox=False)), ["the proxy says that the sandbox is not ready"],
+                 id="the proxy: the sandbox"),
+    pytest.param(answers("the proxy's /ready", proxy_says(inference=False, v3=False)),
+                 ["the proxy says that the model server is not ready", "the proxy says that v3-service is not ready"],
+                 id="the proxy: two parts"),
     # A part that the proxy does not give is not taken as ready.
-    (answers(**{"the proxy's /ready": [200, {"ready": True, "inference": True, "sandbox": True, "v3": True}]}),
-     ["the proxy says that the lens is not ready"]),
-    (answers(**{"the proxy's /ready": [0, "no answer: timed out"]}), ["the proxy gave no answer about the services (no answer: timed out)"]),
-    (answers(**{"the lens's /ready": [503, {"detail": {"ready": False, "reason": "the cost field has another dimension than the model"}}]}),
-     ["the lens says that it cannot score (the cost field has another dimension than the model)"]),
-    (answers(**{"the lens's /ready": [0, "no answer: timed out"]}), ["the lens says that it cannot score (no answer: timed out)"]),
+    pytest.param(answers("the proxy's /ready", [200, {"ready": True, "inference": True, "sandbox": True, "v3": True}]),
+                 ["the proxy says that the lens is not ready"], id="the proxy: a part not given"),
+    pytest.param(answers("the proxy's /ready", [0, "no answer: timed out"]),
+                 ["the proxy gave no answer about the services (no answer: timed out)"], id="the proxy: no answer"),
+    pytest.param(answers("the lens's /ready", [503, {"detail": {"ready": False,
+                                                                "reason": "the cost field has another dimension than the model"}}]),
+                 ["the lens says that it cannot score (the cost field has another dimension than the model)"], id="the lens: not ready"),
+    pytest.param(answers("the lens's /ready", [0, "no answer: timed out"]),
+                 ["the lens says that it cannot score (no answer: timed out)"], id="the lens: no answer"),
     # The lens's /health is kept for the reader and is not judged: a lens with no calibration scores.
-    (answers(**{"the lens's /health": [200, {"status": "degraded"}]}), []),
+    pytest.param(answers("the lens's /health", [200, {"status": "degraded"}]), [], id="the lens's health is not judged"),
 ])
 def test_what_the_answers_of_the_services_say_is_wrong(said, faults):
     assert nightly.not_whole(said) == faults
@@ -1138,9 +1139,14 @@ def test_a_left_stack_is_stopped_also_in_a_night_whose_images_are_stale(tmp_path
 THE_REST = ["look"] + IMAGES + WITH_THE_CARD
 
 
-def test_when_taking_the_head_changes_the_script_the_new_copy_does_the_run_and_only_once(tmp_path):
+@pytest.mark.parametrize("change", [
     # Each checkout changes the file again: the new copy still does not start a third one.
-    night = Night(tmp_path, from_the_tree=True, checkout_adds="\n# one more line\n").run()
+    pytest.param({"checkout_adds": "\n# one more line\n"}, id="the script changes"),
+    # The run read the judge when it started. A repair of the judge acts in the night after its merge, as one of the script.
+    pytest.param({"checkout_adds_to_the_judge": "\n# one more line\n"}, id="the judge changes"),
+])
+def test_when_taking_the_head_changes_the_script_or_the_judge_beside_it_the_new_copy_does_the_run_and_only_once(tmp_path, change):
+    night = Night(tmp_path, from_the_tree=True, **change).run()
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
     assert night.did() == ONE_HEAD + ONE_HEAD + THE_REST
     assert night.report["result"] == "passed" and night.report["script"] == "the new copy: taking the head changed the script"
@@ -1167,15 +1173,6 @@ def test_a_start_time_with_a_number_that_is_not_the_kept_lock_file_is_a_run_like
     assert night.done.returncode == 0 and night.report["result"] == "passed", night.done.stdout + night.done.stderr
     with open(night.dir / "run.lock", "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def test_when_taking_the_head_changes_the_judge_beside_the_script_the_new_copy_does_the_run(tmp_path):
-    # The run read the judge when it started. A repair of the judge acts in the night after its merge, as one of the script.
-    night = Night(tmp_path, from_the_tree=True, checkout_adds_to_the_judge="\n# one more line\n").run()
-    assert night.done.returncode == 0, night.done.stdout + night.done.stderr
-    assert night.did() == ONE_HEAD + ONE_HEAD + THE_REST
-    assert night.report["result"] == "passed"
-    assert night.report["script"] == "the new copy: taking the head changed the script"
 
 
 def test_a_script_that_the_head_did_not_change_is_not_started_again(tmp_path):
