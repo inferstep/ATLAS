@@ -66,14 +66,6 @@ def folders(folder):
     return sorted((folder / "tmp").glob("atlas-bootstrap.*"))
 
 
-def stand_in(folder, name, text):
-    """A command of this name that is first on the path. Returns the lines that stop the run when it is not."""
-    (folder / name).write_text("#!/bin/bash\n" + text, encoding="utf-8")
-    (folder / name).chmod(0o755)
-    return (f'[[ "$(command -v {name})" == "{folder}/{name}" ]] || '
-            f'{{ echo "the stand-in for {name} is not the first on the path"; exit 99; }}\n')
-
-
 def paths_given(done, folder):
     """Each path inside the run's folder that the output of a run gives."""
     found = re.findall(re.escape(str(folder / "tmp")) + r"/atlas-bootstrap\.[\w.]+/[\w-]+(?:\.[\w-]+)*", done.stdout + done.stderr)
@@ -131,14 +123,24 @@ def test_the_folder_of_a_run_is_new_each_run_and_has_mode_700(tmp_path):
         assert path.parent == tmp_path / "tmp"
 
 
-def test_an_install_that_passed_removes_the_folder_and_gives_no_path(tmp_path):
-    done = run(tmp_path, 'echo "a line" > "$ATLAS_RUN_DIR/atlas-pip.log"\nmkdir "$ATLAS_RUN_DIR/try.1"\nlog_ok "ATLAS CLI installed"\n')
-    assert done.returncode == 0, done.stdout + done.stderr
+@pytest.mark.parametrize("body, status", [
+    pytest.param('echo "a line" > "$ATLAS_RUN_DIR/atlas-pip.log"\nmkdir "$ATLAS_RUN_DIR/try.1"\nlog_ok "ATLAS CLI installed"\n', 0,
+                 id="passed-after-it-wrote-files"),
+    pytest.param('log_err "Unsupported distro."\nexit 2\n', 2, id="failed-before-it-wrote-a-file"),
+])
+def test_a_run_that_passed_or_failed_before_it_wrote_a_file_leaves_no_folder_and_gives_no_path(tmp_path, body, status):
+    done = run(tmp_path, body)
+    assert done.returncode == status, done.stdout + done.stderr
     assert folders(tmp_path) == []
+    assert KEPT not in done.stdout
     assert str(tmp_path / "tmp") not in done.stdout + done.stderr
 
 
-@pytest.mark.parametrize("ends, status", [("exit 3", 3), ('die "The step failed."', 1), ("false", 1)])
+@pytest.mark.parametrize("ends, status", [
+    pytest.param("exit 3", 3, id="exit-3"),
+    pytest.param('die "The step failed."', 1, id="die"),
+    pytest.param("false", 1, id="a-failed-command-under-errexit"),
+])
 def test_an_install_that_failed_keeps_the_folder_and_the_last_line_gives_its_path(tmp_path, ends, status):
     done = run(tmp_path, f'echo "a line" > "$ATLAS_RUN_DIR/atlas-pip.log"\n{ends}\necho "the install goes on"\n')
     assert done.returncode == status
@@ -148,7 +150,12 @@ def test_an_install_that_failed_keeps_the_folder_and_the_last_line_gives_its_pat
     assert (kept / "atlas-pip.log").read_text() == "a line\n"
 
 
-@pytest.mark.parametrize("number, started_by, says_so", [("0", "dev", True), ("0", "root", False), ("0", "", False), ("1000", "dev", False)])
+@pytest.mark.parametrize("number, started_by, says_so", [
+    pytest.param("0", "dev", True, id="root-through-sudo-from-dev"),
+    pytest.param("0", "root", False, id="root-through-sudo-from-root"),
+    pytest.param("0", "", False, id="root-without-sudo"),
+    pytest.param("1000", "dev", False, id="not-root"),
+])
 def test_the_last_line_says_that_the_folder_belongs_to_root_only_after_a_run_through_sudo(tmp_path, number, started_by, says_so):
     # The number of the user is a stand-in: the script asks `id -u`, and the test answers for it.
     done = run(tmp_path, 'echo "a line" > "$ATLAS_RUN_DIR/atlas-pip.log"\nexit 3\n', first=f"id() {{ echo {number}; }}\n",
@@ -159,23 +166,15 @@ def test_the_last_line_says_that_the_folder_belongs_to_root_only_after_a_run_thr
     assert done.stdout.splitlines()[-1] == f"{KEPT}{kept}{note}"
 
 
-def test_a_run_that_failed_before_it_wrote_a_file_leaves_no_folder_and_gives_no_path(tmp_path):
-    done = run(tmp_path, 'log_err "Unsupported distro."\nexit 2\n')
-    assert done.returncode == 2
-    assert folders(tmp_path) == []
-    assert KEPT not in done.stdout
-    assert str(tmp_path / "tmp") not in done.stdout + done.stderr
-
-
 @pytest.mark.parametrize("says", [
-    'log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log"',
-    'log_err "The pull failed. Log: $ATLAS_RUN_DIR/a.log"',
-    'log_info "The output is also in $ATLAS_RUN_DIR/a.log."',
-    'log_ok "Done (log: $ATLAS_RUN_DIR/a.log)"',
-    'log_step "See $ATLAS_RUN_DIR/a.log"',
-    'log_skip "Skipped; see $ATLAS_RUN_DIR/a.log"',
-    '( log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log" )',
-    'log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log" | cat',
+    pytest.param('log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log"', id="log_warn"),
+    pytest.param('log_err "The pull failed. Log: $ATLAS_RUN_DIR/a.log"', id="log_err"),
+    pytest.param('log_info "The output is also in $ATLAS_RUN_DIR/a.log."', id="log_info"),
+    pytest.param('log_ok "Done (log: $ATLAS_RUN_DIR/a.log)"', id="log_ok"),
+    pytest.param('log_step "See $ATLAS_RUN_DIR/a.log"', id="log_step"),
+    pytest.param('log_skip "Skipped; see $ATLAS_RUN_DIR/a.log"', id="log_skip"),
+    pytest.param('( log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log" )', id="log_warn-in-a-subshell"),
+    pytest.param('log_warn "The build failed. Log: $ATLAS_RUN_DIR/a.log" | cat', id="log_warn-in-a-pipe"),
 ])
 def test_a_message_that_names_a_file_of_the_folder_keeps_the_folder_though_the_install_passed(tmp_path, says):
     done = run(tmp_path, f'echo "a line" > "$ATLAS_RUN_DIR/a.log"\n{says}\necho "the install goes on"\n')
@@ -186,33 +185,32 @@ def test_a_message_that_names_a_file_of_the_folder_keeps_the_folder_though_the_i
     assert done.stdout.splitlines()[-2:] == ["the install goes on", f"{KEPT}{kept}"]
 
 
-def failing_step(tmp_path, step):
-    """Run one step of the script so that it fails, with stand-ins. Returns the run and the name of the log it must give."""
+@pytest.mark.parametrize("stand_in, stand_in_text, call, log", [
+    pytest.param("go", '[ "$1" = build ] && { echo "./main.go:9:2: undefined: missing" >&2; exit 1; }\nexit 0\n',
+                 "build_atlas_tui || die 'atlas-tui build failed.'", "atlas-tui-build.log", id="tui-build"),
+    pytest.param("python3", 'case "$*" in *"-e ."*) echo "error: invalid command bdist_wheel" >&2; exit 1 ;; esac\nexit 0\n',
+                 "install_atlas_cli || die 'ATLAS CLI installation failed.'", "atlas-pip.log", id="cli-install"),
+    pytest.param("scripts/download-models.sh", 'echo "curl: (28) Operation timed out"\nexit 28\n',
+                 "download_models", "atlas-models.log", id="model-download"),
+    pytest.param("docker", 'case "$*" in *" pull"*) echo "Error response from daemon: denied" >&2; exit 1 ;; esac\nexit 0\n',
+                 "start_compose", "atlas-compose-pull.log", id="image-pull"),
+    pytest.param("docker", 'case "$*" in *" up"*) echo "Error response from daemon: denied" >&2; exit 1 ;; esac\nexit 0\n',
+                 "start_compose", "atlas-compose.log", id="start-of-the-containers"),
+])
+def test_the_path_that_a_failed_step_gives_is_a_file_that_is_there_after_the_run(tmp_path, stand_in, stand_in_text, call, log):
+    for folder in ("tui", "home", "scripts"):
+        (tmp_path / folder).mkdir()
+    (tmp_path / stand_in).write_text("#!/bin/bash\n" + stand_in_text, encoding="utf-8")
+    (tmp_path / stand_in).chmod(0o755)
+    # The run stops before the step when the command that the step looks up on the path is not the stand-in.
+    # The step runs scripts/download-models.sh by its path, so that stand-in needs no such check.
+    guard = "" if "/" in stand_in else (f'[[ "$(command -v {stand_in})" == "{tmp_path}/{stand_in}" ]] || '
+                                        f'{{ echo "the stand-in for {stand_in} is not the first on the path"; exit 99; }}\n')
     stubs = ('run_as_target() { "$@"; }\n' + f'target_home_dir() {{ echo "{tmp_path}/home"; }}\n' + f'ATLAS_INSTALL_DIR="{tmp_path}"\n'
              + 'DOCKER_PREFIX=""\nGPU_VENDOR="nvidia"\ncompose_files_args() { echo "-f /no-such-folder/compose.yml"; }\n')
-    helper = function("retry_download") + setting("PIP_NETWORK_ERROR") + setting("GO_NOT_A_NETWORK_ERROR")
-    if step == "the TUI build":
-        (tmp_path / "tui").mkdir()
-        (tmp_path / "home").mkdir()
-        guard = stand_in(tmp_path, "go", '[ "$1" = build ] && { echo "./main.go:9:2: undefined: missing" >&2; exit 1; }\nexit 0\n')
-        return run(tmp_path, guard + helper + stubs + function("build_atlas_tui") + "build_atlas_tui || die 'atlas-tui build failed.'\n"), "atlas-tui-build.log"
-    if step == "the CLI install":
-        guard = stand_in(tmp_path, "python3", 'case "$*" in *"-e ."*) echo "error: invalid command bdist_wheel" >&2; exit 1 ;; esac\nexit 0\n')
-        return run(tmp_path, guard + helper + stubs + function("install_atlas_cli") + "install_atlas_cli || die 'ATLAS CLI installation failed.'\n"), "atlas-pip.log"
-    if step == "the model download":
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "download-models.sh").write_text('#!/bin/bash\necho "curl: (28) Operation timed out"\nexit 28\n', encoding="utf-8")
-        (tmp_path / "scripts" / "download-models.sh").chmod(0o755)
-        return run(tmp_path, stubs + function("download_models") + "download_models\n"), "atlas-models.log"
-    fails = "pull" if step == "the image pull" else "up"
-    guard = stand_in(tmp_path, "docker", f'case "$*" in *" {fails}"*) echo "Error response from daemon: denied" >&2; exit 1 ;; esac\nexit 0\n')
-    log = "atlas-compose-pull.log" if step == "the image pull" else "atlas-compose.log"
-    return run(tmp_path, guard + stubs + function("start_compose") + "start_compose\n"), log
-
-
-@pytest.mark.parametrize("step", ["the TUI build", "the CLI install", "the model download", "the image pull", "the start of the containers"])
-def test_the_path_that_a_failed_step_gives_is_a_file_that_is_there_after_the_run(tmp_path, step):
-    done, log = failing_step(tmp_path, step)
+    retry = function("retry_download") + setting("PIP_NETWORK_ERROR") + setting("GO_NOT_A_NETWORK_ERROR")
+    # The step's own function from the script, then the call of it as the script makes it.
+    done = run(tmp_path, guard + retry + stubs + function(call.split()[0]) + call + "\n")
     assert done.returncode == 1, done.stdout + done.stderr
     assert "is not the first on the path" not in done.stdout
     (kept,) = folders(tmp_path)

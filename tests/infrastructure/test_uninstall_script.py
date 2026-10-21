@@ -21,7 +21,6 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "uninstall.sh"
 TEXT = SCRIPT.read_text(encoding="utf-8")
-SETTINGS = ("ATLAS_MODELS_DIR", "ATLAS_DATA_DIR", "ATLAS_PROJECTS_DIR")
 OWN = ("usage", "print_removals", "not_removable", "check_settings", "parse_args", "confirm", "remove_models", "remove_data", "main")
 STAND_INS = ("remove_atlas_services", "remove_container_images", "remove_gpu_operator", "remove_k3s")
 # `rm` as the tests give it to the script: a path outside the folder of the test, or one that leaves it through
@@ -48,15 +47,10 @@ def function(name):
     return found.group(0)
 
 
-def defaults():
-    """The lines of the script that set its options and its three folder settings, before the first function."""
-    return TEXT[TEXT.index("REMOVE_K3S=false\n"):TEXT.index("usage() {\n")]
-
-
 class Install:
     """The folders of an install, made for one test. `apart` puts the projects folder outside the data folder."""
 
-    def __init__(self, root, apart):
+    def __init__(self, root, apart=True):
         self.root = root
         self.data = root / "install" / "data"
         self.projects = root / "my-projects" if apart else self.data / "projects"
@@ -78,6 +72,8 @@ class Install:
         values = {"ATLAS_MODELS_DIR": str(self.models), "ATLAS_DATA_DIR": str(self.data),
                   "ATLAS_PROJECTS_DIR": str(self.projects), **changed}
         settings = "".join(f'{name}="{value}"\n' for name, value in values.items() if value is not None)
+        # The lines of the script that set its options and its three folder settings, before the first function.
+        defaults = TEXT[TEXT.index("REMOVE_K3S=false\n"):TEXT.index("usage() {\n")]
         script = f"""set -euo pipefail
 ROOT="{self.root}"
 {NET}read() {{ echo "QUESTION: $2"; builtin read "$@"; }}
@@ -87,7 +83,7 @@ log_error() {{ echo "[ERROR] $1" >&2; }}
 K8S_DIR="$ROOT/checkout"
 HOME="$ROOT/home"
 ATLAS_NAMESPACE="atlas"
-{settings}{defaults()}
+{settings}{defaults}
 for value in "$ATLAS_MODELS_DIR" "$ATLAS_DATA_DIR" "$ATLAS_PROJECTS_DIR"; do
     [[ -z "$value" || "$value" == "$ROOT"/* || "|{"|".join(refused)}|" == *"|$value|"* ]] || {{
         echo "a setting points outside the folder of the test"; exit 99; }}
@@ -107,13 +103,13 @@ done
 
 
 @pytest.mark.parametrize("path, refused", [
-    ("$ROOT/made/inside.txt", False),
-    ("/no-such-folder-of-this-test/x", True),
-    ("$ROOT/made/../../no-such-folder-of-this-test", True),
-    ("$ROOT/..", True),
-    ("$ROOT", True),
-    ("relative/path", True),
-    ("", True),
+    pytest.param("$ROOT/made/inside.txt", False, id="a file inside the folder"),
+    pytest.param("/no-such-folder-of-this-test/x", True, id="a full path outside"),
+    pytest.param("$ROOT/made/../../no-such-folder-of-this-test", True, id="out of the folder through .."),
+    pytest.param("$ROOT/..", True, id="the folder above"),
+    pytest.param("$ROOT", True, id="the folder itself"),
+    pytest.param("relative/path", True, id="a path that is not full"),
+    pytest.param("", True, id="an empty path"),
 ])
 def test_the_net_of_these_tests_lets_a_removal_through_only_inside_the_folder_of_the_test(tmp_path, path, refused):
     # Each path that must be refused is one that does not exist, so this test removes nothing when the net is wrong.
@@ -126,87 +122,69 @@ def test_the_net_of_these_tests_lets_a_removal_through_only_inside_the_folder_of
     assert (tmp_path / "made" / "inside.txt").exists() == refused
 
 
-def the_list(done):
-    """The lines that the script prints before its question."""
-    assert "QUESTION: " in done.stdout, done.stdout + done.stderr
-    return done.stdout.split("QUESTION: ")[0].splitlines()
-
-
-def lines_with(lines, path):
-    return [line for line in lines if line.rstrip().endswith(f": {path}")]
-
-
-@pytest.mark.parametrize("apart", [False, True])
-@pytest.mark.parametrize("option", ["--data", "--all"])
-def test_the_list_names_the_data_folder_and_the_projects_folder_with_their_paths_before_the_question(tmp_path, apart, option):
+@pytest.mark.parametrize("options, apart, listed", [
+    pytest.param((), True, [], id="no option"),
+    pytest.param(("--k3s",), True, [], id="--k3s"),
+    pytest.param(("--models",), True, ["models"], id="--models"),
+    pytest.param(("--data",), True, ["data", "projects"], id="--data"),
+    pytest.param(("--data",), False, ["data", "projects"], id="--data, projects folder in the data folder"),
+    pytest.param(("--models", "--data"), True, ["models", "data", "projects"], id="--models --data"),
+    pytest.param(("--all",), True, ["models", "data", "projects"], id="--all"),
+    pytest.param(("--all",), False, ["models", "data", "projects"], id="--all, projects folder in the data folder"),
+])
+def test_the_list_names_the_folders_of_the_chosen_options_and_no_other(tmp_path, options, apart, listed):
     install = Install(tmp_path, apart)
     before = install.files()
-    done = install.run(option, answer="n")
-    listed = the_list(done)
-    assert len(lines_with(listed, install.data)) == 1, listed
-    assert len(lines_with(listed, install.projects)) == 1, listed
-    assert "projects folder" in lines_with(listed, install.projects)[0]
+    done = install.run(*options, answer="n")
+    assert "QUESTION: " in done.stdout, done.stdout + done.stderr
+    lines_before_the_question = done.stdout.split("QUESTION: ")[0].splitlines()
+    for name, path in (("models", install.models), ("data", install.data), ("projects", install.projects)):
+        lines = [line for line in lines_before_the_question if line.rstrip().endswith(f": {path}")]
+        assert len(lines) == (1 if name in listed else 0), (name, lines_before_the_question)
+        assert all(f"{name} folder" in line for line in lines), lines
     assert done.returncode == 0 and done.stdout.rstrip().endswith("Aborted.")
     assert install.files() == before and install.called() == []
 
 
-@pytest.mark.parametrize("options, named", [
-    ((), ()),
-    (("--k3s",), ()),
-    (("--models",), ("models",)),
-    (("--data",), ("data", "projects")),
-    (("--models", "--data"), ("models", "data", "projects")),
-    (("--all",), ("models", "data", "projects")),
+@pytest.mark.parametrize("option, apart, files_left, stand_ins_called", [
+    pytest.param("--models", False,
+                 ["install/beside/keep.txt", "install/data/projects/app/main.py", "install/data/state.db",
+                  "install/models/notes.txt"],
+                 ["remove_atlas_services", "remove_container_images"], id="--models, projects folder in the data folder"),
+    pytest.param("--data", True,
+                 ["install/beside/keep.txt", "install/models/a.gguf", "install/models/default.gguf",
+                  "install/models/notes.txt"],
+                 ["remove_atlas_services", "remove_container_images"], id="--data"),
+    pytest.param("--all", True, ["install/beside/keep.txt", "install/models/notes.txt"],
+                 ["remove_atlas_services", "remove_container_images", "remove_gpu_operator", "remove_k3s"], id="--all"),
 ])
-def test_the_list_names_the_folders_of_the_chosen_options_and_no_other(tmp_path, options, named):
-    install = Install(tmp_path, apart=True)
-    listed = the_list(install.run(*options, answer="n"))
-    for name in ("models", "data", "projects"):
-        assert len(lines_with(listed, getattr(install, name))) == (1 if name in named else 0), (name, listed)
-
-
-def test_with_the_answer_yes_data_removes_the_two_folders_that_the_list_named_and_nothing_else(tmp_path):
-    install = Install(tmp_path, apart=True)
-    done = install.run("--data", answer="y")
+def test_with_the_answer_yes_an_option_removes_what_the_list_named_and_nothing_else(
+        tmp_path, option, apart, files_left, stand_ins_called):
+    install = Install(tmp_path, apart)
+    done = install.run(option, answer="y")
     assert done.returncode == 0, done.stdout + done.stderr
-    assert not install.data.exists() and not install.projects.exists()
-    assert install.files() == ["install/beside/keep.txt", "install/models/a.gguf", "install/models/default.gguf",
-                               "install/models/notes.txt"]
-    assert install.called() == ["remove_atlas_services", "remove_container_images"]
+    assert install.files() == files_left
+    # The data folder and the projects folder go as a whole: no empty folder is left behind.
+    assert [path for path in tmp_path.rglob("*") if path.is_dir() and not any(path.iterdir())] == []
+    assert install.called() == stand_ins_called
 
 
-def test_with_the_answer_yes_models_removes_the_model_files_and_leaves_the_folder_and_the_rest(tmp_path):
-    install = Install(tmp_path, apart=False)
-    done = install.run("--models", answer="y")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert install.files() == ["install/beside/keep.txt", "install/data/projects/app/main.py", "install/data/state.db",
-                               "install/models/notes.txt"]
-
-
-def test_with_the_answer_yes_all_removes_what_data_and_models_remove(tmp_path):
-    install = Install(tmp_path, apart=True)
-    done = install.run("--all", answer="y")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert install.files() == ["install/beside/keep.txt", "install/models/notes.txt"]
-    assert install.called() == list(STAND_INS)
-
-
-@pytest.mark.parametrize("answer", ["n", "", "x", "no"])
+@pytest.mark.parametrize("answer", ["n", "", "x", "no"], ids=["n", "empty", "x", "no"])
 def test_without_the_answer_yes_nothing_is_removed(tmp_path, answer):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     before = install.files()
     done = install.run("--all", answer=answer)
     assert done.returncode == 0 and "Aborted." in done.stdout
     assert install.files() == before and install.called() == []
 
 
-@pytest.mark.parametrize("value", ["", None])
+@pytest.mark.parametrize("value", ["", None], ids=["empty", "not set"])
 @pytest.mark.parametrize("option, setting", [
     ("--data", "ATLAS_DATA_DIR"), ("--data", "ATLAS_PROJECTS_DIR"), ("--models", "ATLAS_MODELS_DIR"),
     ("--all", "ATLAS_DATA_DIR"), ("--all", "ATLAS_PROJECTS_DIR"), ("--all", "ATLAS_MODELS_DIR"),
 ])
 def test_an_empty_setting_stops_the_script_before_its_question_and_nothing_is_removed(tmp_path, option, setting, value):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     before = install.files()
     done = install.run(option, answer="y", **{setting: value})
     assert done.returncode == 1, done.stdout + done.stderr
@@ -217,17 +195,18 @@ def test_an_empty_setting_stops_the_script_before_its_question_and_nothing_is_re
 
 
 def test_two_empty_settings_are_both_named(tmp_path):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     done = install.run("--all", answer="y", ATLAS_DATA_DIR="", ATLAS_MODELS_DIR="")
     assert done.returncode == 1
     assert "[ERROR] ATLAS_DATA_DIR is empty" in done.stderr and "[ERROR] ATLAS_MODELS_DIR is empty" in done.stderr
     assert "ATLAS_PROJECTS_DIR is empty" not in done.stderr
 
 
-SETTING_OF = [("--data", "ATLAS_DATA_DIR"), ("--data", "ATLAS_PROJECTS_DIR"), ("--models", "ATLAS_MODELS_DIR")]
+# Each option that removes a folder, with each setting that names a folder it removes.
+OPTION_AND_SETTING = [("--data", "ATLAS_DATA_DIR"), ("--data", "ATLAS_PROJECTS_DIR"), ("--models", "ATLAS_MODELS_DIR")]
 
 
-@pytest.mark.parametrize("option, setting", SETTING_OF)
+@pytest.mark.parametrize("option, setting", OPTION_AND_SETTING)
 @pytest.mark.parametrize("value, says", [
     ("/", "is the root folder (/)"),
     ("//", "is the root folder (//)"),
@@ -244,7 +223,7 @@ SETTING_OF = [("--data", "ATLAS_DATA_DIR"), ("--data", "ATLAS_PROJECTS_DIR"), ("
 def test_a_folder_that_must_not_be_removed_stops_the_script_before_its_question(tmp_path, option, setting, value, says):
     # The home folder and the folder of the repository are stand-ins inside the folder of the test. The answer is
     # "no" in every case, so a script that does not refuse removes nothing either.
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     before = install.files()
     value = value.replace("{root}", str(tmp_path))
     done = install.run(option, answer="n", refused=(value,), **{setting: value})
@@ -253,11 +232,10 @@ def test_a_folder_that_must_not_be_removed_stops_the_script_before_its_question(
     assert "Nothing was removed." in done.stderr
     assert "Fix: set it in " in done.stderr
     assert "QUESTION" not in done.stdout
-    assert install.files() == before
-    assert install.called() == []
+    assert install.files() == before and install.called() == []
 
 
-@pytest.mark.parametrize("option, setting", SETTING_OF)
+@pytest.mark.parametrize("option, setting", OPTION_AND_SETTING)
 @pytest.mark.parametrize("value", [
     "{root}/checkout/data",
     "{root}/home/projects",
@@ -269,14 +247,14 @@ def test_a_folder_that_must_not_be_removed_stops_the_script_before_its_question(
     "{root}//install//data",
 ])
 def test_a_folder_inside_the_home_folder_or_the_repository_is_not_refused(tmp_path, option, setting, value):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     done = install.run(option, answer="n", **{setting: value.replace("{root}", str(tmp_path))})
     assert done.returncode == 0, done.stdout + done.stderr
     assert "QUESTION" in done.stdout
 
 
 def test_an_empty_setting_of_an_option_that_was_not_given_does_not_stop_the_script(tmp_path):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     done = install.run("--models", answer="y", ATLAS_DATA_DIR="", ATLAS_PROJECTS_DIR=None)
     assert done.returncode == 0, done.stdout + done.stderr
     assert not (install.models / "a.gguf").exists() and (install.projects / "app" / "main.py").exists()
@@ -284,7 +262,7 @@ def test_an_empty_setting_of_an_option_that_was_not_given_does_not_stop_the_scri
 
 
 def test_the_help_text_says_for_data_and_for_all_that_the_projects_folder_is_removed(tmp_path):
-    install = Install(tmp_path, apart=True)
+    install = Install(tmp_path)
     before = install.files()
     done = install.run("--help")
     assert done.returncode == 0 and "QUESTION" not in done.stdout
@@ -305,8 +283,9 @@ def removals():
 
 
 def test_every_removal_in_the_script_fails_on_an_empty_value():
-    assert len(removals()) >= 4, removals()
-    wrong = [f"line {number}: {line.strip()}" for number, line in removals()
+    lines = removals()
+    assert len(lines) >= 4, lines
+    wrong = [f"line {number}: {line.strip()}" for number, line in lines
              if not re.fullmatch(r'\s*rm -r?f "\$\{ATLAS_\w+:\?\}[^$"]*"[^$\s]*', line)]
     assert not wrong, (
         "scripts/uninstall.sh removes a path that can be empty:\n  " + "\n  ".join(wrong) + "\nWith an empty setting "
@@ -316,12 +295,15 @@ def test_every_removal_in_the_script_fails_on_an_empty_value():
 
 def test_each_setting_that_a_removal_uses_is_in_the_list_and_in_the_check_of_empty_settings():
     removed = set(re.findall(r"\$\{(ATLAS_\w+):\?\}", "\n".join(line for _number, line in removals())))
-    assert removed == set(SETTINGS), removed
+    assert removed == {"ATLAS_MODELS_DIR", "ATLAS_DATA_DIR", "ATLAS_PROJECTS_DIR"}, removed
+    # check_settings() looks at the settings that it puts in `names`. Its message names every setting too, so a
+    # search of the whole function would find a setting that it no longer looks at.
+    checked = " ".join(re.findall(r'names="([^"]*)"', function("check_settings"))).split()
     for name in sorted(removed):
         assert f"${name}" in function("print_removals"), (
             f"the script removes ${{{name}}} and print_removals() does not print it. Fix: add a line to the list "
             "that names the folder and prints its path.")
-        assert name in function("check_settings"), (
+        assert name in checked, (
             f"the script removes ${{{name}}} and check_settings() does not look at it. Fix: add it under the option "
             "that removes it.")
     main = function("main")

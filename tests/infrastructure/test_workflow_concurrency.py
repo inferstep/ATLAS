@@ -29,8 +29,6 @@ NEWEST_PUSH_CANCELS = {
     "jetbrains-plugin.yml": "it builds and tests the plugin as it is now; an older commit's result is not kept",
     "sonar.yml": "the analysis of the newest commit takes the place of the older one",
 }
-
-
 # No concurrency group at all: no run of it cancels another.
 NO_GROUP = {
     "scorecard.yml": "it starts on a push to main only, once a week, and by hand; its runs do not get in each other's way",
@@ -39,13 +37,6 @@ NO_GROUP = {
 
 def read(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
-
-
-def starts_on_a_push_to_a_branch(workflow: dict) -> bool:
-    """Whether the workflow starts on a push to dev or to main."""
-    # PyYAML reads the key `on` as the boolean True.
-    push = (workflow.get(True) or {}).get("push")
-    return isinstance(push, dict) and bool({"dev", "main"} & set(push.get("branches") or []))
 
 
 @pytest.mark.parametrize("name", sorted(EVERY_PUSH_ENDS))
@@ -70,7 +61,12 @@ def test_a_workflow_listed_with_no_group_has_none(name):
 
 
 def test_every_workflow_that_starts_on_a_push_to_dev_or_main_is_on_one_of_the_lists():
-    on_push = sorted(path.name for path in WORKFLOWS.glob("*.yml") if starts_on_a_push_to_a_branch(read(path.name)))
+    on_push = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        # PyYAML reads the key `on` as the boolean True.
+        push = (read(path.name).get(True) or {}).get("push")
+        if isinstance(push, dict) and {"dev", "main"} & set(push.get("branches") or []):
+            on_push.append(path.name)
     undecided = [name for name in on_push if name not in {**EVERY_PUSH_ENDS, **NEWEST_PUSH_CANCELS, **NO_GROUP}]
     assert undecided == [], (
         f"{undecided} start on a push to dev or main and are on no list in this test. Fix: add each to EVERY_PUSH_ENDS when "
