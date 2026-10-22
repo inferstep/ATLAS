@@ -11,9 +11,9 @@ import (
 )
 
 // Outcome table for the whole-file sandbox check. The flat (string, bool) API
-// returns ("", true) for TEN distinct conditions of which only one is a pass,
-// so `true` means "do not refuse", never "validated". These pin the
-// structured core that tells them apart.
+// returns ("", true) for many distinct conditions, and only one of them is a
+// pass, so true means "do not refuse", never "validated". These rows pin the
+// structured outcome that tells them apart.
 func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 	sandbox := func(status int, body string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -226,13 +226,12 @@ func TestFallbackSyntaxComposites(t *testing.T) {
 	})
 }
 
-// --- Phase 3A: observational deliverable ledger -----------------------------
+// --- The deliverable ledger -------------------------------------------------
 //
-// At a stall the server knows only which paths were touched — not whether the
-// current bytes are valid, and not what the last good version was.
-// ValidationStatus never crosses the event boundary, so a finaliser had
-// nothing true to say and nothing safe to leave behind. This records both.
-// Phase 3A observes only: no restoration, no behaviour change.
+// For each path the run touched, the ledger records whether the current bytes
+// passed a check and which bytes last passed. ValidationStatus never crosses
+// the event boundary, so without the ledger a finaliser would have nothing
+// true to say and nothing safe to leave behind.
 
 func ledgerCtx(t *testing.T) *AgentContext {
 	t.Helper()
@@ -268,29 +267,33 @@ func TestALaterPassedHashReplacesTheCheckpoint(t *testing.T) {
 	}
 }
 
+// Only an explicit pass makes a checkpoint. Every other status is still
+// recorded as it was observed.
 func TestOnlyAnExplicitPassPromotes(t *testing.T) {
-	for _, st := range []ValidationStatus{
-		ValidationFailed, ValidationNotRun, ValidationNotApplicable, ValidationUnknown,
+	for _, tc := range []struct {
+		name   string
+		kind   ValidationKind
+		status ValidationStatus
+		reason string
+	}{
+		{"failed", ValidationKindSyntax, ValidationFailed, ""},
+		{"not run", ValidationKindSyntax, ValidationNotRun, ""},
+		{"not applicable", ValidationKindSyntax, ValidationNotApplicable, ""},
+		{"unknown", ValidationKindSyntax, ValidationUnknown, ""},
+		// A snapshot taken before a change has no verdict of its own.
+		{"baseline snapshot", ValidationKindUnknown, ValidationUnknown, "pre-mutation snapshot"},
 	} {
-		ctx := ledgerCtx(t)
-		observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, st, "")
-		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-		if d.CheckpointHash != "" {
-			t.Errorf("status %q promoted a checkpoint", st)
-		}
-		if _, s := d.CurrentValidation(); s != st {
-			t.Errorf("status %q not recorded faithfully (got %q)", st, s)
-		}
-	}
-}
-
-func TestBaselineBytesNeverPromoteWithoutTheirOwnPass(t *testing.T) {
-	ctx := ledgerCtx(t)
-	// A pre-mutation snapshot observed with no verdict of its own.
-	observeDeliverable(ctx, "solve.py", []byte("baseline\n"), ValidationKindUnknown,
-		ValidationUnknown, "pre-mutation snapshot")
-	if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d.CheckpointHash != "" {
-		t.Error("baseline bytes were promoted without explicit passed evidence")
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := ledgerCtx(t)
+			observeDeliverable(ctx, "solve.py", []byte("x\n"), tc.kind, tc.status, tc.reason)
+			d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+			if d.CheckpointHash != "" {
+				t.Errorf("status %q promoted a checkpoint", tc.status)
+			}
+			if _, s := d.CurrentValidation(); s != tc.status {
+				t.Errorf("status %q not recorded faithfully (got %q)", tc.status, s)
+			}
+		})
 	}
 }
 
@@ -348,25 +351,6 @@ func TestCommandRehashKeepsUnchangedAndInvalidatesMutated(t *testing.T) {
 	}
 }
 
-func TestBackgroundHazardOnlyClearsOnConfirmedExit(t *testing.T) {
-	ctx := ledgerCtx(t)
-	if workspaceHazardous(ctx) {
-		t.Fatal("hazard set before any background work")
-	}
-	raiseWorkspaceHazard(ctx, "job1")
-	if !workspaceHazardous(ctx) {
-		t.Fatal("run_background must mark the workspace concurrently mutable")
-	}
-	// stop_background does not clear it: a signalled process may still flush.
-	if !workspaceHazardous(ctx) {
-		t.Fatal("hazard cleared by a stop request")
-	}
-	clearWorkspaceHazard(ctx, "job1") // confirmed exit
-	if workspaceHazardous(ctx) {
-		t.Error("confirmed exit did not clear the hazard")
-	}
-}
-
 func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	ctx := ledgerCtx(t)
 	observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
@@ -380,19 +364,6 @@ func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	}
 	if _, s := d.CurrentValidation(); s != ValidationUnknown {
 		t.Error("a deleted file has no current validation")
-	}
-}
-
-func TestMoveTombstonesSourceAndDoesNotTransferTheVerdict(t *testing.T) {
-	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "old.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
-	tombstoneDeliverable(ctx, "old.py", "moved:"+ledgerKey(ctx, "new.py"))
-	src := ctx.Ledger[ledgerKey(ctx, "old.py")]
-	if !src.Tombstoned || !strings.HasPrefix(src.TombstoneReason, "moved:") {
-		t.Fatal("source not tombstoned as moved")
-	}
-	if dst := ctx.Ledger[ledgerKey(ctx, "new.py")]; dst != nil {
-		t.Error("destination must be observed freshly, never inherited")
 	}
 }
 

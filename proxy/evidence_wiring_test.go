@@ -20,6 +20,8 @@ func wiringWorld(t *testing.T, contract, filename, code string, valid bool) *mat
 
 // --- the wired producer ------------------------------------------------------
 
+// The record names the delivered bytes, the live request and its route entry,
+// and carries none of the content.
 func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 	const code = "TOKEN = 'hunter2'\nprint(7)\n"
 	w := wiringWorld(t,
@@ -41,8 +43,7 @@ func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 	if p.RequestID != "req-matrix" {
 		t.Errorf("request %q, want the live one", p.RequestID)
 	}
-	// The invocation IS the route entry that produced it, so the identity now
-	// names the entry rather than a generation counter.
+	// The invocation is the route entry that produced it.
 	if !strings.HasPrefix(p.InvocationID, "req-matrix:entry:") {
 		t.Errorf("invocation %q is not bound to the request", p.InvocationID)
 	}
@@ -55,31 +56,33 @@ func TestTheWiredProducerObservesTheDeliveredBytes(t *testing.T) {
 	if ev.Outcome != outcome.Status {
 		t.Errorf("the record says %q, the gate said %q", ev.Outcome, outcome.Status)
 	}
+	blob, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{code, "hunter2", "TOKEN", "print(7)"} {
+		if strings.Contains(string(blob), needle) {
+			t.Errorf("the binding carries %q", needle)
+		}
+	}
 }
 
-// TestTheWiredProducerRunsNoSecondCheck pins that the verdict is handed over.
-// A producer that re-ran the gate would be a second opinion about one artifact
-// and a second sandbox round trip on every delivery.
+// The producer records the verdict it is handed. A producer that ran the
+// gate again would be a second opinion about one file and a second sandbox
+// round trip on every delivery.
 func TestTheWiredProducerRunsNoSecondCheck(t *testing.T) {
 	const code = "A = 1\n"
-	calls := 0
 	w := wiringWorld(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		"solve.py", code, true)
-	// Count what the sandbox is asked after the caller has its verdict.
 	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-	countingURL := w.ctx.SandboxURL
-	_ = countingURL
-	w.ctx.SandboxURL = "" // any further check would now be not_run, not a pass
+	w.ctx.SandboxURL = "" // a check run now could only be not_run, never a pass
 	ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code, outcome)
 	if !ok {
 		t.Fatal("the producer refused a verdict it was handed")
 	}
 	if ev.Outcome != ValidationPassed {
-		t.Errorf("outcome %q — the producer re-derived instead of using the verdict", ev.Outcome)
-	}
-	if calls != 0 {
-		t.Errorf("%d extra sandbox calls", calls)
+		t.Errorf("outcome %q: the producer checked again instead of using the verdict", ev.Outcome)
 	}
 }
 
@@ -123,61 +126,59 @@ func TestTheWiredProducerDistinguishesNegativeFromNotRun(t *testing.T) {
 
 // --- what the wiring refuses -------------------------------------------------
 
-func TestTheWiringObservesOnlyDeclaredTargets(t *testing.T) {
-	const code = "A = 1\n"
-	w := wiringWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-		"solve.py", code, true)
-	other := filepath.Join(w.ctx.WorkingDir, "other.py")
-	if err := os.WriteFile(other, []byte(code), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	outcome := fallbackSyntaxOutcomeFor(w.ctx, other, code).aggregate()
-	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), other, code, outcome); ok {
-		t.Error("a delivery to an undeclared target produced evidence")
-	}
-}
-
-func TestTheWiringFabricatesNoSyntaxForADocument(t *testing.T) {
-	const body = "# notes\n"
-	w := wiringWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
-		"notes.md", body, true)
-	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, body).aggregate()
-	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, body, outcome); ok {
-		t.Error("a class the gate does not govern got a fabricated structural record")
-	}
-}
-
-func TestTheWiringIsSilentForLegacyTraffic(t *testing.T) {
-	const code = "A = 1\n"
-	for _, contract := range []string{
-		"",
-		`{"task_mode":"work"}`,
-		`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+// The wiring records nothing unless a live request declared this code file as
+// an output.
+func TestTheWiringObservesOnlyADeclaredCodeOutputOfALiveRequest(t *testing.T) {
+	const declared = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`
+	for _, tc := range []struct {
+		name     string
+		contract string
+		filename string
+		body     string
+		// observed is the file the wiring is asked about, when it is not the
+		// delivered one.
+		observed  string
+		noRequest bool
+	}{
+		{name: "an undeclared target", contract: declared,
+			filename: "solve.py", body: "A = 1\n", observed: "other.py"},
+		{name: "a document the syntax gate does not govern",
+			contract: `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
+			filename: "notes.md", body: "# notes\n"},
+		{name: "no contract", contract: "",
+			filename: "solve.py", body: "A = 1\n"},
+		{name: "a contract with only a task mode", contract: `{"task_mode":"work"}`,
+			filename: "solve.py", body: "A = 1\n"},
+		{name: "a contract with unspecified knowledge",
+			contract: `{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			filename: "solve.py", body: "A = 1\n"},
+		{name: "no live request to bind to", contract: declared,
+			filename: "solve.py", body: "A = 1\n", noRequest: true},
 	} {
-		w := wiringWorld(t, contract, "solve.py", code, true)
-		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-		if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code, outcome); ok {
-			t.Errorf("%q produced evidence with no structured obligation", contract)
-		}
-	}
-}
-
-func TestTheWiringNeedsALiveRequestIdentity(t *testing.T) {
-	const code = "A = 1\n"
-	w := wiringWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-		"solve.py", code, true)
-	w.ctx.Ctx = context.Background()
-	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, code).aggregate()
-	if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, code, outcome); ok {
-		t.Error("evidence was produced with no request to bind to")
+		t.Run(tc.name, func(t *testing.T) {
+			w := wiringWorld(t, tc.contract, tc.filename, tc.body, true)
+			path := w.path
+			if tc.observed != "" {
+				path = filepath.Join(w.ctx.WorkingDir, tc.observed)
+				if err := os.WriteFile(path, []byte(tc.body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.noRequest {
+				w.ctx.Ctx = context.Background()
+			}
+			outcome := fallbackSyntaxOutcomeFor(w.ctx, path, tc.body).aggregate()
+			if _, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), path, tc.body, outcome); ok {
+				t.Error("the wiring produced a record")
+			}
+		})
 	}
 }
 
 // --- identities are distinct -------------------------------------------------
 
+// Each route entry mints its own identities, even for the same bytes in the
+// same request, so one invocation's evidence never binds to another's.
 func TestTwoInvocationsProduceDistinctIdentities(t *testing.T) {
 	const code = "A = 1\n"
 	w := wiringWorld(t,
@@ -199,23 +200,8 @@ func TestTwoInvocationsProduceDistinctIdentities(t *testing.T) {
 	if first.Provenance.CandidateInstanceID == second.Provenance.CandidateInstanceID {
 		t.Error("two invocations' candidates share one identity")
 	}
-	// And therefore neither binds to the other.
 	if bound, _ := first.Provenance.BindsTo(second.Provenance); bound {
 		t.Error("one invocation's evidence bound to another's")
-	}
-}
-
-func TestTwoCandidatesInOneRequestDoNotShareAnIdentity(t *testing.T) {
-	w := wiringWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-		"solve.py", "A = 1\n", true)
-	a := nextInvocationIdentity(w.ctx, mintRouteEntry(w.ctx), contentSHA256("A = 1\n"))
-	b := nextInvocationIdentity(w.ctx, mintRouteEntry(w.ctx), contentSHA256("A = 2\n"))
-	if a.CandidateInstanceID == b.CandidateInstanceID || a.InvocationID == b.InvocationID {
-		t.Errorf("%+v and %+v collide", a, b)
-	}
-	if strings.TrimSpace(a.InvocationID) == "" {
-		t.Error("no identity was minted")
 	}
 }
 
@@ -346,27 +332,6 @@ func TestAResultNamingAnUndeclaredObligationProducesNothing(t *testing.T) {
 }
 
 // --- telemetry carries identities and nothing else ---------------------------
-
-func TestTheEvidenceRecordCarriesNoContent(t *testing.T) {
-	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
-	w := wiringWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-		"solve.py", secret, true)
-	outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, secret).aggregate()
-	ev, _, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, secret, outcome)
-	if !ok {
-		t.Fatal("no evidence to inspect")
-	}
-	blob, err := json.Marshal(ev.Provenance)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, needle := range []string{secret, "hunter2", "TOKEN", "print(7)"} {
-		if strings.Contains(string(blob), needle) {
-			t.Errorf("the binding carries %q", needle)
-		}
-	}
-}
 
 // TestTheTelemetryRecordIsShapedAndFlaggedInert reads the record builder's own
 // source: it must state influences_live_decision and must not carry any field

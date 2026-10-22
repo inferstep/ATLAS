@@ -14,8 +14,8 @@ import (
 
 // A command the client required, run exactly, against these exact bytes.
 //
-// Everything here is a way of getting less than that and being told so. No
-// candidate is delivered: authority is computed and never consulted.
+// Most tests here are a way of getting less than that, and the producer must
+// say so.
 
 const declaredCmd = "python3 solve.py"
 
@@ -111,7 +111,7 @@ func bumpWorkspace(ctx *AgentContext, path, hash string) {
 
 // --- the positive case -------------------------------------------------------
 
-func TestAnExactDeclaredCommandAgainstExactCandidateBytesIsBehavioral(t *testing.T) {
+func TestAnExactDeclaredCommandAgainstExactCandidateBytesAuthorizes(t *testing.T) {
 	f := newVerificationFixture(t)
 	ev, ok := produceDeclaredVerificationEvidence(f.ctx, f.request())
 	if !ok {
@@ -163,117 +163,93 @@ func TestADeclaredCommandIsNeverLabelledAnOracle(t *testing.T) {
 	forged.Provenance.ObligationID = oracleObligation.ID
 	forged.Provenance.RequiredStrength = "oracle"
 	if authorized, _ := forged.Authorizes(); authorized {
-		t.Error("behavioral evidence closed an oracle obligation")
+		t.Error("declared-command evidence closed an oracle obligation")
 	}
 }
 
 // --- provenance comes from the declaration, not from the text ----------------
 
-func TestTheSameTextFromTheModelRemainsUntrusted(t *testing.T) {
-	// The client declared nothing. The model ran a command that looks exactly
-	// like verification and it passed against the exact bytes.
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(7)\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
-	ctx.TaskContract = mustContract(t, dir, `{"task_mode":"work"}`)
-
-	resolved := resolveAgentPath(ctx, "solve.py")
-	hash := fileSHA256(ctx, resolved)
-	obl, _ := newTaskObligation(ObligationDeclaredCommand, declaredCmd, VerificationKindRuntime, true)
-	generation, stateHash := workspaceIdentity(ctx)
-	req := verificationEvidenceRequest{
-		Obligation: obl,
-		Result: stagingCommandResult{
-			CommandIdentity: contentSHA256(declaredCmd), ObligationID: obl.ID,
-			Count: 1, Outcome: stagingExitedZero,
-			TargetHashBefore: hash, TargetHashAfter: hash,
-			WorkspaceHashBefore: "ws", WorkspaceHashAfter: "ws",
-		},
-		Identity: stagingIdentity{
-			RequestID: "req-fixture", InvocationID: "inv-1",
-			CandidateInstanceID: "cand-1", CandidateHash: hash,
-			TargetPath: resolved, BaselineIdentity: baselineIdentityFor(ctx, resolved),
-			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
-		},
-	}
-	if _, ok := produceDeclaredVerificationEvidence(ctx, req); ok {
-		t.Error("a command the client never declared produced trusted evidence")
-	}
-}
-
-func TestUnspecifiedVerificationKnowledgeDeclaresNothing(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print(7)\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
-	ctx.TaskContract = mustContract(t, dir,
-		`{"task_mode":"work","verification_knowledge":"unspecified"}`)
-	if requestDeclaredCommand(ctx, declaredCmd) {
-		t.Error("an unspecified caller was read as declaring a command")
-	}
-}
-
-func TestASimilarButNotIdenticalCommandFailsBinding(t *testing.T) {
-	for _, ran := range []string{
-		"python3  solve.py",   // an extra space
-		"python3 solve.py ",   // a trailing space
-		"python3 ./solve.py",  // a different spelling of the path
-		"python3 solve.py -v", // an extra flag
-		"python solve.py",     // a different interpreter
+// The model may run a command that looks exactly like verification, and it may
+// pass against the exact bytes. If the client did not declare it, it produces
+// nothing.
+func TestACommandTheClientNeverDeclaredProducesNothing(t *testing.T) {
+	for _, tc := range []struct{ name, contract string }{
+		{"no verification list", `{"task_mode":"work"}`},
+		{"unspecified knowledge", `{"task_mode":"work","verification_knowledge":"unspecified"}`},
 	} {
-		f := newVerificationFixture(t)
-		req := f.request()
-		req.Result.CommandIdentity = contentSHA256(ran)
-		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Errorf("%q was accepted for the declared %q", ran, declaredCmd)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			f := newVerificationFixture(t)
+			f.ctx.TaskContract = mustContract(t, f.ctx.WorkingDir, tc.contract)
+			if requestDeclaredCommand(f.ctx, declaredCmd) {
+				t.Error("the contract was read as declaring the command")
+			}
+			if _, ok := produceDeclaredVerificationEvidence(f.ctx, f.request()); ok {
+				t.Error("a command the client never declared produced trusted evidence")
+			}
+		})
 	}
 }
 
 // --- what the run was actually about -----------------------------------------
 
-func TestASuccessfulUnrelatedCommandProvesNothing(t *testing.T) {
-	f := newVerificationFixture(t)
-	t.Run("saw no bytes at the target", func(t *testing.T) {
-		req := f.request()
-		req.Result.TargetHashBefore = ""
-		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Error("a run that observed nothing at the target authorized a candidate")
-		}
-	})
-	t.Run("saw other bytes at the target", func(t *testing.T) {
-		req := f.request()
-		req.Result.TargetHashBefore = contentSHA256("print(1)\n")
-		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Error("a run against other bytes authorized this candidate")
-		}
-	})
-}
-
-func TestACommandThatPassedBeforeInsertionCannotAuthorizeTheCandidate(t *testing.T) {
-	f := newVerificationFixture(t)
-	// The command passed against the file as it was, then the candidate
-	// replaced it. The record still names the older bytes.
-	oldHash := f.hash
-	if err := os.WriteFile(f.path, []byte("print(8)\n"), 0o644); err != nil {
-		t.Fatal(err)
+// A run produces evidence only when it binds exactly: to the declared command
+// byte for byte, to the bytes of this candidate, and to a complete identity for
+// this obligation. The unchanged request produces evidence, so each row is
+// refused for its own change.
+func TestARunThatDoesNotBindExactlyProducesNothing(t *testing.T) {
+	control := newVerificationFixture(t)
+	if _, ok := produceDeclaredVerificationEvidence(control.ctx, control.request()); !ok {
+		t.Fatal("the unchanged request produced no evidence")
 	}
-	newHash := fileSHA256(f.ctx, f.path)
-	if newHash == oldHash {
-		t.Fatal("the candidate did not change")
-	}
-	req := f.request()
-	// The staged run observed the OLD bytes; the candidate is the new ones.
-	req.Result.TargetHashBefore = oldHash
-	req.Result.TargetHashAfter = oldHash
-	req.Identity.CandidateHash = newHash
-	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-		t.Error("a run from before the candidate landed authorized it")
+	for _, tc := range []struct {
+		name   string
+		change func(*verificationEvidenceRequest)
+	}{
+		{"command with an extra space", func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("python3  solve.py")
+		}},
+		{"command with a trailing space", func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("python3 solve.py ")
+		}},
+		{"command with another spelling of the path", func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("python3 ./solve.py")
+		}},
+		{"command with an extra flag", func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("python3 solve.py -v")
+		}},
+		{"command with another interpreter", func(r *verificationEvidenceRequest) {
+			r.Result.CommandIdentity = contentSHA256("python solve.py")
+		}},
+		{"run saw no bytes at the target", func(r *verificationEvidenceRequest) {
+			r.Result.TargetHashBefore = ""
+		}},
+		{"run saw other bytes at the target", func(r *verificationEvidenceRequest) {
+			r.Result.TargetHashBefore = contentSHA256("print(1)\n")
+		}},
+		// The run passed against the file as it was, and then the candidate
+		// replaced it.
+		{"candidate changed after the run", func(r *verificationEvidenceRequest) {
+			r.Identity.CandidateHash = contentSHA256("some other candidate")
+		}},
+		{"no invocation", func(r *verificationEvidenceRequest) { r.Identity.InvocationID = "" }},
+		{"no candidate instance", func(r *verificationEvidenceRequest) { r.Identity.CandidateInstanceID = "" }},
+		{"no target path", func(r *verificationEvidenceRequest) { r.Identity.TargetPath = "" }},
+		{"no candidate hash", func(r *verificationEvidenceRequest) { r.Identity.CandidateHash = "" }},
+		{"no request", func(r *verificationEvidenceRequest) { r.Identity.RequestID = "" }},
+		{"no workspace state", func(r *verificationEvidenceRequest) { r.Identity.WorkspaceStateHash = "" }},
+		{"result about another obligation", func(r *verificationEvidenceRequest) { r.Result.ObligationID = "other" }},
+		{"unknown outcome", func(r *verificationEvidenceRequest) {
+			r.Result.Outcome = stagingCommandOutcome("something_new")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newVerificationFixture(t)
+			req := f.request()
+			tc.change(&req)
+			if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
+				t.Error("evidence was produced")
+			}
+		})
 	}
 }
 
@@ -311,15 +287,6 @@ func TestAWorkspaceMutationAfterExecutionInvalidatesEvidence(t *testing.T) {
 	}
 }
 
-func TestACandidateHashMismatchInvalidatesEvidence(t *testing.T) {
-	f := newVerificationFixture(t)
-	req := f.request()
-	req.Identity.CandidateHash = contentSHA256("some other candidate")
-	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-		t.Error("evidence was produced about a candidate the run never covered")
-	}
-}
-
 func TestABaselineMismatchInvalidatesEvidence(t *testing.T) {
 	f := newVerificationFixture(t)
 	req := f.request()
@@ -337,66 +304,53 @@ func TestABaselineMismatchInvalidatesEvidence(t *testing.T) {
 
 // --- every way a command can end without authorizing -------------------------
 
+// Only a clean foreground success authorizes. Every other ending is not a pass
+// and leaves its obligation owed. That includes an exit zero that rewrote the
+// candidate it was testing, or changed something else it could reach: only
+// staging can see that case.
 func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
-	for _, outcome := range []stagingCommandOutcome{
-		stagingExitedNonZero, stagingTimedOut, stagingCancelled, stagingRefused,
-		stagingMutatedTarget, stagingMutatedWorkspace, stagingUnobservable,
-		stagingBudgetExceeded, stagingUnavailable,
-	} {
-		f := newVerificationFixture(t)
-		req := f.request()
-		req.Result.Outcome = outcome
-		ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
-		if !ok {
-			continue // declining outright is also a correct answer
-		}
-		if authorized, _ := ev.Authorizes(); authorized {
-			t.Errorf("%s authorized its obligation", outcome)
-		}
-		if ev.Outcome == ValidationPassed {
-			t.Errorf("%s was recorded as a pass", outcome)
-		}
-	}
-}
-
-// TestAnExitZeroThatChangedSomethingIsNotAPass is the case only staging can
-// see: the command succeeded, and it succeeded by rewriting the thing it was
-// meant to be testing, or something else it could reach.
-func TestAnExitZeroThatChangedSomethingIsNotAPass(t *testing.T) {
-	for _, c := range []struct {
-		name                     string
-		target, workspaceChanged bool
+	for _, tc := range []struct {
+		name             string
+		outcome          stagingCommandOutcome
+		mutatedTarget    bool
+		mutatedWorkspace bool
 	}{
-		{"rewrote the candidate", true, true},
-		{"changed an input", false, true},
+		{"exited non-zero", stagingExitedNonZero, false, false},
+		{"timed out", stagingTimedOut, false, false},
+		{"cancelled", stagingCancelled, false, false},
+		{"refused", stagingRefused, false, false},
+		{"mutated target", stagingMutatedTarget, false, false},
+		{"mutated workspace", stagingMutatedWorkspace, false, false},
+		{"unobservable", stagingUnobservable, false, false},
+		{"budget exceeded", stagingBudgetExceeded, false, false},
+		{"unavailable", stagingUnavailable, false, false},
+		{"exit zero that rewrote the candidate", stagingExitedZero, true, true},
+		{"exit zero that changed an input", stagingExitedZero, false, true},
 	} {
-		f := newVerificationFixture(t)
-		req := f.request()
-		req.Result.Outcome = stagingExitedZero
-		req.Result.MutatedTarget = c.target
-		req.Result.MutatedWorkspace = c.workspaceChanged
-		if c.target {
-			req.Result.TargetHashAfter = contentSHA256("rewritten\n")
-		}
-		ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
-		if !ok {
-			continue
-		}
-		if ev.Outcome == ValidationPassed {
-			t.Errorf("a command that %s was recorded as a pass", c.name)
-		}
-		if authorized, _ := ev.Authorizes(); authorized {
-			t.Errorf("a command that %s authorized its obligation", c.name)
-		}
-	}
-}
-
-func TestAnUnknownOutcomeValueFailsClosed(t *testing.T) {
-	f := newVerificationFixture(t)
-	req := f.request()
-	req.Result.Outcome = stagingCommandOutcome("something_new")
-	if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-		t.Error("an unrecognised outcome produced evidence")
+		t.Run(tc.name, func(t *testing.T) {
+			f := newVerificationFixture(t)
+			req := f.request()
+			req.Result.Outcome = tc.outcome
+			req.Result.MutatedTarget = tc.mutatedTarget
+			req.Result.MutatedWorkspace = tc.mutatedWorkspace
+			if tc.mutatedTarget {
+				req.Result.TargetHashAfter = contentSHA256("rewritten\n")
+			}
+			ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
+			if !ok {
+				return // declining outright is also a correct answer
+			}
+			if ev.Outcome == ValidationPassed {
+				t.Error("recorded as a pass")
+			}
+			if authorized, _ := ev.Authorizes(); authorized {
+				t.Error("authorized its obligation")
+			}
+			if _, missing := declaredVerificationCoverage(
+				[]taskObligation{f.obl}, []proxyEvidence{ev}); len(missing) != 1 {
+				t.Error("covered its obligation")
+			}
+		})
 	}
 }
 
@@ -411,75 +365,39 @@ func TestACancelledRunProducesNothing(t *testing.T) {
 	}
 }
 
-func TestAMissingIdentityProducesNothing(t *testing.T) {
-	for _, mut := range []func(*verificationEvidenceRequest){
-		func(r *verificationEvidenceRequest) { r.Identity.InvocationID = "" },
-		func(r *verificationEvidenceRequest) { r.Identity.CandidateInstanceID = "" },
-		func(r *verificationEvidenceRequest) { r.Identity.TargetPath = "" },
-		func(r *verificationEvidenceRequest) { r.Identity.CandidateHash = "" },
-		func(r *verificationEvidenceRequest) { r.Identity.RequestID = "" },
-		func(r *verificationEvidenceRequest) { r.Identity.WorkspaceStateHash = "" },
-		func(r *verificationEvidenceRequest) { r.Result.ObligationID = "other" },
-	} {
-		f := newVerificationFixture(t)
-		req := f.request()
-		mut(&req)
-		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Error("evidence was produced with an incomplete identity")
-		}
-	}
-}
-
+// The producer describes declared commands only. Each row changes nothing but
+// the obligation's kind, so the refusal comes from the kind alone.
 func TestTheProducerRefusesAnyOtherObligationKind(t *testing.T) {
-	f := newVerificationFixture(t)
 	for _, kind := range []string{
 		ObligationSyntacticValidity, ObligationArtifactExists,
 		ObligationDeclaredExample, ObligationBaselinePreserved,
 		ObligationUnsupported,
 	} {
-		baseline := ""
-		if kind == ObligationBaselinePreserved {
-			baseline = "behavioral"
-		}
-		o, ok := newTaskObligation(kind, declaredCmd, baseline, true)
-		if !ok {
-			continue
-		}
-		req := f.request()
-		req.Obligation = o
-		req.Result.ObligationID = o.ID
-		if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
-			t.Errorf("a declared command described a %s obligation", kind)
-		}
+		t.Run(kind, func(t *testing.T) {
+			f := newVerificationFixture(t)
+			req := f.request()
+			req.Obligation.Kind = kind
+			if _, ok := produceDeclaredVerificationEvidence(f.ctx, req); ok {
+				t.Errorf("a declared command described a %s obligation", kind)
+			}
+		})
 	}
 }
 
 // --- obligations stay independent --------------------------------------------
 
-func TestOneOfTwoCommandsPassingDoesNotCompleteBoth(t *testing.T) {
+// Two declared commands are two obligations. Evidence for one leaves the other
+// owed, and evidence for both meets both.
+func TestEachDeclaredCommandNeedsItsOwnEvidence(t *testing.T) {
 	f := newVerificationFixture(t, declaredCmd, "ruff check .")
 	second, ok := newTaskObligation(ObligationDeclaredCommand, "ruff check .", VerificationKindRuntime, true)
 	if !ok {
 		t.Fatal("second obligation refused")
 	}
-	ev, ok := produceDeclaredVerificationEvidence(f.ctx, f.request())
+	firstEv, ok := produceDeclaredVerificationEvidence(f.ctx, f.request())
 	if !ok {
 		t.Fatal("the first command produced no evidence")
 	}
-	met, missing := declaredVerificationCoverage(
-		[]taskObligation{f.obl, second}, []proxyEvidence{ev})
-	if len(met) != 1 || met[0] != f.obl.ID {
-		t.Errorf("met %v, want only the command that ran", met)
-	}
-	if len(missing) != 1 || missing[0] != second.ID {
-		t.Errorf("missing %v, want the command that did not run", missing)
-	}
-}
-
-func TestAllRequiredCommandsMustBeRepresented(t *testing.T) {
-	f := newVerificationFixture(t, declaredCmd, "ruff check .")
-	second, _ := newTaskObligation(ObligationDeclaredCommand, "ruff check .", VerificationKindRuntime, true)
-
 	secondReq := f.request()
 	secondReq.Obligation = second
 	secondReq.Result.ObligationID = second.ID
@@ -488,26 +406,20 @@ func TestAllRequiredCommandsMustBeRepresented(t *testing.T) {
 	if !ok {
 		t.Fatal("the second command produced no evidence")
 	}
-	firstEv, _ := produceDeclaredVerificationEvidence(f.ctx, f.request())
 
 	met, missing := declaredVerificationCoverage(
+		[]taskObligation{f.obl, second}, []proxyEvidence{firstEv})
+	if len(met) != 1 || met[0] != f.obl.ID {
+		t.Errorf("one run: met %v, want only the command that ran", met)
+	}
+	if len(missing) != 1 || missing[0] != second.ID {
+		t.Errorf("one run: missing %v, want the command that did not run", missing)
+	}
+
+	met, missing = declaredVerificationCoverage(
 		[]taskObligation{f.obl, second}, []proxyEvidence{firstEv, secondEv})
 	if len(met) != 2 || len(missing) != 0 {
-		t.Errorf("met %v missing %v, want both met", met, missing)
-	}
-}
-
-func TestAFailedObservationDoesNotCoverItsObligation(t *testing.T) {
-	f := newVerificationFixture(t)
-	req := f.request()
-	req.Result.Outcome = stagingExitedNonZero
-	ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
-	if !ok {
-		t.Skip("the producer declined outright, which is also correct")
-	}
-	_, missing := declaredVerificationCoverage([]taskObligation{f.obl}, []proxyEvidence{ev})
-	if len(missing) != 1 {
-		t.Error("a failed run covered its obligation")
+		t.Errorf("both runs: met %v missing %v, want both met", met, missing)
 	}
 }
 

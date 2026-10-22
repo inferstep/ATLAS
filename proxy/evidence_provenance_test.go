@@ -6,13 +6,12 @@ import (
 	"testing"
 )
 
-// The wire half of evidence provenance.
+// Evidence provenance on the V3 wire.
 //
-// The envelope already carries how strong a verifier was. It does not carry
-// who the verifier was, so a model-generated test that ran and a repository
-// test that ran arrive identical. This adds the source and the identities the
-// evidence is bound to, and authorizes nothing with them: every test below
-// that touches delivery proves the decision is UNCHANGED.
+// The envelope carries how strong a verifier was. Provenance also says who the
+// verifier was, so a model-generated test and a repository test that both ran
+// do not arrive identical, and it names the identities the evidence is bound
+// to. Provenance on an envelope does not change the V3 delivery decision.
 
 func provenanceFixture() V3EvidenceProvenance {
 	return V3EvidenceProvenance{
@@ -59,49 +58,43 @@ func TestTheHiddenEvaluatorHasNoWireRepresentation(t *testing.T) {
 	}
 }
 
-func TestUnknownAuthorityCriticalValuesFailClosed(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		mut  func(*V3EvidenceProvenance)
+// MayAuthorize refuses provenance it cannot trust or cannot read, and the
+// reason says what is wrong. The unchanged fixture authorizes, so each row is
+// refused for its own change.
+func TestMayAuthorizeRefusesUntrustedOrIncompleteProvenance(t *testing.T) {
+	fixture := provenanceFixture()
+	if ok, why := fixture.MayAuthorize(); !ok {
+		t.Fatalf("the unchanged fixture was refused: %s", why)
+	}
+	for _, tc := range []struct {
+		name      string
+		change    func(*V3EvidenceProvenance)
+		reasonHas string
 	}{
-		{"unknown source", func(p *V3EvidenceProvenance) { p.Source = "trusted" }},
-		{"empty source", func(p *V3EvidenceProvenance) { p.Source = "" }},
-		{"unknown required strength", func(p *V3EvidenceProvenance) { p.RequiredStrength = "strong" }},
-		{"unknown observed strength", func(p *V3EvidenceProvenance) { p.ObservedStrength = "" }},
-		{"missing candidate hash", func(p *V3EvidenceProvenance) { p.CandidateHash = "" }},
-		{"missing request", func(p *V3EvidenceProvenance) { p.RequestID = "" }},
-		{"missing invocation", func(p *V3EvidenceProvenance) { p.InvocationID = "" }},
-		{"missing obligation", func(p *V3EvidenceProvenance) { p.ObligationID = "" }},
-		{"negative generation", func(p *V3EvidenceProvenance) { p.WorkspaceGeneration = -1 }},
+		{"unknown source", func(p *V3EvidenceProvenance) { p.Source = "trusted" }, "unknown evidence source"},
+		{"empty source", func(p *V3EvidenceProvenance) { p.Source = "" }, "unknown evidence source"},
+		{"model generated", func(p *V3EvidenceProvenance) { p.Source = ProvenanceModelGenerated }, ProvenanceModelGenerated},
+		{"legacy", func(p *V3EvidenceProvenance) { p.Source = ProvenanceLegacy }, ProvenanceLegacy},
+		{"unknown required strength", func(p *V3EvidenceProvenance) { p.RequiredStrength = "strong" }, "unknown required strength"},
+		{"unknown observed strength", func(p *V3EvidenceProvenance) { p.ObservedStrength = "" }, "unknown observed strength"},
+		{"observed below required", func(p *V3EvidenceProvenance) { p.ObservedStrength = "syntax" }, "below the required"},
+		{"missing candidate hash", func(p *V3EvidenceProvenance) { p.CandidateHash = "" }, "candidate_hash is missing"},
+		{"missing request", func(p *V3EvidenceProvenance) { p.RequestID = "" }, "request_id is missing"},
+		{"missing invocation", func(p *V3EvidenceProvenance) { p.InvocationID = "" }, "invocation_id is missing"},
+		{"missing obligation", func(p *V3EvidenceProvenance) { p.ObligationID = "" }, "obligation_id is missing"},
+		{"negative generation", func(p *V3EvidenceProvenance) { p.WorkspaceGeneration = -1 }, "workspace_generation is negative"},
 	} {
-		p := provenanceFixture()
-		c.mut(&p)
-		if ok, _ := p.MayAuthorize(); ok {
-			t.Errorf("%s: authorized", c.name)
-		}
-	}
-}
-
-// --- source-specific authority --------------------------------------------
-
-func TestModelGeneratedIsRecordedButNeverAuthorizing(t *testing.T) {
-	p := provenanceFixture()
-	p.Source = ProvenanceModelGenerated
-	if p.Source != ProvenanceModelGenerated {
-		t.Fatal("the source was not recorded")
-	}
-	ok, why := p.MayAuthorize()
-	if ok || !strings.Contains(why, ProvenanceModelGenerated) {
-		t.Fatalf("model-generated authorized: ok=%v why=%q", ok, why)
-	}
-}
-
-func TestLegacyIsReadableButNeverAuthorizing(t *testing.T) {
-	p := provenanceFixture()
-	p.Source = ProvenanceLegacy
-	ok, why := p.MayAuthorize()
-	if ok || !strings.Contains(why, ProvenanceLegacy) {
-		t.Fatalf("legacy authorized: ok=%v why=%q", ok, why)
+		t.Run(tc.name, func(t *testing.T) {
+			p := provenanceFixture()
+			tc.change(&p)
+			ok, why := p.MayAuthorize()
+			if ok {
+				t.Fatal("authorized")
+			}
+			if !strings.Contains(why, tc.reasonHas) {
+				t.Errorf("reason %q does not contain %q", why, tc.reasonHas)
+			}
+		})
 	}
 }
 
@@ -118,17 +111,15 @@ func TestProxyValidationMayCloseSyntaxOnly(t *testing.T) {
 	}
 }
 
-func TestObservedStrengthMustReachTheRequirement(t *testing.T) {
-	p := provenanceFixture()
-	p.ObservedStrength = "syntax" // repo-owned, but it only compiled
-	if ok, why := p.MayAuthorize(); ok {
-		t.Fatalf("authorized below the required strength: %s", why)
-	}
-}
-
 // --- binding ---------------------------------------------------------------
 
+// Evidence binds only to the identity it was observed for. Identical
+// identities bind, and a difference in any one field refuses and names it.
 func TestEvidenceCannotCrossAnIdentity(t *testing.T) {
+	held := provenanceFixture()
+	if ok, why := held.BindsTo(provenanceFixture()); !ok {
+		t.Fatalf("identical bindings refused: %s", why)
+	}
 	for _, c := range []struct {
 		field string
 		mut   func(*V3EvidenceProvenance)
@@ -142,7 +133,6 @@ func TestEvidenceCannotCrossAnIdentity(t *testing.T) {
 		{"workspace_generation", func(p *V3EvidenceProvenance) { p.WorkspaceGeneration = 8 }},
 		{"workspace_state_hash", func(p *V3EvidenceProvenance) { p.WorkspaceStateHash = strings.Repeat("z", 64) }},
 	} {
-		held := provenanceFixture()
 		asked := provenanceFixture()
 		c.mut(&asked)
 		ok, why := held.BindsTo(asked)
@@ -152,22 +142,6 @@ func TestEvidenceCannotCrossAnIdentity(t *testing.T) {
 		if !strings.Contains(why, c.field) {
 			t.Errorf("%s: reason %q does not name the field", c.field, why)
 		}
-	}
-}
-
-func TestIdenticalIdentityBinds(t *testing.T) {
-	held := provenanceFixture()
-	if ok, why := held.BindsTo(provenanceFixture()); !ok {
-		t.Fatalf("identical bindings refused: %s", why)
-	}
-}
-
-func TestAStaleWorkspaceGenerationFailsClosed(t *testing.T) {
-	held := provenanceFixture()
-	asked := provenanceFixture()
-	asked.WorkspaceGeneration = held.WorkspaceGeneration + 2 // mutations since
-	if ok, why := held.BindsTo(asked); ok || !strings.Contains(why, "workspace_generation") {
-		t.Fatalf("stale evidence bound: ok=%v why=%q", ok, why)
 	}
 }
 
@@ -184,42 +158,39 @@ func TestProvenanceIsOmittedWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestALegacyEnvelopeStillParses(t *testing.T) {
-	// Exactly the shape a pre-provenance producer emits.
-	const legacy = `{"wire_version":"1.0.0","record_schema_version":"1.1.0",
-	 "identity":{"contract_id":"c","contract_version":"1","artifact_scope":"s",
-	  "evaluation_context_hash":"ctx","adapter_id":"a","adapter_version":"v",
-	  "candidate_content_hash":"h"},
-	 "evaluation":{"evidence_strength":"syntax","execution_status":"ok",
-	  "supported":true,"requirements_complete":false,"closure_eligible":false},
-	 "selection":{"status":"best_not_closure_eligible"}}`
-	var e V3EvidenceEnvelope
-	if err := json.Unmarshal([]byte(legacy), &e); err != nil {
-		t.Fatalf("a legacy envelope no longer parses: %v", err)
-	}
-	if e.Provenance != nil {
-		t.Fatal("a legacy envelope invented provenance")
-	}
-	if a, why := e.Validate(); a != EvidenceAvailable {
-		t.Fatalf("a legacy envelope stopped validating: %s (%s)", a, why)
-	}
-}
-
-func TestUnknownUnrelatedFieldsStayForwardCompatible(t *testing.T) {
-	const future = `{"wire_version":"1.0.0","record_schema_version":"1.1.0",
-	 "some_future_field":{"nested":[1,2,3]},
-	 "identity":{"contract_id":"c","contract_version":"1","artifact_scope":"s",
-	  "evaluation_context_hash":"ctx","adapter_id":"a","adapter_version":"v",
-	  "candidate_content_hash":"h","future_id":"x"},
-	 "evaluation":{"evidence_strength":"syntax","execution_status":"ok",
-	  "supported":true,"requirements_complete":false,"closure_eligible":false},
-	 "selection":{"status":"best_not_closure_eligible"}}`
-	var e V3EvidenceEnvelope
-	if err := json.Unmarshal([]byte(future), &e); err != nil {
-		t.Fatalf("an unrelated additive field broke the reader: %v", err)
-	}
-	if a, _ := e.Validate(); a != EvidenceAvailable {
-		t.Fatal("an unrelated additive field changed availability")
+// An envelope without provenance still parses and validates: the shape an
+// older producer emits, and one with unknown fields that have nothing to do
+// with provenance.
+func TestEnvelopesWithoutProvenanceStillParse(t *testing.T) {
+	for _, tc := range []struct{ name, envelope string }{
+		{"older producer", `{"wire_version":"1.0.0","record_schema_version":"1.1.0",
+		 "identity":{"contract_id":"c","contract_version":"1","artifact_scope":"s",
+		  "evaluation_context_hash":"ctx","adapter_id":"a","adapter_version":"v",
+		  "candidate_content_hash":"h"},
+		 "evaluation":{"evidence_strength":"syntax","execution_status":"ok",
+		  "supported":true,"requirements_complete":false,"closure_eligible":false},
+		 "selection":{"status":"best_not_closure_eligible"}}`},
+		{"unknown unrelated fields", `{"wire_version":"1.0.0","record_schema_version":"1.1.0",
+		 "some_future_field":{"nested":[1,2,3]},
+		 "identity":{"contract_id":"c","contract_version":"1","artifact_scope":"s",
+		  "evaluation_context_hash":"ctx","adapter_id":"a","adapter_version":"v",
+		  "candidate_content_hash":"h","future_id":"x"},
+		 "evaluation":{"evidence_strength":"syntax","execution_status":"ok",
+		  "supported":true,"requirements_complete":false,"closure_eligible":false},
+		 "selection":{"status":"best_not_closure_eligible"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var e V3EvidenceEnvelope
+			if err := json.Unmarshal([]byte(tc.envelope), &e); err != nil {
+				t.Fatalf("the envelope does not parse: %v", err)
+			}
+			if e.Provenance != nil {
+				t.Fatal("the envelope invented provenance")
+			}
+			if a, why := e.Validate(); a != EvidenceAvailable {
+				t.Fatalf("the envelope does not validate: %s (%s)", a, why)
+			}
+		})
 	}
 }
 

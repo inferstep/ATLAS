@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-// A declared command and artifact coverage are two obligations, not one.
+// A declared command and file coverage are two obligations, not one.
 //
-// They were collapsed: a declared command could only be satisfied by an
-// evidence record that evidenceIsCurrent accepted, and that function refuses
-// any record with empty coverage. So `pytest`, `make check` and every other
-// command that names no file created an obligation nothing could ever
-// discharge, and the session could not reach the settlement gate at all.
+// A declared command is met by a current run of exactly that command. A code
+// file is met by a current run that covered its bytes. A command that names
+// no file, such as `pytest` or `make check`, meets its own obligation and
+// covers nothing. If the two were one check, such a command could never be
+// met and the session could never reach the settlement gate.
 
 func sepCtx(t *testing.T, tc *TaskContract) (*AgentContext, string) {
 	t.Helper()
@@ -46,8 +46,8 @@ func sepContract(outputs, commands []string) *TaskContract {
 	}
 }
 
-// stamp is what the agent loop records after a command and after the ledger
-// has been reconciled with whatever that command did.
+// sepStamp is the record the agent loop keeps after a command has run and
+// the ledger holds whatever that command changed.
 func sepStamp(ctx *AgentContext, command string, covered map[string]string) VerificationRecord {
 	gen, hash := workspaceIdentity(ctx)
 	return VerificationRecord{
@@ -56,174 +56,213 @@ func sepStamp(ctx *AgentContext, command string, covered map[string]string) Veri
 	}
 }
 
-// --- direct execution -------------------------------------------------------
+func TestDeclaredCommandsAndFileCoverageAreSeparateObligations(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		outputs  []string
+		commands []string
+		// evidence writes the files and returns the records the session holds.
+		evidence func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord
+		wantMet  bool
+		// When the demand is not met, one of these names what is missing.
+		wantMissingCommand string
+		wantMissingFile    string
+	}{
+		{
+			name:    "a pathless command alone leaves the file uncovered",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{sepStamp(ctx, "pytest", nil)}
+			},
+			wantMissingFile: "solve.py",
+		},
+		{
+			name:    "a pathless command plus a covering run meets both",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMet: true,
+		},
+		{
+			name:    "one record that is the command and covers the file meets both",
+			outputs: []string{"solve.py"}, commands: []string{"python3 solve.py"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMet: true,
+		},
+		{
+			name:    "a command run before a change to the file is stale",
+			outputs: []string{"solve.py"}, commands: []string{"pytest", "make check"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				sepWrite(t, ctx, dir, "solve.py", "print('one')\n")
+				before := sepStamp(ctx, "pytest", nil)
+				h := sepWrite(t, ctx, dir, "solve.py", "print('two')\n")
+				return []VerificationRecord{
+					before,
+					sepStamp(ctx, "make check", nil),
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMissingCommand: "pytest",
+		},
+		{
+			// notes.txt is not code, so it adds no coverage demand of its
+			// own: only the stale command can be what is missing.
+			name:    "a later change to an unrelated file stales a pathless command",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				records := []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+				sepWrite(t, ctx, dir, "notes.txt", "x = 1\n")
+				return records
+			},
+			wantMissingCommand: "pytest",
+		},
+		{
+			name:    "a stamp from another workspace does not count",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					{Command: "pytest", WorkspaceGeneration: 99, WorkspaceStateHash: contentSHA256("another session")},
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMissingCommand: "pytest",
+		},
+		{
+			name:    "a record with no workspace stamp does not count",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					{Command: "pytest"},
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMissingCommand: "pytest",
+		},
+		{
+			name:    "commands match byte for byte, so two spaces is another command",
+			outputs: []string{"solve.py"}, commands: []string{"python3  solve.py"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMissingCommand: "python3  solve.py",
+		},
+		{
+			name:    "every declared command is required",
+			outputs: []string{"solve.py"}, commands: []string{"pytest", "make check"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMissingCommand: "make check",
+		},
+		{
+			name:    "a command declared twice is met by one run",
+			outputs: []string{"solve.py"}, commands: []string{"pytest", "pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+				}
+			},
+			wantMet: true,
+		},
+		{
+			name:    "every declared output needs its own coverage",
+			outputs: []string{"a.py", "b.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				ha := sepWrite(t, ctx, dir, "a.py", "print('a')\n")
+				sepWrite(t, ctx, dir, "b.py", "print('b')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 a.py", map[string]string{"a.py": ha}),
+				}
+			},
+			wantMissingFile: "b.py",
+		},
+		{
+			name:    "coverage of another file does not cover the output",
+			outputs: []string{"solve.py"}, commands: []string{"pytest"},
+			evidence: func(t *testing.T, ctx *AgentContext, dir string) []VerificationRecord {
+				sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+				other := sepWrite(t, ctx, dir, "other.py", "print('other')\n")
+				return []VerificationRecord{
+					sepStamp(ctx, "pytest", nil),
+					sepStamp(ctx, "python3 other.py", map[string]string{"other.py": other}),
+				}
+			},
+			wantMissingFile: "solve.py",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contract := sepContract(tc.outputs, tc.commands)
+			ctx, dir := sepCtx(t, contract)
+			ctx.VerificationEvidence = tc.evidence(t, ctx, dir)
 
-func TestPathlessCommandClearsItsOwnObligationButNotCoverage(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{sepStamp(ctx, "pytest", nil)}
+			d := decideVerificationDemand(ctx, contract, tc.outputs)
 
-	d := decideVerificationDemand(ctx, tc, []string{"solve.py"})
-	if !d.Required || d.Met {
-		t.Fatalf("want unmet on coverage, got %+v", d)
-	}
-	if d.Missing != filepath.Join(dir, "solve.py") && d.Missing != "solve.py" {
-		t.Fatalf("the unmet item should be the PATH, got %q", d.Missing)
+			wantMissing := tc.wantMissingCommand
+			if tc.wantMissingFile != "" {
+				wantMissing = filepath.Join(dir, tc.wantMissingFile)
+			}
+			if !d.Required || d.Met != tc.wantMet || d.Missing != wantMissing {
+				t.Fatalf("got %+v, want Required, Met=%v, Missing=%q", d, tc.wantMet, wantMissing)
+			}
+		})
 	}
 }
 
-func TestPathlessCommandPlusSeparateCoverageClearsBoth(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
-		t.Fatalf("both obligations were discharged, got %+v", d)
-	}
-}
-
-func TestOneRecordCarryingBothIdentitiesClearsBoth(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"python3 solve.py"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
-		t.Fatalf("one record named the command AND the bytes, got %+v", d)
-	}
-}
-
-func TestRunAMutateRunBLeavesAStale(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest", "make check"})
-	ctx, dir := sepCtx(t, tc)
-	sepWrite(t, ctx, dir, "solve.py", "print('one')\n")
-	a := sepStamp(ctx, "pytest", nil)
-
-	// A material mutation between the two runs.
-	h := sepWrite(t, ctx, dir, "solve.py", "print('two')\n")
-	b := sepStamp(ctx, "make check", nil)
-	cover := sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h})
-	ctx.VerificationEvidence = []VerificationRecord{a, b, cover}
-
-	d := decideVerificationDemand(ctx, tc, []string{"solve.py"})
-	if d.Met {
-		t.Fatal("the run from before the mutation was revived")
-	}
-	if d.Missing != "pytest" {
-		t.Fatalf("the stale command should be the unmet one, got %q", d.Missing)
-	}
-}
-
-func TestALaterUnrelatedMutationStalesAPathlessCommand(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
-		t.Fatalf("precondition: %+v", d)
-	}
-	sepWrite(t, ctx, dir, "notes.py", "x = 1\n")
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); d.Met {
-		t.Fatal("a workspace mutation left a pathless command current")
-	}
-}
-
-func TestAStampFromAnotherWorkspaceCannotSatisfy(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	other := VerificationRecord{Command: "pytest",
-		WorkspaceGeneration: 99, WorkspaceStateHash: contentSHA256("another session")}
-	ctx.VerificationEvidence = []VerificationRecord{other,
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h})}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); d.Met {
-		t.Fatal("a record stamped by another workspace satisfied an obligation")
-	}
-}
-
-func TestExactCommandMatchingStaysByteForByte(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"python3  solve.py"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); d.Met {
-		t.Fatal("two spaces is a different command")
-	}
-}
-
-func TestEveryDeclaredCommandIsRequiredIndependently(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest", "make check"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	d := decideVerificationDemand(ctx, tc, []string{"solve.py"})
-	if d.Met || d.Missing != "make check" {
-		t.Fatalf("want make check unmet, got %+v", d)
-	}
-}
-
-func TestEveryDeclaredOutputNeedsItsOwnCoverage(t *testing.T) {
-	tc := sepContract([]string{"a.py", "b.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	ha := sepWrite(t, ctx, dir, "a.py", "print('a')\n")
-	sepWrite(t, ctx, dir, "b.py", "print('b')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 a.py", map[string]string{"a.py": ha}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"a.py", "b.py"}); d.Met {
-		t.Fatal("b.py had no covering run")
-	}
-}
-
-func TestDuplicateDeclaredCommandsDeduplicateDeterministically(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest", "pytest"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
-		t.Fatalf("one run discharges a command declared twice, got %+v", d)
-	}
-}
-
+// A command that names no file covers nothing, and still meets its own
+// declared obligation.
 func TestOpaqueCommandsSatisfyTheirOwnObligationWithoutPathInvention(t *testing.T) {
 	for _, cmd := range []string{"pytest", "make check", "./scripts/verify.sh"} {
-		tc := sepContract([]string{"solve.py"}, []string{cmd})
-		ctx, dir := sepCtx(t, tc)
-		h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-		rec := sepStamp(ctx, cmd, nil)
-		if len(rec.Covered) != 0 {
-			t.Fatalf("%q produced coverage out of nowhere: %v", cmd, rec.Covered)
-		}
-		ctx.VerificationEvidence = []VerificationRecord{rec,
-			sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h})}
-		if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
-			t.Fatalf("%q: %+v", cmd, d)
-		}
+		t.Run(cmd, func(t *testing.T) {
+			tc := sepContract([]string{"solve.py"}, []string{cmd})
+			ctx, dir := sepCtx(t, tc)
+			h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
+
+			// The same coverage the agent loop computes for a green command.
+			covered := coverageForGreenCommand(ctx, cmd)
+			if len(covered) != 0 {
+				t.Fatalf("%q produced coverage out of nowhere: %v", cmd, covered)
+			}
+			ctx.VerificationEvidence = []VerificationRecord{
+				sepStamp(ctx, cmd, covered),
+				sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
+			}
+			if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); !d.Met {
+				t.Fatalf("%q: %+v", cmd, d)
+			}
+		})
 	}
 }
 
-// --- structural rejection of untrustworthy execution ------------------------
-
+// A run is verification only when it ran to its own end and exited zero.
 func TestATimedOutCommandIsRejectedStructurally(t *testing.T) {
-	out := RunCommandOutput{ExitCode: 0, TimedOut: true}
-	if runCommandVerifiable(out) {
+	if runCommandVerifiable(RunCommandOutput{ExitCode: 0, TimedOut: true}) {
 		t.Fatal("a timed-out run was treated as verification")
 	}
 	if !runCommandVerifiable(RunCommandOutput{ExitCode: 0}) {
@@ -240,9 +279,8 @@ func TestAMutatingCommandIsStampedWithThePostCommandState(t *testing.T) {
 	sepWrite(t, ctx, dir, "solve.py", "print('one')\n")
 	beforeGen, beforeState := workspaceIdentity(ctx)
 
-	// The command rewrites a tracked artifact behind the tool layer's back --
-	// which is the whole reason a shell effect is reconciled rather than
-	// trusted.
+	// The command rewrites a tracked file outside the tool layer. This is
+	// why a shell effect is reconciled with the ledger rather than trusted.
 	if err := os.WriteFile(filepath.Join(dir, "solve.py"), []byte("print('two')\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -263,33 +301,6 @@ func TestAMutatingCommandIsStampedWithThePostCommandState(t *testing.T) {
 		WorkspaceGeneration: beforeGen, WorkspaceStateHash: beforeState}
 	if commandEvidenceCurrent(ctx, stale) {
 		t.Fatal("a pre-command stamp was accepted as current")
-	}
-}
-
-func TestAnUnstampedRecordCannotSatisfyACommandObligation(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	h := sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		{Command: "pytest"},
-		sepStamp(ctx, "python3 solve.py", map[string]string{"solve.py": h}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); d.Met {
-		t.Fatal("a record with no workspace identity satisfied a pathless command")
-	}
-}
-
-func TestCoverageFromAnUnrelatedPathDoesNotCount(t *testing.T) {
-	tc := sepContract([]string{"solve.py"}, []string{"pytest"})
-	ctx, dir := sepCtx(t, tc)
-	sepWrite(t, ctx, dir, "solve.py", "print('ok')\n")
-	other := sepWrite(t, ctx, dir, "other.py", "print('other')\n")
-	ctx.VerificationEvidence = []VerificationRecord{
-		sepStamp(ctx, "pytest", nil),
-		sepStamp(ctx, "python3 other.py", map[string]string{"other.py": other}),
-	}
-	if d := decideVerificationDemand(ctx, tc, []string{"solve.py"}); d.Met {
-		t.Fatal("coverage of another artifact satisfied solve.py")
 	}
 }
 

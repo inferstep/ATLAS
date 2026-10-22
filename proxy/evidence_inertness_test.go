@@ -9,13 +9,11 @@ import (
 
 // The delivery graph, enumerated.
 //
-// Two producers now exist and each computes authority. Nothing consults it.
-// This file is the proof: every production consumer of provenance is named
-// here, and a new one fails the build's tests rather than quietly shipping.
-//
-// The rule is not "provenance is unused" -- it is computed, serialised and
-// compared. The rule is that no result of it reaches a decision about what
-// lands on disk.
+// Two producers compute provenance and the authority it carries. Every
+// production consumer of provenance is named here, and a new one fails these
+// tests rather than shipping quietly. One owner turns provenance into a
+// decision about what lands on disk, and the guards below pin that it stays
+// the only one.
 
 // deliveryDecisions are the functions that decide whether a generated
 // candidate may replace the caller's content. Adding a caller to any of them

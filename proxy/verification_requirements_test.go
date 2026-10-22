@@ -6,12 +6,7 @@ import (
 	"testing"
 )
 
-// Strength comes from what the client TYPED and from nothing else.
-//
-// Every row here is a pair: the same command, declared two ways, reaching two
-// different floors. If any of them ever agreed, something would be reading the
-// command instead of the declaration.
-
+// typedCommandObligation returns the world's declared-command obligation.
 func typedCommandObligation(t *testing.T, w *matrixWorld) taskObligation {
 	t.Helper()
 	for _, o := range w.obligations() {
@@ -23,9 +18,12 @@ func typedCommandObligation(t *testing.T, w *matrixWorld) taskObligation {
 	return taskObligation{}
 }
 
+// Required strength comes from what the client declared and from nothing else.
+// The same command reaches different floors when it is declared in different
+// ways. Commands of different shapes reach the same floor when they are
+// declared in the same way.
 func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 	const code = "print(7)\n"
-	// The identical command text, four declarations.
 	for _, tc := range []struct {
 		name     string
 		contract string
@@ -35,6 +33,18 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 			name: "untyped list is runtime",
 			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
 				`"verification":["pytest -q"]}`,
+			want: VerificationKindRuntime,
+		},
+		{
+			name: "untyped parse check is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification":["python3 -c \"import ast;ast.parse(open('solve.py').read())\""]}`,
+			want: VerificationKindRuntime,
+		},
+		{
+			name: "untyped true is runtime",
+			contract: `{"task_mode":"work","verification_knowledge":"declared",` +
+				`"verification":["true"]}`,
 			want: VerificationKindRuntime,
 		},
 		{
@@ -72,25 +82,6 @@ func TestDeclaredStrengthComesFromTheDeclaration(t *testing.T) {
 				t.Errorf("floor %q, want %q", got, tc.want)
 			}
 		})
-	}
-}
-
-// A command that looks like a test suite and one that looks like a parse check
-// reach the same floor when they are declared the same way. Shape decides
-// nothing.
-func TestCommandTextDoesNotDecideStrength(t *testing.T) {
-	const code = "print(7)\n"
-	for _, cmd := range []string{
-		"pytest -q tests/",
-		`python3 -c "import ast;ast.parse(open('solve.py').read())"`,
-		"true",
-	} {
-		w := newMatrixWorld(t, `{"task_mode":"work","verification_knowledge":"declared",`+
-			`"verification":[`+mustJSONString(cmd)+`]}`, "solve.py", code, true)
-		o := typedCommandObligation(t, w)
-		if o.RequiredStrength != VerificationKindRuntime {
-			t.Errorf("%q reached %q untyped, want runtime", cmd, o.RequiredStrength)
-		}
 	}
 }
 
@@ -179,7 +170,9 @@ func TestTypedAndUntypedCommandsCoexist(t *testing.T) {
 	}
 }
 
-// The boundary refuses anything it cannot read, rather than defaulting it.
+// The boundary refuses a typed declaration it cannot read, rather than
+// defaulting it. A question declares nothing, so typed requirements are no way
+// in for one.
 func TestTypedVerificationBoundaryRefusesTheUnreadable(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct{ name, contract string }{
@@ -213,6 +206,10 @@ func TestTypedVerificationBoundaryRefusesTheUnreadable(t *testing.T) {
 			`"verification_requirements_version":1,"verification_requirements":[` +
 			`{"command":"  ","kind":"runtime","expects":"exit_zero",` +
 			`"asset_authority":"client_supplied"}]}`},
+		{"question mode", `{"task_mode":"question",` +
+			`"verification_requirements_version":1,"verification_requirements":[` +
+			`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",` +
+			`"asset_authority":"client_supplied"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var in TaskContract
@@ -223,20 +220,6 @@ func TestTypedVerificationBoundaryRefusesTheUnreadable(t *testing.T) {
 				t.Fatal("the boundary accepted a contract it cannot read")
 			}
 		})
-	}
-}
-
-// A question declares nothing, and typed requirements are not a way in.
-func TestQuestionModeCannotDeclareTypedVerification(t *testing.T) {
-	var in TaskContract
-	if err := json.Unmarshal([]byte(`{"task_mode":"question",`+
-		`"verification_requirements_version":1,"verification_requirements":[`+
-		`{"command":"pytest -q","kind":"behavioral","expects":"exit_zero",`+
-		`"asset_authority":"client_supplied"}]}`), &in); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := validateTaskContract(&in, t.TempDir()); err == nil {
-		t.Fatal("question mode declared a verification obligation")
 	}
 }
 

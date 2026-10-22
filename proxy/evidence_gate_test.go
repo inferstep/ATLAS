@@ -3,17 +3,15 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
 // An answer that names a file the run never opened is a guess, and it reads
-// exactly like knowledge. Measured over 12 sessions of a diagnostic question
-// across three modules: every one ran list_directory, outlined a single file,
-// and answered. The outcome tracked the filename it guessed rather than
-// anything it read — scoring.py wrong 11 times out of 11, planning.py right
-// once out of once.
+// exactly like knowledge. The evidence gate finds such citations and asks the
+// model to read the file before it answers.
 
 func evidenceCtx(t *testing.T, files map[string]string) *AgentContext {
 	t.Helper()
@@ -35,26 +33,51 @@ func evidenceCtx(t *testing.T, files map[string]string) *AgentContext {
 	}
 }
 
-func TestCitingAFileTheRunNeverOpened(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{
-		"scoring.py":  "def score_candidate():\n    pass\n",
-		"planning.py": "def select_best():\n    pass\n",
-	})
-	// The exact shape observed: a file, a function, and a line range, none of
-	// which the model was ever shown.
-	answer := "The issue is in `scoring.py` within the `score_candidate` " +
-		"function (lines 134-142)."
-	got := unreadFileCitations(ctx, answer)
-	if len(got) != 1 || got[0] != "scoring.py" {
-		t.Fatalf("want [scoring.py], got %v", got)
-	}
-}
-
-func TestReadingTheFileClearsTheGate(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"scoring.py": "x = 1\n"})
-	ctx.RecordBodySeen(resolveAgentPath(ctx, "scoring.py"))
-	if got := unreadFileCitations(ctx, "The bug is in scoring.py"); len(got) != 0 {
-		t.Fatalf("a file that was read must not be cited: %v", got)
+// A reply cites a workspace file whose body the run never saw. Names that are
+// not workspace files are not citations.
+func TestUnreadFileCitations(t *testing.T) {
+	onlyRealPy := map[string]string{"real.py": "x = 1\n"}
+	for _, tc := range []struct {
+		name   string
+		files  map[string]string
+		seen   []string
+		answer string
+		want   []string
+	}{
+		{
+			// A file, a function and a line range, none of which the model
+			// was ever shown.
+			name: "an unread file is cited",
+			files: map[string]string{
+				"scoring.py":  "def score_candidate():\n    pass\n",
+				"planning.py": "def select_best():\n    pass\n",
+			},
+			answer: "The issue is in `scoring.py` within the `score_candidate` " +
+				"function (lines 134-142).",
+			want: []string{"scoring.py"},
+		},
+		{
+			// Every read, write and edit path records the body as seen.
+			name:   "a file whose body was seen is not cited",
+			files:  map[string]string{"scoring.py": "x = 1\n"},
+			seen:   []string{"scoring.py"},
+			answer: "The bug is in scoring.py",
+		},
+		{name: "a version number", files: onlyRealPy, answer: "upgrade to V3.2 for this"},
+		{name: "a decimal number", files: onlyRealPy, answer: "the score dropped to 0.34"},
+		{name: "a module path", files: onlyRealPy, answer: "import os.path at the top"},
+		{name: "a file not in the workspace", files: onlyRealPy, answer: "see requirements.txt for the pins"},
+		{name: "an empty reply", files: onlyRealPy, answer: "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := evidenceCtx(t, tc.files)
+			for _, name := range tc.seen {
+				ctx.RecordBodySeen(resolveAgentPath(ctx, name))
+			}
+			if got := unreadFileCitations(ctx, tc.answer); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("cited %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -74,35 +97,6 @@ func TestOutlineDoesNotCountAsSeeingTheBody(t *testing.T) {
 	}
 	if got := unreadFileCitations(ctx, "the bug is in scoring.py"); len(got) != 1 {
 		t.Fatalf("outlined-only file should still be cited, got %v", got)
-	}
-}
-
-func TestAFileTheModelWroteIsEvidenceEnough(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"out.py": "print(1)\n"})
-	ctx.RecordBodySeen(resolveAgentPath(ctx, "out.py"))
-	if got := unreadFileCitations(ctx, "I created out.py with the helper."); len(got) != 0 {
-		t.Fatalf("the model authored the contents: %v", got)
-	}
-}
-
-func TestNamesThatAreNotWorkspaceFilesAreIgnored(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"real.py": "x = 1\n"})
-	for _, answer := range []string{
-		"upgrade to V3.2 for this",
-		"the score dropped to 0.34",
-		"import os.path at the top",
-		"see requirements.txt for the pins", // not present in this workspace
-	} {
-		if got := unreadFileCitations(ctx, answer); len(got) != 0 {
-			t.Errorf("%q should cite nothing, got %v", answer, got)
-		}
-	}
-}
-
-func TestAnEmptyReplyCitesNothing(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"real.py": "x = 1\n"})
-	if got := unreadFileCitations(ctx, "   "); got != nil {
-		t.Fatalf("got %v", got)
 	}
 }
 
@@ -138,17 +132,11 @@ func TestTheRejectionIsCappedAndReadable(t *testing.T) {
 	}
 }
 
-// The failure the evidence gate backstops was caused upstream, by guidance.
-// The tool description sold outline_file on costing "almost no context" and
-// told the model to reach for it FIRST "instead of reading the whole thing",
-// while the system prompt separately said never to answer from code it had
-// not opened. The model followed the procedure and dropped the principle.
-//
-// Measured over run 16's 28 sessions: peak prompt tokens median 6,294, worst
-// case 15,406, against a 131,072-token window. Context frugality is buying
-// nothing at 12% utilisation, and read_file already caps itself on a file too
-// large to load, so the advice duplicated a guard that works and cost
-// correctness to do it.
+// The outline_file description must not sell an outline as a cheaper read.
+// A model told to reach for an outline first, instead of reading the file,
+// follows that advice and then answers from signatures it never saw the code
+// of. read_file already caps itself on a file too large to load, so frugality
+// advice adds no guard and costs correctness.
 func TestOutlineIsNotSoldAsACheaperRead(t *testing.T) {
 	def := outlineFileTool()
 	for _, banned := range []string{"almost no context", "instead of reading the whole"} {

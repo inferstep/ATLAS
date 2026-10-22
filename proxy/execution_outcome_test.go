@@ -12,12 +12,9 @@ import (
 
 // A command that was stopped is not a command that failed.
 //
-// The defective acquisition's staged verification was `python3 -m pytest -q`
-// over a seeded loop that appends without bound. It reached 5.9 GB in seconds
-// and the kernel killed the largest process on the box. Bounding the memory is
-// half the fix; the other half is that a bounded kill exits non-zero exactly
-// like a failing test, and reading it as one records a behavioural failure of
-// a candidate that nothing observed.
+// A command killed at a resource ceiling exits non-zero exactly like a failing
+// test. Reading it as one would record a behavioural failure of a candidate
+// that nothing observed.
 
 func TestOnlyOneOutcomeMeansTheCommandFinished(t *testing.T) {
 	for _, o := range []ExecutionOutcome{
@@ -47,10 +44,10 @@ func TestOnlyOneOutcomeMeansTheCommandFinished(t *testing.T) {
 	}
 }
 
-// The exact shape that took the host down, decoded from the executor.
+// A test suite killed at the memory ceiling, decoded from the executor: exit 1
+// and a MemoryError on stderr, byte for byte what a failing suite looks like.
+// Only the outcome field tells them apart.
 func TestAMemoryKilledVerificationIsNotAFailedOne(t *testing.T) {
-	// pytest over `stepped(0, 5, -1)`: killed at the ceiling, exit 1, and a
-	// MemoryError on stderr -- byte-for-byte what a failing suite looks like.
 	body := `{"success":false,"stdout":"","stderr":"MemoryError\n","exit_code":1,` +
 		`"elapsed_ms":2100,"timed_out":false,"outcome":"memory_exhausted",` +
 		`"peak_memory_bytes":2100000000}`
@@ -96,12 +93,11 @@ func TestAnExecutorThatDoesNotSpeakTheVocabularyFailsClosed(t *testing.T) {
 	if out.Outcome != ExecutionUnclassified {
 		t.Fatalf("a missing outcome decoded as %q", out.Outcome)
 	}
-	// It is NOT refused. Silence from an executor older than this vocabulary
-	// is the state every command was in before the contract existed, and a
-	// proxy that called every command failed because its executor had not been
-	// rebuilt would be worse than the risk it removes. What silence cannot do
-	// is support an authorization: candidate staging turns the same value into
-	// `unobservable`, which is asserted in the staging table below.
+	// It is NOT refused: a proxy that called every command failed because its
+	// executor had not been rebuilt would be worse than the risk it removes.
+	// What silence cannot do is support an authorization: candidate staging
+	// turns the same value into `unobservable`, which the staging table below
+	// asserts.
 	if !runCommandVerifiable(out) {
 		t.Error("an unclassified execution was refused outright")
 	}
@@ -203,25 +199,31 @@ func TestStagingSeparatesAStoppedCommandFromAFailedOne(t *testing.T) {
 }
 
 // A resource kill fires the veto that says nothing was observed, never the one
-// that says the candidate's own verification went against it.
+// that says the candidate's own verification went against it. Neither delivery
+// basis weakens this: a stopped verification is a veto whether or not the V3
+// selection path named the candidate.
 func TestResourceExhaustionVetoesForTheRightReason(t *testing.T) {
-	out := decideCandidatePolicy(policyContext(t), advisoryInput{
-		Observed:         checkOutcome{Status: ValidationPassed},
-		TargetDeclared:   true,
-		TargetAuthorized: true,
-		ScopeAdmits:      true,
-		Unmet: map[string]AuthorizationReason{
-			"declared_command:abc": ReasonEvidenceResourceExhausted,
-		},
-	}, false)
-	if out.Decision != PolicyCandidateRejectedHardVeto {
-		t.Fatalf("decision %q", out.Decision)
-	}
-	if !hasVeto(out.Vetoes, VetoExecutionUnavailable) {
-		t.Errorf("vetoes %v do not say the execution never happened", out.Vetoes)
-	}
-	if hasVeto(out.Vetoes, VetoDeclaredVerificationFailed) {
-		t.Error("a stopped command was recorded as a failed verification")
+	for _, eligible := range []bool{false, true} {
+		out := decideCandidatePolicy(policyContext(t), advisoryInput{
+			Observed:         checkOutcome{Status: ValidationPassed},
+			TargetDeclared:   true,
+			TargetAuthorized: true,
+			ScopeAdmits:      true,
+			Unmet: map[string]AuthorizationReason{
+				"declared_command:abc": ReasonEvidenceResourceExhausted,
+			},
+			AutomaticEligible: eligible,
+		}, false)
+		if out.Decision != PolicyCandidateRejectedHardVeto {
+			t.Errorf("eligible=%v: decision %q over a stopped verification", eligible, out.Decision)
+		}
+		if !hasVeto(out.Vetoes, VetoExecutionUnavailable) {
+			t.Errorf("eligible=%v: vetoes %v do not say the execution never happened",
+				eligible, out.Vetoes)
+		}
+		if hasVeto(out.Vetoes, VetoDeclaredVerificationFailed) {
+			t.Errorf("eligible=%v: a stopped command was recorded as a failed verification", eligible)
+		}
 	}
 }
 
@@ -339,26 +341,6 @@ func TestResourceExhaustionReachesNoGrant(t *testing.T) {
 	}
 }
 
-// Neither delivery basis weakens it: a stopped verification is a veto
-// whether or not the V3 selection path named the candidate.
-func TestNoDeliveryBasisWeakensResourceSafety(t *testing.T) {
-	for _, eligible := range []bool{false, true} {
-		out := decideCandidatePolicy(policyContext(t), advisoryInput{
-			Observed:         checkOutcome{Status: ValidationPassed},
-			TargetDeclared:   true,
-			TargetAuthorized: true,
-			ScopeAdmits:      true,
-			Unmet: map[string]AuthorizationReason{
-				"declared_command:abc": ReasonEvidenceResourceExhausted,
-			},
-			AutomaticEligible: eligible,
-		}, false)
-		if out.Decision != PolicyCandidateRejectedHardVeto {
-			t.Errorf("eligible=%v decided %q over a stopped verification", eligible, out.Decision)
-		}
-	}
-}
-
 // The wire shape the executor promises, pinned so a rename on either side is
 // a test failure rather than a silent unclassified.
 func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
@@ -386,8 +368,8 @@ func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 
 // --- the declared envelope ---------------------------------------------------
 
-// The deployment that killed the model was one where every process was inside
-// its own limit and the sum was not.
+// Every process can be inside its own limit while the sum is not. An envelope
+// whose enforced maxima over-commit the host is refused.
 func TestAnEnvelopeThatDoesNotFitTheHostIsRefused(t *testing.T) {
 	const GiB = int64(1) << 30
 	fits := memoryEnvelope{
@@ -405,39 +387,8 @@ func TestAnEnvelopeThatDoesNotFitTheHostIsRefused(t *testing.T) {
 		t.Error("a fitting envelope refused execution")
 	}
 
-	// The deployment as it actually stood: an 11 GiB sandbox beside an
-	// unbounded 9 GiB model on a 15 GiB host.
-	//
-	// The enforced maxima ALONE do not catch it, and that is the lesson. With
-	// the model unbounded there is no inference maximum to add, so eleven
-	// gigabytes of sandbox plus the small services plus the reserve fits --
-	// which is exactly how every process came to be inside its own limit at
-	// the moment the kernel went looking for something to kill. What catches
-	// it is the remainder: what the enforced budgets leave over for the one
-	// component nothing holds.
-	asItWas := fits
-	asItWas.Budgets = []memoryBudget{
-		{"sandbox", 11 * GiB, true}, {"inference", 11 * GiB, false},
-	}
-	asItWas.SandboxBytes = 11 * GiB
-	if len(asItWas.validate()) != 0 {
-		t.Fatal("the enforced maxima are expected to fit here; the point is that " +
-			"fitting is not sufficient")
-	}
-	over := asItWas.unenforcedOverruns()
-	if len(over) != 1 || !strings.Contains(over[0], "inference") {
-		t.Fatalf("the configuration that killed the model was not reported: %v", over)
-	}
-	// The overrun is reported WITH its size, which is what separates the two
-	// configurations: the historical one misses by more than ten gigabytes,
-	// today's by about one.
-	if !strings.Contains(over[0], "11.00 GiB") {
-		t.Errorf("the report does not say what was expected: %q", over[0])
-	}
-
-	// A refusal still exists, for the case it was built for: enforced maxima
-	// that over-commit. Setting an inference limit AND an eleven-gigabyte
-	// sandbox is a number an operator can edit, and it is refused.
+	// Enforced maxima that over-commit are a number an operator can edit, so
+	// they are refused: an inference limit beside an 11 GiB sandbox.
 	enforcedOver := fits
 	enforcedOver.Budgets = append(append([]memoryBudget{}, fits.Budgets...),
 		memoryBudget{"inference", 9728 * (1 << 20), true})
@@ -483,8 +434,8 @@ func TestTheEnvelopeReadsTheSizesComposeWrites(t *testing.T) {
 	}
 }
 
-// A budget that is missing, zero or negative is a declaration nobody can act
-// on, and it fails closed rather than being treated as unlimited.
+// A declaration nobody can act on fails closed rather than being treated as
+// unlimited.
 func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
 	const GiB = int64(1) << 30
 	base := memoryEnvelope{
@@ -495,37 +446,34 @@ func TestAMalformedEnvelopeFailsClosed(t *testing.T) {
 	if len(base.validate()) != 0 {
 		t.Fatalf("the base envelope does not validate: %v", base.validate())
 	}
-	noReserve := base
-	noReserve.ReserveBytes = 0
-	if len(noReserve.validate()) == 0 {
-		t.Error("an envelope with no host reserve validated")
-	}
-	zeroBudget := base
-	zeroBudget.Budgets = []memoryBudget{{"inference", 0, true}}
-	if len(zeroBudget.validate()) == 0 {
-		t.Error("a component with no budget validated")
-	}
-	noContainer := base
-	noContainer.SandboxBytes = 0
-	if len(noContainer.validate()) == 0 {
-		t.Error("a per-command ceiling with no container to hold it validated")
-	}
-	zeroConcurrency := base
-	zeroConcurrency.Concurrency = 0
-	if len(zeroConcurrency.validate()) == 0 {
-		t.Error("zero concurrency validated")
+	for _, tc := range []struct {
+		name   string
+		change func(*memoryEnvelope)
+	}{
+		{"no host reserve", func(e *memoryEnvelope) { e.ReserveBytes = 0 }},
+		{"a component with no budget", func(e *memoryEnvelope) {
+			e.Budgets = []memoryBudget{{"inference", 0, true}}
+		}},
+		{"a per-command ceiling with no container to hold it", func(e *memoryEnvelope) { e.SandboxBytes = 0 }},
+		{"zero concurrency", func(e *memoryEnvelope) { e.Concurrency = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := base
+			tc.change(&e)
+			if len(e.validate()) == 0 {
+				t.Error("validated")
+			}
+		})
 	}
 }
 
-// An unbounded component is not a maximum, and pretending otherwise is the
-// mistake that made the first draft of this envelope dangerous.
+// An unbounded component is not a maximum.
 //
-// The inference service has no cgroup limit: its measured peak resident set is
-// above the value that was proposed for it, and a hard limit under the peak
-// produces a certain kill rather than reclaim. So its budget is an
-// EXPECTATION. It is excluded from the maxima sum -- an unbounded component
-// has no maximum to add -- and reported separately when the expectation does
-// not fit what the enforced budgets leave.
+// The inference service may run without a cgroup limit, because a hard limit
+// under its peak resident set produces a certain kill rather than reclaim. Its
+// budget is then an EXPECTATION. It is left out of the maxima sum, since an
+// unbounded component has no maximum to add, and it is reported, with its
+// size, when the expectation does not fit what the enforced budgets leave.
 func TestAnUnenforcedBudgetIsReportedAndNotSummed(t *testing.T) {
 	const GiB = int64(1) << 30
 	e := memoryEnvelope{
@@ -553,6 +501,9 @@ func TestAnUnenforcedBudgetIsReportedAndNotSummed(t *testing.T) {
 	}
 	if !strings.Contains(over[0], "not held to a limit") {
 		t.Errorf("the report does not say it is unbounded: %q", over[0])
+	}
+	if !strings.Contains(over[0], "11.00 GiB") {
+		t.Errorf("the report does not give the expected size: %q", over[0])
 	}
 	// Enforcing it instead moves it into the sum, where it does not fit.
 	enforced := e
@@ -597,14 +548,19 @@ func TestTheInferenceBudgetIsEnforcedOnlyWhenTheLimitIsSet(t *testing.T) {
 	}
 	t.Setenv("ATLAS_LLAMA_MEM", "9728m")
 	e = envelopeFromEnv()
-	for _, b := range e.Budgets {
-		if b.Name == "inference" {
-			if !b.Enforced {
-				t.Error("a set ATLAS_LLAMA_MEM did not enforce")
-			}
-			if b.Bytes != 9728*(1<<20) {
-				t.Errorf("the expectation shadowed the limit: %d", b.Bytes)
-			}
+	inference = nil
+	for i := range e.Budgets {
+		if e.Budgets[i].Name == "inference" {
+			inference = &e.Budgets[i]
 		}
+	}
+	if inference == nil {
+		t.Fatal("a set ATLAS_LLAMA_MEM dropped the inference term")
+	}
+	if !inference.Enforced {
+		t.Error("a set ATLAS_LLAMA_MEM did not enforce")
+	}
+	if inference.Bytes != 9728*(1<<20) {
+		t.Errorf("the expectation shadowed the limit: %d", inference.Bytes)
 	}
 }

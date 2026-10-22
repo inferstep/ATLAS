@@ -14,10 +14,9 @@ import (
 )
 
 // A truncated read shows part of a file. The unread-citation check works per
-// file, so it let a reply describe code past the cut. Smoke run 2026-09-27,
-// bugfind_tiebreak: both reads stopped near line 190, the reply named
-// `_score_plan` and said it lay "past the provided snippet", and the run ended
-// completed.
+// file, so on its own it lets a reply describe code past the cut: both reads
+// stop near line 190, the reply names `_score_plan` and says it lies "past the
+// provided snippet", and the run ends completed. The range check catches this.
 
 // planningSource is a 600-line file with _score_plan defined at line 412.
 func planningSource() string {
@@ -51,52 +50,68 @@ func TestATruncatedReadDoesNotShowTheWholeFile(t *testing.T) {
 	}
 }
 
-func TestASymbolInsideTheReadIsNotFlagged(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 380, 440, 600)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("line 412 was shown: %+v", got)
-	}
-}
-
-func TestReadingTheRestClearsTheGap(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 189, 600)
-	ctx.RecordBodyRead(path, 401, 440, 600)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("a second read showed line 412: %+v", got)
-	}
-}
-
-func TestAWholeReadOrAWriteShowsEverything(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 600, 600)
-	ctx.RecordBodyRead(path, 1, 50, 600) // a later partial read takes nothing back
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("the whole file was read: %+v", got)
-	}
-
-	ctx = evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path = resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 189, 600)
-	ctx.RecordBodySeen(path) // what every write and edit path records
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("after a write the old line numbers no longer hold: %+v", got)
-	}
-}
-
-func TestANameShownInAnotherFileIsNotFlagged(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{
-		"planning.py": planningSource(),
-		"helpers.py":  "def _score_plan(plans):\n    return plans\n",
-	})
-	ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 1, 189, 600)
-	ctx.RecordBodyRead(resolveAgentPath(ctx, "helpers.py"), 1, 3, 3)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("a definition of the name was shown in helpers.py: %+v", got)
+// Once the line that defines a cited name has been shown, in any of these
+// ways, the citation is not flagged.
+func TestACitedSymbolThatWasShownIsNotFlagged(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		show  func(ctx *AgentContext)
+	}{
+		{
+			name:  "one read that holds line 412",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 380, 440, 600)
+			},
+		},
+		{
+			name:  "a second read of the rest",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 189, 600)
+				ctx.RecordBodyRead(path, 401, 440, 600)
+			},
+		},
+		{
+			name:  "a whole read, which a later partial read does not take back",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 600, 600)
+				ctx.RecordBodyRead(path, 1, 50, 600)
+			},
+		},
+		{
+			// After a write the old line numbers do not hold.
+			name:  "a write after a partial read",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 189, 600)
+				ctx.RecordBodySeen(path) // what every write and edit path records
+			},
+		},
+		{
+			name: "a definition of the name in another file that was read",
+			files: map[string]string{
+				"planning.py": planningSource(),
+				"helpers.py":  "def _score_plan(plans):\n    return plans\n",
+			},
+			show: func(ctx *AgentContext) {
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 1, 189, 600)
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "helpers.py"), 1, 3, 3)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := evidenceCtx(t, tc.files)
+			tc.show(ctx)
+			if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
+				t.Fatalf("the definition was shown, got %+v", got)
+			}
+		})
 	}
 }
 
@@ -185,8 +200,8 @@ func TestReadFileRecordsWhatItShowed(t *testing.T) {
 	}
 }
 
-// End to end, as the smoke run went: a truncated read, an answer about code
-// past the cut, and one bounce that sends the model back to read it.
+// End to end: a truncated read, an answer about code past the cut, and one
+// bounce that sends the model back to read it.
 func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 	dir := t.TempDir()
 	src := planningSource()

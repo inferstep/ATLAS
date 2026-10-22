@@ -20,9 +20,8 @@ import (
 //	a direct join       every record names the request, invocation and
 //	                    candidate it is about, with no inference in between
 //
-// Nothing here delivers. The producers have no production caller, so a matrix
-// row that produces authorizing evidence is describing what WOULD close an
-// obligation if a consumer existed.
+// Nothing here delivers. A row that produces authorizing evidence shows what
+// would close the obligation; it does not deliver anything.
 
 type matrixWorld struct {
 	ctx     *AgentContext
@@ -164,8 +163,8 @@ func assertDirectJoin(t *testing.T, row string, ev proxyEvidence,
 }
 
 // stagedRun builds the request the wiring builds: one declared command, one
-// staged observation of it, bound to this world's candidate. The shape is the
-// point -- the producer is handed an OBSERVATION, never a conclusion.
+// staged observation of it, bound to this world's candidate. The producer is
+// handed an observation, never a conclusion.
 func (w *matrixWorld) stagedRun(obl taskObligation, outcome stagingCommandOutcome,
 	mutatedTarget, mutatedWorkspace bool) verificationEvidenceRequest {
 	generation, stateHash := workspaceIdentity(w.ctx)
