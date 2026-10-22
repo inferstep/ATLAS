@@ -11,7 +11,7 @@ plugins {
     kotlin("plugin.compose") version "2.3.20"
     // The protocol layer parses the proxy's SSE envelopes with
     // kotlinx.serialization; the compiler plugin version must match Kotlin.
-    kotlin("plugin.serialization") version "2.3.20"
+    kotlin("plugin.serialization") version "2.4.21"
     id("org.jetbrains.intellij.platform") version "2.19.0"
     id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
 }
@@ -29,8 +29,8 @@ plugins {
 // The mock-proxy integration tests in AtlasClientTest are the guard: they
 // issue real requests, so a bump past 3.4.3 fails them rather than shipping.
 // .github/dependabot.yml also ignores io.ktor for this tree.
-val ktorVersion = "3.4.3"
-val serializationVersion = "1.11.0"
+val ktorVersion = "3.6.0"
+val serializationVersion = "1.12.0"
 
 // Which products `verifyPlugin` checks. The CI matrix sets one per job so a
 // runner downloads two IDE distributions rather than eight; a release run
@@ -100,7 +100,7 @@ dependencies {
     // BasePlatformTestCase is JUnit 3/4, and the protocol layer's tests are
     // Jupiter; both run under the JUnit Platform (the vintage engine carries
     // the platform test). Managed by the BOM so the engines cannot drift.
-    testImplementation(platform("org.junit:junit-bom:5.13.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
