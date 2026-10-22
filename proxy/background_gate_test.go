@@ -11,11 +11,10 @@ import (
 	"testing"
 )
 
-// A model that verified its work by starting a server and then declared done
-// used to get its summary replaced by "Still running in the sandbox" and the
-// run reported as unfinished (dev scenario, 2026-09-14). The exit gate now
-// names the job and asks for stop_background; a model that complies finishes
-// with its own account of the work.
+// A model that verified its work by starting a server and then declares done
+// is not reported as unfinished with "Still running in the sandbox" in place
+// of its summary. The exit gate names the job and asks for stop_background,
+// and a model that complies finishes with its own account of the work.
 func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 	const good = "def solve():\n    return 7\n\n\nprint(solve())\n"
 	zero := 0

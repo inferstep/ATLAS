@@ -8,20 +8,16 @@ import (
 
 // Omitted knowledge is not authoritative emptiness.
 //
-// The wire could always tell `"expected_outputs": []` from an omitted key --
-// encoding/json leaves a []string nil for the first and non-nil-empty for the
-// second -- and validateTaskContract threw that away: it built its output by
-// appending, so an explicit [] was STORED as nil, byte-identical to omitted.
+// The wire tells `"expected_outputs": []` from an omitted key: encoding/json
+// leaves the []string non-nil and empty for the first and nil for the second.
+// The validator and storage must keep that distinction, not store an explicit
+// [] as nil.
 //
-// That matters because every owned sender -- the TUI, tests/e2e/conftest.py
-// and scripts/e2e-reliability.py -- sends `{"task_mode": ...}` and nothing
-// else. Reading "a contract is present, so its output list is authoritative"
-// would have turned 100% of owned traffic into "the caller requires no
-// outputs" and dropped the legacy obligation for all of it.
-//
-// So knowledge is stated, not inferred. Nothing below reads policy: this
-// commit only makes the distinction survive the wire, the validator and
-// storage.
+// Every owned sender (the TUI, tests/e2e/conftest.py and
+// scripts/e2e-reliability.py) sends `{"task_mode": ...}` and nothing else.
+// Reading "a contract is present, so its output list is authoritative" would
+// turn all that traffic into "the caller requires no outputs". So knowledge is
+// stated, not inferred.
 
 func decodeContract(t *testing.T, body string) *TaskContract {
 	t.Helper()
@@ -55,8 +51,8 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 			KnowledgeUnspecified, nil, false},
 		{"outputs null", `{"task_contract":{"task_mode":"work","expected_outputs":null}}`,
 			KnowledgeUnspecified, nil, false},
-		// Historical storage could not tell an explicit [] from omitted, so a
-		// legacy [] cannot be promoted to authoritative none.
+		// Without output_knowledge, an explicit [] cannot be told from an
+		// omitted list in stored contracts, so it is not authoritative none.
 		{"legacy empty list", `{"task_contract":{"task_mode":"work","expected_outputs":[]}}`,
 			KnowledgeUnspecified, nil, false},
 		// A legacy non-empty list always meant "these are the outputs".
@@ -192,12 +188,11 @@ func TestOutputAndVerificationKnowledgeAreIndependent(t *testing.T) {
 
 // --- owned senders stay unspecified and wire-compatible ---------------------
 
+// The TUI, the e2e conftest and the benchmark harness send task_mode alone.
 func TestEveryOwnedSenderNormalisesToUnspecified(t *testing.T) {
 	for _, c := range []struct{ name, body string }{
-		{"tui work", `{"task_contract":{"task_mode":"work"}}`},
-		{"tui question", `{"task_contract":{"task_mode":"question"}}`},
-		{"e2e conftest", `{"task_contract":{"task_mode":"work"}}`},
-		{"benchmark harness", `{"task_contract":{"task_mode":"work"}}`},
+		{"work", `{"task_contract":{"task_mode":"work"}}`},
+		{"question", `{"task_contract":{"task_mode":"question"}}`},
 	} {
 		got, err := validate(t, c.body)
 		if err != nil {

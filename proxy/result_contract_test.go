@@ -13,244 +13,165 @@ import (
 	"testing"
 )
 
-// Stage B contract tests. These pin the FACTS a ToolResult reports, before
-// any consumer is changed.
+// A ToolResult reports separate facts: whether bytes changed (MutationStatus),
+// what was checked (ValidationKind) and how the check came out
+// (ValidationStatus). `Success` alone mixes these up: a warned invalid write
+// and a validated one look the same, and a delete looks like productive work.
 //
-// The defect they guard against is the one the locked benchmark found:
-// `Success` conflated "the tool ran", "bytes changed" and "the content is
-// valid", so a warned invalid write and a validated one were
-// indistinguishable, and a successful delete looked like productive work.
-//
-// Every new field must FAIL CLOSED at its zero value. A result that was
-// never populated, or that carries a value this build does not recognise,
-// must never read as applied or as passed.
+// Every field fails closed at its zero value. A result that nobody filled in,
+// or that carries a value this build does not know, never reads as applied or
+// as passed.
 
-func TestZeroValueResultIsNeitherAppliedNorValidated(t *testing.T) {
-	var r ToolResult
-	if r.MutationStatus.Applied() {
-		t.Error("zero-value MutationStatus reads as applied")
-	}
-	if r.ValidationStatus.Passed() {
-		t.Error("zero-value ValidationStatus reads as passed")
-	}
-	if r.ValidationKind != ValidationKindUnknown {
-		t.Errorf("zero-value ValidationKind = %q, want unknown", r.ValidationKind)
-	}
-	if r.MutationStatus != MutationUnknown {
-		t.Errorf("zero-value MutationStatus = %q, want unknown", r.MutationStatus)
-	}
-	if r.ValidationStatus != ValidationUnknown {
-		t.Errorf("zero-value ValidationStatus = %q, want unknown", r.ValidationStatus)
-	}
-	if r.Classified() {
-		t.Error("a zero-value result reports itself as fully classified")
-	}
-}
-
-// An unrecognised value is not a success. This matters across a version skew
-// where one side emits a status the other does not know.
-func TestUnknownEnumValuesAreNotSuccess(t *testing.T) {
-	for _, v := range []MutationStatus{"", "APPLIED", "applied_maybe", "yes", "unknown"} {
-		if v == MutationApplied {
-			continue
-		}
-		if v.Applied() {
-			t.Errorf("MutationStatus(%q) reads as applied", v)
+// Only "applied" counts as applied. Only the named states count as
+// classified: Unknown means that no producer set the field.
+func TestMutationStatusValues(t *testing.T) {
+	for _, tc := range []struct {
+		status              MutationStatus
+		wire                string
+		applied, classified bool
+	}{
+		{MutationUnknown, "", false, false},
+		{MutationNone, "none", false, true},
+		{MutationApplied, "applied", true, true},
+		{MutationRefused, "refused", false, true},
+		{MutationFailed, "failed", false, true},
+		// A command tool can change the workspace without looking. Unobserved
+		// says so: a producer spoke, and nothing was shown to be applied.
+		{MutationUnobserved, "unobserved", false, true},
+	} {
+		if string(tc.status) != tc.wire || tc.status.Applied() != tc.applied || tc.status.Classified() != tc.classified {
+			t.Errorf("MutationStatus %q: applied %v, classified %v; want wire %q, applied %v, classified %v",
+				tc.status, tc.status.Applied(), tc.status.Classified(), tc.wire, tc.applied, tc.classified)
 		}
 	}
-	for _, v := range []ValidationStatus{"", "PASSED", "passed_ish", "ok", "unknown"} {
-		if v == ValidationPassed {
-			continue
-		}
-		if v.Passed() {
-			t.Errorf("ValidationStatus(%q) reads as passed", v)
+	// A value from a producer of another version, or with its case or spacing
+	// changed, fails closed.
+	for _, s := range []MutationStatus{"APPLIED", "Applied", " applied", "applied ", "applied_maybe", "yes", "unknown"} {
+		if s.Applied() || s.Classified() {
+			t.Errorf("MutationStatus(%q) reads as applied or classified", s)
 		}
 	}
 }
 
-// not_run and not_applicable are distinct and neither is passed. Collapsing
-// them is how "we could not check" silently becomes "we checked".
-func TestNotRunAndNotApplicableAreNotPassed(t *testing.T) {
-	if ValidationNotRun.Passed() {
-		t.Error("not_run reads as passed")
+// Only "passed" counts as passed. not_run ("could not check") and
+// not_applicable ("nothing to check") are separate states, and neither is a
+// pass.
+func TestValidationStatusValues(t *testing.T) {
+	for _, tc := range []struct {
+		status             ValidationStatus
+		wire               string
+		passed, classified bool
+	}{
+		{ValidationUnknown, "", false, false},
+		{ValidationNotRun, "not_run", false, true},
+		{ValidationNotApplicable, "not_applicable", false, true},
+		{ValidationPassed, "passed", true, true},
+		{ValidationFailed, "failed", false, true},
+	} {
+		if string(tc.status) != tc.wire || tc.status.Passed() != tc.passed || tc.status.Classified() != tc.classified {
+			t.Errorf("ValidationStatus %q: passed %v, classified %v; want wire %q, passed %v, classified %v",
+				tc.status, tc.status.Passed(), tc.status.Classified(), tc.wire, tc.passed, tc.classified)
+		}
 	}
-	if ValidationNotApplicable.Passed() {
-		t.Error("not_applicable reads as passed")
-	}
-	if ValidationFailed.Passed() {
-		t.Error("failed reads as passed")
-	}
-	if ValidationNotRun == ValidationNotApplicable {
-		t.Error("not_run and not_applicable must stay distinguishable")
+	for _, s := range []ValidationStatus{"PASSED", "Passed", " passed", "passed_ish", "ok", "unknown", "not-run"} {
+		if s.Passed() || s.Classified() {
+			t.Errorf("ValidationStatus(%q) reads as passed or classified", s)
+		}
 	}
 }
 
-// Legacy wire compatibility: `success` keeps its meaning and its shape, and
-// the new fields are additive and omitted when unset.
-func TestLegacyWireSuccessUnchanged(t *testing.T) {
-	b, err := json.Marshal(ToolResult{Success: true})
-	if err != nil {
+// A syntax pass is not a verified task: the kind keeps the two apart.
+// Structural is its own kind. The write_file handler runs the syntax check
+// first, so a structural refusal means that the syntax check passed.
+func TestValidationKindValues(t *testing.T) {
+	for _, tc := range []struct {
+		kind       ValidationKind
+		wire       string
+		classified bool
+	}{
+		{ValidationKindUnknown, "", false},
+		{ValidationKindNone, "none", true},
+		{ValidationKindSyntax, "syntax", true},
+		{ValidationKindStructural, "structural", true},
+		{ValidationKindExecution, "execution", true},
+	} {
+		if string(tc.kind) != tc.wire || tc.kind.Classified() != tc.classified {
+			t.Errorf("ValidationKind %q: classified %v; want wire %q, classified %v",
+				tc.kind, tc.kind.Classified(), tc.wire, tc.classified)
+		}
+	}
+	for _, k := range []ValidationKind{"STRUCTURAL", "Structural", " structural"} {
+		if k.Classified() {
+			t.Errorf("ValidationKind(%q) reads as classified", k)
+		}
+	}
+}
+
+// A result is classified only when all three facts are set. A payload from an
+// older producer has none of them and decodes to Unknown, not to "nothing was
+// done". A check with no outcome is not classified either.
+func TestAResultIsClassifiedOnlyWhenEveryFactIsSet(t *testing.T) {
+	var legacy ToolResult
+	if err := json.Unmarshal([]byte(`{"success":true}`), &legacy); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"success":true`) {
-		t.Fatalf("legacy success field changed shape: %s", b)
+	if legacy.MutationStatus != MutationUnknown || legacy.ValidationKind != ValidationKindUnknown ||
+		legacy.ValidationStatus != ValidationUnknown {
+		t.Errorf("a legacy payload decoded to %+v, want every fact unknown", legacy)
 	}
-	for _, unwanted := range []string{"mutation_status", "validation_status", "validation_kind"} {
-		if strings.Contains(string(b), unwanted) {
-			t.Errorf("unset %s must be omitted from the wire, got: %s", unwanted, b)
-		}
-	}
-}
-
-func TestNewFieldsRoundTrip(t *testing.T) {
-	in := ToolResult{
-		Success:          false,
-		MutationStatus:   MutationRefused,
-		ValidationKind:   ValidationKindSyntax,
-		ValidationStatus: ValidationFailed,
-		ValidationDetail: "SyntaxError: invalid syntax (line 4)",
-	}
-	b, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out ToolResult
-	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.MutationStatus != MutationRefused || out.ValidationStatus != ValidationFailed ||
-		out.ValidationKind != ValidationKindSyntax || out.ValidationDetail != in.ValidationDetail {
-		t.Fatalf("round trip lost fields: %+v", out)
+	for _, tc := range []struct {
+		name       string
+		res        ToolResult
+		classified bool
+	}{
+		{"zero value", ToolResult{}, false},
+		{"legacy payload", legacy, false},
+		{"check without outcome", ToolResult{MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax}, false},
+		{"explicit none", ToolResult{MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
+			ValidationStatus: ValidationNotRun}, true},
+		{"structural refusal", ToolResult{MutationStatus: MutationRefused, ValidationKind: ValidationKindStructural,
+			ValidationStatus: ValidationFailed}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.res.Classified() != tc.classified {
+				t.Errorf("Classified() = %v, want %v: %+v", tc.res.Classified(), tc.classified, tc.res)
+			}
+		})
 	}
 }
 
-// A payload from an older producer carries no new fields at all. It must
-// decode to the fail-closed zero values rather than to applied/passed.
-func TestLegacyPayloadDecodesFailClosed(t *testing.T) {
-	var out ToolResult
-	if err := json.Unmarshal([]byte(`{"success":true}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.MutationStatus.Applied() || out.ValidationStatus.Passed() {
-		t.Fatalf("a legacy payload decoded as applied/validated: %+v", out)
-	}
-	// The distinction the producer audit depends on: an unmigrated producer
-	// must NOT look like one that intentionally did nothing.
-	if out.MutationStatus != MutationUnknown {
-		t.Errorf("legacy payload MutationStatus = %q, want unknown", out.MutationStatus)
-	}
-	if out.ValidationStatus != ValidationUnknown {
-		t.Errorf("legacy payload ValidationStatus = %q, want unknown", out.ValidationStatus)
-	}
-	if out.Classified() {
-		t.Error("a legacy payload reports itself as fully classified")
-	}
-}
-
-// Syntax validation is labelled as such. It is not evidence that the task
-// was verified, and the kind is what keeps those separable.
-func TestSyntaxPassIsLabelledSyntaxNotTaskVerification(t *testing.T) {
-	r := ToolResult{
-		Success: true, MutationStatus: MutationApplied,
-		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
-	}
-	if r.ValidationKind != ValidationKindSyntax {
-		t.Fatalf("ValidationKind = %q, want syntax", r.ValidationKind)
-	}
-	if !r.ValidationStatus.Passed() {
-		t.Fatal("an explicit syntax pass must read as passed")
-	}
-}
-
-// Explicit none/not_run are intentional states and must survive the wire as
-// their named strings, distinguishable from Unknown in both directions.
-func TestExplicitNoneIsDistinctFromUnknown(t *testing.T) {
-	in := ToolResult{
-		Success: true, MutationStatus: MutationNone,
-		ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotRun,
-	}
-	b, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"mutation_status":"none"`, `"validation_kind":"none"`,
-		`"validation_status":"not_run"`} {
-		if !strings.Contains(string(b), want) {
-			t.Errorf("missing %s in %s", want, b)
-		}
-	}
-	var out ToolResult
-	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.MutationStatus == MutationUnknown || out.ValidationStatus == ValidationUnknown {
-		t.Fatal("explicit none/not_run collapsed to unknown on the round trip")
-	}
-	if !out.Classified() {
-		t.Fatal("an explicitly-none result must count as classified")
-	}
-}
-
-// A claimed check with no outcome is not a classified result.
-func TestSyntaxKindWithUnknownStatusIsUnclassified(t *testing.T) {
-	r := ToolResult{MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax}
-	if r.Classified() {
-		t.Fatal("syntax kind with an unknown status must not count as classified")
-	}
-}
-
-func TestMalformedValuesAreUnclassifiedAndNotSuccess(t *testing.T) {
-	for _, m := range []MutationStatus{"", "APPLIED", "Applied", " applied", "applied "} {
-		if m.Applied() || m.Classified() {
-			t.Errorf("MutationStatus(%q) leaked through", m)
-		}
-	}
-	for _, v := range []ValidationStatus{"", "PASSED", "Passed", " passed", "not-run"} {
-		if v.Passed() || v.Classified() {
-			t.Errorf("ValidationStatus(%q) leaked through", v)
-		}
-	}
-}
-
-// MutationUnobserved exists because command tools can change the workspace
-// without the harness ever looking. run_command performs no pre/post state
-// comparison, so `sed -i`, a build step, or `python fix.py` mutates the tree
-// invisibly. Reporting that as MutationNone would be a false claim -- "nothing
-// changed" is a fact this producer does not have. Unobserved says the true
-// thing: side effects were not measured.
-func TestUnobservedIsClassifiedButNotApplied(t *testing.T) {
-	if !MutationUnobserved.Classified() {
-		t.Error("Unobserved must be Classified: it is a current producer speaking")
-	}
-	if MutationUnobserved.Applied() {
-		t.Error("Unobserved must not satisfy Applied: nothing was measured")
-	}
-	if MutationUnobserved == MutationUnknown {
-		t.Error("Unobserved must be distinct from Unknown (unmigrated)")
-	}
-	if MutationUnobserved == MutationNone {
-		t.Error("Unobserved must be distinct from None (measured, nothing changed)")
-	}
-}
-
-// All four states stay mutually distinguishable across the wire.
-func TestUnknownNoneAppliedUnobservedAreFourDistinctStates(t *testing.T) {
-	seen := map[MutationStatus]bool{}
-	for _, m := range []MutationStatus{MutationUnknown, MutationNone, MutationApplied, MutationUnobserved} {
-		if seen[m] {
-			t.Fatalf("duplicate wire value for %q", m)
-		}
-		seen[m] = true
-	}
-	if MutationUnobserved != "unobserved" {
-		t.Fatalf("MutationUnobserved = %q, want \"unobserved\"", MutationUnobserved)
-	}
-	var out ToolResult
-	if err := json.Unmarshal([]byte(`{"success":true,"mutation_status":"unobserved"}`), &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.MutationStatus != MutationUnobserved || out.MutationStatus.Applied() {
-		t.Fatalf("unobserved did not survive decode as a non-applied state: %+v", out)
+// `success` keeps its shape on the wire. The new fields are omitted when
+// unset, and explicit none and not_run go out under their own names.
+func TestToolResultJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		res           ToolResult
+		want, omitted []string
+	}{
+		{"legacy success", ToolResult{Success: true},
+			[]string{`"success":true`},
+			[]string{"mutation_status", "validation_status", "validation_kind"}},
+		{"explicit none", ToolResult{Success: true, MutationStatus: MutationNone,
+			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotRun},
+			[]string{`"mutation_status":"none"`, `"validation_kind":"none"`, `"validation_status":"not_run"`},
+			nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.res)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("missing %s in %s", want, b)
+				}
+			}
+			for _, unwanted := range tc.omitted {
+				if strings.Contains(string(b), unwanted) {
+					t.Errorf("unset %s is on the wire: %s", unwanted, b)
+				}
+			}
+		})
 	}
 }
 
@@ -420,144 +341,64 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 		sites, envelopes, sites+envelopes)
 }
 
-// The states themselves round-trip inside the process. Wire non-exposure is a
-// deliberate boundary, not a limitation of the contract.
-func TestClassificationRoundTripsInternallyEvenThoughSSEOmitsIt(t *testing.T) {
-	for _, m := range []MutationStatus{MutationNone, MutationApplied,
-		MutationRefused, MutationFailed, MutationUnobserved} {
-		b, err := json.Marshal(ToolResult{MutationStatus: m,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out ToolResult
-		if err := json.Unmarshal(b, &out); err != nil {
-			t.Fatal(err)
-		}
-		if out.MutationStatus != m || !out.Classified() {
-			t.Fatalf("internal round trip lost %q: %+v", m, out)
-		}
-	}
-}
-
-// Structural validation is a distinct kind, not a flavour of syntax. In the
-// write_file handler the syntax gate runs FIRST and a structural rejection
-// therefore means syntax PASSED on those exact bytes -- labelling it
-// syntax/failed would assert the opposite of what happened.
-func TestStructuralIsARecognizedValidationKind(t *testing.T) {
-	if !ValidationKindStructural.Classified() {
-		t.Error("structural must be a classified validation kind")
-	}
-	if ValidationKindStructural == ValidationKindSyntax {
-		t.Error("structural must be distinct from syntax")
-	}
-	if ValidationKindStructural != "structural" {
-		t.Errorf("ValidationKindStructural = %q, want \"structural\"",
-			ValidationKindStructural)
-	}
-	r := ToolResult{
-		MutationStatus: MutationRefused,
-		ValidationKind: ValidationKindStructural, ValidationStatus: ValidationFailed,
-	}
-	if !r.Classified() {
-		t.Error("refused + structural/failed must be a classified result")
-	}
-	if r.ValidationStatus.Passed() {
-		t.Error("structural/failed must never read as passed")
-	}
-	if r.MutationStatus.Applied() {
-		t.Error("a structural refusal must never read as applied")
-	}
-}
-
-func TestMalformedStructuralKindFailsClosed(t *testing.T) {
-	for _, k := range []ValidationKind{"", "STRUCTURAL", "Structural", " structural"} {
-		if k.Classified() {
-			t.Errorf("ValidationKind(%q) leaked through as classified", k)
-		}
-	}
-}
-
-func TestStructuralRoundTripsInternally(t *testing.T) {
-	in := ToolResult{
-		MutationStatus: MutationRefused,
-		ValidationKind: ValidationKindStructural, ValidationStatus: ValidationFailed,
-		ValidationDetail: "unresolved call: render_template",
-	}
-	b, err := json.Marshal(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out ToolResult
-	if err := json.Unmarshal(b, &out); err != nil {
-		t.Fatal(err)
-	}
-	if out.ValidationKind != ValidationKindStructural ||
-		out.ValidationStatus != ValidationFailed ||
-		out.ValidationDetail != in.ValidationDetail {
-		t.Fatalf("structural round trip lost fields: %+v", out)
-	}
-}
-
 // --- The model-facing boundary ----------------------------------------------
 //
-// The SSE guard above proved the wire never carried classification. The
-// conversation did: ToolResult.MarshalText marshalled the whole struct into
-// the tool message, so every branch that classified itself also put four new
-// keys in front of the model. Phase 3A's claim of unchanged external
-// behaviour held for disk and for SSE, and did not hold here.
-//
-// The projection is an allowlist. These tests pin what crosses it.
+// A tool result reaches the model as the text of a tool message.
+// ToolResult.MarshalText builds that text from an allowlist (ModelFacing), so
+// the classification facts stay inside the process. These tests pin what
+// crosses the allowlist.
 
-// representativeResults covers one of each mutation outcome plus the warning
-// shape -- a write that landed with a defect notice, which is the case where
-// `data` and `error` are both populated and most likely to drift.
-func representativeResults() []struct {
+// representativeResults holds one result of each mutation outcome, plus a
+// warned write: a write that landed with a defect notice, where `data` and
+// `error` are both set and the shape is most likely to drift.
+var representativeResults = []struct {
 	name string
 	res  ToolResult
 	want string
-} {
-	return []struct {
-		name string
-		res  ToolResult
-		want string
-	}{
-		{"applied", ToolResult{Success: true, Data: json.RawMessage(`{"bytes_written":6}`),
-			MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-			ValidationStatus: ValidationPassed, ValidationDetail: "parsed"},
-			`{"success":true,"data":{"bytes_written":6}}`},
-		{"refused", ToolResult{Success: false, Error: "edit_file: would not parse",
-			MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax,
-			ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError"},
-			`{"success":false,"error":"edit_file: would not parse"}`},
-		{"none", ToolResult{Success: false, Error: "file not found: gone.py",
-			MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
-			ValidationStatus: ValidationNotApplicable},
-			`{"success":false,"error":"file not found: gone.py"}`},
-		{"failed", ToolResult{Success: false, Error: "delete_file: permission denied",
-			MutationStatus: MutationFailed, ValidationKind: ValidationKindNone,
-			ValidationStatus: ValidationNotApplicable},
-			`{"success":false,"error":"delete_file: permission denied"}`},
-		{"unobserved", ToolResult{Success: true, Data: json.RawMessage(`{"exit_code":0}`),
-			MutationStatus: MutationUnobserved, ValidationKind: ValidationKindNone,
-			ValidationStatus: ValidationNotApplicable},
-			`{"success":true,"data":{"exit_code":0}}`},
-		{"warned write", ToolResult{Success: true,
-			Data:  json.RawMessage(`{"bytes_written":41,"warning":"does not parse"}`),
-			Error: "", MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-			ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError: invalid syntax"},
-			`{"success":true,"data":{"bytes_written":41,"warning":"does not parse"}}`},
-		{"v3 provenance survives", ToolResult{Success: true, Data: json.RawMessage(`{"ok":true}`),
-			MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
-			ValidationStatus: ValidationPassed,
-			V3Used:           true, CandidatesTested: 4, WinningScore: 0.75, PhaseSolved: "phase1"},
-			`{"success":true,"data":{"ok":true},"v3_used":true,"candidates_tested":4,"winning_score":0.75,"phase_solved":"phase1"}`},
-	}
+}{
+	{"applied", ToolResult{Success: true, Data: json.RawMessage(`{"bytes_written":6}`),
+		MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+		ValidationStatus: ValidationPassed, ValidationDetail: "parsed"},
+		`{"success":true,"data":{"bytes_written":6}}`},
+	{"refused", ToolResult{Success: false, Error: "edit_file: would not parse",
+		MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax,
+		ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError"},
+		`{"success":false,"error":"edit_file: would not parse"}`},
+	{"structural refusal", ToolResult{Success: false, Error: "write_file: unresolved call",
+		MutationStatus: MutationRefused, ValidationKind: ValidationKindStructural,
+		ValidationStatus: ValidationFailed, ValidationDetail: "unresolved call: render_template"},
+		`{"success":false,"error":"write_file: unresolved call"}`},
+	{"none", ToolResult{Success: false, Error: "file not found: gone.py",
+		MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable},
+		`{"success":false,"error":"file not found: gone.py"}`},
+	{"not run", ToolResult{Success: true, Data: json.RawMessage(`{"listed":2}`),
+		MutationStatus: MutationNone, ValidationKind: ValidationKindNone,
+		ValidationStatus: ValidationNotRun},
+		`{"success":true,"data":{"listed":2}}`},
+	{"failed", ToolResult{Success: false, Error: "delete_file: permission denied",
+		MutationStatus: MutationFailed, ValidationKind: ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable},
+		`{"success":false,"error":"delete_file: permission denied"}`},
+	{"unobserved", ToolResult{Success: true, Data: json.RawMessage(`{"exit_code":0}`),
+		MutationStatus: MutationUnobserved, ValidationKind: ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable},
+		`{"success":true,"data":{"exit_code":0}}`},
+	{"warned write", ToolResult{Success: true,
+		Data:  json.RawMessage(`{"bytes_written":41,"warning":"does not parse"}`),
+		Error: "", MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+		ValidationStatus: ValidationFailed, ValidationDetail: "SyntaxError: invalid syntax"},
+		`{"success":true,"data":{"bytes_written":41,"warning":"does not parse"}}`},
+	{"v3 provenance survives", ToolResult{Success: true, Data: json.RawMessage(`{"ok":true}`),
+		MutationStatus: MutationApplied, ValidationKind: ValidationKindSyntax,
+		ValidationStatus: ValidationPassed,
+		V3Used:           true, CandidatesTested: 4, WinningScore: 0.75, PhaseSolved: "phase1"},
+		`{"success":true,"data":{"ok":true},"v3_used":true,"candidates_tested":4,"winning_score":0.75,"phase_solved":"phase1"}`},
 }
 
 func TestModelFacingTextCarriesNoClassification(t *testing.T) {
 	banned := []string{"mutation_status", "validation_kind", "validation_status", "validation_detail"}
-	for _, c := range representativeResults() {
+	for _, c := range representativeResults {
 		t.Run(c.name, func(t *testing.T) {
 			got := c.res.MarshalText()
 			for _, key := range banned {
@@ -565,19 +406,18 @@ func TestModelFacingTextCarriesNoClassification(t *testing.T) {
 					t.Errorf("model-facing text leaks %q: %s", key, got)
 				}
 			}
-			// Byte-identical to what the parent produced for the same
-			// success/data/error, which is the same struct with the
-			// classification fields at their zero values.
 			if got != c.want {
 				t.Errorf("model-facing text changed:\n got %s\nwant %s", got, c.want)
 			}
+			// The text is the plain JSON of the same result with the
+			// classification fields left unset.
 			legacy := ToolResult{Success: c.res.Success, Data: c.res.Data, Error: c.res.Error,
 				V3Used: c.res.V3Used, CandidatesTested: c.res.CandidatesTested,
 				WinningScore: c.res.WinningScore, PhaseSolved: c.res.PhaseSolved,
 				VerificationEvidence: c.res.VerificationEvidence}
-			parent, _ := json.Marshal(legacy)
-			if got != string(parent) {
-				t.Errorf("diverged from the parent shape:\n got %s\nwant %s", got, parent)
+			legacyJSON, _ := json.Marshal(legacy)
+			if got != string(legacyJSON) {
+				t.Errorf("diverged from the legacy shape:\n got %s\nwant %s", got, legacyJSON)
 			}
 		})
 	}
@@ -586,7 +426,7 @@ func TestModelFacingTextCarriesNoClassification(t *testing.T) {
 // The projection narrows the conversation, not the contract. The same result
 // still marshals with every fact intact for internal use.
 func TestInternalResultsStayFullyClassifiedBehindTheProjection(t *testing.T) {
-	for _, c := range representativeResults() {
+	for _, c := range representativeResults {
 		t.Run(c.name, func(t *testing.T) {
 			b, err := json.Marshal(c.res)
 			if err != nil {

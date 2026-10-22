@@ -7,11 +7,10 @@ import (
 	"testing"
 )
 
-// P-agent-1/INTEGRITY#3: once an exit gate's three bounces were spent, the
-// fourth exit fell straight through to "completed", with nothing in the
-// status, the reason or the summary. The audit reproduced it with an unread
-// citation (completed/text_reply) and a stdin-only verification
-// (completed/deliverables_demonstrated).
+// Once an exit gate's bounces are spent, the next exit is judged: it must not
+// fall through to "completed" with nothing in the status, the reason or the
+// summary about what the gate still found (an unread citation, a stdin-only
+// verification, an unresolved claim).
 
 // exitUntilSpent drives the exit the way the loop does: each bounce is a
 // refused exit, and the exit after the last one is judged.
@@ -179,9 +178,9 @@ func TestACleanExitReportsNothingUnresolved(t *testing.T) {
 	}
 }
 
-// P-agent-3/INTEGRITY#1: a completion that rests on a parse said
-// "deliverables_demonstrated", and the model's "All tests pass and everything
-// works" was shown word for word over code nothing had run.
+// A completion that rests on a parse says so: it is not
+// "deliverables_demonstrated", and a claim like "All tests pass and everything
+// works" over code nothing ran is not shown word for word.
 func TestAParseOnlyCompletionSaysSo(t *testing.T) {
 	cases := []struct {
 		name, file, body, command, prose string
@@ -228,9 +227,8 @@ func TestAParseOnlyCompletionSaysSo(t *testing.T) {
 	}
 }
 
-// GB-4#5 part 1: a run whose deliverable no check applies to cannot
-// complete, and the summary said "the run ended without finishing the task".
-// It now says which file has no check.
+// A run whose deliverable no check applies to cannot complete, and the
+// summary names the file that has no check.
 func TestAFileWithNoCheckIsNamed(t *testing.T) {
 	ctx, dir := sepCtx(t, nil)
 	withSyntaxSandbox(t, ctx)

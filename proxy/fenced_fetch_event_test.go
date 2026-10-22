@@ -3,22 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
-// Each fenced attempt is recorded in a fenced_fetch event (#254): what the
-// wire showed and what became of the attempt. In the smoke runs on 4403ae8
-// and fc8321d, 34 of 84 sessions lost the fenced channel the same way: the
-// first attempt streamed the file and could not close, the raw retry sent no
-// content, and that silent retry turned the channel off. Nothing in the event
-// stream showed it.
+// Each fenced attempt is recorded in a fenced_fetch event: what the wire
+// showed and what became of the attempt. A channel can be lost when the first
+// attempt streams the file and cannot close, and the raw retry sends no
+// content: these events make that visible in the event stream.
 
 type fencedEvents struct {
 	mu  sync.Mutex
@@ -62,33 +58,9 @@ func isChatCompletion(r *http.Request) bool {
 	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/chat/completions")
 }
 
-// serveReasoningOnly streams reasoning_content frames and no content until
-// the client gives up.
-func serveReasoningOnly(w http.ResponseWriter, r *http.Request, stop <-chan struct{}) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	fl, _ := w.(http.Flusher)
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-stop:
-			return
-		default:
-		}
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{{"delta": map[string]string{"reasoning_content": "thinking "}}},
-		})
-		fmt.Fprintf(w, "data: %s\n\n", d)
-		if fl != nil {
-			fl.Flush()
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 func TestAFencedAttemptThatIsUsedIsRecorded(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveFencedBlock(w, "````python\nprint(1)\n````")
+		serveReply(w, "````python\nprint(1)\n````")
 	}))
 	defer srv.Close()
 	ctx, fe := fencedEventCtx(t, srv.URL)
@@ -108,8 +80,8 @@ func TestAFencedAttemptThatIsUsedIsRecorded(t *testing.T) {
 	}
 }
 
-// The smoke-run shape: the fence attempt streams the file and cannot close,
-// and the raw retry reasons without sending content.
+// The fence attempt streams the file and cannot close, and the raw retry
+// reasons without sending content.
 func TestASilentRetryIsRecordedWithWhatTheWireShowed(t *testing.T) {
 	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "5")
 	t.Setenv("ATLAS_FENCED_IDLE_SEC", "1")
@@ -187,8 +159,7 @@ func TestAFetchWithNoResponseIsRecorded(t *testing.T) {
 }
 
 // The refusal that turns the channel off says where the stall was: this
-// file's own fetch, or an earlier one. It said "earlier in this run" for
-// both.
+// file's own fetch, or an earlier one.
 func TestTheChannelOffRefusalSaysWhereTheStallWas(t *testing.T) {
 	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "5")
 	t.Setenv("ATLAS_FENCED_STALL_SEC", "1")
@@ -201,21 +172,8 @@ func TestTheChannelOffRefusalSaysWhereTheStallWas(t *testing.T) {
 	ctx.PermissionMode = PermissionYolo
 	ctx.MaxTurns = 2
 	ctx.Ctx = context.Background()
-	var mu sync.Mutex
-	var errs []string
-	ctx.StreamFn = func(et string, data interface{}) {
-		m, ok := data.(map[string]interface{})
-		if et != "tool_result" || !ok || m["tool"] != "write_file" {
-			return
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		e, _ := m["error"].(string)
-		errs = append(errs, e)
-	}
-	runAgentLoop(ctx, "Create solve.py.")
-	mu.Lock()
-	defer mu.Unlock()
+
+	errs := writeFileErrors(ctx, "Create solve.py.")
 	if len(errs) < 2 {
 		t.Fatalf("%d write results, want 2: %q", len(errs), errs)
 	}

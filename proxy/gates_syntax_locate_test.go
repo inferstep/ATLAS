@@ -5,15 +5,10 @@ import (
 	"testing"
 )
 
-// An unclosed brace in the MIDDLE of a file is a bug, not a truncated write.
-//
-// Measured on multifile_cli: test_store.py failed with "'{' was never closed
-// (line 44)" and the rejection said the call looked truncated and to resend
-// the complete content. The model resent it, identically, twice, until the
-// repetition breaker ended the session. The task went 0/2 across two runs.
-//
-// Truncation puts the failure at the END of the content, which is now
-// checkable because the syntax check carries the line number.
+// An unclosed brace in the middle of a file is a bug, not a truncated write.
+// Told that its call looked truncated, a model resends the same content until
+// the repetition breaker ends the session. Truncation puts the failure at the
+// end of the content, and the syntax check's line number shows where it is.
 
 func midFileUnclosed() string {
 	var b strings.Builder
@@ -28,38 +23,35 @@ func midFileUnclosed() string {
 	return b.String()
 }
 
-func TestAnUnclosedBraceMidFileIsNotCalledTruncation(t *testing.T) {
-	msg := fallbackSyntaxRejection("test_store.py", midFileUnclosed(),
-		"SyntaxError: '{' was never closed (line 42)")
-	if strings.Contains(msg, "truncated tool call") {
-		t.Errorf("a failure 20 lines from the end is not truncation: %s", msg)
-	}
-	if !strings.Contains(msg, "The offending line 42") {
-		t.Errorf("must quote the offending line: %s", msg)
-	}
-	if !strings.Contains(msg, "d = {'a': 1") {
-		t.Errorf("must show the actual source: %s", msg)
-	}
-}
-
-func TestAFailureAtTheEndStillReadsAsTruncation(t *testing.T) {
-	content := "def f():\n    return {\n"
-	msg := fallbackSyntaxRejection("a.py", content,
-		"SyntaxError: '{' was never closed (line 2)")
-	if !strings.Contains(msg, "truncated tool call") {
-		t.Errorf("a failure on the last line is the truncation shape: %s", msg)
-	}
-	// Even then, showing the line costs nothing and grounds the retry.
-	if !strings.Contains(msg, "The offending line 2") {
-		t.Errorf("truncation advice should still quote the line: %s", msg)
-	}
-}
-
-func TestNoLineNumberKeepsTheOldBehaviour(t *testing.T) {
-	msg := fallbackSyntaxRejection("a.py", "x = (\n",
-		"SyntaxError: unexpected EOF while parsing")
-	if !strings.Contains(msg, "truncated tool call") {
-		t.Errorf("without a location the truncation guess is all we have: %s", msg)
+func TestFallbackSyntaxRejection(t *testing.T) {
+	for _, c := range []struct {
+		name, path, content, checkerError string
+		truncation                        bool
+		quotes                            []string
+	}{
+		{"unclosed brace mid-file", "test_store.py", midFileUnclosed(),
+			"SyntaxError: '{' was never closed (line 42)",
+			false, []string{"The offending line 42", "d = {'a': 1"}},
+		// Even then, showing the line costs nothing and grounds the retry.
+		{"failure on the last line", "a.py", "def f():\n    return {\n",
+			"SyntaxError: '{' was never closed (line 2)",
+			true, []string{"The offending line 2"}},
+		// Without a location, truncation is the only guess.
+		{"no line number", "a.py", "x = (\n",
+			"SyntaxError: unexpected EOF while parsing",
+			true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg := fallbackSyntaxRejection(c.path, c.content, c.checkerError)
+			if got := strings.Contains(msg, "truncated tool call"); got != c.truncation {
+				t.Errorf("reads as truncation: %v, want %v: %s", got, c.truncation, msg)
+			}
+			for _, want := range c.quotes {
+				if !strings.Contains(msg, want) {
+					t.Errorf("must quote %q: %s", want, msg)
+				}
+			}
+		})
 	}
 }
 
@@ -79,34 +71,31 @@ func TestLocateSyntaxLineRejectsOutOfRange(t *testing.T) {
 }
 
 // One mis-escaped newline traps the next statement inside a comment. The file
-// may still parse, or dies with an IndentationError whose reported line is a
-// downstream casualty: measured, the rejection quoted line 45 (blank) while
-// the fused comment sat at line 40, and the model re-sent identical content
-// until the repetition breaker ended the session.
-func TestAFusedCommentLineIsNamed(t *testing.T) {
-	content := "x = 1\n" +
-		"# If the value changes, it's a transition\\n        if a != b:\n" +
-		"    y = 2\n"
-	hint := fusedLineHint(content)
-	if hint == "" {
-		t.Fatal("the fused line must be named")
-	}
-	if !strings.Contains(hint, "line 2") {
-		t.Errorf("must point at the comment line, got: %s", hint)
-	}
-	if !strings.Contains(hint, "trapped INSIDE the comment") {
-		t.Errorf("must say what happened: %s", hint)
-	}
-}
-
-func TestAnOrdinaryCommentMentioningBackslashNIsLeftAlone(t *testing.T) {
-	for _, content := range []string{
-		"# split the input on \\n characters\nx = 1\n",
-		"s = 'a\\nb'\n",
-		"# plain comment\nif a != b:\n    pass\n",
+// may still parse, or die with an IndentationError whose reported line is a
+// later casualty, so the hint names the fused comment line itself. A comment
+// or string that only mentions \n is left alone.
+func TestFusedLineHint(t *testing.T) {
+	for _, c := range []struct {
+		name, content string
+		quotes        []string // nil: no hint
+	}{
+		{"fused comment",
+			"x = 1\n" + "# If the value changes, it's a transition\\n        if a != b:\n" + "    y = 2\n",
+			[]string{"line 2", "trapped INSIDE the comment"}},
+		{"comment mentioning \\n", "# split the input on \\n characters\nx = 1\n", nil},
+		{"string holding \\n", "s = 'a\\nb'\n", nil},
+		{"plain comment", "# plain comment\nif a != b:\n    pass\n", nil},
 	} {
-		if hint := fusedLineHint(content); hint != "" {
-			t.Errorf("false positive on %q: %s", content, hint)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			hint := fusedLineHint(c.content)
+			if (hint != "") != (c.quotes != nil) {
+				t.Fatalf("hint = %q, want a hint: %v", hint, c.quotes != nil)
+			}
+			for _, want := range c.quotes {
+				if !strings.Contains(hint, want) {
+					t.Errorf("hint must contain %q: %s", want, hint)
+				}
+			}
+		})
 	}
 }

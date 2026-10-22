@@ -6,10 +6,9 @@ import (
 )
 
 // The plan's verify step names its command by guess. A passing verification
-// of the same program satisfies it, whatever the port or flags; anything
-// else keeps the literal rule. Smoke run 2026-09-27: planned `curl
-// http://127.0.0.1:5000`, the app served on 5001, the passing probe on 5001
-// did not count, and a finished task ended "stopped".
+// of the same program satisfies it, whatever the port or flags: a plan may
+// say `curl http://127.0.0.1:5000` while the app serves on 5001. Anything
+// else keeps the literal rule.
 
 func flaskPlan() *Plan {
 	return &Plan{VerifyStep: "s5", Steps: []PlanStep{
@@ -26,31 +25,27 @@ func runArgs(cmd string) json.RawMessage {
 	return b
 }
 
-func TestAPassingProbeOfTheSameProgramSatisfiesTheVerifyStep(t *testing.T) {
-	ctx := &AgentContext{Plan: flaskPlan()}
-	ctx.PlanStepsSatisfied = []bool{true, true, true, true, false}
-	recordPlanAdherence(ctx, "run_command", runArgs("curl -sf http://127.0.0.1:5001/"), true)
-	if !ctx.PlanStepsSatisfied[4] {
-		t.Error("a passing curl probe on the app's real port did not satisfy the verify step")
-	}
-}
-
-func TestTheVerifyStepIsNotSatisfiedByOtherEvidence(t *testing.T) {
+func TestWhatSatisfiesTheVerifyStep(t *testing.T) {
 	for _, c := range []struct {
 		name, cmd string
 		success   bool
+		satisfies bool
 	}{
-		{"another program", "python3 app.py", true},
-		{"a failed probe", "curl -sf http://127.0.0.1:5001/", false},
-		{"curl without -f proves nothing", "curl http://127.0.0.1:5001/", true},
-		{"a static check", "python3 -m py_compile app.py", true},
+		{"a passing probe on the app's real port", "curl -sf http://127.0.0.1:5001/", true, true},
+		{"another program", "python3 app.py", true, false},
+		{"a failed probe", "curl -sf http://127.0.0.1:5001/", false, false},
+		{"curl without -f proves nothing", "curl http://127.0.0.1:5001/", true, false},
+		{"a static check", "python3 -m py_compile app.py", true, false},
 	} {
-		ctx := &AgentContext{Plan: flaskPlan()}
-		ctx.PlanStepsSatisfied = []bool{true, true, true, true, false}
-		recordPlanAdherence(ctx, "run_command", runArgs(c.cmd), c.success)
-		if ctx.PlanStepsSatisfied[4] {
-			t.Errorf("%s (%q) satisfied the verify step", c.name, c.cmd)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			ctx := &AgentContext{Plan: flaskPlan()}
+			ctx.PlanStepsSatisfied = []bool{true, true, true, true, false}
+			recordPlanAdherence(ctx, "run_command", runArgs(c.cmd), c.success)
+			if ctx.PlanStepsSatisfied[4] != c.satisfies {
+				t.Errorf("%q (success %v) satisfied the verify step: %v, want %v",
+					c.cmd, c.success, ctx.PlanStepsSatisfied[4], c.satisfies)
+			}
+		})
 	}
 }
 

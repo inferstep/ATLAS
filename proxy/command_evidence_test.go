@@ -8,10 +8,9 @@ import (
 	"testing"
 )
 
-// The audit's probes (P-guardrails/INTEGRITY#1-2, P-agent-1/INTEGRITY#1-2,
-// P-agent-3/INTEGRITY#2, GB-4#3) are the cases below: a parse, a lint or a
-// `--version` counted as verification, `| tail` and `|| true` hid a failing
-// test, and a red run after a green one never blocked completion.
+// The cases below are the ways a check can be miscounted: a parse, a lint or
+// a `--version` taken as verification, `| tail` or `|| true` hiding a failing
+// test, and a red run after a green one that does not block completion.
 
 func TestClassifyCommandEvidence(t *testing.T) {
 	cases := []struct {
@@ -187,7 +186,7 @@ func TestHereDocumentsAreNotSplit(t *testing.T) {
 		t.Fatalf("the body did not stay with its command: %q", ev.Honest)
 	}
 	if !executionAttempt(strings.Join(ev.Honest, " && "), "store.py") {
-		t.Fatal("an import inside a here-document is no longer an execution attempt")
+		t.Fatal("an import inside a here-document is not an execution attempt")
 	}
 }
 
@@ -204,7 +203,7 @@ func ranRed(stderr string) *ToolResult {
 }
 
 // A red run after a green one takes the verification back: the latest result
-// on these bytes is the one that describes them (P-agent-1/INTEGRITY#2).
+// on these bytes is the one that describes them.
 func TestARedRunAfterAGreenOneTakesTheVerificationBack(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -241,8 +240,7 @@ func TestARedRunAfterAGreenOneTakesTheVerificationBack(t *testing.T) {
 }
 
 // A parse or a lint is not verification. It is not recorded, it does not
-// discharge the contract, and the run is told why at the exit
-// (P-agent-3/INTEGRITY#2, P-tools-2/INTEGRITY#1).
+// discharge the contract, and the run is told why at the exit.
 func TestAStaticCheckIsNeverVerification(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -266,7 +264,7 @@ func TestAStaticCheckIsNeverVerification(t *testing.T) {
 	}
 }
 
-// A test whose failure `| tail` hid is not a pass (P-guardrails/INTEGRITY#1).
+// A test whose failure `| tail` hid is not a pass.
 func TestAHiddenResultIsNeverVerification(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -413,7 +411,7 @@ func TestAHiddenExecutionSettlesNoDebt(t *testing.T) {
 	}
 	settleDebtByExecution(ctx, st, "python3 app.py", true)
 	if len(st.mutationDebt) != 0 {
-		t.Fatal("a clean run no longer settles content debt")
+		t.Fatal("a clean run did not settle content debt")
 	}
 }
 

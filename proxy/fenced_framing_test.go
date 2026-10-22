@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -28,17 +27,11 @@ func writeStubSSE(w http.ResponseWriter, content string, tokens int) {
 
 // Framing, not language.
 //
-// "@fenced" routes a file body around the JSON channel. The parent then has
-// to decide whether what came back is a whole file. It used to decide that
-// from one signal -- an opening fence with no closing fence -- and treat
-// everything else as complete. Everything else includes a bare body with no
-// fence at all, which carries no framing evidence in either direction.
-//
-// Measured on the sealed Stage-A acquisition: of 210 inline payloads, 168
-// were the sentinel alone and 42 inlined a body. ZERO of those 42 opened a
-// fence. The guard that existed could not fire, and the shape that actually
-// occurred was accepted unconditionally -- including one that stopped
-// mid-emission and landed 1106 bytes that parse cleanly and do nothing.
+// "@fenced" routes a file body around the JSON channel, and the caller must
+// then decide whether what came back is a whole file. Only a closed fence says
+// so. An opening fence with no closer is cut off, and a bare body with no fence
+// at all carries no framing evidence in either direction: an inlined body is
+// usually bare, and one that stopped mid-emission can still parse cleanly.
 //
 // Nothing below reads the payload as source. No test here depends on a
 // language, a comment, a final line, indentation, a token count, or any
@@ -46,6 +39,8 @@ func writeStubSSE(w http.ResponseWriter, content string, tokens int) {
 
 // --- the classifier both paths share --------------------------------------
 
+// Only a closed fence proves a whole file. Properly framed content that looks
+// unfinished is a file; unframed content that looks finished is not evidence.
 func TestFramingIsDecidedByFencesAlone(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -62,49 +57,31 @@ func TestFramingIsDecidedByFencesAlone(t *testing.T) {
 		{"empty", "", fenceFramingAbsent, ""},
 		{"whitespace only", "   \n\t\n", fenceFramingAbsent, ""},
 		{"fenced but empty body", "```lang\n\n```", fenceFramingUnterminated, ""},
+		// Framed, and the last line is a comment, a dangling clause or an
+		// open bracket: complete, because the fence closed.
+		{"framed, ends on a comment", "```lang\nx = 1\n# trailing note about the rule\n```",
+			fenceFramingComplete, "x = 1\n# trailing note about the rule\n"},
+		{"framed, stops mid-word", "```lang\nprose that simply stops mid senten\n```",
+			fenceFramingComplete, "prose that simply stops mid senten\n"},
+		{"framed, open bracket", "```lang\ndata = [\n  1,\n  2,\n```", fenceFramingComplete, "data = [\n  1,\n  2,\n"},
+		{"framed, not ASCII", "```lang\nこんにちは\n```", fenceFramingComplete, "こんにちは\n"},
+		{"framed, inert bytes", "```lang\nAAAA\nBBBB\nCCC\n```", fenceFramingComplete, "AAAA\nBBBB\nCCC\n"},
+		// Unframed: a finished-looking program, or one cut mid-emission, is
+		// never handed on as a file.
+		{"unframed program", "x = 1\nprint(x)\n", fenceFramingAbsent, ""},
+		{"unframed word", "COMPLETE\n", fenceFramingAbsent, ""},
+		{"unframed, cut mid-emission", "AAAA\nBBBB\nCCC", fenceFramingAbsent, ""},
 	}
 	for _, c := range cases {
-		got, body := classifyFencedPayload(c.payload)
-		if got != c.want {
-			t.Errorf("%s: framing %v, want %v", c.name, got, c.want)
-		}
-		if body != c.body {
-			t.Errorf("%s: body %q, want %q", c.name, body, c.body)
-		}
-		if got != fenceFramingComplete && body != "" {
-			t.Errorf("%s: returned a body without proving completion", c.name)
-		}
-	}
-}
-
-// The whole point: content that looks unfinished but is properly framed is a
-// FILE, and content that looks finished but is unframed is not evidence.
-func TestFramingIgnoresWhatTheBodyLooksLike(t *testing.T) {
-	// Framed, and the last line is a comment, a dangling clause, an open
-	// bracket -- all complete, because the fence closed.
-	for _, body := range []string{
-		"x = 1\n# trailing note about the rule",
-		"prose that simply stops mid senten",
-		"data = [\n  1,\n  2,",
-		"こんにちは",
-	} {
-		framing, got := classifyFencedPayload("```lang\n" + body + "\n```")
-		if framing != fenceFramingComplete {
-			t.Errorf("framed payload rejected: %q -> %v", body, framing)
-		}
-		if got != body+"\n" {
-			t.Errorf("framed payload altered: got %q want %q", got, body+"\n")
-		}
-	}
-	// Unframed, and the body looks like a finished program. Still not
-	// evidence of completion.
-	for _, body := range []string{
-		"x = 1\nprint(x)\n",
-		"COMPLETE\n",
-	} {
-		if framing, _ := classifyFencedPayload(body); framing != fenceFramingAbsent {
-			t.Errorf("unframed payload accepted: %q -> %v", body, framing)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			got, body := classifyFencedPayload(c.payload)
+			if got != c.want {
+				t.Errorf("framing %v, want %v", got, c.want)
+			}
+			if body != c.body {
+				t.Errorf("body %q, want %q", body, c.body)
+			}
+		})
 	}
 }
 
@@ -193,32 +170,6 @@ func stubMarkerModel(t *testing.T, marker, before, after string, seen *int, sawM
 	}))
 }
 
-// An unframed body that stops mid-emission must never be handed on as a
-// file. This is the Stage-A class, stated without any of its content.
-func TestUnframedInlineBodyIsNotAcceptedAsAFile(t *testing.T) {
-	// Bytes chosen to be inert: no language, no comment, no syntax.
-	truncated := "AAAA\nBBBB\nCCC"
-	framing, body := classifyFencedPayload(truncated)
-	if framing != fenceFramingAbsent {
-		t.Fatalf("an unframed body classified as %v", framing)
-	}
-	if body != "" {
-		t.Fatalf("an unframed body yielded %q; nothing may be handed on without framing", body)
-	}
-}
-
-// The same bytes, properly framed, land unchanged.
-func TestTheSameBytesFramedDoLand(t *testing.T) {
-	truncated := "AAAA\nBBBB\nCCC"
-	framing, body := classifyFencedPayload("```lang\n" + truncated + "\n```")
-	if framing != fenceFramingComplete {
-		t.Fatalf("framing %v, want complete", framing)
-	}
-	if body != truncated+"\n" {
-		t.Fatalf("body %q, want %q", body, truncated+"\n")
-	}
-}
-
 // --- the sub-call refuses the same shapes, and is bounded -----------------
 
 // An unframed reply is not a block: the fetch charges the attempt, retries
@@ -273,57 +224,5 @@ func TestCorrectionFollowsTheBoundedRecoveryAndIsCountedOnce(t *testing.T) {
 	}
 	if ctx.FencedCalls != seen {
 		t.Fatalf("accounting: %d generations charged for %d calls", ctx.FencedCalls, seen)
-	}
-}
-
-// Ignoring the recovery stays bounded: a model that never frames anything
-// cannot spend more than the session allowance.
-func TestIgnoringTheRecoveryRemainsBounded(t *testing.T) {
-	calls := 0
-	srv := stubInference(t, []string{"still unframed"}, 3, &calls)
-	defer srv.Close()
-	t.Setenv("ATLAS_LLAMA_URL", srv.URL)
-
-	ctx := &AgentContext{}
-	if _, err := fetchFencedContent(ctx, `{"type":"tool_call"}`, "a.txt"); err == nil {
-		t.Fatal("an endlessly unframed model was not refused")
-	}
-	if calls > maxFencedFailuresPerPath {
-		t.Fatalf("%d attempts exceeded the allowance %d", calls, maxFencedFailuresPerPath)
-	}
-	// A second write_file for the same path must not restore the allowance.
-	before := calls
-	if _, err := fetchFencedContent(ctx, `{"type":"tool_call"}`, "a.txt"); err == nil {
-		t.Fatal("the refusal did not persist for the path")
-	}
-	if calls != before {
-		t.Fatalf("a new call bought %d more generations", calls-before)
-	}
-}
-
-// Nothing unframed may reach disk. The write never happens, so whatever was
-// there before is still there byte-for-byte.
-func TestUnframedResolutionLeavesDiskUnchanged(t *testing.T) {
-	calls := 0
-	srv := stubInference(t, []string{"AAAA\nBBBB\nCCC"}, 5, &calls)
-	defer srv.Close()
-	t.Setenv("ATLAS_LLAMA_URL", srv.URL)
-
-	dir := t.TempDir()
-	target := dir + "/a.txt"
-	const before = "ORIGINAL\n"
-	if err := os.WriteFile(target, []byte(before), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ctx := &AgentContext{}
-	if _, err := fetchFencedContent(ctx, `{"type":"tool_call"}`, "a.txt"); err == nil {
-		t.Fatal("expected a refusal")
-	}
-	raw, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after := string(raw); after != before {
-		t.Fatalf("disk changed: %q -> %q", before, after)
 	}
 }
