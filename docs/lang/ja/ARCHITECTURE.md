@@ -1,4 +1,4 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: 8d01e1fe -->
+<!-- source: docs/ARCHITECTURE.md synced-through: 466a1142e05780965df4e27c30fd389eb9fa701c -->
 > **[English](../../ARCHITECTURE.md)** | **[简体中文](../zh-CN/ARCHITECTURE.md)** | **日本語** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS アーキテクチャ

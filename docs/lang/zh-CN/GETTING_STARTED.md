@@ -1,4 +1,4 @@
-<!-- source: docs/GETTING_STARTED.md synced-through: eec0147b99954591320ee839241ce8a268e173d6 -->
+<!-- source: docs/GETTING_STARTED.md synced-through: 5610fde5ba546c1b0f7c7cb0c1e5b6b4339083b7 -->
 > **[English](../../GETTING_STARTED.md)** | **简体中文**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([GETTING_STARTED.md](../../GETTING_STARTED.md)) 有出入，以英文原版为准。

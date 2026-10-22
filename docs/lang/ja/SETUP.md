@@ -1,4 +1,4 @@
-<!-- source: docs/SETUP.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
+<!-- source: docs/SETUP.md synced-through: 7d90cbee05ec5196e2ed3f72ffc52735ce8ce245 -->
 > **[English](../../SETUP.md)** | **[简体中文](../zh-CN/SETUP.md)** | **日本語** | **[한국어](../ko/SETUP.md)**
 
 # ATLAS セットアップガイド
