@@ -57,7 +57,7 @@ def calls(folder, name="fetch"):
 
 def run(folder, body, tries=None, wait="0"):
     script = "set -euo pipefail\n" + LOGS + function("retry_download") + setting("PIP_NETWORK_ERROR") + setting(
-        "GO_NOT_A_NETWORK_ERROR") + body
+        "GO_NOT_A_NETWORK_ERROR") + setting("CURL_NOT_A_NETWORK_ERROR") + body
     # The folder of the run, which the script makes at its start, is given here.
     (folder / "run").mkdir(exist_ok=True)
     env = {"PATH": f"{folder}:/usr/bin:/bin", "ATLAS_DOWNLOAD_WAIT_SECONDS": wait, "ATLAS_RUN_DIR": str(folder / "run")}
@@ -138,6 +138,19 @@ def test_a_download_whose_file_fails_its_check_is_not_tried_again(tmp_path, says
                          ' || echo "stopped with status $?"\n')
     assert calls(tmp_path) == tried
     assert done.stdout.rstrip().endswith("stopped with status 1")
+
+
+@pytest.mark.parametrize("says, status, tried", [
+    ("curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2)", 92, 3),
+    ("curl: (6) Could not resolve host: go.dev", 6, 3),
+    ("curl: (22) The requested URL returned error: 404", 22, 1),
+])
+def test_the_go_download_is_tried_again_unless_the_file_is_not_there(tmp_path, says, status, tried):
+    stand_in(tmp_path, fails=99, says=says, status=status)
+    done = run(tmp_path, 'retry_download "The Go download" --not-if "$CURL_NOT_A_NETWORK_ERROR" -- fetch'
+                         ' || echo "stopped with status $?"\n')
+    assert calls(tmp_path) == tried
+    assert done.stdout.rstrip().endswith(f"stopped with status {status}")
 
 
 def test_the_number_of_tries_is_a_setting_and_one_try_means_no_retry(tmp_path):
@@ -261,6 +274,7 @@ def test_each_step_says_which_of_its_errors_is_tried_again():
     assert calls_of["The pip and setuptools download"] == ' --only-if "$PIP_NETWORK_ERROR" --log "$ATLAS_RUN_DIR/atlas-pip.log"'
     assert calls_of["The download for the ATLAS CLI install"] == ' --only-if "$PIP_NETWORK_ERROR"'
     assert calls_of["The Go module download"] == ' --not-if "$GO_NOT_A_NETWORK_ERROR"'
+    assert calls_of["The Go download"] == ' --not-if "$CURL_NOT_A_NETWORK_ERROR"'
 
 
 def test_the_wait_between_two_tries_is_kept(tmp_path):
@@ -273,7 +287,8 @@ def test_the_wait_between_two_tries_is_kept(tmp_path):
 
 def test_only_the_download_steps_of_the_script_go_through_the_retry():
     through = re.findall(r'retry_download "([^"]+)"', TEXT.split("\nretry_download() {", 1)[1])
-    assert through == ["The pip and setuptools download", "The download for the ATLAS CLI install", "The Go module download"]
+    assert through == ["The pip and setuptools download", "The download for the ATLAS CLI install", "The Go download",
+                       "The Go module download"]
     build = re.search(r"^.*'\$go_cmd' build -o '\$out'.*$", TEXT, re.M).group(0)
     assert "retry_download" not in build
     assert TEXT.index("'$go_cmd' mod download\"") < TEXT.index("'$go_cmd' build -o '$out'")

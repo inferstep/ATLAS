@@ -205,6 +205,9 @@ PIP_NETWORK_ERROR='Read timed out|ReadTimeoutError|ConnectTimeoutError|NewConnec
 # What `go mod download` prints when the fault is in what it got or in the
 # module file: the same on every try.
 GO_NOT_A_NETWORK_ERROR='checksum mismatch|SECURITY ERROR|errors parsing go\.mod|malformed module path|invalid go version'
+# What curl -f prints when the server answers that the file is not there: the
+# same on every try.
+CURL_NOT_A_NETWORK_ERROR='The requested URL returned error: 4[0-9][0-9]'
 
 # ---------------------------------------------------------------------------
 # sudo wrapper — uses sudo if we're not root, fails fast if blocked
@@ -1267,7 +1270,7 @@ install_go() {
     local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
     local tmp="$ATLAS_RUN_DIR/atlas-go.tar.gz"
     log_info "  Downloading $go_url…"
-    if ! curl -fL -# -o "$tmp" "$go_url"; then
+    if ! retry_download "The Go download" --not-if "$CURL_NOT_A_NETWORK_ERROR" -- curl -fL -# -o "$tmp" "$go_url"; then
         log_warn "Go download failed — atlas-tui binary will need manual install."
         log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
         return 1
