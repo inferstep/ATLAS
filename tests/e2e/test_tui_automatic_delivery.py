@@ -18,12 +18,17 @@ real v3-service, fake lens, real sandbox executor.
 """
 import pytest
 
+from tests.e2e import test_v3_lens_acceptance
 from tests.e2e.conftest import drive_agent_turn, start_proxy
 from tests.e2e.test_v3_lens_acceptance import (  # fixtures, used by name
     CAND_A,
     _agent_body, _assert_no_human_gate_inside_v3, _payload, _write_result,
     fake_lens, fake_llama, proxy, v3_service, workspace,
 )
+
+# The fixtures above start a real proxy and a real sandbox: without a built
+# proxy binary or the sandbox's packages, this file skips as that file does.
+pytestmark = test_v3_lens_acceptance.pytestmark
 
 # Exactly what the TUI sends for an ordinary work message: the mode, and
 # nothing about files.
