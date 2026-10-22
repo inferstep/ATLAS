@@ -51,7 +51,9 @@ Face account and write token. The walkthrough is in
 
 **Without a GPU.** Most of ATLAS can be built and tested without a GPU or a
 model: the quality gate, the unit tests, and the end-to-end tests, which use
-a scripted fake llama-server. You need Python 3.9 or newer, Go 1.26 and git.
+a scripted fake llama-server. You need Python 3.12, Go 1.26 and git. The
+tests install CI's own lock, which is made for Python 3.12; ATLAS itself
+runs on Python 3.9 or newer.
 
 Fork the repo first. The fork page copies only `main` unless you untick
 **Copy the `main` branch only**. Either way works: the commands below take
@@ -63,8 +65,9 @@ cd ATLAS
 git remote add upstream https://github.com/inferstep/ATLAS.git
 git fetch upstream
 git checkout -b dev upstream/dev
-python -m venv .venv && . .venv/bin/activate
-pip install -e . pytest pyyaml
+python3.12 -m venv .venv && . .venv/bin/activate
+pip install --require-hashes -r .github/requirements/ci.txt
+pip install --no-deps -e .
 python scripts/production-readiness.py
 ```
 

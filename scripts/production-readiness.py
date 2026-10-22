@@ -229,8 +229,14 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),
-            available=lambda: _module_available("pytest"),
-            unavailable_reason="pytest is not installed",
+            # The suites need more than pytest: the sandbox service (fastapi,
+            # defusedxml) and the tree-sitter grammars. Without them many tests
+            # fail for a reason that is not the change's, so the gate says what
+            # to install instead of running.
+            available=lambda: all(_module_available(name) for name in
+                                  ("pytest", "fastapi", "defusedxml", "tree_sitter")),
+            unavailable_reason="pytest, fastapi, defusedxml or tree_sitter is not installed "
+                               "(pip install --require-hashes -r .github/requirements/ci.txt)",
         ),
         # Separate process on purpose — see the LENS_PYTEST_PATH comment.
         "python-tests-lens": Gate(
