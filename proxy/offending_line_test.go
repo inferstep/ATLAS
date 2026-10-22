@@ -8,20 +8,12 @@ import (
 	"testing"
 )
 
-// A parse warning shows the line it names.
-//
-// Measured (family P, cycle 9, stabilization9/R/sessions/03-P). The first write
-// landed at t=41 s with "written, but it does not parse (SyntaxError:
-// unmatched ')' (line 111))" and 529 s of the work budget left. The run then
-// rewrote the whole file six times — 2365, 2364, 2365 bytes — each carrying the
-// same error at the same line, never once running it, until the deadline. The
-// delivered line was `@app.route('/items', methods=['GET']))`: one paren too
-// many, and never shown. The warning gave a number for a file the model was
-// reproducing from its own memory.
+// A parse warning shows the line it names. A bare line number is little use
+// to a model that reproduces the whole file from its own memory: it can
+// rewrite the file again and again with the same error at the same line.
 //
 // This is information, not a gate: nothing is rejected, retried or repaired,
-// and the write lands with its warning exactly as before. It is not evidence
-// that delivery improves.
+// and the write lands with its warning.
 
 func TestTheParseWarningQuotesTheLineItNames(t *testing.T) {
 	broken := "from flask import Flask\n\napp = Flask(__name__)\n\n\n@app.route('/items', methods=['GET']))\n" +

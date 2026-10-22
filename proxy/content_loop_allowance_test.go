@@ -14,15 +14,9 @@ import (
 	"testing"
 )
 
-// The bound on answering repetition cuts, and what it counts.
-//
-// Measured (stabilization cycle 4, flask_pause, both repetitions, identical to
-// the token): cut, recovery 1, cut, recovery 2, a valid replace_lines that
-// landed, then a third cut that hit the allowance and ended the run with the
-// change half applied — at 271 s of a 570 s work budget, with the prompt at
-// 7,270 tokens of an 18,432-token conversation budget. Neither wall clock,
-// context, per-response cap nor turn count was near its limit: the allowance
-// ended it, and the productive edit between the cuts had given nothing back.
+// The bound on answering repetition cuts, and what it counts. Counting every
+// cut can end a run that is making progress between cuts, with its change
+// half applied, long before any other budget is near its limit.
 //
 // ATLAS_CONTENT_LOOP_COUNT=unproductive charges the allowance only for
 // CONSECUTIVE recoveries after which nothing landed. ATLAS_CONTENT_LOOP_RECOVERIES
@@ -35,6 +29,7 @@ import (
 type loopWorld struct {
 	dir      string
 	prompts  []string
+	checked  []string // the code of each syntax-check request
 	terminal map[string]string
 	mu       sync.Mutex
 }
@@ -59,6 +54,11 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			w.mu.Lock()
+			w.checked = append(w.checked, in.Code)
+			w.mu.Unlock()
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
 			return
 		case strings.HasSuffix(r.URL.Path, "/execute"):
@@ -307,7 +307,6 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 // checks — the allowance changes how long a run may continue, not what is
 // checked before bytes land.
 func TestWritesAfterARecoveryAreStillChecked(t *testing.T) {
-	t.Setenv("ATLAS_CONTENT_LOOP_COUNT", "unproductive")
 	w := runLoopWorld(t, map[string]string{"ATLAS_CONTENT_LOOP_COUNT": "unproductive"},
 		readFirst("", edit(1, "a = 1\n"), "", edit(1, "b = 2\n"),
 			`{"type":"done","summary":"added the flag"}`))
@@ -315,8 +314,13 @@ func TestWritesAfterARecoveryAreStillChecked(t *testing.T) {
 	if !strings.Contains(string(got), "a = 1") || !strings.Contains(string(got), "b = 2") {
 		t.Fatalf("the edits did not land: %q", got)
 	}
-	// The gate log line is the product's own record that checks ran.
-	if !strings.Contains(strings.Join(w.prompts, "\n"), "app.py") {
-		t.Error("the conversation lost the file under edit")
+	checked := false
+	for _, code := range w.checked {
+		if strings.Contains(code, "b = 2") {
+			checked = true
+		}
+	}
+	if !checked {
+		t.Error("the write after the second recovery landed without a syntax check")
 	}
 }

@@ -6,25 +6,12 @@ import (
 )
 
 // The truncation notice must not steer a data file toward shell pipelines.
-//
-// Its old wording told the model to "process it with run_command
-// (grep/awk/sed/head, or a python script) instead of loading it all into
-// context". For a large source file that is right. For a data file the
-// program is meant to open at runtime it is not: it points at pipelines and
-// stdin, and the caller then runs `python solve.py` with no stdin and gets 0.
-//
-// Measured on the AoC tasks, whose answer is computed from input.txt:
-//
-//	shoal   1 line,    600 B  -> never truncated -> 92%
-//	slope   400 lines, 12800 B -> truncated      -> 50%
-//	course  1200 lines, 9707 B -> truncated      -> 27%
-//	sonar   2000 lines, 8707 B -> truncated      -> 27%
-//
-// The same model prompted directly never reads the file and scored 83-100%.
+// For a data file the program is meant to open at runtime, advice to process
+// it with run_command (grep, awk, sed) points at pipelines and stdin, and the
+// caller then runs `python solve.py` with no stdin and gets nothing.
 func TestTruncationNoticeDoesNotSteerTowardPipelines(t *testing.T) {
-	// A DATA file: start 0, 1131 lines shown of 2001, 8707 bytes. The data
-	// advice is the whole point of this test and must survive the source/data
-	// split added for smallrung_toml.
+	// A DATA file (the last argument false): start 0, 1131 lines shown of
+	// 2001, 8707 bytes.
 	notice := readFileTruncationNotice(0, 1131, 2001, 8707, false)
 	for _, banned := range []string{"grep", "awk", "sed", "run_command"} {
 		if strings.Contains(notice, banned) {

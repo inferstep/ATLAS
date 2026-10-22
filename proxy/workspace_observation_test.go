@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// G-tool-parity#1: what a shell command wrote, changed or removed never
-// reached the ledger, so a broken module written with a heredoc, or the
-// removal of a user's file, ended completed.
+// What a shell command writes, changes or removes reaches the ledger, so a
+// broken module written with a heredoc, or the removal of a user's file,
+// cannot end completed.
 
 // shellWorld is a workspace with the files a user had, a session that
 // started over it, and run_command executing on this host.
@@ -157,22 +157,28 @@ func (bg *bgSandbox) exit(onExit func()) {
 
 func TestAModuleABackgroundJobWroteIsJudged(t *testing.T) {
 	for _, tc := range []struct {
+		name      string
 		body      string
 		completes bool
-	}{{"VALUES = [1, 2]]\n", false}, {"VALUES = [1, 2]\n", true}} {
-		ctx, dir, bg := bgShellWorld(t, nil)
-		w, _ := json.Marshal(map[string]string{"path": "main.py", "content": "import gen\nprint(gen.VALUES)\n"})
-		executeToolCall("write_file", w, ctx)
-		bg.exit(func() { os.WriteFile(filepath.Join(dir, "gen.py"), []byte(tc.body), 0o644) })
+	}{
+		{"broken", "VALUES = [1, 2]]\n", false},
+		{"fixed", "VALUES = [1, 2]\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, dir, bg := bgShellWorld(t, nil)
+			w, _ := json.Marshal(map[string]string{"path": "main.py", "content": "import gen\nprint(gen.VALUES)\n"})
+			executeToolCall("write_file", w, ctx)
+			bg.exit(func() { os.WriteFile(filepath.Join(dir, "gen.py"), []byte(tc.body), 0o644) })
 
-		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"main.py"}}
-		status, reason := finalizeCompletion(ctx, st, "Create main.py.", "")
-		if !ledgerTracks(ctx, "gen.py") {
-			t.Fatalf("%q: the module the job wrote never reached the ledger", tc.body)
-		}
-		if status.Completed() != tc.completes {
-			t.Errorf("%q: terminal = %s/%s", tc.body, status, reason)
-		}
+			st := &runState{madeProductiveChange: true, expectedOutputs: []string{"main.py"}}
+			status, reason := finalizeCompletion(ctx, st, "Create main.py.", "")
+			if !ledgerTracks(ctx, "gen.py") {
+				t.Fatal("the module the job wrote never reached the ledger")
+			}
+			if status.Completed() != tc.completes {
+				t.Errorf("terminal = %s/%s, want completed = %v", status, reason, tc.completes)
+			}
+		})
 	}
 }
 

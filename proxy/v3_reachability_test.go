@@ -15,18 +15,11 @@ import (
 // Whether the candidate pipeline can contribute to delivered software for the
 // request this product actually receives: a person's prose, and nothing else.
 //
-// The existing automatic-delivery tests enter at writeFileWithV3, which is
-// BELOW the decision that turned every exposed session away. Across six
-// preserved regressions -- 26 sessions -- the producer was consulted zero
-// times, and 54 skips recorded the same reason:
-// candidate_undeliverable_under_policy. Nothing in that path was broken; the
-// generation owner asks whether a candidate could be delivered, and for a
-// request that declared no outputs under the default strict policy the honest
-// answer is no.
-//
-// So these enter where a real session does, at the tool call, and walk the
-// whole path: generated, checked, selected, authorized, applied byte-exactly,
-// rechecked -- with the refusals that must survive it.
+// These tests enter where a real session does, at the tool call, and not at
+// writeFileWithV3, which is BELOW the decision whether a candidate could be
+// delivered at all. They walk the whole path: generated, checked, selected,
+// authorized, applied byte-exactly, rechecked -- with the refusals that must
+// survive it.
 
 // reachWorld drives executeToolCall("write_file", ...) against a producer that
 // counts its consultations, so "the pipeline never ran" and "the pipeline ran
@@ -48,8 +41,7 @@ type reachWorld struct {
 	unsupported bool
 }
 
-// The prose a person types. No paths, no commands, no expected outputs -- the
-// request shape stabilization6/R through stabilization10/T actually sent.
+// The prose a person types. No paths, no commands, no expected outputs.
 const reachProse = "i need something that keeps track of the items we lend " +
 	"out and tells me whats currently out and who has it"
 
@@ -223,7 +215,9 @@ const reachWork = `{"task_mode":"work"}`
 
 // A request with no contract, or a question, names no target a candidate
 // could be delivered to, so the producer is never asked and the model's own
-// bytes land. A work request is asked: section 2.
+// bytes land. A work request is asked: section 2. A question that names the
+// automatic_v3 policy is no different: a policy creates no mutation
+// authority.
 //
 // Pinned, so a change to it cannot happen silently. A client that sends no
 // contract gets no V3 candidate, which is why every client must send one.
@@ -231,6 +225,7 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 	for _, tc := range []struct{ name, contract string }{
 		{"no task_contract at all", ""},
 		{"a question", `{"task_mode":"question"}`},
+		{"a question naming automatic_v3", `{"task_mode":"question","candidate_policy":"automatic_v3"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newReachWorld(t, tc.contract)
@@ -244,6 +239,9 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 			}
 			if got := w.disk(t); got != reachBaseline {
 				t.Error("the model's own bytes are not what landed")
+			}
+			if res.AuthorizedDeliveryHash != "" {
+				t.Errorf("an undeliverable request named an authorization: %q", res.AuthorizedDeliveryHash)
 			}
 			var reasons []string
 			for _, r := range bypassRecords(recs) {
@@ -260,9 +258,9 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 
 // Generated, checked, selected, authorized, applied byte-exactly, rechecked.
 //
-// The request differs from the one above in exactly one field -- the client's
-// candidate_policy selection. It declares no outputs, no commands and no
-// requirements, and the prose is unchanged. The target the candidate lands on
+// The request differs from the question above in exactly one field: its
+// task_mode is work. It declares no outputs, no commands and no requirements,
+// and the prose is unchanged. The target the candidate lands on
 // comes from the model's own tool call, not from anything supplied here.
 func TestTheSelectedCandidateIsAppliedByteExactlyAndRechecked(t *testing.T) {
 	w := newReachWorld(t, reachWork)
@@ -396,26 +394,6 @@ func TestACandidateThatFailsItsCheckDoesNotDisplaceWorkingBytes(t *testing.T) {
 	}
 }
 
-// A question creates no mutation authority, whatever the policy says.
-//
-// automatic_v3 grounds a delivery on the model's own structured call. That
-// grounding is available to work requests only: structuredMutationTargetGrounds
-// refuses a question before it looks at the call at all, so there is no target
-// for a candidate to bind to and the baseline stays.
-func TestAQuestionRequestGroundsNoAutomaticDelivery(t *testing.T) {
-	w := newReachWorld(t, `{"task_mode":"question","candidate_policy":"automatic_v3"}`)
-	res := w.write(t)
-	if res == nil || !res.Success {
-		t.Fatalf("the write itself failed: %+v", res)
-	}
-	if got := w.disk(t); got != reachBaseline {
-		t.Errorf("a question request delivered a candidate: %q", got)
-	}
-	if res.AuthorizedDeliveryHash != "" {
-		t.Errorf("a question request named an authorization: %q", res.AuthorizedDeliveryHash)
-	}
-}
-
 // The grounding owner refuses every request that is not this one's.
 //
 // Asked directly, because these are the facts the whole path above rests on
@@ -480,13 +458,11 @@ func TestAnAutomaticDeliveryCreatesNoObligation(t *testing.T) {
 	}
 }
 
-// --- 5. What the intervention still does NOT reach ---------------------------
+// --- 5. What the pipeline does NOT reach -------------------------------------
 //
-// Predicted in the cycle-12 record before it was measured, and pinned here so
-// the prediction is executable rather than asserted. Selecting automatic_v3
-// satisfies the policy clause of candidateDeliverableUnderPolicy. It does not
-// touch the two rules that turn the producer away in exactly the situation
-// cycle 11 wanted help with: a file that does not parse.
+// A work request satisfies the policy clause of
+// candidateDeliverableUnderPolicy. It does not touch the two rules that turn
+// the producer away from a file that does not parse.
 
 // Bytes that do not parse are never sent to the producer, whatever the policy.
 //
@@ -526,7 +502,7 @@ func TestBrokenBytesStillNeverReachTheProducer(t *testing.T) {
 			found = true
 		}
 		if r == string(bypassCandidateUndeliverable) {
-			t.Error("automatic_v3 did not satisfy the policy clause")
+			t.Error("a work request did not satisfy the policy clause")
 		}
 	}
 	if !found {
@@ -574,21 +550,14 @@ func TestTheRepairLoopStillTakesTheFastPath(t *testing.T) {
 	}
 }
 
-// A question generates nothing it cannot deliver. It grounds no target, so
-// under the one delivery rule a candidate for it could only be discarded; the
-// cost rule that skips an undeliverable candidate now asks whether the
-// request declared work, where it once asked only about the policy mode.
+// A question generates nothing it cannot deliver: it grounds no target, so
+// under the one delivery rule a candidate for it could only be discarded. The
+// cost rule that skips an undeliverable candidate asks whether the request
+// declared work. That the producer is never asked and the model's own bytes
+// land is the "a question" row of
+// TestARequestWithNoDeliverableTargetNeverReachesTheProducer.
 func TestAQuestionGeneratesNothingItCannotDeliver(t *testing.T) {
 	w := newReachWorld(t, `{"task_mode":"question"}`)
-	if res := w.write(t); res == nil || !res.Success {
-		t.Fatalf("the write failed: %+v", res)
-	}
-	if w.v3Calls != 0 {
-		t.Fatalf("the producer was consulted %d times for a question", w.v3Calls)
-	}
-	if got := w.disk(t); got != reachBaseline {
-		t.Fatal("a question request delivered a candidate")
-	}
 	if candidateDeliverable(w.ctx) {
 		t.Error("a question counts as deliverable")
 	}

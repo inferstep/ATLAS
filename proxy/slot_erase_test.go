@@ -9,43 +9,6 @@ import (
 	"time"
 )
 
-// llama-server handles an erase on its main loop, so a slot that is
-// mid-decode answers only once it frees up. Measured 2026-08-03: a single
-// attempt lost one slot in half the sessions of a 26-session run, and the
-// slot it lost is the one still holding the previous session's KV — the
-// cross-session bleed the erase exists to prevent.
-func TestEraseRetriesABusySlot(t *testing.T) {
-	var calls int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&calls, 1) == 1 {
-			http.Error(w, "slot is processing", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	client := &http.Client{Timeout: 2 * time.Second}
-	if !eraseOneSlot(context.Background(), client, srv.URL, 1) {
-		t.Error("a slot that frees up on the second attempt was reported stale")
-	}
-	if got := atomic.LoadInt32(&calls); got != 2 {
-		t.Errorf("expected a retry, got %d call(s)", got)
-	}
-}
-
-func TestEraseReportsASlotItCouldNotClear(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "still busy", http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	client := &http.Client{Timeout: 2 * time.Second}
-	if eraseOneSlot(context.Background(), client, srv.URL, 2) {
-		t.Error("a slot that never cleared was reported clear")
-	}
-}
-
 func TestEraseStopsWhenTheRequestIsCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "busy", http.StatusServiceUnavailable)
@@ -65,11 +28,12 @@ func TestEraseStopsWhenTheRequestIsCancelled(t *testing.T) {
 	}
 }
 
-// The classification, pinned status by status. A permanent answer returns
-// after exactly one request and without sleeping; a transient one is retried
-// exactly twice more with the bounded pause and reported stale; a transient
-// one that clears on the second try is reported clear. The matrix is the one
-// eraseRetryable documents against the pinned llama-server's error types.
+// The classification, pinned status by status through eraseOneSlot. A
+// permanent answer returns after exactly one request and without sleeping; a
+// transient one is retried exactly twice more with the bounded pause and
+// reported stale; a transient one that clears on the second try is reported
+// clear. The matrix is the one eraseRetryable documents against the pinned
+// llama-server's error types.
 var (
 	erasePermanent = []int{
 		http.StatusBadRequest,       // "Invalid slot ID" / "Invalid action"
@@ -92,19 +56,6 @@ var (
 		http.StatusGatewayTimeout,      // 504
 	}
 )
-
-func TestEraseClassifiesStatusesByMeaning(t *testing.T) {
-	for _, status := range erasePermanent {
-		if eraseRetryable(status) {
-			t.Errorf("status %d is a final answer and must not be retried", status)
-		}
-	}
-	for _, status := range eraseTransient {
-		if !eraseRetryable(status) {
-			t.Errorf("status %d names a passing state and must be retried", status)
-		}
-	}
-}
 
 func TestEraseDoesNotRetryADefinitiveRefusal(t *testing.T) {
 	for _, status := range erasePermanent {
@@ -162,6 +113,10 @@ func TestEraseRetriesATransientAnswerExactlyAsBounded(t *testing.T) {
 }
 
 // A transient answer that clears is reported clear, on the attempt it clears.
+// llama-server handles an erase on its main loop, so a slot that is
+// mid-decode answers only once it frees up. Given up after one attempt, the
+// slot still holds the previous session's KV: the cross-session bleed the
+// erase exists to prevent.
 func TestEraseSucceedsWhenATransientStateClears(t *testing.T) {
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusConflict, http.StatusServiceUnavailable} {
 		var calls int32

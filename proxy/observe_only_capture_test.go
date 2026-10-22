@@ -37,12 +37,10 @@ func captureShadow(t *testing.T, fn func()) []map[string]interface{} {
 
 	// The production shutdown path, not finalize(). finalize() writes the
 	// footer and releases the descriptor without closing the queue, so the
-	// writer goroutine is still draining into a file that is already closed:
-	// records submitted late in fn() are lost, and the goroutine never exits.
-	// Every assertion in this package about what production recorded rests on
-	// this helper, and one of them failed exactly that way -- a delivered
-	// candidate whose consumed_authorized event was missing from the capture,
-	// under full-suite load, in a test that passes in isolation.
+	// writer goroutine would still be draining into a closed file: records
+	// submitted late in fn() would be lost, under load, and the goroutine
+	// would never exit. Every assertion in this package about what
+	// production recorded rests on this helper.
 	if err := sink.close(context.Background(), 10*time.Second); err != nil {
 		t.Fatalf("the capture did not finalise: %v", err)
 	}
@@ -95,9 +93,9 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 	})
 
 	// Each record says truthfully whether it decided anything. Feasibility and
-	// the evidence observation still decide nothing; the authorization now
-	// does, for a request that declared obligations, and a record that still
-	// claimed inertness would be lying about its own weight.
+	// the evidence observation decide nothing; the authorization does, for a
+	// request that declared obligations, and a record that claimed inertness
+	// would be lying about its own weight.
 	for _, c := range []struct {
 		kind       string
 		influences bool

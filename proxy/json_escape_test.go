@@ -6,7 +6,7 @@ import (
 )
 
 // The salvaged text of a cut answer decodes a \uXXXX escape as encoding/json
-// does, a surrogate pair included, where it used to keep the letters "uXXXX".
+// does, a surrogate pair included, and does not keep the letters "uXXXX".
 func TestTheSalvagedTextDecodesUnicodeEscapes(t *testing.T) {
 	padding := strings.Repeat(" padding to clear the length floor.", 8)
 	for _, c := range []struct {

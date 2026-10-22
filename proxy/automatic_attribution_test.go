@@ -654,11 +654,9 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 	}
 }
 
-// An edit V3 replaced reached the model as its own. Only write_file, whose
-// whole-file content compares with disk, got the note that the bytes differ;
-// the model then kept editing a file it had never seen. Every edit tool now
-// carries its whole-file proposal, so the model is told for all four, and its
-// read state follows what landed.
+// When V3's candidate replaces an edit, the model is told that the bytes on
+// disk are not the ones it sent, for every edit tool, and its read state
+// follows what landed. Untold, it keeps editing a file it has never seen.
 func TestTheModelIsToldWhenACandidateReplacedItsEdit(t *testing.T) {
 	for _, c := range editCases() {
 		t.Run(c.tool, func(t *testing.T) {

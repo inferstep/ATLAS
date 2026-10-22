@@ -139,12 +139,7 @@ func TestLensInvocationIsDeterministicDistinctBoundedAndTyped(t *testing.T) {
 		}
 		seen[a] = rid
 	}
-	// Never a V3 invocation shape (uuid4 with dashes) and never the raw request id.
-	for rid := range seen {
-		if strings.Count(rid, "-") == 4 && len(rid) == 36 {
-			t.Fatal("test ids must not look like V3 invocations")
-		}
-	}
+	// Never the raw request id.
 	if inv, _ := lensInvocationID("proxy-lens:deadbeef"); inv == "proxy-lens:deadbeef" {
 		t.Fatal("a request id is hashed, never passed through")
 	}

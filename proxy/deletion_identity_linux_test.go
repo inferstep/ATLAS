@@ -56,13 +56,12 @@ func lstatT(t *testing.T, p string) *syscall.Stat_t {
 func TestHeldReferenceRefusesARecycledNumber(t *testing.T) {
 	dir := t.TempDir()
 	for _, c := range []struct {
-		name   string
-		make   func(p string)
-		remake func(p string)
+		name string
+		make func(p string) // run twice: the object, then its look-alike
 	}{
-		{"file", func(p string) { os.WriteFile(p, []byte("A\n"), 0o644) }, func(p string) { os.WriteFile(p, []byte("A\n"), 0o644) }},
-		{"symlink", func(p string) { os.Symlink("real", p) }, func(p string) { os.Symlink("real", p) }},
-		{"dir", func(p string) { os.Mkdir(p, 0o755) }, func(p string) { os.Mkdir(p, 0o755) }},
+		{"file", func(p string) { os.WriteFile(p, []byte("A\n"), 0o644) }},
+		{"symlink", func(p string) { os.Symlink("real", p) }},
+		{"dir", func(p string) { os.Mkdir(p, 0o755) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := filepath.Join(dir, c.name)
@@ -80,7 +79,7 @@ func TestHeldReferenceRefusesARecycledNumber(t *testing.T) {
 			// The object loses its last name. Whatever the path shows now,
 			// even an entry wearing the held object's exact numbers, is not it.
 			os.Remove(p)
-			c.remake(p)
+			c.make(p)
 			recycled := statInfo{FileInfo: info, st: pinned}
 			if h.stillTheObjectAt(recycled) {
 				t.Error("a recycled device+inode passed as the held object")

@@ -99,23 +99,6 @@ func TestEnvelopeOmitsEmptyOptionalFields(t *testing.T) {
 // Broker
 // ---------------------------------------------------------------------------
 
-func TestBrokerSubscribersReceiveEmittedEvents(t *testing.T) {
-	b := &broker{subscribers: map[chan Envelope]struct{}{}}
-	ch := b.subscribe()
-	defer b.unsubscribe(ch)
-
-	go b.emit(NewEnvelope(EvtMetric, "lens", map[string]interface{}{"name": "gx", "value": 0.83}))
-
-	select {
-	case ev := <-ch:
-		if ev.Type != EvtMetric {
-			t.Fatalf("got %q, want %q", ev.Type, EvtMetric)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("subscriber didn't receive event in 1s")
-	}
-}
-
 func TestBrokerFanOutToMultipleSubscribers(t *testing.T) {
 	b := &broker{subscribers: map[chan Envelope]struct{}{}}
 	subs := []chan Envelope{b.subscribe(), b.subscribe(), b.subscribe()}
@@ -125,13 +108,13 @@ func TestBrokerFanOutToMultipleSubscribers(t *testing.T) {
 		}
 	}()
 
-	b.emit(NewEnvelope(EvtStageStart, "phase2", nil))
+	b.emit(NewEnvelope(EvtMetric, "lens", nil))
 
 	for i, ch := range subs {
 		select {
 		case ev := <-ch:
-			if ev.Stage != "phase2" {
-				t.Errorf("subscriber %d: stage = %q, want phase2", i, ev.Stage)
+			if ev.Type != EvtMetric || ev.Stage != "lens" {
+				t.Errorf("subscriber %d: got %q/%q, want %q/lens", i, ev.Type, ev.Stage, EvtMetric)
 			}
 		case <-time.After(time.Second):
 			t.Errorf("subscriber %d didn't receive event", i)
@@ -139,6 +122,7 @@ func TestBrokerFanOutToMultipleSubscribers(t *testing.T) {
 	}
 }
 
+// No call here fails the test: a panic or a hang is the failure.
 func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {
 	b := &broker{subscribers: map[chan Envelope]struct{}{}}
 	ch := b.subscribe()
@@ -187,9 +171,9 @@ func TestBrokerSlowConsumerDoesntBlockProducer(t *testing.T) {
 	}
 }
 
+// No call here fails the test: the race detector (go test -race) is the
+// check. Without it, only a crash under concurrent load fails it.
 func TestBrokerConcurrentSubscribeUnsubscribeIsRaceFree(t *testing.T) {
-	// Run with `go test -race` in CI to actually catch a race; this test
-	// just ensures the operations don't crash under concurrent load.
 	b := &broker{subscribers: map[chan Envelope]struct{}{}}
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -208,11 +192,8 @@ func TestBrokerConcurrentSubscribeUnsubscribeIsRaceFree(t *testing.T) {
 // /events handler — integration test
 // ---------------------------------------------------------------------------
 
-// This test exists because a unit test on the broker missed a real bug:
-// handleEvents called WriteHeader but never flushed, so clients with
-// connect-timeout shorter than the 15s heartbeat saw "no response".
-// The bug was caught by hand-running curl. This test reproduces that
-// scenario in-process.
+// handleEvents must flush its headers at once. A client whose timeout is
+// shorter than the 15s heartbeat would otherwise see no response.
 func TestHandleEventsSendsHeadersImmediately(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(handleEvents))
 	defer srv.Close()
@@ -324,10 +305,9 @@ func TestHandleEventsStreamsEmittedEnvelopeToConnectedClient(t *testing.T) {
 // --- Draining the infrastructure event stream --------------------------------
 //
 // The TUI keeps /events connected for the life of the session, so a shutdown
-// that waits for subscribers to disconnect on their own waits forever. The
-// close path already exists -- handleEvents returns when its channel closes --
-// so draining is closing every registered channel once, under the lock that
-// owns the registry.
+// that waits for subscribers to disconnect on their own waits forever.
+// handleEvents returns when its channel closes, so draining closes every
+// registered channel once, under the lock that owns the registry.
 
 func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
 	b := &broker{subscribers: map[chan Envelope]struct{}{}}
@@ -355,6 +335,8 @@ func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
 }
 
 // Concurrent subscribe/unsubscribe/drain must not panic or double-close.
+// No call here fails the test: the race detector (go test -race) and a
+// panic are the check.
 func TestBrokerDrainIsRaceSafe(t *testing.T) {
 	b := &broker{subscribers: map[chan Envelope]struct{}{}}
 	var wg sync.WaitGroup
