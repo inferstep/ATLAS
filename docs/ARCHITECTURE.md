@@ -145,6 +145,14 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `verification_evidence.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
 | `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
 | `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
+| `confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read |
+| `json_escape.go` | Decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
+| `plan_context.go` | Adds the files a run has read to a revised plan's context, in sorted order of their paths, up to a limit |
+| `sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
+| `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
+| `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
+| `shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
+| `sorted_keys.go` | Gives a map's keys in sorted order, so a text for the model names the same keys on every run |
 
 ### Agent Loop Flow
 
