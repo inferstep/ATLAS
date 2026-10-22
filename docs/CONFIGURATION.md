@@ -338,7 +338,7 @@ Command patterns are anchored to the command position of each shell segment (pre
 
 ### Shell-mutation gate
 
-`run_command` runs a real shell inside the sandbox container, which is the actual safety boundary: read-only rootfs, `no-new-privileges`, and only the project dir bind-mounted writable at `/workspace` (cwd is forced under `/workspace`), so the model cannot touch the host — the blast radius of any command is the project folder. Given that, `validateShellCommand` blocks **only catastrophic commands**: whole-project/root wipes (`rm -rf /`, `rm -rf .`, `rm -rf *`, `rm -rf /workspace`), `find -delete` / `-exec rm` (recursive from the search root), fork bombs, and device/filesystem destruction (`dd of=/dev/…`, `mkfs`, `wipefs`, redirect onto a block device). `bash -c "…"` / `eval "…"` are unwrapped one layer so a wrapped catastrophic command can't slip through. Ordinary file management — `mv`, `cp`, `mkdir`, `rm <file>`, `rm -rf <named-subdir>`, `chmod`, `sed -i`, `>` redirects — runs freely. Content edits are still *nudged* toward `write_file`/`edit_file`/`structural_edit` (where V3 + the lens add value) via the system prompt, but are no longer hard-refused at the shell. `move_file` remains available as a structured move/rename with clobber-protection.
+`run_command` runs a real shell inside the sandbox container, which is the actual safety boundary: read-only rootfs, `no-new-privileges`, and only the project dir bind-mounted writable at `/workspace` (cwd is forced under `/workspace`), so the model cannot touch the host — the blast radius of any command is the project folder. Given that, `validateShellCommand` blocks **only catastrophic commands**: whole-project/root wipes (`rm -rf /`, `rm -rf .`, `rm -rf *`, `rm -rf /workspace`), `find -delete` / `-exec rm` (recursive from the search root), fork bombs, and device/filesystem destruction (`dd of=/dev/…`, `mkfs`, `wipefs`, redirect onto a block device). `bash -c "…"` / `eval "…"` are unwrapped, up to 16 layers, so a wrapped catastrophic command can't slip through; a wrapper that cannot be checked is refused. Ordinary file management — `mv`, `cp`, `mkdir`, `rm <file>`, `rm -rf <named-subdir>`, `chmod`, `sed -i`, `>` redirects — runs freely. Content edits are still *nudged* toward `write_file`/`edit_file`/`structural_edit` (where V3 + the lens add value) via the system prompt, but are no longer hard-refused at the shell. `move_file` remains available as a structured move/rename with clobber-protection.
 
 | Pattern | Reaction |
 |---------|----------|
@@ -346,7 +346,7 @@ Command patterns are anchored to the command position of each shell segment (pre
 | `find … -delete` or `find … -exec rm` | Reject — deletes recursively from the search root |
 | Fork bomb (function whose body pipes to itself and backgrounds, then self-invokes) | Reject |
 | `mkfs*` / `wipefs`, `dd … of=/dev/…`, or a `>` redirect onto a block device (`/dev/sd*`, `/dev/nvme*`, …) | Reject — device/filesystem destruction |
-| `bash -c "…"` / `sh -c "…"` / `zsh -c "…"` / `dash -c "…"` / `ksh -c "…"` / `eval …` | Unwrapped one layer; the inner command is re-checked against the rules above |
+| `bash -c "…"` / `sh -c "…"` / `zsh -c "…"` / `dash -c "…"` / `ksh -c "…"` / `eval …` | Unwrapped layer by layer, up to 16 layers; each inner command is re-checked against the rules above. A deeper command, an incomplete wrapper, or one whose quoting cannot be checked is refused |
 
 These checks are enforced regardless of permission mode — `yolo` does NOT bypass them.
 
