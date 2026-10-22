@@ -425,12 +425,6 @@ def test_python_syntax_check_handles_a_subdirectory_path(tmp_path):
     assert errs and any("line" in e.lower() or "syntax" in e.lower() for e in errs), errs
 
 
-def test_javascript_syntax_check_handles_a_subdirectory_path(tmp_path):
-    sandbox = _load_sandbox_module()
-    assert sandbox._syntax_check_impl(
-        "javascript", "const x = 1;\n", tmp_path, filename="static/js/app.js") == []
-
-
 # --- the Jinja checker's tool dependency must be baked (audit, 2026-09-15) ---
 #
 # _jinja_template_errors does `import jinja2`; jinja2 is NOT a user app lib the
@@ -543,6 +537,13 @@ def test_a_javascript_error_names_the_file_the_caller_sent(tmp_path):
     errors = sandbox._syntax_check_impl("javascript", "const x = (1 + 2;\n", tmp_path, "src/app.js")
 
     assert errors and "app.js" in errors[0] and ".cjs" not in errors[0] and ".mjs" not in errors[0]
+
+
+@_requires_node
+def test_javascript_syntax_check_handles_a_subdirectory_path(tmp_path):
+    sandbox = _load_sandbox_module()
+    assert sandbox._syntax_check_impl(
+        "javascript", "const x = 1;\n", tmp_path, filename="static/js/app.js") == []
 
 
 # --- a syntax check judges syntax ---------------------------------------------
