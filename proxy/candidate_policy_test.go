@@ -302,7 +302,7 @@ func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Comments may discuss it; code may not reach it. The check is about
+		// Comments may DISCUSS it; code may not reach it. The check is about
 		// what the build can execute, so the prose is stripped first.
 		for _, banned := range []string{"evaluator", "benchmark", "held_out", "ground_truth"} {
 			if strings.Contains(strings.ToLower(codeWithoutComments(string(src))), banned) {
@@ -310,7 +310,7 @@ func TestHiddenEvaluatorCannotInfluenceThePolicy(t *testing.T) {
 			}
 		}
 	}
-	// No provenance source exists that a hidden grader could claim.
+	// And no provenance source exists that a hidden grader could claim.
 	for source := range provenanceSources {
 		if strings.Contains(source, "evaluator") || strings.Contains(source, "benchmark") {
 			t.Errorf("provenance source %q exists", source)
