@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE))
 from atlas_arm import run_atlas
 from baseline_arm import Workspace, run_baseline
 from grading import build_workspace, check_controls, grade, resolve_image
-from provenance import run_context
+from run_context import run_context
 from report import arm_summary, compare
 from suite import SuiteError, load_suite
 

@@ -17,10 +17,10 @@ import atlas_arm
 import baseline_arm as B
 import driver
 import grading as G
-import provenance as P
 import report as R
 import suite as S
 from result import ArmResult
+from run_context import run_context, sandbox_network
 
 
 # --- a toy suite -----------------------------------------------------------------
@@ -394,7 +394,7 @@ def _run_with(monkeypatch, tmp_path, host, arm="baseline", extra=()):
     out = tmp_path / "records.jsonl"
     monkeypatch.setattr(driver, "stack_identity", lambda args: ({"commit": "b0e6013"}, []))
     monkeypatch.setattr(driver, "run_context",
-                        lambda args, root: P.run_context(args, root, run=host.run, get=host.get))
+                        lambda args, root: run_context(args, root, run=host.run, get=host.get))
     monkeypatch.setattr(driver, "run_baseline",
                         lambda *a, **k: ArmResult("completed", "done", 9.0, 3, 500))
     monkeypatch.setattr(driver, "run_atlas",
@@ -442,14 +442,14 @@ def test_an_older_proxy_that_reports_no_timeout_is_recorded_as_such(tmp_path, mo
 def test_an_internal_sandbox_network_has_no_egress():
     for internal, want in (("true", False), ("false", True)):
         host = FakeHost(internal=internal)
-        assert P.sandbox_network("atlaseval", run=host.run)["egress"] is want
+        assert sandbox_network("atlaseval", run=host.run)["egress"] is want
 
     def none_mode(argv, **kw):
         class R:
             returncode, stderr = 0, ""
             stdout = "cid1\n" if argv[1] == "ps" else "none\n"
         return R()
-    assert P.sandbox_network("atlaseval", run=none_mode) == {"egress": False, "networks": {"none": True}}
+    assert sandbox_network("atlaseval", run=none_mode) == {"egress": False, "networks": {"none": True}}
 
 
 def test_a_grader_image_docker_does_not_know_is_refused_before_any_check(tmp_path, monkeypatch):
