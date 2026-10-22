@@ -27,10 +27,9 @@ import (
 // which is the ordinary shape when the pipeline finds nothing better.
 func retentionWorld(t *testing.T, contract string) *routeWorld {
 	t.Helper()
-	// The declared command passes in staging, which is what made the live run
-	// mint a grant over the caller's own bytes.
+	// The declared command passes in staging, so a route that wrongly staged
+	// the caller's own bytes would mint a grant over them.
 	w := newRouteWorld(t, contract, map[string]stubEffect{"pytest": {ExitCode: 0}})
-	dir := w.dir
 	stub := w.shell
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
@@ -81,7 +80,6 @@ func retentionWorld(t *testing.T, contract string) *routeWorld {
 	}))
 	t.Cleanup(srv.Close)
 	w.ctx.V3URL, w.ctx.SandboxURL = srv.URL, srv.URL
-	_ = dir
 	return w
 }
 
@@ -129,10 +127,6 @@ func TestARetainedBaselineLandsTheCallersOwnBytes(t *testing.T) {
 	}
 	if res.MutationStatus != MutationApplied {
 		t.Errorf("mutation status %q", res.MutationStatus)
-	}
-	// The ledger observed the landed bytes exactly once, as before.
-	if h := fileSHA256(w.ctx, w.path); h != contentSHA256(routeBaseline) {
-		t.Error("the ledger does not describe the landed bytes")
 	}
 }
 

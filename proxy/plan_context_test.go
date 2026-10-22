@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// More files were read than fit into the context of a revised plan. Which of
-// them the planner saw was left to the map's order; it is the first in sorted
-// order of their paths, each time.
+// More files were read than fit into the context of a revised plan. The
+// planner sees the first of them in sorted path order, every time, not
+// whatever the map's order gives.
 func TestTheFilesReadThatFillAPlansContextAreTheSameEachTime(t *testing.T) {
 	dir := t.TempDir()
 	ctx := NewAgentContext(dir, Tier2Medium)

@@ -2,10 +2,9 @@ package main
 
 import "testing"
 
-// Regression for the highest-impact bug in the saga: Gemma's chat template
-// drops role:"tool" messages, so the model never saw any tool result and
-// looped re-issuing the call. Tool results must go on the wire as a user turn
-// with a [tool result] marker; other roles pass through unchanged.
+// Some chat templates drop role:"tool" messages, so the model never sees a
+// tool result and loops re-issuing the call. Tool results go on the wire as a
+// user turn with a [tool result] marker; other roles pass through unchanged.
 func TestToWireMessagesRendersToolAsUser(t *testing.T) {
 	in := []AgentMessage{
 		{Role: "system", Content: "sys"},

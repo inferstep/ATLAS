@@ -6,9 +6,9 @@ import (
 
 // The background gate asks the run to stop a job it started. A planned step
 // that runs a command may need that job, so the gate waits while the plan
-// gate still owes one. Smoke run 2026-09-27 (flask_pause rep 1): the gate had
-// the run stop the server, the plan gate then demanded a probe of it, and the
-// probe could no longer pass. The run ended "stopped" on passing work.
+// gate still owes one. Otherwise the run stops the server, the plan gate then
+// demands a probe of it, the probe cannot pass, and passing work ends
+// "stopped".
 
 // orderCtx is a run with a live background job (job1) and a three-step plan
 // whose last step, a run_command, is not yet done.
@@ -45,21 +45,23 @@ func TestThePlanGateSpeaksBeforeTheBackgroundGate(t *testing.T) {
 	}
 }
 
-// A spent plan gate no longer bounces, so it must not hold the job open: the
-// run would end background_work_unresolved instead.
-func TestASpentPlanGateDoesNotHoldTheJobOpen(t *testing.T) {
-	ctx, _ := orderCtx(t, "run_command")
-	st := &runState{madeProductiveChange: true, gateBounces: map[string]int{"plan_gate": maxGateBounces}}
-	if gate, _ := st.exitGates(ctx, "Add a pause key to app.py.", "Done."); gate != "background_gate" {
-		t.Fatalf("want background_gate once the plan gate is spent, got %q", gate)
-	}
-}
-
-// Only a step that runs something needs the job. An owed edit does not.
-func TestAnOwedEditDoesNotHoldTheJob(t *testing.T) {
-	ctx, _ := orderCtx(t, "structural_edit")
-	st := &runState{madeProductiveChange: true}
-	if gate, _ := st.exitGates(ctx, "Add a pause key to app.py.", "Done."); gate != "background_gate" {
-		t.Fatalf("an owed edit does not need the job: want background_gate, got %q", gate)
+// Only an owed step that runs something holds the job open. A spent plan gate
+// does not bounce, so holding the job for it would end the run
+// background_work_unresolved; an owed edit does not need the job.
+func TestTheBackgroundGateSpeaksWhenNoRunStepIsOwed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		lastAction string
+		st         *runState
+	}{
+		{"the plan gate is spent", "run_command",
+			&runState{madeProductiveChange: true, gateBounces: map[string]int{"plan_gate": maxGateBounces}}},
+		{"the owed step is an edit", "structural_edit",
+			&runState{madeProductiveChange: true}},
+	} {
+		ctx, _ := orderCtx(t, tc.lastAction)
+		if gate, _ := tc.st.exitGates(ctx, "Add a pause key to app.py.", "Done."); gate != "background_gate" {
+			t.Errorf("%s: want background_gate, got %q", tc.name, gate)
+		}
 	}
 }

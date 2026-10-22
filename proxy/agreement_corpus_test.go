@@ -167,12 +167,6 @@ type corpusRun struct {
 	LandedWinner   bool   `json:"landed_winner"`
 	Disk           string `json:"disk_sha"`
 	LedgerHash     string `json:"ledger_hash"`
-	V3Used         bool   `json:"v3_used"`
-	Authorization  string `json:"authorization_hash"`
-	Success        bool   `json:"success"`
-	Mutation       string `json:"mutation"`
-	Validation     string `json:"validation"`
-	Terminal       string `json:"terminal_reason"`
 }
 
 func runCorpusCase(t *testing.T, c corpusCase) corpusRun {
@@ -189,16 +183,8 @@ func runCorpusCase(t *testing.T, c corpusCase) corpusRun {
 		bumpWorkspace(w.ctx, w.dir+"/unrelated.py", contentSHA256("moved on\n"))
 	}
 
-	var decision FeasibilityDecision
 	recs := captureShadow(t, func() {
-		res, err := writeFileWithV3(w.path, c.body, w.ctx)
-		if err != nil && res == nil {
-			return
-		}
-		if res != nil {
-			decision.Reason = FeasibilityReason("")
-			_ = res
-		}
+		writeFileWithV3(w.path, c.body, w.ctx)
 	})
 	out := corpusRun{Name: c.name, Generations: w.generateCalls()}
 	for _, r := range recordsOfKind(recs, "shadow_invocation_feasibility") {

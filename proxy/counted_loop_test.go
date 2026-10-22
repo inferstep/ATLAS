@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -33,19 +32,13 @@ func loopCutAt(text string) int {
 	return -1
 }
 
-// jsonText is s as a JSON string body, without the quotes.
-func jsonText(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b[1 : len(b)-1])
-}
-
 func proseReply(body string) string {
-	return `{"type":"text","content":"` + jsonText(body) + `"}`
+	return `{"type":"text","content":"` + jsonStringBody(body) + `"}`
 }
 
 func writeFileReply(path, body string) string {
 	return `{"type":"tool_call","name":"write_file","args":{"path":"` + path +
-		`","content":"` + jsonText(body) + `"}}`
+		`","content":"` + jsonStringBody(body) + `"}}`
 }
 
 func counted(format string, from, to int) string {
@@ -63,7 +56,7 @@ func TestAProseReplyThatLoopsWhileItCountsIsCut(t *testing.T) {
 	if at < 0 || at > 3000 {
 		t.Fatalf("the counted loop was cut at %d of %d chars, want a cut within 3000", at, len(loop))
 	}
-	done := `{"type":"done","summary":"` + jsonText(counted("Step %d: I will check the output again. ", 1, 200)) + `"}`
+	done := `{"type":"done","summary":"` + jsonStringBody(counted("Step %d: I will check the output again. ", 1, 200)) + `"}`
 	if loopCutAt(done) < 0 {
 		t.Error("a done summary that loops while it counts was not cut")
 	}
@@ -76,10 +69,10 @@ func TestAFileBodyThatCountsIsNotCut(t *testing.T) {
 		"numbered asserts": writeFileReply("test_f.py", "from f import f\n\n"+counted("assert f(%d) == %[1]d\n", 1, 200)),
 		"migration list":   writeFileReply("MIGRATIONS.txt", counted("%04d_add_column.sql applied\n", 1, 150)),
 		"fenced csv body":  "````csv\n" + csv + "````\n",
-		// The tool named in "type": seen 9 times in the recorded smoke runs.
-		"tool named in type": `{"type":"write_file","path":"data.csv","content":"` + jsonText(csv) + `"}`,
+		// The tool named in "type": models do send this shape.
+		"tool named in type": `{"type":"write_file","path":"data.csv","content":"` + jsonStringBody(csv) + `"}`,
 		// Keys in another order: the body streams before "tool_call" does.
-		"args before type": `{"name":"write_file","args":{"path":"data.csv","content":"` + jsonText(csv) + `"},"type":"tool_call"}`,
+		"args before type": `{"name":"write_file","args":{"path":"data.csv","content":"` + jsonStringBody(csv) + `"},"type":"tool_call"}`,
 	} {
 		if at := loopCutAt(stream); at >= 0 {
 			t.Errorf("%s: a file body that counts was cut at %d chars", name, at)
@@ -128,11 +121,11 @@ func TestCountedRowsInProseMeetTheVerbatimRule(t *testing.T) {
 // fourth repeat, where a check sees the most of them.
 func TestFourCountedStepsInProseAreNotALoop(t *testing.T) {
 	step := "Step %d: run the test again and read the output. "
-	four := `{"type":"text","content":"` + jsonText(variedIntro+counted(step, 1, 4))
+	four := `{"type":"text","content":"` + jsonStringBody(variedIntro+counted(step, 1, 4))
 	if streamLooping(four) {
 		t.Error("four counted steps were cut as a loop")
 	}
-	six := `{"type":"text","content":"` + jsonText(variedIntro+counted(step, 1, 6))
+	six := `{"type":"text","content":"` + jsonStringBody(variedIntro+counted(step, 1, 6))
 	if !streamLooping(six) {
 		t.Error("six counted steps were not cut")
 	}

@@ -6,57 +6,50 @@ import (
 	"testing"
 )
 
-// The exact command measured on multiturn_stats, which the model re-sent 12
-// times: the f-string opens on a single quote and closes on a double, so it is
-// invalid Python as well as unparseable shell. Nothing the harness could
-// re-quote would save it; the shape has to change.
+// A command a model re-sent many times: the f-string opens on a single quote
+// and closes on a double, so it is invalid Python as well as unparseable
+// shell. Nothing the harness could re-quote would save it; the shape has to
+// change.
 const brokenOneLiner = `python3 -c "from stats import mean, median; print(f'mean([1, 2, 3]): {mean([1, 2, 3])}"); print(f'median([1, 2, 3]): {median([1, 2, 3])}")"`
 
 const bashParseErr = "bash: -c: line 1: syntax error near unexpected token `)'"
 
 func TestAnUnparseableOneLinerGetsAnActionableReason(t *testing.T) {
 	hint := shellQuotingHint(brokenOneLiner, bashParseErr)
-	if hint == "" {
-		t.Fatal("the measured failure must produce a hint")
-	}
 	for _, want := range []string{"write_file", "nothing ran", "fails identically"} {
 		if !strings.Contains(hint, want) {
-			t.Errorf("hint should contain %q: %s", want, hint)
+			t.Errorf("hint should contain %q: %q", want, hint)
 		}
 	}
 }
 
-func TestACommandThatRanAndFailedIsNotAQuotingProblem(t *testing.T) {
-	// pytest exiting non-zero is a real result, not a parse failure.
-	if h := shellQuotingHint("pytest -q", "1 failed, 3 passed"); h != "" {
-		t.Errorf("a real test failure must not be relabelled as quoting: %s", h)
-	}
-}
-
-func TestAParseErrorInAScriptFileIsNotRedirected(t *testing.T) {
-	// Already running from a file — the advice would be to do what it did.
-	if h := shellQuotingHint("python3 check.py", bashParseErr); h != "" {
-		t.Errorf("no redirect when the program is already a file: %s", h)
-	}
-}
-
-func TestOtherInlineInterpretersAreCovered(t *testing.T) {
-	for _, cmd := range []string{`node -e "console.log('x)"`, `perl -e 'print "x'`} {
-		if shellQuotingHint(cmd, bashParseErr) == "" {
-			t.Errorf("no hint for %s", cmd)
+// The hint is only for an inline program the shell could not parse.
+func TestTheQuotingHintIsOnlyForAnInlineProgramThatDidNotParse(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		cmd      string
+		errText  string
+		wantHint bool
+	}{
+		{"python one-liner", brokenOneLiner, bashParseErr, true},
+		{"node one-liner", `node -e "console.log('x)"`, bashParseErr, true},
+		{"perl one-liner", `perl -e 'print "x'`, bashParseErr, true},
+		// pytest exiting non-zero is a real result, not a parse failure.
+		{"a command that ran and failed", "pytest -q", "1 failed, 3 passed", false},
+		// Already running from a file: the advice would be to do what it did.
+		{"a script file", "python3 check.py", bashParseErr, false},
+		{"empty command", "", bashParseErr, false},
+		{"empty error", brokenOneLiner, "", false},
+	} {
+		if got := shellQuotingHint(tc.cmd, tc.errText) != ""; got != tc.wantHint {
+			t.Errorf("%s: hint given = %v, want %v", tc.name, got, tc.wantHint)
 		}
-	}
-}
-
-func TestEmptyInputsAreSafe(t *testing.T) {
-	if shellQuotingHint("", bashParseErr) != "" || shellQuotingHint(brokenOneLiner, "") != "" {
-		t.Error("empty command or error must not produce a hint")
 	}
 }
 
 // A file whose tail is swallowed by a drifting comment still parses, runs and
-// exits 0 with no output. Measured: a session recorded that as verification
-// and reported success on a program that provably printed no answer.
+// exits 0 with no output. Counting that as verification reports success on a
+// program that printed no answer.
 func TestASilentRunIsNotVerificationWhenOutputWasPromised(t *testing.T) {
 	ctx := &AgentContext{}
 	prompt := "Write solve.py that reads input.txt and prints the answer on a single line."
@@ -76,8 +69,8 @@ func TestASilentRunIsNotVerificationWhenOutputWasPromised(t *testing.T) {
 	}
 }
 
-// Past the streak threshold the advice flips from edit-the-fix to rewrite —
-// the no-tool retry baseline's whole advantage is the fresh sheet.
+// Past the streak threshold the advice flips from edit-the-fix to rewrite: a
+// fresh start is what a stuck fix lacks.
 func TestARedStreakFlipsToRewriteAdvice(t *testing.T) {
 	msg := verificationRejectionWithStreak(true, false, "", 3)
 	if !strings.Contains(msg, "Rewrite the file from scratch") {

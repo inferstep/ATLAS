@@ -12,12 +12,12 @@ import (
 	"testing"
 )
 
-// #215: an edit_file old_str that has stopped matching its file, and keeps
-// going, is cut while it streams. One that matches is never cut.
+// An edit_file old_str that has stopped matching its file, and keeps going,
+// is cut while it streams. One that matches is never cut.
 
-// oldStrTarget is a file shaped like smallrung_toml's executor_server.py: a
-// comment block the model copied, then kept cycling with read_file line
-// numbers (fc8321d run a, rep 1, turn 3: 25,333 characters, 322 s).
+// oldStrTarget is a file with a comment block repeated per language: the
+// block a model can copy into old_str and then keep cycling, with read_file
+// line numbers counting up, for tens of thousands of characters.
 func oldStrTarget() string {
 	var sb strings.Builder
 	sb.WriteString("import subprocess\n\n\ndef _syntax_check_impl(lang, code, workspace, filename=None):\n")
@@ -106,8 +106,8 @@ func TestAnOldStrThatMatchesIsNeverCut(t *testing.T) {
 }
 
 func TestACountedOldStrLoopIsCut(t *testing.T) {
-	// The smallrung shape: the comment block, copied with read_file line
-	// numbers, then copied again and again with the numbers still counting.
+	// The comment block, copied with read_file line numbers, then copied
+	// again and again with the numbers still counting.
 	file := oldStrTarget()
 	ctx, _ := oldStrWorld(t, file)
 	block := []string{
