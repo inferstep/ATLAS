@@ -717,7 +717,8 @@ in one place.
   needs a model.
 - The 32 need a real model server. No job on GitHub has one; the nightly
   run has.
-- The two jobs are not required checks.
+- The two jobs are required checks on a pull request into `dev`. They are
+  not required on `staging` or `main`.
 - Among the 80, a program of each of Java, Kotlin, Ruby and PHP is run and
   is checked for its syntax. Four `sandbox smoke` jobs did that before, each
   with a build of the same image. They are gone.
