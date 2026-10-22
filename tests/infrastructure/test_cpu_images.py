@@ -21,7 +21,8 @@ def test_lens_image_installs_torch_from_cpu_only_index():
     assert req_torch, "no torch pin in geometric-lens/requirements.txt"
     assert f"torch=={req_torch.group(1)}" in dockerfile
     assert "--extra-index-url" not in requirements
-    assert 'xgboost-cpu==3.2.0; sys_platform == "linux"' in requirements
+    # The form and the marker of the pin, not its version: Linux takes the CPU-only distribution.
+    assert re.search(r'^xgboost-cpu==\S+; sys_platform == "linux"$', requirements, re.MULTILINE)
 
 
 # --- declared Python floor -------------------------------------------------
