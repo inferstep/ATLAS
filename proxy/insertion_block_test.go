@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,11 @@ func TestInsertingIntoTheMiddleOfABlockIsRefusedThroughTheTool(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal should name %q so the model can see what would move; got: %s", want, msg)
 		}
+	}
+	// The model edits by line number, so the refusal names the first line that would move by its number.
+	moving := blockLineOf(t, javaDispatch, "for line in stderr.splitlines():")
+	if want := fmt.Sprintf("line %d `for line in stderr.splitlines():`", moving); !strings.Contains(msg, want) {
+		t.Errorf("refusal should name %q; got: %s", want, msg)
 	}
 	if got, _ := os.ReadFile(path); string(got) != javaDispatch {
 		t.Errorf("the file changed although the insertion was refused")
