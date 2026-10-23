@@ -17,62 +17,36 @@ import java.io.File
 class ProtocolIsolationTest {
     @Test
     fun `the protocol, client and session layers import nothing from the IntelliJ platform`() {
-        val sources = layerSources()
+        // The module root is found by walking up from the test's working
+        // directory, so the test does not depend on how Gradle was invoked.
+        val mainSources = "src/main/kotlin/com/inferstep/atlas"
+        var directory = File("").absoluteFile
+        while (!File(directory, mainSources).isDirectory) {
+            directory =
+                directory.parentFile
+                    ?: error("could not find $mainSources from ${File("").absolutePath}")
+        }
+        val sources =
+            File(directory, mainSources)
+                .walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .filter { it.parentFile.name in setOf("protocol", "client", "session") }
+                .toList()
 
-        // Guard against passing vacuously if the walk finds nothing.
-        assertTrue(sources.size >= 3, "expected the layer's sources, found ${sources.size}")
+        // Guards against passing because the walk found nothing.
+        val names = sources.map { it.name }
+        val expected =
+            listOf("Types.kt", "Sse.kt", "AtlasClient.kt", "TurnManager.kt", "ChatSession.kt")
+        assertTrue(names.containsAll(expected), "expected $expected in $names")
 
         val offenders =
             sources.filter { file ->
                 file.readLines().any { it.trimStart().startsWith("import com.intellij") }
             }
-
         assertTrue(
             offenders.isEmpty(),
             "these files import the IntelliJ platform and break the IDE-free layer: " +
                 offenders.joinToString { it.name },
         )
-    }
-
-    @Test
-    fun `the layers are where this test thinks they are`() {
-        val sources = layerSources()
-
-        assertTrue(
-            sources.any { it.name == "Types.kt" } &&
-                sources.any { it.name == "Sse.kt" } &&
-                sources.any { it.name == "AtlasClient.kt" } &&
-                sources.any { it.name == "TurnManager.kt" } &&
-                sources.any { it.name == "ChatSession.kt" },
-            "expected the protocol, client and session sources in $sources",
-        )
-    }
-
-    /**
-     * Every Kotlin file under the protocol, client and session packages. The
-     * module root is found by walking up from the test's working directory, so
-     * the test does not depend on how Gradle was invoked.
-     */
-    private fun layerSources(): List<File> {
-        var directory = File("").absoluteFile
-        var root = File(directory, MAIN_SOURCES)
-        while (!root.isDirectory) {
-            directory =
-                directory.parentFile
-                    ?: error("could not find $MAIN_SOURCES from ${File("").absolutePath}")
-            root = File(directory, MAIN_SOURCES)
-        }
-        return root
-            .walkTopDown()
-            .filter { it.isFile && it.extension == "kt" }
-            .filter { LAYER_PACKAGES.contains(it.parentFile.name) }
-            .toList()
-    }
-
-    private companion object {
-        const val MAIN_SOURCES = "src/main/kotlin/com/inferstep/atlas"
-
-        /** The packages that must stay runnable on a plain JVM. */
-        val LAYER_PACKAGES = setOf("protocol", "client", "session")
     }
 }

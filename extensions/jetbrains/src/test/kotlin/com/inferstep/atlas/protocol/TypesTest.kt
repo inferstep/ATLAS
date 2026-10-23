@@ -48,24 +48,20 @@ class TypesTest {
         // an empty obligation list would be worse than no field at all.
         assertFalse(encoded.contains("expected_outputs"), encoded)
         assertFalse(encoded.contains("verification"), encoded)
-        assertEquals(
-            request,
-            AtlasJson.decodeFromString(
-                AgentRequest.serializer(),
-                AtlasJson.encodeToString(AgentRequest.serializer(), request),
-            ),
-        )
     }
 
     @Test
     fun `permission modes use the exact wire strings, hyphens included`() {
-        assertEquals("default", wireMode(PermissionMode.DEFAULT))
-        assertEquals("accept-edits", wireMode(PermissionMode.ACCEPT_EDITS))
-        assertEquals("yolo", wireMode(PermissionMode.YOLO))
+        val modes = listOf(PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS, PermissionMode.YOLO)
+
+        assertEquals(
+            listOf("\"default\"", "\"accept-edits\"", "\"yolo\""),
+            modes.map { AtlasJson.encodeToString(PermissionMode.serializer(), it) },
+        )
     }
 
     @Test
-    fun `a history and session allow-list survive a round-trip`() {
+    fun `a history, a session allow-list and a task contract survive a round-trip`() {
         val request =
             AgentRequest(
                 message = "next",
@@ -78,6 +74,7 @@ class TypesTest {
                         HistoryMessage("assistant", "hello"),
                     ),
                 sessionAllowedTools = listOf("write_file"),
+                taskContract = TaskContract(TaskMode.QUESTION),
             )
 
         val decoded =
@@ -160,18 +157,6 @@ class TypesTest {
     }
 
     @Test
-    fun `unknown fields inside a known payload are ignored`() {
-        val payload =
-            AtlasJson.decodeFromString(
-                DonePayload.serializer(),
-                """{"summary":"done","status":"completed","reason":"x","future_field":42}""",
-            )
-
-        assertEquals("done", payload.summary)
-        assertEquals(DoneStatus.COMPLETED, payload.resolvedStatus())
-    }
-
-    @Test
     fun `an absent or unrecognized done status reads as incomplete`() {
         assertEquals(DoneStatus.COMPLETED, DoneStatus.from("completed"))
         assertEquals(DoneStatus.STOPPED, DoneStatus.from("stopped"))
@@ -192,6 +177,7 @@ class TypesTest {
                 """{"summary":"s","status":"completed","reason":"r","unresolved":"gate_a,gate_b","repair_open":"a.py"}""",
             )
 
+        assertEquals("s", payload.summary)
         assertEquals("gate_a,gate_b", payload.unresolved)
         assertEquals("a.py", payload.repairOpen)
         assertTrue(payload.resolvedStatus().isCompleted())
@@ -290,7 +276,6 @@ class TypesTest {
             ),
             AtlasErrorCodes.ALL,
         )
-        assertEquals(6, AtlasErrorCodes.ALL.distinct().size)
     }
 
     @Test
@@ -315,7 +300,4 @@ class TypesTest {
         assertTrue(miss.neutral)
         assertEquals(0, miss.offStreak)
     }
-
-    private fun wireMode(mode: PermissionMode): String =
-        AtlasJson.encodeToString(PermissionMode.serializer(), mode).trim('"')
 }

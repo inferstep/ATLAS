@@ -13,6 +13,8 @@ import com.inferstep.atlas.protocol.PermissionScope
 import com.inferstep.atlas.protocol.TaskContract
 import com.inferstep.atlas.protocol.TaskMode
 import com.inferstep.atlas.protocol.WorkspaceResponse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -34,15 +36,6 @@ private fun textFrame(content: String): ChatEvent =
     event("""{"type":"text","data":{"content":"$content"}}""")
 
 private fun doneFrame(json: String): ChatEvent = event("""{"type":"done","data":$json}""")
-
-private fun permissionFrame(
-    tool: String,
-    id: String,
-): ChatEvent =
-    event(
-        """{"type":"permission_request","data":{"tool_name":"$tool",""" +
-            """"args":{"path":"a.py"},"message":"$tool?","tool_call_id":"$id"}}""",
-    )
 
 private class RecordingClient(
     private val frames: List<ChatEvent>,
@@ -82,7 +75,6 @@ private class FakeWorkspace(
     override val root: String? = "/tmp/ws",
 ) : Workspace {
     val files = mutableMapOf<String, String>()
-    val stats = mutableMapOf<String, PathStat>()
     val changed = mutableListOf<String>()
 
     /** The contents successive reads return, per path; the last one repeats.
@@ -104,7 +96,9 @@ private class FakeWorkspace(
         return files[relativePath]
     }
 
-    override fun stat(relativePath: String): PathStat = stats[relativePath] ?: PathStat(false)
+    /** Nothing is ever on disk here, so the mismatch check finds every
+     * successful file op missing and warns. */
+    override fun stat(relativePath: String): PathStat = PathStat(exists = false)
 
     override fun changed(relativePath: String) {
         changed += relativePath
@@ -113,16 +107,17 @@ private class FakeWorkspace(
 
 private class SessionFixture(
     frames: List<ChatEvent>,
-    val workspace: FakeWorkspace = FakeWorkspace(),
+    workspace: FakeWorkspace = FakeWorkspace(),
     probe: WorkspaceProbe = WorkspaceProbe { null },
 ) {
-    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+    val scope = CoroutineScope(Dispatchers.Unconfined)
     val client = RecordingClient(frames)
     val poster = RecordingPoster()
     val session = ChatSession(client, poster, scope, "/tmp/ws", workspace, probe)
 
-    val entries: List<TranscriptEntry>
-        get() = session.state.value.entries
+    /** What the panel would render right now. */
+    val state: ChatUiState
+        get() = session.state.value
 }
 
 class ChatSessionTest {
@@ -138,51 +133,25 @@ class ChatSessionTest {
 
         fixture.session.send(message)
 
-        assertEquals(want, fixture.entries, name)
-        assertFalse(fixture.session.state.value.running, name)
+        assertEquals(want, fixture.state.entries, name)
+        assertFalse(fixture.state.running, name)
     }
 
     @Test
-    fun `shows tool calls with the output summary and the call's outcome`() =
+    fun `shows a prompt with its predicted change, and posts the answer`() =
         runBlocking {
-            val fixture =
-                SessionFixture(
-                    listOf(
-                        event(
-                            """{"type":"tool_call","data":{"name":"list_directory",""" +
-                                """"args":{},"turn":1}}""",
-                        ),
-                        event(
-                            """{"type":"tool_result","data":{"tool":"list_directory",""" +
-                                """"success":true,"data":{"entries":""" +
-                                """[{"name":"app.py","type":"file"}]}}}""",
-                        ),
-                    ),
-                )
-
-            fixture.session.send("list the files")
-
-            assertEquals(TranscriptEntry.Tool(2, "list_directory", null, null), fixture.entries[1])
-            val result = fixture.entries[2] as TranscriptEntry.Tool
-            assertEquals("list_directory", result.name)
-            assertEquals(true, result.success)
-            val summary = result.summary.orEmpty()
-            assertTrue(summary.contains("app.py"), summary)
-        }
-
-    @Test
-    fun `shows a prompt for the request and posts the answer`() =
-        runBlocking {
+            val workspace = FakeWorkspace()
+            workspace.files["app.py"] = "old"
             val fixture =
                 SessionFixture(
                     listOf(
                         event(
                             """{"type":"permission_request","data":{"tool_name":"write_file",""" +
-                                """"args":{"path":"app.py"},"message":"write app.py?",""" +
-                                """"tool_call_id":"c1"}}""",
+                                """"args":{"path":"app.py","content":"new"},""" +
+                                """"message":"write app.py?","tool_call_id":"c1"}}""",
                         ),
-                        doneFrame("""{"summary":"stopped","status":"incomplete"}"""),
                     ),
+                    workspace,
                 )
             // The proxy pauses the turn while a permission is pending, which
             // is the only time a prompt is on screen.
@@ -190,10 +159,13 @@ class ChatSessionTest {
 
             val running = launch { fixture.session.send("write it") }
             letTheLaunchedWorkRun()
-            val pending =
-                fixture.session.state.value.pending
-                    .single()
+
+            val pending = fixture.state.pending.single()
             assertEquals("write_file", pending.request.toolName)
+            assertEquals(
+                EditPrediction("app.py", EditPredictionKind.FILE, "old", "new", false),
+                fixture.state.previews[pending.id],
+            )
 
             fixture.session.answer(pending.id, PermissionChoice.ALLOW_SESSION)
             letTheLaunchedWorkRun()
@@ -206,15 +178,14 @@ class ChatSessionTest {
             assertEquals(PermissionScope.SESSION, decision.scope)
             val turn = fixture.client.requests.single()
             assertEquals(turn.sessionId, decision.sessionId)
-            assertTrue(
-                fixture.session.state.value.pending
-                    .isEmpty(),
-            )
-            assertTrue(fixture.session.state.value.running)
+            // The card is gone, and its prediction with it, while the turn goes on.
+            assertTrue(fixture.state.pending.isEmpty())
+            assertEquals(emptyMap<Long, EditPrediction>(), fixture.state.previews)
+            assertTrue(fixture.state.running)
 
             fixture.session.cancel()
             running.join()
-            assertFalse(fixture.session.state.value.running)
+            assertFalse(fixture.state.running)
         }
 
     @Test
@@ -223,19 +194,18 @@ class ChatSessionTest {
             val fixture =
                 SessionFixture(
                     listOf(
-                        permissionFrame("edit_file", "c2"),
-                        doneFrame("""{"summary":"ok"}"""),
+                        event(
+                            """{"type":"permission_request","data":{"tool_name":"edit_file",""" +
+                                """"args":{"path":"a.py"},"tool_call_id":"c2"}}""",
+                        ),
                     ),
                 )
-
             fixture.client.hangAfter = 0
 
             // Turn 1: the user allows edit_file for the session.
             val first = launch { fixture.session.send("edit it") }
             letTheLaunchedWorkRun()
-            val pending =
-                fixture.session.state.value.pending
-                    .single()
+            val pending = fixture.state.pending.single()
             fixture.session.answer(pending.id, PermissionChoice.ALLOW_SESSION)
             letTheLaunchedWorkRun()
             fixture.session.cancel()
@@ -250,16 +220,13 @@ class ChatSessionTest {
                 listOf(PermissionScope.SESSION, PermissionScope.ONCE),
                 fixture.poster.decisions.map { it.scope },
             )
+            assertTrue(fixture.state.pending.isEmpty())
             assertTrue(
-                fixture.session.state.value.pending
-                    .isEmpty(),
-            )
-            assertTrue(
-                fixture.entries.any {
+                fixture.state.entries.any {
                     it is TranscriptEntry.Notice &&
                         it.text == "edit_file is allowed for this session."
                 },
-                fixture.entries.toString(),
+                fixture.state.entries.toString(),
             )
 
             fixture.session.cancel()
@@ -274,11 +241,11 @@ class ChatSessionTest {
 
             fixture.session.send("go")
 
-            val last = fixture.entries.last()
-            assertTrue(last is TranscriptEntry.Notice, fixture.entries.toString())
+            val last = fixture.state.entries.last()
+            assertTrue(last is TranscriptEntry.Notice, fixture.state.entries.toString())
             assertEquals(true, (last as TranscriptEntry.Notice).isError)
             assertTrue(last.text.contains("unauthorized: no token"), last.text)
-            assertFalse(fixture.session.state.value.running)
+            assertFalse(fixture.state.running)
         }
 
     @Test
@@ -302,15 +269,20 @@ class ChatSessionTest {
             fixture.client.hangAfter = 0
 
             fixture.session.send("   ")
-            assertEquals(0, fixture.entries.size)
+            assertEquals(0, fixture.state.entries.size)
 
             val running = launch { fixture.session.send("first") }
             letTheLaunchedWorkRun()
-            assertTrue(fixture.session.state.value.running)
             fixture.session.send("second")
 
+            // The second message leaves no trace: no entry, no request, and the
+            // first turn is still running.
+            assertEquals(
+                listOf(TranscriptEntry.User(1, "first"), TranscriptEntry.Assistant(2, "hi")),
+                fixture.state.entries,
+            )
             assertEquals(1, fixture.client.requests.size)
-            assertEquals(0, fixture.session.state.value.pending.size)
+            assertTrue(fixture.state.running)
 
             fixture.session.cancel()
             running.join()
@@ -333,16 +305,16 @@ class ChatSessionTest {
 
             val running = launch { fixture.session.send("delete it") }
             letTheLaunchedWorkRun()
-            assertEquals(1, fixture.session.state.value.pending.size)
+            assertEquals(1, fixture.state.pending.size)
 
             fixture.session.cancel()
             running.join()
             letTheLaunchedWorkRun()
 
-            assertFalse(fixture.session.state.value.running)
-            assertEquals(emptyList<PendingPermission>(), fixture.session.state.value.pending)
-            val last = fixture.entries.last()
-            assertTrue(last is TranscriptEntry.Notice, fixture.entries.toString())
+            assertFalse(fixture.state.running)
+            assertEquals(emptyList<PendingPermission>(), fixture.state.pending)
+            val last = fixture.state.entries.last()
+            assertTrue(last is TranscriptEntry.Notice, fixture.state.entries.toString())
             assertEquals("Turn cancelled.", (last as TranscriptEntry.Notice).text)
             assertFalse(last.isError)
         }
@@ -357,8 +329,8 @@ class ChatSessionTest {
 
             fixture.session.reset()
 
-            assertEquals(emptyList<TranscriptEntry>(), fixture.entries)
-            assertEquals(TaskMode.QUESTION, fixture.session.state.value.taskMode)
+            assertEquals(emptyList<TranscriptEntry>(), fixture.state.entries)
+            assertEquals(TaskMode.QUESTION, fixture.state.taskMode)
 
             // The turn after the reset is the one that shows the history is
             // gone: it would carry turn 1's entries back to the proxy.
@@ -374,6 +346,8 @@ class ChatSessionTest {
     fun `captures the exact change a successful file op made`() =
         runBlocking {
             val workspace = FakeWorkspace()
+            // Snapshot read, then post-call read: the proxy wrote in between.
+            workspace.reads["a.py"] = ArrayDeque(listOf("old", "new"))
             val fixture =
                 SessionFixture(
                     listOf(
@@ -388,58 +362,19 @@ class ChatSessionTest {
                     ),
                     workspace,
                 )
-            // Snapshot read, then post-call read: the proxy wrote in between.
-            workspace.reads["a.py"] = ArrayDeque(listOf("old", "new"))
 
             fixture.session.send("write it")
 
             // The last entry is the mismatch notice (the scripted workspace has
             // no stats), so the change is read off the result row itself.
-            val result = fixture.entries.filterIsInstance<TranscriptEntry.Tool>().last()
+            val result =
+                fixture.state.entries
+                    .filterIsInstance<TranscriptEntry.Tool>()
+                    .last()
             assertEquals(AppliedChange("a.py", "old", "new"), result.change)
             // And the IDE is told, so a new file shows up without waiting for
             // its own VFS refresh.
             assertEquals(listOf("a.py"), workspace.changed)
-        }
-
-    @Test
-    fun `a prompt for a file edit carries the predicted change until it is answered`() =
-        runBlocking {
-            val workspace = FakeWorkspace()
-            workspace.files["app.py"] = "old"
-            val fixture =
-                SessionFixture(
-                    listOf(
-                        event(
-                            """{"type":"permission_request","data":{"tool_name":"write_file",""" +
-                                """"args":{"path":"app.py","content":"new"},""" +
-                                """"message":"write app.py?","tool_call_id":"c1"}}""",
-                        ),
-                        doneFrame("""{"summary":"stopped","status":"incomplete"}"""),
-                    ),
-                    workspace,
-                )
-            fixture.client.hangAfter = 0
-
-            val running = launch { fixture.session.send("write it") }
-            letTheLaunchedWorkRun()
-
-            val pending =
-                fixture.session.state.value.pending
-                    .single()
-            assertEquals(
-                EditPrediction("app.py", EditPredictionKind.FILE, "old", "new", false),
-                fixture.session.state.value.previews[pending.id],
-            )
-
-            fixture.session.answer(pending.id, PermissionChoice.ALLOW_ONCE)
-            letTheLaunchedWorkRun()
-
-            // The card is gone, so its prediction goes with it.
-            assertEquals(emptyMap<Long, EditPrediction>(), fixture.session.state.value.previews)
-
-            fixture.session.cancel()
-            running.join()
         }
 
     @Test
@@ -481,7 +416,10 @@ class ChatSessionTest {
             // The denied a.py call's failed result consumed its snapshot, so
             // the successful result pairs with b.py — not with a.py, which the
             // proxy never wrote.
-            val result = fixture.entries.filterIsInstance<TranscriptEntry.Tool>().last()
+            val result =
+                fixture.state.entries
+                    .filterIsInstance<TranscriptEntry.Tool>()
+                    .last()
             assertEquals(AppliedChange("b.py", "old-b", "new-b"), result.change)
         }
 
@@ -507,7 +445,7 @@ class ChatSessionTest {
             fixture.session.send("write it")
 
             val notice =
-                fixture.entries
+                fixture.state.entries
                     .filterIsInstance<TranscriptEntry.Notice>()
                     .single()
             assertTrue(notice.text.contains("a different directory"), notice.text)
@@ -522,54 +460,53 @@ class ChatSessionTest {
         runBlocking {
             val misaligned =
                 SessionFixture(
-                    listOf(doneFrame("""{"summary":"x"}""")),
+                    emptyList(),
                     FakeWorkspace(root = "/home/isaac/demo2"),
                     probe =
                         WorkspaceProbe {
-                            WorkspaceResponse(
-                                projectDir = "/home/isaac/snake-game",
-                            )
+                            WorkspaceResponse(projectDir = "/home/isaac/snake-game")
                         },
                 )
-
             misaligned.session.checkWorkspace()
 
-            val notice = misaligned.entries.single() as TranscriptEntry.Notice
+            val notice = misaligned.state.entries.single() as TranscriptEntry.Notice
             assertTrue(notice.text.contains("/home/isaac/snake-game"), notice.text)
             assertTrue(notice.isWarning, notice.text)
 
             val aligned =
                 SessionFixture(
-                    listOf(doneFrame("""{"summary":"x"}""")),
+                    emptyList(),
                     FakeWorkspace(root = "/home/isaac/demo2"),
                     probe = WorkspaceProbe { WorkspaceResponse(projectDir = "/home/isaac/demo2") },
                 )
             aligned.session.checkWorkspace()
-            assertEquals(0, aligned.entries.size)
+            assertEquals(0, aligned.state.entries.size)
 
             // An older proxy without the route, or one that cannot name an
             // absolute path, must produce no warning at all.
-            val noRoute =
-                SessionFixture(
-                    listOf(doneFrame("""{"summary":"x"}""")),
-                    probe = WorkspaceProbe { null },
-                )
+            val noRoute = SessionFixture(emptyList(), probe = WorkspaceProbe { null })
             noRoute.session.checkWorkspace()
-            assertEquals(0, noRoute.entries.size)
+            assertEquals(0, noRoute.state.entries.size)
         }
 
     @Test
     fun `a swapped connection takes effect on the next turn and leaves the open prompt alone`() =
         runBlocking {
-            val fixture = SessionFixture(listOf(permissionFrame("write_file", "c1")))
+            val fixture =
+                SessionFixture(
+                    listOf(
+                        event(
+                            """{"type":"permission_request","data":{"tool_name":"write_file",""" +
+                                """"args":{"path":"a.py"},"tool_call_id":"c1"}}""",
+                        ),
+                    ),
+                )
             // The proxy pauses on a prompt, so the turn stays in flight while
             // the settings change lands.
             fixture.client.hangAfter = 0
             val running = launch { fixture.session.send("first") }
             letTheLaunchedWorkRun()
-            val prompt =
-                fixture.session.state.value.pending
-                    .single()
+            val prompt = fixture.state.pending.single()
 
             val nextClient = RecordingClient(listOf(doneFrame("""{"summary":"second"}""")))
             val nextPoster = RecordingPoster()
@@ -605,7 +542,7 @@ class ChatSessionTest {
         val running = launch { fixture.session.send("go") }
         letTheLaunchedWorkRun()
 
-        assertEquals(want, fixture.session.state.value.progress, name)
+        assertEquals(want, fixture.state.progress, name)
 
         fixture.session.cancel()
         running.join()
@@ -646,20 +583,17 @@ class ChatSessionTest {
                     revision = 0,
                     satisfied = setOf("s1"),
                 ),
-                fixture.session.state.value.plan,
+                fixture.state.plan,
             )
             assertTrue(
-                fixture.entries.any {
-                    it is TranscriptEntry.Notice &&
-                        it.text.contains(
-                            "revising",
-                        )
+                fixture.state.entries.any {
+                    it is TranscriptEntry.Notice && it.text.contains("revising")
                 },
-                fixture.entries.toString(),
+                fixture.state.entries.toString(),
             )
 
             fixture.session.reset()
-            assertNull(fixture.session.state.value.plan)
+            assertNull(fixture.state.plan)
         }
 
     companion object {
@@ -681,6 +615,26 @@ class ChatSessionTest {
                             3,
                             DoneOutcome("Plan ready.", "completed", "completed", "", "completed"),
                         ),
+                    ),
+                ),
+                Arguments.of(
+                    "a tool call shows as a chip, and its result adds the summary and the outcome",
+                    "list the files",
+                    listOf(
+                        event(
+                            """{"type":"tool_call","data":{"name":"list_directory",""" +
+                                """"args":{},"turn":1}}""",
+                        ),
+                        event(
+                            """{"type":"tool_result","data":{"tool":"list_directory",""" +
+                                """"success":true,"data":{"entries":""" +
+                                """[{"name":"app.py","type":"file"}]}}}""",
+                        ),
+                    ),
+                    listOf(
+                        TranscriptEntry.User(1, "list the files"),
+                        TranscriptEntry.Tool(2, "list_directory", null, null),
+                        TranscriptEntry.Tool(3, "list_directory", "1 entries: app.py", true),
                     ),
                 ),
                 Arguments.of(

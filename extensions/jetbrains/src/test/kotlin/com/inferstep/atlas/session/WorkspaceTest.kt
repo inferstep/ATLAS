@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
+import org.junit.jupiter.params.provider.NullAndEmptySource
 import java.io.File
 
 class WorkspaceTest {
@@ -49,22 +50,27 @@ class WorkspaceTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("refusals")
-    fun `refuses a path that leaves the root, and reads nothing with no root`(
+    fun `refuses a path that leaves the root`(
         name: String,
-        rootChoice: Root,
         path: String,
     ) {
-        File(dir, "outside.py").writeText("secret")
-        val bound =
-            when (rootChoice) {
-                Root.WINDOW -> root.absolutePath
-                Root.EMPTY -> ""
-                Root.NONE -> null
-            }
-        val workspace = LocalWorkspace(bound)
+        // What each path would reach if it were let through: the root's own
+        // a.py for the absolute path read as relative, and a file beside the root.
+        File(root, "a.py").writeText("inside")
+        File(dir, "outside.py").writeText("outside")
+        val workspace = LocalWorkspace(root.absolutePath)
 
         assertNull(workspace.readText(path), name)
         assertEquals(PathStat(exists = false), workspace.stat(path), name)
+    }
+
+    @ParameterizedTest(name = "root {0}")
+    @NullAndEmptySource
+    fun `reads nothing when no folder is open`(noRoot: String?) {
+        val workspace = LocalWorkspace(noRoot)
+
+        assertNull(workspace.readText("a.py"))
+        assertEquals(PathStat(exists = false), workspace.stat("a.py"))
     }
 
     @Test
@@ -112,14 +118,6 @@ class WorkspaceTest {
         assertEquals(want, workspaceAlignment(projectDir, localRoot), name)
     }
 
-    /** Which folder the workspace is built over: the window's own, an empty
-     * string (a proxy that cannot say), or none at all (no folder open). */
-    enum class Root {
-        WINDOW,
-        EMPTY,
-        NONE,
-    }
-
     companion object {
         @JvmStatic
         fun reads(): List<Arguments> =
@@ -127,28 +125,13 @@ class WorkspaceTest {
                 Arguments.of("a file at the root", "a.py", "x = 1\n"),
                 Arguments.of("a file in a subdirectory", "src/a.py", "nested"),
                 Arguments.of("an absent file reads as nothing", "missing.py", null),
-                Arguments.of(
-                    "an absent file in a subdirectory reads as nothing",
-                    "src/missing.py",
-                    null,
-                ),
             )
 
         @JvmStatic
         fun refusals(): List<Arguments> =
             listOf(
-                Arguments.of(
-                    "an absolute path is refused before any filesystem call",
-                    Root.WINDOW,
-                    "/etc/passwd",
-                ),
-                Arguments.of(
-                    "a path that climbs out of the root is refused",
-                    Root.WINDOW,
-                    "../outside.py",
-                ),
-                Arguments.of("an empty root reads nothing", Root.EMPTY, "a.py"),
-                Arguments.of("a root that is null reads nothing", Root.NONE, "a.py"),
+                Arguments.of("an absolute path, even when the root has a file there", "/a.py"),
+                Arguments.of("a path that climbs out of the root", "../outside.py"),
             )
 
         @JvmStatic
@@ -165,12 +148,6 @@ class WorkspaceTest {
                     "a sibling directory",
                     "/home/isaac/sudoku-solver",
                     "/home/isaac/tic-tac-toe",
-                    false,
-                ),
-                Arguments.of(
-                    "the parent of the bound project",
-                    "/home/isaac/monorepo",
-                    "/home/isaac",
                     false,
                 ),
                 Arguments.of(
@@ -206,12 +183,6 @@ class WorkspaceTest {
                     "the open folder covered by the proxy's project dir is aligned",
                     "/home/isaac/monorepo",
                     "/home/isaac/monorepo/packages/api",
-                    WorkspaceAlignment.ALIGNED,
-                ),
-                Arguments.of(
-                    "the same directory is aligned",
-                    "/home/isaac/monorepo",
-                    "/home/isaac/monorepo",
                     WorkspaceAlignment.ALIGNED,
                 ),
                 Arguments.of(

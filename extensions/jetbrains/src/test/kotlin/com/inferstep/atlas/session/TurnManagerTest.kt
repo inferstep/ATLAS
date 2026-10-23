@@ -1,16 +1,16 @@
 // TurnManager: session_id minting, request shape, rolling history (40-cap,
-// assistant envelope re-wrap), session_allowed_tools re-send, the busy guard,
-// the task contract and cancel.
+// assistant envelope re-wrap), session_allowed_tools re-send, the busy guard
+// and cancel. The task contract is checked in ChatSessionTest, where the user
+// picks the mode.
 //
-// The same cases as extensions/vscode/test/turnManager.test.ts, so the two
-// clients cannot drift apart on what a turn looks like on the wire.
+// The cases of extensions/vscode/test/turnManager.test.ts, so the two clients
+// cannot drift apart on what a turn looks like on the wire.
 package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.AgentRequest
 import com.inferstep.atlas.protocol.AtlasJson
 import com.inferstep.atlas.protocol.ChatEvent
 import com.inferstep.atlas.protocol.PermissionMode
-import com.inferstep.atlas.protocol.TaskContract
 import com.inferstep.atlas.protocol.TaskMode
 import com.inferstep.atlas.protocol.assistantHistoryContent
 import kotlinx.coroutines.awaitCancellation
@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -34,26 +33,16 @@ import org.junit.jupiter.params.provider.MethodSource
 
 private const val WORKSPACE = "/tmp/ws"
 
-/** The `text` event, as the proxy sends it. */
-private fun text(content: String): ChatEvent =
-    decode("""{"type":"text","data":{"content":${quote(content)}}}""")
-
-/** The `done` event with the given summary. */
-private fun done(summary: String): ChatEvent =
-    decode("""{"type":"done","data":{"summary":${quote(summary)}}}""")
-
-/** The `error` event, which is a turn that produced no text. */
-private fun errorFrame(message: String): ChatEvent =
-    decode("""{"type":"error","data":{"error":${quote(message)}}}""")
-
-/** A `tool_call`, the shape a turn that ran a tool has. */
-private fun toolCallFrame(tool: String): ChatEvent =
-    decode("""{"type":"tool_call","data":{"name":${quote(tool)},"args":{},"turn":1}}""")
-
 private fun decode(frame: String): ChatEvent =
     AtlasJson.decodeFromString(ChatEvent.serializer(), frame)
 
-private fun quote(value: String): String = JsonPrimitive(value).toString()
+/** The `text` event, as the proxy sends it. */
+private fun text(content: String): ChatEvent =
+    decode("""{"type":"text","data":{"content":"$content"}}""")
+
+/** The `done` event with the given summary. */
+private fun done(summary: String): ChatEvent =
+    decode("""{"type":"done","data":{"summary":"$summary"}}""")
 
 /**
  * A fake [TurnClient]: records the requests it is given and replays canned
@@ -99,16 +88,6 @@ private suspend fun TurnManager.runOneTurn(
 
 class TurnManagerTest {
     @Test
-    fun `mints 24-character hex ids, unique per call`() {
-        val first = mintSessionId()
-        val second = mintSessionId()
-
-        assertEquals(24, first.length)
-        assertTrue(first.matches(Regex("[0-9a-f]{24}")), first)
-        assertNotEquals(first, second)
-    }
-
-    @Test
     fun `sends the conventional request shape and yields every event`() =
         runBlocking {
             val client = FakeTurnClient(listOf(text("hi"), done("")))
@@ -126,29 +105,12 @@ class TurnManagerTest {
             // uses it for host-to-container path translation.
             assertEquals(WORKSPACE, request.workingDir)
             assertEquals(PermissionMode.DEFAULT, request.mode)
+            // A minted id: 24 hex characters, the TUI's recipe.
             assertTrue(request.sessionId.matches(Regex("[0-9a-f]{24}")), request.sessionId)
             // Absent, not empty: the proxy treats an empty history as a history.
             assertNull(request.history)
             assertNull(request.sessionAllowedTools)
             assertEquals(request.sessionId, turns.sessionId)
-        }
-
-    @Test
-    fun `declares the task mode and nothing it does not know`() =
-        runBlocking {
-            val client = FakeTurnClient(listOf(done("")))
-            val turns = TurnManager(scope = this)
-
-            turns
-                .runTurn(
-                    client,
-                    "what does solve.py do?",
-                    PermissionMode.DEFAULT,
-                    TaskMode.QUESTION,
-                    WORKSPACE,
-                ).collect {}
-
-            assertEquals(TaskContract(TaskMode.QUESTION), client.requests.single().taskContract)
         }
 
     @Test
@@ -274,8 +236,11 @@ class TurnManagerTest {
     @Test
     fun `cancel when idle is a no-op`() =
         runBlocking {
-            val client = FakeTurnClient()
+            val client = FakeTurnClient(listOf(done("")))
             val turns = TurnManager(scope = this)
+            // The manager has run a turn with this client, so a cancel that did
+            // not check for idle would have somewhere to post.
+            turns.runOneTurn(client, "one")
 
             turns.cancel()
             letTheLaunchedWorkRun()
@@ -310,13 +275,15 @@ class TurnManagerTest {
                 ),
                 Arguments.of(
                     "a turn that produced no text records no assistant entry",
-                    listOf(errorFrame("boom")),
+                    listOf(decode("""{"type":"error","data":{"error":"boom"}}""")),
                     listOf("user|first"),
                 ),
                 Arguments.of(
                     "a tool-shaped turn takes the done summary",
                     listOf(
-                        toolCallFrame("edit_file"),
+                        decode(
+                            """{"type":"tool_call","data":{"name":"edit_file","args":{},"turn":1}}""",
+                        ),
                         done(toolTurnSummary),
                     ),
                     listOf(

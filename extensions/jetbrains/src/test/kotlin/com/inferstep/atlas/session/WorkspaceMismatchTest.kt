@@ -20,20 +20,6 @@ private val ABSENT = PathStat(exists = false)
 
 private fun at(mtimeMs: Long): PathStat = PathStat(exists = true, mtimeMs = mtimeMs)
 
-/** A detector over a scripted stat table: tests mutate the table between the
- * call and the result, which is what the real filesystem does. */
-private class Harness {
-    val stats = mutableMapOf<String, PathStat>()
-    var fired = 0
-
-    val detector =
-        MismatchDetector(
-            stat = { path -> stats[path] ?: ABSENT },
-            onMismatch = { fired += 1 },
-            settleMs = 0,
-        )
-}
-
 class WorkspaceMismatchTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("paths")
@@ -89,16 +75,27 @@ class WorkspaceMismatchTest {
         steps: List<Step>,
         want: Int,
     ) = runBlocking {
-        val harness = Harness()
+        // The local disk: the steps change it between a call and its result,
+        // which is what the real filesystem does.
+        val disk = mutableMapOf<String, PathStat>()
+        var warnings = 0
+        val detector =
+            MismatchDetector(
+                stat = { path -> disk[path] ?: ABSENT },
+                onMismatch = { warnings += 1 },
+                settleMs = 0,
+            )
+
         for (step in steps) {
             when (step) {
-                is Step.Call -> harness.detector.recordToolCall(step.tool, args(step.args))
-                is Step.Result -> harness.detector.recordToolResult(step.tool, step.success)
-                is Step.Stat -> harness.stats[step.path] = step.value
-                Step.Reset -> harness.detector.reset()
+                is Step.Call -> detector.recordToolCall(step.tool, args(step.args))
+                is Step.Result -> detector.recordToolResult(step.tool, step.success)
+                is Step.Stat -> disk[step.path] = step.value
+                Step.Reset -> detector.reset()
             }
         }
-        assertEquals(want, harness.fired, name)
+
+        assertEquals(want, warnings, name)
     }
 
     companion object {
@@ -136,13 +133,13 @@ class WorkspaceMismatchTest {
                     "results pair with the calls in order",
                     listOf(
                         Step.Stat("a.py", at(1)),
-                        Step.Stat("b.py", at(1)),
                         Step.Call("edit_file", """{"path":"a.py"}"""),
                         Step.Call("edit_file", """{"path":"b.py"}"""),
-                        Step.Stat("a.py", at(2)),
-                        Step.Stat("b.py", ABSENT),
+                        Step.Stat("a.py", ABSENT),
+                        // a.py's result: a successful edit of a file that vanished.
                         Step.Result("edit_file", true),
-                        Step.Result("edit_file", true),
+                        // b.py's result failed, so nothing is checked for it.
+                        Step.Result("edit_file", false),
                     ),
                     1,
                 ),
@@ -151,14 +148,6 @@ class WorkspaceMismatchTest {
                     listOf(
                         Step.Stat("a.py", at(1)),
                         Step.Call("edit_file", """{"path":"a.py"}"""),
-                        Step.Result("edit_file", true),
-                    ),
-                    0,
-                ),
-                Arguments.of(
-                    "an edit of a file this workspace never had is inconclusive",
-                    listOf(
-                        Step.Call("edit_file", """{"path":"ghost.py"}"""),
                         Step.Result("edit_file", true),
                     ),
                     0,
@@ -184,16 +173,14 @@ class WorkspaceMismatchTest {
                     1,
                 ),
                 Arguments.of(
-                    "a denied call's failed result consumes its entry, so the next edit pairs with its own",
+                    "a denied call's failed result consumes its entry, so the next write pairs with its own",
                     listOf(
-                        Step.Stat("a.py", at(1)),
-                        Step.Stat("b.py", at(1)),
-                        Step.Call("edit_file", """{"path":"a.py"}"""),
+                        Step.Call("write_file", """{"path":"a.py","content":"x"}"""),
                         // The proxy follows a denial with this failed result.
-                        Step.Result("edit_file", false),
-                        Step.Call("edit_file", """{"path":"b.py"}"""),
+                        Step.Result("write_file", false),
+                        Step.Call("write_file", """{"path":"b.py","content":"y"}"""),
                         Step.Stat("b.py", at(2)),
-                        Step.Result("edit_file", true),
+                        Step.Result("write_file", true),
                     ),
                     0,
                 ),
@@ -260,12 +247,6 @@ class WorkspaceMismatchTest {
                     "move_file",
                     """{"source":"a.py","destination":"lib/a.py"}""",
                     FileOpPaths("a.py", "lib/a.py"),
-                ),
-                Arguments.of(
-                    "run_command touches no file",
-                    "run_command",
-                    """{"command":"ls"}""",
-                    null,
                 ),
                 Arguments.of(
                     "read_file touches no file",

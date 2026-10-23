@@ -10,28 +10,14 @@ import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 
 class AtlasStatusTest {
-    @Test
-    fun `all gates passing is ready`() {
-        val ready =
-            ReadyResponse(
-                ready = true,
-                inference = true,
-                lensReady = true,
-                sandbox = true,
-                v3 = true,
-            )
-
-        assertEquals(AtlasStatus.Ready, statusFromReady(ready))
-    }
-
     @ParameterizedTest(name = "{0}")
     @MethodSource("gates")
-    fun `a failing gate is named in status order`(
+    fun `a ready answer is Ready, or Starting with the failing gates in status order`(
         name: String,
         response: ReadyResponse,
-        want: List<String>,
+        want: AtlasStatus,
     ) {
-        assertEquals(AtlasStatus.Starting(want), statusFromReady(response), name)
+        assertEquals(want, statusFromReady(response), name)
     }
 
     @Test
@@ -160,20 +146,21 @@ class AtlasStatusTest {
         @JvmStatic
         fun gates(): List<Arguments> =
             listOf(
+                Arguments.of("all gates passing", readyEveryGate, AtlasStatus.Ready),
                 Arguments.of(
                     "inference alone",
                     ReadyResponse(ready = false, lensReady = true, sandbox = true, v3 = true),
-                    listOf("inference"),
+                    AtlasStatus.Starting(listOf("inference")),
                 ),
                 Arguments.of(
                     "lens and v3",
-                    ReadyResponse(ready = false, inference = true, sandbox = true),
-                    listOf("lens", "v3 service"),
+                    lensAndV3Waiting,
+                    AtlasStatus.Starting(listOf("lens", "v3 service")),
                 ),
                 Arguments.of(
                     "all four, in display order",
                     ReadyResponse(ready = false),
-                    listOf("inference", "lens", "sandbox", "v3 service"),
+                    AtlasStatus.Starting(listOf("inference", "lens", "sandbox", "v3 service")),
                 ),
                 Arguments.of(
                     "a ready flag that disagrees with the gates",
@@ -184,7 +171,7 @@ class AtlasStatusTest {
                         sandbox = true,
                         v3 = true,
                     ),
-                    emptyList<String>(),
+                    AtlasStatus.Starting(emptyList()),
                 ),
             )
     }

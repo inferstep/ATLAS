@@ -16,6 +16,7 @@ import com.inferstep.atlas.protocol.TextPayload
 import com.inferstep.atlas.protocol.payload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -28,15 +29,19 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
+import org.junit.jupiter.params.provider.ValueSource
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
 
 class AtlasClientTest {
-    @Test
-    fun `streams a turn and completes on the sentinel`() {
-        MockProxy(MockProxy.Options(agentFrames = TURN)).use { proxy ->
+    @ParameterizedTest(name = "sentinel omitted: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `streams a turn's events, whether or not the sentinel closes the stream`(
+        omitSentinel: Boolean,
+    ) {
+        MockProxy(MockProxy.Options(agentFrames = TURN, omitSentinel = omitSentinel)).use { proxy ->
             AtlasClient(proxy.url).use { client ->
-                val events = runBlocking { collect(client.agentTurn(request())) }
+                val events = runBlocking { client.agentTurn(request()).toList() }
 
                 assertEquals(listOf("turn_start", "text", "done"), events.map { it.type })
                 assertEquals("hello", events[1].payload<TextPayload>().content)
@@ -56,7 +61,7 @@ class AtlasClientTest {
         runBlocking {
             MockProxy(MockProxy.Options(agentFrames = TURN)).use { proxy ->
                 AtlasClient(proxy.url, token = "s3cret").use { client ->
-                    collect(client.agentTurn(request()))
+                    client.agentTurn(request()).toList()
 
                     val sent = proxy.requests.single { it.path == "/v1/agent" }
                     assertEquals("POST", sent.method)
@@ -75,7 +80,7 @@ class AtlasClientTest {
         runBlocking {
             MockProxy(MockProxy.Options(agentFrames = TURN)).use { proxy ->
                 AtlasClient(proxy.url).use { client ->
-                    collect(client.agentTurn(request()))
+                    client.agentTurn(request()).toList()
                     assertNull(proxy.requests.single { it.path == "/v1/agent" }.authorization)
                 }
             }
@@ -146,68 +151,26 @@ class AtlasClientTest {
             }
         }
 
-    @Test
-    fun `a 401 fails the turn with the proxy's error envelope`() {
-        val envelope = """{"error":"unauthorized","detail":"missing token","api_version":"1.0.0"}"""
-        MockProxy(MockProxy.Options(agentStatus = 401, agentBody = envelope)).use { proxy ->
-            AtlasClient(proxy.url).use { client ->
-                val error =
-                    assertThrows(AtlasApiError::class.java) {
-                        runBlocking { collect(client.agentTurn(request())) }
-                    }
-
-                assertEquals(401, error.status)
-                assertEquals(AtlasErrorCodes.UNAUTHORIZED, error.code)
-                assertEquals("missing token", error.detail)
-                assertTrue(error.isUnauthorized)
-            }
-        }
-    }
-
-    @ParameterizedTest(name = "{0} {1}")
-    @MethodSource("structuredFailures")
-    fun `a structured HTTP failure keeps the proxy's code and detail`(
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("failedTurns")
+    fun `a failed turn keeps the proxy's status, code and detail`(
+        name: String,
         status: Int,
+        body: String,
         code: String,
+        detail: String,
     ) {
-        val envelope = """{"error":"$code","detail":"the proxy said no","api_version":"1.0.0"}"""
-        MockProxy(MockProxy.Options(agentStatus = status, agentBody = envelope)).use { proxy ->
+        MockProxy(MockProxy.Options(agentStatus = status, agentBody = body)).use { proxy ->
             AtlasClient(proxy.url).use { client ->
                 val error =
                     assertThrows(AtlasApiError::class.java) {
-                        runBlocking { collect(client.agentTurn(request())) }
+                        runBlocking { client.agentTurn(request()).toList() }
                     }
 
-                assertEquals(status, error.status)
-                assertEquals(code, error.code)
-                assertEquals("the proxy said no", error.detail)
-            }
-        }
-    }
-
-    @Test
-    fun `a non-JSON failure body is kept as the detail`() {
-        MockProxy(MockProxy.Options(agentStatus = 502, agentBody = "bad gateway")).use { proxy ->
-            AtlasClient(proxy.url).use { client ->
-                val error =
-                    assertThrows(AtlasApiError::class.java) {
-                        runBlocking { collect(client.agentTurn(request())) }
-                    }
-
-                assertEquals(502, error.status)
-                assertEquals("", error.code)
-                assertEquals("bad gateway", error.detail)
-            }
-        }
-    }
-
-    @Test
-    fun `a connection that ends without the sentinel still yields its events`() {
-        MockProxy(MockProxy.Options(agentFrames = TURN, omitSentinel = true)).use { proxy ->
-            AtlasClient(proxy.url).use { client ->
-                val events = runBlocking { collect(client.agentTurn(request())) }
-
-                assertEquals(listOf("turn_start", "text", "done"), events.map { it.type })
+                assertEquals(status, error.status, name)
+                assertEquals(code, error.code, name)
+                assertEquals(detail, error.detail, name)
+                assertEquals(status == 401, error.isUnauthorized, name)
             }
         }
     }
@@ -215,12 +178,12 @@ class AtlasClientTest {
     @Test
     fun `a cancellation mid-stream stops the collector`() =
         runBlocking {
-            // Frames arrive slowly, so the stream is still open when the
-            // collector is cancelled. Cancelling the collector is the primary
+            // After the first frame the proxy goes quiet, as it does while a
+            // permission prompt is open. MockProxy holds that stream for 30 s,
+            // longer than the 20 s this test waits, so only the cancel can end
+            // the collector in time. Cancelling the collector is the primary
             // cancel mechanism: it aborts the HTTP request itself.
-            MockProxy(
-                MockProxy.Options(agentFrames = TURN, frameDelayMs = 2_000),
-            ).use { proxy ->
+            MockProxy(MockProxy.Options(agentFrames = TURN, pauseAfterIndex = 0)).use { proxy ->
                 AtlasClient(proxy.url).use { client ->
                     val events = CopyOnWriteArrayList<ChatEvent>()
                     val collector =
@@ -233,12 +196,11 @@ class AtlasClientTest {
                             delay(5)
                         }
                     }
-                    assertTrue(events.isNotEmpty(), "the stream must have started")
 
                     collector.cancel()
                     withTimeout(PROMPT_TIMEOUT_MS) { collector.join() }
 
-                    assertTrue(collector.isCancelled, "the collector must end cancelled")
+                    assertEquals(listOf("turn_start"), events.map { it.type })
                 }
             }
         }
@@ -268,17 +230,6 @@ class AtlasClientTest {
             assertFalse(runBlocking { client.cancelTurn("client-1") })
         }
     }
-
-    @Test
-    fun `a base URL with a trailing slash still hits the documented paths`() =
-        runBlocking {
-            MockProxy().use { proxy ->
-                AtlasClient("${proxy.url}///").use { client ->
-                    client.getVersion()
-                    assertEquals("/version", proxy.requests.single().path)
-                }
-            }
-        }
 
     @Test
     fun `cancelTurn short-circuits an empty session id`() =
@@ -346,11 +297,13 @@ class AtlasClientTest {
         }
 
     @Test
-    fun `version parses the additive measurement fields`() =
+    fun `version reads the additive measurement fields, even through a trailing slash`() =
         runBlocking {
             MockProxy().use { proxy ->
-                AtlasClient(proxy.url).use { client ->
+                AtlasClient("${proxy.url}///").use { client ->
                     val version = client.getVersion()
+
+                    assertEquals("/version", proxy.requests.single().path)
                     assertEquals("1.0.0", version.apiVersion)
                     assertEquals(1, version.protocolVersion)
                     assertEquals("strict", version.grammarMode)
@@ -407,12 +360,6 @@ class AtlasClientTest {
         }
     }
 
-    private suspend fun collect(stream: kotlinx.coroutines.flow.Flow<ChatEvent>): List<ChatEvent> {
-        val events = mutableListOf<ChatEvent>()
-        stream.collect { events += it }
-        return events
-    }
-
     private fun request(): AgentRequest =
         AgentRequest(
             message = "do the thing",
@@ -433,10 +380,36 @@ class AtlasClientTest {
         const val PROMPT_TIMEOUT_MS = 20_000L
 
         @JvmStatic
-        fun structuredFailures(): List<Arguments> =
+        fun failedTurns(): List<Arguments> =
             listOf(
-                Arguments.of(400, AtlasErrorCodes.INVALID_INPUT),
-                Arguments.of(500, AtlasErrorCodes.INTERNAL_ERROR),
+                Arguments.of(
+                    "401 with the proxy's envelope",
+                    401,
+                    """{"error":"unauthorized","detail":"missing token","api_version":"1.0.0"}""",
+                    AtlasErrorCodes.UNAUTHORIZED,
+                    "missing token",
+                ),
+                Arguments.of(
+                    "400 with the proxy's envelope",
+                    400,
+                    """{"error":"invalid_input","detail":"said no","api_version":"1.0.0"}""",
+                    AtlasErrorCodes.INVALID_INPUT,
+                    "said no",
+                ),
+                Arguments.of(
+                    "500 with the proxy's envelope",
+                    500,
+                    """{"error":"internal_error","detail":"said no","api_version":"1.0.0"}""",
+                    AtlasErrorCodes.INTERNAL_ERROR,
+                    "said no",
+                ),
+                Arguments.of(
+                    "502 with a non-JSON body, kept as the detail",
+                    502,
+                    "bad gateway",
+                    "",
+                    "bad gateway",
+                ),
             )
 
         @JvmStatic

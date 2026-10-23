@@ -8,24 +8,17 @@
 package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.AtlasJson
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
 import org.junit.jupiter.params.provider.MethodSource
 
-private fun element(json: String): JsonElement = Json.parseToJsonElement(json)
-
 /** tool_result as the proxy sends it: the tool's own output nested in `data`. */
 private fun payload(
     tool: String,
     inner: String,
-): JsonElement = element("""{"tool":"$tool","success":true,"data":$inner}""")
-
-/** [count] file entries, as `list_directory` returns them. */
-private fun fileEntries(count: Int): String =
-    (0 until count).joinToString(",") { """{"name":"f$it.py","type":"file"}""" }
+): JsonElement = AtlasJson.parseToJsonElement("""{"tool":"$tool","success":true,"data":$inner}""")
 
 class ToolSummaryTest {
     @ParameterizedTest(name = "{0}")
@@ -41,8 +34,10 @@ class ToolSummaryTest {
 
     companion object {
         @JvmStatic
-        fun summaries(): List<Arguments> =
-            listOf(
+        fun summaries(): List<Arguments> {
+            // 40 file entries, as list_directory returns them: past the cap of 12.
+            val fortyFiles = List(40) { """{"name":"f$it.py","type":"file"}""" }.joinToString(",")
+            return listOf(
                 Arguments.of(
                     "an empty directory says so rather than rendering nothing",
                     "list_directory",
@@ -62,7 +57,7 @@ class ToolSummaryTest {
                 Arguments.of(
                     "a listing past the cap is cut, and the cut is counted",
                     "list_directory",
-                    payload("list_directory", """{"entries":[${fileEntries(40)}]}"""),
+                    payload("list_directory", """{"entries":[$fortyFiles]}"""),
                     "40 entries: f0.py, f1.py, f2.py, f3.py, f4.py, f5.py, f6.py, " +
                         "f7.py, f8.py, f9.py, f10.py, f11.py (+28 more)",
                 ),
@@ -121,5 +116,6 @@ class ToolSummaryTest {
                     "4 lines",
                 ),
             )
+        }
     }
 }

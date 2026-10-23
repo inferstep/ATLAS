@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import org.w3c.dom.Document
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
@@ -20,7 +19,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 class AtlasToolWindowIconTest {
     @Test
     fun `the descriptor gives the ATLAS tool window an icon`() {
-        val descriptor = resource(DESCRIPTOR).decodeToString()
+        val descriptor = resource("META-INF/plugin.xml").decodeToString()
         val toolWindow = Regex("<toolWindow\\b[^>]*>").find(descriptor)
 
         assertNotNull(toolWindow, "plugin.xml must declare a toolWindow")
@@ -37,8 +36,12 @@ class AtlasToolWindowIconTest {
     @Test
     fun `both theme variants ship at the size the stripe draws`() {
         listOf(LIGHT, DARK).forEach { path ->
-            val document = parse(path)
-            val root = document.documentElement
+            val root =
+                DocumentBuilderFactory
+                    .newInstance()
+                    .newDocumentBuilder()
+                    .parse(resource(path).inputStream())
+                    .documentElement
 
             assertEquals("13", root.getAttribute("width"), "$path width")
             assertEquals("13", root.getAttribute("height"), "$path height")
@@ -69,23 +72,18 @@ class AtlasToolWindowIconTest {
         )
     }
 
-    private fun parse(path: String): Document =
-        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(resourceStream(path))
-
     private fun withoutCommentsAndFill(svg: String): String {
         val withoutComments = svg.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
         return withoutComments.replace(Regex("fill=\"#[0-9a-fA-F]{6}\""), "fill=\"\"").trim()
     }
 
-    private fun resource(path: String): ByteArray = resourceStream(path).use { it.readBytes() }
-
-    private fun resourceStream(path: String) =
-        javaClass.classLoader.getResourceAsStream(path.removePrefix("/")).also {
-            assertNotNull(it, "$path must be on the classpath")
-        }!!
+    private fun resource(path: String): ByteArray {
+        val stream = javaClass.classLoader.getResourceAsStream(path.removePrefix("/"))
+        assertNotNull(stream, "$path must be on the classpath")
+        return stream!!.use { it.readBytes() }
+    }
 
     private companion object {
-        const val DESCRIPTOR = "META-INF/plugin.xml"
         const val LIGHT = "/icons/toolwindow.svg"
         const val DARK = "/icons/toolwindow_dark.svg"
     }

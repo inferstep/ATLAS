@@ -2,7 +2,9 @@
 // trips (once/session/deny), first-answer-wins, remote permission_denied
 // dismissal, turn-end cleanup and advisory POST error reporting.
 //
-// The same cases as extensions/vscode/test/permissionFlow.test.ts.
+// The cases of extensions/vscode/test/permissionFlow.test.ts. The one-time
+// case also names a tool other than delete_file, so that the one_time_only
+// flag is checked on its own.
 package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.PermissionDecision
@@ -32,18 +34,6 @@ private fun request(
         message = "run $tool?",
         toolCallId = id,
         oneTimeOnly = oneTimeOnly,
-    )
-
-private fun deletion(
-    id: String,
-    marked: Boolean,
-): PermissionRequestPayload =
-    PermissionRequestPayload(
-        toolName = "delete_file",
-        args = JsonObject(mapOf("path" to JsonPrimitive("important.db"))),
-        message = "Allow this one deletion? important.db",
-        toolCallId = id,
-        oneTimeOnly = marked,
     )
 
 private class FakePoster(
@@ -269,33 +259,26 @@ class PermissionFlowTest {
             val boom = IllegalStateException("proxy 500")
             val poster = FakePoster(boom)
             val ui = FakeUi()
-            val flow = PermissionFlow(linkedSetOf(), ui, this)
-
-            flow.handleRequest(poster, "sess-8", request("write_file"))
-            ui.prompts.single().settle(PermissionChoice.ALLOW_ONCE)
-            letTheLaunchedWorkRun()
-
-            assertEquals(UiEvent.PostError("write_file", boom), ui.events.last())
-        }
-
-    @Test
-    fun `an auto-allow POST failure also routes to onPostError`() =
-        runBlocking {
-            val boom = IllegalStateException("proxy 500")
-            val poster = FakePoster(boom)
-            val ui = FakeUi()
             val flow = PermissionFlow(linkedSetOf("edit_file"), ui, this)
 
-            flow.handleRequest(poster, "sess-9", request("edit_file"))
+            // Both ways a decision is posted: write_file answered by the user,
+            // edit_file by the session allowlist.
+            flow.handleRequest(poster, "sess-8", request("write_file"))
+            ui.prompts.single().settle(PermissionChoice.ALLOW_ONCE)
+            flow.handleRequest(poster, "sess-8", request("edit_file"))
             letTheLaunchedWorkRun()
 
-            assertEquals(UiEvent.PostError("edit_file", boom), ui.events.last())
+            assertEquals(
+                listOf(UiEvent.PostError("write_file", boom), UiEvent.PostError("edit_file", boom)),
+                ui.events.filterIsInstance<UiEvent.PostError>(),
+            )
         }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("deletions")
-    fun `never approves a deletion for the session, marked or not`(
+    @MethodSource("oneTimeRequests")
+    fun `never approves a one-time request for the session`(
         name: String,
+        tool: String,
         marked: Boolean,
     ) = runBlocking {
         val allowed = linkedSetOf<String>()
@@ -303,17 +286,17 @@ class PermissionFlowTest {
         val poster = FakePoster()
         val flow = PermissionFlow(allowed, ui, this)
 
-        flow.handleRequest(poster, "s", deletion("c1", marked))
+        flow.handleRequest(poster, "s", request(tool, "c1", oneTimeOnly = marked))
         ui.prompts.single().settle(PermissionChoice.ALLOW_SESSION)
         letTheLaunchedWorkRun()
 
         assertEquals(PermissionDecision.ALLOW, poster.decisions[0].decision, name)
         assertEquals(PermissionScope.ONCE, poster.decisions[0].scope, name)
-        assertFalse(allowed.contains("delete_file"), name)
+        assertFalse(allowed.contains(tool), name)
 
         // Even an allowlist entry from elsewhere answers nothing.
-        allowed += "delete_file"
-        flow.handleRequest(poster, "s", deletion("c2", marked))
+        allowed += tool
+        flow.handleRequest(poster, "s", request(tool, "c2", oneTimeOnly = marked))
         assertEquals(2, ui.prompts.size, name)
         assertTrue(ui.events.none { it is UiEvent.AutoAllow }, name)
     }
@@ -360,10 +343,14 @@ class PermissionFlowTest {
             )
 
         @JvmStatic
-        fun deletions(): List<Arguments> =
+        fun oneTimeRequests(): List<Arguments> =
             listOf(
-                Arguments.of("a deletion the proxy marks one_time_only", true),
-                Arguments.of("a delete_file the proxy did not mark", false),
+                Arguments.of(
+                    "a delete_file, even one the proxy did not mark",
+                    "delete_file",
+                    false,
+                ),
+                Arguments.of("any call the proxy marks one_time_only", "run_command", true),
             )
     }
 }

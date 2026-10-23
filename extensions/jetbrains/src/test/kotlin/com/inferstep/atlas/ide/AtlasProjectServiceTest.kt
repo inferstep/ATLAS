@@ -2,6 +2,7 @@ package com.inferstep.atlas.ide
 
 import com.inferstep.atlas.protocol.PermissionMode
 import com.inferstep.atlas.settings.AtlasSettings
+import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
@@ -20,10 +21,27 @@ class AtlasProjectServiceTest : BasePlatformTestCase() {
             service.connection.value.url
                 .isNotEmpty(),
         )
-        assertEquals(
-            AtlasSettings.getInstance().permissionMode,
-            service.session.state.value.permissionMode,
-        )
+    }
+
+    fun testANewServiceStartsItsSessionInTheStoredPermissionMode() {
+        val settings = AtlasSettings.getInstance()
+        val previous = settings.permissionMode
+        // A stored mode that is not the session's own default, so a session
+        // that ignored the setting would show it. The service is built here
+        // rather than taken from the project, whose one instance may already
+        // exist from an earlier test: the stored mode is read when a service
+        // starts.
+        settings.permissionMode = PermissionMode.ACCEPT_EDITS
+        val service = AtlasProjectService(project)
+        try {
+            assertEquals(
+                PermissionMode.ACCEPT_EDITS,
+                service.session.state.value.permissionMode,
+            )
+        } finally {
+            Disposer.dispose(service)
+            settings.permissionMode = previous
+        }
     }
 
     fun testSettingThePermissionModeWritesTheSettingAndTheSession() {

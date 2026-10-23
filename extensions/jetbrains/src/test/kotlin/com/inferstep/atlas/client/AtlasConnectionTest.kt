@@ -23,13 +23,7 @@ class AtlasConnectionTest {
                     }
                 },
                 readFile = { path ->
-                    if (path ==
-                        "/run/atlas-secrets/service-token"
-                    ) {
-                        "s3cret\n"
-                    } else {
-                        null
-                    }
+                    if (path == "/run/atlas-secrets/service-token") "s3cret\n" else null
                 },
             )
 
@@ -39,38 +33,7 @@ class AtlasConnectionTest {
     }
 
     @Test
-    fun `falls back to the documented default url`() {
-        val connection = AtlasConnection.fromEnvironment(env = { null }, readFile = { null })
-
-        assertEquals(AtlasConnection.DEFAULT_URL, connection.url)
-        assertEquals("http://127.0.0.1:8090", connection.url)
-    }
-
-    @Test
-    fun `a blank url falls back rather than producing an empty base`() {
-        val connection =
-            AtlasConnection.fromEnvironment(env = { name ->
-                if (name ==
-                    AtlasConnection.URL_ENV
-                ) {
-                    "  "
-                } else {
-                    null
-                }
-            }, readFile = { null })
-
-        assertEquals(AtlasConnection.DEFAULT_URL, connection.url)
-    }
-
-    @Test
-    fun `an install with no token file is a connection with no token`() {
-        val connection = AtlasConnection.fromEnvironment(env = { null }, readFile = { null })
-
-        assertEquals("", connection.token)
-    }
-
-    @Test
-    fun `no configured token path reads no file`() {
+    fun `with no variables set, the url is the documented default and no token file is read`() {
         val asked = mutableListOf<String>()
         val connection =
             AtlasConnection.fromEnvironment(
@@ -81,8 +44,21 @@ class AtlasConnectionTest {
                 },
             )
 
+        assertEquals(AtlasConnection.DEFAULT_URL, connection.url)
+        assertEquals("http://127.0.0.1:8090", connection.url)
         assertEquals("", connection.token)
         assertEquals(emptyList<String>(), asked)
+    }
+
+    @Test
+    fun `a blank url falls back rather than producing an empty base`() {
+        val connection =
+            AtlasConnection.fromEnvironment(
+                env = { name -> if (name == AtlasConnection.URL_ENV) "  " else null },
+                readFile = { null },
+            )
+
+        assertEquals(AtlasConnection.DEFAULT_URL, connection.url)
     }
 
     @Test
