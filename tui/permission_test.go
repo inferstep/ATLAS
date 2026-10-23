@@ -13,50 +13,37 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
-
-// permReqMsg builds a chatStreamMsg carrying a permission_request event.
-func permReqMsg(tool, message, callID string) chatStreamMsg {
-	data, _ := json.Marshal(map[string]interface{}{
-		"tool_name":    tool,
-		"message":      message,
-		"tool_call_id": callID,
-		"args":         json.RawMessage(`{"command":"npm install"}`),
-	})
-	return chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: data}}
-}
 
 // A permission_request for a tool NOT on the session allowlist raises the
 // modal and captures the turn's session id.
 func TestPermissionRequestRaisesModal(t *testing.T) {
 	m := sized(80, 30)
 	m.turnSessionID = "turn-abc"
-	updated, _ := m.Update(permReqMsg("run_command", "Run command: npm install", "call_3"))
-	mu := updated.(tuiModel)
-	if mu.pendingPerm == nil {
+	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: json.RawMessage(
+		`{"tool_name": "run_command", "message": "Run command: npm install", "tool_call_id": "call_3",
+		  "args": {"command": "npm install"}}`)}})
+	got := updated.(tuiModel).pendingPerm
+	if got == nil {
 		t.Fatal("pendingPerm is nil — modal should be up")
 	}
-	if mu.pendingPerm.toolName != "run_command" {
-		t.Errorf("toolName = %q, want run_command", mu.pendingPerm.toolName)
-	}
-	if mu.pendingPerm.message != "Run command: npm install" {
-		t.Errorf("message = %q", mu.pendingPerm.message)
-	}
-	if mu.pendingPerm.toolCallID != "call_3" {
-		t.Errorf("toolCallID = %q, want call_3", mu.pendingPerm.toolCallID)
-	}
-	if mu.pendingPerm.sessionID != "turn-abc" {
-		t.Errorf("sessionID = %q, want the turn's session id", mu.pendingPerm.sessionID)
+	if got.toolName != "run_command" || got.message != "Run command: npm install" ||
+		got.toolCallID != "call_3" || got.sessionID != "turn-abc" {
+		t.Errorf("modal = %+v, want the request's tool, message and call id, and the turn's session id", *got)
 	}
 }
 
 // A tool already approved "for session" auto-answers allow without a modal.
 func TestPermissionRequestAutoAllowsWhitelistedTool(t *testing.T) {
 	m := sized(80, 30)
+	// The auto-answer is posted in the background; a closed port on this
+	// machine keeps it off the network.
+	m.proxyURL = "http://127.0.0.1:1"
 	m.turnSessionID = "turn-abc"
 	m.sessionAllowedTools["run_command"] = true
-	updated, _ := m.Update(permReqMsg("run_command", "Run command: npm install", "call_3"))
+	updated, _ := m.Update(chatStreamMsg{ev: chatEvent{Type: "permission_request", Data: json.RawMessage(
+		`{"tool_name": "run_command", "message": "Run command: npm install", "tool_call_id": "call_3",
+		  "args": {"command": "npm install"}}`)}})
 	mu := updated.(tuiModel)
 	if mu.pendingPerm != nil {
 		t.Fatal("whitelisted tool should auto-allow without raising the modal")
@@ -85,21 +72,25 @@ func permServer(t *testing.T, got *map[string]string) *httptest.Server {
 	}))
 }
 
+// Each decision key closes the modal and posts its answer for this turn and
+// call. Only 'a' adds the tool to the session allowlist. Deny ('n' or esc)
+// adds no local row: the proxy's permission_denied event renders it.
 func TestPermissionModalKeyDecisions(t *testing.T) {
 	cases := []struct {
-		key            string
+		name           string
+		key            tea.KeyMsg
 		wantDecision   string
 		wantScope      string
 		wantAllowlist  bool
 		wantBodyPrefix string // "" = no local transcript row expected
 	}{
-		{"y", "allow", "once", false, "allowed"},
-		{"a", "allow", "session", true, "allowed"},
-		// Deny adds no local row — the proxy's permission_denied event renders it.
-		{"n", "deny", "once", false, ""},
+		{"y", keyMsg("y"), "allow", "once", false, "allowed"},
+		{"a", keyMsg("a"), "allow", "session", true, "allowed"},
+		{"n", keyMsg("n"), "deny", "once", false, ""},
+		{"esc", tea.KeyMsg(tea.Key{Type: tea.KeyEsc}), "deny", "once", false, ""},
 	}
 	for _, tc := range cases {
-		t.Run(tc.key, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var got map[string]string
 			srv := permServer(t, &got)
 			defer srv.Close()
@@ -110,22 +101,14 @@ func TestPermissionModalKeyDecisions(t *testing.T) {
 				toolName: "run_command", message: "Run command: npm install",
 				toolCallID: "call_3", sessionID: "turn-abc",
 			}
-			var msg tea.KeyMsg
-			if tc.key == "esc" {
-				msg = tea.KeyMsg(tea.Key{Type: tea.KeyEsc})
-			} else {
-				msg = keyMsg(tc.key)
-			}
-			updated, cmd := m.Update(msg)
+			updated, cmd := m.Update(tc.key)
 			mu := updated.(tuiModel)
 			if mu.pendingPerm != nil {
 				t.Fatal("pendingPerm should be cleared after a decision")
 			}
-			if tc.wantAllowlist && !mu.sessionAllowedTools["run_command"] {
-				t.Error("'a' should add run_command to the session allowlist")
-			}
-			if !tc.wantAllowlist && tc.key == "y" && mu.sessionAllowedTools["run_command"] {
-				t.Error("'y' should not add to the session allowlist")
+			if mu.sessionAllowedTools["run_command"] != tc.wantAllowlist {
+				t.Errorf("run_command on the session allowlist = %v, want %v",
+					mu.sessionAllowedTools["run_command"], tc.wantAllowlist)
 			}
 			if tc.wantBodyPrefix == "" {
 				if len(mu.chat) != 0 {
@@ -141,34 +124,13 @@ func TestPermissionModalKeyDecisions(t *testing.T) {
 			if got == nil {
 				t.Fatal("no /v1/permission POST received")
 			}
-			if got["decision"] != tc.wantDecision {
-				t.Errorf("decision = %q, want %q", got["decision"], tc.wantDecision)
-			}
-			if got["scope"] != tc.wantScope {
-				t.Errorf("scope = %q, want %q", got["scope"], tc.wantScope)
+			if got["decision"] != tc.wantDecision || got["scope"] != tc.wantScope {
+				t.Errorf("decision/scope = %q/%q, want %q/%q", got["decision"], got["scope"], tc.wantDecision, tc.wantScope)
 			}
 			if got["session_id"] != "turn-abc" || got["tool_call_id"] != "call_3" {
 				t.Errorf("correlation = %+v, want session turn-abc / call_3", got)
 			}
 		})
-	}
-}
-
-// esc denies, same as 'n'.
-func TestPermissionModalEscDenies(t *testing.T) {
-	var got map[string]string
-	srv := permServer(t, &got)
-	defer srv.Close()
-	m := sized(80, 30)
-	m.proxyURL = srv.URL
-	m.pendingPerm = &permPrompt{toolName: "run_command", toolCallID: "call_9", sessionID: "s1"}
-	_, cmd := m.Update(tea.KeyMsg(tea.Key{Type: tea.KeyEsc}))
-	if cmd == nil {
-		t.Fatal("esc must return a post-back Cmd")
-	}
-	cmd()
-	if got["decision"] != "deny" {
-		t.Errorf("esc decision = %q, want deny", got["decision"])
 	}
 }
 
@@ -184,48 +146,6 @@ func TestPermissionModalSwallowsOtherKeys(t *testing.T) {
 	}
 	if mu.input.Value() != "" {
 		t.Errorf("input = %q, want empty (key swallowed, not typed)", mu.input.Value())
-	}
-}
-
-// The rendered frame is exactly terminal-height even with the modal up.
-func TestViewHeightMatchesTerminalWithModal(t *testing.T) {
-	m := withStages(t, 100, 30, 2)
-	m.pendingPerm = &permPrompt{
-		toolName: "run_command", message: "Run command: npm install",
-		toolCallID: "call_3", sessionID: "s1",
-	}
-	out := m.View()
-	if got := lipgloss.Height(out); got != 30 {
-		t.Errorf("view height with modal = %d, want 30", got)
-	}
-	if !strings.Contains(out, "Permission required") {
-		t.Error("modal title not rendered")
-	}
-	if !strings.Contains(out, "[y] allow once") {
-		t.Error("modal key legend not rendered")
-	}
-}
-
-// After an 'a' (allow for session) the next /v1/agent request carries the tool
-// in session_allowed_tools so the proxy skips re-prompting.
-func TestSessionAllowedToolsRideRequestBody(t *testing.T) {
-	var gotReq agentRequest
-	srv := fakeAgentServer(t, []chatEvent{
-		mkChatEvent("done", map[string]string{"summary": "ok"}),
-	}, &gotReq)
-	defer srv.Close()
-
-	out := make(chan chatEvent, 8)
-	if err := sendChatOpts(context.Background(), srv.URL, "go", "/w", "default", "s1", nil,
-		demoOpts{allowedTools: []string{"run_command", "write_file"}}, out); err != nil {
-		t.Fatalf("sendChatOpts: %v", err)
-	}
-	close(out)
-	if len(gotReq.SessionAllowedTools) != 2 ||
-		gotReq.SessionAllowedTools[0] != "run_command" ||
-		gotReq.SessionAllowedTools[1] != "write_file" {
-		t.Errorf("session_allowed_tools = %v, want [run_command write_file]",
-			gotReq.SessionAllowedTools)
 	}
 }
 

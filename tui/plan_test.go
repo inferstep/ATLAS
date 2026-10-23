@@ -96,16 +96,9 @@ func TestPlanViewStepLines(t *testing.T) {
 func TestApplyPlanLoadedReplacesPriorState(t *testing.T) {
 	m := &tuiModel{}
 	// First load — initial plan.
-	data := rawJSON(map[string]interface{}{
-		"steps": []map[string]string{
-			{"id": "s1", "action": "read_file", "target": "app.py", "why": "inspect"},
-			{"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
-		},
-		"verify_step":   "s2",
-		"winning_score": 0.9,
-		"revision":      0,
-	})
-	msg, ok := applyPlanLoaded(m, data)
+	msg, ok := applyPlanLoaded(m, json.RawMessage(`{"verify_step": "s2", "winning_score": 0.9, "revision": 0,
+		"steps": [{"id": "s1", "action": "read_file", "target": "app.py", "why": "inspect"},
+		          {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"}]}`))
 	if !ok {
 		t.Fatal("applyPlanLoaded returned ok=false on valid payload")
 	}
@@ -118,16 +111,9 @@ func TestApplyPlanLoadedReplacesPriorState(t *testing.T) {
 
 	// Mark s1 satisfied, then load a revision — Satisfied should reset.
 	m.plan.markSatisfied("s1")
-	revData := rawJSON(map[string]interface{}{
-		"steps": []map[string]string{
-			{"id": "s1", "action": "edit_file", "target": "app.py", "why": "fix"},
-			{"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"},
-		},
-		"verify_step":   "s2",
-		"winning_score": 1.0,
-		"revision":      1,
-	})
-	msg, ok = applyPlanLoaded(m, revData)
+	msg, ok = applyPlanLoaded(m, json.RawMessage(`{"verify_step": "s2", "winning_score": 1.0, "revision": 1,
+		"steps": [{"id": "s1", "action": "edit_file", "target": "app.py", "why": "fix"},
+		          {"id": "s2", "action": "run_command", "target": "pytest", "why": "verify"}]}`))
 	if !ok {
 		t.Fatal("applyPlanLoaded(revision) returned ok=false")
 	}
@@ -149,65 +135,34 @@ func TestApplyPlanLoadedRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestApplyPlanAdherenceMatched(t *testing.T) {
-	m := &tuiModel{
-		plan: &planView{
-			Steps: []planStep{{ID: "s1"}, {ID: "s2"}},
-		},
+// A tool call off the plan changes nothing and shows nothing; one that
+// matches a step marks it satisfied and shows a row naming the step.
+func TestApplyPlanAdherence(t *testing.T) {
+	m := &tuiModel{plan: &planView{Steps: []planStep{{ID: "s1"}, {ID: "s2"}}}}
+	body := applyPlanAdherence(m, json.RawMessage(`{"matched": false, "tool": "list_directory", "off_streak": 2}`))
+	if body != "" {
+		t.Errorf("unmatched adherence should be silent, got %q", body)
 	}
-	data := rawJSON(map[string]interface{}{
-		"matched":     true,
-		"step_id":     "s1",
-		"step_action": "read_file",
-		"satisfied":   1,
-		"total":       2,
-	})
-	body := applyPlanAdherence(m, data)
-	if body == "" {
-		t.Fatal("matched adherence should return a chat row")
+	if m.plan.Steps[0].Satisfied || m.plan.Steps[1].Satisfied {
+		t.Error("unmatched call shouldn't flip any step")
 	}
+	body = applyPlanAdherence(m, json.RawMessage(
+		`{"matched": true, "step_id": "s1", "step_action": "read_file", "satisfied": 1, "total": 2}`))
 	if !strings.Contains(body, "s1") {
-		t.Errorf("body %q missing step id", body)
+		t.Errorf("matched adherence row %q, want one naming step s1", body)
 	}
 	if !m.plan.Steps[0].Satisfied {
 		t.Error("matched adherence didn't flip Satisfied")
 	}
 }
 
-func TestApplyPlanAdherenceUnmatchedSilent(t *testing.T) {
-	m := &tuiModel{plan: &planView{Steps: []planStep{{ID: "s1"}}}}
-	data := rawJSON(map[string]interface{}{
-		"matched":    false,
-		"tool":       "list_directory",
-		"off_streak": 2,
-	})
-	body := applyPlanAdherence(m, data)
-	if body != "" {
-		t.Errorf("unmatched adherence should be silent, got %q", body)
-	}
-	if m.plan.Steps[0].Satisfied {
-		t.Error("unmatched call shouldn't flip any step")
-	}
-}
-
 func TestApplyPlanReviseSetsRevisingFlag(t *testing.T) {
 	m := &tuiModel{plan: &planView{Steps: []planStep{{ID: "s1"}}}}
-	data := rawJSON(map[string]interface{}{
-		"reason":   "off-plan x3",
-		"revision": 1,
-	})
-	body := applyPlanRevise(m, data)
+	body := applyPlanRevise(m, json.RawMessage(`{"reason": "off-plan x3", "revision": 1}`))
 	if body == "" || !strings.Contains(body, "rev 1") {
 		t.Errorf("revise body wrong: %q", body)
 	}
 	if !m.plan.Revising {
 		t.Error("Revising flag not set")
 	}
-}
-
-// rawJSON is a small adapter — chat_test.go's mustJSON returns string,
-// but applyPlan* take json.RawMessage. Wrapping keeps these tests
-// self-contained without redeclaring mustJSON.
-func rawJSON(v interface{}) json.RawMessage {
-	return json.RawMessage(mustJSON(v))
 }

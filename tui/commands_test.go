@@ -18,125 +18,66 @@ import (
 	"time"
 )
 
-func newTestModel() *tuiModel {
+// Input that starts with "/" is a command: it is consumed (never sent to the
+// agent as a message), echoed as a chat row, and answered in the chat.
+func TestHandleSlash(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		consumed bool
+		sends    bool     // returns a command to run
+		quit     bool     // asks the program to quit
+		rows     []string // text each chat row contains, in order: the echo, then the answer
+	}{
+		{"help lists the commands", "/help", true, false, false, []string{"/help", "Slash commands"}},
+		{"quit quits", "/quit", true, true, true, []string{"/quit"}},
+		{"an unknown command is an error", "/diffx", true, false, false, []string{"/diffx", "unknown command"}},
+		{"run needs a command", "/run", true, false, false, []string{"/run", "/run requires"}},
+		{"ask needs a message", "/ask", true, false, false, []string{"/ask", "/ask requires"}},
+		{"plain input is not a command", "fix the snake game", false, false, false, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newTUIModel("http://localhost:8090")
+			consumed, cmd, quit := m.handleSlash(c.input)
+			if consumed != c.consumed || (cmd != nil) != c.sends || quit != c.quit {
+				t.Errorf("consumed=%v command=%v quit=%v, want %v %v %v",
+					consumed, cmd != nil, quit, c.consumed, c.sends, c.quit)
+			}
+			if len(m.chat) != len(c.rows) {
+				t.Fatalf("chat = %+v, want %d row(s)", m.chat, len(c.rows))
+			}
+			for i, want := range c.rows {
+				if !strings.Contains(m.chat[i].Body, want) {
+					t.Errorf("row %d = %q, want it to contain %q", i, m.chat[i].Body, want)
+				}
+			}
+			// Only an /ask that sends a message selects question mode.
+			if m.pendingTaskMode != "" {
+				t.Errorf("pendingTaskMode = %q, want unset", m.pendingTaskMode)
+			}
+		})
+	}
+}
+
+// /add and /drop keep the list of context files. The suffix sent with a
+// message names them and is empty while the list is.
+func TestSlashAddAndDropKeepTheContextFiles(t *testing.T) {
 	m := newTUIModel("http://localhost:8090")
-	return &m
-}
-
-func TestSlashHelpEchoesHelpText(t *testing.T) {
-	m := newTestModel()
-	consumed, cmd, quit := m.handleSlash("/help")
-	if !consumed {
-		t.Fatal("consumed = false, want true")
-	}
-	if cmd != nil {
-		t.Errorf("/help should not return a tea.Cmd")
-	}
-	if quit {
-		t.Errorf("/help should not signal quit")
-	}
-	// Two messages: the echo of "/help" and the help-body.
-	if len(m.chat) != 2 {
-		t.Fatalf("chat length = %d, want 2", len(m.chat))
-	}
-	if !strings.Contains(m.chat[1].Body, "Slash commands") {
-		t.Errorf("help body missing header: %q", m.chat[1].Body)
-	}
-}
-
-func TestSlashQuitSignalsQuit(t *testing.T) {
-	m := newTestModel()
-	consumed, cmd, quit := m.handleSlash("/quit")
-	if !consumed || !quit {
-		t.Errorf("consumed=%v quit=%v, want both true", consumed, quit)
-	}
-	if cmd == nil {
-		t.Errorf("expected tea.Quit cmd")
-	}
-}
-
-func TestSlashAddPopulatesContext(t *testing.T) {
-	m := newTestModel()
-	m.handleSlash("/add foo.go bar.go")
-	if !m.contextFiles["foo.go"] || !m.contextFiles["bar.go"] {
-		t.Errorf("contextFiles = %v", m.contextFiles)
-	}
-	// Adding the same files again should report "no new files added"
-	// without duplicating entries.
-	m.handleSlash("/add foo.go")
-	count := 0
-	for range m.contextFiles {
-		count++
-	}
-	if count != 2 {
-		t.Errorf("contextFiles size = %d, want 2 (no dup)", count)
-	}
-}
-
-func TestSlashDropRemovesContext(t *testing.T) {
-	m := newTestModel()
-	m.handleSlash("/add foo.go bar.go")
-	m.handleSlash("/drop foo.go")
-	if m.contextFiles["foo.go"] {
-		t.Errorf("foo.go should be dropped")
-	}
-	if !m.contextFiles["bar.go"] {
-		t.Errorf("bar.go should remain")
-	}
-}
-
-func TestContextSuffixOmitsHintWhenEmpty(t *testing.T) {
-	m := newTestModel()
 	if got := m.contextSuffix(); got != "" {
-		t.Errorf("empty context suffix = %q, want empty", got)
+		t.Errorf("suffix with no context files = %q, want empty", got)
 	}
-	m.handleSlash("/add foo.go")
-	got := m.contextSuffix()
-	if !strings.Contains(got, "foo.go") {
-		t.Errorf("suffix = %q, missing foo.go", got)
+	m.handleSlash("/add foo.go bar.go")
+	m.handleSlash("/add foo.go") // already there: nothing new
+	if len(m.contextFiles) != 2 || !m.contextFiles["foo.go"] || !m.contextFiles["bar.go"] {
+		t.Errorf("contextFiles = %v, want foo.go and bar.go", m.contextFiles)
 	}
-	if !strings.Contains(got, "atlas-tui context") {
-		t.Errorf("suffix = %q, missing marker tag", got)
+	if got := m.contextSuffix(); !strings.Contains(got, "foo.go") || !strings.Contains(got, "atlas-tui context") {
+		t.Errorf("suffix = %q, want the marker tag and foo.go", got)
 	}
-}
-
-func TestSlashUnknownReportsErrorNotPassthrough(t *testing.T) {
-	m := newTestModel()
-	consumed, _, _ := m.handleSlash("/diffx")
-	if !consumed {
-		t.Fatal("unknown slash should still be consumed (not passed to agent)")
-	}
-	if len(m.chat) < 2 {
-		t.Fatalf("expected echo + error, got %d msgs", len(m.chat))
-	}
-	if !strings.Contains(m.chat[1].Body, "unknown command") {
-		t.Errorf("missing unknown-command notice: %q", m.chat[1].Body)
-	}
-}
-
-func TestNonSlashInputNotConsumed(t *testing.T) {
-	m := newTestModel()
-	consumed, _, _ := m.handleSlash("fix the snake game")
-	if consumed {
-		t.Errorf("plain input should not be consumed by slash handler")
-	}
-	if len(m.chat) != 0 {
-		t.Errorf("plain input should not append to chat from slash handler")
-	}
-}
-
-func TestSlashRunRequiresArgument(t *testing.T) {
-	m := newTestModel()
-	consumed, cmd, _ := m.handleSlash("/run")
-	if !consumed {
-		t.Fatal("consumed = false")
-	}
-	if cmd != nil {
-		t.Errorf("/run with no arg should not run anything")
-	}
-	// echo + error message
-	if len(m.chat) != 2 || !strings.Contains(m.chat[1].Body, "/run requires") {
-		t.Errorf("chat = %v, want error about missing arg", m.chat)
+	m.handleSlash("/drop foo.go")
+	if m.contextFiles["foo.go"] || !m.contextFiles["bar.go"] {
+		t.Errorf("after /drop foo.go: contextFiles = %v, want only bar.go", m.contextFiles)
 	}
 }
 
@@ -192,21 +133,6 @@ func TestAskSelectsQuestionModeOnce(t *testing.T) {
 	last := m.chat[len(m.chat)-1]
 	if last.Body != "what does solve.py do?" || last.Echo {
 		t.Errorf("chat row is %+v", last)
-	}
-}
-
-// /ask with no message asks for one and sends nothing.
-func TestAskWithoutAMessageSendsNothing(t *testing.T) {
-	m := &tuiModel{workingDir: t.TempDir()}
-	consumed, cmd, _ := m.handleSlash("/ask")
-	if !consumed {
-		t.Fatal("not consumed")
-	}
-	if cmd != nil {
-		t.Error("/ask with no message sent a request")
-	}
-	if m.pendingTaskMode != "" {
-		t.Errorf("pendingTaskMode=%q, want unset", m.pendingTaskMode)
 	}
 }
 

@@ -11,80 +11,99 @@ import (
 	"time"
 )
 
-func TestRenderCalibrationBadge_NilStatus_ShowsPlaceholder(t *testing.T) {
-	got := renderCalibrationBadge(nil)
-	if !strings.Contains(got, "cal") {
-		t.Errorf("expected 'cal' placeholder, got %q", got)
+// The badge shows one mark per subsystem: ✓ ready, ⚠ a warning, ✗ requests
+// are refused (the lens is required). When something needs attention, the
+// hint follows on the same line.
+func TestRenderCalibrationBadge(t *testing.T) {
+	if got := renderCalibrationBadge(nil); !strings.Contains(got, "cal") {
+		t.Errorf("before the first answer the badge is %q, want the 'cal' placeholder", got)
+	}
+	cases := []struct {
+		name, lens, asa string
+		want            []string
+	}{
+		{"both supported", "supported", "supported", []string{"Lens ✓", "ASA ✓"}},
+		// A lens with no artifacts cannot score: a failure, not a warning.
+		{"lens without artifacts", "no-artifacts", "supported",
+			[]string{"Lens ✗", "ASA ✓", "atlas lens build", "PUBLISHING.md"}},
+		{"lens with incomplete artifacts", "incomplete-artifacts", "active", []string{"Lens ✗"}},
+		{"lens with mismatched dimensions", "dim-mismatch", "active", []string{"Lens ✗"}},
+		{"uncalibrated lens, unverified ASA", "uncalibrated", "unverified", []string{"Lens ⚠", "ASA ⚠"}},
+		{"unreachable lens, missing ASA", "unreachable", "missing", []string{"Lens ✗", "ASA ⚠"}},
+		{"drifted lens", "drifted", "incompatible", []string{"Lens ✗"}},
+		{"lens failed its self-test", "self-test-failed", "incompatible", []string{"Lens ✗"}},
+		{"lens cannot reach the model server", "model-server-unreachable", "incompatible", []string{"Lens ✗"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := &calibrationStatus{}
+			s.Lens.Verdict = c.lens
+			s.ASA.Verdict = c.asa
+			got := renderCalibrationBadge(s)
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("badge %q, want it to contain %q", got, want)
+				}
+			}
+		})
 	}
 }
 
-func TestRenderCalibrationBadge_BothSupported_ShowsCheck(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.ASA.Verdict = "supported"
-	got := renderCalibrationBadge(s)
-	// ANSI codes wrap each badge — assert on the visible text content
-	if !strings.Contains(got, "Lens ✓") {
-		t.Errorf("expected 'Lens ✓' badge, got %q", got)
+// The hint says what to do: build what is missing, check what is unverified,
+// or run atlas doctor when the lens is down (its artifacts may be fine, so a
+// build would mislead). While the lens cannot score, requests are refused and
+// the hint says so; an uncalibrated lens still scores.
+func TestBadgeActionHint(t *testing.T) {
+	cases := []struct {
+		name, lens, asa string
+		want            []string // texts the hint contains; none means no hint at all
+		notWant         []string
+	}{
+		{"both supported", "supported", "supported", nil, nil},
+		{"ASA unverified", "supported", "unverified", []string{"atlas asa check"}, nil},
+		{"ASA missing", "supported", "missing", []string{"atlas asa build"}, []string{"atlas lens build"}},
+		{"lens without artifacts", "no-artifacts", "supported",
+			[]string{"atlas lens build", "PUBLISHING.md", "refused"}, []string{"atlas asa build"}},
+		{"lens with incomplete artifacts", "incomplete-artifacts", "active", []string{"atlas lens build", "refused"}, nil},
+		{"lens with mismatched dimensions", "dim-mismatch", "active", []string{"atlas lens build", "refused"}, nil},
+		{"lens and ASA both need a build", "dim-mismatch", "missing", []string{"atlas lens build", "atlas asa build"}, nil},
+		{"uncalibrated lens", "uncalibrated", "active", []string{"atlas lens build"}, []string{"refused"}},
+		{"unreachable lens", "unreachable", "incompatible", []string{"atlas doctor"}, []string{"build"}},
+		{"drifted lens", "drifted", "incompatible", []string{"atlas doctor"}, []string{"build"}},
+		{"lens failed its self-test", "self-test-failed", "incompatible", []string{"atlas doctor"}, []string{"build"}},
+		{"lens cannot reach the model server", "model-server-unreachable", "incompatible", []string{"atlas doctor"}, []string{"build"}},
 	}
-	if !strings.Contains(got, "ASA ✓") {
-		t.Errorf("expected 'ASA ✓' badge, got %q", got)
-	}
-}
-
-// A lens with no artifacts cannot score, and the lens is required: requests
-// are refused, so the badge is a failure, not a warning.
-func TestRenderCalibrationBadge_NoArtifacts_ShowsFailure(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "no-artifacts"
-	s.ASA.Verdict = "supported"
-	got := renderCalibrationBadge(s)
-	if !strings.Contains(got, "Lens ✗") {
-		t.Errorf("expected 'Lens ✗' failure badge, got %q", got)
-	}
-	if !strings.Contains(got, "ASA ✓") {
-		t.Errorf("expected 'ASA ✓' ok badge alongside the failure, got %q", got)
-	}
-}
-
-func TestRenderCalibrationBadge_Uncalibrated_ShowsWarning(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "uncalibrated"
-	s.ASA.Verdict = "unverified"
-	got := renderCalibrationBadge(s)
-	if !strings.Contains(got, "Lens ⚠") || !strings.Contains(got, "ASA ⚠") {
-		t.Errorf("expected truthful warnings, got %q", got)
-	}
-}
-
-func TestBadgeActionHint_UnverifiedASA_PointsAtCheck(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.ASA.Verdict = "unverified"
-	if got := badgeActionHint(s); !strings.Contains(got, "atlas asa check") {
-		t.Errorf("expected verification hint, got %q", got)
-	}
-}
-
-func TestRenderCalibrationBadge_Unreachable_ShowsFail(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "unreachable"
-	s.ASA.Verdict = "missing"
-	got := renderCalibrationBadge(s)
-	if !strings.Contains(got, "Lens ✗") {
-		t.Errorf("expected 'Lens ✗' fail badge, got %q", got)
-	}
-	if !strings.Contains(got, "ASA ⚠") {
-		t.Errorf("expected 'ASA ⚠' warn badge for missing, got %q", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := &calibrationStatus{}
+			s.Lens.Verdict = c.lens
+			s.ASA.Verdict = c.asa
+			got := badgeActionHint(s)
+			if len(c.want) == 0 && got != "" {
+				t.Errorf("hint %q, want none", got)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("hint %q, want it to contain %q", got, want)
+				}
+			}
+			for _, notWant := range c.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("hint %q, want it without %q", got, notWant)
+				}
+			}
+		})
 	}
 }
 
 func TestFetchCalibrationStatusCmd_RoundTripsRealResponse(t *testing.T) {
-	// Spin up a mock proxy that returns a realistic CalibrationStatus
-	// payload. The cmd should parse it into the right struct.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/calibration/status", func(w http.ResponseWriter, r *http.Request) {
-		payload := map[string]any{
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/calibration/status" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"lens": map[string]any{
 				"verdict":           "supported",
 				"cost_field_loaded": true,
@@ -99,224 +118,66 @@ func TestFetchCalibrationStatusCmd_RoundTripsRealResponse(t *testing.T) {
 				"vector_present": false,
 				"hint":           "no control vector",
 			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(payload)
-	})
-	srv := httptest.NewServer(mux)
+		})
+	}))
 	defer srv.Close()
 
-	msg := fetchCalibrationStatusCmd(srv.URL)()
-	cmsg, ok := msg.(calibrationStatusMsg)
+	got := fetchCalibrationStatusCmd(srv.URL)()
+	msg, ok := got.(calibrationStatusMsg)
 	if !ok {
-		t.Fatalf("expected calibrationStatusMsg, got %T", msg)
+		t.Fatalf("got %T, want calibrationStatusMsg", got)
 	}
-	if cmsg.err != nil {
-		t.Fatalf("unexpected err: %v", cmsg.err)
+	if msg.err != nil || msg.status == nil {
+		t.Fatalf("got status %v and error %v, want a status and no error", msg.status, msg.err)
 	}
-	if cmsg.status == nil {
-		t.Fatal("expected non-nil status")
+	if msg.status.Lens.Verdict != "supported" || msg.status.Lens.CostFieldDim != 4096 {
+		t.Errorf("lens = %+v, want verdict supported and cost field dim 4096", msg.status.Lens)
 	}
-	if cmsg.status.Lens.Verdict != "supported" {
-		t.Errorf("Lens.Verdict = %q, want supported", cmsg.status.Lens.Verdict)
-	}
-	if cmsg.status.Lens.CostFieldDim != 4096 {
-		t.Errorf("CostFieldDim = %d, want 4096", cmsg.status.Lens.CostFieldDim)
-	}
-	if cmsg.status.ASA.Verdict != "missing" {
-		t.Errorf("ASA.Verdict = %q, want missing", cmsg.status.ASA.Verdict)
-	}
-	if cmsg.status.ASA.VectorPresent {
-		t.Errorf("VectorPresent = true, want false")
+	if msg.status.ASA.Verdict != "missing" || msg.status.ASA.VectorPresent {
+		t.Errorf("ASA = %+v, want verdict missing and no vector present", msg.status.ASA)
 	}
 }
 
 func TestFetchCalibrationStatusCmd_ProxyDown_ReturnsErr(t *testing.T) {
-	// Point at a definitely-closed port.
-	msg := fetchCalibrationStatusCmd("http://127.0.0.1:1")()
-	cmsg, ok := msg.(calibrationStatusMsg)
+	// A closed port on this machine stands in for a proxy that is down.
+	got := fetchCalibrationStatusCmd("http://127.0.0.1:1")()
+	msg, ok := got.(calibrationStatusMsg)
 	if !ok {
-		t.Fatalf("expected calibrationStatusMsg, got %T", msg)
+		t.Fatalf("got %T, want calibrationStatusMsg", got)
 	}
-	if cmsg.err == nil {
-		t.Error("expected err for unreachable proxy, got nil")
-	}
-	if cmsg.status != nil {
-		t.Error("expected nil status on err")
+	if msg.err == nil || msg.status != nil {
+		t.Errorf("got status %v and error %v, want no status and an error", msg.status, msg.err)
 	}
 }
 
-func TestBadgeActionHint_BothSupported_Empty(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.ASA.Verdict = "supported"
-	if got := badgeActionHint(s); got != "" {
-		t.Errorf("expected no hint when both supported, got %q", got)
+// The retry tick (fast, bounded, while the proxy starts) and the refresh tick
+// (slow, forever, so the badge follows the truth) each send their own message.
+func TestCalibrationTicksSendTheirOwnMessage(t *testing.T) {
+	retry := scheduleCalibrationRetry(time.Millisecond)()
+	if _, ok := retry.(calibrationRetryMsg); !ok {
+		t.Errorf("the retry tick sent %T, want calibrationRetryMsg", retry)
+	}
+	refresh := scheduleCalibrationRefresh(time.Millisecond)()
+	if _, ok := refresh.(calibrationRefreshMsg); !ok {
+		t.Errorf("the refresh tick sent %T, want calibrationRefreshMsg", refresh)
 	}
 }
 
-func TestBadgeActionHint_LensWarn_PointsAtBuildAndDocs(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "no-artifacts"
-	s.ASA.Verdict = "supported"
-	got := badgeActionHint(s)
-	if !strings.Contains(got, "atlas lens build") {
-		t.Errorf("lens-warn hint should suggest `atlas lens build`, got %q", got)
-	}
-	if !strings.Contains(got, "PUBLISHING.md") {
-		t.Errorf("hint should reference docs/PUBLISHING.md, got %q", got)
-	}
-	if strings.Contains(got, "atlas asa build") {
-		t.Errorf("ASA was supported, asa-build should NOT appear: %q", got)
-	}
-}
-
-func TestBadgeActionHint_ASAWarn_PointsAtASABuild(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "supported"
-	s.ASA.Verdict = "missing"
-	got := badgeActionHint(s)
-	if !strings.Contains(got, "atlas asa build") {
-		t.Errorf("asa-warn hint should suggest `atlas asa build`, got %q", got)
-	}
-	if strings.Contains(got, "atlas lens build") {
-		t.Errorf("Lens was supported, lens-build should NOT appear: %q", got)
-	}
-}
-
-func TestBadgeActionHint_BothWarn_SuggestsBoth(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "dim-mismatch"
-	s.ASA.Verdict = "missing"
-	got := badgeActionHint(s)
-	if !strings.Contains(got, "atlas lens build") || !strings.Contains(got, "atlas asa build") {
-		t.Errorf("both-warn hint should mention both commands, got %q", got)
-	}
-}
-
-func TestBadgeActionHint_Unreachable_NoBuildSuggestion(t *testing.T) {
-	// When the lens is down the artifact may be fine — the service is.
-	// Telling the user to "build" would be misleading; the lens is
-	// required, so the pointer is atlas doctor.
-	for _, v := range []string{"unreachable", "drifted", "self-test-failed",
-		"model-server-unreachable"} {
-		s := &calibrationStatus{}
-		s.Lens.Verdict = v
-		s.ASA.Verdict = "incompatible"
-		got := badgeActionHint(s)
-		if strings.Contains(got, "build") || !strings.Contains(got, "atlas doctor") {
-			t.Errorf("%s: hint %q, want atlas doctor and no build suggestion", v, got)
-		}
-		if badge := renderOneBadge("Lens", v); !strings.Contains(badge, "✗") {
-			t.Errorf("%s: badge %q, want a failure mark", v, badge)
-		}
-	}
-}
-
-// Missing or mismatched artifacts leave the lens unable to score, so requests
-// are refused: a failure mark, a build pointer, and the reason. An
-// uncalibrated lens scores, so it stays a warning.
-func TestBadgeActionHint_MissingArtifactsSayRequestsAreRefused(t *testing.T) {
-	for _, v := range []string{"no-artifacts", "incomplete-artifacts", "dim-mismatch"} {
-		s := &calibrationStatus{}
-		s.Lens.Verdict = v
-		s.ASA.Verdict = "active"
-		got := badgeActionHint(s)
-		if !strings.Contains(got, "atlas lens build") || !strings.Contains(got, "refused") {
-			t.Errorf("%s: hint %q, want atlas lens build and that requests are refused", v, got)
-		}
-		if badge := renderOneBadge("Lens", v); !strings.Contains(badge, "✗") {
-			t.Errorf("%s: badge %q, want a failure mark", v, badge)
-		}
-	}
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "uncalibrated"
-	s.ASA.Verdict = "active"
-	if got := badgeActionHint(s); strings.Contains(got, "refused") {
-		t.Errorf("uncalibrated: hint %q says requests are refused; an uncalibrated lens scores", got)
-	}
-	if badge := renderOneBadge("Lens", "uncalibrated"); !strings.Contains(badge, "⚠") {
-		t.Errorf("uncalibrated: badge %q, want a warning mark", badge)
-	}
-}
-
-func TestRenderCalibrationBadge_WarnIncludesHint(t *testing.T) {
-	s := &calibrationStatus{}
-	s.Lens.Verdict = "no-artifacts"
-	s.ASA.Verdict = "supported"
-	got := renderCalibrationBadge(s)
-	if !strings.Contains(got, "atlas lens build") {
-		t.Errorf("rendered badge should append actionable hint when lens warn, got %q", got)
-	}
-	if !strings.Contains(got, "PUBLISHING.md") {
-		t.Errorf("rendered badge should reference docs, got %q", got)
-	}
-}
-
-// PC-061 round-2 fix: badge retry tick must converge once we have a
-// real status and must stop after the retry cap.
-func TestScheduleCalibrationRetry_FiresRetryMsgAfterDelay(t *testing.T) {
-	// 1ms tick lets us assert the message type without slowing the
-	// suite down. The shape of the message is what we care about; the
-	// model decides what to do with it.
-	cmd := scheduleCalibrationRetry(time.Millisecond)
-	if cmd == nil {
-		t.Fatal("scheduleCalibrationRetry returned nil cmd")
-	}
-	msg := cmd()
-	if _, ok := msg.(calibrationRetryMsg); !ok {
-		t.Errorf("expected calibrationRetryMsg, got %T", msg)
-	}
-}
-
-func TestCalibrationRetryConstants_BoundedAndReasonable(t *testing.T) {
-	// Lock the retry budget so changes are intentional. Too low and a
-	// slow proxy startup never converges; too high and a permanently-
-	// down proxy keeps pinging forever.
+// The bounds are deliberate. Too few or too slow retries never catch a slow
+// proxy start; too many keep pinging a proxy that is down. The refresh must
+// be cheap (about 120 calls an hour at 30s), fast enough to follow a fixed
+// lens, and slower than the retry so the two do not overlap.
+func TestCalibrationRetryAndRefreshBounds(t *testing.T) {
 	if maxCalibrationRetries < 3 || maxCalibrationRetries > 10 {
-		t.Errorf("maxCalibrationRetries (%d) outside reasonable range [3,10]",
-			maxCalibrationRetries)
+		t.Errorf("maxCalibrationRetries = %d, want 3 to 10", maxCalibrationRetries)
 	}
-	if calibrationRetryInterval < 2*time.Second ||
-		calibrationRetryInterval > 30*time.Second {
-		t.Errorf("calibrationRetryInterval (%v) outside reasonable range",
-			calibrationRetryInterval)
+	if calibrationRetryInterval < 2*time.Second || calibrationRetryInterval > 30*time.Second {
+		t.Errorf("calibrationRetryInterval = %v, want 2s to 30s", calibrationRetryInterval)
 	}
-}
-
-// New: regression test for the badge-frozen bug. The original
-// implementation locked in the first response from the proxy forever —
-// users who downloaded lens/asa artifacts mid-session and restarted
-// the lens container saw the warn badge persist until they restarted
-// the TUI. The fix: scheduleCalibrationRefresh produces a refresh msg
-// that fires periodically forever, separate from the bounded retry
-// mechanism that handles startup races.
-func TestScheduleCalibrationRefresh_FiresRefreshMsgAfterDelay(t *testing.T) {
-	cmd := scheduleCalibrationRefresh(time.Millisecond)
-	if cmd == nil {
-		t.Fatal("scheduleCalibrationRefresh returned nil cmd")
+	if calibrationRefreshInterval < 15*time.Second || calibrationRefreshInterval > 5*time.Minute {
+		t.Errorf("calibrationRefreshInterval = %v, want 15s to 5m", calibrationRefreshInterval)
 	}
-	msg := cmd()
-	if _, ok := msg.(calibrationRefreshMsg); !ok {
-		t.Errorf("expected calibrationRefreshMsg, got %T", msg)
-	}
-}
-
-func TestCalibrationRefreshInterval_LongerThanRetry(t *testing.T) {
-	// Refresh runs forever after first success — must be slow enough
-	// that the cost is trivial (~120 calls/hour at 30s). Also must be
-	// longer than retry interval so the two mechanisms don't overlap.
 	if calibrationRefreshInterval < calibrationRetryInterval {
-		t.Errorf("refresh (%v) should be longer than retry (%v) — "+
-			"refresh is the steady-state long-poll, retry is the "+
-			"fast startup-race handler",
-			calibrationRefreshInterval, calibrationRetryInterval)
-	}
-	if calibrationRefreshInterval < 15*time.Second ||
-		calibrationRefreshInterval > 5*time.Minute {
-		t.Errorf("calibrationRefreshInterval (%v) outside reasonable range "+
-			"[15s, 5m] — too short hammers proxy, too long defeats the "+
-			"point of auto-converging",
-			calibrationRefreshInterval)
+		t.Errorf("refresh (%v) is faster than retry (%v)", calibrationRefreshInterval, calibrationRetryInterval)
 	}
 }
