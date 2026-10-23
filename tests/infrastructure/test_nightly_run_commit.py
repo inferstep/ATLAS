@@ -550,11 +550,19 @@ def test_a_compose_file_that_the_run_was_given_is_taken_from_dev_too_and_one_tha
     assert OneCommit(tmp_path / "a second server", repository).run(commit).report["result"] == "passed"
 
 
-def test_with_more_than_one_such_file_the_result_names_the_first_and_counts_the_others(tmp_path, repository):
-    commit = repository.on_a_branch({"scripts/code_quality.py": "x\n", "docker-compose.yml": "services: {z: {}}\n", "inference/x": "x\n"})
+@pytest.mark.parametrize("changed, counted", [
+    pytest.param({"docker-compose.yml": "services: {z: {}}\n"}, "", id="one-file"),
+    pytest.param({"docker-compose.yml": "services: {z: {}}\n", "inference/x": "x\n"}, " It changes 1 more such file(s).",
+                 id="two-files"),
+    pytest.param({"scripts/code_quality.py": "x\n", "docker-compose.yml": "services: {z: {}}\n", "inference/x": "x\n"},
+                 " It changes 2 more such file(s).", id="three-files"),
+])
+def test_the_result_names_the_first_such_file_and_counts_the_others(tmp_path, repository, changed, counted):
+    commit = repository.on_a_branch(changed)
     run = OneCommit(tmp_path, repository).run(commit)
     not_run(run, "the commit changes `docker-compose.yml`: a compose file of the stack.")
-    assert "It changes 2 more such file(s)." in run.report["result"]
+    # The count stands between the sentence that names the file and the fix. With one file nothing stands there.
+    assert f"under the name of the commit.{counted} Fix:" in run.report["result"]
 
 
 @pytest.mark.parametrize("name, path, lies_in_it", [

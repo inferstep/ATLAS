@@ -175,6 +175,19 @@ def test_every_area_label_is_one_the_label_script_creates(cfg):
         assert f'"{label}|' in script, label
 
 
+@pytest.mark.parametrize("bot_settings, author, mine", [
+    pytest.param({"login": BOT}, {"login": BOT, "type": "Bot"}, True, id="login-set-the-bot"),
+    pytest.param({"login": BOT}, {"login": "another-app[bot]", "type": "Bot"}, False, id="login-set-another-bot-pasted-the-mark"),
+    pytest.param({}, {"login": "an-app[bot]", "type": "Bot"}, True, id="no-login-an-author-of-type-bot"),
+    pytest.param({}, {"login": "mallory", "type": "User"}, False, id="no-login-a-person-pasted-the-mark"),
+])
+def test_a_comment_is_the_bots_by_the_set_login_and_with_no_login_by_the_author_type_bot(api, cfg, bot_settings, author, mine):
+    cfg["bot"] = bot_settings
+    # Each comment holds a claim mark, as a pasted one would: only its author makes it the bot's.
+    comment = {"user": author, "body": bot_mod.marker("claim", "alice")}
+    assert run(api, cfg)._mine(comment) is mine
+
+
 # --- /claim -----------------------------------------------------------------
 
 
