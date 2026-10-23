@@ -75,7 +75,6 @@
   "tui/chat.go:sendRawChat": 121,
   "tui/commands.go:tuiModel.handleSlash": 243,
   "tui/demo.go:demoModel.Update": 178,
-  "tui/events.go:tuiModel.appendChatEvent": 769,
   "tui/main.go:main": 103,
   "tui/model.go:tuiModel.Update": 489,
   "tui/panes.go:layoutFullScreen": 334,
