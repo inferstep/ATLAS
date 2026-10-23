@@ -108,6 +108,14 @@ def test_stray_paren_in_python_template_string_is_rejected():
 
 # --- a broken block in an HTML carrier --------------------------------------
 
+# A quoted CSS string, then a rule: the string must end at its closing quote, even when it is empty.
+STRING_THEN_UNCLOSED_RULE = ("<html><head><style>\n"
+                             "  .a::after { content: %s; }\n"
+                             "  body { margin: 0;\n"
+                             "</style></head></html>\n")
+STRING_THEN_RULE = STRING_THEN_UNCLOSED_RULE.replace("body { margin: 0;", ".c { color: red; }")
+
+
 @pytest.mark.parametrize("path, source, kind, line, message, where", [
     pytest.param("templates/index.html", BROKEN_HTML,
                  "javascript", 7, "unexpected `)`", "the <script> block",
@@ -141,6 +149,14 @@ def test_stray_paren_in_python_template_string_is_rejected():
                  "</style></head></html>\n",
                  "css", 2, "an extra `}`", "the <style> block",
                  id="an extra CSS brace"),
+    pytest.param("index.html", STRING_THEN_UNCLOSED_RULE % '""', "css", 3, "a `{` that is never closed",
+                 "the <style> block", id='an unclosed rule after an empty "" string'),
+    pytest.param("index.html", STRING_THEN_UNCLOSED_RULE % "''", "css", 3, "a `{` that is never closed",
+                 "the <style> block", id="an unclosed rule after an empty '' string"),
+    pytest.param("index.html", STRING_THEN_UNCLOSED_RULE % '"x"', "css", 3, "a `{` that is never closed",
+                 "the <style> block", id='an unclosed rule after a one-letter "x" string'),
+    pytest.param("index.html", STRING_THEN_UNCLOSED_RULE % "'x'", "css", 3, "a `{` that is never closed",
+                 "the <style> block", id="an unclosed rule after a one-letter 'x' string"),
 ])
 def test_a_broken_block_is_reported_once(path, source, kind, line, message, where):
     res = main.embedded_script_check(path, source)
@@ -216,6 +232,8 @@ NOT_JAVASCRIPT = ('<html><body><script type="%s">\n'
                  "  body { color: {{ theme.fg }};\n"
                  "</style></head></html>\n",
                  id="templated CSS"),
+    pytest.param("index.html", STRING_THEN_RULE % '""', id='a CSS rule after an empty "" string'),
+    pytest.param("index.html", STRING_THEN_RULE % "''", id="a CSS rule after an empty '' string"),
     pytest.param("calc.py",
                  "import math\n"
                  "\n"

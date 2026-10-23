@@ -84,3 +84,8 @@ class TestMixedProject:
         assert is_js("x.js") and is_js("x.mjs")
         assert is_supported("x.py") and is_supported("x.jsx")
         assert not is_supported("x.md")
+
+
+@pytest.mark.parametrize("path", ["lines.py", "lines.js"])
+def test_a_file_without_a_final_newline_counts_its_last_line(path):
+    assert [f.line_count for f in extract_file(path, "a\nb\nc").files] == [3]
