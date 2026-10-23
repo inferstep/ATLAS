@@ -29,6 +29,9 @@ func TestRecoverCutCallKeepsOnlyCompleteTokens(t *testing.T) {
 		{"name cut", `{"type":"tool_call","name":"struct`, "", "", "", "", 0, true, true},
 		{"selector cut", `{"type":"tool_call","name":"structural_edit","args":{"path":"app.py","selector":"function:ind`,
 			"structural_edit", "app.py", "", "selector", 0, false, true},
+		// The cut field's key holds a quote, which the raw text escapes.
+		{"cut field with a quote in its key", `{"type":"tool_call","name":"write_file","args":{"path":"a.txt","con\"tent":"line 1\nline 2\nline 3`,
+			"write_file", "a.txt", "", "con\"tent", 3, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rc := recoverCutCall(c.raw)
