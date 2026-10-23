@@ -1,16 +1,18 @@
 // The predicted diff a permission prompt can show: which tools name a path,
 // and what the post-state is for each of them.
 //
-// Two tables, because every case in a table is the same question asked with
-// other arguments: given this tool and these args, which path; and given this
-// tool, these args and this local file, what diff — or none, which is what an
-// unpredictable call gets. A port of extensions/vscode/test/editPreview.test.ts.
+// Tables, because every case in a table is the same question asked with other
+// arguments: given this tool and these args, which path; and given this tool,
+// these args and this local file, what diff — or none, which is what an
+// unpredictable call gets. The two line-number tools have a table of their own,
+// of plain values. A port of extensions/vscode/test/editPreview.test.ts.
 package com.inferstep.atlas.session
 
 import com.inferstep.atlas.protocol.AtlasJson
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.MethodSource
 
 private const val SERVER_SIDE_NOTE = "predicted client-side — tree-sitter runs server-side"
@@ -65,6 +67,60 @@ class EditPreviewTest {
         want: EditPrediction?,
     ) {
         val args = AtlasJson.parseToJsonElement(argsJson)
+
+        assertEquals(want, predictEdit(tool, args, current), "$tool: $name")
+    }
+
+    // insert_after and replace_lines edit f.py by line number. The columns: the case, the tool,
+    // the call's args besides the path, the file before the call (empty: not readable locally),
+    // and the file after it with the note the preview shows (empty: no preview). In the two file
+    // columns, \n is a line break.
+    @ParameterizedTest(name = "{1}: {0}")
+    @CsvSource(
+        delimiter = '|',
+        textBlock = """
+        replaces an inclusive range, exactly | replace_lines | "start_line":2,"end_line":3,"content":"X\nY" | a\nb\nc\nd\n | a\nX\nY\nd\n | replaced lines 2-3
+        replaces a single line | replace_lines | "start_line":1,"end_line":1,"content":"Z" | a\nb\nc\nd\n | Z\nb\nc\nd\n | replaced line 1
+        preserves a missing trailing newline | replace_lines | "start_line":2,"end_line":2,"content":"X" | a\nb | a\nX | replaced line 2
+        declines a range that starts before the file | replace_lines | "start_line":0,"end_line":1,"content":"X" | a\nb\nc\nd\n |  |
+        declines an inverted range | replace_lines | "start_line":3,"end_line":2,"content":"X" | a\nb\nc\nd\n |  |
+        declines a range past the end | replace_lines | "start_line":2,"end_line":99,"content":"X" | a\nb\nc\nd\n |  |
+        declines a missing end line | replace_lines | "start_line":1,"content":"X" | a\nb\nc\nd\n |  |
+        declines a line number sent as a string | replace_lines | "start_line":"1","end_line":2,"content":"X" | a\nb\nc\nd\n |  |
+        declines a file that is not readable locally | replace_lines | "start_line":1,"end_line":2,"content":"X" |  |  |
+        inserts after a 1-based line number, and is exact | insert_after | "line":2,"content":"X" | a\nb\nc\n | a\nb\nX\nc\n | inserted after line 2
+        line 0 is the top of the file | insert_after | "line":0,"content":"X" | a\nb\nc\n | X\na\nb\nc\n | inserted at top of file
+        a line past the end appends | insert_after | "line":99,"content":"X" | a\nb\nc\n | a\nb\nc\nX\n | inserted after line 99
+        preserves a missing trailing newline | insert_after | "line":1,"content":"X" | a\nb | a\nX\nb | inserted after line 1
+        does not double a newline the content already carries | insert_after | "line":1,"content":"X\n" | a\nb\nc\n | a\nX\nb\nc\n | inserted after line 1
+        handles multi-line content | insert_after | "line":1,"content":"X\nY" | a\nb\nc\n | a\nX\nY\nb\nc\n | inserted after line 1
+        no line at all is not previewable | insert_after | "content":"X" | a\n |  |
+        a line sent as a string is not a number | insert_after | "line":"2","content":"X" | a\n |  |
+        a fractional line is not a line | insert_after | "line":1.5,"content":"X" | a\n |  |
+        a negative line is refused | insert_after | "line":-1,"content":"X" | a\n |  |
+        a file that is not readable locally | insert_after | "line":1,"content":"X" |  |  |""",
+    )
+    fun `predicts a line-number edit exactly, or none when it cannot`(
+        name: String,
+        tool: String,
+        argsBesidesThePath: String,
+        before: String?,
+        after: String?,
+        note: String?,
+    ) {
+        val args = AtlasJson.parseToJsonElement("""{"path":"f.py",$argsBesidesThePath}""")
+        val current = before?.replace("\\n", "\n")
+        val want =
+            after?.let {
+                EditPrediction(
+                    "f.py",
+                    EditPredictionKind.FILE,
+                    current!!,
+                    it.replace("\\n", "\n"),
+                    false,
+                    note!!,
+                )
+            }
 
         assertEquals(want, predictEdit(tool, args, current), "$tool: $name")
     }
@@ -368,211 +424,6 @@ class EditPreviewTest {
                         "selector '<table>' not matched locally — showing the proposed content " +
                             "against the whole file",
                     ),
-                ),
-                // insert_after: splices after a line number, exactly.
-                Arguments.of(
-                    "inserts after a 1-based line number, and is exact",
-                    "insert_after",
-                    """{"path":"f.py","line":2,"content":"X"}""",
-                    "a\nb\nc\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\n",
-                        "a\nb\nX\nc\n",
-                        false,
-                        "inserted after line 2",
-                    ),
-                ),
-                Arguments.of(
-                    "line 0 is the top of the file",
-                    "insert_after",
-                    """{"path":"f.py","line":0,"content":"X"}""",
-                    "a\nb\nc\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\n",
-                        "X\na\nb\nc\n",
-                        false,
-                        "inserted at top of file",
-                    ),
-                ),
-                Arguments.of(
-                    "a line past the end appends",
-                    "insert_after",
-                    """{"path":"f.py","line":99,"content":"X"}""",
-                    "a\nb\nc\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\n",
-                        "a\nb\nc\nX\n",
-                        false,
-                        "inserted after line 99",
-                    ),
-                ),
-                Arguments.of(
-                    "preserves a missing trailing newline",
-                    "insert_after",
-                    """{"path":"f.py","line":1,"content":"X"}""",
-                    "a\nb",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb",
-                        "a\nX\nb",
-                        false,
-                        "inserted after line 1",
-                    ),
-                ),
-                Arguments.of(
-                    "does not double a newline the content already carries",
-                    "insert_after",
-                    """{"path":"f.py","line":1,"content":"X\n"}""",
-                    "a\nb\nc\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\n",
-                        "a\nX\nb\nc\n",
-                        false,
-                        "inserted after line 1",
-                    ),
-                ),
-                Arguments.of(
-                    "handles multi-line content",
-                    "insert_after",
-                    """{"path":"f.py","line":1,"content":"X\nY"}""",
-                    "a\nb\nc\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\n",
-                        "a\nX\nY\nb\nc\n",
-                        false,
-                        "inserted after line 1",
-                    ),
-                ),
-                Arguments.of(
-                    "no line at all is not previewable",
-                    "insert_after",
-                    """{"path":"f.py","content":"X"}""",
-                    "a\n",
-                    null,
-                ),
-                Arguments.of(
-                    "a line sent as a string is not a number",
-                    "insert_after",
-                    """{"path":"f.py","line":"2","content":"X"}""",
-                    "a\n",
-                    null,
-                ),
-                Arguments.of(
-                    "a fractional line is not a line",
-                    "insert_after",
-                    """{"path":"f.py","line":1.5,"content":"X"}""",
-                    "a\n",
-                    null,
-                ),
-                Arguments.of(
-                    "a negative line is refused",
-                    "insert_after",
-                    """{"path":"f.py","line":-1,"content":"X"}""",
-                    "a\n",
-                    null,
-                ),
-                Arguments.of(
-                    "a file that is not readable locally",
-                    "insert_after",
-                    """{"path":"f.py","line":1,"content":"X"}""",
-                    null,
-                    null,
-                ),
-                // replace_lines: replaces an inclusive range, exactly.
-                Arguments.of(
-                    "replaces an inclusive range, exactly",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":2,"end_line":3,"content":"X\nY"}""",
-                    "a\nb\nc\nd\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\nd\n",
-                        "a\nX\nY\nd\n",
-                        false,
-                        "replaced lines 2-3",
-                    ),
-                ),
-                Arguments.of(
-                    "replaces a single line",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":1,"end_line":1,"content":"Z"}""",
-                    "a\nb\nc\nd\n",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb\nc\nd\n",
-                        "Z\nb\nc\nd\n",
-                        false,
-                        "replaced line 1",
-                    ),
-                ),
-                Arguments.of(
-                    "preserves a missing trailing newline",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":2,"end_line":2,"content":"X"}""",
-                    "a\nb",
-                    EditPrediction(
-                        "f.py",
-                        EditPredictionKind.FILE,
-                        "a\nb",
-                        "a\nX",
-                        false,
-                        "replaced line 2",
-                    ),
-                ),
-                Arguments.of(
-                    "declines a range that starts before the file",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":0,"end_line":1,"content":"X"}""",
-                    "a\nb\nc\nd\n",
-                    null,
-                ),
-                Arguments.of(
-                    "declines an inverted range",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":3,"end_line":2,"content":"X"}""",
-                    "a\nb\nc\nd\n",
-                    null,
-                ),
-                Arguments.of(
-                    "declines a range past the end",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":2,"end_line":99,"content":"X"}""",
-                    "a\nb\nc\nd\n",
-                    null,
-                ),
-                Arguments.of(
-                    "declines a missing end line",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":1,"content":"X"}""",
-                    "a\nb\nc\nd\n",
-                    null,
-                ),
-                Arguments.of(
-                    "declines a line number sent as a string",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":"1","end_line":2,"content":"X"}""",
-                    "a\nb\nc\nd\n",
-                    null,
-                ),
-                Arguments.of(
-                    "declines a file that is not readable locally",
-                    "replace_lines",
-                    """{"path":"f.py","start_line":1,"end_line":2,"content":"X"}""",
-                    null,
-                    null,
                 ),
             )
     }

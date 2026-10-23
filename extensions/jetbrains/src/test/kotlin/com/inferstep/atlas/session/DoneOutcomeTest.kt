@@ -6,12 +6,35 @@ import com.inferstep.atlas.protocol.DonePayload
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.MethodSource
 
 class DoneOutcomeTest {
+    // The banner of each status: its label, and its style. A status this client has never seen
+    // keeps its text as the label and gets the style "other": the panel invents no style.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(
+        delimiter = '|',
+        textBlock = """
+        completed | completed | completed
+        stopped | stopped | stopped
+        timed_out | timed out | timed_out
+        failed | failed | failed
+        x" onclick="y | x" onclick="y | other""",
+    )
+    fun `gives each status its label and its style, and an unknown one the style other`(
+        status: String,
+        label: String,
+        style: String,
+    ) {
+        val want = DoneOutcome("", status, label, "", style)
+
+        assertEquals(want, doneOutcome(DonePayload(status = status)), status)
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("outcomes")
-    fun `reads a done payload into the banner, and invents no style of its own`(
+    fun `reads the summary and the reason, and a missing status or done event as incomplete`(
         name: String,
         payload: DonePayload?,
         want: DoneOutcome,
@@ -38,31 +61,6 @@ class DoneOutcomeTest {
                         "repair_unfinished",
                         "incomplete",
                     ),
-                ),
-                Arguments.of(
-                    "a completed run",
-                    DonePayload(status = "completed"),
-                    DoneOutcome("", "completed", "completed", "", "completed"),
-                ),
-                Arguments.of(
-                    "a stopped run",
-                    DonePayload(status = "stopped"),
-                    DoneOutcome("", "stopped", "stopped", "", "stopped"),
-                ),
-                Arguments.of(
-                    "a timed-out run is labelled in words",
-                    DonePayload(status = "timed_out"),
-                    DoneOutcome("", "timed_out", "timed out", "", "timed_out"),
-                ),
-                Arguments.of(
-                    "a failed run",
-                    DonePayload(status = "failed"),
-                    DoneOutcome("", "failed", "failed", "", "failed"),
-                ),
-                Arguments.of(
-                    "a status this client has never seen gets the style other",
-                    DonePayload(status = """x" onclick="y"""),
-                    DoneOutcome("", """x" onclick="y""", """x" onclick="y""", "", "other"),
                 ),
                 Arguments.of(
                     "a missing status reads as incomplete, as the API doc says",
