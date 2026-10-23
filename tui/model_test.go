@@ -343,6 +343,33 @@ func TestFormatEventLineTruncatesByVisibleWidth(t *testing.T) {
 	}
 }
 
+// With token counts the prompt row draws a 24-cell bar with round(pct × 24)
+// cells filled, never more than 24. Without a total there is no bar, only a
+// spinner and the time.
+func TestFormatPromptProgressFillsA24CellBar(t *testing.T) {
+	cases := []struct {
+		name             string
+		processed, total int
+		pct              float64
+		want             string
+	}{
+		{"half way: 12 cells", 500, 1000, 0.5,
+			"encoding prompt  [" + strings.Repeat("█", 12) + strings.Repeat("░", 12) + "] 500/1000 (50%)  · 0.0s"},
+		{"done: 24 cells", 1000, 1000, 1.0,
+			"encoding prompt  [" + strings.Repeat("█", 24) + "] 1000/1000 (100%)  · 0.0s"},
+		{"above 100%: still 24 cells", 1000, 1000, 1.2,
+			"encoding prompt  [" + strings.Repeat("█", 24) + "] 1000/1000 (100%)  · 0.0s"},
+		{"no total: no bar", 0, 0, 0.5, "encoding prompt  ⠋  0.0s"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := formatPromptProgress(c.processed, c.total, c.pct, 0); got != c.want {
+				t.Errorf("formatPromptProgress = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // Proxy stream-health events each render one muted system row.
 func TestChatStreamRendersProxyInterventionEvents(t *testing.T) {
 	cases := []struct {

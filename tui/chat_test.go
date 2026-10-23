@@ -67,12 +67,15 @@ func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
 }
 
 // The demo's raw side is one direct request to the model, carrying only the
-// user's message: no agent endpoint and no orchestration guidance.
+// user's message: no agent endpoint and no orchestration guidance. The body
+// is JSON, and the request asks for an event stream.
 func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
 	var got rawChatRequest
-	var gotPath string
+	var gotPath, gotContentType, gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		gotAccept = r.Header.Get("Accept")
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
@@ -89,6 +92,12 @@ func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
 	close(out)
 	if gotPath != "/v1/chat/completions" {
 		t.Errorf("path = %q, want the raw chat completions endpoint", gotPath)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotAccept != "text/event-stream" {
+		t.Errorf("Accept = %q, want text/event-stream", gotAccept)
 	}
 	if !got.Stream || got.Model != "configured-model" {
 		t.Errorf("request = %#v, want a stream from the configured model", got)
@@ -215,6 +224,50 @@ func TestLoadBearerToken(t *testing.T) {
 			t.Setenv("ATLAS_API_KEYS_PATH", path)
 			if got := loadBearerToken(); got != c.want {
 				t.Errorf("loadBearerToken = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The wrapper on the default transport adds the service token to a request
+// that has no Authorization header, keeps the header a request already has,
+// and adds nothing when there is no service token.
+func TestTokenTransportAddsTheServiceTokenOnlyWhenMissing(t *testing.T) {
+	saved := serviceToken
+	t.Cleanup(func() { serviceToken = saved })
+	var gotAuth string // the Authorization header the server got
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+	}))
+	defer srv.Close()
+
+	cases := []struct {
+		name  string
+		token string // the service token; "" means there is none
+		auth  string // the request's own Authorization header; "" means it has none
+		want  string
+	}{
+		{"a request without the header gets the token", "svc-secret", "", "Bearer svc-secret"},
+		{"a request's own header is kept", "svc-secret", "Bearer own", "Bearer own"},
+		{"no token adds nothing", "", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			serviceToken = c.token
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.auth != "" {
+				req.Header.Set("Authorization", c.auth)
+			}
+			resp, err := (&tokenTransport{base: http.DefaultTransport}).RoundTrip(req)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			resp.Body.Close()
+			if gotAuth != c.want {
+				t.Errorf("the server got Authorization %q, want %q", gotAuth, c.want)
 			}
 		})
 	}

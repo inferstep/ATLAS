@@ -161,3 +161,35 @@ func TestEveryOwnedSenderDeclaresATaskMode(t *testing.T) {
 		t.Error("the one-shot selector is gone")
 	}
 }
+
+// /copy N copies the last N messages, joined by blank lines: the whole
+// transcript when N is larger than it, and nothing when N is not positive or
+// there are no messages.
+func TestCollectLastMessagesTakesTheLastN(t *testing.T) {
+	five := []chatMessage{
+		{Role: roleUser, Body: "one"},
+		{Role: roleAssistant, Body: "two"},
+		{Role: roleUser, Body: "three"},
+		{Role: roleAssistant, Body: "four"},
+		{Role: roleUser, Body: "five"},
+	}
+	cases := []struct {
+		name string
+		chat []chatMessage
+		n    int
+		want string
+	}{
+		{"the last two", five, 2, "four\n\nfive"},
+		{"all five", five, 5, "one\n\ntwo\n\nthree\n\nfour\n\nfive"},
+		{"more than there are gives all", five, 10, "one\n\ntwo\n\nthree\n\nfour\n\nfive"},
+		{"zero gives nothing", five, 0, ""},
+		{"no messages gives nothing", nil, 3, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := collectLastMessages(c.chat, c.n); got != c.want {
+				t.Errorf("collectLastMessages(n=%d) = %q, want %q", c.n, got, c.want)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // isolateSessions points os.UserCacheDir at a temp dir of this test, so the
@@ -133,6 +134,21 @@ func TestModelSaveSessionRoundTrip(t *testing.T) {
 	}
 	if len(got.Messages) != 2 {
 		t.Errorf("messages len = %d, want 2", len(got.Messages))
+	}
+}
+
+// A session keeps the time it was created; a model without one stamps the
+// current time. (The round-trip tests above do not read CreatedAt.)
+func TestBuildSessionKeepsTheCreationTime(t *testing.T) {
+	m := &tuiModel{sessionCreatedAt: "2026-07-01T10:00:00Z"}
+	if got := m.buildSession().CreatedAt; got != "2026-07-01T10:00:00Z" {
+		t.Errorf("CreatedAt = %q, want the model's own 2026-07-01T10:00:00Z", got)
+	}
+
+	m = &tuiModel{}
+	got := m.buildSession().CreatedAt
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Errorf("CreatedAt with no creation time = %q, want the current time in RFC 3339: %v", got, err)
 	}
 }
 
