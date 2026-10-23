@@ -504,3 +504,71 @@ func TestARunnerCoversWhatItDiscovers(t *testing.T) {
 		})
 	}
 }
+
+// shellScript gives the script that a shell runs inline, with the options the
+// shell was started with put in front of it. A shell without a -c script gives
+// none.
+func TestShellScript(t *testing.T) {
+	for _, c := range []struct {
+		seg    string
+		script string
+		ok     bool
+	}{
+		{`bash -c "x"`, "x", true},
+		{`bash -lc 'x'`, "x", true},
+		{`sh -ec "x"`, "set -e\nx", true},
+		{`bash -o pipefail -c "x"`, "set -o pipefail\nx", true},
+		{`bash -euo pipefail -c "x"`, "set -e\nset -o pipefail\nx", true},
+		{"bash run.sh", "", false},
+		{"sh -e", "", false},
+		{"bash", "", false},
+		{"bash -c", "", false},
+		{`bash -n -c "x"`, "", false},
+		{`python3 -c "x"`, "", false},
+	} {
+		script, ok := shellScript(c.seg)
+		if script != c.script || ok != c.ok {
+			t.Errorf("shellScript(%q) = %q, %v; want %q, %v", c.seg, script, ok, c.script, c.ok)
+		}
+	}
+}
+
+// compileStep judges each build tool by its own rule: a compiler always
+// compiles; go, cargo, dotnet and swift compile with `build`; Maven and Gradle
+// with compile, build, package or assemble; npm, pnpm and yarn with a build
+// script; make with any target that is not a test or a run.
+func TestCompileStep(t *testing.T) {
+	for seg, want := range map[string]bool{
+		"javac App.java":     true,
+		"gcc main.c -o main": true,
+		"python3 app.py":     false,
+		"go build ./...":     true,
+		"go test ./...":      false,
+		"cargo build":        true,
+		"cargo package":      false,
+		"dotnet build":       true,
+		"dotnet test":        false,
+		"swift build":        true,
+		"swift package":      false,
+		"mvn compile":        true,
+		"mvn test":           false,
+		"./mvnw package":     true,
+		"./mvnw verify":      false,
+		"gradle assemble":    true,
+		"gradle test":        false,
+		"./gradlew build":    true,
+		"./gradlew run":      false,
+		"npm run build":      true,
+		"npm test":           false,
+		"pnpm build":         true,
+		"pnpm test":          false,
+		"yarn run compile":   true,
+		"yarn start":         false,
+		"make":               true,
+		"make test":          false,
+	} {
+		if got := compileStep(seg); got != want {
+			t.Errorf("compileStep(%q) = %v, want %v", seg, got, want)
+		}
+	}
+}
