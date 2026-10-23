@@ -6,6 +6,7 @@ the case, so the judge is held against the file as pytest writes it.
 import ast
 import importlib.util
 import json
+import math
 import re
 import subprocess
 import sys
@@ -230,17 +231,21 @@ def test_the_groups_hold_the_files_that_carry_the_mark_and_no_other(counted):
 
 
 def number_of_tests(file):
-    """The number of test functions of a file. A function that runs once for each of a list of values is refused."""
+    """The number of tests of a file: one for each test function, and one for each value of its table, if it has one."""
     tree = ast.parse((ROOT / file).read_text(encoding="utf-8"))
     functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test")]
-    many = [node.name for node in functions if any("parametrize" in ast.unparse(mark) for mark in node.decorator_list)]
-    assert not many, (
-        f"{file}: {many} now runs once for each of its values, so the number of its tests is no longer the number of its "
-        "functions. Fix: count its values in this test, then give the new number to the group and to the page.")
-    return len(functions)
+    count = 0
+    for function in functions:
+        tables = [mark for mark in function.decorator_list if "parametrize" in ast.unparse(mark)]
+        values = [mark.args[1] for mark in tables if isinstance(mark, ast.Call) and len(mark.args) > 1]
+        assert len(values) == len(tables) and all(isinstance(value, (ast.List, ast.Tuple)) for value in values), (
+            f"{file}: the values of {function.name} are not written out as a list in its mark, so this test cannot count "
+            "them. Fix: write them as a list there.")
+        count += math.prod(len(value.elts) for value in values)
+    return count
 
 
-def test_the_number_of_each_group_is_the_number_of_test_functions_in_its_files_and_the_gates_page_has_each(counted):
+def test_the_number_of_each_group_is_the_number_of_tests_in_its_files_and_the_gates_page_has_each(counted):
     page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     rows = {file: (int(count), runs_in) for file, count, runs_in in
             re.findall(r"^\| `(tests/infrastructure/test_\w+\.py)` \| (\d+) \| [^|]+ \| ([^|]+?) \|$", page, re.MULTILINE)}

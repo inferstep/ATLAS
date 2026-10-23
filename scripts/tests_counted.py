@@ -46,7 +46,7 @@ GROUPS = {
         "tests/infrastructure/test_tui_render.py",
         "tests/infrastructure/test_tui_commands.py",
         "tests/infrastructure/test_control_plane.py")),
-    "model": Group("a running model server", "the nightly run, on the development server", 32, (
+    "model": Group("a running model server", "the nightly run, on the development server", 30, (
         "tests/infrastructure/test_llm.py",)),
     "docker": Group("a Docker engine and the network", "the job `sandbox tests (containerized)`", 1, (
         "tests/infrastructure/test_nightly_images_docker.py",)),

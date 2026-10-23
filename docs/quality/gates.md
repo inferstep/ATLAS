@@ -677,11 +677,11 @@ in one place.
 | `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |
-| `tests/infrastructure/test_llm.py` | 32 | a running model server | the nightly run, on the development server |
+| `tests/infrastructure/test_llm.py` | 30 | a running model server | the nightly run, on the development server |
 | `tests/infrastructure/test_nightly_images_docker.py` | 1 | a Docker engine and the network | the job `sandbox tests (containerized)` |
 
-- That is 126 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
-  TUI, 32 for the model, and 1 that asks a real Docker engine what it
+- That is 124 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
+  TUI, 30 for the model, and 1 that asks a real Docker engine what it
   removes with an image's name by digest. `tests/integration/` holds no
   test.
 - GitHub's runner has Docker 28.0.4 with the storage driver overlay2, not
@@ -715,7 +715,7 @@ in one place.
   change and starts the proxy with no service behind it. The 13 ask the
   proxy's own answers and read the TUI's own screen in a terminal. None
   needs a model.
-- The 32 need a real model server. No job on GitHub has one; the nightly
+- The 30 need a real model server. No job on GitHub has one; the nightly
   run has.
 - The two jobs are required checks on a pull request into `dev`. They are
   not required on `staging` or `main`.
@@ -781,7 +781,7 @@ What follows from it:
 `scripts/nightly_run.py` is one run for the development server, in a folder
 of its own. A timer on the server starts it (see "The timer" below). It is
 not a CI job: a check on a pull request cannot see a real model that got
-slower, and it has no model server for the 32 tests above that need one.
+slower, and it has no model server for the 30 tests above that need one.
 
 The nightly run is best effort. The server is one machine, and it is not
 always on. A night with no run is not a failure: the server was off, the
@@ -818,7 +818,7 @@ Each night it:
 6. runs the driver `scripts/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
 7. runs the tests that need a real model, and judges pytest's result file
-   with the judge of such runs: all 32 of them are to be collected and to
+   with the judge of such runs: all 30 of them are to be collected and to
    pass, and none is to be skipped;
 8. asks the services again, and writes one report: the commit, the digest
    of each image, what the services said, the seconds of each task, and the
@@ -853,7 +853,7 @@ The first line of the report is its result:
 - A failed test is named in the result.
 - Counting nights, for a number such as "passed in 9 of 10 nights": a night
   counts as passed only with the result `passed`, which needs every one of
-  the 32 tests collected, none failed and none skipped. A night that is
+  the 30 tests collected, none failed and none skipped. A night that is
   `not run`, and a night with no report (the server was off), counts
   neither as passed nor as failed. At most one run counts for a night: the
   first one whose result is not `not run`.

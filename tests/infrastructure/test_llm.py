@@ -70,14 +70,12 @@ class TestLlamaModels:
         assert matched, f"Expected configured model {expected!r}, found: {model_ids}"
 
     def test_context_length_is_configured(self, llama_client: httpx.Client):
-        """Model should report the configured minimum context length."""
-        # Try /props endpoint for llama.cpp server properties
+        """/props reports the context length of a slot, and it is at least 8192."""
         response = llama_client.get("/props", timeout=10.0)
-        if response.status_code == 200:
-            data = response.json()
-            ctx_len = data.get("n_ctx") or data.get("default_generation_settings", {}).get("n_ctx")
-            if ctx_len:
-                assert ctx_len >= 8192, f"Context length should be at least 8192, got {ctx_len}"
+        assert response.status_code == 200, f"/props should return 200, got {response.status_code}"
+        settings = response.json().get("default_generation_settings", {})
+        assert "n_ctx" in settings, f"/props has no default_generation_settings.n_ctx: {response.text[:300]}"
+        assert settings["n_ctx"] >= 8192, f"Context length should be at least 8192, got {settings['n_ctx']}"
 
 
 class TestLlamaChatCompletion:
@@ -243,29 +241,6 @@ class TestLlamaChatCompletion:
         _ = response.json()["choices"][0]["message"]["content"]
 
 
-class TestLlamaServerFeatures:
-    """Test llama-server specific features."""
-
-    def test_flash_attention_enabled(self, llama_client: httpx.Client):
-        """Check if flash attention is enabled via props."""
-        response = llama_client.get("/props", timeout=10.0)
-        if response.status_code == 200:
-            data = response.json()
-            # Flash attention may be reported in various ways
-            flash = data.get("flash_attn") or data.get("flash_attention")
-            if flash is not None:
-                assert flash is True, "Flash attention should be enabled"
-
-    def test_speculative_decoding_check(self, llama_client: httpx.Client):
-        """Report speculative decoding when the selected model enables it."""
-        response = llama_client.get("/props", timeout=10.0)
-        if response.status_code == 200:
-            data = response.json()
-            draft = data.get("draft_model") or data.get("speculative")
-            if draft:
-                print(f"Speculative decoding configured: {draft}")
-
-
 class TestLlamaModelsAdvanced:
     """Test advanced model endpoint features."""
 
@@ -280,28 +255,30 @@ class TestLlamaModelsAdvanced:
         """Model object should have required fields."""
         response = llama_client.get("/v1/models")
         assert response.status_code == 200
-        data = response.json()
-        models = data.get("data", [])
-        if models:
-            model = models[0]
-            assert "id" in model, "Model should have 'id' field"
-            assert "object" in model, "Model should have 'object' field"
+        model = response.json()["data"][0]
+        assert "id" in model, "Model should have 'id' field"
+        assert "object" in model, "Model should have 'object' field"
 
 
 class TestLlamaChatCompletionAdvanced:
     """Test advanced chat completion scenarios."""
 
-    def test_single_user_message(self, llama_client: httpx.Client):
-        """Single user message should work."""
+    @pytest.mark.parametrize("content, max_tokens", [
+        ("Hi", 10),
+        ("Say hello in Japanese: こんにちは", 20),
+        ("What does this code do? def add(a,b): return a+b", 50),
+    ], ids=["plain", "unicode", "code"])
+    def test_one_user_message_is_answered(self, llama_client: httpx.Client, content, max_tokens):
+        """A request with one user message gets an answer: plain text, Unicode, and code."""
         response = llama_client.post(
             "/v1/chat/completions",
             json={
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 10
+                "messages": [{"role": "user", "content": content}],
+                "max_tokens": max_tokens
             },
             timeout=120.0
         )
-        assert response.status_code == 200, "Single user message should work"
+        assert response.status_code == 200, f"One user message should work, got {response.status_code}"
 
     def test_system_plus_user_message(self, llama_client: httpx.Client):
         """System plus user message should work."""
@@ -341,30 +318,6 @@ class TestLlamaChatCompletionAdvanced:
         _ = message.get("content", "") or message.get("reasoning_content", "") or ""
         # Model should return a response - don't require "Bob" since model may vary
         assert response.status_code == 200, "Multi-turn should work"
-
-    def test_unicode_in_message(self, llama_client: httpx.Client):
-        """Unicode in message should work."""
-        response = llama_client.post(
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": "Say hello in Japanese: こんにちは"}],
-                "max_tokens": 20
-            },
-            timeout=120.0
-        )
-        assert response.status_code == 200, "Unicode in message should work"
-
-    def test_code_in_message(self, llama_client: httpx.Client):
-        """Code in message should work."""
-        response = llama_client.post(
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": "What does this code do? def add(a,b): return a+b"}],
-                "max_tokens": 50
-            },
-            timeout=120.0
-        )
-        assert response.status_code == 200, "Code in message should work"
 
 
 class TestLlamaParameters:
@@ -417,18 +370,18 @@ class TestLlamaParameters:
             },
             timeout=120.0
         )
-        if response.status_code == 200:
-            data = response.json()
-            # n parameter support varies by server; we don't assert
-            # cardinality, just that the response parses.
-            _ = data.get("choices", [])
+        assert response.status_code == 200, f"n=2 should return 200, got {response.status_code}"
+        choices = response.json()["choices"]
+        assert len(choices) == 2, f"n=2 should give 2 choices, got {len(choices)}"
+        assert all("message" in choice for choice in choices), f"Each choice should have a message: {choices}"
 
 
 class TestLlamaResponseValidation:
     """Test response format validation."""
 
-    def test_response_has_id(self, llama_client: httpx.Client):
-        """Response should have id field."""
+    @pytest.mark.parametrize("field", ["id", "object", "created"])
+    def test_response_has_field(self, llama_client: httpx.Client, field):
+        """A response has its id, its object type and its created timestamp."""
         response = llama_client.post(
             "/v1/chat/completions",
             json={
@@ -438,36 +391,7 @@ class TestLlamaResponseValidation:
             timeout=120.0
         )
         assert response.status_code == 200
-        data = response.json()
-        assert "id" in data, "Response should have 'id' field"
-
-    def test_response_has_object_field(self, llama_client: httpx.Client):
-        """Response should have object field."""
-        response = llama_client.post(
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 5
-            },
-            timeout=120.0
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "object" in data, "Response should have 'object' field"
-
-    def test_response_has_created_timestamp(self, llama_client: httpx.Client):
-        """Response should have created timestamp."""
-        response = llama_client.post(
-            "/v1/chat/completions",
-            json={
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 5
-            },
-            timeout=120.0
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "created" in data, "Response should have 'created' field"
+        assert field in response.json(), f"Response should have '{field}' field"
 
     def test_choices_have_finish_reason(self, llama_client: httpx.Client):
         """Choices should have finish_reason."""
