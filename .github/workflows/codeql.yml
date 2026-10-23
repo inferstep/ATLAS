@@ -45,6 +45,12 @@ jobs:
       matrix:
         language: [python, go, javascript-typescript, java-kotlin]
 
+    # Tests are code too, and get the same scan. The Go extractor leaves out
+    # every _test.go file unless this option is on (GitHub's "build options
+    # for compiled languages"); it is read by the Go extractor only.
+    env:
+      CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS: 'true'
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -103,7 +109,8 @@ jobs:
         # CodeQL needs to observe a real compile to extract dataflow.
         # autobuild can't handle our two-module layout (proxy/ + tui/)
         # so we do it manually. Each module's `go build ./...` is enough
-        # for extraction — we don't need the artifacts.
+        # for extraction (with the option above, of its tests too) — we
+        # don't need the artifacts.
         if: matrix.language == 'go'
         run: |
           (cd proxy && go build ./...)
@@ -111,10 +118,11 @@ jobs:
 
       # The Kotlin plugin is a Gradle build, and CodeQL only extracts
       # Kotlin from a compile it observes. Force the plugin's compileKotlin
-      # task to actually run: --rerun defeats the task's own up-to-date
-      # check, --no-build-cache defeats the cache, and in-process keeps the
-      # Kotlin compiler in the JVM CodeQL instruments — the Kotlin compiler
-      # daemon is a separate process that --no-daemon does not cover.
+      # and compileTestKotlin tasks (its code and its tests) to actually
+      # run: --rerun defeats each task's own up-to-date check,
+      # --no-build-cache defeats the cache, and in-process keeps the Kotlin
+      # compiler in the JVM CodeQL instruments — the Kotlin compiler daemon
+      # is a separate process that --no-daemon does not cover.
       - name: build kotlin (forced, in-process)
         if: matrix.language == 'java-kotlin'
         working-directory: extensions/jetbrains
@@ -129,7 +137,7 @@ jobs:
             ./gradlew --no-daemon --no-build-cache --console=plain \
               -Pkotlin.compiler.execution.strategy=in-process \
               -Pkotlin.incremental=false \
-              :compileKotlin --rerun 2>&1 | tee kotlin-compile.log
+              :compileKotlin --rerun :compileTestKotlin --rerun 2>&1 | tee kotlin-compile.log
           }
           build || { echo "The build of the plugin failed. It is tried once more."; build; }
 
@@ -142,17 +150,17 @@ jobs:
         working-directory: extensions/jetbrains
         run: |
           set -euo pipefail
-          if grep -Eq '^> Task :compileKotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
+          if grep -Eq '^> Task :compile(Test)?Kotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
             echo "::error::the Kotlin compile was skipped (see kotlin-compile.log); CodeQL would extract nothing"
             exit 1
           fi
-          for task in ':compileKotlin'; do
+          for task in ':compileKotlin' ':compileTestKotlin'; do
             if ! grep -Eq "^> Task ${task}$" kotlin-compile.log; then
               echo "::error::$task did not run (see kotlin-compile.log)"
               exit 1
             fi
           done
-          echo "ok: the Kotlin compile executed"
+          echo "ok: the Kotlin compiles of the code and the tests executed"
 
       - name: analyze
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
