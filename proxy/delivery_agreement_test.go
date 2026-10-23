@@ -41,30 +41,28 @@ type agreementRow struct {
 func agreementRows() []agreementRow {
 	const declared = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`
 	withCommands := func(cmds ...string) string {
-		quoted := make([]string, 0, len(cmds))
-		for _, c := range cmds {
-			b, _ := json.Marshal(c)
-			quoted = append(quoted, string(b))
-		}
-		return `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
-			`"verification_knowledge":"declared","verification":[` + strings.Join(quoted, ",") + `]}`
+		contract, _ := json.Marshal(map[string]any{
+			"task_mode": "work", "output_knowledge": "declared", "expected_outputs": []string{"solve.py"},
+			"verification_knowledge": "declared", "verification": cmds,
+		})
+		return string(contract)
 	}
 	// The same commands, typed behavioral over assets the client owns. A
 	// behavioral baseline can only be re-established by evidence that reaches
 	// behavioral, and only a typed declaration does.
 	withBehavioralCommands := func(cmds ...string) string {
-		typed := make([]string, 0, len(cmds))
-		quoted := make([]string, 0, len(cmds))
+		typed := make([]map[string]string, 0, len(cmds))
 		for _, c := range cmds {
-			b, _ := json.Marshal(c)
-			quoted = append(quoted, string(b))
-			typed = append(typed, `{"command":`+string(b)+`,"kind":"behavioral",`+
-				`"expects":"exit_zero","asset_authority":"client_supplied"}`)
+			typed = append(typed, map[string]string{
+				"command": c, "kind": "behavioral", "expects": "exit_zero", "asset_authority": "client_supplied",
+			})
 		}
-		return `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
-			`"verification_knowledge":"declared","verification":[` + strings.Join(quoted, ",") + `],` +
-			`"verification_requirements_version":1,"verification_requirements":[` +
-			strings.Join(typed, ",") + `]}`
+		contract, _ := json.Marshal(map[string]any{
+			"task_mode": "work", "output_knowledge": "declared", "expected_outputs": []string{"solve.py"},
+			"verification_knowledge": "declared", "verification": cmds,
+			"verification_requirements_version": 1, "verification_requirements": typed,
+		})
+		return string(contract)
 	}
 	pass := map[string]stubEffect{"pytest -q": {ExitCode: 0}}
 

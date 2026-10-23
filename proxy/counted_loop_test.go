@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,13 +33,31 @@ func loopCutAt(text string) int {
 	return -1
 }
 
+// jsonOf is v as a model's reply streams it: JSON with the keys in the order of
+// the struct's fields.
+func jsonOf(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+type writeFileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 func proseReply(body string) string {
-	return `{"type":"text","content":"` + jsonStringBody(body) + `"}`
+	return jsonOf(struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}{"text", body})
 }
 
 func writeFileReply(path, body string) string {
-	return `{"type":"tool_call","name":"write_file","args":{"path":"` + path +
-		`","content":"` + jsonStringBody(body) + `"}}`
+	return jsonOf(struct {
+		Type string        `json:"type"`
+		Name string        `json:"name"`
+		Args writeFileArgs `json:"args"`
+	}{"tool_call", "write_file", writeFileArgs{path, body}})
 }
 
 func counted(format string, from, to int) string {
@@ -56,7 +75,10 @@ func TestAProseReplyThatLoopsWhileItCountsIsCut(t *testing.T) {
 	if at < 0 || at > 3000 {
 		t.Fatalf("the counted loop was cut at %d of %d chars, want a cut within 3000", at, len(loop))
 	}
-	done := `{"type":"done","summary":"` + jsonStringBody(counted("Step %d: I will check the output again. ", 1, 200)) + `"}`
+	done := jsonOf(struct {
+		Type    string `json:"type"`
+		Summary string `json:"summary"`
+	}{"done", counted("Step %d: I will check the output again. ", 1, 200)})
 	if loopCutAt(done) < 0 {
 		t.Error("a done summary that loops while it counts was not cut")
 	}
@@ -70,9 +92,17 @@ func TestAFileBodyThatCountsIsNotCut(t *testing.T) {
 		"migration list":   writeFileReply("MIGRATIONS.txt", counted("%04d_add_column.sql applied\n", 1, 150)),
 		"fenced csv body":  "````csv\n" + csv + "````\n",
 		// The tool named in "type": models do send this shape.
-		"tool named in type": `{"type":"write_file","path":"data.csv","content":"` + jsonStringBody(csv) + `"}`,
+		"tool named in type": jsonOf(struct {
+			Type    string `json:"type"`
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}{"write_file", "data.csv", csv}),
 		// Keys in another order: the body streams before "tool_call" does.
-		"args before type": `{"name":"write_file","args":{"path":"data.csv","content":"` + jsonStringBody(csv) + `"},"type":"tool_call"}`,
+		"args before type": jsonOf(struct {
+			Name string        `json:"name"`
+			Args writeFileArgs `json:"args"`
+			Type string        `json:"type"`
+		}{"write_file", writeFileArgs{"data.csv", csv}, "tool_call"}),
 	} {
 		if at := loopCutAt(stream); at >= 0 {
 			t.Errorf("%s: a file body that counts was cut at %d chars", name, at)
