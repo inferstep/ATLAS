@@ -14,6 +14,7 @@ from stages.plan_search import (
     Plan,
     PlanSearch,
     PlanSearchConfig,
+    PlanSearchInfrastructureError,
     PlanSearchResult,
     extract_code_from_response,
     parse_constraint_sets,
@@ -262,6 +263,31 @@ def test_event_logged(plan_search, tmp_path):
     assert event["num_plans"] == 3
     assert event["num_candidates"] == 3
     assert event["total_tokens"] > 0
+
+
+class Refused(Exception):
+    """A model call that the server refused: status 401."""
+    code = 401
+
+
+def test_refused_code_calls_stop_the_search_and_keep_the_plans_and_tokens_spent(plan_search, tmp_path):
+    # Steps 1 and 2 are answered; the three code calls of step 3 are refused.
+    def model(prompt, temperature, max_tokens, seed):
+        if "Implement this plan" in prompt:
+            raise Refused("401 Unauthorized")
+        if "Based on these constraints" in prompt:
+            return SAMPLE_PLAN_RESPONSE, 20, 100.0
+        return SAMPLE_CONSTRAINT_RESPONSE, 10, 100.0
+
+    with pytest.raises(PlanSearchInfrastructureError) as refused:
+        plan_search.generate(SAMPLE_PROBLEM, "LCB_001", model)
+
+    result = refused.value.result
+    assert len(result.constraint_sets) == 3 and len(result.plans) == 3
+    assert result.candidates == []
+    assert result.total_tokens == 10 + 3 * 20
+    event = json.loads((tmp_path / "plan_search_events.jsonl").read_text())
+    assert (event["num_plans"], event["total_tokens"], event["infrastructure_failures"]) == (3, 70, 3)
 
 
 @pytest.mark.parametrize("record, expected", [
