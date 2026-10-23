@@ -69,6 +69,7 @@ def wait_for(path, seconds=10):
 
 def test_a_job_runs_holding_the_lock_with_its_note_and_then_frees_both(tmp_path):
     job = start_queue(tmp_path, "dev", "--what", "a fault run", command=(
+        'until [ -s q/holder.json ]; do sleep 0.05; done; '  # the queue writes its note just after it starts the job
         'cat q/holder.json > note.json; echo "$ATLAS_QUEUE_CPUS $(nice)" > limits.txt; exit 3'))
 
     assert job.wait(timeout=20) == 3

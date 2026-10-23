@@ -92,7 +92,9 @@ def write_note(queue: Path, what: str, command: list, process_group: int, expect
             "since": since.isoformat(timespec="seconds"),
             "expected_end": (since + timedelta(minutes=expected_minutes)).isoformat(timespec="seconds")
             if expected_minutes else None, "yields": yields}
-    (queue / "holder.json").write_text(json.dumps(note) + "\n", encoding="utf-8")
+    # Written whole, then renamed into place: a reader never finds half a note.
+    (queue / "holder.json.new").write_text(json.dumps(note) + "\n", encoding="utf-8")
+    os.replace(queue / "holder.json.new", queue / "holder.json")
 
 
 def leader_command(group: int) -> list | None:
