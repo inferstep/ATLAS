@@ -104,6 +104,18 @@ def _module_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+# The suites need more than pytest: the sandbox service (fastapi, defusedxml)
+# and the tree-sitter grammars. Without them many tests fail for a reason that
+# is not the change's, so the python-tests gate says what to install instead of
+# running.
+PYTHON_SUITES_MISSING = ("pytest, fastapi, defusedxml or tree_sitter is not installed "
+                         "(pip install --require-hashes -r .github/requirements/ci.txt)")
+
+
+def _python_suites_installed() -> bool:
+    return all(_module_available(name) for name in ("pytest", "fastapi", "defusedxml", "tree_sitter"))
+
+
 def _command_available(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -229,14 +241,8 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),
-            # The suites need more than pytest: the sandbox service (fastapi,
-            # defusedxml) and the tree-sitter grammars. Without them many tests
-            # fail for a reason that is not the change's, so the gate says what
-            # to install instead of running.
-            available=lambda: all(_module_available(name) for name in
-                                  ("pytest", "fastapi", "defusedxml", "tree_sitter")),
-            unavailable_reason="pytest, fastapi, defusedxml or tree_sitter is not installed "
-                               "(pip install --require-hashes -r .github/requirements/ci.txt)",
+            available=_python_suites_installed,
+            unavailable_reason=PYTHON_SUITES_MISSING,
         ),
         # Separate process on purpose — see the LENS_PYTEST_PATH comment.
         "python-tests-lens": Gate(
