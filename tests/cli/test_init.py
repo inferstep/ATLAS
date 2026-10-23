@@ -270,6 +270,26 @@ def test_answer_at_the_model_prompt(atlas_root, monkeypatch, answer, expected_rc
     assert (atlas_root / "secrets").is_dir() is files_written
 
 
+def test_the_gpu_picked_at_the_prompt_goes_into_env(atlas_root, monkeypatch):
+    """On a host with two GPUs the wizard offers the largest as the default.
+    The user picks position 2, so .env names that GPU."""
+    big = tier.GPUInfo(vendor="nvidia", name="NVIDIA RTX 4090", vram_gb=24.0, index=0)
+    small = tier.GPUInfo(vendor="nvidia", name="NVIDIA RTX 3060", vram_gb=12.0, index=1)
+    two_gpus = tier.Probe(
+        has_gpu=True, gpu_name=big.name, gpu_vendor="nvidia", vram_gb=24.0,
+        gpu_count=2, gpus=[big, small], system_ram_gb=64.0, cpu_cores=16,
+        disk_free_gb=500.0, platform="linux")
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: two_gpus)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    answers = iter(["2", ""])  # GPU position 2, then Enter at the model prompt
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: next(answers))
+
+    rc = init.main(["--skip-download", "--no-color"])
+
+    assert rc == 0
+    assert "ATLAS_GPU_INDEX=1" in (atlas_root / ".env").read_text()
+
+
 # ---------------------------------------------------------------------------
 # Backend choice per GPU (ROCm, Metal #32, Vulkan PC-114, arm64 #115)
 # ---------------------------------------------------------------------------

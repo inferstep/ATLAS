@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from atlas import display
 from atlas.commands import tier, model_registry
 
 
@@ -142,6 +143,31 @@ def test_overall_status_is_the_worst_check():
     assert tier.overall_status(checks) == "fail"
 
 
+# --- `atlas tier`: the exit code and the printed card ------------------------
+
+@pytest.mark.parametrize("host, expected_rc", [
+    # Scripts (bootstrap, CI) gate on the exit code: a warning is no failure.
+    pytest.param(dataclasses.replace(COMFORTABLE_HOST, system_ram_gb=14.0), 0,
+                 id="borderline-ram-warns-and-exits-0"),
+    pytest.param(dataclasses.replace(COMFORTABLE_HOST, disk_free_gb=5.0), 1,
+                 id="disk-short-of-the-minimum-exits-1"),
+    pytest.param(tier.Probe(has_gpu=False), 1, id="no-gpu-exits-1"),
+])
+def test_atlas_tier_exit_code(monkeypatch, host, expected_rc):
+    monkeypatch.setattr(tier, "probe", lambda install_dir=None: host)
+    assert tier.main(["--no-color"]) == expected_rc
+
+
+def test_tier_card_prints_with_color_and_unicode(monkeypatch, capsys):
+    # A terminal that takes color and Unicode.
+    monkeypatch.setattr(tier, "UNICODE_OK", True)
+    monkeypatch.setattr(display, "UNICODE_OK", True)
+
+    tier._print_tier_card(tier.by_name("medium"), COMFORTABLE_HOST, color=True)
+
+    assert "─" * 60 in capsys.readouterr().out  # the card's bar line
+
+
 # --- probe() -----------------------------------------------------------------
 
 @pytest.mark.parametrize("install_dir, measured_path", [
@@ -163,6 +189,18 @@ def test_probe_measures_free_disk_where_atlas_is_installed(
     monkeypatch.setattr(tier.shutil, "disk_usage", fake_disk_usage)
     tier.probe(install_dir=install_dir)
     assert measured == [measured_path]
+
+
+def test_ram_from_sysctl_is_the_byte_count_in_gib(monkeypatch):
+    """macOS has no /proc/meminfo: `sysctl -n hw.memsize` prints the RAM
+    size in bytes."""
+    def no_proc_meminfo(path, *args, **kwargs):
+        raise FileNotFoundError(path)
+    monkeypatch.setattr(tier, "open", no_proc_meminfo, raising=False)
+    sysctl = subprocess.CompletedProcess(args=[], returncode=0, stdout="34359738368\n")
+    monkeypatch.setattr(tier.subprocess, "run", lambda *a, **kw: sysctl)
+
+    assert tier._read_system_ram_gb() == 32.0
 
 
 @pytest.mark.parametrize("machine", ["aarch64", "x86_64"])

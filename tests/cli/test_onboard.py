@@ -73,3 +73,19 @@ def test_url_download_writes_env_only_with_apply(
     out = capsys.readouterr().out
     for text in expected_texts:
         assert text in out
+
+
+@pytest.mark.parametrize("loaded, model_file, expected", [
+    pytest.param("/models/Qwen3-14B-Q4_K_M.gguf", "Qwen3-14B-Q4_K_M.gguf", True,
+                 id="path-form-is-the-same-model"),
+    # ATLAS_MODEL_NAME is the file name without .gguf; the dot in "2.5" stays.
+    pytest.param("Qwen2.5-Coder-14B-Q4_K_M", "Qwen2.5-Coder-14B-Q4_K_M.gguf", True,
+                 id="name-without-gguf-is-the-same-model"),
+    pytest.param("Qwen3-14B-Q4_K_M-abliterated.gguf", "Qwen3-14B-Q4_K_M.gguf", False,
+                 id="longer-name-is-another-model"),
+])
+def test_names_match(loaded, model_file, expected):
+    """onboard asks llama-server which model it serves and compares that
+    name with ATLAS_MODEL_FILE. A wrong "no" restarts the server and
+    reports a rebuild; a wrong "yes" passes a model that was never loaded."""
+    assert onboard._names_match(loaded, model_file) is expected

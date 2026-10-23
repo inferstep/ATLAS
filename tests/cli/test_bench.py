@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from atlas.bench.config import BenchmarkConfig
 from atlas.commands import bench
 
 
@@ -121,3 +122,10 @@ def test_successful_run_reports_results_and_exits_zero(tmp_path, monkeypatch,
     assert "pass@1: 1/3" in out
     # The next onboarding step is printed for the operator.
     assert "lens build --force --from-results" in out
+
+
+def test_runner_results_folder_is_the_one_atlas_bench_reads():
+    # bench() reads <repo root>/benchmark/results/<run-id>/; the runner
+    # writes under the bench config's results_dir. If the two drift apart,
+    # a finished run reports "No results found".
+    assert BenchmarkConfig().results_dir == bench._atlas_root() / "benchmark" / "results"

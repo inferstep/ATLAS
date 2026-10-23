@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from atlas import runtime_artifacts
+from atlas import runtime, runtime_artifacts
 from atlas.commands import tui
 
 
@@ -58,3 +58,24 @@ def test_select_tui_binary_rebuilds_only_a_stale_binary(
     selected = tui._select_tui_binary(str(atlas_dir))
 
     assert selected == ("/rebuilt/atlas-tui" if expect_rebuild else str(binary))
+
+
+def test_tui_stops_the_local_proxy_before_the_binary_takes_over(
+        monkeypatch, tmp_path):
+    # exec replaces the process, so exit handlers never run: a local proxy
+    # left running keeps port 8090 and blocks the next `docker compose up`.
+    # Already set, so main() does not look for the checkout's token file.
+    monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(tmp_path / "token"))
+    monkeypatch.setattr(tui, "_select_tui_binary", lambda atlas_dir: "/opt/atlas-tui")
+    monkeypatch.setattr(runtime, "ensure_proxy", lambda required_capability: True)
+    steps = []
+    monkeypatch.setattr(runtime, "stop_local_proxy",
+                        lambda: steps.append("stop local proxy"))
+    monkeypatch.setattr(tui.os, "execv", lambda path, argv: steps.append(argv))
+
+    tui.main(["--log", "off"])
+
+    assert steps == [
+        "stop local proxy",
+        ["/opt/atlas-tui", "--proxy", runtime.PROXY_URL, "--log", "off"],
+    ]

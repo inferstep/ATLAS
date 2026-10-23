@@ -1,6 +1,7 @@
 """Proxy runtime tests — compose lifecycle behind ensure_proxy()."""
 
 import io
+import os
 import urllib.request
 from types import SimpleNamespace
 
@@ -111,3 +112,54 @@ def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp
     assert "--build" in command
     assert command[-1] == "atlas-proxy"
     assert kwargs["env"]["ATLAS_PROJECT_DIR"] == str(tmp_path / "project")
+
+
+def test_a_stale_installed_proxy_is_rebuilt_not_launched(monkeypatch):
+    """A binary older than the checkout's proxy source would run old code
+    after an update."""
+    monkeypatch.setattr(runtime, "_find_proxy_binary",
+                        lambda atlas_dir: "/installed/atlas-proxy-v2")
+    monkeypatch.setattr(runtime, "go_binary_is_current", lambda binary, source_dir: False)
+    monkeypatch.setattr(runtime, "_find_go", lambda: "/usr/bin/go")
+    monkeypatch.setattr(runtime, "_build_proxy", lambda atlas_dir: "/rebuilt/atlas-proxy-v2")
+
+    assert runtime._select_proxy_binary("/atlas") == "/rebuilt/atlas-proxy-v2"
+
+
+def test_a_stale_compose_proxy_is_rebuilt_in_docker_not_replaced_locally(monkeypatch, tmp_path):
+    """A local proxy would collide with the compose stack's container on the
+    proxy port (#118)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(runtime, "_proxy_supports_capability", lambda capability: False)
+    monkeypatch.setattr(runtime, "_docker_compose_owns_proxy", lambda atlas_dir: True)
+    monkeypatch.setattr(runtime, "_find_go", lambda: "/usr/bin/go")
+    docker_rebuilds, local_builds = [], []
+    monkeypatch.setattr(runtime, "_rebuild_docker_proxy_for_capability",
+                        lambda atlas_dir, project_dir, capability:
+                        docker_rebuilds.append(project_dir) or True)
+    monkeypatch.setattr(runtime, "_build_proxy", lambda atlas_dir: local_builds.append(atlas_dir))
+
+    assert runtime._repair_proxy_capability("/atlas", runtime.DEMO_RAW_CAPABILITY) is True
+    assert docker_rebuilds == [str(tmp_path)]
+    assert local_builds == []
+
+
+@pytest.mark.parametrize("proxy_bind, sandbox_bind, recreated", [
+    pytest.param("project", "project", False, id="cwd-inside-both-binds"),
+    pytest.param("project", "elsewhere", True, id="sandbox-bound-elsewhere"),
+])
+def test_align_workspace_recreates_only_when_a_bind_misses_the_cwd(
+        monkeypatch, tmp_path, proxy_bind, sandbox_bind, recreated):
+    cwd = tmp_path / "project" / "src"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("ATLAS_AUTO_WORKSPACE", raising=False)
+    monkeypatch.setattr(runtime, "_docker_proxy_workspace", lambda: str(tmp_path / proxy_bind))
+    monkeypatch.setattr(runtime, "_docker_sandbox_workspace", lambda: str(tmp_path / sandbox_bind))
+    recreates = []
+    monkeypatch.setattr(runtime, "_recreate_docker_proxy",
+                        lambda atlas_dir, project_dir: recreates.append(project_dir) or True)
+
+    runtime._align_workspace("/atlas")
+
+    assert recreates == ([os.path.realpath(cwd)] if recreated else [])

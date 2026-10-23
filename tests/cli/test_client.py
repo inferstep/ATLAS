@@ -58,6 +58,33 @@ def test_check_llama_reads_model_id_from_v1_models(monkeypatch, models_reply, ex
     assert client.check_llama() == (True, expected_model)
 
 
+@pytest.mark.parametrize("health_reply, embedding_reply, expected", [
+    pytest.param({"status": "ok"}, [{"embedding": [0.1, 0.2, 0.3]}],
+                 (True, 3, False), id="pooled vector"),
+    pytest.param({"status": "ok"}, [{"embedding": [[0.1, 0.2, 0.3, 0.4],
+                                                   [0.5, 0.6, 0.7, 0.8]]}],
+                 (True, 4, False), id="one vector per token"),
+    pytest.param({"status": "ok"},
+                 [{"embedding": [0.1, 0.2, 0.3], "hidden_states_dim": 3}],
+                 (True, 3, True), id="hidden-states patch present"),
+    pytest.param(None, None, (False, 0, False), id="server not reachable"),
+])
+def test_probe_llama_reads_reachability_dim_and_patch(monkeypatch, health_reply,
+                                                      embedding_reply, expected):
+    """`atlas lens check` and `atlas asa check` judge the loaded model by
+    these fields: an embedding dim that differs from the artifact's is a
+    mismatch, and lens training needs the hidden-states patch."""
+    monkeypatch.setattr(client, "get_json_or_none",
+                        lambda url, timeout: health_reply if url.endswith("/health") else {})
+    monkeypatch.setattr(client, "post_json_or_none",
+                        lambda url, body, timeout: embedding_reply)
+
+    probe = client.probe_llama("http://llama:8080")
+
+    assert (probe.reachable, probe.embedding_dim,
+            probe.has_hidden_states_patch) == expected
+
+
 def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     """reasoning_content deltas surface as literal <think>…</think> so
     callers keep a single thinking-detection path."""

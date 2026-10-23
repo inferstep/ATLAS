@@ -6,13 +6,16 @@ the gguf package is not installed. The training run itself is dry-run only:
 the real run shells into the lens container, which isn't reproducible in CI.
 """
 
+import base64
+import importlib.util
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from atlas import publishing
-from atlas.commands import asa
+from atlas.commands import asa, model_registry
 
 
 def _probe(reachable=True, embedding_dim=4096, n_layers=32,
@@ -432,6 +435,98 @@ def test_publishing_records_a_vector_as_unverified():
     assert out is not None
     assert 'asa_status="unverified"' in out
     assert 'asa_status="supported"' not in out
+
+
+# A registry file from before Model had lens_calibrated and lens_hf_repo.
+REGISTRY_BEFORE_LENS_FIELDS = """\
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+
+@dataclass(frozen=True)
+class Model:
+    name: str
+    tier: str
+    model_file: str
+    model_display: str
+    model_size_gb: float
+    lens_status: str
+    download_url: Optional[str] = None
+    sha256: Optional[str] = None
+    license: Optional[str] = None
+    lens_artifact_files: List[str] = field(default_factory=list)
+    notes: str = ""
+
+
+REGISTRY: List[Model] = [
+]
+"""
+
+
+@pytest.mark.parametrize("registry_source", [
+    pytest.param(Path(model_registry.__file__).read_text(), id="current-registry"),
+    pytest.param(REGISTRY_BEFORE_LENS_FIELDS, id="registry-before-lens-fields"),
+])
+def test_publish_adds_an_importable_registry_entry(tmp_path, registry_source):
+    """`atlas publish` and `atlas lens publish` commit this edit upstream, so
+    the file must still import, with the new model inside REGISTRY, even
+    when the upstream Model is older than the publisher's install."""
+    entry = publishing.render_registry_entry(
+        "New-Model-Q4", "New-Model-Q4.gguf", 5.2, "medium", 4096,
+        "alice/new-model-lens", "apache-2.0", ["cost_field.safetensors"])
+
+    edited = publishing.registry_insert_entry(registry_source, "New-Model-Q4",
+                                              entry)
+
+    edited_file = tmp_path / "edited_registry.py"
+    edited_file.write_text(edited)
+    spec = importlib.util.spec_from_file_location("edited_registry", edited_file)
+    edited_registry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(edited_registry)
+    added = [m for m in edited_registry.REGISTRY if m.name == "New-Model-Q4"]
+    assert [m.model_file for m in added] == ["New-Model-Q4.gguf"]
+
+
+def test_registry_pr_from_a_contributor_goes_through_their_fork(monkeypatch):
+    """A contributor cannot push to inferstep/ATLAS: the edit is committed to
+    a branch of their fork, and the PR asks to merge <login>:<branch> into
+    dev."""
+    monkeypatch.delenv("ATLAS_UPSTREAM_REPO", raising=False)
+    registry_file = publishing.REGISTRY_PATH
+    replies = {
+        "user": "alice",
+        "repos/inferstep/ATLAS/branches/dev": {"name": "dev"},
+        "repos/inferstep/ATLAS/forks": {"full_name": "alice/ATLAS"},
+        "repos/alice/ATLAS/merge-upstream": {},
+        "repos/alice/ATLAS/branches/dev": {"commit": {"sha": "base-sha"}},
+        f"repos/alice/ATLAS/contents/{registry_file}?ref=dev": {
+            "content": base64.b64encode(b"REGISTRY = []\n").decode(),
+            "sha": "old-blob"},
+        "repos/alice/ATLAS/git/refs": {},
+        f"repos/alice/ATLAS/contents/{registry_file}": {},
+        "repos/inferstep/ATLAS/pulls": {
+            "html_url": "https://github.com/inferstep/ATLAS/pull/9"},
+    }
+    sent = {}
+
+    def fake_gh_api(api_args, payload=None):
+        sent[api_args[0]] = payload
+        return True, replies[api_args[0]], ""
+
+    monkeypatch.setattr(publishing, "gh_api", fake_gh_api)
+
+    url = publishing.open_registry_pr_via_api(
+        "New-Model", "Registry: add New-Model", "body",
+        edit_fn=lambda content: content + "# new entry\n")
+
+    assert url == "https://github.com/inferstep/ATLAS/pull/9"
+    commit = sent[f"repos/alice/ATLAS/contents/{registry_file}"]
+    assert (base64.b64decode(commit["content"]).decode()
+            == "REGISTRY = []\n# new entry\n")
+    assert commit["sha"] == "old-blob"
+    pull_request = sent["repos/inferstep/ATLAS/pulls"]
+    assert pull_request["head"] == "alice:" + commit["branch"]
+    assert pull_request["base"] == "dev"
 
 
 def test_model_marker_value_strips_loaded_model_path():
