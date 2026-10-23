@@ -14,16 +14,6 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD_FILES = sorted(path for path in (ROOT / "inference").glob("Dockerfile*") if "cmake -B" in path.read_text(encoding="utf-8"))
 
 
-def without_comments(text: str) -> str:
-    """A build file as Docker reads it: a comment line is dropped, also between the lines of one command."""
-    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-
-
-def configure_steps(text: str) -> list:
-    """Each `cmake -B` command of a build file, with its continuation lines joined into one."""
-    return re.findall(r"cmake -B \S+[^&\n]*", re.sub(r"\\\n", " ", without_comments(text)))
-
-
 def test_the_four_images_of_the_model_server_are_the_build_files_that_are_read():
     assert [path.name for path in BUILD_FILES] == ["Dockerfile", "Dockerfile.rocm", "Dockerfile.v31", "Dockerfile.vulkan"], (
         "the build files of the model server under inference/ are not the four that this test knows. Fix: when a build "
@@ -32,8 +22,10 @@ def test_the_four_images_of_the_model_server_are_the_build_files_that_are_read()
 
 @pytest.mark.parametrize("path", BUILD_FILES, ids=lambda path: path.name)
 def test_the_build_names_the_processor_level_of_the_cpu_part(path):
-    text = path.read_text(encoding="utf-8")
-    steps = configure_steps(text)
+    # The build file as Docker reads it: a comment line is dropped, also between the lines of one command.
+    code = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#"))
+    # Each `cmake -B` command, with its continuation lines joined into one.
+    steps = re.findall(r"cmake -B \S+[^&\n]*", code.replace("\\\n", " "))
     assert steps, f"inference/{path.name} has no `cmake -B` step that this test can read; the form of the step has changed"
     for step in steps:
         assert re.search(r"(?<!\S)-DGGML_NATIVE=OFF(?!\S)", step), (
@@ -41,7 +33,6 @@ def test_the_build_names_the_processor_level_of_the_cpu_part(path):
             "CPU part is compiled for the processor of the build machine: the image may not start on a user's older "
             "processor, and the compile fails on a runner whose processor the builder's assembler does not know. Fix: "
             "add `-DGGML_NATIVE=OFF` to that step.")
-    code = without_comments(text)
     for native in ("-DGGML_NATIVE=ON", "-march=native", "-mcpu=native", "-mtune=native"):
         assert native not in code, (
             f"inference/{path.name} has `{native}`, which builds for the processor of the build machine. Fix: remove it.")

@@ -38,10 +38,6 @@ PLUGIN_VERSION = re.compile(rf"""version\s+['"]?{VERSION_PART}['"]?""")
 LIBRARY = re.compile(rf"""(?:\(|\s)\s*['"](?P<group>{PART}):(?P<name>{PART}):{VERSION_PART}['"]""")
 
 
-def with_no_comment(build):
-    return BLOCK_COMMENT.sub("", LINE_COMMENT.sub("\n", build))
-
-
 def plugin_blocks(text):
     """The text of each `plugins { ... }` block, up to the brace that closes it."""
     for start in PLUGINS_BLOCK.finditer(text):
@@ -53,20 +49,17 @@ def plugin_blocks(text):
                 break
 
 
-def is_kotlin(kind, name):
-    return kind == "kotlin" or name.startswith("org.jetbrains.kotlin.")
-
-
 def dependencies_of(build):
     """Each dependency of a build file by the name that Dependabot gives it, with its kind: `kotlin plugin`,
     `plugin` or `library`."""
-    text, found = with_no_comment(build), {}
+    text, found = BLOCK_COMMENT.sub("", LINE_COMMENT.sub("\n", build)), {}
     for block in plugin_blocks(text):
         for line in block.splitlines():
             plugin = PLUGIN.search(line)
             if plugin and PLUGIN_VERSION.search(line):
                 name = plugin["spaced"] or plugin["called"]
-                found[name] = "kotlin plugin" if is_kotlin(plugin["kind"], name) else "plugin"
+                is_kotlin = plugin["kind"] == "kotlin" or name.startswith("org.jetbrains.kotlin.")
+                found[name] = "kotlin plugin" if is_kotlin else "plugin"
     for library in LIBRARY.finditer(text):
         found.setdefault(f"{library['group']}:{library['name']}", "library")
     return found
@@ -77,10 +70,6 @@ def names(rule, dependency):
     count, as with Dependabot."""
     pattern = ".*".join(re.escape(part) for part in str(rule.get("dependency-name", "")).lower().split("*"))
     return re.fullmatch(pattern, dependency.lower()) is not None
-
-
-def is_for_every_version(rule):
-    return not rule.get("versions") and not rule.get("update-types")
 
 
 def rules_of(settings, folder):
@@ -105,8 +94,8 @@ def not_kept_for_a_maintainer(wanted, rules, why):
     findings = []
     for dependency in sorted(wanted):
         own = [rule for rule in rules if names(rule, dependency)]
-        if any(is_for_every_version(rule) for rule in own):
-            continue
+        if any(not rule.get("versions") and not rule.get("update-types") for rule in own):
+            continue  # a rule for every version
         state = "has a rule for some versions only" if own else "has no rule"
         findings.append(
             f"`{dependency}` {state} in the entry for {FOLDER} of `.github/dependabot.yml`. {why} Fix: add "
@@ -117,8 +106,6 @@ def not_kept_for_a_maintainer(wanted, rules, why):
 
 KOTLIN_WHY = ("It is a Kotlin plugin of the build, and the Kotlin plugins move together and by hand: the Kotlin "
               "compiler follows the platform that the plugin targets. So Dependabot would move this one alone.")
-PLATFORM_WHY = ("The comment of the entry says that the IntelliJ Platform Gradle Plugin is managed by hand. So "
-                "Dependabot would bump it all the same.")
 
 
 @pytest.fixture(scope="module")
@@ -153,7 +140,9 @@ def test_the_platform_gradle_plugin_is_kept_at_every_version(rules, dependencies
     assert dependencies.get(PLATFORM_PLUGIN) == "plugin", (
         f"The build file has no plugin `{PLATFORM_PLUGIN}` with a version, so this test holds nothing. Fix: when "
         "the plugin has a new id, change PLATFORM_PLUGIN here and the rule in `.github/dependabot.yml`.")
-    findings = not_kept_for_a_maintainer([PLATFORM_PLUGIN], rules, PLATFORM_WHY)
+    findings = not_kept_for_a_maintainer([PLATFORM_PLUGIN], rules, (
+        "The comment of the entry says that the IntelliJ Platform Gradle Plugin is managed by hand. So Dependabot "
+        "would bump it all the same."))
     assert not findings, "\n".join(findings)
 
 
@@ -197,31 +186,34 @@ def test_the_reader_gives_each_dependency_the_name_that_dependabot_gives_it():
     }
 
 
+# A line with no version and a commented line are in A_BUILD above.
 @pytest.mark.parametrize("line, expected", [
-    ('id "org.example.groovy" version "1.0"', {"org.example.groovy": "plugin"}),
-    ("id 'org.example.groovy' version '1.0'", {"org.example.groovy": "plugin"}),
-    ('id("org.jetbrains.kotlin.jvm") version "2.3.20"', {"org.jetbrains.kotlin.jvm": "kotlin plugin"}),
+    pytest.param('id "org.example.groovy" version "1.0"', {"org.example.groovy": "plugin"}, id="groovy-form"),
+    pytest.param("id 'org.example.groovy' version '1.0'", {"org.example.groovy": "plugin"}, id="single-quotes"),
+    pytest.param('id("org.jetbrains.kotlin.jvm") version "2.3.20"', {"org.jetbrains.kotlin.jvm": "kotlin plugin"},
+                 id="a-kotlin-plugin-by-its-long-id"),
     # A version that is the name of a value counts as a version here. Dependabot looks the value up.
-    ('kotlin("jvm") version kotlinVersion', {"jvm": "kotlin plugin"}),
-    ('kotlin("jvm")', {}),
-    ('// kotlin("jvm") version "2.3.20"', {}),
+    pytest.param('kotlin("jvm") version kotlinVersion', {"jvm": "kotlin plugin"}, id="a-version-that-names-a-value"),
 ])
 def test_the_reader_takes_a_plugin_line_as_dependabot_does(line, expected):
     assert dependencies_of(f"plugins {{\n    {line}\n}}\n") == expected
 
 
+# What the reader leaves out of A_BUILD is held by the exact result above. Here: which `dependency-name` names a
+# dependency of A_BUILD.
 @pytest.mark.parametrize("name, named", [
-    ("jvm", True), ("JVM", True), ("plugin.compose", True), ("plugin.*", True), ("io.ktor:*", True),
-    ("io.ktor:ktor-client-core", True), ("*", True), ("org.junit:junit-bom", True),
-    # The long names of the Kotlin plugins, which Dependabot does not use for `kotlin("...")`.
-    ("org.jetbrains.kotlin.jvm", False), ("org.jetbrains.kotlin.plugin.compose", False),
-    ("org.jetbrains.kotlin.plugin.serialization", False), ("org.jetbrains.kotlin*", False),
-    # Named in the build with two parts only, as a thing that is excluded.
-    ("org.jetbrains.kotlin:*", False), ("org.jetbrains.kotlinx:kotlinx-coroutines-core", False),
-    # No version of its own, a commented line, a line outside the block, a part of a name.
-    ("org.junit.jupiter:junit-jupiter", False), ("kapt", False), ("org.example.no.version", False),
-    ("plugin.allopen", False), ("plugin.noarg", False), ("plugin.spring", False), ("com.example:*", False),
-    ("org.example.outside.the.block", False), ("plugin", False), ("io.ktor", False), ("", False),
+    pytest.param("jvm", True, id="the-name-dependabot-gives-a-kotlin-plugin"),
+    pytest.param("JVM", True, id="another-case"),
+    pytest.param("plugin.*", True, id="a-star-after-a-part"),
+    pytest.param("io.ktor:*", True, id="a-star-for-a-group-of-libraries"),
+    pytest.param("io.ktor:ktor-client-core", True, id="a-library-by-group-and-name"),
+    pytest.param("*", True, id="a-star-alone"),
+    # Dependabot does not use the long name for `kotlin("...")`.
+    pytest.param("org.jetbrains.kotlin.jvm", False, id="the-long-name-of-a-kotlin-plugin"),
+    pytest.param("org.jetbrains.kotlin*", False, id="a-star-after-the-long-name"),
+    pytest.param("plugin", False, id="a-part-of-a-plugin-name"),
+    pytest.param("io.ktor", False, id="a-group-with-no-name"),
+    pytest.param("", False, id="an-empty-name"),
 ])
 def test_a_rule_that_names_nothing_is_found(name, named):
     findings = rules_that_name_nothing([{"dependency-name": name}], dependencies_of(A_BUILD))
@@ -231,17 +223,20 @@ def test_a_rule_that_names_nothing_is_found(name, named):
 
 
 @pytest.mark.parametrize("rules, left_alone", [
-    ([{"dependency-name": "jvm"}, {"dependency-name": "plugin.compose"}, {"dependency-name": "plugin.serialization"}],
-     []),
-    ([{"dependency-name": "jvm"}, {"dependency-name": "plugin.*"}], []),
-    ([{"dependency-name": "jvm"}, {"dependency-name": "plugin.compose"}], ["plugin.serialization"]),
-    ([{"dependency-name": "org.jetbrains.kotlin.jvm"}, {"dependency-name": "plugin.*"}], ["jvm"]),
-    ([{"dependency-name": "jvm", "versions": [">= 2.4.0"]}, {"dependency-name": "plugin.*"}], ["jvm"]),
-    ([{"dependency-name": "jvm", "update-types": ["version-update:semver-major"]}, {"dependency-name": "plugin.*"}],
-     ["jvm"]),
-    ([{"dependency-name": "jvm", "versions": [">= 2.4.0"]}, {"dependency-name": "jvm"}, {"dependency-name": "plugin.*"}],
-     []),
-    ([], ["jvm", "plugin.compose", "plugin.serialization"]),
+    pytest.param([{"dependency-name": "jvm"}, {"dependency-name": "plugin.compose"},
+                  {"dependency-name": "plugin.serialization"}], [], id="each-by-its-name"),
+    pytest.param([{"dependency-name": "jvm"}, {"dependency-name": "plugin.*"}], [], id="two-by-a-star"),
+    pytest.param([{"dependency-name": "jvm"}, {"dependency-name": "plugin.compose"}], ["plugin.serialization"],
+                 id="one-with-no-rule"),
+    pytest.param([{"dependency-name": "org.jetbrains.kotlin.jvm"}, {"dependency-name": "plugin.*"}], ["jvm"],
+                 id="a-rule-by-the-long-name"),
+    pytest.param([{"dependency-name": "jvm", "versions": [">= 2.4.0"]}, {"dependency-name": "plugin.*"}], ["jvm"],
+                 id="a-rule-for-some-versions"),
+    pytest.param([{"dependency-name": "jvm", "update-types": ["version-update:semver-major"]},
+                  {"dependency-name": "plugin.*"}], ["jvm"], id="a-rule-for-some-update-types"),
+    pytest.param([{"dependency-name": "jvm", "versions": [">= 2.4.0"]}, {"dependency-name": "jvm"},
+                  {"dependency-name": "plugin.*"}], [], id="a-rule-for-every-version-beside-one-for-some"),
+    pytest.param([], ["jvm", "plugin.compose", "plugin.serialization"], id="no-rule"),
 ])
 def test_a_kotlin_plugin_that_dependabot_would_move_alone_is_found(rules, left_alone):
     kotlin = [name for name, kind in dependencies_of(A_BUILD).items() if kind == "kotlin plugin"]

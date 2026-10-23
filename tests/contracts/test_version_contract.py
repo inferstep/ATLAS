@@ -24,30 +24,28 @@ def _truth() -> str:
     return m.group(1)
 
 
-def test_package_dunder_version_matches():
+@pytest.mark.parametrize("path, expected", [
+    pytest.param("README.md", "version-V{}-", id="readme-badge"),
+    pytest.param("docs/lang/zh-CN/README.md", "version-V{}-", id="zh-CN-readme-badge"),
+    pytest.param("docs/lang/ja/README.md", "version-V{}-", id="ja-readme-badge"),
+    pytest.param("docs/lang/ko/README.md", "version-V{}-", id="ko-readme-badge"),
+    pytest.param("docs/ARCHITECTURE.md", "ATLAS V{}", id="architecture-header"),
+])
+def test_doc_states_the_version(path, expected):
     version = _truth()
-    text = (REPO / "atlas" / "__init__.py").read_text()
-    m = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.M)
-    assert m, "atlas/__init__.py must declare __version__"
-    assert m.group(1) == version, (
-        f"atlas/__init__.py __version__ is {m.group(1)!r}, "
-        f"pyproject.toml says {version!r}")
+    stated = expected.format(version)
+    assert stated in (REPO / path).read_text(), f"{path} must contain {stated!r} (pyproject.toml says {version})"
 
 
-def test_readme_badge_matches():
+@pytest.mark.parametrize("path, version_line", [
+    pytest.param("atlas/__init__.py", r'^__version__\s*=\s*"([^"]+)"', id="package-dunder-version"),
+    pytest.param("SUPPORT_MATRIX.md", r"Applies to:\s*\*\*V(\d+\.\d+\.\d+)", id="support-matrix-applies-to"),
+])
+def test_declared_version_matches(path, version_line):
     version = _truth()
-    text = (REPO / "README.md").read_text()
-    assert f"version-V{version}-" in text, (
-        f"README.md version badge must contain 'version-V{version}-' "
-        f"(pyproject.toml says {version})")
-
-
-def test_architecture_header_matches():
-    version = _truth()
-    text = (REPO / "docs" / "ARCHITECTURE.md").read_text()
-    assert f"ATLAS V{version}" in text, (
-        f"docs/ARCHITECTURE.md header must say 'ATLAS V{version}' "
-        f"(pyproject.toml says {version})")
+    m = re.search(version_line, (REPO / path).read_text(), re.M)
+    assert m, f"{path} must have a line that matches the pattern {version_line}"
+    assert m.group(1) == version, f"{path} says {m.group(1)!r}, pyproject.toml says {version!r}"
 
 
 def test_changelog_top_entry_matches():
@@ -64,25 +62,6 @@ def test_changelog_top_entry_matches():
     assert releases[0] == version, (
         f"CHANGELOG.md top release entry is [{releases[0]}], "
         f"pyproject.toml says {version} — add the release entry")
-
-
-def test_support_matrix_applies_to_matches():
-    version = _truth()
-    text = (REPO / "SUPPORT_MATRIX.md").read_text()
-    m = re.search(r"Applies to:\s*\*\*V(\d+\.\d+\.\d+)", text)
-    assert m, "SUPPORT_MATRIX.md must contain an 'Applies to: **VX.Y.Z' line"
-    assert m.group(1) == version, (
-        f"SUPPORT_MATRIX.md applies to V{m.group(1)}, "
-        f"pyproject.toml says {version}")
-
-
-@pytest.mark.parametrize("lang", ["zh-CN", "ja", "ko"])
-def test_translated_readme_badge_matches(lang):
-    version = _truth()
-    path = REPO / "docs" / "lang" / lang / "README.md"
-    assert f"version-V{version}-" in path.read_text(), (
-        f"docs/lang/{lang}/README.md version badge must contain "
-        f"'version-V{version}-' (pyproject.toml says {version})")
 
 
 def test_proxy_startup_banner_matches():

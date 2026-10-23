@@ -21,21 +21,11 @@ import re
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-REQ = os.path.join(ROOT, ".github", "requirements")
 
 
 def _read(*parts):
     with open(os.path.join(ROOT, *parts), encoding="utf-8") as fh:
         return fh.read()
-
-
-def _names(text):
-    out = []
-    for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line and not line.startswith("-"):
-            out.append(re.split(r"[=<>!~ ]", line, maxsplit=1)[0].lower())
-    return out
 
 
 def _locked(lock="ci.txt"):
@@ -70,6 +60,14 @@ def _fits(version, wanted):
     return SpecifierSet(wanted).contains(version, prereleases=True)
 
 
+def _workflow_lines():
+    """Each line of each workflow: (file name, line number, line)."""
+    for name in sorted(os.listdir(os.path.join(ROOT, ".github", "workflows"))):
+        if name.endswith((".yml", ".yaml")):
+            for number, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
+                yield name, number, line
+
+
 # The pins of ci.in that are copies, and the product file each one is a copy of.
 COPIED = (
     ("sandbox/requirements-runtime.txt", None),   # every pin of the file
@@ -79,11 +77,9 @@ COPIED = (
 )
 
 
-def test_every_tool_in_ci_in_is_locked_with_hashes():
+def test_every_package_of_the_lock_has_a_hash():
     locked = _locked()
     assert locked, "ci.txt has no pinned packages"
-    for name in _names(_read(".github", "requirements", "ci.in")):
-        assert name in locked, f"{name} is in ci.in but not in ci.txt: run scripts/ci-lock.sh"
     for name, (_version, hashes) in locked.items():
         assert hashes > 0, f"{name} has no --hash in ci.txt"
 
@@ -98,8 +94,12 @@ def test_every_line_of_ci_in_stands_in_the_lock_at_a_version_that_fits_it():
 
 
 @pytest.mark.parametrize("version, wanted, fits", [
-    ("0.54.0", "==0.54.0", True), ("0.54.0", "==0.53.0", False), ("0.54.0", "", True),
-    ("2.4.0", ">=2.3,<3", True), ("3.0.0", ">=2.3,<3", False), ("0.54.0", "== 0.54.0", True),
+    pytest.param("0.54.0", "==0.54.0", True, id="the-same-pin"),
+    pytest.param("0.54.0", "== 0.54.0", True, id="the-same-pin-after-a-space"),
+    pytest.param("0.54.0", "==0.53.0", False, id="another-pin"),
+    pytest.param("0.54.0", "", True, id="a-bare-name"),
+    pytest.param("2.4.0", ">=2.3,<3", True, id="inside-a-range"),
+    pytest.param("3.0.0", ">=2.3,<3", False, id="outside-a-range"),
 ])
 def test_a_locked_version_fits_a_line_or_does_not(version, wanted, fits):
     assert _fits(version, wanted) is fits
@@ -149,16 +149,13 @@ def test_the_lock_is_made_for_the_python_version_of_the_jobs_that_install_it():
 
 
 def test_no_workflow_installs_a_copied_pin_from_its_product_file():
-    product = r"(sandbox/requirements-(?:runtime|verify)\.txt|v3-service/requirements\.txt|geometric-lens/requirements\.txt)"
+    product = "(" + "|".join(re.escape(path) for path, _names in COPIED) + ")"
     loose = re.compile(rf"pip install[^\n]*{product}|{product}[^\n]*\|\s*xargs pip install")
-    wf_dir = os.path.join(ROOT, ".github", "workflows")
-    for name in sorted(os.listdir(wf_dir)):
-        if name.endswith((".yml", ".yaml")):
-            for n, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
-                assert not loose.search(line), (
-                    f"{name}:{n} installs from a product pin file, with no hashes: {line.strip()}. Fix: install "
-                    "from the hashed lock that holds these pins, .github/requirements/ci.txt or lens.txt, with "
-                    "`pip install --require-hashes -r`.")
+    for name, number, line in _workflow_lines():
+        assert not loose.search(line), (
+            f"{name}:{number} installs from a product pin file, with no hashes: {line.strip()}. Fix: install "
+            "from the hashed lock that holds these pins, .github/requirements/ci.txt or lens.txt, with "
+            "`pip install --require-hashes -r`.")
 
 
 def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
@@ -177,34 +174,19 @@ def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
 
 
 def test_every_install_of_the_lock_checks_the_hashes():
-    wf_dir = os.path.join(ROOT, ".github", "workflows")
-    seen = 0
-    for name in sorted(os.listdir(wf_dir)):
-        if name.endswith((".yml", ".yaml")):
-            for n, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
-                if "pip install" in line and "requirements/ci.txt" in line:
-                    seen += 1
-                    assert "--require-hashes" in line, (
-                        f"{name}:{n} installs the lock and does not check its hashes: {line.strip()}. Fix: write "
-                        "`pip install --require-hashes -r .github/requirements/ci.txt`.")
-    assert seen >= 5, f"only {seen} installs of the lock were found; this test reads the workflows wrongly"
-
-
-def test_ruff_and_mypy_match_the_sandbox_verify_pins():
-    locked = _locked()
-    verify = dict(re.findall(r"^(ruff|mypy)==(\S+)", _read("sandbox", "requirements-verify.txt"), re.M))
-    for tool in ("ruff", "mypy"):
-        assert locked[tool][0] == verify[tool], (
-            f"ci.txt has {tool}=={locked[tool][0]} but sandbox/requirements-verify.txt has "
-            f"{tool}=={verify[tool]}: update ci.in and run scripts/ci-lock.sh")
+    installs = [(name, number, line) for name, number, line in _workflow_lines()
+                if "pip install" in line and "requirements/ci.txt" in line]
+    assert len(installs) >= 5, (
+        f"only {len(installs)} installs of the lock were found; this test reads the workflows wrongly")
+    for name, number, line in installs:
+        assert "--require-hashes" in line, (
+            f"{name}:{number} installs the lock and does not check its hashes: {line.strip()}. Fix: write "
+            "`pip install --require-hashes -r .github/requirements/ci.txt`.")
 
 
 def test_workflows_install_locked_tools_only_through_the_lock():
-    tools = _names(_read(".github", "requirements", "ci.in"))
+    tools = [name for name, _wanted in _lines(_read(".github", "requirements", "ci.in"))]
     loose = re.compile(r"pip install (?!--require-hashes)(?!--no-deps)(?!-r )(?!-e )[^\n]*\b(%s)\b" % "|".join(
-        re.escape(t) for t in tools))
-    wf_dir = os.path.join(ROOT, ".github", "workflows")
-    for name in sorted(os.listdir(wf_dir)):
-        if name.endswith((".yml", ".yaml")):
-            for n, line in enumerate(_read(".github", "workflows", name).splitlines(), 1):
-                assert not loose.search(line), f"{name}:{n} installs a locked tool without the lock: {line.strip()}"
+        re.escape(tool) for tool in tools))
+    for name, number, line in _workflow_lines():
+        assert not loose.search(line), f"{name}:{number} installs a locked tool without the lock: {line.strip()}"

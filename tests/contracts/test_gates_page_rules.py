@@ -71,15 +71,16 @@ def test_a_rule_is_written_once_and_a_rule_of_the_guide_is_pointed_to():
 
 
 def test_the_gates_page_has_the_two_rounds_line_and_the_week_of_counts_with_its_dates():
-    page = " ".join(PAGE.read_text(encoding="utf-8").split())
+    text = PAGE.read_text(encoding="utf-8")
+    page = " ".join(text.split())
     assert "After two red CI rounds on the same pull request, stop and rethink the change before a third push." in page
     assert "## What the checks found so far" in page
     assert "The week of counts ran from 2026-10-07 21:26Z to 2026-10-14 21:26Z." in page
     assert "comes at the monthly review (mid-November)." in page
     # The rows of the tables of the week: the check, its runs, right, false alarm, outside, false alarms per 100 runs.
-    rows = re.findall(r"^\| (`[^|]+`) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+\.\d) \|$", PAGE.read_text(encoding="utf-8"), re.M)
-    assert rows, "the tables of the week of counts are gone, or their rows have another form"
-    for check, runs, right, false, _outside, per_100 in rows:
+    counts = re.findall(r"^\| (`[^|]+`) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+\.\d) \|$", text, re.M)
+    assert counts, "the tables of the week of counts are gone, or their rows have another form"
+    for check, runs, right, false, _outside, per_100 in counts:
         assert int(right) + int(false) <= int(runs), f"the row {check} gives more right reds and false alarms than runs"
         assert per_100 == f"{100 * int(false) / int(runs):.1f}", (
             f"the row {check} gives {per_100} false alarms per 100 runs, and {false} of {runs} runs is another number")

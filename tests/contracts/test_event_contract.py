@@ -77,8 +77,8 @@ def test_every_tui_handler_has_a_producer():
 
 def test_envelope_types_agree_across_implementations():
     """The 7 typed-envelope types must match across the Go producer
-    (proxy/events.go), the Go consumer (tui/consumer.go), and the
-    Python spec (atlas/events.py)."""
+    (proxy/events.go), the Go consumer (the TUI), and the Python spec
+    (atlas/events.py)."""
     go_src = (REPO / "proxy" / "events.go").read_text()
     go_types = set(re.findall(r'Evt\w+\s*=\s*"([a-z_]+)"', go_src))
 
@@ -95,4 +95,4 @@ def test_envelope_types_agree_across_implementations():
         f"events.py {sorted(py_types)}")
     assert go_types == tui_types, (
         f"envelope types diverge: proxy {sorted(go_types)} vs "
-        f"tui/consumer.go {sorted(tui_types)}")
+        f"the TUI {sorted(tui_types)}")
