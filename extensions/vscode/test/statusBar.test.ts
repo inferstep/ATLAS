@@ -49,3 +49,30 @@ describe('the status bar', () => {
 		bar.dispose();
 	});
 });
+
+// While a turn streams the bar does not poll: the stream shows the proxy is up.
+describe('the polls of /ready', () => {
+	it.each([
+		['start polls at once', (bar: StatusBar) => bar.start(), 1],
+		['a config change polls at once', (bar: StatusBar) => bar.applyConfig(), 1],
+		['the start of a turn does not poll', (bar: StatusBar) => bar.setStreaming(true), 0],
+		['the end of a turn polls at once', (bar: StatusBar) => bar.setStreaming(false), 1],
+	])('%s', async (_case, trigger, expectedPolls) => {
+		let polls = 0;
+		const client = {
+			getReady: () => {
+				polls++;
+				return Promise.resolve({ ready: true, inference: true, lens_ready: true, sandbox: true, v3: true });
+			},
+			getCalibrationStatus: answered,
+		} as unknown as AtlasClient;
+		const bar = new StatusBar(() => Promise.resolve(client));
+
+		trigger(bar);
+		// The poll runs in the background; let it reach the client.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		bar.dispose();
+
+		expect(polls).toBe(expectedPolls);
+	});
+});
