@@ -37,7 +37,6 @@
   "proxy/agent.go:runState.exitGates": 338,
   "proxy/agent.go:validateTaskContract": 107,
   "proxy/authorization_decision.go:decideAuthorization": 191,
-  "proxy/authorization_grant.go:grantFor": 155,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/command_evidence.go:segmentEvidenceKind": 101,
   "proxy/command_evidence.go:splitTopLevelShell": 109,
