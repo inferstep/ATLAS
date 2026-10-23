@@ -48,7 +48,9 @@ def test_oracle_picks_a_passing_candidate():
 def test_random_picks_a_passing_candidate_and_the_same_seed_picks_the_same_one():
     for seed in range(10):
         assert select_random(CANDIDATES, seed=seed).passed, f"seed {seed}"
-    assert select_random(CANDIDATES, seed=42).index == select_random(CANDIDATES, seed=42).index
+    first = select_random(CANDIDATES, seed=42)
+    second = select_random(CANDIDATES, seed=42)
+    assert first.index == second.index
 
 
 @pytest.mark.parametrize("selector", [
