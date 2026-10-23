@@ -35,6 +35,8 @@ SCRIPT = ROOT / "scripts" / "nightly_run.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import nightly_run as nightly
 
+# How many tests the group "model" has: what a stand-in run collects, and what the judge asks for.
+MODEL_TESTS = nightly.TESTS.expected
 HEAD = "1" * 40
 OLD = "2" * 40
 NEWER = "3" * 40
@@ -271,7 +273,7 @@ class Night:
             self.script = Path(shutil.copy(SCRIPT, tree / "scripts" / "nightly_run.py"))
             for beside in ("tests_counted.py", "nightly_images.py", "nightly_statuses.py"):
                 shutil.copy(SCRIPT.with_name(beside), tree / "scripts" / beside)
-        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": 32}, **plan,
+        self.plan = {"head": HEAD, "built_from": {}, "driver_rows": rows(), "tests": {"tests": MODEL_TESTS}, **plan,
                      "answers": {**WHOLE, **plan.get("answers", {})}}
         (root / "plan.json").write_text(json.dumps(self.plan))
 
@@ -384,7 +386,8 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
         assert about["image"] == f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev"
         assert about["digest"].startswith("sha256:") and about["commit"] == HEAD
     assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "passed": True, "defects": 0} for n, task in enumerate(nightly.TASKS)]
-    assert report["tests"] == {"expected": 32, "collected": 32, "passed": 32, "failed": 0, "skipped": 0, "failed_tests": [],
+    assert report["tests"] == {"expected": MODEL_TESTS, "collected": MODEL_TESTS, "passed": MODEL_TESTS, "failed": 0, "skipped": 0,
+                               "failed_tests": [],
                                "skip_reasons": {}}
     for when in ("at the start", "at the end"):
         assert report["services"][when] == {
@@ -654,12 +657,12 @@ def test_a_step_that_fails_ends_the_run_with_its_reason_and_the_stack_is_stopped
         assert "stack down" not in did and "stack_stopped" not in night.report
 
 
-def measured(defects=(0, 0, 0), collected=32, failed=0, at_the_end=(), skipped=None):
+def measured(defects=(0, 0, 0), collected=MODEL_TESTS, failed=0, at_the_end=(), skipped=None):
     """What a run that came to its end holds in its report."""
     skipped = skipped or {}
     return {"stale": [], "tasks": [{"task": task, "seconds": 10.5, "passed": True, "defects": count}
                                    for task, count in zip(nightly.TASKS, defects)],
-            "tests": {"expected": 32, "collected": collected, "passed": collected - failed - sum(skipped.values()), "failed": failed,
+            "tests": {"expected": MODEL_TESTS, "collected": collected, "passed": collected - failed - sum(skipped.values()), "failed": failed,
                       "skipped": sum(skipped.values()), "skip_reasons": skipped},
             "not_whole_at_the_end": list(at_the_end)}
 
@@ -667,14 +670,14 @@ def measured(defects=(0, 0, 0), collected=32, failed=0, at_the_end=(), skipped=N
 @pytest.mark.parametrize("report, says", [
     (measured(), "passed"),
     (measured(defects=(0, 2, 0)), "failed: offbyone: 2 defect(s) of the harness"),
-    (measured(collected=13), "failed: 13 tests were collected, and there are 32"),
-    (measured(collected=33), "failed: 33 tests were collected, and there are 32"),
+    (measured(collected=13), f"failed: 13 tests were collected, and there are {MODEL_TESTS}"),
+    (measured(collected=MODEL_TESTS + 1), f"failed: {MODEL_TESTS + 1} tests were collected, and there are {MODEL_TESTS}"),
     (measured(failed=3), "failed: 3 test(s) failed"),
-    # A skipped test counts as collected: all 32 are there, and 8 of them were not run.
+    # A skipped test counts as collected: all are there, and 8 of them were not run.
     (measured(skipped={"the model server gave no answer": 8}), "failed: 8 test(s) were skipped (8: the model server gave no answer)"),
     (measured(skipped={"one": 3, "two": 2, "three": 2, "four": 2, "five": 2, "one more": 1, "another": 1}),
      "failed: 13 test(s) were skipped (3: one; 2: two; 2: three; 2: four; 2: five; and 2 more reason(s))"),
-    ({**measured(), "tests": {"expected": 32, "collected": 32, "passed": 28, "failed": 0, "skipped": 4}},
+    ({**measured(), "tests": {"expected": MODEL_TESTS, "collected": MODEL_TESTS, "passed": MODEL_TESTS - 4, "failed": 0, "skipped": 4}},
      "failed: 4 test(s) were skipped (the result file gives no reason)"),
     (measured(at_the_end=["the proxy says that the lens is not ready"]),
      "failed: at the end of the run the proxy says that the lens is not ready"),
@@ -687,29 +690,29 @@ def test_a_run_that_measured_faults_fails_and_names_each_fault(tmp_path):
     night = Night(tmp_path, driver_rows=rows(1, 0, 0), tests={"tests": 13, "failures": 1, "errors": 1}).run()
     assert night.done.returncode == 1
     assert night.report["result"] == ("failed: add_function: 1 defect(s) of the harness; 13 tests were collected, and there "
-                                      "are 32; 2 test(s) failed")
+                                      f"are {MODEL_TESTS}; 2 test(s) failed")
     assert night.did()[-5:] == ["driver", "tests", "ask", "logs", "stack down"]
 
 
 def test_a_night_with_failed_tests_names_them(tmp_path):
-    night = Night(tmp_path, tests={"tests": 32, "failures": 1, "errors": 1, "failed": ["test_the_model_answers", "test_a &amp; b"]}).run()
+    night = Night(tmp_path, tests={"tests": MODEL_TESTS, "failures": 1, "errors": 1, "failed": ["test_the_model_answers", "test_a &amp; b"]}).run()
     assert night.done.returncode == 1
     assert night.report["result"] == "failed: 2 test(s) failed (test_the_model_answers; test_a & b)"
     assert night.report["tests"]["failed_tests"] == ["test_the_model_answers", "test_a & b"]
 
 
 def test_a_night_with_skipped_tests_fails_and_the_result_gives_the_reasons(tmp_path):
-    # The result file says tests="32" all the same: a skipped test counts as collected.
+    # The result file gives the group's whole number all the same: a skipped test counts as collected.
     reasons = (["no configured model name to compare against"] * 3 + ["could not import &apos;httpx&apos;: no module (a &amp; b)"] * 2
                + ["the model server gave no answer"])
-    night = Night(tmp_path, tests={"tests": 32, "skipped": 6, "reasons": reasons}).run()
+    night = Night(tmp_path, tests={"tests": MODEL_TESTS, "skipped": 6, "reasons": reasons}).run()
     assert night.done.returncode == 1
     assert night.report["tests"]["skip_reasons"] == {
         "no configured model name to compare against": 3, "could not import 'httpx': no module (a & b)": 2,
         "the model server gave no answer": 1}
     assert night.report["result"] == ("failed: 6 test(s) were skipped (3: no configured model name to compare against; 2: could "
                                       "not import 'httpx': no module (a & b); 1: the model server gave no answer)")
-    assert night.report["tests"]["passed"] == 26
+    assert night.report["tests"]["passed"] == MODEL_TESTS - 6
 
 
 def test_a_task_whose_change_did_not_land_is_reported_and_does_not_fail_the_run(tmp_path):
