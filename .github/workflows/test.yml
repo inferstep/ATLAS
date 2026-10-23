@@ -179,12 +179,13 @@ jobs:
           pip install --no-deps -e .
 
       - name: install lens dependencies (CPU torch)
-        if: matrix.subset == 'geometric-lens/tests'
+        if: matrix.subset == 'geometric-lens/tests' || matrix.subset == 'tests/cli'
         # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
         # CUDA default is ~2 GB and pointless on a CPU runner), then the
         # service requirements, from a hashed lock (see lens.in). xgboost
         # tests importorskip if absent, but requirements.txt pins
-        # xgboost-cpu so they run here.
+        # xgboost-cpu so they run here. The CLI's lens and ASA tests need
+        # torch, gguf and huggingface_hub, and skip without them.
         run: pip install --require-hashes -r .github/requirements/lens.txt
 
       - name: pytest
