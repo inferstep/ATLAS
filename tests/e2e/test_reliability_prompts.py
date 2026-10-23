@@ -94,27 +94,17 @@ def proxy():
         one.close()
 
 
-def session(rel, proxy, tmp_path, policy):
+@pytest.mark.parametrize("policy", ["deny", "allow"])
+def test_the_runner_answers_a_prompt_at_once_by_its_policy_and_keeps_the_answer(rel, proxy, tmp_path, policy):
+    stand_in = proxy(limit=20)
     task = rel.Task(name="asks", prompt="Remove notes.txt.", files={"notes.txt": "x\n"}, check=lambda ws: (True, "ok"))
     started = time.monotonic()
-    result = rel.run_session(task, 1, proxy.url, tmp_path / "ws", "", 30, prompt_policy=policy)
-    return result, time.monotonic() - started
-
-
-@pytest.mark.parametrize("policy", ["deny", "allow"])
-def test_the_runner_answers_a_prompt_at_once_by_its_policy(rel, proxy, tmp_path, policy):
-    stand_in = proxy(limit=20)
-    result, took = session(rel, stand_in, tmp_path, policy)
+    result = rel.run_session(task, 1, stand_in.url, tmp_path / "ws", "", 30, prompt_policy=policy)
+    assert time.monotonic() - started < 10
     assert stand_in.answers == [{"session_id": "reliability-asks-1", "tool_call_id": "call_3", "decision": policy,
                                  "scope": "once"}]
-    assert took < 10
     assert result.stream_ok
     assert [e["data"]["reason"] for e in result.of_type("permission_denied")] == [policy]
-
-
-@pytest.mark.parametrize("policy", ["deny", "allow"])
-def test_the_session_keeps_what_was_asked_and_what_was_answered(rel, proxy, tmp_path, policy):
-    result, _ = session(rel, proxy(limit=20), tmp_path, policy)
     assert len(result.prompts) == 1
     kept = result.prompts[0]
     assert {k: kept[k] for k in ("tool", "tool_call_id", "policy", "answer", "delivered")} == {
@@ -124,20 +114,20 @@ def test_the_session_keeps_what_was_asked_and_what_was_answered(rel, proxy, tmp_
 
 def test_with_the_wait_policy_the_runner_sends_nothing_and_the_proxy_limit_ends_the_wait(rel, proxy, tmp_path):
     stand_in = proxy(limit=0.5)
-    result, took = session(rel, stand_in, tmp_path, "wait")
+    task = rel.Task(name="asks", prompt="Remove notes.txt.", files={"notes.txt": "x\n"}, check=lambda ws: (True, "ok"))
+    started = time.monotonic()
+    result = rel.run_session(task, 1, stand_in.url, tmp_path / "ws", "", 30, prompt_policy="wait")
+    assert time.monotonic() - started >= 0.5
     assert stand_in.answers == []
-    assert took >= 0.5
     assert [e["data"]["reason"] for e in result.of_type("permission_denied")] == ["no answer in time"]
     assert [(p["policy"], p["answer"], p["delivered"]) for p in result.prompts] == [("wait", "", None)]
 
 
-def test_a_session_with_no_prompt_keeps_an_empty_list(rel, tmp_path):
-    result = rel.Session(task="t", rep=1, events=[], workspace=tmp_path, wall_s=1.0, stream_ok=True)
-    assert result.prompts == []
-    assert rel.result_row(result, {}, {"prompt_policy": "deny"})["prompts"] == []
-
-
 def test_the_result_row_holds_the_prompts_and_the_run_holds_the_policy(rel, tmp_path):
+    no_prompt = rel.Session(task="t", rep=1, events=[], workspace=tmp_path, wall_s=1.0, stream_ok=True)
+    assert no_prompt.prompts == []
+    assert rel.result_row(no_prompt, {}, {"prompt_policy": "deny"})["prompts"] == []
+
     asked = [{"tool": "delete_file", "tool_call_id": "call_3", "policy": "deny", "answer": "deny", "delivered": True}]
     result = rel.Session(task="t", rep=1, events=[], workspace=tmp_path, wall_s=1.0, stream_ok=True, prompts=asked)
     row = rel.result_row(result, {}, {"prompt_policy": "deny"})
@@ -167,21 +157,18 @@ def test_an_answer_that_cannot_be_sent_is_kept_with_the_reason(rel):
     assert kept["error"].startswith("the answer could not be sent")
 
 
-def lines(*events, done=True):
-    out = [b"data: " + (e if isinstance(e, bytes) else json.dumps(e).encode()) + b"\n" for e in events]
-    return out + ([b"data: [DONE]\n"] if done else [])
-
-
 def test_the_stream_reader_says_how_the_reading_ended(rel):
     seen = []
-    assert rel.read_stream(lines({"type": "text"}), seen.append, time.time() + 30) == "done"
-    assert rel.read_stream(lines({"type": "text"}, done=False), seen.append, time.time() + 30) == "end"
-    assert rel.read_stream(lines({"type": "text"}), seen.append, time.time() - 1) == "cap"
+    finished = [b'data: {"type": "text"}\n', b"data: [DONE]\n"]
+    assert rel.read_stream(finished, seen.append, time.time() + 30) == "done"
+    assert rel.read_stream([b'data: {"type": "text"}\n'], seen.append, time.time() + 30) == "end"
+    assert rel.read_stream(finished, seen.append, time.time() - 1) == "cap"
     assert seen == [{"type": "text"}, {"type": "text"}]
 
 
 def test_the_stream_reader_keeps_the_exact_lines_and_names_a_line_it_cannot_read(rel):
     seen, raw = [], io.StringIO()
-    rel.read_stream([b": comment\n", *lines(b"{not json", {"type": "text"})], seen.append, time.time() + 30, raw)
+    rel.read_stream([b": comment\n", b"data: {not json\n", b'data: {"type": "text"}\n', b"data: [DONE]\n"],
+                    seen.append, time.time() + 30, raw)
     assert seen == [{"type": "__unparseable__", "raw": "{not json"}, {"type": "text"}]
     assert raw.getvalue() == ': comment\ndata: {not json\ndata: {"type": "text"}\ndata: [DONE]\n'

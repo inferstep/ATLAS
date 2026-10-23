@@ -60,23 +60,18 @@ pytestmark = [
 ]
 
 
-def _model_script(tool_results_seen: int) -> str:
-    """The model's next envelope, keyed off how many tool results it has
-    been shown — robust to any extra user-role nudges the proxy injects."""
-    if tool_results_seen == 0:
-        return json.dumps({"type": "tool_call", "name": "read_file",
-                           "args": {"path": "app.py"}})
-    if tool_results_seen == 1:
-        return json.dumps({"type": "tool_call", "name": "edit_file",
-                           "args": {"path": "app.py", "old_str": OLD_STR,
-                                    "new_str": NEW_STR}})
-    if tool_results_seen == 2:
-        return json.dumps({"type": "tool_call", "name": "run_command",
-                           "args": {"command": "python3 -m py_compile app.py",
-                                    "timeout": 30}})
-    return json.dumps({"type": "done",
-                       "summary": "Fixed the NameError in app.py and "
-                                  "verified it compiles."})
+# The model's four replies, in order. The fake llama picks one by how many
+# tool results the request carries, so extra user-role nudges the proxy
+# injects do not move the script on; after the third result it says done.
+MODEL_REPLIES = [
+    {"type": "tool_call", "name": "read_file", "args": {"path": "app.py"}},
+    {"type": "tool_call", "name": "edit_file",
+     "args": {"path": "app.py", "old_str": OLD_STR, "new_str": NEW_STR}},
+    {"type": "tool_call", "name": "run_command",
+     "args": {"command": "python3 -m py_compile app.py", "timeout": 30}},
+    {"type": "done",
+     "summary": "Fixed the NameError in app.py and verified it compiles."},
+]
 
 
 class _FakeLlamaHandler(http.server.BaseHTTPRequestHandler):
@@ -111,7 +106,7 @@ class _FakeLlamaHandler(http.server.BaseHTTPRequestHandler):
             1 for m in req.get("messages", [])
             if m.get("role") == "user"
             and m.get("content", "").startswith("[tool result]"))
-        envelope = _model_script(tool_results)
+        envelope = json.dumps(MODEL_REPLIES[min(tool_results, 3)])
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

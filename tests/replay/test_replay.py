@@ -111,11 +111,11 @@ def changed_request(made, service, find, put):
 
 
 @pytest.mark.parametrize("service, find, put", [
-    ("model", "You are ATLAS", "You are not ATLAS"),
-    ("model", '"max_tokens"', '"max_token_count"'),
-    ("sandbox", "python3 app.py", "python3 other.py"),
-    ("v3", '"user_message"', '"user_text"'),
-    ("lens", "text", "words"),
+    pytest.param("model", "You are ATLAS", "You are not ATLAS", id="the system prompt of a request to the model"),
+    pytest.param("model", '"max_tokens"', '"max_token_count"', id="a field of a request to the model"),
+    pytest.param("sandbox", "python3 app.py", "python3 other.py", id="the command of a request to the sandbox"),
+    pytest.param("v3", '"user_message"', '"user_text"', id="a field of a request to V3"),
+    pytest.param("lens", "text", "words", id="a field of a request to the lens"),
 ])
 def test_a_request_that_differs_from_the_recording_is_named_with_its_service(normal, proxy_binary, tmp_path, service, find, put):
     problems = replay(changed_request(normal, service, find, put), proxy_binary, tmp_path)
