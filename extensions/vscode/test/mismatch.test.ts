@@ -7,77 +7,64 @@ import {
 	MismatchDetector,
 	fileOpPaths,
 	fileOpVerdict,
+	type FileOpKind,
 	type PathStat,
+	type Verdict,
 } from '../src/workspace/mismatch';
 
 const absent: PathStat = { exists: false };
 const at = (mtimeMs: number): PathStat => ({ exists: true, mtimeMs });
 
 describe('fileOpPaths', () => {
-	it('extracts path for path-shaped tools', () => {
-		expect(fileOpPaths('write_file', { path: 'a.py', content: 'x' })).toEqual({ primary: 'a.py' });
-		expect(fileOpPaths('edit_file', { path: 'b.py' })).toEqual({ primary: 'b.py' });
-		expect(fileOpPaths('structural_edit', { path: 'c.py' })).toEqual({ primary: 'c.py' });
-		expect(fileOpPaths('delete_file', { path: 'd.py' })).toEqual({ primary: 'd.py' });
-	});
-
-	it('extracts source + destination for move_file', () => {
-		expect(fileOpPaths('move_file', { source: 'a.py', destination: 'lib/a.py' })).toEqual({
-			primary: 'a.py',
-			secondary: 'lib/a.py',
-		});
-	});
-
-	it('returns undefined for non-file-op tools and malformed args', () => {
-		expect(fileOpPaths('run_command', { command: 'ls' })).toBeUndefined();
-		expect(fileOpPaths('read_file', { path: 'a.py' })).toBeUndefined();
-		expect(fileOpPaths('write_file', { path: 42 })).toBeUndefined();
-		expect(fileOpPaths('move_file', { source: 'a.py' })).toBeUndefined();
-		expect(fileOpPaths('write_file', null)).toBeUndefined();
+	it.each([
+		['write_file', { path: 'a.py', content: 'x' }, { primary: 'a.py' }],
+		['edit_file', { path: 'b.py' }, { primary: 'b.py' }],
+		['structural_edit', { path: 'c.py' }, { primary: 'c.py' }],
+		['delete_file', { path: 'd.py' }, { primary: 'd.py' }],
+		['move_file', { source: 'a.py', destination: 'lib/a.py' }, { primary: 'a.py', secondary: 'lib/a.py' }],
+		// Not a file-op tool, or malformed args.
+		['run_command', { command: 'ls' }, undefined],
+		['read_file', { path: 'a.py' }, undefined],
+		['write_file', { path: 42 }, undefined],
+		['move_file', { source: 'a.py' }, undefined],
+		['write_file', null, undefined],
+	])('%s %j touches %j', (tool, args, paths) => {
+		expect(fileOpPaths(tool, args)).toEqual(paths);
 	});
 });
 
 describe('fileOpVerdict', () => {
-	it('write: new file appearing is a match, staying absent is a mismatch', () => {
-		expect(fileOpVerdict('write', absent, at(2))).toBe('match');
-		expect(fileOpVerdict('write', absent, absent)).toBe('mismatch');
-	});
-
-	it('write: overwrite with a bumped mtime is a match, equal mtime is inconclusive', () => {
-		expect(fileOpVerdict('write', at(1), at(2))).toBe('match');
+	it.each<[FileOpKind, string, Verdict, PathStat, PathStat]>([
+		['write', 'a new file appearing', 'match', absent, at(2)],
+		['write', 'the file staying absent', 'mismatch', absent, absent],
+		['write', 'an overwrite with a bumped mtime', 'match', at(1), at(2)],
 		// Coarse-mtime filesystems can stamp a real change with the same
 		// time — never call that a wrong mount.
-		expect(fileOpVerdict('write', at(1), at(1))).toBe('inconclusive');
+		['write', 'an overwrite with an equal mtime', 'inconclusive', at(1), at(1)],
+		['edit', 'a changed mtime', 'match', at(1), at(2)],
+		['edit', 'an equal mtime', 'inconclusive', at(1), at(1)],
+		['edit', 'the file vanishing', 'mismatch', at(1), absent],
+		// A file never present locally is an odd path, not mount proof.
+		['edit', 'a file never present locally that appears', 'inconclusive', absent, at(2)],
+		['edit', 'a file never present locally', 'inconclusive', absent, absent],
+		['delete', 'the file disappearing', 'match', at(1), absent],
+		['delete', 'the file persisting', 'mismatch', at(1), at(1)],
+		['delete', 'a file absent before', 'inconclusive', absent, absent],
+		// Missing mtimes count as changed (conservative: no false mismatch).
+		['edit', 'a missing mtime before', 'match', { exists: true }, at(2)],
+		['write', 'a missing mtime after', 'match', at(1), { exists: true }],
+	])('%s: %s gives %s', (kind, _case, verdict, pre, post) => {
+		expect(fileOpVerdict(kind, pre, post)).toBe(verdict);
 	});
 
-	it('edit: changed mtime is a match, equal is inconclusive, vanished is a mismatch', () => {
-		expect(fileOpVerdict('edit', at(1), at(2))).toBe('match');
-		expect(fileOpVerdict('edit', at(1), at(1))).toBe('inconclusive');
-		expect(fileOpVerdict('edit', at(1), absent)).toBe('mismatch');
-	});
-
-	it('edit: file never present locally is inconclusive (odd path, not mount proof)', () => {
-		expect(fileOpVerdict('edit', absent, at(2))).toBe('inconclusive');
-		expect(fileOpVerdict('edit', absent, absent)).toBe('inconclusive');
-	});
-
-	it('delete: disappearance is a match, persistence is a mismatch, pre-absent is inconclusive', () => {
-		expect(fileOpVerdict('delete', at(1), absent)).toBe('match');
-		expect(fileOpVerdict('delete', at(1), at(1))).toBe('mismatch');
-		expect(fileOpVerdict('delete', absent, absent)).toBe('inconclusive');
-	});
-
-	it('move: source->destination is a match, source unmoved is a mismatch', () => {
-		expect(fileOpVerdict('move', at(1), absent, absent, at(2))).toBe('match');
-		expect(fileOpVerdict('move', at(1), at(1), absent, absent)).toBe('mismatch');
-		expect(fileOpVerdict('move', absent, absent, absent, absent)).toBe('inconclusive');
+	it.each<[string, Verdict, PathStat, PathStat, PathStat, PathStat]>([
+		['source to destination', 'match', at(1), absent, absent, at(2)],
+		['the source unmoved', 'mismatch', at(1), at(1), absent, absent],
+		['nothing there at all', 'inconclusive', absent, absent, absent, absent],
 		// Both present (copy-like state / same-name overwrite) — don't guess.
-		expect(fileOpVerdict('move', at(1), at(1), absent, at(2))).toBe('inconclusive');
-	});
-
-	it('treats missing mtimes as changed (conservative: no false mismatch)', () => {
-		expect(fileOpVerdict('edit', { exists: true }, at(2))).toBe('match');
-		expect(fileOpVerdict('write', at(1), { exists: true })).toBe('match');
+		['both present', 'inconclusive', at(1), at(1), absent, at(2)],
+	])('move: %s gives %s', (_case, verdict, pre, post, preDest, postDest) => {
+		expect(fileOpVerdict('move', pre, post, preDest, postDest)).toBe(verdict);
 	});
 });
 
@@ -141,21 +128,14 @@ describe('MismatchDetector', () => {
 		expect(firedCount()).toBe(1);
 	});
 
-	it('stays silent when an edited file keeps an equal mtime (coarse-mtime fs)', async () => {
-		const stats = new Map<string, PathStat>([['a.py', at(1)]]);
+	it.each([
+		// Coarse-mtime file system: the edit landed but the mtime did not move.
+		['an edited file keeps an equal mtime', new Map([['a.py', at(1)]])],
+		['the edited file was never in this workspace', new Map<string, PathStat>()],
+	])('stays silent on an inconclusive verdict: %s', async (_case, stats) => {
 		const { d, firedCount } = detector(stats);
 		await d.recordToolCall('edit_file', { path: 'a.py' });
-		// stat unchanged: same mtime — inconclusive, never a warning
-		await d.recordToolResult('edit_file', true);
-		expect(firedCount()).toBe(0);
-	});
-
-	it('stays silent on inconclusive verdicts', async () => {
-		const stats = new Map<string, PathStat>();
-		const { d, firedCount } = detector(stats);
-		// edit of a file this workspace never had
-		await d.recordToolCall('edit_file', { path: 'ghost.py' });
-		await d.recordToolResult('edit_file', true);
+		await d.recordToolResult('edit_file', true); // stat unchanged
 		expect(firedCount()).toBe(0);
 	});
 

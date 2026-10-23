@@ -10,6 +10,7 @@ import {
 	commandOf,
 	type DismissReason,
 	type PendingPermission,
+	type PermissionChoice,
 	type PermissionPoster,
 	type PermissionUi,
 } from '../src/session/permissionFlow';
@@ -80,7 +81,12 @@ describe('PermissionFlow', () => {
 		expect(ui.events).toEqual([{ kind: 'auto-allow', toolName: 'edit_file' }]);
 	});
 
-	it('prompts for an unlisted tool and posts allow/once on allow-once', async () => {
+	it.each<[PermissionChoice, PermissionDecisionRequest['decision'], PermissionDecisionRequest['scope'], string[]]>([
+		// Allow-once must NOT touch the session allowlist.
+		['allow-once', 'allow', 'once', []],
+		['allow-session', 'allow', 'session', ['write_file']],
+		['deny', 'deny', 'once', []],
+	])('prompts for an unlisted tool and, on %s, posts %s/%s', async (choice, decision, scope, allowlist) => {
 		const poster = fakePoster();
 		const ui = fakeUi();
 		const allowed = new Set<string>();
@@ -92,48 +98,15 @@ describe('PermissionFlow', () => {
 		const pending = ui.events[0].pending!;
 		expect(pending.request.tool_name).toBe('write_file');
 
-		expect(pending.settle('allow-once')).toBe(true);
+		expect(pending.settle(choice)).toBe(true);
 		await letTheLaunchedWorkRun();
 
 		expect(poster.decisions).toEqual([
-			{ session_id: 'sess-1', tool_call_id: 'call-write_file', decision: 'allow', scope: 'once' },
+			{ session_id: 'sess-1', tool_call_id: 'call-write_file', decision, scope },
 		]);
-		// Allow-once must NOT touch the session allowlist.
-		expect(allowed.size).toBe(0);
+		expect([...allowed]).toEqual(allowlist);
 		expect(ui.events.at(-1)).toMatchObject({ kind: 'dismiss', reason: 'answered' });
-		expect(pending.choice).toBe('allow-once');
-	});
-
-	it('allow-session adds to the allowlist and posts scope "session"', async () => {
-		const poster = fakePoster();
-		const ui = fakeUi();
-		const allowed = new Set<string>();
-		const flow = new PermissionFlow(allowed, ui);
-
-		flow.handleRequest(poster, 'sess-2', request('structural_edit'));
-		ui.events[0].pending!.settle('allow-session');
-		await letTheLaunchedWorkRun();
-
-		expect(allowed.has('structural_edit')).toBe(true);
-		expect(poster.decisions).toEqual([
-			{ session_id: 'sess-2', tool_call_id: 'call-structural_edit', decision: 'allow', scope: 'session' },
-		]);
-	});
-
-	it('deny posts deny/once and does not touch the allowlist', async () => {
-		const poster = fakePoster();
-		const ui = fakeUi();
-		const allowed = new Set<string>();
-		const flow = new PermissionFlow(allowed, ui);
-
-		flow.handleRequest(poster, 'sess-3', request('run_command'));
-		ui.events[0].pending!.settle('deny');
-		await letTheLaunchedWorkRun();
-
-		expect(poster.decisions).toEqual([
-			{ session_id: 'sess-3', tool_call_id: 'call-run_command', decision: 'deny', scope: 'once' },
-		]);
-		expect(allowed.size).toBe(0);
+		expect(pending.choice).toBe(choice);
 	});
 
 	it('first answer wins — the second settle is a no-op', async () => {
@@ -243,37 +216,33 @@ describe('PermissionFlow', () => {
 // in the conversation without the user seeing which file. The unmarked case
 // is a proxy that does not send one_time_only.
 describe('deletions are approved one file at a time', () => {
-	function deletion(id: string, marked: boolean): PermissionRequestEventData {
-		return {
+	it.each([true, false])('never approves a deletion for the session (marked=%s)', async (marked) => {
+		const deletion = (id: string): PermissionRequestEventData => ({
 			tool_name: 'delete_file',
 			args: { path: 'important.db' },
 			message: 'Allow this one deletion? important.db',
 			tool_call_id: id,
 			...(marked ? { one_time_only: true } : {}),
-		};
-	}
-	for (const marked of [true, false]) {
-		it(`never approves a deletion for the session (marked=${marked})`, async () => {
-			const allowed = new Set<string>();
-			const ui = fakeUi();
-			const poster = fakePoster();
-			const flow = new PermissionFlow(allowed, ui);
-
-			flow.handleRequest(poster, 's', deletion('c1', marked));
-			const first = ui.events.find((e) => e.kind === 'prompt')?.pending;
-			expect(first).toBeDefined();
-			first?.settle('allow-session');
-			await letTheLaunchedWorkRun();
-			expect(poster.decisions[0]).toMatchObject({ decision: 'allow', scope: 'once' });
-			expect(allowed.has('delete_file')).toBe(false);
-
-			// Even an allowlist entry from elsewhere answers nothing.
-			allowed.add('delete_file');
-			flow.handleRequest(poster, 's', deletion('c2', marked));
-			expect(ui.events.filter((e) => e.kind === 'prompt')).toHaveLength(2);
-			expect(ui.events.some((e) => e.kind === 'auto-allow')).toBe(false);
 		});
-	}
+		const allowed = new Set<string>();
+		const ui = fakeUi();
+		const poster = fakePoster();
+		const flow = new PermissionFlow(allowed, ui);
+
+		flow.handleRequest(poster, 's', deletion('c1'));
+		const first = ui.events.find((e) => e.kind === 'prompt')?.pending;
+		expect(first).toBeDefined();
+		first?.settle('allow-session');
+		await letTheLaunchedWorkRun();
+		expect(poster.decisions[0]).toMatchObject({ decision: 'allow', scope: 'once' });
+		expect(allowed.has('delete_file')).toBe(false);
+
+		// Even an allowlist entry from elsewhere answers nothing.
+		allowed.add('delete_file');
+		flow.handleRequest(poster, 's', deletion('c2'));
+		expect(ui.events.filter((e) => e.kind === 'prompt')).toHaveLength(2);
+		expect(ui.events.some((e) => e.kind === 'auto-allow')).toBe(false);
+	});
 });
 
 // Approval is the only per-command control, so the card shows the command

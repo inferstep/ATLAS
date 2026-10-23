@@ -82,7 +82,9 @@ describe('TurnManager', () => {
 		// Every owned sender declares a task mode; absence is reserved for
 		// external and legacy callers (docs/API.md, "Building a non-TUI
 		// client"). Without one the proxy gets no V3 candidate at all.
-		expect(request.task_contract).toEqual({ task_mode: 'work' });
+		// Strict: no obligations the user never stated. A chat box knows
+		// nothing structured about paths or commands.
+		expect(request.task_contract).toStrictEqual({ task_mode: 'work' });
 		expect(turns.sessionId).toBe(request.session_id);
 	});
 
@@ -100,18 +102,6 @@ describe('TurnManager', () => {
 		expect(client.requests[1].task_contract).toEqual({ task_mode: 'question' });
 	});
 
-	it('sends no obligations the user never stated', async () => {
-		const client = fakeClient([done]);
-		const turns = new TurnManager();
-
-		await drain(turns.runTurn(client, 'create app.py', 'default', 'work', '/tmp/ws'));
-
-		// A chat box knows nothing structured about paths or commands, and
-		// guessing them from the prose is what the contract replaces: the
-		// proxy grounds a work request in the model's own tool call instead.
-		expect(Object.keys(client.requests[0].task_contract!)).toEqual(['task_mode']);
-	});
-
 	it('mints a fresh session_id per turn', async () => {
 		const client = fakeClient([done]);
 		const turns = new TurnManager();
@@ -120,16 +110,27 @@ describe('TurnManager', () => {
 		expect(client.requests[0].session_id).not.toBe(client.requests[1].session_id);
 	});
 
-	it('replays history with assistant text re-wrapped in the {"type":"text"} envelope', async () => {
-		const client = fakeClient([text('Hello '), text('world'), done]);
+	it.each([
+		['replays history with assistant text re-wrapped in the {"type":"text"} envelope',
+			[text('Hello '), text('world'), done], 'Hello world'],
+		// Tool-shaped turn: no text events, the answer arrives only in done.summary.
+		['uses done.summary as the assistant history entry on a tool-shaped turn', [
+			{ type: 'tool_call', data: { name: 'edit_file', args: {}, turn: 1 } },
+			{ type: 'tool_result', data: { tool: 'edit_file', success: true, data: {} } },
+			{ type: 'done', data: { summary: 'Fixed the off-by-one in pagination.' } },
+		], 'Fixed the off-by-one in pagination.'],
+		['prefers streamed text over done.summary when both are present',
+			[text('the streamed answer'), { type: 'done', data: { summary: 'a trailing summary' } }], 'the streamed answer'],
+	])('%s', async (_name, events, reply) => {
+		const client = fakeClient(events);
 		const turns = new TurnManager();
 
-		await drain(turns.runTurn(client, 'greet me', 'default', 'work', '/tmp/ws'));
-		await drain(turns.runTurn(client, 'again', 'default', 'work', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'first', 'default', 'work', '/tmp/ws'));
+		await drain(turns.runTurn(client, 'next', 'default', 'work', '/tmp/ws'));
 
 		expect(client.requests[1].history).toEqual([
-			{ role: 'user', content: 'greet me' },
-			{ role: 'assistant', content: JSON.stringify({ type: 'text', content: 'Hello world' }) },
+			{ role: 'user', content: 'first' },
+			{ role: 'assistant', content: JSON.stringify({ type: 'text', content: reply }) },
 		]);
 	});
 
@@ -142,43 +143,6 @@ describe('TurnManager', () => {
 
 		// History sent on turn N covers turns < N only; turn 1 produced no text.
 		expect(client.requests[1].history).toEqual([{ role: 'user', content: 'do it' }]);
-	});
-
-	it('uses done.summary as the assistant history entry on a tool-shaped turn', async () => {
-		// Tool-shaped turn: no text events, the answer arrives only in done.summary.
-		const client = fakeClient([
-			{ type: 'tool_call', data: { name: 'edit_file', args: {}, turn: 1 } },
-			{ type: 'tool_result', data: { tool: 'edit_file', success: true, data: {} } },
-			{ type: 'done', data: { summary: 'Fixed the off-by-one in pagination.' } },
-		]);
-		const turns = new TurnManager();
-
-		await drain(turns.runTurn(client, 'fix it', 'default', 'work', '/tmp/ws'));
-		await drain(turns.runTurn(client, 'next', 'default', 'work', '/tmp/ws'));
-
-		expect(client.requests[1].history).toEqual([
-			{ role: 'user', content: 'fix it' },
-			{
-				role: 'assistant',
-				content: JSON.stringify({ type: 'text', content: 'Fixed the off-by-one in pagination.' }),
-			},
-		]);
-	});
-
-	it('prefers streamed text over done.summary when both are present', async () => {
-		const client = fakeClient([
-			text('the streamed answer'),
-			{ type: 'done', data: { summary: 'a trailing summary' } },
-		]);
-		const turns = new TurnManager();
-
-		await drain(turns.runTurn(client, 'go', 'default', 'work', '/tmp/ws'));
-		await drain(turns.runTurn(client, 'next', 'default', 'work', '/tmp/ws'));
-
-		expect(client.requests[1].history!.at(-1)).toEqual({
-			role: 'assistant',
-			content: JSON.stringify({ type: 'text', content: 'the streamed answer' }),
-		});
 	});
 
 	it(`caps history at the most recent ${HISTORY_LIMIT} entries`, async () => {
@@ -296,9 +260,12 @@ describe('TurnManager', () => {
 		]);
 	});
 
-	it('cancel when idle is a no-op', () => {
-		const client = fakeClient();
+	it('cancel when idle is a no-op', async () => {
+		const client = fakeClient([done]);
 		const turns = new TurnManager();
+		// The finished turn's client is the one a cancel would reach.
+		await drain(turns.runTurn(client, 'one', 'default', 'work', '/tmp/ws'));
+
 		turns.cancel();
 		expect(client.cancelled).toEqual([]);
 	});
