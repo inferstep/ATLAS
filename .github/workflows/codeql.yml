@@ -109,12 +109,13 @@ jobs:
         # CodeQL needs to observe a real compile to extract dataflow.
         # autobuild can't handle our two-module layout (proxy/ + tui/)
         # so we do it manually. Each module's `go build ./...` is enough
-        # for extraction (with the option above, of its tests too) — we
-        # don't need the artifacts.
+        # for extraction of its code — we don't need the artifacts. The
+        # tests are extracted only from a traced `go test` (with the option
+        # above), so `go test -c` compiles them too, without running them.
         if: matrix.language == 'go'
         run: |
-          (cd proxy && go build ./...)
-          (cd tui   && go build ./...)
+          (cd proxy && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/proxy/" ./...)
+          (cd tui   && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/tui/" ./...)
 
       # The Kotlin plugin is a Gradle build, and CodeQL only extracts
       # Kotlin from a compile it observes. Force the plugin's compileKotlin
@@ -166,3 +167,26 @@ jobs:
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
         with:
           category: "/language:${{ matrix.language }}"
+
+      # The scan reads only what the extractor took in. Count the test files
+      # in the database's source archive, so a change that leaves them out
+      # again fails here instead of passing quietly.
+      - name: assert the tests were scanned
+        if: matrix.language == 'go' || matrix.language == 'java-kotlin'
+        env:
+          DATABASE: ${{ matrix.language == 'go' && 'go' || 'java' }}
+          TESTS: ${{ matrix.language == 'go' && '_test[.]go$' || '/src/test/kotlin/.*[.]kt$' }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/codeql_databases/$DATABASE/src.zip"
+          if [ ! -f "$archive" ]; then
+            echo "::error::$archive is not there, so the tests that CodeQL read cannot be counted"
+            exit 1
+          fi
+          files=$(unzip -Z1 "$archive")
+          tests=$(grep -cE "$TESTS" <<< "$files" || true)
+          echo "the source archive holds $(wc -l <<< "$files") files, $tests of them tests"
+          if [ "$tests" -eq 0 ]; then
+            echo "::error::CodeQL took in no test file (see the step that builds the code)"
+            exit 1
+          fi
