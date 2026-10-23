@@ -36,6 +36,10 @@ func TestReplyDetectorsSeparateUnfinishedRepliesFromAnswers(t *testing.T) {
 				"Since the search returned the file, I will try to read it using the exact string provided by the search tool, but I suspect the filesystem might be behaving unexpectedly.",
 				"The key functions disagree somewhere. Let me attempt to verify that in keys.py.",
 				"I'll go ahead and check the call site in pricing.py next.",
+				// A closing that waits on a check still to come.
+				"The two key functions disagree. I'll give you the exact path once I verify it.",
+				"The cache misses on every read. I can name the line after I check keys.py.",
+				"Both writes use the tier field; I am reading pricing.py to confirm the exact key.",
 			},
 			notDetected: []string{
 				"The bug is on line 536 of planning.py: `n_steps > best_steps` should be `n_steps < best_steps`.",
