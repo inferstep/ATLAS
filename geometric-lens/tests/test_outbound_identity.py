@@ -114,13 +114,6 @@ def test_partial_identity_stays_partial(stub):
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "inv-only")
 
 
-def test_repeated_calls_under_one_binding_carry_the_same_pair(stub):
-    sl.bind_identity("req-r", "inv-r")
-    for _ in range(3):
-        ee._post_embedding("y = 3")
-    assert {(c["rid"], c["inv"]) for c in _captured()} == {("req-r", "inv-r")}
-
-
 def test_served_model_probe_carries_the_bound_pair(stub):
     from geometric_lens import service
     service._served_model_probed = False
@@ -143,8 +136,9 @@ def test_headers_never_carry_content(stub):
 
 def test_concurrent_threads_never_exchange_identities(stub):
     """Each thread binds its own pair and makes several calls; every outbound
-    call must carry the pair of the thread that made it. Repeated to shake out
-    ordering luck."""
+    call must carry the pair of the thread that made it, so repeated calls
+    under one binding carry the same pair. Repeated to shake out ordering
+    luck."""
     for _round in range(20):
         with LOCK:
             CAPTURED.clear()
@@ -165,7 +159,9 @@ def test_concurrent_threads_never_exchange_identities(stub):
         for t in threads:
             t.join()
         assert errors == []
-        for c in _captured():
+        calls = _captured()
+        assert len(calls) == 12 * 3
+        for c in calls:
             i = int(re.search(r"z(\d+)_", c["body"]).group(1))
             assert (c["rid"], c["inv"]) == (f"req-{i}", f"inv-{i}"), c
 
@@ -268,7 +264,9 @@ def test_concurrent_http_requests_keep_their_own_pairs(app_client, stub):
         for t in threads:
             t.join()
         assert all(results[i] == [f"r{i}", f"i{i}"] for i in range(8)), results
-        for c in _captured():
+        calls = _captured()
+        assert len(calls) == 8
+        for c in calls:
             i = int(re.search(r"conc_(\d+)", c["body"]).group(1))
             assert (c["rid"], c["inv"]) == (f"r{i}", f"i{i}"), c
 

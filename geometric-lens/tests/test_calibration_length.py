@@ -59,9 +59,9 @@ def test_pathology_separates_from_real_code():
     real = normalize_cx_energy(12.61, FITTED, length=2400)
     repetition = normalize_cx_energy(12.22, FITTED, length=480)
     stub = normalize_cx_energy(24.71, FITTED, length=880)
+    # The raw energies say the opposite: real code (12.61) scores HIGHER
+    # than the loop (12.22).
     assert real < 0.5 < repetition < stub
-    # Raw energies say the opposite — real code scores HIGHER than the loop.
-    assert 12.61 > 12.22
 
 
 def test_without_a_baseline_nothing_changes():

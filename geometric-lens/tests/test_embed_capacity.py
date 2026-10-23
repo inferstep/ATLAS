@@ -147,15 +147,15 @@ def _assert_scored(result, n_tokens):
     assert result["n_tokens"] == n_tokens
 
 
-def _assert_capacity_failure(result, input_tokens, capacity=CAPACITY):
+def _assert_capacity_failure(result, input_tokens):
     assert result["enabled"] is True
     assert result["scored"] is False
     failure = result["failure"]
     assert failure["kind"] == "embed_capacity"
     assert failure["input_tokens"] == input_tokens
-    assert failure["capacity_tokens"] == capacity
+    assert failure["capacity_tokens"] == CAPACITY
     # No number that could be read as a verdict.
-    assert result["per_step"] == [] if "per_step" in result else True
+    assert result.get("per_step", []) == []
     assert result.get("aggregate", {}) == {}
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert result.get(key) is None, key
@@ -165,33 +165,27 @@ def _assert_capacity_failure(result, input_tokens, capacity=CAPACITY):
 
 # --- the boundary, per-step path ----------------------------------------------------
 
-def test_below_the_boundary_scores_every_token():
-    out = service.evaluate_per_step(text_of(CAPACITY - 1))
-    _assert_scored(out, CAPACITY - 1)
-    assert len(out["per_step"]) == CAPACITY - 1
+@pytest.mark.parametrize("n_tokens", [
+    pytest.param(CAPACITY - 1, id="one-below-the-capacity"),
+    # llama-server rejects `tokens > n_ubatch`; equality is processed.
+    pytest.param(CAPACITY, id="exactly-the-capacity"),
+])
+def test_per_step_scores_every_token_up_to_the_capacity(n_tokens):
+    out = service.evaluate_per_step(text_of(n_tokens))
+    _assert_scored(out, n_tokens)
+    assert len(out["per_step"]) == n_tokens
     assert math.isfinite(out["aggregate"]["cx_energy_mean"])
 
 
-def test_exactly_the_boundary_is_accepted():
-    """llama-server rejects `tokens > n_ubatch`; equality is processed."""
-    out = service.evaluate_per_step(text_of(CAPACITY))
-    _assert_scored(out, CAPACITY)
-
-
-def test_one_past_the_boundary_is_a_typed_transport_failure():
-    out = service.evaluate_per_step(text_of(CAPACITY + 1))
-    _assert_capacity_failure(out, CAPACITY + 1)
-
-
-def test_the_r4_shape_2055_tokens_against_2048():
-    out = service.evaluate_per_step(text_of(2055))
-    _assert_capacity_failure(out, 2055, 2048)
+@pytest.mark.parametrize("n_tokens", [
+    pytest.param(CAPACITY + 1, id="one-past-the-capacity"),
+    pytest.param(2055, id="the-r4-shape-2055-tokens"),
+    pytest.param(12288, id="a-much-longer-input-reports-its-real-size"),
+])
+def test_per_step_past_the_capacity_is_a_typed_transport_failure(n_tokens):
+    out = service.evaluate_per_step(text_of(n_tokens))
+    _assert_capacity_failure(out, n_tokens)
     assert out["n_tokens"] == 0          # tokens scored, not tokens sent
-
-
-def test_substantially_longer_input_reports_its_real_size():
-    out = service.evaluate_per_step(text_of(12288))
-    _assert_capacity_failure(out, 12288)
 
 
 def test_unicode_boundary_is_judged_in_tokens_not_characters():
@@ -279,11 +273,20 @@ def test_capacity_is_unknown_until_declared_or_observed():
     assert snap["embed_capacity_rejections"] == 0
 
 
-def test_declared_capacity_comes_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", "1024")
+@pytest.mark.parametrize("declared, tokens, source", [
+    pytest.param("1024", 1024, "declared", id="a-positive-integer"),
+    pytest.param("", None, None, id="empty"),
+    pytest.param("0", None, None, id="zero"),
+    pytest.param("-5", None, None, id="negative"),
+    pytest.param("many", None, None, id="a-word"),
+    pytest.param("12.5", None, None, id="a-fraction"),
+])
+def test_only_a_positive_integer_in_the_environment_declares_the_capacity(
+        monkeypatch, declared, tokens, source):
+    monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", declared)
     snap = ec.snapshot()
-    assert snap["embed_capacity_tokens"] == 1024
-    assert snap["embed_capacity_source"] == "declared"
+    assert snap["embed_capacity_tokens"] == tokens
+    assert snap["embed_capacity_source"] == source
 
 
 def test_observed_capacity_overrides_a_declaration(monkeypatch):
@@ -294,12 +297,6 @@ def test_observed_capacity_overrides_a_declaration(monkeypatch):
     assert snap["embed_capacity_source"] == "observed"
     assert snap["embed_capacity_rejections"] == 1
     assert snap["embed_capacity_max_rejected_tokens"] == 2055
-
-
-def test_malformed_declaration_is_ignored(monkeypatch):
-    for bad in ("", "0", "-5", "many", "12.5"):
-        monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", bad)
-        assert ec.snapshot()["embed_capacity_tokens"] is None
 
 
 def test_capacity_parser_reads_llama_servers_message():
@@ -427,7 +424,11 @@ def _standard_json(response):
     return json.loads(response.text)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("value", [
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="inf"),
+    pytest.param(float("-inf"), id="minus-inf"),
+])
 def test_score_text_endpoint_reports_a_nonfinite_energy_unscored(app_client, monkeypatch, value):
     client, _ = app_client
     monkeypatch.setattr(service, "_cost_field", _NonFiniteField(value))

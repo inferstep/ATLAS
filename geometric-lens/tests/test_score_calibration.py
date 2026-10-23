@@ -29,18 +29,16 @@ def test_missing_calibration_is_neutral_not_another_models_default():
     assert normalize_cx_energy(1000.0, None) == 0.5
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        {},
-        {"midpoint": 1.0, "steepness": 0.0},
-        {"midpoint": math.inf, "steepness": 1.0},
-        {"midpoint": "one", "steepness": 1.0},
-        {"midpoint": 1.0, "steepness": True},
-        {"midpoint": 1.0, "steepness": 1.0,
-         "pass_energy_mean": 2.0, "fail_energy_mean": 1.0},
-    ],
-)
+@pytest.mark.parametrize("value", [
+    pytest.param({}, id="empty"),
+    pytest.param({"midpoint": 1.0, "steepness": 0.0}, id="zero-steepness"),
+    pytest.param({"midpoint": math.inf, "steepness": 1.0}, id="infinite-midpoint"),
+    pytest.param({"midpoint": "one", "steepness": 1.0}, id="a-text-midpoint"),
+    pytest.param({"midpoint": 1.0, "steepness": True}, id="a-bool-steepness"),
+    pytest.param({"midpoint": 1.0, "steepness": 1.0,
+                  "pass_energy_mean": 2.0, "fail_energy_mean": 1.0},
+                 id="pass-energy-above-fail-energy"),
+])
 def test_invalid_cx_calibration_is_rejected(value):
     with pytest.raises(ValueError):
         validate_cx_normalization(value)

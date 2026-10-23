@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from geometric_lens import drift
 
 
-def _score_fixed(mapping, default=0.0):
+def _score_fixed(mapping):
     """A score_fn that returns a canned energy per reference text."""
-    return lambda text: mapping.get(text, default)
+    return lambda text: mapping.get(text, 0.0)
 
 
 # --- validation ------------------------------------------------------------
@@ -47,24 +47,20 @@ def test_absent_fingerprint_is_present_false_ok_true(tmp_path):
 
 
 def test_in_tolerance_passes(tmp_path):
-    drift.write_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0))
-    }), tolerance_pct=15)
+    drift.write_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0)))), tolerance_pct=15)
     # Re-score slightly off but within 15%.
-    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (21.0, 29.0, 16.0))
-    }))
+    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (21.0, 29.0, 16.0)))))
     assert present is True and ok is True, detail
 
 
 def test_drift_beyond_tolerance_fails_with_reason(tmp_path):
-    drift.write_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0))
-    }), tolerance_pct=15)
+    drift.write_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0)))), tolerance_pct=15)
     # The incident: energies balloon ~30x.
-    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (608.0, 700.0, 450.0))
-    }))
+    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (608.0, 700.0, 450.0)))))
     assert present is True and ok is False
     assert "608" in detail and "20" in detail
 

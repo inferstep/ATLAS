@@ -85,12 +85,14 @@ def test_a_reference_that_cannot_be_scored_is_not_drift(tmp_path):
 
 
 @pytest.mark.parametrize("exc, retryable", [
-    (urllib.error.URLError("connection refused"), True),
-    (ConnectionResetError("reset by peer"), True),
-    (TimeoutError("timed out"), True),
-    (ModelServerHTTPError(503, "Loading model", "http://llama/embedding"), True),
-    (ModelServerHTTPError(400, "embeddings disabled", "http://llama/embedding"), False),
-    (ValueError("dimension mismatch"), False),
+    pytest.param(urllib.error.URLError("connection refused"), True, id="connection-refused"),
+    pytest.param(ConnectionResetError("reset by peer"), True, id="connection-reset"),
+    pytest.param(TimeoutError("timed out"), True, id="timeout"),
+    pytest.param(ModelServerHTTPError(503, "Loading model", "http://llama/embedding"), True,
+                 id="503-while-the-model-loads"),
+    pytest.param(ModelServerHTTPError(400, "embeddings disabled", "http://llama/embedding"), False,
+                 id="400-embeddings-disabled"),
+    pytest.param(ValueError("dimension mismatch"), False, id="dimension-mismatch"),
 ])
 def test_the_self_test_retries_only_a_model_server_that_is_not_answering(
         main_module, monkeypatch, exc, retryable):
