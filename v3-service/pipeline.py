@@ -2208,6 +2208,166 @@ def _prune_unresolved_calls(passing, files, file_path, unresolved_calls, emit):
     return passing
 
 
+def _select(ctx, passing):
+    """Candidate selection. The Lens picks the lowest-energy candidate that
+    passed (or agrees, by consensus); contract selection over the records is
+    what the evidence envelope reports. Returns the finished run, or None
+    when no candidate is selectable."""
+    emit, capture, result = ctx.emit, ctx.capture, ctx.result
+    # ===== CANDIDATE SELECTION =====
+    # Lens selection: minimum C(x) energy among the passing candidates.
+    # (S* tiebreaking used to run first for 2+ passers; across 118 H200
+    # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
+    # lens min-energy pick, so it carried zero discriminating signal.)
+    #
+    # The incumbent is ranked like any other candidate (#259). A rule
+    # that kept it on every tie was measured against: in 3 of 23
+    # recorded AoC deliveries the model's own file was wrong yet ran
+    # cleanly, and a lens-ranked fresh candidate was right.
+    passing = _without_retypings(passing, emit)
+    if passing:
+        ci_list = [
+            CandidateInfo(c["index"], c["code"], c["energy"],
+                          bool(c["passed"] or c.get("consensus")))
+            for c in passing
+        ]
+        selected = select_candidate(ci_list, strategy="lens")
+
+        _select_by_contract(passing, selected, result, capture)
+
+        if selected:
+            winner = _announce_selection(emit, passing, selected)
+            return _deliver_selected(ctx, selected, winner)
+    return None
+
+
+def _select_by_contract(passing, selected, result, capture):
+    """Contract selection over the passing candidates' own records, kept in
+    the result as the evidence selection and in the capture as the pool."""
+    # Contract selection over the candidates' own records. It does
+    # not choose the delivered bytes -- the lens choice above stands
+    # -- but it is the selection the evidence envelope reports, and
+    # the proxy authorizes a candidate only on a verified winner
+    # from it. The choice is contract.select over the candidates' own
+    # records, under the rubric the BASELINE was measured with --
+    # records that disagree about contract, artifact or context are
+    # incomparable rather than silently ranked, so a foreign
+    # majority cannot outvote one matching record.
+    pool = [c for c in passing if c.get("contract_record")]
+    expected = result.get("evidence_record") or (
+        pool[0]["contract_record"] if pool else None)
+    contract_pick = None
+    if pool and expected:
+        picked, contract_pick, verified = _contract_pick(pool, expected)
+        status = contract.selection_status(picked)
+        result["contract_selection"] = picked
+        result["evidence_selection"] = {
+            "lens_index": getattr(selected, "index", None),
+            "evidence_index": (contract_pick or {}).get("index"),
+            "verified_index": (verified or {}).get("index"),
+            "agree": getattr(selected, "index", None)
+                     == (contract_pick or {}).get("index"),
+            "status": status,
+            "reason": picked.get("selection_reason", ""),
+            "tied": len(picked.get("tied") or []),
+            "incomparable": len(picked.get("incomparable") or []),
+            "ineligible": len(picked.get("ineligible") or []),
+            "candidates": [
+                {"index": c.get("index"),
+                 "strength": c["contract_record"]["evidence_strength"],
+                 "adapter": c["contract_record"]["adapter_id"],
+                 "supported": c["contract_record"]["supported"],
+                 "closure_eligible": c["contract_record"]["closure_eligible"],
+                 "quality": c["contract_record"]["overall_quality_score"],
+                 "missing_required": c["contract_record"]["missing_required"],
+                 "energy": c.get("energy")}
+                for c in pool],
+        }
+        capture.note_pool(
+            phase="phase1", pool=pool,
+            lens_index=getattr(selected, "index", None),
+            evidence_index=(contract_pick or {}).get("index"),
+            verified_index=(verified or {}).get("index"),
+            status=status, reason=picked.get("selection_reason", ""),
+            tied=len(picked.get("tied") or []),
+            incomparable=len(picked.get("incomparable") or []),
+            ineligible=len(picked.get("ineligible") or []))
+
+
+def _contract_pick(pool, expected):
+    """contract.select over the pool's records. Returns (picked, the pick
+    the evidence reports, the verified winner or None)."""
+    try:
+        picked = contract.select(
+            [c["contract_record"] for c in pool], expected)
+    except contract.ContractError as exc:
+        picked = {"best_record": None, "verified_winner": None,
+                  "tied": [], "incomparable": [], "ineligible": [],
+                  "selection_reason": f"identity error: {exc}"}
+    by_record = {id(c["contract_record"]): c for c in pool}
+    best = by_record.get(id(picked.get("best_record")))
+    verified = by_record.get(id(picked.get("verified_winner")))
+    # A record must describe the bytes it is attached to before
+    # it may win anything.
+    if verified and not _record_closes(
+            verified["contract_record"], verified["code"]):
+        verified = None
+    contract_pick = verified or best
+    return picked, contract_pick, verified
+
+
+def _announce_selection(emit, passing, selected):
+    """Emit which candidate the Lens selected and on what grounds. Returns
+    the selected candidate's dict (None if no candidate has its index)."""
+    winner = _candidate_by_index(passing, selected.index)
+    lens_scored = getattr(selected, "energy", None) is not None
+    lens_failure = (winner or {}).get("lens_failure")
+    named = ("the submitted file" if (winner or {}).get("incumbent")
+             else f"candidate {selected.index}")
+    if (winner or {}).get("consensus"):
+        detail = (f"Lens selected {named} from candidates "
+                  f"that agree — no candidate passed verification")
+    elif lens_scored:
+        detail = f"Lens selected {named}"
+    else:
+        # The only verified candidate carries no score. It
+        # is delivered on its sandbox evidence and says so;
+        # a scored candidate would have outranked it.
+        detail = (f"Selected {named}: verified, "
+                  f"unscored by the lens "
+                  f"({scoring.describe_lens_failure(lens_failure or {})})")
+    emit("selected", detail,
+         index=selected.index,
+         energy=getattr(selected, "energy", None),
+         lens_scored=lens_scored, lens_failure=lens_failure)
+    return winner
+
+
+def _deliver_selected(ctx, selected, winner):
+    """The finished run of a selected candidate: its code, the phase it
+    solved in, its evidence and its score."""
+    result, start, events = ctx.result, ctx.start, ctx.events
+    result["passed"] = True
+    result["code"] = selected.code
+    if (winner or {}).get("consensus"):
+        # A phase the proxy's verifiedPhase does not list: the
+        # pick rests on agreement, not on a check it passed.
+        result["phase_solved"] = "consensus"
+    elif (winner or {}).get("incumbent"):
+        # The caller's own bytes held. The proxy reads that as
+        # no proposal, whatever the phase says.
+        result["phase_solved"] = "incumbent"
+    else:
+        result["phase_solved"] = "phase1"
+    result["total_time_ms"] = (time.time() - start) * 1000
+    result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
+    result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
+    result["evidence_record"] = ((winner or {}).get("contract_record")
+                                 or result.get("evidence_record"))
+    result["events"] = events
+    return result
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2576,130 +2736,9 @@ class V3PipelineService:
             passing = _structural_veto(passing, files, smoke_language, emit)
             passing = _call_graph_veto(passing, files, file_path, smoke_language, emit)
 
-            # ===== CANDIDATE SELECTION =====
-            # Lens selection: minimum C(x) energy among the passing candidates.
-            # (S* tiebreaking used to run first for 2+ passers; across 118 H200
-            # tiebreaks every pair scored 0-0 and 110/110 winners equaled the
-            # lens min-energy pick, so it carried zero discriminating signal.)
-            #
-            # The incumbent is ranked like any other candidate (#259). A rule
-            # that kept it on every tie was measured against: in 3 of 23
-            # recorded AoC deliveries the model's own file was wrong yet ran
-            # cleanly, and a lens-ranked fresh candidate was right.
-            passing = _without_retypings(passing, emit)
-            if passing:
-                ci_list = [
-                    CandidateInfo(c["index"], c["code"], c["energy"],
-                                  bool(c["passed"] or c.get("consensus")))
-                    for c in passing
-                ]
-                selected = select_candidate(ci_list, strategy="lens")
-
-                # Contract selection over the candidates' own records. It does
-                # not choose the delivered bytes -- the lens choice above stands
-                # -- but it is the selection the evidence envelope reports, and
-                # the proxy authorizes a candidate only on a verified winner
-                # from it. The choice is contract.select over the candidates' own
-                # records, under the rubric the BASELINE was measured with --
-                # records that disagree about contract, artifact or context are
-                # incomparable rather than silently ranked, so a foreign
-                # majority cannot outvote one matching record.
-                pool = [c for c in passing if c.get("contract_record")]
-                expected = result.get("evidence_record") or (
-                    pool[0]["contract_record"] if pool else None)
-                contract_pick = None
-                if pool and expected:
-                    try:
-                        picked = contract.select(
-                            [c["contract_record"] for c in pool], expected)
-                    except contract.ContractError as exc:
-                        picked = {"best_record": None, "verified_winner": None,
-                                  "tied": [], "incomparable": [], "ineligible": [],
-                                  "selection_reason": f"identity error: {exc}"}
-                    by_record = {id(c["contract_record"]): c for c in pool}
-                    best = by_record.get(id(picked.get("best_record")))
-                    verified = by_record.get(id(picked.get("verified_winner")))
-                    # A record must describe the bytes it is attached to before
-                    # it may win anything.
-                    if verified and not _record_closes(
-                            verified["contract_record"], verified["code"]):
-                        verified = None
-                    contract_pick = verified or best
-                    status = contract.selection_status(picked)
-                    result["contract_selection"] = picked
-                    result["evidence_selection"] = {
-                        "lens_index": getattr(selected, "index", None),
-                        "evidence_index": (contract_pick or {}).get("index"),
-                        "verified_index": (verified or {}).get("index"),
-                        "agree": getattr(selected, "index", None)
-                                 == (contract_pick or {}).get("index"),
-                        "status": status,
-                        "reason": picked.get("selection_reason", ""),
-                        "tied": len(picked.get("tied") or []),
-                        "incomparable": len(picked.get("incomparable") or []),
-                        "ineligible": len(picked.get("ineligible") or []),
-                        "candidates": [
-                            {"index": c.get("index"),
-                             "strength": c["contract_record"]["evidence_strength"],
-                             "adapter": c["contract_record"]["adapter_id"],
-                             "supported": c["contract_record"]["supported"],
-                             "closure_eligible": c["contract_record"]["closure_eligible"],
-                             "quality": c["contract_record"]["overall_quality_score"],
-                             "missing_required": c["contract_record"]["missing_required"],
-                             "energy": c.get("energy")}
-                            for c in pool],
-                    }
-                    capture.note_pool(
-                        phase="phase1", pool=pool,
-                        lens_index=getattr(selected, "index", None),
-                        evidence_index=(contract_pick or {}).get("index"),
-                        verified_index=(verified or {}).get("index"),
-                        status=status, reason=picked.get("selection_reason", ""),
-                        tied=len(picked.get("tied") or []),
-                        incomparable=len(picked.get("incomparable") or []),
-                        ineligible=len(picked.get("ineligible") or []))
-
-                if selected:
-                    winner = _candidate_by_index(passing, selected.index)
-                    lens_scored = getattr(selected, "energy", None) is not None
-                    lens_failure = (winner or {}).get("lens_failure")
-                    named = ("the submitted file" if (winner or {}).get("incumbent")
-                             else f"candidate {selected.index}")
-                    if (winner or {}).get("consensus"):
-                        detail = (f"Lens selected {named} from candidates "
-                                  f"that agree — no candidate passed verification")
-                    elif lens_scored:
-                        detail = f"Lens selected {named}"
-                    else:
-                        # The only verified candidate carries no score. It
-                        # is delivered on its sandbox evidence and says so;
-                        # a scored candidate would have outranked it.
-                        detail = (f"Selected {named}: verified, "
-                                  f"unscored by the lens "
-                                  f"({scoring.describe_lens_failure(lens_failure or {})})")
-                    emit("selected", detail,
-                         index=selected.index,
-                         energy=getattr(selected, "energy", None),
-                         lens_scored=lens_scored, lens_failure=lens_failure)
-                    result["passed"] = True
-                    result["code"] = selected.code
-                    if (winner or {}).get("consensus"):
-                        # A phase the proxy's verifiedPhase does not list: the
-                        # pick rests on agreement, not on a check it passed.
-                        result["phase_solved"] = "consensus"
-                    elif (winner or {}).get("incumbent"):
-                        # The caller's own bytes held. The proxy reads that as
-                        # no proposal, whatever the phase says.
-                        result["phase_solved"] = "incumbent"
-                    else:
-                        result["phase_solved"] = "phase1"
-                    result["total_time_ms"] = (time.time() - start) * 1000
-                    result["verification_evidence"] = (winner or {}).get("verification_evidence", [])
-                    result["winning_score"] = (winner or {}).get("energy_norm", 0.0)
-                    result["evidence_record"] = ((winner or {}).get("contract_record")
-                                                 or result.get("evidence_record"))
-                    result["events"] = events
-                    return result
+            finished = _select(ctx, passing)
+            if finished is not None:
+                return finished
 
             # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
             check_client()
