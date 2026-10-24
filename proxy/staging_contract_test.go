@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -289,6 +290,8 @@ func TestTheResultTypeCannotCarryOutput(t *testing.T) {
 		"Message": true, "Contents": true, "Body": true, "Log": true,
 		"Diagnostic": true, "Text": true,
 	}
+	// Every field of every staging struct, as "type.Field".
+	var fields []string
 	ast.Inspect(tree, func(n ast.Node) bool {
 		ts, ok := n.(*ast.TypeSpec)
 		if !ok || !strings.HasPrefix(ts.Name.Name, "staging") {
@@ -300,22 +303,28 @@ func TestTheResultTypeCannotCarryOutput(t *testing.T) {
 		}
 		for _, f := range st.Fields.List {
 			for _, name := range f.Names {
-				if !banned[name.Name] {
-					continue
-				}
-				// One exception, and it must be un-serialisable: the command
-				// text has to reach the executor somehow.
-				if ts.Name.Name == "stagingCommand" && name.Name == "Text" {
-					if f.Tag == nil || !strings.Contains(f.Tag.Value, `json:"-"`) {
-						t.Error("stagingCommand.Text is serialisable; command text must never travel")
-					}
-					continue
-				}
-				t.Errorf("%s.%s can hold content", ts.Name.Name, name.Name)
+				fields = append(fields, ts.Name.Name+"."+name.Name)
 			}
 		}
 		return true
 	})
+	for _, field := range fields {
+		// stagingCommand.Text is the one exception, pinned by the next test.
+		_, name, _ := strings.Cut(field, ".")
+		if banned[name] && field != "stagingCommand.Text" {
+			t.Errorf("%s can hold content", field)
+		}
+	}
+}
+
+// TestTheCommandTextIsNeverSerialised pins the one exception above: the
+// command text has to reach the executor somehow, so stagingCommand may hold
+// it, but only in a field that cannot be serialised.
+func TestTheCommandTextIsNeverSerialised(t *testing.T) {
+	text, ok := reflect.TypeOf(stagingCommand{}).FieldByName("Text")
+	if ok && text.Tag.Get("json") != "-" {
+		t.Error("stagingCommand.Text is serialisable; command text must never travel")
+	}
 }
 
 // --- the executor declares no authority ----------------------------------------
@@ -347,22 +356,18 @@ func TestTheExecutorReportsFactsAndNotConclusions(t *testing.T) {
 	// declarations rather than the whole block: the docstring says "no command
 	// text" and a prose match would fail on the sentence promising the thing
 	// it is checking for.
-	if !strings.Contains(body, "class ShellObservation") {
+	_, observation, found := strings.Cut(body, "class ShellObservation")
+	if !found {
 		t.Fatal("the executor no longer reports a staging observation")
 	}
-	start := strings.Index(body, "class ShellObservation")
-	end := strings.Index(body[start:], "\n\n\nclass ")
-	if end < 0 {
-		end = len(body) - start
-	}
-	for _, line := range strings.Split(body[start:start+end], "\n") {
+	// The class ends where the next class begins, or with the file.
+	observation, _, _ = strings.Cut(observation, "\n\n\nclass ")
+	for _, line := range strings.Split(observation, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, ":") {
-			continue
-		}
-		field := strings.TrimSpace(strings.SplitN(line, ":", 2)[0])
-		if !isPythonFieldName(field) {
-			continue // docstring prose, not a declaration
+		before, _, hasColon := strings.Cut(line, ":")
+		field := strings.TrimSpace(before)
+		if line == "" || strings.HasPrefix(line, "#") || !hasColon || !isPythonFieldName(field) {
+			continue // a blank line, a comment or docstring prose, not a declaration
 		}
 		for _, banned := range []string{"stdout", "stderr", "content", "text", "output"} {
 			if strings.Contains(strings.ToLower(field), banned) {

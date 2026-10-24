@@ -260,25 +260,21 @@ func TestStructuredRouteGrantCannotBeReplayed(t *testing.T) {
 
 // --- Structural guards -------------------------------------------------------
 
-func TestStructuredMutationTargetOwnership(t *testing.T) {
-	read := func(f string) string {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	own := read("structured_mutation_target.go")
-	// No prose or intent helper participates, and no contract field is read.
+// No prose or intent helper participates, and no contract field is read.
+func TestTheStructuredTargetReadsNoProseAndNoContractField(t *testing.T) {
+	own := readSourceForTest(t, "structured_mutation_target.go")
 	for _, banned := range []string{"UserMessage", "HumanTask", "Messages", "actionIntentWords",
 		"isActionIntentMessage", "expectedOutputPaths", "strings.Contains(", "regexp", ".TaskContract."} {
 		if strings.Contains(own, banned) {
 			t.Errorf("the structured target reads %q", banned)
 		}
 	}
-	// It is consumed only by the automatic-delivery owners, and by the staged
-	// verification producer, which asks it only whether declared commands
-	// should run against a target a grant could later be minted for.
+}
+
+// It is consumed only by the automatic-delivery owners, and by the staged
+// verification producer, which asks it only whether declared commands
+// should run against a target a grant could later be minted for.
+func TestStructuredMutationTargetOwnership(t *testing.T) {
 	entries, _ := os.ReadDir(".")
 	readers := map[string]bool{}
 	for _, e := range entries {
@@ -286,7 +282,7 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
 			continue
 		}
-		if strings.Contains(read(n), "structuredMutationTargetGrounds(") {
+		if strings.Contains(readSourceForTest(t, n), "structuredMutationTargetGrounds(") {
 			readers[n] = true
 		}
 	}
@@ -303,9 +299,12 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 			t.Errorf("%s no longer consults the structured mutation target", must)
 		}
 	}
-	// It never feeds obligations, completion, permissions, or the delete tool.
+}
+
+// It never feeds obligations, completion, permissions, or the delete tool.
+func TestTheStructuredTargetFeedsNoObligationPermissionOrDeletion(t *testing.T) {
 	for _, f := range []string{"obligations.go", "obligation_kinds.go", "permissions.go", "delivery_settlement.go"} {
-		body := read(f)
+		body := readSourceForTest(t, f)
 		for _, banned := range []string{"structuredMutationTargetGrounds", "targetGroundingStructuredMutationTarget", "TargetGrounding"} {
 			if strings.Contains(body, banned) {
 				t.Errorf("%s reads %s", f, banned)
@@ -313,7 +312,7 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 		}
 	}
 	// The delete tool region of tools.go consults no scope and no grounding.
-	tools := read("tools.go")
+	tools := readSourceForTest(t, "tools.go")
 	del := tools[strings.Index(tools, "func deleteFileTool()"):]
 	del = del[:strings.Index(del, "\nfunc ")]
 	for _, banned := range []string{"mutationScope", "structuredMutationTarget", "TargetGrounding", "deriveMutationScope"} {
@@ -321,9 +320,12 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 			t.Errorf("delete_file consults %s", banned)
 		}
 	}
-	// The mint still binds to the scope and still has the one-time, exact-byte
-	// path as its only delivery: guarded elsewhere, re-asserted here.
-	mint := read("authorization_grant.go")
+}
+
+// The mint still binds to the scope and still has the one-time, exact-byte
+// path as its only delivery: guarded elsewhere, re-asserted here.
+func TestTheMintStillBindsToTheScopeAndNeverWidensDeclaredOutputs(t *testing.T) {
+	mint := readSourceForTest(t, "authorization_grant.go")
 	for _, must := range []string{"scopeAdmitsCandidate", "targetIsAuthorized(in.Obligations, target)", "structuredMutationTargetGrounds"} {
 		if !strings.Contains(mint, must) {
 			t.Errorf("the mint no longer contains %s", must)
@@ -335,12 +337,15 @@ func TestStructuredMutationTargetOwnership(t *testing.T) {
 	if i < 0 || j < 0 || i > j {
 		t.Error("the declared-outputs refusal does not precede the structured grounding")
 	}
-	// The identity of a proposed candidate has one owner.
-	if strings.Count(read("evidence_wiring.go"), "func proposedCandidateIdentity(") != 1 {
+}
+
+// The identity of a proposed candidate has one owner.
+func TestTheProposedCandidateIdentityHasOneOwner(t *testing.T) {
+	if strings.Count(readSourceForTest(t, "evidence_wiring.go"), "func proposedCandidateIdentity(") != 1 {
 		t.Error("proposedCandidateIdentity is not defined exactly once in the identity owner")
 	}
 	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
-		if strings.Count(read(f), "proposedCandidateIdentity(") != 1 {
+		if strings.Count(readSourceForTest(t, f), "proposedCandidateIdentity(") != 1 {
 			t.Errorf("%s does not mint the proposed candidate's identity exactly once", f)
 		}
 	}

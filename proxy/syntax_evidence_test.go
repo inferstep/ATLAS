@@ -189,6 +189,9 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			t.Error("a cancelled run produced evidence")
 		}
 	})
+}
+
+func TestTheProducerDeclinesWithoutAnIdentityToBindTo(t *testing.T) {
 	t.Run("no request identity", func(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 		ctx.Ctx = context.Background()

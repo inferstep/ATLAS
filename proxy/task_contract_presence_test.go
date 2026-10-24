@@ -43,55 +43,31 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 		body      string
 		knowledge ObligationKnowledge
 		paths     []string
-		reject    bool
 	}{
 		{"task_mode only", `{"task_contract":{"task_mode":"work"}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		{"outputs omitted", `{"task_contract":{"task_mode":"work","verification":["go test"]}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		{"outputs null", `{"task_contract":{"task_mode":"work","expected_outputs":null}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		// Without output_knowledge, an explicit [] cannot be told from an
 		// omitted list in stored contracts, so it is not authoritative none.
 		{"legacy empty list", `{"task_contract":{"task_mode":"work","expected_outputs":[]}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		// A legacy non-empty list always meant "these are the outputs".
 		{"legacy non-empty list", `{"task_contract":{"task_mode":"work","expected_outputs":["a.py"]}}`,
-			KnowledgeDeclared, []string{"a.py"}, false},
+			KnowledgeDeclared, []string{"a.py"}},
 		{"declared with paths",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":["a.py","b.py"]}}`,
-			KnowledgeDeclared, []string{"a.py", "b.py"}, false},
+			KnowledgeDeclared, []string{"a.py", "b.py"}},
 		{"declared empty is authoritative none",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}}`,
-			KnowledgeDeclared, []string{}, false},
+			KnowledgeDeclared, []string{}},
 		{"explicit unspecified",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified"}}`,
-			KnowledgeUnspecified, nil, false},
-
-		// rejections
-		{"declared with the list omitted",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"declared"}}`, "", nil, true},
-		{"declared with a null list",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":null}}`, "", nil, true},
-		{"unspecified contradicted by paths",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified","expected_outputs":["a.py"]}}`, "", nil, true},
-		{"unknown knowledge",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"maybe"}}`, "", nil, true},
-		{"question cannot declare outputs",
-			`{"task_contract":{"task_mode":"question","output_knowledge":"declared","expected_outputs":[]}}`, "", nil, true},
-		{"question cannot carry legacy outputs",
-			`{"task_contract":{"task_mode":"question","expected_outputs":["a.py"]}}`, "", nil, true},
+			KnowledgeUnspecified, nil},
 	} {
 		got, err := validate(t, c.body)
-		if c.reject {
-			if err == nil {
-				t.Errorf("%s: accepted, want rejection", c.name)
-			}
-			if got != nil {
-				t.Errorf("%s: stored a contract despite rejecting", c.name)
-			}
-			continue
-		}
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
@@ -104,13 +80,37 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 			t.Errorf("%s: paths=%v want %v", c.name, paths, c.paths)
 		}
 		// Presence must survive: declared-empty is not the same as unspecified.
-		if c.knowledge == KnowledgeDeclared && c.paths != nil && len(c.paths) == 0 {
-			if !got.OutputsPresent() {
-				t.Errorf("%s: an authoritative none collapsed into absent", c.name)
-			}
+		declaredEmpty := c.knowledge == KnowledgeDeclared && c.paths != nil && len(c.paths) == 0
+		if declaredEmpty && !got.OutputsPresent() {
+			t.Errorf("%s: an authoritative none collapsed into absent", c.name)
 		}
 		if c.knowledge == KnowledgeUnspecified && got.OutputsPresent() {
 			t.Errorf("%s: unspecified knowledge claims a present list", c.name)
+		}
+	}
+}
+
+func TestOutputKnowledgeTruthTableRejections(t *testing.T) {
+	for _, c := range []struct{ name, body string }{
+		{"declared with the list omitted",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"declared"}}`},
+		{"declared with a null list",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":null}}`},
+		{"unspecified contradicted by paths",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified","expected_outputs":["a.py"]}}`},
+		{"unknown knowledge",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"maybe"}}`},
+		{"question cannot declare outputs",
+			`{"task_contract":{"task_mode":"question","output_knowledge":"declared","expected_outputs":[]}}`},
+		{"question cannot carry legacy outputs",
+			`{"task_contract":{"task_mode":"question","expected_outputs":["a.py"]}}`},
+	} {
+		got, err := validate(t, c.body)
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", c.name)
+		}
+		if got != nil {
+			t.Errorf("%s: stored a contract despite rejecting", c.name)
 		}
 	}
 }

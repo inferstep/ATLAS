@@ -141,11 +141,8 @@ func TestT0T1StructuralBranchIsReachable(t *testing.T) {
 	if sha256.Sum256(after) != priorHash {
 		t.Fatalf("target bytes changed on a refusal: %q", string(after))
 	}
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.Contains(e.Name(), ".atlas.tmp") {
-			t.Errorf("temporary artifact left behind: %s", e.Name())
-		}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, "*.atlas.tmp*")); len(leftovers) > 0 {
+		t.Errorf("temporary artifacts left behind: %v", leftovers)
 	}
 
 	// --- classification ---------------------------------------------------
