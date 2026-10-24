@@ -29,6 +29,9 @@ COPY v3-service/embedded_script.py /app/embedded_script.py
 COPY v3-service/node_splice.py /app/node_splice.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
+COPY v3-service/stage_telemetry.py /app/stage_telemetry.py
+COPY v3-service/candidate_records.py /app/candidate_records.py
+COPY v3-service/vetoes.py /app/vetoes.py
 COPY v3-service/runtime_verification.py /app/runtime_verification.py
 # contract.py was added and the image kept building without it: this COPY
 # list enumerates modules, so a new one is silently excluded and the service

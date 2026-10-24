@@ -1,6 +1,10 @@
-"""The V3 pipeline orchestrator: probe, candidate generation, sandbox
-verification, the lens/structural/call-graph vetoes, candidate selection,
-the repair phases, stage telemetry, and the /v3/generate problem builder."""
+"""The V3 pipeline orchestrator. V3PipelineService runs one task through its
+phases (probe, allocation, generation, sandbox verification, selection,
+repair) as the steps defined here. Also here: the benchmark-only pool
+capture, the self-test and output-probe case wrappers with the CodeT
+consensus over them, the candidate verifier, and the /v3/generate problem
+builder. Stage telemetry, the candidate records and the vetoes are modules
+of their own beside this one."""
 
 import base64
 import dataclasses
@@ -38,52 +42,17 @@ import contract
 import scoring
 import symbols
 from runtime_verification import PythonImportComparison
+from stage_telemetry import (_SUMMARY_LOCK, _STAGE_PHASE, _VETO_STAGES, _progress_emitter,
+                             _resolve_telemetry_dir, _summarize_phases)
+from candidate_records import (INCUMBENT_INDEX, _announce_selection, _candidate_by_index,
+                               _candidate_lens_payload, _ensure_delivered_evidence, _lens_view,
+                               _note_lens, _record_closes, _select_by_contract, _task_identity,
+                               _without_retypings)
+from vetoes import _call_graph_veto, _lens_veto, _structural_veto
 
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
-
-
-# --- Stage telemetry ---------------------------------------------------------
-
-# Serializes pipeline-summary appends across the ThreadingHTTPServer's
-# request threads. Stage JSONL appends need no lock: each event is one
-# small O_APPEND write.
-_SUMMARY_LOCK = threading.Lock()
-
-_TELEMETRY_DISABLE_VALUES = {"0", "off", "none", "disabled", "false"}
-
-# stage name -> summary phase. Stages not listed (token/llm_*/task_type/…)
-# don't contribute a phase row.
-_STAGE_PHASE = {}
-for _phase, _stages in {
-    "probe": ("probe", "probe_light", "probe_retry", "probe_failed",
-              "probe_error", "probe_scored", "probe_sandbox", "probe_pass"),
-    "self_test": ("self_test_gen", "self_test_done", "self_test_error",
-                  "self_test_skip", "self_test_untrusted"),
-    "allocation": ("phase2", "phase2_allocated", "diagnostic_allocation"),
-    "generation": ("phase1", "plansearch", "plansearch_done",
-                   "plansearch_error", "divsampling", "divsampling_done",
-                   "divsampling_error", "divsampling_stop", "lens_per_step",
-                   "lens_unscored"),
-    "sandbox": ("sandbox_test", "sandbox_pass", "sandbox_fail",
-                "sandbox_done", "smoke_check", "interactive_lint",
-                "self_test_verify", "build_verify",
-                "build_verify_unavailable", "runtime_compare"),
-    "veto": ("lens_veto", "structural_veto", "call_graph_veto"),
-    "selection": ("selected", "consensus"),
-    "repair_pr_cot": ("phase3", "call_chain_context", "pr_cot",
-                      "pr_cot_pass", "pr_cot_failed", "pr_cot_error"),
-    "repair_refinement": ("refinement", "refinement_pass",
-                          "refinement_failed", "refinement_error",
-                          "refinement_verify_failed", "refinement_skip"),
-    "fallback": ("fallback", "fallback_all_vetoed", "fallback_unverified",
-                 "budget_exhausted", "budget_no_verified_candidate"),
-}.items():
-    for _s in _stages:
-        _STAGE_PHASE[_s] = _phase
-
-_VETO_STAGES = frozenset(("lens_veto", "structural_veto", "call_graph_veto"))
 
 
 def _remaining_budget_ms(start: float, cap_ms: Optional[float] = None) -> Optional[float]:
@@ -107,32 +76,6 @@ def _remaining_budget_ms(start: float, cap_ms: Optional[float] = None) -> Option
     if seconds <= 0:
         return None
     return seconds * 1000.0 - (time.time() - start) * 1000.0
-
-
-def _resolve_telemetry_dir() -> Optional[Path]:
-    """Resolve the stage-telemetry directory for the live service.
-
-    ``ATLAS_V3_TELEMETRY_DIR`` names the directory; a disable value
-    (``0``/``off``/``none``/``disabled``/``false``) turns telemetry off;
-    unset/empty falls back to ``/data/telemetry`` when writable (the
-    compose volume), else telemetry is disabled. Never raises: telemetry must not break generation.
-    """
-    configured = os.environ.get("ATLAS_V3_TELEMETRY_DIR", "").strip()
-    if configured.lower() in _TELEMETRY_DISABLE_VALUES:
-        return None
-    candidate = Path(configured) if configured else Path("/data/telemetry")
-    try:
-        candidate.mkdir(parents=True, exist_ok=True)
-        probe = candidate / ".write_probe"
-        probe.touch()
-        probe.unlink()
-        return candidate
-    except OSError as e:
-        if configured:
-            print(f"  [telemetry] {candidate} not writable ({e}) — stage telemetry disabled. To keep its data and write it "
-                  f"again, run once on the host: docker compose run --rm --no-deps --user root v3-service chown -R "
-                  f"{os.getuid()}:{os.getgid()} {candidate}", flush=True)
-        return None
 
 
 # --- Benchmark-only candidate-pool capture -----------------------------------
@@ -626,76 +569,6 @@ class _PoolCapture:
             self._append(b'{"type":"capture_status","limit_reached":true}\n')
 
 
-def _lens_view(code: str) -> Dict[str, Any]:
-    """Both Lens views of one candidate, as its record carries them.
-
-    `energy` and `energy_norm` are None and `lens_failure` is set when the
-    Lens did not score the candidate (its input exceeded the embedding
-    server's physical batch, the Lens answered an error or was unreachable).
-    `per_step` is empty when the per-step call did not score; that failure
-    is recorded under `lens_failure` with `path: per_step` when C(x) did.
-    Nothing here substitutes a number for a score that did not happen.
-    """
-    scored = scoring.score_candidate(code)
-    energy, energy_norm, energy_calibrated = scored
-    failure = getattr(scored, "failure", None)
-    token_assertion = getattr(scored, "token_assertion", None)
-    per_step = scoring.score_candidate_per_step(code)  # PC-207
-    per_step = dict(per_step) if isinstance(per_step, dict) else {}
-    per_step_failure = per_step.pop("failure", None)
-    per_step_token_assertion = per_step.pop("token_assertion", None)
-    if per_step_failure:
-        per_step = {}
-    if energy is None:
-        failure = failure or per_step_failure or {
-            "kind": scoring.LENS_ERROR, "detail": "no C(x) energy returned"}
-        energy_norm, energy_calibrated = None, False
-    elif per_step_failure and failure is None:
-        failure = {**per_step_failure, "path": "per_step"}
-    return {"energy": energy, "energy_norm": energy_norm,
-            "energy_calibrated": bool(energy_calibrated),
-            "token_assertion": token_assertion,
-            "per_step_token_assertion": per_step_token_assertion,
-            "per_step": per_step, "lens_failure": failure}
-
-
-def _note_lens(emit, candidate: Dict[str, Any], source: str) -> None:
-    """Emit what the Lens said about a freshly generated candidate."""
-    index = candidate["index"]
-    per_step = candidate.get("per_step") or {}
-    if per_step:
-        emit("lens_per_step",
-             f"cand {index}: gx_min={per_step['gx_score_min']:.2f} "
-             f"first_off_rails={per_step['first_off_rails_idx']}",
-             index=index,
-             source=source,
-             first_off_rails_idx=per_step["first_off_rails_idx"],
-             gx_score_min=per_step["gx_score_min"],
-             gx_score_mean=per_step["gx_score_mean"],
-             cx_norm_max=per_step["cx_norm_max"],
-             n_tokens=per_step["n_tokens"])
-    failure = candidate.get("lens_failure")
-    if candidate.get("energy") is None and failure:
-        emit("lens_unscored",
-             f"cand {index}: unscored ({scoring.describe_lens_failure(failure)})",
-             index=index, source=source,
-             kind=failure.get("kind"),
-             input_tokens=failure.get("input_tokens"),
-             capacity_tokens=failure.get("capacity_tokens"),
-             failure_detail=failure.get("detail"))
-
-
-def _candidate_lens_payload(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    """The exact Lens fields carried by candidate capture records."""
-    return {"energy": candidate.get("energy"),
-            "energy_norm": candidate.get("energy_norm"),
-            "energy_calibrated": candidate.get("energy_calibrated"),
-            "token_assertion": candidate.get("token_assertion"),
-            "per_step_token_assertion": candidate.get("per_step_token_assertion"),
-            "per_step": candidate.get("per_step"),
-            "failure": candidate.get("lens_failure")}
-
-
 def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) -> None:
     """Record a pool member under the role that explains where it came from.
 
@@ -714,42 +587,7 @@ def _capture_pool_member(capture: "_PoolCapture", candidate, probe_code: str) ->
         lens=_candidate_lens_payload(candidate))
 
 
-def _summarize_phases(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Fold the run's progress events into ordered per-phase rows.
-
-    Each row carries the phase name, the stage that closed it (its
-    outcome marker), that stage's detail, and the span between the
-    phase's first and last event. Derived purely from the events the
-    run already emits — no extra instrumentation in the hot path.
-    """
-    rows: List[Dict[str, Any]] = []
-    by_phase: Dict[str, Dict[str, Any]] = {}
-    for ev in events:
-        phase = _STAGE_PHASE.get(ev.get("stage", ""))
-        if phase is None:
-            continue
-        row = by_phase.get(phase)
-        if row is None:
-            row = {"phase": phase, "first_ms": round(ev.get("t", 0.0) * 1000)}
-            by_phase[phase] = row
-            rows.append(row)
-        row["outcome"] = ev.get("stage", "")
-        row["detail"] = str(ev.get("detail", ""))[:120]
-        row["duration_ms"] = round(ev.get("t", 0.0) * 1000) - row["first_ms"]
-    return rows
-
-
 # --- V3 Pipeline Orchestrator ------------------------------------------------
-
-def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optional[Dict[str, Any]]:
-    """Return the candidate dict whose original ``index`` field matches.
-
-    Selection reports the winner by the candidate's original index, but
-    the ``passing`` list has been sorted and filtered — positional
-    indexing would pick the wrong candidate (or IndexError). Returns None
-    when no candidate carries that index.
-    """
-    return next((c for c in candidates if c.get("index") == index), None)
 
 
 def _entry_function(code: str) -> Optional[str]:
@@ -1067,8 +905,6 @@ def _make_self_test(code: str, tc, task_input_file: str = ""):
 _CONSENSUS_MARK = "V3_OUT:"
 
 
-
-
 def _evaluate_candidate(file_path, code, smoke_passed, emit, *, task=None):
     """THE canonical contract record for ONE artifact.
 
@@ -1087,91 +923,6 @@ def _evaluate_candidate(file_path, code, smoke_passed, emit, *, task=None):
         artifact_scope=task["artifact_scope"],
         evaluation_context_hash=task["evaluation_context_hash"],
         candidate_content_hash=contract.content_hash(code))
-
-
-
-def _ensure_delivered_evidence(result, *, file_path, problem):
-    """Every successful exit describes THE BYTES IT RETURNS.
-
-    The pipeline has five ways to return code, and only two of them ran the
-    structured evaluation on the artifact they hand back: the probe's early
-    return and phase-one selection. Repair, refinement and the budget
-    fallback returned code with no record of it at
-    all, or with the record of a different candidate, so the envelope either
-    went missing or described bytes the caller never received.
-
-    This evaluates the delivered bytes through the SAME canonical
-    adapter->contract path every other candidate goes through. Nothing new
-    runs here -- an artifact whose behaviour was never observed reports
-    exactly that -- and the verifier's own accept/reject is the observation
-    input, never a claim of complete evidence: `accepted` on an interactive
-    artifact still yields syntax-level, unsupported evidence, and no adapter
-    here reports more than syntax.
-
-    It changes no path's `passed`, selection or return value. Where a legacy
-    `passed=true` sits on evidence that is not closure-eligible, the envelope
-    says so plainly rather than hiding the contradiction.
-    """
-    if not result:
-        return
-    code = result.get("code") or ""
-    if not code:
-        return
-    task = _task_identity(file_path, problem)
-    record = result.get("evidence_record")
-    if not record or record.get("candidate_content_hash") != contract.content_hash(code):
-        record = adapters.contract_record(
-            adapter=adapters.select_adapter(file_path, code),
-            accepted=bool(result.get("passed")),
-            contract_id=task["contract_id"],
-            contract_version=task["contract_version"],
-            artifact_scope=task["artifact_scope"],
-            evaluation_context_hash=task["evaluation_context_hash"],
-            candidate_content_hash=contract.content_hash(code))
-        result["evidence_record"] = record
-        # The selection that produced the old record described a different
-        # pool; re-state it over the record actually delivered.
-        result["contract_selection"] = None
-    selection = result.get("contract_selection")
-    if not selection or selection.get("best_record") is not record:
-        try:
-            result["contract_selection"] = contract.select([record], record)
-        except contract.ContractError as exc:
-            result["contract_selection"] = {
-                "best_record": None, "verified_winner": None, "tied": [],
-                "incomparable": [], "ineligible": [],
-                "selection_reason": f"identity error: {exc}"}
-
-
-def _task_identity(file_path, problem):
-    """What every record in this run is measured under.
-
-    The rubric is the TASK's, not a candidate's: same contract, same artifact
-    scope, same evaluation context for every candidate, so records that
-    disagree about any of them are incomparable rather than silently ranked
-    against each other.
-    """
-    ext = (file_path or "").rsplit(".", 1)
-    suffix = ext[-1].lower() if len(ext) == 2 else "unknown"
-    return {"contract_id": f"generate:{suffix}",
-            "contract_version": "1",
-            "artifact_scope": file_path or "",
-            "evaluation_context_hash": contract.content_hash(problem or "")}
-
-
-def _record_closes(record, code):
-    """Closure is contract.select's verdict, on a record proven to describe
-    these exact bytes. A record whose hash does not match the candidate it is
-    attached to may neither close nor win -- stale evidence about other bytes
-    is the one way a verified claim becomes a false one.
-    """
-    if not record or record.get("candidate_content_hash") != contract.content_hash(code):
-        return False
-    try:
-        selection = contract.select([record], record)
-    except contract.ContractError:
-        return False
-    return selection.get("verified_winner") is record
 
 
 def _make_output_probe(code: str, tc, task_input_file: str = ""):
@@ -1241,47 +992,6 @@ def _failed_a_project_check(candidate) -> bool:
                                       "incumbent_role")
                and ev.get("status") == "failed"
                for ev in candidate.get("verification_evidence") or [])
-
-
-# The pool index of the incumbent: the caller's own bytes. Every generated
-# candidate is numbered from 0 (the phase-zero probe) up; the incumbent was not
-# generated, so it takes no generation slot and no generated number.
-INCUMBENT_INDEX = -1
-
-
-def _who(candidate) -> str:
-    """How an event names a pool member."""
-    if candidate.get("incumbent"):
-        return "The submitted file"
-    return f"Candidate {candidate.get('index')}"
-
-
-def _whitespace_free(text: str) -> str:
-    return "".join((text or "").split())
-
-
-def _without_retypings(passing, emit=None):
-    """The submitted bytes, never a copy of them (#259).
-
-    A candidate that equals the passing incumbent once whitespace is ignored
-    is the incumbent re-typed: the same program plus whatever drift the
-    re-typing added, observed as a leading space inside a printed message. It
-    leaves the pool, and the exact bytes stand for both. A copy of an
-    incumbent that did NOT pass stays: re-typing is how an indentation slip
-    gets repaired.
-    """
-    incumbent = next((c for c in passing if c.get("incumbent")), None)
-    if incumbent is None:
-        return passing
-    bare = _whitespace_free(incumbent.get("code"))
-    kept = [c for c in passing
-            if c is incumbent or _whitespace_free(c.get("code")) != bare]
-    if emit is not None and len(kept) < len(passing):
-        dropped = [c.get("index") for c in passing if c not in kept]
-        emit("retyping_dropped",
-             f"{len(dropped)} candidate(s) only re-typed the submitted file; "
-             f"its exact bytes stand for them", indices=dropped)
-    return kept
 
 
 def _consensus_winners(candidates, test_cases, sandbox, emit,
@@ -1488,26 +1198,6 @@ def _with_file_context(problem, files):
             + "\n\n---\n\nTask:\n" + problem
         )
     return problem
-
-
-def _progress_emitter(events, start, progress_callback):
-    """The run's emit(stage, detail, **data). It keeps every event but a
-    token in `events` and streams each one to the progress callback."""
-    def emit(stage, detail="", **data):
-        ev = {"stage": stage, "detail": detail, "t": time.time() - start}
-        if data:
-            ev["data"] = data
-        # Token deltas stream live through the callback but are not
-        # stored: one dict per token would make the final `event: result`
-        # frame multi-MB on long generations.
-        if stage != "token":
-            events.append(ev)
-        if progress_callback:
-            try:
-                progress_callback(stage, detail, **data)
-            except TypeError:
-                progress_callback(stage, detail)
-    return emit
 
 
 def _client_check(progress_callback, cancel_scope, task_id):
@@ -1969,245 +1659,6 @@ def _agree_by_consensus(ctx, passing, pool_members, self_tests):
     return passing
 
 
-def _lens_verdict(per_step):
-    """Whether one candidate's per-step Lens scores fall below the model's
-    severe band. Returns (vetoed, the score read, the band it is read
-    against)."""
-    # Vetoes read the MEAN, not the MIN.
-    #
-    # gx_score_min is a minimum over every token, so it falls
-    # with length whatever the content: measured 2026-08-04 on
-    # one function repeated, 0.468 at 20 tokens down to 0.305
-    # at 305. It cannot separate — real code 0.325, a
-    # repetition loop 0.320, stub spam 0.286 all sit together,
-    # which is why severe=0.28 never fired once in 56 sessions.
-    #
-    # gx_score_mean holds across the same 15x length change
-    # (0.577 to 0.517) and does separate: real code 0.594,
-    # repetition 0.485, stub spam 0.467. Across 188 scores
-    # from live runs it ranged 0.547-0.651, so severe_mean at
-    # 0.52 sits below every clean sample observed and above
-    # both pathologies.
-    gx_mean = per_step.get("gx_score_mean")
-    gx_min = per_step.get("gx_score_min")
-    thresholds = per_step.get("thresholds") or {}
-    severe_mean = thresholds.get("severe_mean")
-    severe = thresholds.get("severe")
-    if (gx_mean is not None
-            and isinstance(severe_mean, (int, float))):
-        vetoed_now = gx_mean < severe_mean
-        gx_min, severe = gx_mean, severe_mean
-    else:
-        # Artifacts predating severe_mean keep the old check.
-        vetoed_now = (gx_min is not None
-                      and isinstance(severe, (int, float))
-                      and gx_min < severe)
-    return vetoed_now, gx_min, severe
-
-
-def _lens_veto(passing, emit):
-    """PC-207: a sandbox-passing candidate whose generation pattern the Lens
-    reads as collapsed toward a stub is vetoed: marked failing, with the
-    reason as its stderr. Returns the candidates it keeps."""
-    # ===== LENS VETO =====
-    # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
-    # geometric-lens gx_min sits below THIS model's calibrated severe band.
-    # Sandbox is an ORM (does it execute?), lens is a PRM (is the
-    # generation pattern collapsing into a stub?) — they answer
-    # different questions. The May 7 dashboard.html session shipped
-    # a 10-line `<h1>Dashboard</h1>` stub because sandbox said pass
-    # while lens said gx_min=0.069. Without this filter, V3 returns
-    # passed=True and the proxy's PC-044 nudges the agent to done.
-    #
-    # Language-agnostic by construction: the lens runs on the model's
-    # residual stream; gx values don't depend on whether the file
-    # being scored is HTML, Python, Rust, or Java.
-    if passing:
-        kept, vetoed = [], []
-        for c in passing:
-            per_step = c.get("per_step") or {}
-            vetoed_now, gx_min, severe = _lens_verdict(per_step)
-            if vetoed_now:
-                # A vetoed candidate is a failing candidate: mark it so
-                # the phase-3 pool (`not c.get("passed")`) picks it up
-                # and the energy fallback can never return it. The veto
-                # reason replaces the (empty) passing-run stderr so
-                # repair sees WHY it was rejected.
-                c["passed"] = False
-                c["vetoed_by"] = "lens"
-                c["stderr"] = (
-                    f"lens veto: gx_min={gx_min:.3f} below the severe "
-                    f"threshold {severe:.3f} — generation pattern "
-                    f"collapsed toward a stub; the code executes but "
-                    f"likely does not implement the task")
-                vetoed.append(c)
-                emit("lens_veto",
-                     f"{_who(c)} sandbox-passed but lens-vetoed "
-                     f"(gx_min={gx_min:.3f} < {severe:.3f}) — likely a stub",
-                     index=c["index"], gx_score_min=gx_min,
-                     first_off_rails_idx=per_step.get("first_off_rails_idx", -1))
-            else:
-                kept.append(c)
-        if vetoed:
-            print(
-                f"  [lens] vetoed {len(vetoed)}/{len(passing)} sandbox-passing "
-                f"candidates using per-model severe thresholds — falling "
-                f"{'through to phase-3 repair' if not kept else 'back to remaining %d' % len(kept)}",
-                flush=True,
-            )
-        passing = kept
-    return passing
-
-
-def _structural_veto(passing, files, smoke_language, emit):
-    """GH #39 point 1: for Python, a sandbox-passing candidate with a direct
-    call that resolves to nothing is vetoed. Returns the candidates kept."""
-    # ===== STRUCTURAL VETO =====
-    # GH #39 point 1: hard-reject candidates whose direct-identifier
-    # calls don't resolve against (local defs, imports, builtins,
-    # project symbols). Sandbox can pass for code where the unresolved
-    # call is in a try/except ImportError fallback or a dead branch
-    # that doesn't execute under the tests; tree-sitter sees the
-    # surface bug regardless. Same architecture as lens veto.
-    #
-    # Language-agnostic fit: v1 supports Python only (matches the
-    # rest of the GH #39 stack), but the resolution-order pattern
-    # generalizes to any language with explicit imports + named
-    # functions (Go, Rust, JS/TS modules). Adding a language adds
-    # implementation surface, not model-facing API surface.
-    #
-    # Python only, enforced. structural_score parses with the Python
-    # grammar, and tree-sitter parses anything tolerantly: an HTML
-    # template's `<th>Time (mins)</th>` came back as a call to Time,
-    # `rgba(...)` in a stylesheet as a call to rgba, and a template
-    # that had passed its smoke check was vetoed into five minutes of
-    # repair for a NameError no runtime could raise (2026-09-14).
-    if passing and smoke_language not in ("python", "py"):
-        print(f"  [structural] veto skipped: {smoke_language} is not Python", flush=True)
-    elif passing:
-        passing = _keep_structurally_resolved(passing, files, emit)
-    return passing
-
-
-def _keep_structurally_resolved(passing, files, emit):
-    """The structural veto's check of each passing candidate against its own
-    imports and definitions, the builtins and the project's symbols."""
-    # #147: gate on `passing` alone, not `passing and files`. The
-    # edit path (improveContentWithV3) frequently sends no
-    # project_context, so `files` was empty and the whole veto was
-    # skipped — a NameError edit (render_template called with only
-    # render_template_string imported) sailed through and landed as
-    # verified. structural_score resolves against the candidate's
-    # OWN imports/defs/builtins, so it catches an unresolved direct
-    # call with empty project_symbols; project symbols only add
-    # lenient cross-file crediting.
-    project_symbols = symbols.build_project_symbols(files or {})
-    kept = []
-    for c in passing:
-        struct = symbols.structural_score(project_symbols, c.get("code", ""))
-        if struct.get("ok") and struct.get("n_unresolved", 0) >= 1:
-            # Same contract as the lens veto: vetoed = failing.
-            c["passed"] = False
-            c["vetoed_by"] = "structural"
-            c["stderr"] = (
-                "structural veto: unresolved direct call(s) that "
-                "would raise NameError at runtime: "
-                + ", ".join(struct["unresolved_calls"][:5]))
-            emit("structural_veto",
-                 f"{_who(c)} sandbox-passed but "
-                 f"{struct['n_unresolved']} unresolved call(s): "
-                 f"{', '.join(struct['unresolved_calls'][:3])}",
-                 index=c["index"],
-                 n_unresolved=struct["n_unresolved"],
-                 unresolved_calls=struct["unresolved_calls"][:5],
-                 n_calls_total=struct["n_calls_total"])
-            print(
-                f"  [structural] vetoed cand {c['index']} — "
-                f"{struct['n_unresolved']} unresolved: {struct['unresolved_calls'][:5]}",
-                flush=True,
-            )
-            continue
-        if struct.get("ok"):
-            c["structural"] = struct  # stash for phase 3 / repair
-        kept.append(c)
-    if len(kept) < len(passing):
-        print(
-            f"  [structural] kept {len(kept)}/{len(passing)} candidates after structural veto"
-            f"{' — falling through to phase-3 repair' if not kept else ''}",
-            flush=True,
-        )
-    passing = kept
-    return passing
-
-
-def _call_graph_veto(passing, files, file_path, smoke_language, emit):
-    """Issue #39 phase 1: for Python with project files, a candidate whose
-    direct calls resolve to no in-scope definition in the import graph is
-    vetoed, unless that would veto them all. Returns the candidates kept."""
-    # ===== CALL-GRAPH VETO (issue #39, Phase 1) =====
-    # Deepens the structural veto using the import graph: reject a candidate
-    # whose direct calls don't resolve to a real, in-scope definition (local,
-    # builtin, imported, or supplied by a resolved wildcard) — not merely
-    # "some project file defines that name." Catches broken cross-file
-    # references the shipped veto accepts. Conservative — stays lenient on
-    # opaque wildcards and never empties the candidate set (a fully-failing
-    # set falls through intact to repair).
-    #
-    # Python only, like the structural veto above, and for the same
-    # reason: the resolver parses with the Python grammar, and an HTML
-    # page's <script> calling setInterval read as an unresolved call.
-    if passing and files and file_path and smoke_language not in ("python", "py"):
-        print(f"  [call_graph] veto skipped: {smoke_language} is not Python", flush=True)
-    elif passing and files and file_path:
-        try:
-            from graph import unresolved_calls
-            _cg_on = True
-        except Exception as cge:
-            print(f"  [call_graph] veto unavailable: {cge}", flush=True)
-            _cg_on = False
-        if _cg_on:
-            passing = _prune_unresolved_calls(passing, files, file_path, unresolved_calls, emit)
-    return passing
-
-
-def _prune_unresolved_calls(passing, files, file_path, unresolved_calls, emit):
-    """The call-graph veto's resolution of each candidate; it marks and
-    drops the unresolved ones only when at least one candidate survives."""
-    cg_kept, cg_vetoed = [], []
-    for c in passing:
-        try:
-            res = unresolved_calls(
-                file_path, c.get("code", ""), files, strict=True)
-        except Exception as cge:
-            print(f"  [call_graph] veto skipped for cand {c.get('index')}: {cge}",
-                  flush=True)
-            cg_kept.append(c)
-            continue
-        if res.get("ok") and res.get("unresolved"):
-            cg_vetoed.append((c, res["unresolved"]))
-            continue
-        cg_kept.append(c)
-    if cg_kept:  # only prune when at least one candidate survives
-        # Marking happens only when the prune actually applies —
-        # the conservative all-vetoed case keeps the full set
-        # (and its passed flags) intact.
-        for c, unresolved in cg_vetoed:
-            c["passed"] = False
-            c["vetoed_by"] = "call_graph"
-            c["stderr"] = (
-                "call-graph veto: cross-file call(s) that resolve "
-                "to no in-scope definition: "
-                + ", ".join(unresolved[:5]))
-            emit("call_graph_veto",
-                 f"{_who(c)} has unresolved call(s): "
-                 f"{', '.join(unresolved[:3])}",
-                 index=c.get("index"), unresolved=unresolved[:5])
-            print(f"  [call_graph] vetoed cand {c.get('index')} — "
-                  f"unresolved: {unresolved[:5]}", flush=True)
-        passing = cg_kept
-    return passing
-
-
 def _select(ctx, passing):
     """Candidate selection. The Lens picks the lowest-energy candidate that
     passed (or agrees, by consensus); contract selection over the records is
@@ -2239,108 +1690,6 @@ def _select(ctx, passing):
             winner = _announce_selection(emit, passing, selected)
             return _deliver_selected(ctx, selected, winner)
     return None
-
-
-def _select_by_contract(passing, selected, result, capture):
-    """Contract selection over the passing candidates' own records, kept in
-    the result as the evidence selection and in the capture as the pool."""
-    # Contract selection over the candidates' own records. It does
-    # not choose the delivered bytes -- the lens choice above stands
-    # -- but it is the selection the evidence envelope reports, and
-    # the proxy authorizes a candidate only on a verified winner
-    # from it. The choice is contract.select over the candidates' own
-    # records, under the rubric the BASELINE was measured with --
-    # records that disagree about contract, artifact or context are
-    # incomparable rather than silently ranked, so a foreign
-    # majority cannot outvote one matching record.
-    pool = [c for c in passing if c.get("contract_record")]
-    expected = result.get("evidence_record") or (
-        pool[0]["contract_record"] if pool else None)
-    contract_pick = None
-    if pool and expected:
-        picked, contract_pick, verified = _contract_pick(pool, expected)
-        status = contract.selection_status(picked)
-        result["contract_selection"] = picked
-        result["evidence_selection"] = {
-            "lens_index": getattr(selected, "index", None),
-            "evidence_index": (contract_pick or {}).get("index"),
-            "verified_index": (verified or {}).get("index"),
-            "agree": getattr(selected, "index", None)
-                     == (contract_pick or {}).get("index"),
-            "status": status,
-            "reason": picked.get("selection_reason", ""),
-            "tied": len(picked.get("tied") or []),
-            "incomparable": len(picked.get("incomparable") or []),
-            "ineligible": len(picked.get("ineligible") or []),
-            "candidates": [
-                {"index": c.get("index"),
-                 "strength": c["contract_record"]["evidence_strength"],
-                 "adapter": c["contract_record"]["adapter_id"],
-                 "supported": c["contract_record"]["supported"],
-                 "closure_eligible": c["contract_record"]["closure_eligible"],
-                 "quality": c["contract_record"]["overall_quality_score"],
-                 "missing_required": c["contract_record"]["missing_required"],
-                 "energy": c.get("energy")}
-                for c in pool],
-        }
-        capture.note_pool(
-            phase="phase1", pool=pool,
-            lens_index=getattr(selected, "index", None),
-            evidence_index=(contract_pick or {}).get("index"),
-            verified_index=(verified or {}).get("index"),
-            status=status, reason=picked.get("selection_reason", ""),
-            tied=len(picked.get("tied") or []),
-            incomparable=len(picked.get("incomparable") or []),
-            ineligible=len(picked.get("ineligible") or []))
-
-
-def _contract_pick(pool, expected):
-    """contract.select over the pool's records. Returns (picked, the pick
-    the evidence reports, the verified winner or None)."""
-    try:
-        picked = contract.select(
-            [c["contract_record"] for c in pool], expected)
-    except contract.ContractError as exc:
-        picked = {"best_record": None, "verified_winner": None,
-                  "tied": [], "incomparable": [], "ineligible": [],
-                  "selection_reason": f"identity error: {exc}"}
-    by_record = {id(c["contract_record"]): c for c in pool}
-    best = by_record.get(id(picked.get("best_record")))
-    verified = by_record.get(id(picked.get("verified_winner")))
-    # A record must describe the bytes it is attached to before
-    # it may win anything.
-    if verified and not _record_closes(
-            verified["contract_record"], verified["code"]):
-        verified = None
-    contract_pick = verified or best
-    return picked, contract_pick, verified
-
-
-def _announce_selection(emit, passing, selected):
-    """Emit which candidate the Lens selected and on what grounds. Returns
-    the selected candidate's dict (None if no candidate has its index)."""
-    winner = _candidate_by_index(passing, selected.index)
-    lens_scored = getattr(selected, "energy", None) is not None
-    lens_failure = (winner or {}).get("lens_failure")
-    named = ("the submitted file" if (winner or {}).get("incumbent")
-             else f"candidate {selected.index}")
-    if (winner or {}).get("consensus"):
-        detail = (f"Lens selected {named} from candidates "
-                  f"that agree — no candidate passed verification")
-    elif lens_scored:
-        detail = f"Lens selected {named}"
-    else:
-        # The only verified candidate carries no score. It
-        # is delivered on its sandbox evidence and says so;
-        # a scored candidate would have outranked it.
-        detail = (f"Selected {named}: verified, "
-                  f"unscored by the lens "
-                  f"({scoring.describe_lens_failure(lens_failure or {})})")
-    emit("selected", detail,
-         index=selected.index,
-         energy=getattr(selected, "energy", None),
-         lens_scored=lens_scored, lens_failure=lens_failure)
-    return winner
 
 
 def _deliver_selected(ctx, selected, winner):
