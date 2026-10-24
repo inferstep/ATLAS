@@ -509,7 +509,94 @@ def _exit_code(status) -> int:
     return -1
 
 
-def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
+def _wait_without_blocking(proc):
+    """One wait4 that does not block: (pid or 0, wait status, rusage or None).
+
+    A child that is no longer there to wait for counts as ended, with status 0.
+    """
+    try:
+        done, st, usage = os.wait4(proc.pid, os.WNOHANG)
+    except ChildProcessError:
+        done, st, usage = proc.pid, 0, None
+    return done, st, usage
+
+
+def _rusage_peak(usage, child_peak: int) -> int:
+    """The peak in bytes that wait4's rusage gives, or child_peak when there is no rusage."""
+    if usage is not None:
+        child_peak = usage.ru_maxrss * _MAXRSS_UNIT
+    return child_peak
+
+
+def _sample_until_it_ends(proc, pgid: int, token: str, contract: ResourceContract, cancelled,
+                          out_pump: _Pump, err_pump: _Pump, ceiling: int, deadline: float) -> tuple:
+    """Sample the group until the command ends by itself or reaches a limit.
+
+    Returns (outcome, wait status, child peak, peak memory, peak processes).
+    """
+    peak_mem, peak_procs = 0, 0
+    outcome = OUTCOME_UNCLASSIFIED
+    status = None
+    child_peak = 0
+
+    # Reaped here rather than through Popen, because wait4 carries the child's
+    # own rusage -- and ru_maxrss is the kernel's peak for that child and every
+    # descendant it reaped. A command that allocates a gigabyte and dies
+    # between two samples leaves no trace in /proc by the time anyone looks;
+    # it leaves an exact number here.
+    while True:
+        done, st, usage = _wait_without_blocking(proc)
+        if done:
+            status = st
+            child_peak = _rusage_peak(usage, child_peak)
+            outcome = OUTCOME_COMPLETED
+            break
+        rss, procs = group_usage(pgid, token)
+        peak_mem, peak_procs = max(peak_mem, rss), max(peak_procs, procs)
+        if out_pump.overflowed or err_pump.overflowed:
+            outcome = OUTCOME_OUTPUT_LIMIT
+            break
+        if cancelled is not None and cancelled():
+            outcome = OUTCOME_CANCELLED
+            break
+        if peak_mem >= ceiling:
+            # OUR decision, which is what makes it reportable.
+            outcome = OUTCOME_MEMORY_EXHAUSTED
+            break
+        if procs > contract.max_processes:
+            outcome = OUTCOME_PROCESS_LIMIT
+            break
+        if time.time() >= deadline:
+            outcome = OUTCOME_TIMED_OUT
+            break
+        time.sleep(contract.sample_interval)
+    return outcome, status, child_peak, peak_mem, peak_procs
+
+
+def _outcome_after_the_end(outcome: str, out_pump: _Pump, err_pump: _Pump, child_peak: int,
+                           ceiling: int, returncode: int, peak_mem: int) -> str:
+    """The outcome once the command is gone, corrected by what the kernel measured."""
+    if outcome == OUTCOME_COMPLETED and (out_pump.overflowed or err_pump.overflowed):
+        # Closing the pipe at the cap sends SIGPIPE, so the command frequently
+        # dies before the sampler reads the overflow flag and lands on the
+        # completed branch. Truncated output means it did not get to say
+        # everything it had, which is not a command that reached its own end.
+        outcome = OUTCOME_OUTPUT_LIMIT
+    if outcome == OUTCOME_COMPLETED and child_peak >= ceiling:
+        outcome = OUTCOME_MEMORY_EXHAUSTED
+    if outcome == OUTCOME_COMPLETED and returncode < 0:
+        # Killed by a signal nobody here sent.
+        if -returncode in (signal.SIGKILL, signal.SIGSEGV, signal.SIGBUS) \
+                and peak_mem >= ceiling // 2:
+            outcome = OUTCOME_MEMORY_EXHAUSTED
+        else:
+            outcome = OUTCOME_UNCLASSIFIED
+    if outcome not in ALL_OUTCOMES:
+        outcome = OUTCOME_UNCLASSIFIED
+    return outcome
+
+
+def run_bounded(cmd: List[str], contract: ResourceContract,
                 cwd: Optional[Path] = None, env: Optional[Dict[str, str]] = None,
                 stdin: Optional[str] = None,
                 cancelled=None) -> BoundedResult:
@@ -554,56 +641,18 @@ def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
 
     ceiling = contract.memory_bytes
     deadline = started + contract.wall_seconds
-    peak_mem, peak_procs = 0, 0
-    outcome = OUTCOME_UNCLASSIFIED
-    status = None
-    child_peak = 0
-
-    # Reaped here rather than through Popen, because wait4 carries the child's
-    # own rusage -- and ru_maxrss is the kernel's peak for that child and every
-    # descendant it reaped. A command that allocates a gigabyte and dies
-    # between two samples leaves no trace in /proc by the time anyone looks;
-    # it leaves an exact number here.
+    # What the clean-up below reads when the sampling ends by an error.
+    outcome, status, child_peak, peak_mem, peak_procs = OUTCOME_UNCLASSIFIED, None, 0, 0, 0
     try:
-        while True:
-            try:
-                done, st, usage = os.wait4(proc.pid, os.WNOHANG)
-            except ChildProcessError:
-                done, st, usage = proc.pid, 0, None
-            if done:
-                status = st
-                if usage is not None:
-                    child_peak = usage.ru_maxrss * _MAXRSS_UNIT
-                outcome = OUTCOME_COMPLETED
-                break
-            rss, procs = group_usage(pgid, token)
-            peak_mem, peak_procs = max(peak_mem, rss), max(peak_procs, procs)
-            if out_pump.overflowed or err_pump.overflowed:
-                outcome = OUTCOME_OUTPUT_LIMIT
-                break
-            if cancelled is not None and cancelled():
-                outcome = OUTCOME_CANCELLED
-                break
-            if peak_mem >= ceiling:
-                # OUR decision, which is what makes it reportable.
-                outcome = OUTCOME_MEMORY_EXHAUSTED
-                break
-            if procs > contract.max_processes:
-                outcome = OUTCOME_PROCESS_LIMIT
-                break
-            if time.time() >= deadline:
-                outcome = OUTCOME_TIMED_OUT
-                break
-            time.sleep(contract.sample_interval)
+        outcome, status, child_peak, peak_mem, peak_procs = _sample_until_it_ends(
+            proc, pgid, token, contract, cancelled, out_pump, err_pump, ceiling, deadline)
     finally:
         if outcome != OUTCOME_COMPLETED:
             _kill_group(pgid, contract.grace_seconds)
             _kill_token(token, contract.grace_seconds)
             try:
-                done, st, usage = os.wait4(proc.pid, 0)
-                status = st
-                if usage is not None:
-                    child_peak = usage.ru_maxrss * _MAXRSS_UNIT
+                _, status, usage = os.wait4(proc.pid, 0)
+                child_peak = _rusage_peak(usage, child_peak)
             except OSError:  # ChildProcessError is an OSError
                 pass
         out_pump.join(timeout=2)
@@ -627,23 +676,8 @@ def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
     # a way that is indistinguishable from a failing test. ru_maxrss is the
     # kernel's own peak for that child and everything it reaped, so it tells
     # them apart by measurement rather than by reading the child's words.
-    if outcome == OUTCOME_COMPLETED and (out_pump.overflowed or err_pump.overflowed):
-        # Closing the pipe at the cap sends SIGPIPE, so the command frequently
-        # dies before the sampler reads the overflow flag and lands on the
-        # completed branch. Truncated output means it did not get to say
-        # everything it had, which is not a command that reached its own end.
-        outcome = OUTCOME_OUTPUT_LIMIT
-    if outcome == OUTCOME_COMPLETED and child_peak >= ceiling:
-        outcome = OUTCOME_MEMORY_EXHAUSTED
-    if outcome == OUTCOME_COMPLETED and returncode < 0:
-        # Killed by a signal nobody here sent.
-        if -returncode in (signal.SIGKILL, signal.SIGSEGV, signal.SIGBUS) \
-                and peak_mem >= ceiling // 2:
-            outcome = OUTCOME_MEMORY_EXHAUSTED
-        else:
-            outcome = OUTCOME_UNCLASSIFIED
-    if outcome not in ALL_OUTCOMES:
-        outcome = OUTCOME_UNCLASSIFIED
+    outcome = _outcome_after_the_end(outcome, out_pump, err_pump, child_peak, ceiling,
+                                     returncode, peak_mem)
 
     return BoundedResult(
         outcome=outcome, returncode=returncode,
