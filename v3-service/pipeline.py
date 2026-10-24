@@ -1567,6 +1567,116 @@ def _new_result(task_id):
     return result
 
 
+def _check_incumbent(ctx, verified_sandbox, _task, probe_code):
+    """The caller's own bytes, checked as a candidate (#259).
+
+    Returns (incumbent, result). The incumbent is None when the caller sent
+    no file; result is the finished run when the incumbent passed and its
+    own record closes, else None.
+    """
+    baseline_code, file_path, emit, capture = ctx.baseline_code, ctx.file_path, ctx.emit, ctx.capture
+    result, start, events = ctx.result, ctx.start, ctx.events
+    # ===== THE INCUMBENT =====
+    # The caller's own bytes are a real candidate (#259). They face the
+    # checks every generated candidate faces -- the lens, the sandbox
+    # verification, the contract record, and in phase one the vetoes --
+    # and the lens ranks them with the rest, so a candidate replaces them
+    # only by beating them. They are the EXACT bytes the request carried:
+    # nothing re-types them, and a copy that differs only in whitespace
+    # is never delivered in their place (_without_retypings).
+    #
+    # Until #259 they were only prose in the problem statement. Across 112
+    # recorded sessions V3 replaced the model's file in all 33 of its
+    # deliveries, three of them test files replaced by module code that
+    # ran, tested nothing, and left two runs unable to finish.
+    incumbent = None
+    if baseline_code:
+        incumbent = {"index": INCUMBENT_INDEX, "incumbent": True,
+                     "code": baseline_code, **_lens_view(baseline_code)}
+        inc_passed, inc_out, inc_err, inc_evidence = verified_sandbox(baseline_code)
+        incumbent.update(
+            passed=inc_passed, stdout=inc_out, stderr=inc_err,
+            verification_evidence=inc_evidence,
+            contract_record=_evaluate_candidate(
+                file_path, baseline_code, inc_passed, emit, task=_task))
+        emit("incumbent",
+             f"The submitted file: passed={inc_passed}"
+             + (f" stderr={inc_err[:80]}" if inc_err else ""),
+             passed=inc_passed, energy=incumbent.get("energy"))
+        capture.note_candidate(
+            role="incumbent", index=INCUMBENT_INDEX, code=baseline_code,
+            accepted=inc_passed, record=incumbent["contract_record"],
+            phase="incumbent", lens=_candidate_lens_payload(incumbent))
+        # The same closure rule as the probe's below, asked first: a
+        # submitted file whose own record closes is already the verified
+        # winner, and nothing generated could outrank it.
+        if inc_passed and _record_closes(incumbent["contract_record"], baseline_code):
+            emit("incumbent_holds",
+                 "The submitted file passed and closes — keeping it")
+            result["passed"] = True
+            result["code"] = baseline_code
+            result["phase_solved"] = "incumbent"
+            result["candidates_generated"] = 1 if probe_code else 0
+            result["total_time_ms"] = (time.time() - start) * 1000
+            result["verification_evidence"] = inc_evidence
+            result["winning_score"] = incumbent.get("energy_norm") or 0.0
+            result["evidence_record"] = incumbent["contract_record"]
+            result["events"] = events
+            return incumbent, result
+    return incumbent, None
+
+
+def _evaluate_probe(ctx, probe, _task):
+    """Candidate zero's contract record, kept in the result and the capture.
+
+    Returns (probe_result, result): result is the finished run when the
+    probe passed and its own record closes, else None.
+    """
+    file_path, emit, capture, result, start, events = (
+        ctx.file_path, ctx.emit, ctx.capture, ctx.result, ctx.start, ctx.events)
+    probe_code, probe_passed, probe_evidence = probe.code, probe.passed, probe.evidence
+    probe_scores, probe_energy_raw, probe_energy_norm = probe.scores, probe.energy_raw, probe.energy_norm
+    probe_cx_calibrated = probe.cx_calibrated
+    probe_result = _evaluate_candidate(
+        file_path, probe_code, probe_passed, emit, task=_task)
+    probe_adapter = probe_result["adapter_id"]
+    result["evidence_record"] = probe_result
+    capture.note_candidate(
+        role="candidate_zero", index=0, code=probe_code,
+        accepted=probe_passed, record=probe_result, phase="probe",
+        lens={"energy": probe_energy_raw, "energy_norm": probe_energy_norm,
+              "energy_calibrated": probe_cx_calibrated,
+              "token_assertion": probe_scores.get("token_assertion"),
+              "gx_score": probe_scores.get("gx_score"),
+              "verdict": probe_scores.get("verdict"),
+              "failure": probe_scores.get("failure")})
+    emit("probe_evidence",
+         f"adapter={probe_adapter} strength={probe_result['evidence_strength']} "
+         f"supported={probe_result['supported']}",
+         adapter=probe_adapter, strength=probe_result["evidence_strength"])
+
+    # Early return is contract.select over the candidate's own record: it
+    # closes only when that exact record is the VERIFIED WINNER
+    # under its own rubric. A best record that is not closure-eligible,
+    # anything unsupported, failed or incomparable, and any record whose
+    # hash does not match these bytes, all leave the pipeline open. The
+    # strength floor comes from the contract, so an artifact class whose
+    # contract closes on syntax legitimately may, and one that demands
+    # behaviour still cannot close on a compile.
+    if probe_passed and _record_closes(probe_result, probe_code):
+        emit("probe_pass", "Probe passed — returning early")
+        result["passed"] = True
+        result["code"] = probe_code
+        result["phase_solved"] = "probe"
+        result["candidates_generated"] = 1
+        result["total_time_ms"] = (time.time() - start) * 1000
+        result["verification_evidence"] = probe_evidence
+        result["winning_score"] = probe_energy_norm
+        result["events"] = events
+        return probe_result, result
+    return probe_result, None
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -1912,91 +2022,12 @@ class V3PipelineService:
         # play no part in it: they are diagnostics (see verified_sandbox).
         _task = _task_identity(file_path, problem)
 
-        # ===== THE INCUMBENT =====
-        # The caller's own bytes are a real candidate (#259). They face the
-        # checks every generated candidate faces -- the lens, the sandbox
-        # verification, the contract record, and in phase one the vetoes --
-        # and the lens ranks them with the rest, so a candidate replaces them
-        # only by beating them. They are the EXACT bytes the request carried:
-        # nothing re-types them, and a copy that differs only in whitespace
-        # is never delivered in their place (_without_retypings).
-        #
-        # Until #259 they were only prose in the problem statement. Across 112
-        # recorded sessions V3 replaced the model's file in all 33 of its
-        # deliveries, three of them test files replaced by module code that
-        # ran, tested nothing, and left two runs unable to finish.
-        incumbent = None
-        if baseline_code:
-            incumbent = {"index": INCUMBENT_INDEX, "incumbent": True,
-                         "code": baseline_code, **_lens_view(baseline_code)}
-            inc_passed, inc_out, inc_err, inc_evidence = verified_sandbox(baseline_code)
-            incumbent.update(
-                passed=inc_passed, stdout=inc_out, stderr=inc_err,
-                verification_evidence=inc_evidence,
-                contract_record=_evaluate_candidate(
-                    file_path, baseline_code, inc_passed, emit, task=_task))
-            emit("incumbent",
-                 f"The submitted file: passed={inc_passed}"
-                 + (f" stderr={inc_err[:80]}" if inc_err else ""),
-                 passed=inc_passed, energy=incumbent.get("energy"))
-            capture.note_candidate(
-                role="incumbent", index=INCUMBENT_INDEX, code=baseline_code,
-                accepted=inc_passed, record=incumbent["contract_record"],
-                phase="incumbent", lens=_candidate_lens_payload(incumbent))
-            # The same closure rule as the probe's below, asked first: a
-            # submitted file whose own record closes is already the verified
-            # winner, and nothing generated could outrank it.
-            if inc_passed and _record_closes(incumbent["contract_record"], baseline_code):
-                emit("incumbent_holds",
-                     "The submitted file passed and closes — keeping it")
-                result["passed"] = True
-                result["code"] = baseline_code
-                result["phase_solved"] = "incumbent"
-                result["candidates_generated"] = 1 if probe_code else 0
-                result["total_time_ms"] = (time.time() - start) * 1000
-                result["verification_evidence"] = inc_evidence
-                result["winning_score"] = incumbent.get("energy_norm") or 0.0
-                result["evidence_record"] = incumbent["contract_record"]
-                result["events"] = events
-                return result
-
-        probe_result = _evaluate_candidate(
-            file_path, probe_code, probe_passed, emit, task=_task)
-        probe_adapter = probe_result["adapter_id"]
-        result["evidence_record"] = probe_result
-        capture.note_candidate(
-            role="candidate_zero", index=0, code=probe_code,
-            accepted=probe_passed, record=probe_result, phase="probe",
-            lens={"energy": probe_energy_raw, "energy_norm": probe_energy_norm,
-                  "energy_calibrated": probe_cx_calibrated,
-                  "token_assertion": probe_scores.get("token_assertion"),
-                  "gx_score": probe_scores.get("gx_score"),
-                  "verdict": probe_scores.get("verdict"),
-                  "failure": probe_scores.get("failure")})
-        emit("probe_evidence",
-             f"adapter={probe_adapter} strength={probe_result['evidence_strength']} "
-             f"supported={probe_result['supported']}",
-             adapter=probe_adapter, strength=probe_result["evidence_strength"])
-
-        # Early return is contract.select over the candidate's own record: it
-        # closes only when that exact record is the VERIFIED WINNER
-        # under its own rubric. A best record that is not closure-eligible,
-        # anything unsupported, failed or incomparable, and any record whose
-        # hash does not match these bytes, all leave the pipeline open. The
-        # strength floor comes from the contract, so an artifact class whose
-        # contract closes on syntax legitimately may, and one that demands
-        # behaviour still cannot close on a compile.
-        if probe_passed and _record_closes(probe_result, probe_code):
-            emit("probe_pass", "Probe passed — returning early")
-            result["passed"] = True
-            result["code"] = probe_code
-            result["phase_solved"] = "probe"
-            result["candidates_generated"] = 1
-            result["total_time_ms"] = (time.time() - start) * 1000
-            result["verification_evidence"] = probe_evidence
-            result["winning_score"] = probe_energy_norm
-            result["events"] = events
-            return result
+        incumbent, finished = _check_incumbent(ctx, verified_sandbox, _task, probe_code)
+        if finished is not None:
+            return finished
+        probe_result, finished = _evaluate_probe(ctx, probe, _task)
+        if finished is not None:
+            return finished
 
         # ===== PHASE 2: CxGx K ALLOCATION =====
         # The probe failed verification, so this task is not trivial: C(x)
