@@ -220,27 +220,25 @@ func TestMandatoryChecksRefuseOnTheDirectPath(t *testing.T) {
 		"<html><body>\n<script>\nlet x = 1;\n</script>\n</body></html>\n"
 	for _, c := range []struct {
 		name, rel, before, after string
-		setup                    func(w *budgetWorld)
+		unknown, embedded        string // the budgetWorld fields of the same name
 		want                     string
 	}{
 		{"healthy to broken syntax", "solve.py", budgetModule,
-			strings.Replace(budgetModule, "def area(radius):", "def broken(radius:", 1), nil, "syntax error"},
+			strings.Replace(budgetModule, "def area(radius):", "def broken(radius:", 1), "", "", "syntax error"},
 		{"unresolved name introduced", "solve.py", budgetModule,
 			strings.Replace(budgetModule, "return math.pi * radius * radius", "return frobnicate(radius)", 1),
-			func(w *budgetWorld) { w.unknown = "frobnicate" }, "frobnicate"},
+			"frobnicate", "", "frobnicate"},
 		{"embedded script broken", "index.html", healthyPage,
 			strings.Replace(healthyPage, "let x = 1;", "let x = 1;);", 1),
-			func(w *budgetWorld) { w.embedded = "let x = 1;);" }, "<script>"},
+			"", "let x = 1;);", "<script>"},
 		{"duplicate entrypoint", "solve.py",
 			budgetModule + "\n\nif __name__ == \"__main__\":\n    print(area(1))\n",
 			budgetModule + "\n\nif __name__ == \"__main__\":\n    print(area(1))\n\nif __name__ == \"__main__\":\n    print(area(2))\n",
-			nil, "__main__"},
+			"", "", "__main__"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newBudgetWorld(t)
-			if c.setup != nil {
-				c.setup(w)
-			}
+			w.unknown, w.embedded = c.unknown, c.embedded
 			w.seed(t, c.rel, c.before)
 			res := w.write(t, c.rel, c.after)
 			if res.Success {

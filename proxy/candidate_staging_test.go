@@ -44,6 +44,47 @@ type stubEffect struct {
 	StagedAs string
 }
 
+// outcome is the executor's own answer about HOW the command ended. A stub that
+// omitted it would be an executor too old to speak the vocabulary, which now
+// fails closed -- correct in production, and not what any of these fixtures are
+// about.
+func (e stubEffect) outcome() ExecutionOutcome {
+	if e.Outcome != "" {
+		return e.Outcome
+	}
+	if e.TimedOut {
+		return ExecutionTimedOut
+	}
+	return ExecutionCompleted
+}
+
+// observation is what the executor reports about the observed path, either
+// side of the command, when the overlay handed it the staged bytes.
+func (e stubEffect) observation(observed, staged string) map[string]interface{} {
+	if e.StagedAs != "" {
+		staged = e.StagedAs
+	}
+	before := contentSHA256(staged)
+	after := before
+	if e.WriteTarget != "" {
+		after = contentSHA256(e.WriteTarget)
+	}
+	other := "baseline"
+	wsBefore := contentSHA256(observed + "\x00" + before + "\n" + other)
+	if e.WriteOther != "" {
+		other = e.WriteOther
+	}
+	wsAfter := contentSHA256(observed + "\x00" + after + "\n" + other)
+	return map[string]interface{}{
+		"target_before":    map[string]string{observed: before},
+		"target_after":     map[string]string{observed: after},
+		"workspace_before": wsBefore,
+		"workspace_after":  wsAfter,
+		"workspace_files":  2,
+		"digest_truncated": e.Truncated,
+	}
+}
+
 type stubSandbox struct {
 	srv *httptest.Server
 	mu  sync.Mutex
@@ -118,52 +159,20 @@ func newStubSandbox(t *testing.T) *stubSandbox {
 		s.mu.Lock()
 		s.staged[in.Command] = staged
 		s.mu.Unlock()
-		if effect.StagedAs != "" {
-			staged = effect.StagedAs
-		}
-		before := contentSHA256(staged)
-		after := before
-		if effect.WriteTarget != "" {
-			after = contentSHA256(effect.WriteTarget)
-		}
-		other := "baseline"
-		wsBefore := contentSHA256(observed + "\x00" + before + "\n" + other)
-		if effect.WriteOther != "" {
-			other = effect.WriteOther
-		}
-		wsAfter := contentSHA256(observed + "\x00" + after + "\n" + other)
 
 		s.mu.Lock()
 		s.overlaysDestroyed++
 		s.mu.Unlock()
 
-		// The executor's own answer about HOW the command ended. A stub that
-		// omitted it would be an executor too old to speak the vocabulary,
-		// which now fails closed -- correct in production, and not what any of
-		// these fixtures are about.
-		outcome := effect.Outcome
-		if outcome == "" {
-			outcome = ExecutionCompleted
-			if effect.TimedOut {
-				outcome = ExecutionTimedOut
-			}
-		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":    effect.ExitCode == 0 && !effect.TimedOut,
-			"stdout":     "SECRET_OUTPUT hunter2",
-			"stderr":     "SECRET_DIAGNOSTIC hunter2",
-			"exit_code":  effect.ExitCode,
-			"elapsed_ms": 1,
-			"timed_out":  effect.TimedOut,
-			"outcome":    string(outcome),
-			"observation": map[string]interface{}{
-				"target_before":    map[string]string{observed: before},
-				"target_after":     map[string]string{observed: after},
-				"workspace_before": wsBefore,
-				"workspace_after":  wsAfter,
-				"workspace_files":  2,
-				"digest_truncated": effect.Truncated,
-			},
+			"success":     effect.ExitCode == 0 && !effect.TimedOut,
+			"stdout":      "SECRET_OUTPUT hunter2",
+			"stderr":      "SECRET_DIAGNOSTIC hunter2",
+			"exit_code":   effect.ExitCode,
+			"elapsed_ms":  1,
+			"timed_out":   effect.TimedOut,
+			"outcome":     string(effect.outcome()),
+			"observation": effect.observation(observed, staged),
 		})
 	}))
 	t.Cleanup(s.srv.Close)
@@ -331,23 +340,17 @@ func TestARefusedCommandNeverReachesTheExecutor(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		command string
-		// target replaces the staged target path when it is set.
-		target string
 	}{
-		{"the safety gate refuses it", "rm -rf /", ""},
-		{"it ends in an ampersand", "pytest -q &", ""},
-		{"it ends in an ampersand and a space", "pytest -q & ", ""},
-		{"it uses nohup", "nohup pytest -q", ""},
-		{"it uses setsid", "setsid pytest -q", ""},
-		{"its target is outside the workspace", "pytest -q", "/etc/passwd"},
+		{"the safety gate refuses it", "rm -rf /"},
+		{"it ends in an ampersand", "pytest -q &"},
+		{"it ends in an ampersand and a space", "pytest -q & "},
+		{"it uses nohup", "nohup pytest -q"},
+		{"it uses setsid", "setsid pytest -q"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newStubSandbox(t)
 			ctx := stagingCtx(t, stub)
 			req := liveStagingReq(t, ctx, tc.command)
-			if tc.target != "" {
-				req.Identity.TargetPath = tc.target
-			}
 
 			res, ok := stageCandidate(ctx, req)
 
@@ -364,6 +367,30 @@ func TestARefusedCommandNeverReachesTheExecutor(t *testing.T) {
 				t.Errorf("a refused command authorized %v", got)
 			}
 		})
+	}
+}
+
+// A command whose staged target is outside the workspace is refused on this
+// side and never sent to the executor.
+func TestATargetOutsideTheWorkspaceNeverReachesTheExecutor(t *testing.T) {
+	stub := newStubSandbox(t)
+	ctx := stagingCtx(t, stub)
+	req := liveStagingReq(t, ctx, "pytest -q")
+	req.Identity.TargetPath = "/etc/passwd"
+
+	res, ok := stageCandidate(ctx, req)
+
+	if !ok {
+		t.Fatal("no result")
+	}
+	if res.Commands[0].Outcome != stagingRefused {
+		t.Errorf("outcome %q, want refused", res.Commands[0].Outcome)
+	}
+	if seen := stub.commandsSeen(); len(seen) != 0 {
+		t.Errorf("a refused command was executed: %v", seen)
+	}
+	if got := res.authorizingOutcomes(); len(got) != 0 {
+		t.Errorf("a refused command authorized %v", got)
 	}
 }
 

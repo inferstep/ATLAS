@@ -49,9 +49,8 @@ func TestCaptureDisabledStillDeliversAStrictCandidate(t *testing.T) {
 	}
 }
 
-// Capture-only: the same route, the same evidence, the same policy answer --
-// and no licence, no delivery, and the caller's own bytes on disk. It costs
-// no extra model turn.
+// Capture-only: the same route and the same evidence -- and no licence, no
+// delivery, and the caller's own bytes on disk. It costs no extra model turn.
 func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 	t.Setenv(CandidateCaptureOnlyEnv, "1")
 	w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": {}})
@@ -91,8 +90,19 @@ func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 	if got := w.shell.stagedBytes("pytest -q"); got != routeWinner {
 		t.Errorf("staged %q, want the candidate", got)
 	}
+}
 
-	// The policy still concluded what it would have concluded.
+// Capture-only keeps the policy answer: the policy still concludes what it
+// would have concluded.
+func TestCaptureOnlyKeepsThePolicyAnswer(t *testing.T) {
+	t.Setenv(CandidateCaptureOnlyEnv, "1")
+	w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": {}})
+	recs := captureShadow(t, func() {
+		if _, err := w.write(t); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	policy := recordsOfKind(recs, "candidate_policy_decision")
 	if len(policy) == 0 {
 		t.Fatal("no policy decision was recorded")
@@ -123,13 +133,28 @@ func TestCaptureOnlySuppressesAStrictDelivery(t *testing.T) {
 	if disp[0]["delivery_suppressed"] != true || disp[0]["delivered"] != false {
 		t.Errorf("disposition record %v", disp[0])
 	}
+}
 
-	// One candidate hash through verification, policy, suppression and
-	// disposition. A join that drifted would describe two candidates.
+// Under capture-only, one candidate hash runs through verification, policy,
+// suppression and disposition. A join that drifted would describe two
+// candidates.
+func TestCaptureOnlyNamesOneCandidateThroughout(t *testing.T) {
+	t.Setenv(CandidateCaptureOnlyEnv, "1")
+	w := captureOnlyWorld(t, captureOnlyContract, map[string]stubEffect{"pytest -q": {}})
+	recs := captureShadow(t, func() {
+		if _, err := w.write(t); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	want := contentSHA256(routeWinner)
 	for _, kind := range []string{"candidate_policy_decision",
 		"candidate_capture_only_suppression", "candidate_capture_only_disposition"} {
-		for _, r := range recordsOfKind(recs, kind) {
+		records := recordsOfKind(recs, kind)
+		if len(records) == 0 {
+			t.Errorf("no %s record to join", kind)
+		}
+		for _, r := range records {
 			if r["candidate_hash"] != want {
 				t.Errorf("%s names candidate %v, want %s", kind, r["candidate_hash"], want)
 			}

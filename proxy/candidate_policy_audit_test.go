@@ -103,7 +103,11 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	if got.Delivers {
 		t.Error("capture-only left the licence in place")
 	}
-	// In the source: the policy owner sets Delivers in exactly one place.
+}
+
+// In the source: the policy owner sets Delivers in exactly one place, only two
+// decisions deliver, and the owner never authorizes for itself.
+func TestThePolicyOwnerSetsDeliversInOnePlace(t *testing.T) {
 	src, err := os.ReadFile("advisory_policy.go")
 	if err != nil {
 		t.Fatal(err)
@@ -216,10 +220,9 @@ func TestCaptureDisabledIsInert(t *testing.T) {
 	}
 }
 
-// Provenance describes the bytes that are on disk, and neither the model nor
-// the service can set it.
-func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
-	// The field is not on any wire type the model or the service fills.
+// Neither the model nor the service can set the delivered provenance: the
+// field is not on any wire type they fill.
+func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
 	types, err := os.ReadFile("types.go")
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +240,11 @@ func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 			t.Errorf("%s carries the provenance", typeName)
 		}
 	}
-	// It is set only beside a delivery that happened, from the policy outcome.
+}
+
+// Neither the model nor the service can set the delivered provenance: it is set
+// only beside a delivery that happened, from the policy outcome.
+func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -261,7 +268,10 @@ func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 			}
 		}
 	}
-	// And what it says matches what landed.
+}
+
+// The delivered provenance describes the bytes that are on disk.
+func TestDeliveredProvenanceMatchesWhatLanded(t *testing.T) {
 	w := newRouteWorldWithClosure(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared",`+
