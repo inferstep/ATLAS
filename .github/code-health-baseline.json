@@ -4,8 +4,6 @@
   "file_lines": 1500
  },
  "functions": {
-  "atlas/bench/v3_runner.py:V3Pipeline.run_task": 536,
-  "atlas/bench/v3_runner.py:run_v3_benchmark": 129,
   "atlas/commands/doctor.py:check_tier_match": 122,
   "atlas/commands/doctor.py:main": 146,
   "atlas/commands/lens.py:_check_model_inner": 151,
