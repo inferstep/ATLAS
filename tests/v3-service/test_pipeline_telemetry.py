@@ -18,8 +18,6 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
@@ -520,7 +518,8 @@ def test_the_byte_cap_never_emits_a_partial_line(monkeypatch, tmp_path):
         json.loads(line)          # every line is a complete record
     assert len(sink.read_bytes()) <= 900
     marker = _of_type(records, "capture_status")
-    assert marker and marker[-1]["limit_reached"] is True
+    assert marker
+    assert marker[-1]["limit_reached"] is True
 
 
 def test_concurrent_writers_append_complete_unique_records(tmp_path):
