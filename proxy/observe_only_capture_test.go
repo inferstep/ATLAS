@@ -82,14 +82,15 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 	recs := captureShadow(t, func() {
 		observeInvocationFeasibility(w.ctx, mintRouteEntry(w.ctx))
 		outcome := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate()
-		if ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome); ok {
-			captureEntry := mintRouteEntry(w.ctx)
-			authorizeCandidateDelivery(w.ctx, captureEntry, w.path, w.code, id, nil,
-				[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
-				testMutationScope(w.ctx, captureEntry, w.path, w.code), automaticIntent{})
-		} else {
+		ev, id, ok := observeDeliveredCandidateSyntax(w.ctx, mintRouteEntry(w.ctx), w.path, w.code, outcome)
+		if !ok {
 			t.Error("the producer did not run on a declared code output")
+			return
 		}
+		captureEntry := mintRouteEntry(w.ctx)
+		authorizeCandidateDelivery(w.ctx, captureEntry, w.path, w.code, id, nil,
+			[]proxyEvidence{ev}, "selected", nil, checkOutcome{Status: ValidationPassed},
+			testMutationScope(w.ctx, captureEntry, w.path, w.code), automaticIntent{})
 	})
 
 	// Each record says truthfully whether it decided anything. Feasibility and
@@ -167,47 +168,77 @@ func TestTheObserversRunAndRecordAttributably(t *testing.T) {
 	}
 }
 
-// TestNoObserverEmitsAnSSEEventOrToolResult pins that none of the three
-// observers can reach the caller: the private sink is the only destination.
+// The next three tests pin that none of the three observers can reach the
+// caller: the private sink is the only destination.
 //
-// It reads the CODE, not the prose. A file may say in a comment that it emits
+// They read the CODE, not the prose. A file may say in a comment that it emits
 // no ToolResult; what it may not do is build or return one.
-func TestNoObserverEmitsAnSSEEventOrToolResult(t *testing.T) {
-	fset := token.NewFileSet()
+var observerFiles = []string{"evidence_wiring.go", "authorization_decision.go", "feasibility_decision.go"}
+
+func TestNoObserverBuildsAToolResultOrAnAgentMessage(t *testing.T) {
 	bannedTypes := map[string]bool{"ToolResult": true, "AgentMessage": true}
-	bannedCalls := map[string]bool{
-		"StreamFn": true, "endStream": true, "WriteFile": true,
-		"Remove": true, "RemoveAll": true, "Rename": true, "Create": true,
-	}
-	for _, file := range []string{
-		"evidence_wiring.go", "authorization_decision.go", "feasibility_decision.go",
-	} {
-		tree, err := parser.ParseFile(fset, file, nil, 0)
+	for _, file := range observerFiles {
+		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ast.Inspect(tree, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.CompositeLit:
-				if id, ok := node.Type.(*ast.Ident); ok && bannedTypes[id.Name] {
-					t.Errorf("%s builds a %s", file, id.Name)
-				}
-			case *ast.CallExpr:
-				var name string
-				switch fn := node.Fun.(type) {
-				case *ast.Ident:
-					name = fn.Name
-				case *ast.SelectorExpr:
-					name = fn.Sel.Name
-				}
-				if bannedCalls[name] {
-					t.Errorf("%s calls %s", file, name)
-				}
-			case *ast.IndexExpr:
-				// ctx.Ledger[...] as an assignment target would be a mutation.
-				if sel, ok := node.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Ledger" {
-					t.Errorf("%s indexes the ledger", file)
-				}
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if id, ok := lit.Type.(*ast.Ident); ok && bannedTypes[id.Name] {
+				t.Errorf("%s builds a %s", file, id.Name)
+			}
+			return true
+		})
+	}
+}
+
+func TestNoObserverStreamsOrChangesAFile(t *testing.T) {
+	bannedCalls := map[string]bool{
+		"StreamFn": true, "endStream": true, "WriteFile": true,
+		"Remove": true, "RemoveAll": true, "Rename": true, "Create": true,
+	}
+	for _, file := range observerFiles {
+		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(tree, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			var name string
+			switch fn := call.Fun.(type) {
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			}
+			if bannedCalls[name] {
+				t.Errorf("%s calls %s", file, name)
+			}
+			return true
+		})
+	}
+}
+
+func TestNoObserverIndexesTheLedger(t *testing.T) {
+	for _, file := range observerFiles {
+		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(tree, func(n ast.Node) bool {
+			index, ok := n.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// ctx.Ledger[...] as an assignment target would be a mutation.
+			if sel, ok := index.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Ledger" {
+				t.Errorf("%s indexes the ledger", file)
 			}
 			return true
 		})

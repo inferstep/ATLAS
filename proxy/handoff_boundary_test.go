@@ -147,13 +147,7 @@ func newHandoffWorld(t *testing.T, winner string, scripts []string) *handoffWorl
 			w.mu.Unlock()
 			body, _ := json.Marshal(v3Envelope(winner))
 			rw.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := rw.(http.Flusher)
-			for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
-				fmt.Fprint(rw, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(rw, "event: result", "data: "+string(body), "", "data: [DONE]", "")
 			return
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})

@@ -59,31 +59,50 @@ func hasKindFor(obs []taskObligation, kind, subject string) (taskObligation, boo
 }
 
 // --- the taxonomy is closed, and its floors are stated ----------------------
+//
+// Every kind has exactly one answer about its floor: an unsatisfiable kind has
+// none, a dynamic kind takes it from a baseline, and every other kind has a
+// fixed one. Each of the next three tests takes the kinds of one class, and an
+// unsatisfiable kind counts as unsatisfiable even when it is also dynamic.
 
-func TestEveryObligationKindHasExactlyOneAnswerAboutItsFloor(t *testing.T) {
+func TestAnUnsatisfiableObligationKindHasNoFloor(t *testing.T) {
 	for _, kind := range obligationKinds {
-		switch {
-		case obligationUnsatisfiableKinds[kind]:
-			if _, ok := obligationRequiredStrength(kind, ""); ok {
-				t.Errorf("%s is unsatisfiable and must have no strength", kind)
-			}
-		case obligationDynamicStrengthKinds[kind]:
-			if _, ok := obligationRequiredStrength(kind, ""); ok {
-				t.Errorf("%s must refuse to invent a baseline strength", kind)
-			}
-			s, ok := obligationRequiredStrength(kind, "behavioral")
-			if !ok || s != "behavioral" {
-				t.Errorf("%s took %q/%v from a behavioral baseline", kind, s, ok)
-			}
-		default:
-			s, ok := obligationRequiredStrength(kind, "")
-			if !ok || strengthRank(s) < 0 {
-				t.Errorf("%s has no fixed strength: %q/%v", kind, s, ok)
-			}
-			// A fixed floor cannot be raised by handing it a baseline.
-			if _, ok := obligationRequiredStrength(kind, "oracle"); ok {
-				t.Errorf("%s let a baseline raise its fixed floor", kind)
-			}
+		if !obligationUnsatisfiableKinds[kind] {
+			continue
+		}
+		if _, ok := obligationRequiredStrength(kind, ""); ok {
+			t.Errorf("%s is unsatisfiable and must have no strength", kind)
+		}
+	}
+}
+
+func TestADynamicObligationKindTakesItsFloorFromTheBaseline(t *testing.T) {
+	for _, kind := range obligationKinds {
+		if obligationUnsatisfiableKinds[kind] || !obligationDynamicStrengthKinds[kind] {
+			continue
+		}
+		if _, ok := obligationRequiredStrength(kind, ""); ok {
+			t.Errorf("%s must refuse to invent a baseline strength", kind)
+		}
+		s, ok := obligationRequiredStrength(kind, "behavioral")
+		if !ok || s != "behavioral" {
+			t.Errorf("%s took %q/%v from a behavioral baseline", kind, s, ok)
+		}
+	}
+}
+
+func TestEveryOtherObligationKindHasAFixedFloor(t *testing.T) {
+	for _, kind := range obligationKinds {
+		if obligationUnsatisfiableKinds[kind] || obligationDynamicStrengthKinds[kind] {
+			continue
+		}
+		s, ok := obligationRequiredStrength(kind, "")
+		if !ok || strengthRank(s) < 0 {
+			t.Errorf("%s has no fixed strength: %q/%v", kind, s, ok)
+		}
+		// A fixed floor cannot be raised by handing it a baseline.
+		if _, ok := obligationRequiredStrength(kind, "oracle"); ok {
+			t.Errorf("%s let a baseline raise its fixed floor", kind)
 		}
 	}
 }

@@ -144,25 +144,38 @@ func proxyFiles(t *testing.T) map[string]*ast.File {
 	return out
 }
 
-func callSites(files map[string]*ast.File, fn string) map[string]int {
-	hits := map[string]int{}
+// sourceFunc is one function declaration of the proxy, with its file.
+type sourceFunc struct {
+	file string
+	decl *ast.FuncDecl
+}
+
+// funcsWithBodies lists every function declaration in files that has a body.
+func funcsWithBodies(files map[string]*ast.File) []sourceFunc {
+	var out []sourceFunc
 	for name, f := range files {
 		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil {
+				out = append(out, sourceFunc{file: name, decl: fd})
 			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == fn {
-					hits[name+":"+fd.Name.Name]++
-				}
-				return true
-			})
 		}
+	}
+	return out
+}
+
+func callSites(files map[string]*ast.File, fn string) map[string]int {
+	hits := map[string]int{}
+	for _, f := range funcsWithBodies(files) {
+		ast.Inspect(f.decl.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == fn {
+				hits[f.file+":"+f.decl.Name.Name]++
+			}
+			return true
+		})
 	}
 	return hits
 }
@@ -257,60 +270,44 @@ func TestTheLegacyOutputHeuristicIsReachedOnlyThroughTheOwner(t *testing.T) {
 }
 
 func TestTheObligationOwnerReadsNoShadowSymbol(t *testing.T) {
-	files := proxyFiles(t)
-	for name, f := range files {
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			if !strings.HasPrefix(fd.Name.Name, "resolve") ||
-				!strings.Contains(fd.Name.Name, "Obligation") {
-				continue
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				id, ok := call.Fun.(*ast.Ident)
-				if ok && shadowProductionSymbols[id.Name] {
-					t.Errorf("%s:%s reads shadow state %q", name, fd.Name.Name, id.Name)
-				}
-				return true
-			})
+	for _, f := range funcsWithBodies(proxyFiles(t)) {
+		name := f.decl.Name.Name
+		if !strings.HasPrefix(name, "resolve") || !strings.Contains(name, "Obligation") {
+			continue
 		}
+		ast.Inspect(f.decl.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if ok && shadowProductionSymbols[id.Name] {
+				t.Errorf("%s:%s reads shadow state %q", f.file, name, id.Name)
+			}
+			return true
+		})
 	}
 }
 
 // The knowledge fields may be read by the owner and by nothing else.
 func TestOnlyTheOwnerReadsTheKnowledgeFields(t *testing.T) {
-	files := proxyFiles(t)
-	for name, f := range files {
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			owner := strings.HasPrefix(fd.Name.Name, "resolve") &&
-				strings.Contains(fd.Name.Name, "Obligation")
-			if owner || fd.Name.Name == "validateTaskContract" ||
-				fd.Name.Name == "normalizeKnowledge" ||
-				fd.Name.Name == "emitShadowRequestSnapshot" {
-				continue
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				if sel.Sel.Name == "OutputKnowledge" || sel.Sel.Name == "VerificationKnowledge" {
-					t.Errorf("%s:%s reads %s outside the obligation owner",
-						name, fd.Name.Name, sel.Sel.Name)
-				}
-				return true
-			})
+	for _, f := range funcsWithBodies(proxyFiles(t)) {
+		name := f.decl.Name.Name
+		owner := strings.HasPrefix(name, "resolve") && strings.Contains(name, "Obligation")
+		if owner || name == "validateTaskContract" || name == "normalizeKnowledge" ||
+			name == "emitShadowRequestSnapshot" {
+			continue
 		}
+		ast.Inspect(f.decl.Body, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "OutputKnowledge" || sel.Sel.Name == "VerificationKnowledge" {
+				t.Errorf("%s:%s reads %s outside the obligation owner", f.file, name, sel.Sel.Name)
+			}
+			return true
+		})
 	}
 }
 

@@ -14,39 +14,46 @@ import (
 	"testing"
 )
 
-func FuzzValidateShellCommand(f *testing.F) {
-	// These expectations come from the existing command-policy unit tests.
-	seeds := []struct {
-		command string
-		blocked bool
-	}{
-		{"rm -rf /", true},
-		{"rm -rf /workspace", true},
-		{"rm -rf .", true},
-		{"find . -name '*.tmp' -delete", true},
-		{"mkfs.ext4 /dev/sda1", true},
-		{"dd if=/dev/zero of=/dev/sda bs=1M", true},
-		{`bash -c "rm -rf /"`, true},
-		{"env rm -rf /", true},
-		{"nohup rm -rf /", true},
-		{"(rm -rf /)", true},
-		{"echo $(rm -rf /)", true},
-		{"mv index.html templates/", false},
-		{"rm -f stale.pyc", false},
-		{"rm -rf __pycache__", false},
-		{"mkdir -p static/js", false},
-		{"go test ./...", false},
-		{"env ATLAS_FLAG=x bash -c 'go test ./...'", false},
-		{`env -S 'bash -c "go test ./..."'`, false},
-		{`bash -c "python app.py"`, false},
-		{"env FLASK_APP=app.py flask run", false},
-		{"nohup python app.py > app.log 2>&1 &", false},
-	}
-	for _, seed := range seeds {
-		f.Add(seed.command)
+// shellCommandSeeds are the seeds of FuzzValidateShellCommand. The expected
+// verdicts come from the existing command-policy unit tests.
+var shellCommandSeeds = []struct {
+	command string
+	blocked bool
+}{
+	{"rm -rf /", true},
+	{"rm -rf /workspace", true},
+	{"rm -rf .", true},
+	{"find . -name '*.tmp' -delete", true},
+	{"mkfs.ext4 /dev/sda1", true},
+	{"dd if=/dev/zero of=/dev/sda bs=1M", true},
+	{`bash -c "rm -rf /"`, true},
+	{"env rm -rf /", true},
+	{"nohup rm -rf /", true},
+	{"(rm -rf /)", true},
+	{"echo $(rm -rf /)", true},
+	{"mv index.html templates/", false},
+	{"rm -f stale.pyc", false},
+	{"rm -rf __pycache__", false},
+	{"mkdir -p static/js", false},
+	{"go test ./...", false},
+	{"env ATLAS_FLAG=x bash -c 'go test ./...'", false},
+	{`env -S 'bash -c "go test ./..."'`, false},
+	{`bash -c "python app.py"`, false},
+	{"env FLASK_APP=app.py flask run", false},
+	{"nohup python app.py > app.log 2>&1 &", false},
+}
+
+func TestTheShellCommandSeedsHaveTheirKnownVerdicts(t *testing.T) {
+	for _, seed := range shellCommandSeeds {
 		if blocked := validateShellCommand(seed.command) != ""; blocked != seed.blocked {
-			f.Errorf("seed %q: blocked = %t, want %t", seed.command, blocked, seed.blocked)
+			t.Errorf("seed %q: blocked = %t, want %t", seed.command, blocked, seed.blocked)
 		}
+	}
+}
+
+func FuzzValidateShellCommand(f *testing.F) {
+	for _, seed := range shellCommandSeeds {
+		f.Add(seed.command)
 	}
 
 	f.Fuzz(func(t *testing.T, command string) {
@@ -211,13 +218,13 @@ func FuzzParseFencedReply(f *testing.F) {
 		if againFraming, againBody := parseFencedReply(reply); againFraming != framing || againBody != body {
 			t.Fatalf("reply %q: parse changed from (%v, %q) to (%v, %q)", reply, framing, body, againFraming, againBody)
 		}
-		extracted := extractFencedContent(reply)
-		if framing == fenceFramingComplete {
-			if body == "" || extracted != body {
-				t.Fatalf("reply %q: complete body %q, extracted %q", reply, body, extracted)
-			}
-		} else if body != "" || extracted != "" {
-			t.Fatalf("reply %q: framing %v returned body %q or extracted %q", reply, framing, body, extracted)
+		// A complete fence has a body, and nothing else has one.
+		if (body != "") != (framing == fenceFramingComplete) {
+			t.Fatalf("reply %q: framing %v returned body %q", reply, framing, body)
+		}
+		// So the extracted content is that body, or empty with no complete fence.
+		if extracted := extractFencedContent(reply); extracted != body {
+			t.Fatalf("reply %q: framing %v, body %q, extracted %q", reply, framing, body, extracted)
 		}
 		if len(reply) <= 4096 {
 			// Prefix each body line so arbitrary bytes cannot form a closer.
