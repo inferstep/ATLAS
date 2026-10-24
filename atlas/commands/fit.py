@@ -276,6 +276,13 @@ def fit_runtime_knobs(meta: GGUFMeta, vram_gib: float,
     # Nothing acceptable — report the most frugal configuration's accounting
     # (ubatch 512, q8_0 KV, minimum context) so the operator sees exactly
     # what doesn't fit, plus the largest quant of THIS geometry that would.
+    return _no_fit_result(meta, vram_gib, slots, global_dims, local_dims)
+
+
+def _no_fit_result(meta: GGUFMeta, vram_gib: float, slots: int,
+                   global_dims: int, local_dims: int) -> FitResult:
+    """The not-fitting FitResult: the minimum configuration's accounting and
+    the largest quant of this geometry that would fit."""
     compute = max(COMPUTE_FLOOR_GIB,
                   512 * meta.n_embd * COMPUTE_BYTES_PER_TOK_EMBD / GIB)
     bpe = KV_BYTES["q8_0"]
