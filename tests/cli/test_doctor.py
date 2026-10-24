@@ -19,6 +19,9 @@ import os
 import sys
 import threading
 import urllib.error
+from types import SimpleNamespace
+
+import pytest
 
 from atlas.commands import doctor
 
@@ -495,7 +498,8 @@ def test_grammar_mode_check_compares_the_env_with_the_registry(tmp_path):
                    "ATLAS_GRAMMAR_MODE=strict\n")
     r = doctor.check_grammar_mode(str(tmp_path))
     assert r.status == "warn", r
-    assert "loose" in r.message and "ATLAS_GRAMMAR_MODE=loose" in r.detail
+    assert "loose" in r.message
+    assert "ATLAS_GRAMMAR_MODE=loose" in r.detail
     env.write_text("ATLAS_MODEL_FILE=gemma-4-12b-it-Q4_K_M.gguf\n"
                    "ATLAS_GRAMMAR_MODE=loose\n")
     assert doctor.check_grammar_mode(str(tmp_path)).status == "pass"
@@ -527,3 +531,94 @@ def test_status_dimensions_fail_while_the_agent_is_blocked(monkeypatch):
         True, status("supported", "the lens can score")))
     [fine] = doctor.check_status_dimensions()
     assert fine.status == "pass"
+
+
+# ---------------------------------------------------------------------------
+# tier_match: the configured model against the host's tier, and its Lens files
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("host_tier, model_file, artifacts_ok, status, words", [
+    pytest.param("medium", "Qwen3.5-9B-Q6_K.gguf", False, "warn",
+                 "registered as Lens-supported but 1 artifact file(s) missing: cost_field.pt",
+                 id="the tier's own model, its Lens files missing"),
+    pytest.param("medium", "Qwen3.5-9B-Q6_K.gguf", True, "pass",
+                 "medium tier matches configured model",
+                 id="the tier's own model, its Lens files present"),
+    pytest.param("large", "Qwen3.5-7B-Q4_K_M.gguf", True, "warn",
+                 "has Lens status `no-artifacts`",
+                 id="a smaller model without a Lens bundle"),
+    pytest.param("large", "Qwen3.5-9B-Q6_K.gguf", True, "pass",
+                 "running medium-tier model on large-tier hardware (under-utilized but safe)",
+                 id="a smaller model with its Lens files present"),
+])
+def test_tier_match_checks_the_lens_files_of_the_configured_model(
+        monkeypatch, host_tier, model_file, artifacts_ok, status, words):
+    from atlas.commands import model_registry
+    monkeypatch.setattr(doctor.tier, "probe", lambda: SimpleNamespace(has_gpu=True, vram_gb=24.0))
+    monkeypatch.setattr(doctor.tier, "classify", lambda probe: SimpleNamespace(tier=host_tier))
+    monkeypatch.setattr(doctor, "MODEL_FILE", model_file)
+    missing = [] if artifacts_ok else ["cost_field.pt"]
+    monkeypatch.setattr(model_registry, "lens_artifacts_present", lambda model, root: {
+        "ok": artifacts_ok, "missing_files": missing, "expected_dir": "/lens"})
+
+    result = doctor.check_tier_match()
+
+    assert result.status == status
+    assert words in result.message
+
+
+# ---------------------------------------------------------------------------
+# main: every check, in its order, with what each needs
+# ---------------------------------------------------------------------------
+
+def test_doctor_runs_every_check_in_order_and_hands_each_what_it_needs(
+        monkeypatch, tmp_path, capsys):
+    """With Metal as the backend and a running container, every check runs,
+    in its order. The Metal and auth checks get the install root, and the
+    mount and image checks get the services `docker compose ps` listed."""
+    services = [{"Service": "llama-server", "State": "running"}]
+    given = {}
+
+    def one_result(name):
+        def check(*args, **kwargs):
+            given[name] = args
+            return doctor.CheckResult(name, "pass", "ok")
+        return check
+
+    def a_list_of_results(name):
+        def check(*args, **kwargs):
+            given[name] = args
+            return [doctor.CheckResult(name, "pass", "ok")]
+        return check
+
+    for name in ("check_docker", "check_compose", "check_arch", "check_gpu",
+                 "_check_metal_native", "check_model_file", "check_lens_weights",
+                 "check_asa_steering", "check_grammar_mode", "check_workspace_mounts",
+                 "check_image_skew", "check_tier_match", "check_tier_constraints",
+                 "check_e2e_smoke", "check_inference_contract"):
+        monkeypatch.setattr(doctor, name, one_result(name))
+    for name in ("check_containers", "check_health_endpoints", "check_internal_auth",
+                 "check_status_dimensions"):
+        monkeypatch.setattr(doctor, name, a_list_of_results(name))
+    monkeypatch.setattr(doctor, "_find_atlas_root", lambda: str(tmp_path))
+    monkeypatch.setattr(doctor, "_resolve_backend", lambda root: "metal")
+    monkeypatch.setattr(doctor, "_compose_ps", lambda root: services)
+    monkeypatch.setattr(doctor.compose_config, "format_command",
+                        lambda root, args: "docker compose up -d")
+
+    rc = doctor.main(["--json"])
+
+    assert rc == 0
+    checks = json.loads(capsys.readouterr().out)["checks"]
+    assert [check["name"] for check in checks] == [
+        "check_docker", "check_compose", "check_arch", "check_gpu", "_check_metal_native",
+        "check_containers", "check_health_endpoints", "check_internal_auth",
+        "check_status_dimensions", "check_model_file", "check_lens_weights",
+        "check_asa_steering", "check_grammar_mode", "check_workspace_mounts",
+        "check_image_skew", "check_tier_match", "check_tier_constraints",
+        "check_e2e_smoke", "check_inference_contract"]
+    assert given["_check_metal_native"] == (str(tmp_path),)
+    assert given["check_internal_auth"] == (str(tmp_path),)
+    assert given["check_workspace_mounts"] == (services,)
+    assert given["check_image_skew"] == (services,)
+    assert given["check_tier_constraints"] == (str(tmp_path),)

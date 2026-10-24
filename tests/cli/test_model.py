@@ -211,6 +211,41 @@ def test_install_refuses_overwrite_without_yes(tmp_path, capsys):
     assert "--yes" in out
 
 
+def test_install_url_makes_an_entry_of_its_own_for_an_unregistered_gguf(tmp_path, capsys):
+    """--url: the file name comes from the URL, the entry carries no SHA pin,
+    and the file goes to --models-dir."""
+    rc = model.main(["install", "--url", "https://models.example.test/org/My-Model-Q4_K_M.gguf",
+                     "--models-dir", str(tmp_path), "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Unregistered model (--url): no SHA pin" in out
+    assert f"Target: {tmp_path / 'My-Model-Q4_K_M.gguf'}" in out
+    assert "SHA256:" not in out
+
+
+def test_install_url_that_names_no_gguf_is_refused(tmp_path, capsys):
+    rc = model.main(["install", "--url", "https://models.example.test/org/README.md",
+                     "--models-dir", str(tmp_path), "--dry-run", "--no-color"])
+    assert rc == 1
+    assert "Could not infer a .gguf filename from the URL." in capsys.readouterr().out
+
+
+def test_install_refuses_when_the_models_disk_has_no_room(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    monkeypatch.setattr(model.shutil, "disk_usage", lambda _path: SimpleNamespace(
+        total=10 * 1024 ** 3, used=9 * 1024 ** 3, free=1024 ** 3))
+
+    def no_download(*a, **kw):
+        raise AssertionError("the install must stop before it downloads")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_download)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Insufficient disk: 1.0 GB free" in out
+
+
 # ---------------------------------------------------------------------------
 # `atlas model remove`
 # ---------------------------------------------------------------------------
@@ -1224,6 +1259,58 @@ def test_resume_416_verified_small_part_finalizes(tmp_path, monkeypatch,
     assert "already complete" in out
     assert (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
     assert not p.exists()
+
+
+# ---------------------------------------------------------------------------
+# The download's checks before and after its GET
+# ---------------------------------------------------------------------------
+
+def test_resume_from_a_part_that_cannot_be_read_stops_before_the_download(
+        tmp_path, monkeypatch, capsys):
+    """The .part's bytes cannot be read back into the hash (here the .part
+    is a directory), so the install stops before it asks the server."""
+    _stub_ample_disk(monkeypatch)
+    part = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    part.mkdir()
+    (part / "x").write_text("x")
+
+    def no_download(*a, **kw):
+        raise AssertionError("the install must stop before it downloads")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_download)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    assert "Cannot read existing .part for hash continuation" in capsys.readouterr().out
+
+
+def test_resume_answered_with_neither_200_nor_206_keeps_the_part(tmp_path, monkeypatch,
+                                                                    capsys):
+    _patched_9b(monkeypatch, None)
+    _stub_ample_disk(monkeypatch)
+    part = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    part.write_bytes(b"x" * 1024)
+    _install_with_fake_urlopen(monkeypatch, body=b"y" * 2048, status=302)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--no-color", "--no-artifacts"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Unexpected response to Range request: HTTP 302. Aborting." in out
+    assert part.read_bytes() == b"x" * 1024
+
+
+def test_download_too_small_to_be_a_model_is_removed(tmp_path, monkeypatch, capsys):
+    body = b"z" * 1024
+    _patched_9b(monkeypatch, hashlib.sha256(body).hexdigest())
+    _stub_ample_disk(monkeypatch)
+    _install_with_fake_urlopen(monkeypatch, body=body, status=200)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--no-color", "--no-artifacts"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Downloaded file is too small (1.0 KB)" in out
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf.part").exists()
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
 
 
 # ---------------------------------------------------------------------------
