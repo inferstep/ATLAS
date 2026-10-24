@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,9 +154,7 @@ func delLoopFixture(t *testing.T, seed map[string]string, prompt string,
 		case "done":
 			var m map[string]string
 			json.Unmarshal(b, &m)
-			for k, v := range m {
-				r.terminal[k] = v
-			}
+			maps.Copy(r.terminal, m)
 		}
 	}
 	runAgentLoop(r.ctx, prompt)
@@ -250,6 +249,10 @@ func TestDeleteDoesNotSwallowTheRestOfTheTask(t *testing.T) {
 	}
 }
 
+// script (edit_route_accounting_test.go) builds a plan from the model's turns
+// in order: turn i gets the i-th step, and the last step repeats on every
+// later turn.
+
 // Every other delete shape: the loop continues, and the terminal is decided at
 // the real terminal point by the rules that already exist.
 func TestDeleteContinuationMatrix(t *testing.T) {
@@ -263,58 +266,31 @@ func TestDeleteContinuationMatrix(t *testing.T) {
 	}{
 		{"write then delete", "Create report.py with the summary.",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlWrite("report.py", delSeed)
-				case 1:
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote report.py"}
-			}, 2, "deliverables_parse_only"},
+			script(dlWrite("report.py", delSeed), dlDel("a.py"), stepDone("wrote report.py")),
+			2, "deliverables_parse_only"},
 		{"delete only", "Delete a.py.",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
-			}, 1, "approved_deletions_demonstrated"},
+			script(dlDel("a.py"), stepDone("deleted a.py")),
+			1, "approved_deletions_demonstrated"},
 		{"delete then a read that only happens if the loop continues", "Delete a.py.",
 			map[string]string{"a.py": delSeed, "b.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return map[string]interface{}{"type": "tool_call", "name": "read_file",
-						"args": map[string]string{"path": "b.py"}}
-				}
-				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
-			}, 2, "approved_deletions_demonstrated"},
+			script(dlDel("a.py"), stepRead("b.py"), stepDone("deleted a.py")),
+			2, "approved_deletions_demonstrated"},
+		// The model asks for the same deletion on every turn.
 		{"repeated delete of a now-absent path", "Delete a.py.",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				return dlDel("a.py")
-			}, 2, ""},
+			script(dlDel("a.py")),
+			2, ""},
 		// The structured intent is recorded before the target is judged, so a
 		// refused deletion still owes something and cannot report completed.
 		{"non-empty directory is refused", "Delete pkg.",
 			map[string]string{"pkg/mod.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("pkg")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed pkg"}
-			}, 1, "unresolved_mutation_debt"},
+			script(dlDel("pkg"), stepDone("removed pkg")),
+			1, "unresolved_mutation_debt"},
 		{"missing path fails", "Delete gone.py.",
 			map[string]string{},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("gone.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "not there"}
-			}, 1, "no_file_obligation"},
+			script(dlDel("gone.py"), stepDone("not there")),
+			1, "no_file_obligation"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixture(t, c.seed, c.prompt, c.plan)
@@ -359,72 +335,36 @@ func TestDemonstratedMoveDoesNotBlockCompletion(t *testing.T) {
 	}{
 		{"a validated move completes", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlMove("old.py", "new.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed old.py to new.py"}
-			}, true, TerminalCompleted},
+			script(dlMove("old.py", "new.py"), stepDone("renamed old.py to new.py")),
+			true, TerminalCompleted},
 		{"several demonstrated moves complete", "Rename a.py to x.py and b.py to y.py.",
 			map[string]string{"a.py": delSeed, "b.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlMove("a.py", "x.py")
-				case 1:
-					return dlMove("b.py", "y.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed both"}
-			}, true, TerminalCompleted},
+			script(dlMove("a.py", "x.py"), dlMove("b.py", "y.py"), stepDone("renamed both")),
+			true, TerminalCompleted},
 		// An unapproved deletion never reaches a tombstone (nothing is
 		// removed), so the debt it still owes stops it earlier. The property
 		// is that it cannot complete; which gate says so is not the subject.
 		{"an unapproved delete still cannot complete", "Delete a.py.",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "deleted a.py"}
-			}, false, TerminalIncomplete},
+			script(dlDel("a.py"), stepDone("deleted a.py")),
+			false, TerminalIncomplete},
 		{"an unapproved unrequested delete still cannot complete", "Make the tests pass.",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed the failing file"}
-			}, false, TerminalIncomplete},
+			script(dlDel("a.py"), stepDone("removed the failing file")),
+			false, TerminalIncomplete},
 		{"a move and a delete together still cannot complete", "Rename a.py to x.py.",
 			map[string]string{"a.py": delSeed, "b.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlMove("a.py", "x.py")
-				case 1:
-					return dlDel("b.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed and cleaned up"}
-			}, false, TerminalIncomplete},
+			script(dlMove("a.py", "x.py"), dlDel("b.py"), stepDone("renamed and cleaned up")),
+			false, TerminalIncomplete},
 		{"destination deleted after the move", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlMove("old.py", "new.py")
-				case 1:
-					return dlDel("new.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed"}
-			}, false, TerminalIncomplete},
+			script(dlMove("old.py", "new.py"), dlDel("new.py"), stepDone("renamed")),
+			false, TerminalIncomplete},
 		{"text exit after a demonstrated move", "Rename old.py to new.py.",
 			map[string]string{"old.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlMove("old.py", "new.py")
-				}
-				return map[string]interface{}{"type": "text", "content": "Renamed old.py to new.py."}
-			}, true, TerminalCompleted},
+			script(dlMove("old.py", "new.py"),
+				map[string]interface{}{"type": "text", "content": "Renamed old.py to new.py."}),
+			true, TerminalCompleted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixtureApprove(t, c.seed, c.prompt, c.plan, c.approveDeletes)
@@ -534,18 +474,12 @@ func TestMoveTombstoneDemonstrationPredicate(t *testing.T) {
 	}
 }
 
-// The rest of the move matrix: partial work, aliases, and a move that only
-// half happened.
+// The rest of the move matrix: partial work and aliases.
 func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 	t.Run("move plus an unmet named deliverable", func(t *testing.T) {
 		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
 			"Rename old.py to new.py and create report.py with the summary.",
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlMove("old.py", "new.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed old.py"}
-			})
+			script(dlMove("old.py", "new.py"), stepDone("renamed old.py")))
 		r.check(t, "unmet deliverable")
 		t.Logf("   summary=%.160s", r.terminal["summary"])
 		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
@@ -564,18 +498,10 @@ func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 	t.Run("several moves, one not demonstrated", func(t *testing.T) {
 		r := delLoopFixture(t, map[string]string{"a.py": delSeed, "b.py": delSeed},
 			"Rename a.py to x.py and b.py to y.py.",
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlMove("a.py", "x.py")
-				case 1:
-					return dlMove("b.py", "y.py")
-				case 2:
-					// y.py is removed again, so that move is no longer shown.
-					return dlDel("y.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed both"}
-			})
+			script(dlMove("a.py", "x.py"), dlMove("b.py", "y.py"),
+				// y.py is removed again, so that move is no longer shown.
+				dlDel("y.py"),
+				stepDone("renamed both")))
 		r.check(t, "one incomplete")
 		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
 			t.Errorf("completed with one move undemonstrated: %q", r.terminal["reason"])
@@ -585,12 +511,7 @@ func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 	t.Run("alias spellings resolve to one pair", func(t *testing.T) {
 		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
 			"Rename old.py to new.py.",
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlMove("./old.py", "./new.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed"}
-			})
+			script(dlMove("./old.py", "./new.py"), stepDone("renamed")))
 		r.check(t, "aliases")
 		if r.terminal["status"] != string(TerminalCompleted) {
 			t.Errorf("alias spellings did not resolve: %q/%q",
@@ -600,31 +521,25 @@ func TestDemonstratedMoveMatrixRemaining(t *testing.T) {
 			t.Errorf("aliases produced %d tombstones: %v", len(r.tombstones()), r.tombstones())
 		}
 	})
+}
 
-	t.Run("source gone but destination never landed", func(t *testing.T) {
-		needsObjectHold(t)
-		// The destination is removed straight after, which is the observable
-		// end state of a copy that did not survive.
-		r := delLoopFixture(t, map[string]string{"old.py": delSeed},
-			"Rename old.py to new.py.",
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlMove("old.py", "new.py")
-				case 1:
-					return dlDel("new.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "renamed"}
-			})
-		r.check(t, "destination gone")
-		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
-			t.Errorf("completed with neither source nor destination present: %q",
-				r.terminal["reason"])
-		}
-		if len(r.present()) != 0 {
-			t.Errorf("disk should be empty, got %v", r.present())
-		}
-	})
+// A move that only half happened: the source is gone but the destination
+// never landed.
+func TestAMoveWhoseDestinationNeverLandedCannotComplete(t *testing.T) {
+	needsObjectHold(t)
+	// The destination is removed straight after, which is the observable
+	// end state of a copy that did not survive.
+	r := delLoopFixture(t, map[string]string{"old.py": delSeed},
+		"Rename old.py to new.py.",
+		script(dlMove("old.py", "new.py"), dlDel("new.py"), stepDone("renamed")))
+	r.check(t, "destination gone")
+	if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+		t.Errorf("completed with neither source nor destination present: %q",
+			r.terminal["reason"])
+	}
+	if len(r.present()) != 0 {
+		t.Errorf("disk should be empty, got %v", r.present())
+	}
 }
 
 // claimsNothingWritten matches every phrasing the terminal uses to say the run
@@ -697,23 +612,12 @@ func TestRefusedDeletionCannotAuthoriseCompletion(t *testing.T) {
 		wantOnDisk []string
 	}{
 		{"denied deletion then done", map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed a.py"}
-			}, TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+			script(dlDel("a.py"), stepDone("removed a.py")),
+			TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
 
 		{"denied deletion then unrelated success", map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlWrite("report.py", delSeed)
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote report.py"}
-			}, TerminalIncomplete, "unresolved_mutation_debt",
+			script(dlDel("a.py"), dlWrite("report.py", delSeed), stepDone("wrote report.py")),
+			TerminalIncomplete, "unresolved_mutation_debt",
 			[]string{"a.py", "report.py"}},
 
 		// A rewrite is not a retirement of a delete debt: that debt retires on
@@ -724,15 +628,10 @@ func TestRefusedDeletionCannotAuthoriseCompletion(t *testing.T) {
 		// alternative would let any later write launder a denied removal.
 		{"denied deletion then a same-path rewrite still owes the deletion",
 			map[string]string{"a.py": delSeed},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlWrite("a.py", "def solve():\n    return 8\n\n\nprint(solve())\n")
-				}
-				return map[string]interface{}{"type": "done", "summary": "rewrote a.py"}
-			}, TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
+			script(dlDel("a.py"),
+				dlWrite("a.py", "def solve():\n    return 8\n\n\nprint(solve())\n"),
+				stepDone("rewrote a.py")),
+			TerminalIncomplete, "unresolved_mutation_debt", []string{"a.py"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, false)
@@ -791,110 +690,69 @@ func TestUnansweredDeletionCannotAuthoriseCompletion(t *testing.T) {
 // whose work was exactly that has finished it. An unapproved removal still
 // blocks, and a move is judged by its own predicate.
 
+// approvedDeletionRuns are runs in which the user approves every deletion,
+// under the prompt "Tidy the workspace.". Each test below runs these rows and
+// checks one property; the two summary tests take only the rows that end in
+// approved_deletions_demonstrated.
+var approvedDeletionRuns = []struct {
+	name       string
+	seed       map[string]string
+	plan       func(i int) map[string]interface{}
+	wantStatus TerminalStatus
+	wantReason string
+	wantGone   []string
+	wantThere  []string
+}{
+	{"one approved deletion", map[string]string{"a.py": delSeed},
+		script(dlDel("a.py"), stepDone("removed a.py")),
+		TerminalCompleted, "approved_deletions_demonstrated",
+		[]string{"a.py"}, nil},
+
+	{"two approved deletions", map[string]string{"a.py": delSeed, "b.py": delSeed},
+		script(dlDel("a.py"), dlDel("b.py"), stepDone("removed both")),
+		TerminalCompleted, "approved_deletions_demonstrated",
+		[]string{"a.py", "b.py"}, nil},
+
+	{"one approved deletion fails", map[string]string{"a.py": delSeed, "pkg/m.py": delSeed},
+		script(dlDel("a.py"),
+			dlDel("pkg"), // non-empty: refused before asking
+			stepDone("tidied up")),
+		TerminalIncomplete, "unresolved_mutation_debt",
+		[]string{"a.py"}, []string{"pkg/m.py"}},
+
+	{"approved delete plus a demonstrated deliverable",
+		map[string]string{"a.py": delSeed},
+		script(dlDel("a.py"), dlWrite("report.py", delSeed), stepDone("done")),
+		TerminalCompleted, "deliverables_parse_only",
+		[]string{"a.py"}, []string{"report.py"}},
+
+	{"approved deletion then the path is recreated",
+		map[string]string{"a.py": delSeed},
+		script(dlDel("a.py"), dlWrite("a.py", delSeed), stepDone("removed then rewrote a.py")),
+		TerminalIncomplete, "delete_intent_unestablished",
+		nil, []string{"a.py"}},
+
+	{"approved symlink deletion leaves the target",
+		map[string]string{"real.py": delSeed, "link.py": delSymlinkTo},
+		script(dlDel("link.py"), stepDone("removed the link")),
+		TerminalCompleted, "approved_deletions_demonstrated",
+		[]string{"link.py"}, []string{"real.py"}},
+
+	{"alias spelling is one obligation", map[string]string{"a.py": delSeed},
+		script(dlDel("./a.py"), stepDone("removed a.py")),
+		TerminalCompleted, "approved_deletions_demonstrated",
+		[]string{"a.py"}, nil},
+
+	{"deleted, recreated, deleted again with fresh approval", map[string]string{"a.py": delSeed},
+		script(dlDel("a.py"), dlWrite("a.py", delSeed), dlDel("a.py"), stepDone("removed a.py")),
+		TerminalCompleted, "approved_deletions_demonstrated",
+		[]string{"a.py"}, nil},
+}
+
+// An approved deletion run ends with the status and the reason its work earns.
 func TestApprovedDeletionCompletionMatrix(t *testing.T) {
 	needsObjectHold(t)
-	valid := delSeed
-	for _, c := range []struct {
-		name       string
-		seed       map[string]string
-		plan       func(i int) map[string]interface{}
-		wantStatus TerminalStatus
-		wantReason string
-		wantGone   []string
-		wantThere  []string
-	}{
-		{"one approved deletion", map[string]string{"a.py": valid},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed a.py"}
-			}, TerminalCompleted, "approved_deletions_demonstrated",
-			[]string{"a.py"}, nil},
-
-		{"two approved deletions", map[string]string{"a.py": valid, "b.py": valid},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlDel("b.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed both"}
-			}, TerminalCompleted, "approved_deletions_demonstrated",
-			[]string{"a.py", "b.py"}, nil},
-
-		{"one approved deletion fails", map[string]string{"a.py": valid, "pkg/m.py": valid},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlDel("pkg") // non-empty: refused before asking
-				}
-				return map[string]interface{}{"type": "done", "summary": "tidied up"}
-			}, TerminalIncomplete, "unresolved_mutation_debt",
-			[]string{"a.py"}, []string{"pkg/m.py"}},
-
-		{"approved delete plus a demonstrated deliverable",
-			map[string]string{"a.py": valid},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlWrite("report.py", valid)
-				}
-				return map[string]interface{}{"type": "done", "summary": "done"}
-			}, TerminalCompleted, "deliverables_parse_only",
-			[]string{"a.py"}, []string{"report.py"}},
-
-		{"approved deletion then the path is recreated",
-			map[string]string{"a.py": valid},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlWrite("a.py", valid)
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed then rewrote a.py"}
-			}, TerminalIncomplete, "delete_intent_unestablished",
-			nil, []string{"a.py"}},
-
-		{"approved symlink deletion leaves the target",
-			map[string]string{"real.py": valid, "link.py": delSymlinkTo},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("link.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed the link"}
-			}, TerminalCompleted, "approved_deletions_demonstrated",
-			[]string{"link.py"}, []string{"real.py"}},
-
-		{"alias spelling is one obligation", map[string]string{"a.py": valid},
-			func(i int) map[string]interface{} {
-				if i == 0 {
-					return dlDel("./a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed a.py"}
-			}, TerminalCompleted, "approved_deletions_demonstrated",
-			[]string{"a.py"}, nil},
-
-		{"deleted, recreated, deleted again with fresh approval", map[string]string{"a.py": valid},
-			func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return dlDel("a.py")
-				case 1:
-					return dlWrite("a.py", valid)
-				case 2:
-					return dlDel("a.py")
-				}
-				return map[string]interface{}{"type": "done", "summary": "removed a.py"}
-			}, TerminalCompleted, "approved_deletions_demonstrated",
-			[]string{"a.py"}, nil},
-	} {
+	for _, c := range approvedDeletionRuns {
 		t.Run(c.name, func(t *testing.T) {
 			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, true)
 			r.check(t, c.name)
@@ -906,6 +764,17 @@ func TestApprovedDeletionCompletionMatrix(t *testing.T) {
 			if r.terminal["reason"] != c.wantReason {
 				t.Errorf("reason=%q, want %q", r.terminal["reason"], c.wantReason)
 			}
+		})
+	}
+}
+
+// An approved deletion run removes the paths it deleted and leaves the rest.
+func TestApprovedDeletionRunsLeaveTheExpectedFiles(t *testing.T) {
+	needsObjectHold(t)
+	for _, c := range approvedDeletionRuns {
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, true)
+			r.check(t, c.name)
 			for _, p := range c.wantGone {
 				if _, err := os.Lstat(filepath.Join(r.dir, p)); !os.IsNotExist(err) {
 					t.Errorf("%s is still there", p)
@@ -916,23 +785,48 @@ func TestApprovedDeletionCompletionMatrix(t *testing.T) {
 					t.Errorf("%s is missing: %v", p, err)
 				}
 			}
-			// A completed deletion run names what it removed, and never says
-			// nothing was written.
-			if c.wantReason == "approved_deletions_demonstrated" {
-				for _, p := range c.wantGone {
-					if !strings.Contains(r.terminal["summary"], p) {
-						t.Errorf("the summary does not name %s: %q", p, r.terminal["summary"])
-					}
+		})
+	}
+}
+
+// A completed deletion run names what it removed, and never says nothing was
+// written.
+func TestACompletedDeletionRunNamesWhatItRemoved(t *testing.T) {
+	needsObjectHold(t)
+	for _, c := range approvedDeletionRuns {
+		if c.wantReason != "approved_deletions_demonstrated" {
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, true)
+			r.check(t, c.name)
+			for _, p := range c.wantGone {
+				if !strings.Contains(r.terminal["summary"], p) {
+					t.Errorf("the summary does not name %s: %q", p, r.terminal["summary"])
 				}
-				if claimsNothingWritten(r.terminal["summary"]) {
-					t.Errorf("the summary claims nothing was written: %q", r.terminal["summary"])
-				}
-				for _, leak := range []string{"sha256", "tombstone", "RestoreProhibited",
-					"generation", "inode", "permission"} {
-					if strings.Contains(strings.ToLower(r.terminal["summary"]),
-						strings.ToLower(leak)) {
-						t.Errorf("the summary leaks %q: %q", leak, r.terminal["summary"])
-					}
+			}
+			if claimsNothingWritten(r.terminal["summary"]) {
+				t.Errorf("the summary claims nothing was written: %q", r.terminal["summary"])
+			}
+		})
+	}
+}
+
+// The summary of a completed deletion run carries none of the ledger's words.
+func TestACompletedDeletionSummaryLeaksNoLedgerWords(t *testing.T) {
+	needsObjectHold(t)
+	for _, c := range approvedDeletionRuns {
+		if c.wantReason != "approved_deletions_demonstrated" {
+			continue
+		}
+		t.Run(c.name, func(t *testing.T) {
+			r := delLoopFixtureApprove(t, c.seed, "Tidy the workspace.", c.plan, true)
+			r.check(t, c.name)
+			for _, leak := range []string{"sha256", "tombstone", "RestoreProhibited",
+				"generation", "inode", "permission"} {
+				if strings.Contains(strings.ToLower(r.terminal["summary"]),
+					strings.ToLower(leak)) {
+					t.Errorf("the summary leaks %q: %q", leak, r.terminal["summary"])
 				}
 			}
 		})

@@ -43,38 +43,42 @@ func diskHash(t *testing.T, p string) string {
 	return hashBytes(b)
 }
 
-func TestContentMutatorsRecordTheBytesThatLanded(t *testing.T) {
-	for _, c := range []struct {
-		name, tool, seed string
-		args             map[string]interface{}
-		want             string
-	}{
-		{"write_file", "write_file", "",
-			map[string]interface{}{"path": "solve.py", "content": "A = 1\n"},
-			"A = 1\n"},
-		{"edit_file", "edit_file", "A = 1\n",
-			map[string]interface{}{"path": "solve.py", "old_str": "A = 1", "new_str": "A = 2"},
-			"A = 2\n"},
-		{"insert_after", "insert_after", "A = 1\n",
-			map[string]interface{}{"path": "solve.py", "line": 1, "content": "B = 2"},
-			"A = 1\nB = 2\n"},
-		{"replace_lines", "replace_lines", "A = 1\nB = 2\n",
-			map[string]interface{}{"path": "solve.py", "start_line": 1, "end_line": 1,
-				"expected_first_line": "A = 1", "expected_last_line": "A = 1",
-				"content": "A = 99"},
-			"A = 99\nB = 2\n"},
-	} {
+// contentMutatorCalls are one call of each content mutator on solve.py and the
+// bytes it lands. write_file starts from no file; the edit tools start from
+// the seed, and they require a current read, so their rows read solve.py
+// first: that guard is not what these tests measure.
+var contentMutatorCalls = []struct {
+	name, tool string
+	seed       map[string]string
+	read       []string
+	args       map[string]interface{}
+	want       string
+}{
+	{"write_file", "write_file", nil, nil,
+		map[string]interface{}{"path": "solve.py", "content": "A = 1\n"},
+		"A = 1\n"},
+	{"edit_file", "edit_file", map[string]string{"solve.py": "A = 1\n"}, []string{"solve.py"},
+		map[string]interface{}{"path": "solve.py", "old_str": "A = 1", "new_str": "A = 2"},
+		"A = 2\n"},
+	{"insert_after", "insert_after", map[string]string{"solve.py": "A = 1\n"}, []string{"solve.py"},
+		map[string]interface{}{"path": "solve.py", "line": 1, "content": "B = 2"},
+		"A = 1\nB = 2\n"},
+	{"replace_lines", "replace_lines", map[string]string{"solve.py": "A = 1\nB = 2\n"}, []string{"solve.py"},
+		map[string]interface{}{"path": "solve.py", "start_line": 1, "end_line": 1,
+			"expected_first_line": "A = 1", "expected_last_line": "A = 1",
+			"content": "A = 99"},
+		"A = 99\nB = 2\n"},
+}
+
+// Each content mutator succeeds and lands exactly the bytes asked for.
+func TestContentMutatorsLandTheBytesAskedFor(t *testing.T) {
+	for _, c := range contentMutatorCalls {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			full := filepath.Join(dir, "solve.py")
-			if c.seed != "" {
-				os.WriteFile(full, []byte(c.seed), 0o644)
-			}
+			writeTree(t, dir, c.seed)
 			ctx := ledgerToolCtx(t, dir)
-			if c.seed != "" {
-				// The edit tools require a current read; that guard is not
-				// what this test is measuring.
-				r, _ := json.Marshal(map[string]string{"path": "solve.py"})
+			for _, f := range c.read {
+				r, _ := json.Marshal(map[string]string{"path": f})
 				executeToolCall("read_file", r, ctx)
 			}
 			args, _ := json.Marshal(c.args)
@@ -82,21 +86,58 @@ func TestContentMutatorsRecordTheBytesThatLanded(t *testing.T) {
 			if !res.Success {
 				t.Fatalf("%s failed: %v", c.tool, res.Error)
 			}
-			got, _ := os.ReadFile(full)
+			got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
 			if string(got) != c.want {
 				t.Fatalf("disk bytes = %q, want %q", got, c.want)
 			}
+		})
+	}
+}
+
+// The ledger entry describes the bytes that landed: their hash and their size.
+func TestContentMutatorsRecordTheBytesThatLanded(t *testing.T) {
+	for _, c := range contentMutatorCalls {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTree(t, dir, c.seed)
+			ctx := ledgerToolCtx(t, dir)
+			for _, f := range c.read {
+				r, _ := json.Marshal(map[string]string{"path": f})
+				executeToolCall("read_file", r, ctx)
+			}
+			args, _ := json.Marshal(c.args)
+			executeToolCall(c.tool, args, ctx)
 			d := ledgerOf(t, ctx, "solve.py")
 			if d == nil {
 				t.Fatal("the mutation was not recorded")
 			}
-			if d.CurrentHash != diskHash(t, full) {
+			if d.CurrentHash != diskHash(t, filepath.Join(dir, "solve.py")) {
 				t.Errorf("ledger hash does not describe the bytes on disk")
 			}
 			if d.CurrentSize != len(c.want) {
 				t.Errorf("CurrentSize = %d, want %d", d.CurrentSize, len(c.want))
 			}
-			// The tool's own evidence is copied, never upgraded.
+		})
+	}
+}
+
+// The ledger entry copies the tool's own evidence and never upgrades it.
+func TestContentMutatorsCopyTheToolsEvidence(t *testing.T) {
+	for _, c := range contentMutatorCalls {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTree(t, dir, c.seed)
+			ctx := ledgerToolCtx(t, dir)
+			for _, f := range c.read {
+				r, _ := json.Marshal(map[string]string{"path": f})
+				executeToolCall("read_file", r, ctx)
+			}
+			args, _ := json.Marshal(c.args)
+			res := executeToolCall(c.tool, args, ctx)
+			d := ledgerOf(t, ctx, "solve.py")
+			if d == nil {
+				t.Fatal("the mutation was not recorded")
+			}
 			if d.ValidationStatus != res.ValidationStatus {
 				t.Errorf("ledger status %q != tool status %q",
 					d.ValidationStatus, res.ValidationStatus)
@@ -280,8 +321,9 @@ func TestStopBackgroundClearsTheHazardOnlyOnAReapedExit(t *testing.T) {
 	}
 }
 
-// The ledger after one branch of each direct mutator, driven through the real
-// boundary. Four rules hold for every row:
+// directMutatorBranches are one branch of each direct mutator, driven through
+// the real boundary: seed files, files read first, one call, and the
+// deliverable the row is about. Four rules hold for every row:
 //
 //  1. a recorded current hash always describes the bytes on disk;
 //  2. a checkpoint exists only where the tool reported an explicit pass;
@@ -289,95 +331,82 @@ func TestStopBackgroundClearsTheHazardOnlyOnAReapedExit(t *testing.T) {
 //     model was refused a write to never looks like the session's work;
 //  4. no branch reports MutationUnknown: a direct mutator owes its own
 //     classification.
+//
+// TestDirectMutatorOutcomeTable checks rules 3 and 4,
+// TestDirectMutatorLedgerDescribesTheDisk rule 1, and
+// TestDirectMutatorCheckpointsComeOnlyFromAPass rule 2.
+var directMutatorBranches = []struct {
+	name string
+	seed map[string]string
+	read []string
+	tool string
+	args map[string]interface{}
+	path string // the deliverable this row is about
+}{
+	{"write_file/new non-code", nil, nil,
+		"write_file", map[string]interface{}{"path": "notes.txt", "content": "hi\n"}, "notes.txt"},
+	{"write_file/new code", nil, nil,
+		"write_file", map[string]interface{}{"path": "m.py", "content": "A = 1\n"}, "m.py"},
+	{"write_file/deny-list refusal", map[string]string{".env": "S=1\n"}, nil,
+		"write_file", map[string]interface{}{"path": ".env", "content": "S=2\n"}, ".env"},
+	{"write_file/escapes workspace", nil, nil,
+		"write_file", map[string]interface{}{"path": "../out.py", "content": "A = 1\n"}, "../out.py"},
+	{"write_file/echoed write refused", map[string]string{"m.py": strings.Repeat("A = 1\n", 40)}, nil,
+		"write_file", map[string]interface{}{"path": "m.py", "content": strings.Repeat("A = 1\n", 40)}, "m.py"},
+
+	{"edit_file/applied", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
+		"edit_file", map[string]interface{}{"path": "m.py", "old_str": "A = 1", "new_str": "A = 2"}, "m.py"},
+	{"edit_file/old_str absent", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
+		"edit_file", map[string]interface{}{"path": "m.py", "old_str": "ZZZ", "new_str": "Q"}, "m.py"},
+	{"edit_file/not read first", map[string]string{"m.py": "A = 1\n"}, nil,
+		"edit_file", map[string]interface{}{"path": "m.py", "old_str": "A = 1", "new_str": "A = 2"}, "m.py"},
+
+	{"structural_edit/function body", map[string]string{"m.py": "def f():\n    return 1\n"}, []string{"m.py"},
+		"structural_edit", map[string]interface{}{"path": "m.py",
+			"selector": "function:f", "content": "def f():\n    return 2\n"}, "m.py"},
+	{"structural_edit/selector missing", map[string]string{"m.py": "def f():\n    return 1\n"}, []string{"m.py"},
+		"structural_edit", map[string]interface{}{"path": "m.py",
+			"selector": "function:nope", "content": "def nope():\n    pass\n"}, "m.py"},
+
+	{"insert_after/applied", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
+		"insert_after", map[string]interface{}{"path": "m.py", "line": 1, "content": "B = 2"}, "m.py"},
+	{"insert_after/line past end", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
+		"insert_after", map[string]interface{}{"path": "m.py", "line": 99, "content": "B = 2"}, "m.py"},
+
+	{"replace_lines/applied", map[string]string{"m.py": "A = 1\nB = 2\n"}, []string{"m.py"},
+		"replace_lines", map[string]interface{}{"path": "m.py", "start_line": 1, "end_line": 1,
+			"expected_first_line": "A = 1", "expected_last_line": "A = 1", "content": "A = 9"}, "m.py"},
+	{"replace_lines/anchor mismatch", map[string]string{"m.py": "A = 1\nB = 2\n"}, []string{"m.py"},
+		"replace_lines", map[string]interface{}{"path": "m.py", "start_line": 1, "end_line": 1,
+			"expected_first_line": "WRONG", "expected_last_line": "WRONG", "content": "A = 9"}, "m.py"},
+
+	{"delete_file/applied", map[string]string{"m.py": "A = 1\n"}, nil,
+		"delete_file", map[string]interface{}{"path": "m.py"}, "m.py"},
+	{"delete_file/missing", nil, nil,
+		"delete_file", map[string]interface{}{"path": "gone.py"}, "gone.py"},
+
+	{"move_file/applied", map[string]string{"old.py": "A = 1\n"}, nil,
+		"move_file", map[string]interface{}{"source": "old.py", "destination": "new.py"}, "old.py"},
+	{"move_file/missing source", nil, nil,
+		"move_file", map[string]interface{}{"source": "gone.py", "destination": "new.py"}, "gone.py"},
+}
+
+// Rules 3 and 4: a branch that says disk did not change records nothing, and
+// every branch classifies its own mutation.
 func TestDirectMutatorOutcomeTable(t *testing.T) {
-	type step struct {
-		tool string
-		args map[string]interface{}
-	}
-	cases := []struct {
-		name  string
-		seed  map[string]string
-		read  []string
-		steps []step
-		path  string // the deliverable this row is about
-	}{
-		{"write_file/new non-code", nil, nil,
-			[]step{{"write_file", map[string]interface{}{"path": "notes.txt", "content": "hi\n"}}}, "notes.txt"},
-		{"write_file/new code", nil, nil,
-			[]step{{"write_file", map[string]interface{}{"path": "m.py", "content": "A = 1\n"}}}, "m.py"},
-		{"write_file/deny-list refusal", map[string]string{".env": "S=1\n"}, nil,
-			[]step{{"write_file", map[string]interface{}{"path": ".env", "content": "S=2\n"}}}, ".env"},
-		{"write_file/escapes workspace", nil, nil,
-			[]step{{"write_file", map[string]interface{}{"path": "../out.py", "content": "A = 1\n"}}}, "../out.py"},
-		{"write_file/echoed write refused", map[string]string{"m.py": strings.Repeat("A = 1\n", 40)}, nil,
-			[]step{{"write_file", map[string]interface{}{"path": "m.py", "content": strings.Repeat("A = 1\n", 40)}}}, "m.py"},
-
-		{"edit_file/applied", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
-			[]step{{"edit_file", map[string]interface{}{"path": "m.py", "old_str": "A = 1", "new_str": "A = 2"}}}, "m.py"},
-		{"edit_file/old_str absent", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
-			[]step{{"edit_file", map[string]interface{}{"path": "m.py", "old_str": "ZZZ", "new_str": "Q"}}}, "m.py"},
-		{"edit_file/not read first", map[string]string{"m.py": "A = 1\n"}, nil,
-			[]step{{"edit_file", map[string]interface{}{"path": "m.py", "old_str": "A = 1", "new_str": "A = 2"}}}, "m.py"},
-
-		{"structural_edit/function body", map[string]string{"m.py": "def f():\n    return 1\n"}, []string{"m.py"},
-			[]step{{"structural_edit", map[string]interface{}{"path": "m.py",
-				"selector": "function:f", "content": "def f():\n    return 2\n"}}}, "m.py"},
-		{"structural_edit/selector missing", map[string]string{"m.py": "def f():\n    return 1\n"}, []string{"m.py"},
-			[]step{{"structural_edit", map[string]interface{}{"path": "m.py",
-				"selector": "function:nope", "content": "def nope():\n    pass\n"}}}, "m.py"},
-
-		{"insert_after/applied", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
-			[]step{{"insert_after", map[string]interface{}{"path": "m.py", "line": 1, "content": "B = 2"}}}, "m.py"},
-		{"insert_after/line past end", map[string]string{"m.py": "A = 1\n"}, []string{"m.py"},
-			[]step{{"insert_after", map[string]interface{}{"path": "m.py", "line": 99, "content": "B = 2"}}}, "m.py"},
-
-		{"replace_lines/applied", map[string]string{"m.py": "A = 1\nB = 2\n"}, []string{"m.py"},
-			[]step{{"replace_lines", map[string]interface{}{"path": "m.py", "start_line": 1, "end_line": 1,
-				"expected_first_line": "A = 1", "expected_last_line": "A = 1", "content": "A = 9"}}}, "m.py"},
-		{"replace_lines/anchor mismatch", map[string]string{"m.py": "A = 1\nB = 2\n"}, []string{"m.py"},
-			[]step{{"replace_lines", map[string]interface{}{"path": "m.py", "start_line": 1, "end_line": 1,
-				"expected_first_line": "WRONG", "expected_last_line": "WRONG", "content": "A = 9"}}}, "m.py"},
-
-		{"delete_file/applied", map[string]string{"m.py": "A = 1\n"}, nil,
-			[]step{{"delete_file", map[string]interface{}{"path": "m.py"}}}, "m.py"},
-		{"delete_file/missing", nil, nil,
-			[]step{{"delete_file", map[string]interface{}{"path": "gone.py"}}}, "gone.py"},
-
-		{"move_file/applied", map[string]string{"old.py": "A = 1\n"}, nil,
-			[]step{{"move_file", map[string]interface{}{"source": "old.py", "destination": "new.py"}}}, "old.py"},
-		{"move_file/missing source", nil, nil,
-			[]step{{"move_file", map[string]interface{}{"source": "gone.py", "destination": "new.py"}}}, "gone.py"},
-	}
-
 	var unknownMutators []string
-	for _, c := range cases {
+	for _, c := range directMutatorBranches {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
-			for f, body := range c.seed {
-				os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644)
-			}
+			writeTree(t, dir, c.seed)
 			ctx := ledgerToolCtx(t, dir)
 			for _, f := range c.read {
 				r, _ := json.Marshal(map[string]string{"path": f})
 				executeToolCall("read_file", r, ctx)
 			}
-			var res *ToolResult
-			for _, s := range c.steps {
-				args, _ := json.Marshal(s.args)
-				res = executeToolCall(s.tool, args, ctx)
-			}
-
+			args, _ := json.Marshal(c.args)
+			res := executeToolCall(c.tool, args, ctx)
 			d := ledgerOf(t, ctx, c.path)
-			full := filepath.Join(dir, c.path)
-			_, statErr := os.Stat(full)
-
-			state := "not recorded"
-			if d != nil {
-				state = fmt.Sprintf("gen=%d tomb=%v ckpt=%v", d.Generation,
-					d.Tombstoned, d.CheckpointHash != "")
-			}
-			t.Logf("mutation=%-10q validation=%s/%-14q ledger[%s]",
-				res.MutationStatus, res.ValidationKind, res.ValidationStatus, state)
 
 			// (3) a branch that says disk did not change records nothing.
 			if (res.MutationStatus == MutationNone || res.MutationStatus == MutationRefused) && d != nil {
@@ -387,26 +416,77 @@ func TestDirectMutatorOutcomeTable(t *testing.T) {
 			if res.MutationStatus == MutationUnknown {
 				unknownMutators = append(unknownMutators, c.name)
 			}
-			if d == nil {
-				return
-			}
-			// (1) the hash describes what is actually there.
-			if !d.Tombstoned && statErr == nil && d.CurrentHash != diskHash(t, full) {
-				t.Errorf("ledger hash does not describe the bytes on disk")
-			}
-			if d.Tombstoned && statErr == nil {
-				t.Error("tombstoned a path that is still on disk")
-			}
-			// (2) checkpoints come only from an explicit pass.
-			if d.CheckpointHash != "" && res.ValidationStatus != ValidationPassed {
-				t.Errorf("checkpointed bytes reported as %q, not passed", res.ValidationStatus)
-			}
 		})
 	}
 	if len(unknownMutators) > 0 {
 		t.Errorf("branches reporting MutationUnknown: %v — a direct mutator "+
 			"owes a local classification; the boundary will not invent one",
 			unknownMutators)
+	}
+}
+
+// Rule 1: a recorded current hash describes what is actually there, and a
+// tombstone stands only where the path is gone.
+func TestDirectMutatorLedgerDescribesTheDisk(t *testing.T) {
+	for _, c := range directMutatorBranches {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTree(t, dir, c.seed)
+			ctx := ledgerToolCtx(t, dir)
+			for _, f := range c.read {
+				r, _ := json.Marshal(map[string]string{"path": f})
+				executeToolCall("read_file", r, ctx)
+			}
+			args, _ := json.Marshal(c.args)
+			executeToolCall(c.tool, args, ctx)
+			d := ledgerOf(t, ctx, c.path)
+			full := filepath.Join(dir, c.path)
+			_, statErr := os.Stat(full)
+
+			if d == nil {
+				return
+			}
+			if !d.Tombstoned && statErr == nil && d.CurrentHash != diskHash(t, full) {
+				t.Errorf("ledger hash does not describe the bytes on disk")
+			}
+			if d.Tombstoned && statErr == nil {
+				t.Error("tombstoned a path that is still on disk")
+			}
+		})
+	}
+}
+
+// Rule 2: checkpoints come only from an explicit pass. This test also logs
+// each row's outcome and ledger state.
+func TestDirectMutatorCheckpointsComeOnlyFromAPass(t *testing.T) {
+	for _, c := range directMutatorBranches {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTree(t, dir, c.seed)
+			ctx := ledgerToolCtx(t, dir)
+			for _, f := range c.read {
+				r, _ := json.Marshal(map[string]string{"path": f})
+				executeToolCall("read_file", r, ctx)
+			}
+			args, _ := json.Marshal(c.args)
+			res := executeToolCall(c.tool, args, ctx)
+			d := ledgerOf(t, ctx, c.path)
+
+			state := "not recorded"
+			if d != nil {
+				state = fmt.Sprintf("gen=%d tomb=%v ckpt=%v", d.Generation,
+					d.Tombstoned, d.CheckpointHash != "")
+			}
+			t.Logf("mutation=%-10q validation=%s/%-14q ledger[%s]",
+				res.MutationStatus, res.ValidationKind, res.ValidationStatus, state)
+
+			if d == nil {
+				return
+			}
+			if d.CheckpointHash != "" && res.ValidationStatus != ValidationPassed {
+				t.Errorf("checkpointed bytes reported as %q, not passed", res.ValidationStatus)
+			}
+		})
 	}
 }
 
@@ -462,13 +542,14 @@ func stripVolatile(v interface{}) interface{} {
 	return v
 }
 
-func TestLedgerTracksFinalDiskBytesThroughTheAgentLoop(t *testing.T) {
-	dir := t.TempDir()
-	rel := "solve.py"
-
+// ledgerLoopServer stands in for the model and the sandbox of one runAgentLoop
+// run in dir: the model answers turn i with plan(i), the syntax check passes,
+// a command succeeds with no output (the mount probe reads its file back),
+// and the V3 and internal services are down.
+func ledgerLoopServer(dir string, plan func(i int) map[string]interface{}) *httptest.Server {
 	var turnMu sync.Mutex
 	turn := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -494,38 +575,33 @@ func TestLedgerTracksFinalDiskBytesThroughTheAgentLoop(t *testing.T) {
 		}
 		io.Copy(io.Discard, r.Body)
 		turnMu.Lock()
+		i := turn
 		turn++
-		n := turn
 		turnMu.Unlock()
 
-		var payload map[string]interface{}
-		switch n {
-		case 1:
-			payload = map[string]interface{}{"type": "tool_call", "name": "write_file",
-				"args": map[string]string{"path": rel, "content": "A = 1\n"}}
-		case 2:
-			payload = map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]string{"path": rel}}
-		case 3:
-			payload = map[string]interface{}{"type": "tool_call", "name": "edit_file",
-				"args": map[string]string{"path": rel, "old_str": "A = 1", "new_str": "A = 2"}}
-		case 4:
-			// The case the ledger exists for: bytes changing outside the
-			// edit tools, so the last recorded verdict stops being about
-			// what is on disk.
-			payload = map[string]interface{}{"type": "tool_call", "name": "run_command",
-				"args": map[string]string{"command": "printf 'A = 3\\n' > " + rel}}
-		default:
-			payload = map[string]interface{}{"type": "done",
-				"summary": "wrote solve.py"}
-		}
-		call, _ := json.Marshal(payload)
+		call, _ := json.Marshal(plan(i))
 		d, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{
 				{"delta": map[string]string{"content": string(call)}}}})
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
+}
+
+func TestLedgerTracksFinalDiskBytesThroughTheAgentLoop(t *testing.T) {
+	dir := t.TempDir()
+	rel := "solve.py"
+
+	srv := ledgerLoopServer(dir, script(
+		stepWrite(rel, "A = 1\n"),
+		stepRead(rel),
+		stepEdit(rel, "A = 1", "A = 2"),
+		// The case the ledger exists for: bytes changing outside the edit
+		// tools, so the last recorded verdict stops being about what is on
+		// disk.
+		stepRun("printf 'A = 3\\n' > "+rel),
+		stepDone("wrote solve.py"),
+	))
 	defer srv.Close()
 
 	var evMu sync.Mutex
@@ -734,9 +810,7 @@ func TestWhichMutatorsCanEverPromoteACheckpoint(t *testing.T) {
 			res := executeToolCall(c.tool, json.RawMessage(c.args), ctx)
 			promoted := false
 			for _, d := range ctx.Ledger {
-				if d.CheckpointHash != "" {
-					promoted = true
-				}
+				promoted = promoted || d.CheckpointHash != ""
 			}
 			t.Logf("%-16s validation=%s/%-14s checkpoint=%v", c.tool,
 				res.ValidationKind, res.ValidationStatus, promoted)

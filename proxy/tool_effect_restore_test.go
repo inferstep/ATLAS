@@ -101,11 +101,10 @@ func TestRestoreReplacesDemonstratedBrokenBytesExactly(t *testing.T) {
 func TestRestoreDeclinesEveryIneligibleShape(t *testing.T) {
 	for _, c := range []struct {
 		name       string
-		syntaxUp   bool
 		mutate     func(t *testing.T, ctx *AgentContext, dir string)
 		wantReason string
 	}{
-		{name: "current bytes parse, so nothing is broken", syntaxUp: true,
+		{name: "current bytes parse, so nothing is broken",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				// Semantically wrong but syntactically fine: the checker has
 				// no opinion to offer, so neither does recovery.
@@ -115,37 +114,42 @@ func TestRestoreDeclinesEveryIneligibleShape(t *testing.T) {
 			// The fresh check passes, so those bytes become the checkpoint
 			// and there is nothing safer to go back to.
 			wantReason: "already holds the last version shown to be valid"},
-		{name: "checker unavailable", syntaxUp: false,
+		{name: "checker unavailable",
+			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
+				// Take the checker away AFTER the checkpoint was earned, so
+				// the only thing missing is the fresh verdict.
+				ctx.SandboxURL = "http://127.0.0.1:1"
+			},
 			wantReason: "not shown to be broken"},
-		{name: "incomparable validation kinds", syntaxUp: true,
+		{name: "incomparable validation kinds",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 				d.CheckpointKind = ValidationKindStructural
 			},
 			wantReason: "not checked the same way"},
-		{name: "checkpoint hash is stale", syntaxUp: true,
+		{name: "checkpoint hash is stale",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 				d.CheckpointHash = hashBytes([]byte("something else"))
 			},
 			wantReason: "could not be verified"},
-		{name: "checkpoint bytes evicted", syntaxUp: true,
+		{name: "checkpoint bytes evicted",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
 				d.CheckpointBytes = nil
 			},
 			wantReason: "no longer available"},
-		{name: "path was deleted on purpose", syntaxUp: true,
+		{name: "path was deleted on purpose",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				tombstoneDeliverable(ctx, "solve.py", "deleted")
 			},
 			wantReason: "deleted or moved on purpose"},
-		{name: "path was moved on purpose", syntaxUp: true,
+		{name: "path was moved on purpose",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				tombstoneDeliverable(ctx, "solve.py", "moved:elsewhere.py")
 			},
 			wantReason: "deleted or moved on purpose"},
-		{name: "a background job may still be writing", syntaxUp: true,
+		{name: "a background job may still be writing",
 			mutate: func(t *testing.T, ctx *AgentContext, dir string) {
 				raiseWorkspaceHazard(ctx, "job1")
 			},
@@ -155,14 +159,7 @@ func TestRestoreDeclinesEveryIneligibleShape(t *testing.T) {
 			dir := t.TempDir()
 			ctx := restoreCtx(t, dir, true)
 			seedCheckpoint(t, ctx, dir, "solve.py")
-			if !c.syntaxUp {
-				// Take the checker away AFTER the checkpoint was earned, so
-				// the only thing missing is the fresh verdict.
-				ctx.SandboxURL = "http://127.0.0.1:1"
-			}
-			if c.mutate != nil {
-				c.mutate(t, ctx, dir)
-			}
+			c.mutate(t, ctx, dir)
 			before, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
 
 			dec := restoreDeliverable(ctx, ledgerKey(ctx, "solve.py"))
