@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -115,36 +117,7 @@ const repeatedRewriteBroken = "def solve():\n    return [1, 2]]\n"
 func repeatedRewriteStubs(t *testing.T, dir, rel string, calls *int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
-			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			valid := !strings.Contains(in.Code, "]]")
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{"SyntaxError: unmatched ']' (line 2)"}
-			}
-			json.NewEncoder(w).Encode(out)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/execute") {
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true, "stdout": "", "stderr": "", "exit_code": 0})
-			return
-		}
-		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
-			http.NotFound(w, r)
+		if serveLoopServices(w, r, dir) {
 			return
 		}
 		i := *calls
@@ -161,12 +134,7 @@ func repeatedRewriteStubs(t *testing.T, dir, rel string, calls *int) *httptest.S
 			"type": "tool_call", "name": "write_file",
 			"args": map[string]string{"path": rel, "content": variant},
 		})
-		w.Header().Set("Content-Type", "text/event-stream")
-		delta, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": string(body)}}},
-		})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+		serveReply(w, string(body))
 	}))
 }
 
@@ -266,36 +234,7 @@ const restoreGood = "def solve():\n    return [1, 2]\n"
 func restoreScenarioStubs(t *testing.T, dir, rel string, calls *int) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v3/") || strings.HasPrefix(r.URL.Path, "/internal/") {
-			http.Error(w, "v3 unavailable in this test", http.StatusServiceUnavailable)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			valid := !strings.Contains(in.Code, "]]")
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{"SyntaxError: unmatched ']' (line 2)"}
-			}
-			json.NewEncoder(w).Encode(out)
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/execute") {
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": string(b), "stderr": "", "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true, "stdout": "", "stderr": "", "exit_code": 0})
-			return
-		}
-		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
-			http.NotFound(w, r)
+		if serveLoopServices(w, r, dir) {
 			return
 		}
 		i := *calls
@@ -322,12 +261,7 @@ func restoreScenarioStubs(t *testing.T, dir, rel string, calls *int) *httptest.S
 				"type": "tool_call", "name": "run_command",
 				"args": map[string]string{"command": "test -s " + rel}})
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		delta, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": string(body)}}},
-		})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", delta)
+		serveReply(w, string(body))
 	}))
 }
 
@@ -656,7 +590,11 @@ func TestCompletionRequiresADemonstratedObligation(t *testing.T) {
 			t.Error("an unknown verdict authorized completion")
 		}
 	})
+}
 
+// What the session did through its own tools counts too: a file it wrote but
+// never declared, and a deliverable it deleted.
+func TestTheSessionsOwnToolCallsCanBlockCompletion(t *testing.T) {
 	t.Run("a file the session wrote but never declared", func(t *testing.T) {
 		ctx, _ := syntaxVerdictCtx(t, false)
 		args, _ := json.Marshal(map[string]string{"path": "side.py", "content": "def f(\n"})
@@ -770,16 +708,19 @@ func TestEveryNonCompletedTerminalIsHonest(t *testing.T) {
 		{"clarification_requested", TerminalIncomplete, ""},
 		{"investigation_handed_back", TerminalIncomplete, ""},
 	}
+	// Each producer runs twice: with nothing written, and after a write.
 	for _, p := range producers {
-		for _, wrote := range []bool{false, true} {
-			name := p.reason
-			if wrote {
-				name += "/wrote"
-			}
-			t.Run(name, func(t *testing.T) {
+		for _, run := range []struct {
+			nameSuffix string
+			wrote      bool
+		}{
+			{"", false},
+			{"/wrote", true},
+		} {
+			t.Run(p.reason+run.nameSuffix, func(t *testing.T) {
 				dir := t.TempDir()
 				ctx := NewAgentContext(dir, Tier2Medium)
-				st := &runState{madeProductiveChange: wrote}
+				st := &runState{madeProductiveChange: run.wrote}
 				got := honestTerminalSummary(ctx, st, p.status, p.reason, p.summary)
 				if strings.TrimSpace(got) == "" {
 					t.Fatal("a terminal shipped with no summary at all")
@@ -896,82 +837,26 @@ func TestModelSuccessClaimOverAnInvalidArtifact(t *testing.T) {
 	const broken = "def solve():\n    return [1, 2]]\n"
 	const claim = "I have successfully implemented solve.py. The script correctly processes input.txt."
 
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			valid := !strings.Contains(in.Code, "]]")
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{"SyntaxError: unmatched ']'"}
+	ctx, _, census, terminal := termFixture(t, dir, "Write solve.py.", termCeiling,
+		func(i int, _ string) map[string]interface{} {
+			switch i {
+			case 0:
+				// A write that lands with a parse warning, as write_file does for
+				// a new file that does not compile.
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": "solve.py", "content": broken}}
+			case 1:
+				// A command that exits zero. The run has a passing verification
+				// on record, so the verification gate is satisfied, and only the
+				// summary rule stands between the model's confident prose and
+				// the client, over a file that does not parse.
+				return map[string]interface{}{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "echo checked"}}
+			default:
+				return map[string]interface{}{"type": "done", "summary": claim}
 			}
-			json.NewEncoder(w).Encode(out)
-			return
-		case strings.HasSuffix(r.URL.Path, "/execute"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": string(b), "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true, "stdout": "", "exit_code": 0})
-			return
-		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-			http.NotFound(w, r)
-			return
-		}
-		i := calls
-		calls++
-		var payload map[string]interface{}
-		switch i {
-		case 0:
-			// A write that lands with a parse warning, as write_file does for
-			// a new file that does not compile.
-			payload = map[string]interface{}{"type": "tool_call", "name": "write_file",
-				"args": map[string]string{"path": "solve.py", "content": broken}}
-		case 1:
-			// A command that exits zero. The run has a passing verification
-			// on record, so the verification gate is satisfied, and only the
-			// summary rule stands between the model's confident prose and
-			// the client, over a file that does not parse.
-			payload = map[string]interface{}{"type": "tool_call", "name": "run_command",
-				"args": map[string]string{"command": "echo checked"}}
-		default:
-			payload = map[string]interface{}{"type": "done", "summary": claim}
-		}
-		body, _ := json.Marshal(payload)
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": string(body)}}}})
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-	}))
-	defer srv.Close()
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.VerifyOnHost = true
+		})
 	ctx.MaxTurns = 12
-
-	var terminal map[string]string
-	census := map[string]int{}
-	ctx.StreamFn = func(eventType string, data interface{}) {
-		census[eventType]++
-		if eventType == "done" {
-			b, _ := json.Marshal(data)
-			json.Unmarshal(b, &terminal)
-		}
-	}
 	if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
 		t.Fatalf("agent loop error: %v", err)
 	}
@@ -1057,13 +942,9 @@ func termFixture(t *testing.T, dir, request string, ceiling int,
 			return
 		}
 		raw, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
 		if strings.Contains(string(raw), "single fenced block") {
 			// No fenced block ever arrives: the resolution fails fast.
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{
-					{"delta": map[string]string{"content": "Sure, here it is."}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+			serveReply(w, "Sure, here it is.")
 			return
 		}
 		mu.Lock()
@@ -1075,10 +956,7 @@ func termFixture(t *testing.T, dir, request string, ceiling int,
 			return
 		}
 		call, _ := json.Marshal(plan(i, string(raw)))
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": string(call)}}}})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		serveReply(w, string(call))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -1094,11 +972,7 @@ func termFixture(t *testing.T, dir, request string, ceiling int,
 		defer mu.Unlock()
 		census[et]++
 		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
+			json.Unmarshal(b, &terminal) // adds the payload's keys to the map
 		}
 	}
 	return ctx, &turns, census, terminal
@@ -1262,23 +1136,16 @@ func TestReadOnlyRequestsStillComplete(t *testing.T) {
 
 // The successful paths complete.
 func TestSuccessfulCompletionsAreUnchanged(t *testing.T) {
-	const body = "def solve():\n    return 1\n\nprint(solve())\n"
+	// The model writes solve.py, runs it, and claims it is done (the claim
+	// repeats on any later turn).
+	plan := script(
+		stepWrite("solve.py", "def solve():\n    return 1\n\nprint(solve())\n"),
+		stepRun("python3 solve.py"),
+		stepDone("I have successfully created solve.py and ran it."))
 	run := func(t *testing.T, request string) (map[string]string, *AgentContext, string) {
 		dir := t.TempDir()
 		ctx, _, _, terminal := termFixture(t, dir, request, termCeiling,
-			func(i int, _ string) map[string]interface{} {
-				switch i {
-				case 0:
-					return map[string]interface{}{"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": "solve.py", "content": body}}
-				case 1:
-					return map[string]interface{}{"type": "tool_call", "name": "run_command",
-						"args": map[string]string{"command": "python3 solve.py"}}
-				default:
-					return map[string]interface{}{"type": "done",
-						"summary": "I have successfully created solve.py and ran it."}
-				}
-			})
+			func(i int, _ string) map[string]interface{} { return plan(i) })
 		if err := runAgentLoop(ctx, request); err != nil {
 			t.Fatal(err)
 		}
@@ -1313,68 +1180,51 @@ func TestSuccessfulCompletionsAreUnchanged(t *testing.T) {
 				terminal["status"], terminal["reason"])
 		}
 	})
+}
 
-	// An unparseable file the session wrote is an open repair, and the most
-	// specific reason there is: it outranks deliverables_not_demonstrated
-	// like that reason outranks the demand reasons.
-	t.Run("a broken artifact ends repair_unfinished", func(t *testing.T) {
-		dir := t.TempDir()
-		const broken = "def solve():\n    return [1, 2]]\n"
-		ctx, _, _, terminal := termFixture(t, dir,
-			"Create solve.py that prints the list.", termCeiling,
-			func(i int, _ string) map[string]interface{} {
-				if i == 0 {
-					return map[string]interface{}{"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": "solve.py", "content": broken}}
-				}
-				if i == 1 {
-					return map[string]interface{}{"type": "tool_call", "name": "run_command",
-						"args": map[string]string{"command": "echo checked"}}
-				}
-				return map[string]interface{}{"type": "done", "summary": "done"}
-			})
-		if err := runAgentLoop(ctx, "Create solve.py that prints the list."); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("broken-artifact: status=%q reason=%q", terminal["status"], terminal["reason"])
-		if terminal["status"] == string(TerminalCompleted) {
-			t.Fatal("invalid bytes completed")
-		}
-		if terminal["reason"] != "repair_unfinished" {
-			t.Errorf("reason = %q — a more specific existing failure was replaced",
-				terminal["reason"])
-		}
-	})
-
-	// With nothing to repair, deliverables_not_demonstrated still wins: a
-	// deliverable no check applies to cannot be shown valid.
-	t.Run("deliverables_not_demonstrated still wins when it applies", func(t *testing.T) {
-		dir := t.TempDir()
-		const request = "Create solve.dat that holds the list."
-		ctx, _, _, terminal := termFixture(t, dir, request, termCeiling,
-			func(i int, _ string) map[string]interface{} {
-				if i == 0 {
-					return map[string]interface{}{"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": "solve.dat", "content": "1 2\n"}}
-				}
-				if i == 1 {
-					return map[string]interface{}{"type": "tool_call", "name": "run_command",
-						"args": map[string]string{"command": "echo checked"}}
-				}
-				return map[string]interface{}{"type": "done", "summary": "done"}
-			})
-		if err := runAgentLoop(ctx, request); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("uncheckable-artifact: status=%q reason=%q", terminal["status"], terminal["reason"])
-		if terminal["status"] == string(TerminalCompleted) {
-			t.Fatal("an uncheckable deliverable completed")
-		}
-		if terminal["reason"] != "deliverables_not_demonstrated" {
-			t.Errorf("reason = %q — a more specific existing failure was replaced",
-				terminal["reason"])
-		}
-	})
+// A deliverable that is written, "checked" by a command that proves nothing,
+// and claimed done ends with the most specific reason there is. An
+// unparseable file the session wrote is an open repair: repair_unfinished
+// outranks deliverables_not_demonstrated like that reason outranks the demand
+// reasons. With nothing to repair, deliverables_not_demonstrated still wins:
+// a deliverable no check applies to cannot be shown valid.
+func TestAnUnfinishedDeliverableEndsWithTheMostSpecificReason(t *testing.T) {
+	for _, c := range []struct {
+		name, request, path, content, wantReason string
+	}{
+		{"a broken artifact ends repair_unfinished", "Create solve.py that prints the list.",
+			"solve.py", "def solve():\n    return [1, 2]]\n", "repair_unfinished"},
+		{"deliverables_not_demonstrated still wins when it applies", "Create solve.dat that holds the list.",
+			"solve.dat", "1 2\n", "deliverables_not_demonstrated"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, _, _, terminal := termFixture(t, dir, c.request, termCeiling,
+				func(i int, _ string) map[string]interface{} {
+					switch i {
+					case 0:
+						return map[string]interface{}{"type": "tool_call", "name": "write_file",
+							"args": map[string]string{"path": c.path, "content": c.content}}
+					case 1:
+						return map[string]interface{}{"type": "tool_call", "name": "run_command",
+							"args": map[string]string{"command": "echo checked"}}
+					default:
+						return map[string]interface{}{"type": "done", "summary": "done"}
+					}
+				})
+			if err := runAgentLoop(ctx, c.request); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s: status=%q reason=%q", c.path, terminal["status"], terminal["reason"])
+			if terminal["status"] == string(TerminalCompleted) {
+				t.Fatalf("%s completed", c.path)
+			}
+			if terminal["reason"] != c.wantReason {
+				t.Errorf("reason = %q, want %q — a more specific existing failure was replaced",
+					terminal["reason"], c.wantReason)
+			}
+		})
+	}
 }
 
 // Refused unsafe mutations cannot become success by leaving no trace.
@@ -1464,94 +1314,96 @@ func TestDocumentAssetClassification(t *testing.T) {
 	}
 }
 
+// bracketCheckCtx is a session in a fresh folder whose sandbox fails the
+// syntax check of code that holds "]]", passes any other code, and refuses
+// everything else.
+func bracketCheckCtx(t *testing.T) (*AgentContext, string) {
+	t.Helper()
+	dir := t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var in struct{ Code, Language string }
+		json.NewDecoder(r.Body).Decode(&in)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"valid": !strings.Contains(in.Code, "]]")})
+	}))
+	t.Cleanup(srv.Close)
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.SandboxURL = srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+	return ctx, dir
+}
+
+// Which written deliverables may demonstrate completion: a document may, code
+// with no applicable check may not, and a structured format goes through its
+// own parser.
 func TestNonCodeDeliverableDemonstration(t *testing.T) {
-	newCtx := func(t *testing.T) (*AgentContext, string) {
-		dir := t.TempDir()
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !strings.HasSuffix(r.URL.Path, "/syntax-check") {
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
+	const code = "fn main() { let x = 1; }\n"
+	for _, c := range []struct {
+		name, path, body string
+		want             bool
+	}{
+		{"markdown may demonstrate", "README.md", "# Title\n\nSome prose.\n", true},
+		{"unsupported code cannot: lib.rs", "lib.rs", code, false},
+		{"unsupported code cannot: main.c", "main.c", code, false},
+		{"unsupported code cannot: weird.zzz", "weird.zzz", code, false},
+		{"unsupported code cannot: app.jinja", "app.jinja", code, false},
+		{"valid json passes its own parser", "data.json", "{\"a\": 1}\n", true},
+		{"invalid json fails its own parser", "bad.json", "{\"a\": [1, 2]]}\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, _ := bracketCheckCtx(t)
+			args, _ := json.Marshal(map[string]string{"path": c.path, "content": c.body})
+			executeToolCall("write_file", args, ctx)
+			if got := deliverablesDemonstrablyValid(ctx, []string{c.path}); got != c.want {
+				t.Errorf("%s demonstrates completion: %v, want %v", c.path, got, c.want)
 			}
-			var in struct{ Code, Language string }
-			json.NewDecoder(r.Body).Decode(&in)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"valid": !strings.Contains(in.Code, "]]")})
-		}))
-		t.Cleanup(srv.Close)
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.SandboxURL = srv.URL
-		ctx.PermissionMode = PermissionYolo
-		ctx.StreamFn = func(string, interface{}) {}
-		return ctx, dir
+		})
 	}
+}
 
-	write := func(t *testing.T, ctx *AgentContext, path, body string) *ToolResult {
-		t.Helper()
-		args, _ := json.Marshal(map[string]string{"path": path, "content": body})
-		return executeToolCall("write_file", args, ctx)
+// An ordinary text file demonstrates as not_applicable, and demonstrating it
+// does not relabel its record.
+func TestATextDeliverableMayDemonstrate(t *testing.T) {
+	ctx, _ := bracketCheckCtx(t)
+	args, _ := json.Marshal(map[string]string{"path": "notes.txt", "content": "ordinary notes\n"})
+	res := executeToolCall("write_file", args, ctx)
+	if res.ValidationKind != ValidationKindNone || res.ValidationStatus != ValidationNotApplicable {
+		t.Fatalf("expected none/not_applicable, got %s/%s",
+			res.ValidationKind, res.ValidationStatus)
 	}
+	if !deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
+		t.Error("a current, ordinary text deliverable could not demonstrate")
+	}
+	// The internal record is untouched: no fake syntax pass.
+	d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
+	k, s := d.CurrentValidation()
+	if k != ValidationKindNone || s != ValidationNotApplicable {
+		t.Errorf("the ledger was relabelled: %v/%v", k, s)
+	}
+}
 
-	t.Run("text file may demonstrate", func(t *testing.T) {
-		ctx, _ := newCtx(t)
-		res := write(t, ctx, "notes.txt", "ordinary notes\n")
-		if res.ValidationKind != ValidationKindNone || res.ValidationStatus != ValidationNotApplicable {
-			t.Fatalf("expected none/not_applicable, got %s/%s",
-				res.ValidationKind, res.ValidationStatus)
-		}
-		if !deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
-			t.Error("a current, ordinary text deliverable could not demonstrate")
-		}
-		// The internal record is untouched: no fake syntax pass.
-		d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
-		k, s := d.CurrentValidation()
-		if k != ValidationKindNone || s != ValidationNotApplicable {
-			t.Errorf("the ledger was relabelled: %v/%v", k, s)
-		}
-	})
+func TestRecognizedCodeWithTheCheckerUnavailableCannotDemonstrate(t *testing.T) {
+	ctx, _ := bracketCheckCtx(t)
+	ctx.SandboxURL = "http://127.0.0.1:1"
+	args, _ := json.Marshal(map[string]string{"path": "solve.py", "content": "A = 1\n"})
+	executeToolCall("write_file", args, ctx)
+	if deliverablesDemonstrablyValid(ctx, []string{"solve.py"}) {
+		t.Error("an unchecked .py demonstrated completion")
+	}
+}
 
-	t.Run("markdown may demonstrate", func(t *testing.T) {
-		ctx, _ := newCtx(t)
-		write(t, ctx, "README.md", "# Title\n\nSome prose.\n")
-		if !deliverablesDemonstrablyValid(ctx, []string{"README.md"}) {
-			t.Error("a markdown document could not demonstrate")
-		}
-	})
-
-	t.Run("unsupported code cannot", func(t *testing.T) {
-		for _, p := range []string{"lib.rs", "main.c", "weird.zzz", "app.jinja"} {
-			ctx, _ := newCtx(t)
-			write(t, ctx, p, "fn main() { let x = 1; }\n")
-			if deliverablesDemonstrablyValid(ctx, []string{p}) {
-				t.Errorf("%s demonstrated completion with no applicable check", p)
-			}
-		}
-	})
-
-	t.Run("recognized code with the checker unavailable cannot", func(t *testing.T) {
-		ctx, _ := newCtx(t)
-		ctx.SandboxURL = "http://127.0.0.1:1"
-		write(t, ctx, "solve.py", "A = 1\n")
-		if deliverablesDemonstrablyValid(ctx, []string{"solve.py"}) {
-			t.Error("an unchecked .py demonstrated completion")
-		}
-	})
-
-	t.Run("structured format uses its parser", func(t *testing.T) {
-		ctx, _ := newCtx(t)
-		write(t, ctx, "data.json", "{\"a\": 1}\n")
-		if !deliverablesDemonstrablyValid(ctx, []string{"data.json"}) {
-			t.Error("valid json did not pass through its own parser")
-		}
-		ctx2, _ := newCtx(t)
-		write(t, ctx2, "bad.json", "{\"a\": [1, 2]]}\n")
-		if deliverablesDemonstrablyValid(ctx2, []string{"bad.json"}) {
-			t.Error("invalid json demonstrated completion")
-		}
-	})
-
+// A document that may demonstrate is still held to every other rule: its
+// bytes must be the ones the session wrote, and the run's demands must be met.
+func TestADemonstrableDocumentIsStillHeldToTheOtherRules(t *testing.T) {
 	t.Run("bytes changed after observation cannot", func(t *testing.T) {
-		ctx, dir := newCtx(t)
-		write(t, ctx, "notes.txt", "ordinary notes\n")
+		ctx, dir := bracketCheckCtx(t)
+		args, _ := json.Marshal(map[string]string{"path": "notes.txt", "content": "ordinary notes\n"})
+		executeToolCall("write_file", args, ctx)
 		os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("changed behind us\n"), 0o644)
 		if deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
 			t.Error("a stale record demonstrated completion")
@@ -1559,7 +1411,7 @@ func TestNonCodeDeliverableDemonstration(t *testing.T) {
 	})
 
 	t.Run("a path the session never wrote cannot", func(t *testing.T) {
-		ctx, dir := newCtx(t)
+		ctx, dir := bracketCheckCtx(t)
 		os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("pre-existing\n"), 0o644)
 		if deliverablesDemonstrablyValid(ctx, []string{"notes.txt"}) {
 			t.Error("a file the session never owned demonstrated completion")
@@ -1567,8 +1419,9 @@ func TestNonCodeDeliverableDemonstration(t *testing.T) {
 	})
 
 	t.Run("unmet verification and outstanding work still block", func(t *testing.T) {
-		ctx, _ := newCtx(t)
-		write(t, ctx, "notes.txt", "ordinary notes\n")
+		ctx, _ := bracketCheckCtx(t)
+		write, _ := json.Marshal(map[string]string{"path": "notes.txt", "content": "ordinary notes\n"})
+		executeToolCall("write_file", write, ctx)
 		st := &runState{madeProductiveChange: true, expectedOutputs: []string{"notes.txt"}}
 		// Requested verification, never satisfied.
 		st.userWantsVerification = true
@@ -1585,47 +1438,53 @@ func TestNonCodeDeliverableDemonstration(t *testing.T) {
 	})
 }
 
-// The production shape, through the real loop.
+// wroteIt is the whole done summary of the two loop tests below.
+const wroteIt = "wrote it"
+
+// The production shape, through the real loop: an ordinary text file
+// completes, and its record stays what it was.
 func TestNonCodeDeliverableCompletesThroughTheLoop(t *testing.T) {
-	for _, c := range []struct {
-		name, path, body string
-		wantCompleted    bool
-	}{
-		{"ordinary text", "notes.txt", "the notes you asked for\n", true},
-		{"unsupported code", "lib.rs", "fn main() { let x = 1; }\n", false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			const req = "Write the file."
-			ctx, _, _, terminal := termFixture(t, dir, req, termCeiling,
-				func(i int, _ string) map[string]interface{} {
-					if i == 0 {
-						return map[string]interface{}{"type": "tool_call", "name": "write_file",
-							"args": map[string]string{"path": c.path, "content": c.body}}
-					}
-					return map[string]interface{}{"type": "done", "summary": "wrote it"}
-				})
-			if err := runAgentLoop(ctx, req); err != nil {
-				t.Fatal(err)
-			}
-			got, _ := os.ReadFile(filepath.Join(dir, c.path))
-			d := ctx.Ledger[ledgerKey(ctx, c.path)]
-			t.Logf("%s: status=%q reason=%q hash_matches=%v",
-				c.name, terminal["status"], terminal["reason"],
-				d != nil && d.CurrentHash == hashBytes(got))
-			completed := terminal["status"] == string(TerminalCompleted)
-			if completed != c.wantCompleted {
-				t.Errorf("completed=%v, want %v (reason=%q)", completed, c.wantCompleted, terminal["reason"])
-			}
-			if c.wantCompleted {
-				if d == nil || d.CurrentHash != hashBytes(got) {
-					t.Error("the ledger hash does not match disk")
-				}
-				if k, s := d.CurrentValidation(); k != ValidationKindNone || s != ValidationNotApplicable {
-					t.Errorf("the internal record was relabelled: %v/%v", k, s)
-				}
-			}
-		})
+	dir := t.TempDir()
+	const req = "Write the file."
+	// The model writes the file, then says it is done.
+	plan := script(stepWrite("notes.txt", "the notes you asked for\n"), stepDone(wroteIt))
+	ctx, _, _, terminal := termFixture(t, dir, req, termCeiling,
+		func(i int, _ string) map[string]interface{} { return plan(i) })
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "notes.txt"))
+	d := ctx.Ledger[ledgerKey(ctx, "notes.txt")]
+	t.Logf("ordinary text: status=%q reason=%q hash_matches=%v",
+		terminal["status"], terminal["reason"], d != nil && d.CurrentHash == hashBytes(got))
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Errorf("status = %q, want completed (reason=%q)", terminal["status"], terminal["reason"])
+	}
+	if d == nil || d.CurrentHash != hashBytes(got) {
+		t.Error("the ledger hash does not match disk")
+	}
+	if k, s := d.CurrentValidation(); k != ValidationKindNone || s != ValidationNotApplicable {
+		t.Errorf("the internal record was relabelled: %v/%v", k, s)
+	}
+}
+
+// The same shape with code no check applies to does not complete.
+func TestUnsupportedCodeDoesNotCompleteThroughTheLoop(t *testing.T) {
+	dir := t.TempDir()
+	const req = "Write the file."
+	// The model writes the file, then says it is done.
+	plan := script(stepWrite("lib.rs", "fn main() { let x = 1; }\n"), stepDone(wroteIt))
+	ctx, _, _, terminal := termFixture(t, dir, req, termCeiling,
+		func(i int, _ string) map[string]interface{} { return plan(i) })
+	if err := runAgentLoop(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "lib.rs"))
+	d := ctx.Ledger[ledgerKey(ctx, "lib.rs")]
+	t.Logf("unsupported code: status=%q reason=%q hash_matches=%v",
+		terminal["status"], terminal["reason"], d != nil && d.CurrentHash == hashBytes(got))
+	if terminal["status"] == string(TerminalCompleted) {
+		t.Errorf("unsupported code completed (reason=%q)", terminal["reason"])
 	}
 }
 
@@ -1835,87 +1694,64 @@ func TestEveryWorkspaceGuardedToolRefusesBoundedly(t *testing.T) {
 	}
 }
 
+// alignedWorkspaceRun drives the real loop with MaxTurns=0 against a healthy
+// workspace that holds app.py, asking it to "Look at app.py." The ceiling
+// lives in the server, so nothing sleeps and an unbounded loop fails
+// immediately. It returns the session, the model turns, the event census, the
+// terminal payload and the first tool result.
+func alignedWorkspaceRun(t *testing.T, plan func(i int, prompt string) map[string]interface{}) (
+	*AgentContext, *int, map[string]int, map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	first := ""
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveLoopServices(w, r, dir) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		if i >= wsCeiling {
+			http.Error(w, "ceiling", http.StatusInsufficientStorage)
+			return
+		}
+		call, _ := json.Marshal(plan(i, string(raw)))
+		serveReply(w, string(call))
+	}))
+	t.Cleanup(srv.Close)
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "tool_result" && first == "" {
+			first = string(b)
+		}
+		if et == "done" {
+			json.Unmarshal(b, &terminal) // adds the payload's keys to the map
+		}
+	}
+	runAgentLoop(ctx, "Look at app.py.")
+	return ctx, &turns, census, terminal, first
+}
+
 // Healthy-workspace controls: the aligned route is untouched.
 func TestAlignedWorkspaceRoutesAreUnchanged(t *testing.T) {
-	base := func(t *testing.T, plan func(i int, prompt string) map[string]interface{}) (
-		*AgentContext, *int, map[string]int, map[string]string, string) {
-		t.Helper()
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
-		turns := 0
-		census := map[string]int{}
-		terminal := map[string]string{}
-		first := ""
-		var mu sync.Mutex
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
-				return
-			case strings.HasSuffix(r.URL.Path, "/execute"):
-				var in struct{ Code string }
-				json.NewDecoder(r.Body).Decode(&in)
-				if strings.Contains(in.Code, ".atlas-mount-probe") {
-					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"success": true, "stdout": string(b), "exit_code": 0})
-					return
-				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": "", "exit_code": 0})
-				return
-			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-				http.NotFound(w, r)
-				return
-			}
-			raw, _ := io.ReadAll(r.Body)
-			mu.Lock()
-			i := turns
-			turns++
-			mu.Unlock()
-			if i >= wsCeiling {
-				http.Error(w, "ceiling", http.StatusInsufficientStorage)
-				return
-			}
-			call, _ := json.Marshal(plan(i, string(raw)))
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{
-					{"delta": map[string]string{"content": string(call)}}}})
-			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}))
-		t.Cleanup(srv.Close)
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-		ctx.PermissionMode = PermissionYolo
-		ctx.TrustMode = trustFullyTrusted
-		ctx.VerifyOnHost = true
-		ctx.MaxTurns = 0
-		ctx.StreamFn = func(et string, data interface{}) {
-			b, _ := json.Marshal(data)
-			mu.Lock()
-			defer mu.Unlock()
-			census[et]++
-			if et == "tool_result" && first == "" {
-				first = string(b)
-			}
-			if et == "done" {
-				var m map[string]string
-				json.Unmarshal(b, &m)
-				for k, v := range m {
-					terminal[k] = v
-				}
-			}
-		}
-		runAgentLoop(ctx, "Look at app.py.")
-		return ctx, &turns, census, terminal, first
-	}
-
 	t.Run("aligned find_file dispatches and succeeds", func(t *testing.T) {
-		_, turns, _, terminal, first := base(t, func(i int, _ string) map[string]interface{} {
+		_, turns, _, terminal, first := alignedWorkspaceRun(t, func(i int, _ string) map[string]interface{} {
 			if i == 0 {
 				return map[string]interface{}{"type": "tool_call", "name": "find_file",
 					"args": map[string]string{"pattern": "app"}}
@@ -1933,7 +1769,7 @@ func TestAlignedWorkspaceRoutesAreUnchanged(t *testing.T) {
 	})
 
 	t.Run("repeated aligned find_file uses the retry policy, not the boundary path", func(t *testing.T) {
-		_, turns, _, terminal, first := base(t, func(i int, _ string) map[string]interface{} {
+		_, turns, _, terminal, first := alignedWorkspaceRun(t, func(i int, _ string) map[string]interface{} {
 			return map[string]interface{}{"type": "tool_call", "name": "find_file",
 				"args": map[string]string{"path": "app.py"}}
 		})
@@ -1949,25 +1785,27 @@ func TestAlignedWorkspaceRoutesAreUnchanged(t *testing.T) {
 			t.Errorf("reason = %q", terminal["reason"])
 		}
 	})
+}
 
-	t.Run("path escape and deny-list diagnostics are verbatim", func(t *testing.T) {
-		for _, c := range []struct{ name, path, want string }{
-			{"escape", "../outside.py", "outside the workspace"},
-			{"deny-list", ".env", "refused"},
-		} {
-			_, _, _, _, first := base(t, func(i int, _ string) map[string]interface{} {
-				if i == 0 {
-					return map[string]interface{}{"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": c.path, "content": "x = 1\n"}}
-				}
-				return map[string]interface{}{"type": "done", "summary": "done"}
-			})
-			t.Logf("%s: %.120s", c.name, first)
-			if !strings.Contains(strings.ToLower(first), c.want) {
-				t.Errorf("%s diagnostic changed: %s", c.name, first)
+// Healthy-workspace control: the path-escape and deny-list refusals still
+// reach the model in their own words.
+func TestPathEscapeAndDenyListDiagnosticsAreVerbatim(t *testing.T) {
+	for _, c := range []struct{ name, path, want string }{
+		{"escape", "../outside.py", "outside the workspace"},
+		{"deny-list", ".env", "refused"},
+	} {
+		_, _, _, _, first := alignedWorkspaceRun(t, func(i int, _ string) map[string]interface{} {
+			if i == 0 {
+				return map[string]interface{}{"type": "tool_call", "name": "write_file",
+					"args": map[string]string{"path": c.path, "content": "x = 1\n"}}
 			}
+			return map[string]interface{}{"type": "done", "summary": "done"}
+		})
+		t.Logf("%s: %.120s", c.name, first)
+		if !strings.Contains(strings.ToLower(first), c.want) {
+			t.Errorf("%s diagnostic changed: %s", c.name, first)
 		}
-	})
+	}
 }
 
 // Structural guard against a fifth instance. Every pre-execution bounce in the
@@ -1986,10 +1824,10 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 	lines := strings.Split(string(src), "\n")
 	start, ban := -1, -1
 	for i, l := range lines {
-		if start < 0 && strings.TrimSpace(l) == `case "tool_call":` && i > 1100 {
+		switch {
+		case start < 0 && strings.TrimSpace(l) == `case "tool_call":` && i > 1100:
 			start = i
-		}
-		if start >= 0 && ban < 0 && strings.Contains(l, "identicalRetryRefusal(") {
+		case start >= 0 && ban < 0 && strings.Contains(l, "identicalRetryRefusal("):
 			ban = i
 		}
 	}
@@ -2013,6 +1851,7 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 		"toolBanNote(":                         "accounted by the per-path ban branch",
 		"identicalRetryRefusal(":               "accounted by the retry-ban branch",
 	}
+	knownPhrases := slices.Collect(maps.Keys(known))
 
 	var unlisted []string
 	for i := start; i < ban; i++ {
@@ -2021,26 +1860,19 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 		}
 		// The rejection text is on this line or the few around it.
 		window := strings.Join(lines[max(start, i-16):min(len(lines), i+6)], "\n")
-		// Accounted right here?
 		after := strings.Join(lines[i:min(len(lines), i+30)], "\n")
-		// accountRefusedCall is the shared reader every pre-dispatch refusal
-		// goes through; the two inline forms predate it and still exist.
-		if strings.Contains(after, "accountRefusedCall(") ||
-			strings.Contains(after, "shouldStopForFailures(") ||
-			strings.Contains(after, "recordFailedToolCall(") {
-			continue
-		}
-		if strings.Contains(window, "chargeBounce(") {
-			continue
-		}
-		matched := false
-		for phrase := range known {
-			if strings.Contains(window, phrase) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		switch {
+		case strings.Contains(after, "accountRefusedCall("),
+			strings.Contains(after, "shouldStopForFailures("),
+			strings.Contains(after, "recordFailedToolCall("):
+			// Accounted right here. accountRefusedCall is the shared reader
+			// every pre-dispatch refusal goes through; the two inline forms
+			// predate it and still exist.
+		case strings.Contains(window, "chargeBounce("):
+			// Bounded by its own budget.
+		case containsAny(window, knownPhrases...):
+			// Listed above, with what bounds it.
+		default:
 			unlisted = append(unlisted, fmt.Sprintf("agent.go:%d", i+1))
 		}
 	}
