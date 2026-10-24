@@ -319,170 +319,177 @@ func TestIdentityUnavailableFailsClosedBeforeAsking(t *testing.T) {
 
 // --- Every way an approval's life can end releases its reference once -------
 
+// askToDelete asks for permission to delete rel and returns, once the prompt
+// is pending, the channel that receives the answer.
+func askToDelete(t *testing.T, ctx *AgentContext, sess, call, rel string) chan bool {
+	t.Helper()
+	done := make(chan bool, 1)
+	go func() { done <- awaitPermission(ctx, "delete_file", call, json.RawMessage(`{"path":"`+rel+`"}`)) }()
+	waitForPending(t, sess, call)
+	return done
+}
+
+// answerDeletePrompt posts the decision for call's pending prompt.
+func answerDeletePrompt(t *testing.T, sess, call, decision string) {
+	t.Helper()
+	postDecision(t, fmt.Sprintf(`{"session_id":%q,"tool_call_id":%q,"decision":%q}`, sess, call, decision))
+}
+
+// approvalLifeEnds are the ways an approval's life can end. Each runs in a
+// fresh workspace dir under its own session sess.
+var approvalLifeEnds = map[string]func(t *testing.T, dir, sess string){
+	"approved and removed": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "allow")
+		if !<-done {
+			t.Fatal("not allowed")
+		}
+		if res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx); !res.Success {
+			t.Fatalf("removal failed: %s", res.Error)
+		}
+	},
+	"approved but stale": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		os.WriteFile(filepath.Join(dir, "f.py"), []byte("B\n"), 0o644)
+		answerDeletePrompt(t, sess, "c", "allow")
+		if !<-done {
+			t.Fatal("not allowed")
+		}
+		if res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx); res.Success {
+			t.Fatal("a stale approval deleted")
+		}
+	},
+	"denied": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "deny")
+		if <-done {
+			t.Fatal("denied but allowed")
+		}
+	},
+	"malformed decision": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "maybe")
+		if <-done {
+			t.Fatal("a malformed decision allowed")
+		}
+	},
+	"timeout": func(t *testing.T, dir, sess string) {
+		t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		if <-done {
+			t.Fatal("a timeout allowed")
+		}
+	},
+	"request cancelled (client disconnect)": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		cancel()
+		if <-done {
+			t.Fatal("a cancelled request allowed")
+		}
+	},
+	"duplicate decision": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "deny")
+		if <-done {
+			t.Fatal("denied but allowed")
+		}
+		w := postDecision(t, fmt.Sprintf(`{"session_id":%q,"tool_call_id":"c","decision":"allow"}`, sess))
+		if w.Code != 404 {
+			t.Errorf("a second decision was accepted: %d", w.Code)
+		}
+	},
+	"preflight failure after the reference was taken": func(t *testing.T, dir, sess string) {
+		// A non-empty directory is refused AFTER the object was held.
+		os.Mkdir(filepath.Join(dir, "d"), 0o755)
+		os.WriteFile(filepath.Join(dir, "d", "x"), []byte("x"), 0o644)
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		if awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"d"}`)) {
+			t.Fatal("a non-empty directory was approved")
+		}
+	},
+	"capacity refusal": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		ctx.mu.Lock()
+		ctx.deletionAttempts = map[string]*deletionAttempt{}
+		for i := 0; i < maxTrackedDeletions; i++ {
+			ctx.deletionAttempts[fmt.Sprintf("/x/%d", i)] = &deletionAttempt{Removed: true}
+		}
+		ctx.mu.Unlock()
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "allow")
+		if !<-done {
+			t.Fatal("not allowed")
+		}
+		res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx)
+		if res.Success {
+			t.Fatal("an untrackable deletion was performed")
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
+			t.Fatal("the file was removed at the tracking ceiling")
+		}
+	},
+	"grant replaced by a later grant": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c1", mkFile(dir))
+		answerDeletePrompt(t, sess, "c1", "allow")
+		<-done
+		os.WriteFile(filepath.Join(dir, "g.py"), []byte("G\n"), 0o644)
+		done = askToDelete(t, ctx, sess, "c2", "g.py")
+		answerDeletePrompt(t, sess, "c2", "allow")
+		<-done
+		// Only the second grant is held; consuming it releases the last one.
+		if res := executeToolCall("delete_file", json.RawMessage(`{"path":"g.py"}`), ctx); !res.Success {
+			t.Fatalf("removal failed: %s", res.Error)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
+			t.Fatal("the replaced grant's file was removed")
+		}
+	},
+	"terminal cleanup without execution": func(t *testing.T, dir, sess string) {
+		ctx, cancel := deletePermCtx(t, sess, dir)
+		defer cancel()
+		ctx.StreamFn = func(string, interface{}) {}
+		done := askToDelete(t, ctx, sess, "c", mkFile(dir))
+		answerDeletePrompt(t, sess, "c", "allow")
+		<-done
+		releaseDeleteApproval(ctx) // what the loop's exit does
+		if _, ok := takeDeleteApproval(ctx, filepath.Join(dir, "f.py")); ok {
+			t.Fatal("a released approval was still available")
+		}
+		if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
+			t.Fatal("cleanup removed the file")
+		}
+	},
+}
+
 func TestHeldReferenceIsReleasedOnEveryPath(t *testing.T) {
-	type flow func(t *testing.T, dir, sess string)
-	ask := func(t *testing.T, ctx *AgentContext, sess, call, rel string) chan bool {
-		t.Helper()
-		done := make(chan bool, 1)
-		go func() { done <- awaitPermission(ctx, "delete_file", call, json.RawMessage(`{"path":"`+rel+`"}`)) }()
-		waitForPending(t, sess, call)
-		return done
-	}
-	answer := func(t *testing.T, sess, call, decision string) {
-		t.Helper()
-		postDecision(t, fmt.Sprintf(`{"session_id":%q,"tool_call_id":%q,"decision":%q}`, sess, call, decision))
-	}
-	paths := map[string]flow{
-		"approved and removed": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "allow")
-			if !<-done {
-				t.Fatal("not allowed")
-			}
-			if res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx); !res.Success {
-				t.Fatalf("removal failed: %s", res.Error)
-			}
-		},
-		"approved but stale": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			os.WriteFile(filepath.Join(dir, "f.py"), []byte("B\n"), 0o644)
-			answer(t, sess, "c", "allow")
-			if !<-done {
-				t.Fatal("not allowed")
-			}
-			if res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx); res.Success {
-				t.Fatal("a stale approval deleted")
-			}
-		},
-		"denied": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "deny")
-			if <-done {
-				t.Fatal("denied but allowed")
-			}
-		},
-		"malformed decision": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "maybe")
-			if <-done {
-				t.Fatal("a malformed decision allowed")
-			}
-		},
-		"timeout": func(t *testing.T, dir, sess string) {
-			t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			if <-done {
-				t.Fatal("a timeout allowed")
-			}
-		},
-		"request cancelled (client disconnect)": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			cancel()
-			if <-done {
-				t.Fatal("a cancelled request allowed")
-			}
-		},
-		"duplicate decision": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "deny")
-			if <-done {
-				t.Fatal("denied but allowed")
-			}
-			w := postDecision(t, fmt.Sprintf(`{"session_id":%q,"tool_call_id":"c","decision":"allow"}`, sess))
-			if w.Code != 404 {
-				t.Errorf("a second decision was accepted: %d", w.Code)
-			}
-		},
-		"preflight failure after the reference was taken": func(t *testing.T, dir, sess string) {
-			// A non-empty directory is refused AFTER the object was held.
-			os.Mkdir(filepath.Join(dir, "d"), 0o755)
-			os.WriteFile(filepath.Join(dir, "d", "x"), []byte("x"), 0o644)
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			if awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"d"}`)) {
-				t.Fatal("a non-empty directory was approved")
-			}
-		},
-		"capacity refusal": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			ctx.mu.Lock()
-			ctx.deletionAttempts = map[string]*deletionAttempt{}
-			for i := 0; i < maxTrackedDeletions; i++ {
-				ctx.deletionAttempts[fmt.Sprintf("/x/%d", i)] = &deletionAttempt{Removed: true}
-			}
-			ctx.mu.Unlock()
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "allow")
-			if !<-done {
-				t.Fatal("not allowed")
-			}
-			res := executeToolCall("delete_file", json.RawMessage(`{"path":"f.py"}`), ctx)
-			if res.Success {
-				t.Fatal("an untrackable deletion was performed")
-			}
-			if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
-				t.Fatal("the file was removed at the tracking ceiling")
-			}
-		},
-		"grant replaced by a later grant": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c1", mkFile(dir))
-			answer(t, sess, "c1", "allow")
-			<-done
-			os.WriteFile(filepath.Join(dir, "g.py"), []byte("G\n"), 0o644)
-			done = ask(t, ctx, sess, "c2", "g.py")
-			answer(t, sess, "c2", "allow")
-			<-done
-			// Only the second grant is held; consuming it releases the last one.
-			if res := executeToolCall("delete_file", json.RawMessage(`{"path":"g.py"}`), ctx); !res.Success {
-				t.Fatalf("removal failed: %s", res.Error)
-			}
-			if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
-				t.Fatal("the replaced grant's file was removed")
-			}
-		},
-		"terminal cleanup without execution": func(t *testing.T, dir, sess string) {
-			ctx, cancel := deletePermCtx(t, sess, dir)
-			defer cancel()
-			ctx.StreamFn = func(string, interface{}) {}
-			done := ask(t, ctx, sess, "c", mkFile(dir))
-			answer(t, sess, "c", "allow")
-			<-done
-			releaseDeleteApproval(ctx) // what the loop's exit does
-			if _, ok := takeDeleteApproval(ctx, filepath.Join(dir, "f.py")); ok {
-				t.Fatal("a released approval was still available")
-			}
-			if _, err := os.Lstat(filepath.Join(dir, "f.py")); err != nil {
-				t.Fatal("cleanup removed the file")
-			}
-		},
-	}
-	for name, run := range paths {
+	for name, run := range approvalLifeEnds {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			sess := "sess-life-" + strings.ReplaceAll(name, " ", "-")

@@ -100,6 +100,13 @@ func TestExplicitEmptyAndUnspecifiedSurviveTheWire(t *testing.T) {
 			if (tc != nil) != c.wantContract {
 				t.Fatalf("contract present=%v, want %v", tc != nil, c.wantContract)
 			}
+			// A nil contract answers too: no outputs arrived, no paths.
+			if got := tc.OutputsPresent(); got != c.wantOutputsSeen {
+				t.Errorf("outputs present=%v, want %v", got, c.wantOutputsSeen)
+			}
+			if got := len(tc.OutputPaths()); got != c.wantPathsCount {
+				t.Errorf("%d declared paths, want %d", got, c.wantPathsCount)
+			}
 			ctx := NewAgentContext(dir, Tier2Medium)
 			ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-wire")
 			ctx.HumanTask = "go"
@@ -107,14 +114,6 @@ func TestExplicitEmptyAndUnspecifiedSurviveTheWire(t *testing.T) {
 
 			if got := outputKnowledgeDeclared(ctx); got != c.wantDeclared {
 				t.Errorf("declared=%v, want %v", got, c.wantDeclared)
-			}
-			if tc != nil {
-				if got := tc.OutputsPresent(); got != c.wantOutputsSeen {
-					t.Errorf("outputs present=%v, want %v", got, c.wantOutputsSeen)
-				}
-				if got := len(tc.OutputPaths()); got != c.wantPathsCount {
-					t.Errorf("%d declared paths, want %d", got, c.wantPathsCount)
-				}
 			}
 			// The obligation owner agrees, and the count alone cannot tell the
 			// last two apart -- which is the whole reason ownership does not
@@ -126,8 +125,12 @@ func TestExplicitEmptyAndUnspecifiedSurviveTheWire(t *testing.T) {
 			}
 		})
 	}
-	// The two that matter derive zero obligations both, and only the
-	// explicit empty set is declared (the rows above).
+}
+
+// The two that matter derive zero obligations both, and only the explicit
+// empty set is declared (TestExplicitEmptyAndUnspecifiedSurviveTheWire).
+func TestExplicitEmptyAndUnspecifiedBothDeriveNoObligations(t *testing.T) {
+	dir := t.TempDir()
 	for _, body := range []string{
 		`{"message":"go","task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}}`,
 		`{"message":"go","task_contract":{"task_mode":"work","output_knowledge":"unspecified"}}`,
@@ -287,24 +290,20 @@ func TestUnspecifiedOutputsAreGroundedByTheModelsCall(t *testing.T) {
 
 func TestADeclaredDocumentIsNotAnUndeclaredTarget(t *testing.T) {
 	for _, c := range []struct {
-		name, contract, file string
-		want                 AuthorizationReason
+		name, contract, file, body string
+		want                       AuthorizationReason
 	}{
 		{"declared document", `{"task_mode":"work","output_knowledge":"declared",` +
-			`"expected_outputs":["notes.md"]}`, "notes.md",
+			`"expected_outputs":["notes.md"]}`, "notes.md", "# notes\n",
 			ReasonNoAuthorizationPrerequisite},
 		{"undeclared target", `{"task_mode":"work","output_knowledge":"declared",` +
-			`"expected_outputs":["something_else.md"]}`, "notes.md",
+			`"expected_outputs":["something_else.md"]}`, "notes.md", "# notes\n",
 			ReasonTargetNotDeclared},
 		{"declared code with evidence", `{"task_mode":"work","output_knowledge":"declared",` +
-			`"expected_outputs":["solve.py"]}`, "solve.py", ReasonAuthorized},
+			`"expected_outputs":["solve.py"]}`, "solve.py", authPy, ReasonAuthorized},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			body := "# notes\n"
-			if strings.HasSuffix(c.file, ".py") {
-				body = authPy
-			}
-			w := newAuthWorld(t, c.contract, c.file, body, true)
+			w := newAuthWorld(t, c.contract, c.file, c.body, true)
 			ev, evID, ok := w.observe(t)
 			var evidence []proxyEvidence
 			if ok {

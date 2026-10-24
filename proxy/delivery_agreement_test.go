@@ -401,7 +401,12 @@ func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 			t.Errorf("%s acts on the feasibility answer", site)
 		}
 	}
-	// And nothing else reads a verdict field to decide anything.
+}
+
+// And no other function reads a feasibility verdict to decide something of
+// its own (TestFeasibilityIsReadAtExactlyOnePlace).
+func TestNoOtherFileReadsAFeasibilityVerdict(t *testing.T) {
+	files := proxyFiles(t)
 	for name := range files {
 		if name == "feasibility_decision.go" || name == "tools.go" {
 			continue

@@ -148,21 +148,6 @@ func TestAChangeAfterDeliveryUnsettlesIt(t *testing.T) {
 			w.ctx.settlements[filepath.Clean(w.path)].RequestID = "req-somebody-else"
 			w.ctx.grantMu.Unlock()
 		}, ""},
-		// The task then declares a command the delivery never answered for.
-		{"a declared command appears later", func(t *testing.T, w *settledWorld) {
-			w.ctx.TaskContract = mustContract(t, w.dir,
-				`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-					`"verification_knowledge":"declared","verification":["pytest -q"]}`)
-			commands := 0
-			for _, o := range authorizationPrerequisites(requestObligations(w.ctx)) {
-				if o.Kind == ObligationDeclaredCommand && o.Required {
-					commands++
-				}
-			}
-			if commands != 1 {
-				t.Fatalf("the fixture declared %d commands, want 1", commands)
-			}
-		}, "declared command"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newSettledWorld(t, settledContract, nil)
@@ -178,6 +163,33 @@ func TestAChangeAfterDeliveryUnsettlesIt(t *testing.T) {
 				t.Errorf("reason %q does not contain %q", why, tc.wantWhy)
 			}
 		})
+	}
+}
+
+// The task then declares a command the delivery never answered for.
+func TestACommandDeclaredAfterDeliveryUnsettlesIt(t *testing.T) {
+	w := newSettledWorld(t, settledContract, nil)
+	if owed, why := postDeliverySettlementOwed(w.ctx); owed {
+		t.Fatalf("the fixture did not settle: %s", why)
+	}
+	w.ctx.TaskContract = mustContract(t, w.dir,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q"]}`)
+	commands := 0
+	for _, o := range authorizationPrerequisites(requestObligations(w.ctx)) {
+		if o.Kind == ObligationDeclaredCommand && o.Required {
+			commands++
+		}
+	}
+	if commands != 1 {
+		t.Fatalf("the fixture declared %d commands, want 1", commands)
+	}
+	owed, why := postDeliverySettlementOwed(w.ctx)
+	if !owed {
+		t.Error("the delivery is still settled")
+	}
+	if !strings.Contains(why, "declared command") {
+		t.Errorf("reason %q does not name the declared command", why)
 	}
 }
 
