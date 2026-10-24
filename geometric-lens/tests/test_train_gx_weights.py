@@ -27,7 +27,8 @@ def test_train_gx_accepts_weights():
     res = train_gx({"embeddings": emb, "labels": labels, "weights": weights},
                    pca_dim=8, n_folds=3, max_rounds=40)
     assert res["cv_auc_mean"] > 0.8
-    assert res["thresholds"] and set(res["thresholds"]) == {"off_rails", "low", "severe"}
+    assert res["thresholds"]
+    assert set(res["thresholds"]) == {"off_rails", "low", "severe"}
 
 
 def test_train_gx_unweighted_still_works():

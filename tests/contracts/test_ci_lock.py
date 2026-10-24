@@ -168,9 +168,10 @@ def test_the_lens_lock_holds_every_linux_pin_of_the_lens_requirements():
         if not line or 'sys_platform != "linux"' in line:
             continue
         name, version = re.match(r"([A-Za-z0-9._-]+)==([^;\s]+)", line).groups()
-        assert name.lower() in locked and locked[name.lower()][0].split("+")[0] == version, (
-            f"geometric-lens/requirements.txt has {name}=={version} and lens.txt holds "
-            f"{locked.get(name.lower(), ('nothing',))[0]}. Fix: run scripts/ci-lock.sh.")
+        why = (f"geometric-lens/requirements.txt has {name}=={version} and lens.txt holds "
+               f"{locked.get(name.lower(), ('nothing',))[0]}. Fix: run scripts/ci-lock.sh.")
+        assert name.lower() in locked, why
+        assert locked[name.lower()][0].split("+")[0] == version, why
 
 
 def test_every_install_of_the_lock_checks_the_hashes():

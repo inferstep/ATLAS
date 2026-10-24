@@ -27,7 +27,8 @@ def test_the_list_holds_single_licences_once_each_and_the_level_of_a_vulnerabili
     found = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
     allowed = found["allow-licenses"]
     assert found["fail-on-severity"] == "high"
-    assert len(allowed) == len(set(allowed)) and all(isinstance(entry, str) and entry.strip() == entry for entry in allowed)
+    assert len(allowed) == len(set(allowed))
+    assert all(isinstance(entry, str) and entry.strip() == entry for entry in allowed)
     joined = [entry for entry in allowed if " AND " in entry or " OR " in entry]
     assert not joined, (
         f"{joined} in `allow-licenses` join two licences. The review action leaves such an entry out without a word. "
@@ -54,10 +55,11 @@ def test_each_package_that_was_read_by_hand_has_its_licence_beside_it_and_every_
         assert "@" not in purl, f"{purl} names a version, so the next version would not be covered"
         parts = re.split(r" (?:AND|OR) ", licence or "")
         off_the_list = [part for part in parts if part not in found["allow-licenses"]]
-        assert licence and not off_the_list, (
-            f"{purl} has `{licence}` beside it, and {off_the_list or 'nothing'} of it is on `allow-licenses`. Fix: write "
-            "the licence that the package index names for the package after a `#` on its line; each part of it must "
-            "be a licence of the list.")
+        why = (f"{purl} has `{licence}` beside it, and {off_the_list or 'nothing'} of it is on `allow-licenses`. Fix: "
+               "write the licence that the package index names for the package after a `#` on its line; each part "
+               "of it must be a licence of the list.")
+        assert licence, why
+        assert not off_the_list, why
 
 
 def test_the_workflow_gives_the_action_the_settings_file_and_then_runs_the_step_for_a_licence_with_no_name():
@@ -71,7 +73,8 @@ def test_the_workflow_gives_the_action_the_settings_file_and_then_runs_the_step_
     assert "python3 scripts/" not in after["run"], "the step runs a script from the checkout, which is the change's copy"
     assert after["env"] == {"BASE": "${{ steps.base.outputs.sha }}",
                             "INVALID_LICENSE_CHANGES": "${{ steps.%s.outputs.invalid-license-changes }}" % steps[at]["id"]}
-    assert "if" not in after and uses.index("actions/checkout") < at
+    assert "if" not in after
+    assert uses.index("actions/checkout") < at
     assert [step.get("id") for step in steps].index("base") < at + 1
 
 
@@ -121,19 +124,22 @@ def test_the_step_runs_the_base_branchs_copy_of_the_script_when_a_change_rewrite
     real = SCRIPT.read_text(encoding="utf-8")
     done = the_step_in_a_merge(tmp_path, real, A_SCRIPT_THAT_PASSES_ALL, [change("pkg:pypi/new-package@1.0.0")])
     assert done.returncode == 1, done.stdout + done.stderr
-    assert "::error title=no named licence::new-package 1.0.0" in done.stdout and "the copy of the change ran" not in done.stdout
+    assert "::error title=no named licence::new-package 1.0.0" in done.stdout
+    assert "the copy of the change ran" not in done.stdout
 
 
 def test_the_changes_copy_of_the_script_runs_only_while_the_base_has_none(tmp_path):
     done = the_step_in_a_merge(tmp_path, None, A_SCRIPT_THAT_PASSES_ALL, [])
-    assert done.returncode == 0 and "the copy of the change ran" in done.stdout
+    assert done.returncode == 0
+    assert "the copy of the change ran" in done.stdout
 
 
 def test_the_base_branchs_copy_reads_the_settings_file_of_the_change(tmp_path):
     # The copy of the script lies outside the checkout; the list of the packages read by hand is the checkout's.
     real = SCRIPT.read_text(encoding="utf-8")
     done = the_step_in_a_merge(tmp_path, real, real + "# a line of the branch\n", [change("pkg:pypi/torch@2.14.0"), change("pkg:pypi/one@1.0")])
-    assert done.returncode == 1 and done.stdout.count("::error title=no named licence::") == 1
+    assert done.returncode == 1
+    assert done.stdout.count("::error title=no named licence::") == 1
     assert "::error title=no named licence::one 1.0" in done.stdout
 
 
@@ -163,13 +169,15 @@ def run_the_script(*args, **env):
 
 def test_the_step_passes_when_nothing_is_without_a_name_and_fails_with_the_fix_for_each_that_is():
     nothing = run_the_script(INVALID_LICENSE_CHANGES=json.dumps({"forbidden": [], "unresolved": [], "unlicensed": []}))
-    assert nothing.returncode == 0 and "has a named licence" in nothing.stdout
+    assert nothing.returncode == 0
+    assert "has a named licence" in nothing.stdout
     # torch was read by hand: two lines for three packages.
     two = run_the_script(INVALID_LICENSE_CHANGES=json.dumps(
         {"unlicensed": [change("pkg:pypi/one@1.0"), change("pkg:pypi/torch@2.14.0"), change("pkg:npm/two@2.0")]}))
     assert two.returncode == 1
     lines = [line for line in two.stdout.splitlines() if line.startswith("::error title=no named licence::")]
-    assert len(lines) == 2 and lines[0].startswith("::error title=no named licence::one 1.0 (requirements.txt): ")
+    assert len(lines) == 2
+    assert lines[0].startswith("::error title=no named licence::one 1.0 (requirements.txt): ")
     assert all("Fix: read the package's licence." in line and "allow-dependencies-licenses" in line for line in lines)
 
 
@@ -194,9 +202,11 @@ def test_what_cannot_be_read_ends_the_step_with_status_2_and_the_fix(tmp_path, e
 def test_the_bug_form_has_the_cause_field_and_the_triage_guide_says_when_to_set_it():
     form = yaml.safe_load((ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8"))
     (cause,) = [field for field in form["body"] if field.get("id") == "cause"]
-    assert cause["type"] == "dropdown" and cause["attributes"]["label"] == "Cause"
+    assert cause["type"] == "dropdown"
+    assert cause["attributes"]["label"] == "Cause"
     options = cause["attributes"]["options"]
-    assert options[cause["attributes"]["default"]] == "Not known yet" and len(options) == len(set(options)) >= 5
+    assert options[cause["attributes"]["default"]] == "Not known yet"
+    assert len(options) == len(set(options)) >= 5
     assert "validations" not in cause
     guide = " ".join((ROOT / "docs" / "TRIAGE.md").read_text(encoding="utf-8").split())
     assert "## When a bug closes Set **Cause** in the text of the issue" in guide

@@ -128,7 +128,8 @@ def test_single_row_nested_is_pooled_not_per_token(monkeypatch):
     ee.set_embedding_contract(NORMALIZED_CONTRACT)
     _install_response(monkeypatch, [_flat(norm=1.0)])
     out = ee.extract_embedding("x")
-    assert len(out) == 8 and not isinstance(out[0], list)
+    assert len(out) == 8
+    assert not isinstance(out[0], list)
 
 
 def test_requests_raw_vectors_regardless_of_contract(monkeypatch):
@@ -160,7 +161,8 @@ def test_extract_per_token_rejects_pooled_encodings(monkeypatch):
         ee.extract_per_token("x")
     _install_response(monkeypatch, [[1.0, 2.0], [3.0, 4.0]])
     vecs, dim = ee.extract_per_token("x")
-    assert len(vecs) == 2 and dim == 2
+    assert len(vecs) == 2
+    assert dim == 2
     # Native scale, matching the unnormalized vectors C(x) is fitted on.
     assert [list(v) for v in vecs] == [[1.0, 2.0], [3.0, 4.0]]
 
@@ -168,11 +170,13 @@ def test_extract_per_token_rejects_pooled_encodings(monkeypatch):
 def test_observe_convention_reports_flat_normalized(monkeypatch):
     _install_response(monkeypatch, _flat(norm=1.0))
     c = ee.observe_embedding_convention("x")
-    assert c["response_shape"] == "flat" and c["normalized"] is True
+    assert c["response_shape"] == "flat"
+    assert c["normalized"] is True
 
     _install_response(monkeypatch, [_flat(norm=5.0), _flat(norm=5.0)])
     c = ee.observe_embedding_convention("x")
-    assert c["response_shape"] == "per_token" and c["pooling"] == "none"
+    assert c["response_shape"] == "per_token"
+    assert c["pooling"] == "none"
 
 
 def test_observed_convention_round_trips_into_an_identity(monkeypatch, tmp_path):

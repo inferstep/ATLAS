@@ -219,7 +219,9 @@ def test_a_rule_that_names_nothing_is_found(name, named):
     findings = rules_that_name_nothing([{"dependency-name": name}], dependencies_of(A_BUILD))
     assert (not findings) == named, findings
     if findings:
-        assert f"The rule `{name}`" in findings[0] and "Fix:" in findings[0] and "plugin.compose" in findings[0]
+        assert f"The rule `{name}`" in findings[0]
+        assert "Fix:" in findings[0]
+        assert "plugin.compose" in findings[0]
 
 
 @pytest.mark.parametrize("rules, left_alone", [

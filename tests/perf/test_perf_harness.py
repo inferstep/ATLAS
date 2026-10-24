@@ -10,7 +10,8 @@ BUDGETS = {"deterministic_max": {"cli_import_time_s": 3.0, "proxy_binary_bytes":
 def test_measure_has_stable_schema():
     r = harness.measure(stamp="2026-07-05T00:00:00", git_commit="abc1234")
     assert r["schema_version"] == harness.SCHEMA_VERSION
-    assert "deterministic" in r and "hardware" in r
+    assert "deterministic" in r
+    assert "hardware" in r
     # hardware fields present but nullable (imported later)
     assert set(r["hardware"]) >= {"model", "first_token_ms", "tokens_per_sec"}
 

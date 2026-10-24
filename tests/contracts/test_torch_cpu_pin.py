@@ -75,9 +75,10 @@ def test_ci_lens_job_installs_the_cpu_torch():
     assert "pip install --require-hashes -r .github/requirements/lens.txt" in workflow, (
         "test.yml: the lens job does not install .github/requirements/lens.txt")
     torch = re.search(r"^torch==(\S+)", lock, re.MULTILINE)
-    assert torch and torch.group(1).endswith("+cpu"), (
-        f"lens.txt pins torch {torch.group(1) if torch else 'nowhere'}, not the "
-        f"build of PyTorch's CPU index. Fix: run scripts/ci-lock.sh.")
+    why = (f"lens.txt pins torch {torch.group(1) if torch else 'nowhere'}, not the "
+           f"build of PyTorch's CPU index. Fix: run scripts/ci-lock.sh.")
+    assert torch, why
+    assert torch.group(1).endswith("+cpu"), why
 
 
 def test_v3_service_ships_no_torch():

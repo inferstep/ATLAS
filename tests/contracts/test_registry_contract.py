@@ -25,7 +25,10 @@ ASA_STATUSES = {"supported", "no-artifacts", "unverified"}
 
 def test_entries_have_identity_fields():
     for m in model_registry.REGISTRY:
-        assert m.name and m.tier and m.model_file and m.model_display, m
+        assert m.name, m
+        assert m.tier, m
+        assert m.model_file, m
+        assert m.model_display, m
         assert m.lens_status in LENS_STATUSES, (m.name, m.lens_status)
         assert m.asa_status in ASA_STATUSES, (m.name, m.asa_status)
 
@@ -35,8 +38,8 @@ def test_every_download_is_hash_pinned():
     installer checks; a download without one would go unchecked."""
     for m in model_registry.REGISTRY:
         if m.download_url:
-            assert m.sha256 and re.fullmatch(r"[0-9a-f]{64}", m.sha256), (
-                f"{m.name}: download_url without a sha256 of 64 hex characters")
+            assert m.sha256, f"{m.name}: download_url without a sha256 of 64 hex characters"
+            assert re.fullmatch(r"[0-9a-f]{64}", m.sha256), f"{m.name}: download_url without a sha256 of 64 hex characters"
 
 
 def test_an_entry_without_a_download_says_why():

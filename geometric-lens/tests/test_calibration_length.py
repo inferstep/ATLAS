@@ -52,7 +52,8 @@ def test_clean_code_scores_alike_at_any_length():
     long_ = normalize_cx_energy(14.80, FITTED, length=5000)
     assert abs(short - long_) < 0.15, (
         f"length still dominates: {short:.2f} vs {long_:.2f}")
-    assert short < 0.5 and long_ < 0.5, "clean code must sit below neutral"
+    assert short < 0.5, "clean code must sit below neutral"
+    assert long_ < 0.5, "clean code must sit below neutral"
 
 
 def test_pathology_separates_from_real_code():

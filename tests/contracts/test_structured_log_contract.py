@@ -52,8 +52,10 @@ def test_json_formatter_shape():
     m.set_request_id("req-json")
     rec = logging.LogRecord("n", logging.INFO, "f", 1, "hello", None, None)
     d = json.loads(m.JsonFormatter("svc").format(rec))
-    assert d["service"] == "svc" and d["level"] == "INFO"
-    assert d["msg"] == "hello" and d["request_id"] == "req-json"
+    assert d["service"] == "svc"
+    assert d["level"] == "INFO"
+    assert d["msg"] == "hello"
+    assert d["request_id"] == "req-json"
     m.set_request_id("")
 
 

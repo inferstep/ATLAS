@@ -81,7 +81,8 @@ def test_a_reference_that_cannot_be_scored_is_not_drift(tmp_path):
         drift.check_fingerprint(str(tmp_path),
                                 _raise(urllib.error.URLError("connection reset")))
     present, ok, _ = drift.check_fingerprint(str(tmp_path), lambda _t: 20.0)
-    assert present and ok
+    assert present
+    assert ok
 
 
 @pytest.mark.parametrize("exc, retryable", [

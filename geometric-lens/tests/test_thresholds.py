@@ -30,7 +30,8 @@ def test_severe_mean_is_carried_through_validation():
     out = validate_gx_thresholds({**base, "severe_mean": 0.52})
     assert out["severe_mean"] == 0.52
     # The required triple is unaffected.
-    assert out["severe"] == 0.28 and out["off_rails"] == 0.34
+    assert out["severe"] == 0.28
+    assert out["off_rails"] == 0.34
 
     for bad in (0, 1.5, -0.1, "0.5", True, float("nan")):
         assert "severe_mean" not in validate_gx_thresholds(

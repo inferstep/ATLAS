@@ -47,7 +47,8 @@ def test_version_constants_present():
 
 def test_version_endpoint_registered():
     src = (REPO / "proxy" / "main.go").read_text()
-    assert '"/version"' in src and "handleVersion" in src
+    assert '"/version"' in src
+    assert "handleVersion" in src
 
 
 def test_sse_envelope_schema_present():
@@ -146,7 +147,8 @@ def test_e2e_helper_defaults_to_work():
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "agent_request_body")
     src = ast.get_source_segment(spec.read_text(), fn)
-    assert "task_contract" in src and "work" in src
+    assert "task_contract" in src
+    assert "work" in src
     # It must not invent obligations the caller never stated. The JSON keys,
     # not the words: the docstring explains why they are absent.
     assert '"expected_outputs"' not in src, "the e2e helper fabricates expected outputs"
