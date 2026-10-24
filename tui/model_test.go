@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // keyMsg builds a tea.KeyMsg matching what the runtime sends for a
@@ -143,6 +144,43 @@ func TestCtrlTCyclesMode(t *testing.T) {
 	}
 }
 
+// Enter runs a slash command instead of sending it: /quit quits.
+func TestEnterRunsASlashCommand(t *testing.T) {
+	m := sized(80, 30)
+	m.input.SetValue("/quit")
+	updated, cmd := m.Update(keyMsg("enter"))
+	if !updated.(tuiModel).quitting {
+		t.Error("/quit did not quit")
+	}
+	if cmd == nil {
+		t.Fatal("/quit returned no command")
+	}
+	if _, quits := cmd().(tea.QuitMsg); !quits {
+		t.Errorf("/quit's command sends %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// A key with no binding of its own is typed into the textarea, and the input
+// mode follows what is typed. A message that no handler takes reaches the
+// textarea too.
+func TestUnboundInputReachesTheTextarea(t *testing.T) {
+	m := sized(80, 30)
+	updated, _ := m.Update(keyMsg("!"))
+	m = updated.(tuiModel)
+	if got := m.input.Value(); got != "!" {
+		t.Errorf("input = %q, want the typed key", got)
+	}
+	if m.inputMode != "bash" {
+		t.Errorf("input mode = %q, want bash", m.inputMode)
+	}
+	m.input.SetValue("/help")
+	updated, _ = m.Update(struct{}{})
+	m = updated.(tuiModel)
+	if m.inputMode != "slash" {
+		t.Errorf("input mode after a message no handler takes = %q, want slash", m.inputMode)
+	}
+}
+
 func TestEnvelopeMsgUpdatesPipelineState(t *testing.T) {
 	m := sized(80, 30)
 	updated, _ := m.Update(envelopeMsg{ev: Envelope{
@@ -224,6 +262,47 @@ func TestTickAdvancesSpinner(t *testing.T) {
 	}
 }
 
+// Each of these messages reaches its own handler, and Update returns the
+// model that handler changed with the command it asked for: a slash command's
+// result shows as a row, a file scan replaces the sidebar's list, and the
+// calibration badge keeps its first status, counts a retry and fetches again
+// on a refresh.
+func TestUpdateReturnsWhatEachHandlerChanged(t *testing.T) {
+	status := &calibrationStatus{}
+	cases := []struct {
+		name    string
+		msg     tea.Msg
+		got     func(m tuiModel) interface{}
+		want    interface{}
+		wantCmd bool
+	}{
+		{"a slash command's result", slashResultMsg{command: "/run", output: "done"},
+			func(m tuiModel) interface{} { return m.chat },
+			[]chatMessage{{Role: roleSystem, Meta: "/run", Body: "done", Success: true}}, false},
+		{"a file scan", scanFilesMsg{entries: []fileEntry{{RelPath: "a.go"}}, at: time.Now()},
+			func(m tuiModel) interface{} { return m.fileEntries },
+			[]fileEntry{{RelPath: "a.go"}}, false},
+		{"the first calibration status", calibrationStatusMsg{status: status},
+			func(m tuiModel) interface{} { return m.calibration }, status, true},
+		{"a calibration retry", calibrationRetryMsg{},
+			func(m tuiModel) interface{} { return m.calibrationRetries }, 1, true},
+		{"a calibration refresh", calibrationRefreshMsg{},
+			func(m tuiModel) interface{} { return m.calibration }, (*calibrationStatus)(nil), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := sized(80, 30)
+			updated, cmd := m.Update(c.msg)
+			if got := c.got(updated.(tuiModel)); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+			if (cmd != nil) != c.wantCmd {
+				t.Errorf("a command came back: %v, want %v", cmd != nil, c.wantCmd)
+			}
+		})
+	}
+}
+
 // The frame shows its panes, also before the terminal has sent its size:
 // some terminals never send the first one, and the user must not be stuck on
 // a placeholder.
@@ -295,6 +374,70 @@ func TestViewHeightMatchesTerminal(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Each pane's snapshot holds the screen rows and columns its text fills, so
+// the mouse finds the pane, and the pane's title is on the row just above. A
+// hidden pane has no snapshot and the panes left take its rows. The frame is
+// 120x40 with two stages: the header is row 0, and the input box, titled
+// "Message", is the last six rows.
+func TestPaneSnapshotsMatchTheFrame(t *testing.T) {
+	type bounds struct {
+		name                         string
+		topY, bottomY, leftX, rightX int
+		titled                       bool // the row above topY holds the pane's title
+	}
+	cases := []struct {
+		name                                string
+		hideFiles, hidePipeline, hideEvents bool
+		panes                               []bounds // paneSnaps, in order
+	}{
+		{"all shown", false, false, false, []bounds{{"pipeline", 3, 4, 1, 90, true},
+			{"chat", 8, 26, 1, 90, true}, {"events", 30, 31, 1, 90, true}, {"files", 3, 38, 95, 118, true}}},
+		{"files hidden", true, false, false, []bounds{{"pipeline", 3, 4, 1, 116, true},
+			{"chat", 8, 26, 1, 116, true}, {"events", 30, 31, 1, 116, true}}},
+		{"pipeline hidden", false, true, false, []bounds{
+			{"chat", 3, 26, 1, 90, true}, {"events", 30, 31, 1, 90, true}, {"files", 3, 38, 95, 118, true}}},
+		{"events hidden", false, false, true, []bounds{
+			{"pipeline", 3, 4, 1, 90, true}, {"chat", 8, 31, 1, 90, true}, {"files", 3, 38, 95, 118, true}}},
+	}
+	titles := map[string]string{"pipeline": "Pipeline", "chat": "Chat", "events": "Events", "files": "Files"}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := withStages(t, 120, 40, 2)
+			m.hideFiles, m.hidePipeline, m.hideEvents = c.hideFiles, c.hidePipeline, c.hideEvents
+			rows := strings.Split(ansi.Strip(m.View()), "\n")
+			if len(rows) != 40 {
+				t.Fatalf("frame has %d rows, want 40", len(rows))
+			}
+			var got []bounds
+			for _, p := range paneSnaps {
+				titled := strings.Contains(rows[p.topY-1], titles[p.name])
+				got = append(got, bounds{p.name, p.topY, p.bottomY, p.leftX, p.rightX, titled})
+			}
+			if !reflect.DeepEqual(got, c.panes) {
+				t.Errorf("snapshots = %+v, want %+v", got, c.panes)
+			}
+			if !strings.Contains(rows[35], "Message") {
+				t.Errorf("row 35 = %q, want the input box's title", rows[35])
+			}
+		})
+	}
+}
+
+// While a turn runs, the chat box ends with the "thinking…" row. Scrolled up,
+// its title shows where the view is.
+func TestChatBoxShowsTheTurnInFlightAndTheScroll(t *testing.T) {
+	m := withStages(t, 120, 40, 2)
+	m.turnActive = true
+	m.chatScroll = 5
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "(Ctrl+C to cancel)") {
+		t.Error("no thinking row while a turn runs")
+	}
+	if !strings.Contains(view, "Chat — ↑") {
+		t.Error("the chat title does not show the scroll position")
 	}
 }
 
@@ -496,6 +639,40 @@ func TestExtractPaneSelectionFilesPaneTopAnchored(t *testing.T) {
 	// Rows in the trailing padding have nothing to copy.
 	if got := extractPaneSelection("files", 9, 10, 1, 24); got != "" {
 		t.Errorf("padding selection = %q, want empty", got)
+	}
+}
+
+// The wheel scrolls the pane under the cursor. A left press there starts a
+// selection, and a release with no drag ends it without copying anything.
+func TestMouseScrollsAndSelectsThePaneUnderIt(t *testing.T) {
+	old := paneSnaps
+	defer func() { paneSnaps = old }()
+	paneSnaps = []paneSnapshot{{name: "events", topY: 5, bottomY: 9, leftX: 1, rightX: 60,
+		lines: []string{"one", "two", "three", "four", "five", "six"}}}
+	m := sized(80, 30)
+
+	updated, _ := m.Update(tea.MouseMsg{X: 10, Y: 6, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	m = updated.(tuiModel)
+	if m.eventsScroll != 3 {
+		t.Errorf("events scroll after a wheel turn up = %d, want 3", m.eventsScroll)
+	}
+
+	updated, _ = m.Update(tea.MouseMsg{X: 10, Y: 6, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m = updated.(tuiModel)
+	if !m.selecting {
+		t.Error("a left press in a pane did not start a selection")
+	}
+	if m.selPane != "events" {
+		t.Errorf("selection pane = %q, want events", m.selPane)
+	}
+
+	updated, _ = m.Update(tea.MouseMsg{X: 10, Y: 6, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	m = updated.(tuiModel)
+	if m.selecting {
+		t.Error("the release did not end the selection")
+	}
+	if len(m.toasts) != 0 {
+		t.Errorf("a click with no drag showed %+v, want nothing copied", m.toasts)
 	}
 }
 
