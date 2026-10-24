@@ -358,20 +358,18 @@ func TestARepairCandidateIsJudgedOnItsOwnBytes(t *testing.T) {
 
 // --- feasibility stays out of it ---------------------------------------------------
 
-// TestFeasibilityIsReadAtExactlyOnePlace replaces the inertness statement that
-// stood here.
-//
-// The answer used to be computed and discarded. It now decides, under enforce
-// only, so what has to hold is different: one production call site, one reader
-// of that answer, and no other function anywhere reading a feasibility verdict
-// to decide something of its own.
+// TestFeasibilityIsReadAtExactlyOnePlace: the feasibility answer is recorded
+// and never enforced (recordFeasibilityDecision), so what has to hold is one
+// production call site on each route, and no other function anywhere reading
+// a feasibility verdict to decide something of its own
+// (TestNoOtherFileReadsAFeasibilityVerdict). A function that would skip
+// generation on the answer is a removed name (TestNoProductionCodeTurnsV3Off).
 func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 	files := proxyFiles(t)
 	sites := callSites(files, "observeInvocationFeasibility")
-	// Two routes observe it, and only one may act on it. The edit route
-	// records the answer and never consults it: adding protection there must
-	// not quietly start skipping generation, and any compute saving on that
-	// route needs its own measurement and its own authorization.
+	// The two routes observe it and neither acts on it: adding protection on a
+	// route must not quietly start skipping generation, and any compute saving
+	// needs its own measurement and its own authorization.
 	want := map[string]bool{
 		"tools.go:writeFileWithV3":                    true,
 		"edit_route_delivery.go:deliverEditCandidate": true,
@@ -384,21 +382,6 @@ func TestFeasibilityIsReadAtExactlyOnePlace(t *testing.T) {
 	for site := range want {
 		if _, ok := sites[site]; !ok {
 			t.Errorf("%s no longer observes feasibility", site)
-		}
-	}
-	// The edit route observes and does not act: it never turns the answer
-	// into a decision.
-	if _, acts := callSites(files, "generationSkipped")["edit_route_delivery.go:deliverEditCandidate"]; acts {
-		t.Error("the edit route consults the feasibility answer; that is a policy change")
-	}
-	// Exactly one function turns the answer into an action, and it is the
-	// mode owner.
-	skipSites := callSites(files, "generationSkipped")
-	for site := range skipSites {
-		switch site {
-		case "tools.go:writeFileWithV3", "feasibility_decision.go:recordFeasibilityDecision":
-		default:
-			t.Errorf("%s acts on the feasibility answer", site)
 		}
 	}
 }

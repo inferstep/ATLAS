@@ -64,8 +64,11 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		"candidate_delivery.go:deliverCandidateBytes": true,
 		// The protected edit route. It asks the same owners the write route
 		// asks, and observes feasibility without consulting the answer --
-		// pinned separately by the feasibility guard.
-		"edit_route_delivery.go:deliverEditCandidate": true,
+		// pinned separately by the feasibility guard. Its evidence and its
+		// decision are two of its named steps (v3DeliveryRouteSteps).
+		"edit_route_delivery.go:deliverEditCandidate":         true,
+		"edit_route_delivery.go:collectEditCandidateEvidence": true,
+		"edit_route_delivery.go:decideEditCandidateDelivery":  true,
 		// The decision's own refusal classifier, called from the decision.
 		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
@@ -181,11 +184,12 @@ func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
 		}
 	}
 	// The routes that may ask for authorization at all are exactly the
-	// registered V3 byte-delivery routes. A new caller is a new way for
-	// service bytes to reach disk and has to be registered to exist.
+	// registered V3 byte-delivery routes, or their named steps. A new caller
+	// is a new way for service bytes to reach disk and has to be registered
+	// to exist.
 	for _, fn := range []string{"authorizeCandidateDelivery", "deliverCandidateBytes"} {
 		for site := range callSites(files, fn) {
-			if !registeredV3DeliveryRoute(site) {
+			if !registeredV3DeliveryRoute(routeOf(site)) {
 				t.Errorf("%s is called from unregistered route %s", fn, site)
 			}
 		}

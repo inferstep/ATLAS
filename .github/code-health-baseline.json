@@ -42,7 +42,6 @@
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/command_evidence.go:segmentEvidenceKind": 101,
   "proxy/command_evidence.go:splitTopLevelShell": 109,
-  "proxy/edit_route_delivery.go:deliverEditCandidate": 206,
   "proxy/evidence_wiring.go:observeCandidateVerification": 119,
   "proxy/gates.go:assetLintFindingsFor": 226,
   "proxy/gates.go:checkStructuralUnresolved": 101,

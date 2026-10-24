@@ -74,147 +74,29 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 		"route_entry": entry.ID,
 	}))
 
-	improved, meta, err := improveContentWithV3(path, edited, ctx)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-			lifecycle.finish(ctx, routingCancelled, "", "")
-			// Classified as no mutation, which is what the message says: the
-			// ledger must not observe a path nothing touched, or a cancelled
-			// edit becomes a deliverable the run is then asked to verify.
-			keep.Cancelled = noMutation(tool + " cancelled — no content was written")
-			return keep
-		}
-		// The lens stopped scoring inside V3: nothing lands, and the agent
-		// loop ends the run with the reason (lens_required.go).
-		if why, down := lensUnavailable(err); down {
-			log.Printf("[%s] the lens cannot score (%s) — not applying the edit", tool, why)
-			ctx.noteLensDown(why)
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-			keep.Cancelled = noMutation(tool + " not applied: the geometric lens stopped answering (" + why + ")")
-			return keep
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			lifecycle.finish(ctx, routingProducerTimedOut, "", "")
-		} else {
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-		}
-		log.Printf("[%s] V3 unavailable: %v — keeping the caller's content", tool, err)
-		// The final summary names this file while these bytes are on disk.
-		ctx.noteV3Unchecked(path, v3FailureReason(err), edited)
-		return keep
-	}
-	ctx.clearV3Unchecked(path)
-
-	// The existing boundary guards, unchanged and still ahead of staging: a
-	// winner that rewrote past the edit or swapped the language is not a
-	// candidate for this attempt and never becomes one.
-	switch {
-	case improved == "":
-		lifecycle.finish(ctx, routingNoCandidate, "", "")
-		return keep
-	case improved == edited:
-		// Nothing materially different was proposed. The caller's own bytes
-		// are what land, through the caller's own path, with no licence.
-		lifecycle.finish(ctx, routingBaselineRetained, "", "")
-		return keep
-	case v3RewroteBeyondTheEdit(original, edited, improved) != "":
-		log.Printf("[%s] V3 rewrote beyond the edit — keeping the caller's content", tool)
-		lifecycle.finish(ctx, routingRevokedByGate, "", "")
-		return keep
-	case v3SwappedTheLanguage(relPath, edited, improved) != "":
-		log.Printf("[%s] V3 swapped the language — keeping the caller's content", tool)
-		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+	improved, meta, isCandidate := proposeEditCandidate(ctx, lifecycle, &keep,
+		tool, path, relPath, original, edited)
+	if !isCandidate {
 		return keep
 	}
 
 	// A materially different proposal. From here it is a candidate, and it
 	// answers every question a new-file candidate answers.
-	observed := fallbackSyntaxOutcomeFor(ctx, path, improved).aggregate()
-	if observed.Status == ValidationFailed {
-		log.Printf("[%s] the candidate does not parse — keeping the caller's content", tool)
-		lifecycle.finish(ctx, routingRevokedByGate, contentSHA256(improved), "")
+	evidence, parses := collectEditCandidateEvidence(ctx, entry, lifecycle,
+		tool, path, improved, scope, scopeOK)
+	if !parses {
 		return keep
 	}
 
-	evidence, evID, seen := observeDeliveredCandidateSyntax(ctx, entry, path, improved, observed)
-	var pool []proxyEvidence
-	if seen {
-		pool = []proxyEvidence{evidence}
-	}
-	if evID.InvocationID == "" {
-		// No producer spoke -- a request that declared no outputs owes no
-		// syntax obligation, and a class the syntax gate does not check owes
-		// none either -- but the candidate is still this route entry's and
-		// these exact bytes, and the authorization owner binds to that.
-		evID = proposedCandidateIdentity(ctx, entry, improved)
-	}
-	// Declared commands are staged whether or not a syntax obligation exists,
-	// as on the new-file route.
-	behavioral, unmet, mutatedAssets := observeCandidateVerification(ctx, path, improved, evID, scope)
-	pool = append(pool, behavioral...)
-
-	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
-	if scopeOK {
-		scopeAdmits, scopeRefusal = scopeAdmitsCandidate(ctx, scope, improved)
-	}
-	recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
-
-	// ONE veto list, two readers -- the same arrangement the new-file route
-	// uses, for the same reason.
-	vetoInput := advisoryInput{
-		Observed:               observed,
-		TargetDeclared:         outputKnowledgeDeclared(ctx),
-		TargetAuthorized:       targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
-		Unmet:                  unmet,
-		Evidence:               pool,
-		Envelope:               meta.Envelope,
-		Cancelled:              ctx.Ctx != nil && ctx.Ctx.Err() != nil,
-		MutatedProtectedAssets: mutatedAssets,
-		ScopeAdmits:            scopeAdmits,
-		ScopeRefusal:           scopeRefusal,
-	}
-	// The selected-candidate identity, from the service's own record. The edit
-	// route reaches V3 through improveContentWithV3, which returns the winner
-	// it was given; this is the hash that winner was named by, and an
-	// automatic delivery requires it to equal the bytes actually in hand.
-	selected := ""
-	if meta.Envelope != nil {
-		selected = meta.Envelope.Identity.CandidateContentHash
-	}
-	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evID,
-		meta.Envelope, pool, selected, unmet, observed, scope,
-		automaticIntent{VetoInput: vetoInput})
-	vetoes := delivery.Vetoes
-	vetoInput.Unmet = delivery.Unmet
-	lifecycle.noteAuthorization(delivery, evID, contentSHA256(improved), vetoes)
-	// The same policy owner the new-file route asks, over the same kinds of
-	// fact. An edit route that decided this for itself is how the two paths
-	// disagreed about what a candidate had to show before it could land.
-	policyInput := vetoInput
-	policyInput.Decision = delivery.Decision
-	policyInput.CaptureOnlySuppressed = delivery.CaptureOnly
-	policyInput.AutomaticEligible = delivery.holds(grantBasisAutomaticV3)
-	policyInput.Vetoes = vetoes
-	policy := decideCandidatePolicy(ctx, policyInput, delivery.holds(grantBasisStrict))
-	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
-	if delivery.CaptureOnly {
-		recordCaptureOnlyDisposition(ctx, entry, contentSHA256(improved), policy, true)
-	}
-	if !policy.mayDeliverUnderPolicy() {
-		// An honest refusal. The model's own edit is the alternative, and
-		// nothing has been written yet, so the caller simply proceeds.
-		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(improved),
-			AuthorizationReason(delivery.Refusal))
-		log.Printf("[%s] the policy refused the candidate (%s) — keeping the caller's content",
-			tool, policy.Decision)
-		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
+	delivery, policy, authorized := decideEditCandidateDelivery(ctx, entry, lifecycle,
+		tool, path, improved, meta, scope, evidence)
+	if !authorized {
 		return keep
 	}
 
-	lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(improved), "")
 	result, out, derr := deliverCandidateBytes(ctx, candidateDeliveryRequest{
 		Tool: tool, Path: path, Code: improved, Grant: delivery.Grant,
-		Observed: observed, MetCommands: delivery.MetCommands,
+		Observed: evidence.observed, MetCommands: delivery.MetCommands,
 		BaselinePreserved: delivery.BaselinePreserved,
 		Write:             editDeliveryWriter(tool),
 	})
@@ -243,6 +125,185 @@ func deliverEditCandidate(ctx *AgentContext, tool, path, relPath,
 			Rel: relPath, Submitted: edited, Delivered: improved}
 	}
 	return keep
+}
+
+// proposeEditCandidate asks V3 to improve the caller's edit and holds the
+// answer to the four boundary guards. False means there is no candidate: the
+// ending is recorded, and keep.Cancelled is set when nothing may be written.
+func proposeEditCandidate(ctx *AgentContext, lifecycle *routeLifecycle, keep *editRouteOutcome,
+	tool, path, relPath, original, edited string) (string, V3EditMetadata, bool) {
+	improved, meta, err := improveContentWithV3(path, edited, ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+			lifecycle.finish(ctx, routingCancelled, "", "")
+			// Classified as no mutation, which is what the message says: the
+			// ledger must not observe a path nothing touched, or a cancelled
+			// edit becomes a deliverable the run is then asked to verify.
+			keep.Cancelled = noMutation(tool + " cancelled — no content was written")
+			return "", V3EditMetadata{}, false
+		}
+		// The lens stopped scoring inside V3: nothing lands, and the agent
+		// loop ends the run with the reason (lens_required.go).
+		if why, down := lensUnavailable(err); down {
+			log.Printf("[%s] the lens cannot score (%s) — not applying the edit", tool, why)
+			ctx.noteLensDown(why)
+			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+			keep.Cancelled = noMutation(tool + " not applied: the geometric lens stopped answering (" + why + ")")
+			return "", V3EditMetadata{}, false
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			lifecycle.finish(ctx, routingProducerTimedOut, "", "")
+		} else {
+			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+		}
+		log.Printf("[%s] V3 unavailable: %v — keeping the caller's content", tool, err)
+		// The final summary names this file while these bytes are on disk.
+		ctx.noteV3Unchecked(path, v3FailureReason(err), edited)
+		return "", V3EditMetadata{}, false
+	}
+	ctx.clearV3Unchecked(path)
+
+	// The existing boundary guards, unchanged and still ahead of staging: a
+	// winner that rewrote past the edit or swapped the language is not a
+	// candidate for this attempt and never becomes one.
+	switch {
+	case improved == "":
+		lifecycle.finish(ctx, routingNoCandidate, "", "")
+		return "", V3EditMetadata{}, false
+	case improved == edited:
+		// Nothing materially different was proposed. The caller's own bytes
+		// are what land, through the caller's own path, with no licence.
+		lifecycle.finish(ctx, routingBaselineRetained, "", "")
+		return "", V3EditMetadata{}, false
+	case v3RewroteBeyondTheEdit(original, edited, improved) != "":
+		log.Printf("[%s] V3 rewrote beyond the edit — keeping the caller's content", tool)
+		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+		return "", V3EditMetadata{}, false
+	case v3SwappedTheLanguage(relPath, edited, improved) != "":
+		log.Printf("[%s] V3 swapped the language — keeping the caller's content", tool)
+		lifecycle.finish(ctx, routingRevokedByGate, "", "")
+		return "", V3EditMetadata{}, false
+	}
+	return improved, meta, true
+}
+
+// editCandidateEvidence is what the proxy observed about the candidate's
+// exact bytes. The delivery decision reads it.
+type editCandidateEvidence struct {
+	observed      checkOutcome
+	evID          candidateEvidenceIdentity
+	pool          []proxyEvidence
+	unmet         map[string]AuthorizationReason
+	mutatedAssets bool
+	scopeAdmits   bool
+	scopeRefusal  string
+}
+
+// collectEditCandidateEvidence observes the candidate: its syntax, the declared
+// commands staged against it, and whether its mutation scope admits it. False
+// means the candidate does not parse, and the ending is recorded.
+func collectEditCandidateEvidence(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
+	tool, path, improved string, scope mutationScope, scopeOK bool) (editCandidateEvidence, bool) {
+	observed := fallbackSyntaxOutcomeFor(ctx, path, improved).aggregate()
+	if observed.Status == ValidationFailed {
+		log.Printf("[%s] the candidate does not parse — keeping the caller's content", tool)
+		lifecycle.finish(ctx, routingRevokedByGate, contentSHA256(improved), "")
+		return editCandidateEvidence{}, false
+	}
+
+	evidence, evID, seen := observeDeliveredCandidateSyntax(ctx, entry, path, improved, observed)
+	var pool []proxyEvidence
+	if seen {
+		pool = []proxyEvidence{evidence}
+	}
+	if evID.InvocationID == "" {
+		// No producer spoke -- a request that declared no outputs owes no
+		// syntax obligation, and a class the syntax gate does not check owes
+		// none either -- but the candidate is still this route entry's and
+		// these exact bytes, and the authorization owner binds to that.
+		evID = proposedCandidateIdentity(ctx, entry, improved)
+	}
+	// Declared commands are staged whether or not a syntax obligation exists,
+	// as on the new-file route.
+	behavioral, unmet, mutatedAssets := observeCandidateVerification(ctx, path, improved, evID, scope)
+	pool = append(pool, behavioral...)
+
+	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
+	if scopeOK {
+		scopeAdmits, scopeRefusal = scopeAdmitsCandidate(ctx, scope, improved)
+	}
+	recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
+	return editCandidateEvidence{
+		observed:      observed,
+		evID:          evID,
+		pool:          pool,
+		unmet:         unmet,
+		mutatedAssets: mutatedAssets,
+		scopeAdmits:   scopeAdmits,
+		scopeRefusal:  scopeRefusal,
+	}, true
+}
+
+// decideEditCandidateDelivery asks the authorization owner, then the policy
+// owner, whether the candidate may land, and records the ending either way.
+// False is an honest refusal: nothing has been written.
+func decideEditCandidateDelivery(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
+	tool, path, improved string, meta V3EditMetadata, scope mutationScope,
+	evidence editCandidateEvidence) (deliveryAuthorization, candidatePolicyOutcome, bool) {
+	// ONE veto list, two readers -- the same arrangement the new-file route
+	// uses, for the same reason.
+	vetoInput := advisoryInput{
+		Observed:               evidence.observed,
+		TargetDeclared:         outputKnowledgeDeclared(ctx),
+		TargetAuthorized:       targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
+		Unmet:                  evidence.unmet,
+		Evidence:               evidence.pool,
+		Envelope:               meta.Envelope,
+		Cancelled:              ctx.Ctx != nil && ctx.Ctx.Err() != nil,
+		MutatedProtectedAssets: evidence.mutatedAssets,
+		ScopeAdmits:            evidence.scopeAdmits,
+		ScopeRefusal:           evidence.scopeRefusal,
+	}
+	// The selected-candidate identity, from the service's own record. The edit
+	// route reaches V3 through improveContentWithV3, which returns the winner
+	// it was given; this is the hash that winner was named by, and an
+	// automatic delivery requires it to equal the bytes actually in hand.
+	selected := ""
+	if meta.Envelope != nil {
+		selected = meta.Envelope.Identity.CandidateContentHash
+	}
+	delivery := authorizeCandidateDelivery(ctx, entry, path, improved, evidence.evID,
+		meta.Envelope, evidence.pool, selected, evidence.unmet, evidence.observed, scope,
+		automaticIntent{VetoInput: vetoInput})
+	vetoes := delivery.Vetoes
+	vetoInput.Unmet = delivery.Unmet
+	lifecycle.noteAuthorization(delivery, evidence.evID, contentSHA256(improved), vetoes)
+	// The same policy owner the new-file route asks, over the same kinds of
+	// fact. An edit route that decided this for itself is how the two paths
+	// disagreed about what a candidate had to show before it could land.
+	policyInput := vetoInput
+	policyInput.Decision = delivery.Decision
+	policyInput.CaptureOnlySuppressed = delivery.CaptureOnly
+	policyInput.AutomaticEligible = delivery.holds(grantBasisAutomaticV3)
+	policyInput.Vetoes = vetoes
+	policy := decideCandidatePolicy(ctx, policyInput, delivery.holds(grantBasisStrict))
+	recordCandidatePolicyDecision(ctx, entry, contentSHA256(improved), policy)
+	if delivery.CaptureOnly {
+		recordCaptureOnlyDisposition(ctx, entry, contentSHA256(improved), policy, true)
+	}
+	if !policy.mayDeliverUnderPolicy() {
+		// An honest refusal. The model's own edit is the alternative, and
+		// nothing has been written yet, so the caller simply proceeds.
+		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(improved),
+			AuthorizationReason(delivery.Refusal))
+		log.Printf("[%s] the policy refused the candidate (%s) — keeping the caller's content",
+			tool, policy.Decision)
+		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
+		return delivery, policy, false
+	}
+
+	lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(improved), "")
+	return delivery, policy, true
 }
 
 // editResultPayload is the originating tool's own result body.
