@@ -284,14 +284,16 @@ func FuzzResolveWorkspacePath(f *testing.F) {
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			t.Fatalf("path %q escaped workspace %q: resolved %q, rel %q, err %v", path, root, resolved, rel, err)
 		}
+		// The root itself has no prefix to check. filepath.Rel cleans its
+		// result, so "." is a component only when it is the whole path.
+		if rel == "." {
+			return
+		}
 		// The target need not exist or even be an openable filename. Check
 		// every existing prefix from the root, so an unusable suffix cannot
 		// hide an earlier symlink that leaves the workspace.
 		prefix := root
 		for _, component := range strings.Split(rel, string(filepath.Separator)) {
-			if component == "." {
-				continue
-			}
 			prefix = filepath.Join(prefix, component)
 			if _, err := os.Lstat(prefix); err != nil {
 				break
