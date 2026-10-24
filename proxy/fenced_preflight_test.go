@@ -222,14 +222,8 @@ func TestUsableWritesStillLandThroughTheLoop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			calls, fences := 0, 0
-			srv := fencedCountingStub(t, dir, &calls, &fences, func(i int) map[string]interface{} {
-				if i == 0 {
-					return map[string]interface{}{
-						"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": "solve.py", "content": tc.content}}
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
-			})
+			srv := fencedCountingStub(t, dir, &calls, &fences,
+				script(stepWrite("solve.py", tc.content), stepDone("wrote solve.py")))
 			defer srv.Close()
 
 			ctx := NewAgentContext(dir, Tier2Medium)
