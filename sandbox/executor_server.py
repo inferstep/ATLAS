@@ -172,15 +172,16 @@ class _CorrelationIDMiddleware:
 app.add_middleware(_ServiceTokenMiddleware)
 app.add_middleware(_CorrelationIDMiddleware)
 
-
-from html.parser import HTMLParser
-
 from resource_contract import (
     OUTCOME_CANCELLED, OUTCOME_COMPLETED, OUTCOME_MEMORY_EXHAUSTED,
     OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
     OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
     contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
     EXEC_TOKEN_VAR, _apply_child_limits, _kill_token)
+
+# The parts of the executor that live in modules beside it (sandbox/Dockerfile copies each one).
+from executor_models import ExecuteRequest, ExecuteResponse, SyntaxCheckRequest, SyntaxCheckResponse
+from executor_parsers import _html_syntax_errors, _xml_syntax_errors, _yaml_syntax_errors
 
 # THE resource contract for every untrusted command, validated here at import.
 # A malformed operator budget stops the executor from starting rather than
@@ -242,41 +243,6 @@ def normalize_language(lang: str) -> str:  # noqa: C901
     if lang in ("php",):
         return "php"
     return lang
-
-
-class ExecuteRequest(BaseModel):
-    code: str
-    language: str = "python"
-    test_code: Optional[str] = None
-    requirements: Optional[List[str]] = None
-    timeout: int = 30
-    # PC-046: Project-context files dropped into the workspace alongside
-    # `solution.py` (or the language equivalent) so multi-file imports
-    # resolve. Filename keys are relative to the workspace root; each is
-    # validated to reject path traversal (`..`) and absolute paths
-    # before being written. Used by V3's verified_sandbox and
-    # smoke_compile_check to ship the rest of the project so e.g.
-    # `import game_logic` resolves to the user's actual game_logic.py.
-    files: Optional[Dict[str, str]] = None
-    # Optional standard input piped to the run step. None (the default)
-    # keeps existing behavior — the process inherits the server's stdin.
-    stdin: Optional[str] = None
-
-
-class ExecuteResponse(BaseModel):
-    success: bool
-    compile_success: bool
-    tests_run: int
-    tests_passed: int
-    lint_score: Optional[float] = None
-    stdout: str
-    stderr: str
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    execution_time_ms: int
-    # HOW the run ended, as /shell says it: a caller need not read stderr for a phrase.
-    timed_out: bool = False
-    outcome: str = OUTCOME_COMPLETED
 
 
 @app.get("/health")
@@ -1173,27 +1139,6 @@ def execute_code(request: ExecuteRequest):
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-class SyntaxCheckRequest(BaseModel):
-    code: str
-    language: str = "python"
-    filename: Optional[str] = None
-
-
-class SyntaxCheckResponse(BaseModel):
-    valid: bool
-    errors: List[str]
-    language: str
-    check_time_ms: int
-    # "checked": the checker ran to its own conclusion and `valid` is its
-    # verdict. "not_run": the resource contract stopped it, or it never
-    # started, so there is no verdict; `valid` is false and `outcome` says how
-    # it ended. A stopped checker exits non-zero with empty stderr, and every
-    # branch below builds its errors from stderr, so it used to read as a clean
-    # parse (valid: true).
-    status: str = "checked"
-    outcome: str = OUTCOME_COMPLETED
-
-
 @app.post("/syntax-check", response_model=SyntaxCheckResponse)
 def syntax_check(request: SyntaxCheckRequest):
     """Check code syntax without executing. Returns parse/compile errors."""
@@ -1261,45 +1206,6 @@ def _extract_java_classname(code: str) -> str:
         return match.group(1)
     
     return "Main"
-
-
-def _looks_like_jinja_template(filename: Optional[str]) -> bool:
-    """True only for files that are Jinja templates by convention: under a
-    templates/ directory, or a .jinja/.jinja2 name. Vue/Angular/Handlebars HTML
-    shares `{{ }}` but is NOT Jinja and lives elsewhere, so it is never handed
-    to a Jinja parser."""
-    if not filename:
-        return False
-    f = filename.replace("\\", "/").lower()
-    return ("templates/" in f) or f.endswith((".jinja", ".jinja2"))
-
-
-def _jinja_template_errors(code: str, filename: Optional[str]) -> List[str]:
-    """Jinja syntax errors for a file that is actually a Jinja template, else
-    []. Requires a statement tag `{%` to be present -- `{{ }}` interpolation
-    alone is too widely shared to attribute to Jinja. Unknown-tag/filter/test
-    errors are dropped: those signal a third-party extension this parser has
-    not loaded, not a typo. Never raises."""
-    if not _looks_like_jinja_template(filename):
-        return []
-    if "{%" not in code:
-        return []
-    try:
-        import jinja2
-    except Exception:
-        return []  # fail open: no Jinja available here
-    try:
-        jinja2.Environment(autoescape=True).parse(code)  # parsed only, never rendered
-        return []
-    except jinja2.TemplateSyntaxError as e:
-        msg = (getattr(e, "message", "") or "").lower()
-        if any(s in msg for s in ("unknown tag", "no filter named",
-                                  "no test named", "not registered")):
-            return []
-        loc = f" (line {e.lineno})" if getattr(e, "lineno", None) else ""
-        return [f"TemplateSyntaxError: {e.message}{loc}"]
-    except Exception:
-        return []  # not a confident syntax verdict -- stay silent
 
 
 class _CheckNotFinished(Exception):
@@ -1374,52 +1280,6 @@ _TS_OPTION_CODES = {1208, 1259, 1343, 1375, 1378, 1470, 1479}
 
 def _is_ts_syntax_code(code: int) -> bool:
     return 1000 <= code < 2000 and code not in _TS_OPTION_CODES
-
-
-class _StructureParser(HTMLParser):
-    """Counts the markup html.parser saw."""
-
-    def __init__(self):
-        super().__init__()
-        self.markup = 0
-
-    def handle_starttag(self, tag, attrs):
-        self.markup += 1
-
-    def handle_startendtag(self, tag, attrs):
-        self.markup += 1
-
-    def handle_decl(self, decl):
-        self.markup += 1
-
-
-def _html_structure_errors(code: str) -> List[str]:
-    """What can be said of HTML without rejecting what HTML allows.
-
-    html.parser accepts any text -- JavaScript, Python, an empty string, a
-    page cut off inside its <script> -- so a clean parse proved nothing, and
-    it was counted as a syntax pass for completion. Two checks can fail: the
-    text has markup at all (a template made only of {% %} or {{ }} blocks is
-    exempt), and it does not end inside a tag, a comment, or a <script> or
-    <style> element, which is what a cut-off generation leaves. Unclosed
-    ordinary elements, fragments and Vue or Angular templates still pass.
-    """
-    parser = _StructureParser()
-    try:
-        parser.feed(code)
-    except Exception as e:
-        return [str(e)]
-    errors = []
-    unclosed = getattr(parser, "cdata_elem", None)
-    leftover = getattr(parser, "rawdata", "")
-    if unclosed:
-        errors.append(f"the document ends inside an unclosed <{unclosed}> element")
-    elif re.match(r"<[!/?A-Za-z]", leftover.lstrip()):
-        errors.append("the document ends inside an unfinished tag or comment: "
-                      + leftover.lstrip()[:60])
-    if parser.markup == 0 and "{%" not in code and "{{" not in code:
-        errors.append("no HTML markup: the text has no tags")
-    return errors
 
 
 def _typescript_syntax_errors(fpath: Path, workspace: Path) -> List[str]:
@@ -1592,49 +1452,6 @@ def _bash_syntax_errors(fpath: Path, workspace: Path) -> List[str]:
     result = _run_check(["bash", "-n", str(fpath)], timeout=5, cwd=workspace)
     if result["returncode"] != 0:
         errors.append(result.get("stderr", "").strip())
-    return errors
-
-
-def _yaml_syntax_errors(code: str) -> List[str]:
-    """Every document of the YAML text, parsed."""
-    errors = []
-    try:
-        import yaml
-        # safe_load_all, not safe_load: a multi-document file ("a: 1"
-        # --- "b: 2") is valid YAML and extremely common in Kubernetes
-        # and Compose manifests, but safe_load rejects it with "expected
-        # a single document in the stream". That false rejection is why
-        # the proxy's direct-write path carried no syntax gate at all,
-        # which let genuinely unparseable files reach disk. list() forces
-        # the generator so every document is actually parsed.
-        list(yaml.safe_load_all(code))
-    except Exception as e:
-        errors.append(str(e))
-    return errors
-
-
-def _html_syntax_errors(code: str, filename: Optional[str]) -> List[str]:
-    """The HTML structure check, then the Jinja parse of a file that is a Jinja template."""
-    errors = []
-    errors.extend(_html_structure_errors(code))
-    # A Jinja template can parse cleanly as HTML and still 500 on EVERY
-    # render: `{% for x in xs %)` closes the tag with `)` instead of `}`.
-    # html.parser sees only text and passes it; Flask compiles the template
-    # on first render, so the server starts, the file imports and the page
-    # returns 500 with a TemplateSyntaxError nothing upstream caught.
-    errors.extend(_jinja_template_errors(code, filename))
-    return errors
-
-
-def _xml_syntax_errors(code: str) -> List[str]:
-    """The XML text, parsed with defusedxml."""
-    errors = []
-    from defusedxml import ElementTree as ET
-    from defusedxml.common import DefusedXmlException
-    try:
-        ET.fromstring(code)
-    except (ET.ParseError, DefusedXmlException) as e:
-        errors.append(str(e))
     return errors
 
 

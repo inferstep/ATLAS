@@ -192,6 +192,8 @@ COPY private_values.py .
 # The resource contract every untrusted command runs under. Imported by
 # executor_server at module load, so the executor does not start without it.
 COPY resource_contract.py .
+COPY executor_models.py .
+COPY executor_parsers.py .
 COPY executor_server.py .
 
 EXPOSE 8020

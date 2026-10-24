@@ -20,8 +20,7 @@
   "proxy/tools.go:editFileTool": 429,
   "proxy/tools.go:structuralEditTool": 368,
   "proxy/tools.go:writeFileWithV3": 828,
-  "sandbox/executor_server.py:_syntax_check_impl": 255,
-  "sandbox/executor_server.py:run_shell": 105,
+  "sandbox/executor_server.py:_syntax_check_impl": 123,
   "tui/demo.go:demoModel.Update": 178,
   "tui/model.go:tuiModel.Update": 489,
   "tui/panes.go:layoutFullScreen": 334,
@@ -33,7 +32,7 @@
   "proxy/agent.go": 10518,
   "proxy/tools.go": 6913,
   "proxy/types.go": 2080,
-  "sandbox/executor_server.py": 2140,
+  "sandbox/executor_server.py": 2059,
   "tui/model.go": 1714,
   "v3-service/pipeline.py": 2964
  }

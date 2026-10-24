@@ -7,7 +7,7 @@ ran with no input at all.
 
 These tests mock the HTTP layer and assert the input lands in the
 ``/execute`` request payload under the field name the sandbox schema
-declares (``ExecuteRequest.stdin`` in sandbox/executor_server.py), the
+declares (``ExecuteRequest.stdin`` in sandbox/executor_models.py), the
 same stdin contract the bench implements via execute_code_stdio.
 """
 
