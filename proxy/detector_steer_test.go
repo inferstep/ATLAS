@@ -87,12 +87,12 @@ func TestMissingModuleAndMissingFileSteers(t *testing.T) {
 }
 
 // A traceback steer points at the deepest frame in the project, the line the
-// model can fix. A missing package is an environment problem, not a fix site.
+// model can fix.
 func TestTracebackSteer(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		out     string
-		want    []string // empty: no steer at all
+		want    []string
 		notWant []string
 	}{
 		{
@@ -114,23 +114,9 @@ func TestTracebackSteer(t *testing.T) {
 			want:    []string{"app.py", "function:main"},
 			notWant: []string{"json/__init__"},
 		},
-		{
-			name: "a missing package",
-			out: "Traceback (most recent call last):\n" +
-				"  File \"/workspace/snake_game.py\", line 1, in <module>\n" +
-				"    import pygame\n" +
-				"ModuleNotFoundError: No module named 'pygame'\n",
-		},
-		{
-			name: "no traceback",
-			out:  "Total inventory value: $237\n",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out)
-			if len(tc.want) == 0 && got != "" {
-				t.Errorf("want no steer, got %q", got)
-			}
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("steer lacks %q:\n%s", want, got)
@@ -145,14 +131,37 @@ func TestTracebackSteer(t *testing.T) {
 	}
 }
 
+// A missing package is an environment problem, not a fix site, and output with
+// no traceback has nothing to point at: no steer at all.
+func TestTracebackSteerStaysSilent(t *testing.T) {
+	for _, tc := range []struct{ name, out string }{
+		{
+			name: "a missing package",
+			out: "Traceback (most recent call last):\n" +
+				"  File \"/workspace/snake_game.py\", line 1, in <module>\n" +
+				"    import pygame\n" +
+				"ModuleNotFoundError: No module named 'pygame'\n",
+		},
+		{
+			name: "no traceback",
+			out:  "Total inventory value: $237\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out); got != "" {
+				t.Errorf("want no steer, got %q", got)
+			}
+		})
+	}
+}
+
 // A missing binary cannot be installed in the sandbox (no root, read-only), so
-// the steer names it and says so. It fires only on a real shell diagnostic,
-// never on program output that happens to print the same words.
+// the steer names it and says so.
 func TestMissingCommandSteer(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		out     string
-		want    []string // empty: no steer at all
+		want    []string
 		notWant []string
 	}{
 		{
@@ -176,6 +185,27 @@ func TestMissingCommandSteer(t *testing.T) {
 			out:  "bash: line 3: /usr/local/bin/terraform: command not found\n",
 			want: []string{"`terraform`"},
 		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := missingCommandSteer(tc.out)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("steer lacks %q: %q", want, got)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("steer suggests %q: %q", notWant, got)
+				}
+			}
+		})
+	}
+}
+
+// The missing-command steer fires only on a real shell diagnostic, never on
+// program output that happens to print the same words.
+func TestMissingCommandSteerStaysSilent(t *testing.T) {
+	for _, tc := range []struct{ name, out string }{
 		{
 			name: "a not-found line with no shell prefix",
 			out:  "config.yaml: not found\n",
@@ -190,19 +220,8 @@ func TestMissingCommandSteer(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := missingCommandSteer(tc.out)
-			if len(tc.want) == 0 && got != "" {
+			if got := missingCommandSteer(tc.out); got != "" {
 				t.Errorf("want no steer, got %q", got)
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("steer lacks %q: %q", want, got)
-				}
-			}
-			for _, notWant := range tc.notWant {
-				if strings.Contains(got, notWant) {
-					t.Errorf("steer suggests %q: %q", notWant, got)
-				}
 			}
 		})
 	}

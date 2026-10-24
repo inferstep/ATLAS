@@ -27,21 +27,14 @@ import (
 // the model is copying a span it cannot reproduce with a change applied, and
 // being told again that the two sides match gives it nothing new.
 
-// brokenArtifactFixture runs the real loop with a genuine Python syntax check,
-// so the failure diagnostic in the ledger is a real one and not a fixture
-// invention. plan sees the prompt, so a scripted model can react to what it
-// was actually told rather than to the turn number.
-func brokenArtifactFixture(t *testing.T, plan func(i int, prompt string) map[string]interface{}) (
-	*AgentContext, string, *int, map[string]int, map[string]string, *[]string) {
-	t.Helper()
-	dir := t.TempDir()
-	turns := 0
-	census := map[string]int{}
-	terminal := map[string]string{}
-	var bounces []string
+// brokenArtifactServer stands in for the sandbox, V3 and the model while the
+// loop works in dir. The syntax check is the real Python parser
+// (pythonSyntaxDiagnostic); V3 is unavailable. Each chat turn i is counted in
+// *turns and answered with the tool call plan(i, prompt) returns, and a turn
+// past wsCeiling is refused.
+func brokenArtifactServer(dir string, turns *int, plan func(i int, prompt string) map[string]interface{}) *httptest.Server {
 	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -81,8 +74,8 @@ func brokenArtifactFixture(t *testing.T, plan func(i int, prompt string) map[str
 			return
 		}
 		mu.Lock()
-		i := turns
-		turns++
+		i := *turns
+		*turns++
 		mu.Unlock()
 		if i >= wsCeiling {
 			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
@@ -94,6 +87,23 @@ func brokenArtifactFixture(t *testing.T, plan func(i int, prompt string) map[str
 				{"delta": map[string]string{"content": string(call)}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
+}
+
+// brokenArtifactFixture runs the real loop with a genuine Python syntax check,
+// so the failure diagnostic in the ledger is a real one and not a fixture
+// invention. plan sees the prompt, so a scripted model can react to what it
+// was actually told rather than to the turn number.
+func brokenArtifactFixture(t *testing.T, plan func(i int, prompt string) map[string]interface{}) (
+	*AgentContext, string, *int, map[string]int, map[string]string, *[]string) {
+	t.Helper()
+	dir := t.TempDir()
+	turns := 0
+	census := map[string]int{}
+	terminal := map[string]string{}
+	var bounces []string
+	var mu sync.Mutex
+
+	srv := brokenArtifactServer(dir, &turns, plan)
 	t.Cleanup(srv.Close)
 
 	ctx := NewAgentContext(dir, Tier2Medium)
@@ -437,83 +447,82 @@ func TestBrokenArtifactStateReleaseIsNarrow(t *testing.T) {
 }
 
 // Loop-level controls: what the run does around the recovery.
-func TestNoopEditRecoveryLoopControls(t *testing.T) {
-	t.Run("one accidental no-op gets only the tool's answer", func(t *testing.T) {
-		// It corrects itself off edit_file's OWN refusal, which is unchanged.
-		ctx, dir, turns, census, terminal, bounces := brokenArtifactFixture(t,
-			noopEditPlan("would change nothing"))
-		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
-		t.Logf("accidental: turns=%d status=%q reason=%q", *turns,
-			terminal["status"], terminal["reason"])
-		for _, b := range *bounces {
-			if strings.Contains(b, noopRecoveryMarker) {
-				t.Fatal("a single no-op drew the recovery")
-			}
-		}
-		if terminal["status"] != string(TerminalCompleted) {
-			t.Errorf("following the tool's own refusal did not complete: %q/%q",
-				terminal["status"], terminal["reason"])
-		}
-		if !strings.Contains(string(got), fixedSolveHeader) {
-			t.Errorf("the correction did not land: %q", got)
-		}
-		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-		if _, status := d.CurrentValidation(); status != ValidationPassed {
-			t.Errorf("validation on the current hash is %s, want passed", status)
-		}
-		if census["done"] != 1 {
-			t.Errorf("%d terminal events", census["done"])
-		}
-	})
 
-	t.Run("a model that ignores the recovery stops honestly", func(t *testing.T) {
-		// marker "" — nothing makes it correct itself.
-		ctx, dir, turns, census, terminal, bounces := brokenArtifactFixture(t, noopEditPlan(""))
-		got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
-		t.Logf("ignored: turns=%d status=%q reason=%q", *turns,
+func TestOneAccidentalNoopEditGetsOnlyTheToolsAnswer(t *testing.T) {
+	// It corrects itself off edit_file's OWN refusal, which is unchanged.
+	ctx, dir, turns, census, terminal, bounces := brokenArtifactFixture(t,
+		noopEditPlan("would change nothing"))
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	t.Logf("accidental: turns=%d status=%q reason=%q", *turns,
+		terminal["status"], terminal["reason"])
+	for _, b := range *bounces {
+		if strings.Contains(b, noopRecoveryMarker) {
+			t.Fatal("a single no-op drew the recovery")
+		}
+	}
+	if terminal["status"] != string(TerminalCompleted) {
+		t.Errorf("following the tool's own refusal did not complete: %q/%q",
 			terminal["status"], terminal["reason"])
+	}
+	if !strings.Contains(string(got), fixedSolveHeader) {
+		t.Errorf("the correction did not land: %q", got)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if _, status := d.CurrentValidation(); status != ValidationPassed {
+		t.Errorf("validation on the current hash is %s, want passed", status)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+}
 
-		offers := 0
-		for _, b := range *bounces {
-			if strings.HasPrefix(b, "gate|") && strings.Contains(b, noopRecoveryMarker) {
-				offers++
-			}
+func TestAModelThatIgnoresTheNoopRecoveryStopsHonestly(t *testing.T) {
+	// marker "" — nothing makes it correct itself.
+	ctx, dir, turns, census, terminal, bounces := brokenArtifactFixture(t, noopEditPlan(""))
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	t.Logf("ignored: turns=%d status=%q reason=%q", *turns,
+		terminal["status"], terminal["reason"])
+
+	offers := 0
+	for _, b := range *bounces {
+		if strings.HasPrefix(b, "gate|") && strings.Contains(b, noopRecoveryMarker) {
+			offers++
 		}
-		if offers != 1 {
-			t.Errorf("%d recovery offers, want exactly one even when ignored", offers)
-		}
-		if *turns >= wsCeiling {
-			t.Fatalf("%d turns without a terminal", *turns)
-		}
-		if NormalizeTerminalStatus(terminal["status"]).Completed() {
-			t.Errorf("an unresolved broken artifact reported %q", terminal["status"])
-		}
-		// Nothing was mutated or run on the model's behalf.
-		if string(got) != brokenSolveSource {
-			t.Errorf("the file changed without a model mutation: %q", got)
-		}
-		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-		if _, status := d.CurrentValidation(); status != ValidationFailed {
-			t.Errorf("the ledger lost the failure on the current bytes: %s", status)
-		}
-		// Nothing safer ever existed to fall back to, which is why this case
-		// needs a recovery rather than restoration of a checkpoint.
-		ok, why := checkpointRestorable(d, hashBytes(got), false)
-		t.Logf("checkpoint: restorable=%v (%s)", ok, why)
-		if ok {
-			t.Error("an eligible checkpoint existed and should have owned this")
-		}
-		if d.CheckpointHash != "" {
-			t.Errorf("a checkpoint was held for a file never shown valid: %q", d.CheckpointHash)
-		}
-		if census["done"] != 1 {
-			t.Errorf("%d terminal events", census["done"])
-		}
-		if census["tool_call"] != census["tool_result"] {
-			t.Errorf("call/result balance: %d vs %d",
-				census["tool_call"], census["tool_result"])
-		}
-	})
+	}
+	if offers != 1 {
+		t.Errorf("%d recovery offers, want exactly one even when ignored", offers)
+	}
+	if *turns >= wsCeiling {
+		t.Fatalf("%d turns without a terminal", *turns)
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("an unresolved broken artifact reported %q", terminal["status"])
+	}
+	// Nothing was mutated or run on the model's behalf.
+	if string(got) != brokenSolveSource {
+		t.Errorf("the file changed without a model mutation: %q", got)
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if _, status := d.CurrentValidation(); status != ValidationFailed {
+		t.Errorf("the ledger lost the failure on the current bytes: %s", status)
+	}
+	// Nothing safer ever existed to fall back to, which is why this case
+	// needs a recovery rather than restoration of a checkpoint.
+	ok, why := checkpointRestorable(d, hashBytes(got), false)
+	t.Logf("checkpoint: restorable=%v (%s)", ok, why)
+	if ok {
+		t.Error("an eligible checkpoint existed and should have owned this")
+	}
+	if d.CheckpointHash != "" {
+		t.Errorf("a checkpoint was held for a file never shown valid: %q", d.CheckpointHash)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
 }
 
 // The recovery turn is counted exactly once: it never reaches the tool, so no
