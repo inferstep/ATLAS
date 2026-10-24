@@ -440,44 +440,7 @@ class LLMAdapter:
         for the chat endpoint. ChatML format:
             <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
         """
-        prompt = body.pop("prompt", "")
-        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
-
-        # PC-206: thinking flag drops down from __call__. Default False so
-        # callers get bounded generation unless they opt into reasoning.
-        thinking = bool(body.pop("_thinking", False))
-
-        # Convert the internal prompt carrier into structured messages before
-        # llama-server applies the selected model's own template.
-        messages = chatml_to_messages(prompt)
-        if "<|im_start|>" not in prompt:
-            print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
-        else:
-            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
-                  f" (thinking={'on' if thinking else 'off'})", flush=True)
-            if thinking:
-                # Strip the legacy directive from old prompt templates when a
-                # caller explicitly enables reasoning.
-                for msg in messages:
-                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
-                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
-
-        chat_body = {
-            "model": model_name,
-            "messages": messages,
-            "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
-            "temperature": body.get("temperature", 0.6),
-            "stream": bool(body.get("stream", False)),
-            # The chat template may honor enable_thinking; templates that do
-            # not support it ignore the kwarg. Reasoning blocks are stripped
-            # in __call__ before downstream JSON parsing.
-            "chat_template_kwargs": {"enable_thinking": thinking},
-        }
-        if chat_body["stream"]:
-            # Need usage in the final chunk so we can report token counts.
-            chat_body["stream_options"] = {"include_usage": True}
-        if "seed" in body:
-            chat_body["seed"] = body["seed"]
+        chat_body = self._chat_body(body)
 
         payload = json.dumps(chat_body).encode()
         for attempt in range(5):
@@ -523,25 +486,7 @@ class LLMAdapter:
                             if choices:
                                 delta_obj = choices[0].get("delta", {}) or {}
                                 if not first_chunk_logged and delta_obj:
-                                    # Metadata only. This line used to carry a
-                                    # 200-character sample of the delta, which
-                                    # is candidate source: harmless while logs
-                                    # were unstructured and local, and a
-                                    # retained content leak the moment
-                                    # ATLAS_LOG_FORMAT=json makes these records
-                                    # evidence. 84 such records were captured in
-                                    # one 63-cell rehearsal. The diagnostic
-                                    # exists to say which keys a build sends and
-                                    # whether anything arrived; request and
-                                    # invocation identity already join the line
-                                    # to its call, so no sample, prefix, excerpt
-                                    # or encoding of the content is needed.
-                                    _c = delta_obj.get("content")
-                                    _r = delta_obj.get("reasoning_content")
-                                    print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
-                                          f"content_chars={len(_c) if isinstance(_c, str) else 0} "
-                                          f"reasoning_chars={len(_r) if isinstance(_r, str) else 0}",
-                                          flush=True)
+                                    self._log_first_delta(delta_obj)
                                     first_chunk_logged = True
                                 delta = delta_obj.get("content", "") or ""
                                 # Some llama.cpp builds split <think>…</think>
@@ -585,6 +530,82 @@ class LLMAdapter:
         # for py/mixed-returns (the implicit fall-through returns None,
         # which violates the -> dict signature).
         raise RuntimeError("unreachable: _send loop must return or raise")
+
+    @staticmethod
+    def _chat_body(body: dict) -> dict:
+        """The /v1/chat/completions request for one call: the messages, the
+        thinking switch and the sampling fields. Takes `prompt` and
+        `_thinking` out of `body`."""
+        prompt = body.pop("prompt", "")
+        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
+
+        # PC-206: thinking flag drops down from __call__. Default False so
+        # callers get bounded generation unless they opt into reasoning.
+        thinking = bool(body.pop("_thinking", False))
+
+        messages = LLMAdapter._chat_messages(prompt, thinking)
+
+        chat_body = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
+            "temperature": body.get("temperature", 0.6),
+            "stream": bool(body.get("stream", False)),
+            # The chat template may honor enable_thinking; templates that do
+            # not support it ignore the kwarg. Reasoning blocks are stripped
+            # in __call__ before downstream JSON parsing.
+            "chat_template_kwargs": {"enable_thinking": thinking},
+        }
+        if chat_body["stream"]:
+            # Need usage in the final chunk so we can report token counts.
+            chat_body["stream_options"] = {"include_usage": True}
+        if "seed" in body:
+            chat_body["seed"] = body["seed"]
+        return chat_body
+
+    @staticmethod
+    def _chat_messages(prompt: str, thinking: bool) -> list:
+        """The ChatML prompt as chat messages. With thinking on, a user
+        message loses the legacy /nothink directive."""
+        # Convert the internal prompt carrier into structured messages before
+        # llama-server applies the selected model's own template.
+        messages = chatml_to_messages(prompt)
+        if "<|im_start|>" not in prompt:
+            print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
+        else:
+            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
+                  f" (thinking={'on' if thinking else 'off'})", flush=True)
+            if thinking:
+                # Strip the legacy directive from old prompt templates when a
+                # caller explicitly enables reasoning.
+                for msg in messages:
+                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
+                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
+        return messages
+
+    @staticmethod
+    def _log_first_delta(delta_obj: dict) -> None:
+        """Log which keys the first streamed delta carries and how many
+        characters arrived, never the characters themselves."""
+        # Metadata only. This line used to carry a
+        # 200-character sample of the delta, which
+        # is candidate source: harmless while logs
+        # were unstructured and local, and a
+        # retained content leak the moment
+        # ATLAS_LOG_FORMAT=json makes these records
+        # evidence. 84 such records were captured in
+        # one 63-cell rehearsal. The diagnostic
+        # exists to say which keys a build sends and
+        # whether anything arrived; request and
+        # invocation identity already join the line
+        # to its call, so no sample, prefix, excerpt
+        # or encoding of the content is needed.
+        _c = delta_obj.get("content")
+        _r = delta_obj.get("reasoning_content")
+        print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
+              f"content_chars={len(_c) if isinstance(_c, str) else 0} "
+              f"reasoning_chars={len(_r) if isinstance(_r, str) else 0}",
+              flush=True)
 
 
 class BudgetExhausted(Exception):
