@@ -303,7 +303,12 @@ func TestFencedProposalsAreEvaluatedNotDeduplicatedByIntent(t *testing.T) {
 			firstPass = i
 		}
 	}
-	if firstPass < 0 || firstPass <= lastFail {
+	// The checks below read the passing check, so without one there is nothing
+	// more to compare.
+	if firstPass < 0 {
+		t.Fatalf("no proposal passed its check (%d checks, last failing %d)", len(r.checks), lastFail)
+	}
+	if firstPass <= lastFail {
 		t.Errorf("the accepted proposal was not checked after the last rejection "+
 			"(lastFail=%d firstPass=%d)", lastFail, firstPass)
 	}
