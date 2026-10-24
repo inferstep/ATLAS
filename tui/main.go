@@ -72,20 +72,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	model := newTUIModel(*proxyURL)
-	// Persistence is on for the top-level TUI. Demo child models are built
-	// via newTUIModel too but never flip this, so they never write sessions.
-	model.persistEnabled = true
-
-	// --continue / --resume reload a saved transcript before the alt-screen
-	// program starts (the resume picker reads stdin, which the alt-screen
-	// would otherwise capture). --resume takes precedence if both are set.
-	switch {
-	case *resumeFlag:
-		applyResume(&model, flag.Arg(0))
-	case *continueFlag:
-		applyContinue(&model)
-	}
+	model := newTopLevelModel(*proxyURL, *resumeFlag, *continueFlag)
 
 	// Surface the Python wrapper's startup warning (workspace mismatch
 	// etc.) inside the TUI. Without this the warning prints to stderr
@@ -100,21 +87,7 @@ func main() {
 	// the Bubbletea program drains via a tea.Cmd.
 	go streamEventsWithReconnect(ctx, *proxyURL+"/events", model.events)
 
-	// Mouse cell-motion capture so the wheel scrolls the chat pane.
-	// Cell-motion (vs all-motion) only captures when buttons are held
-	// or pressed, which keeps idle text selection working on most
-	// modern terminals. iTerm2/Kitty/WezTerm let users hold Option/
-	// Shift while dragging to override capture entirely; that's the
-	// recommended escape hatch when copy/paste is needed.
-	//
-	// --mouse off (or ATLAS_TUI_MOUSE=off) skips the WithMouseCellMotion
-	// option entirely so users who prefer to select/copy without holding
-	// modifiers can launch the TUI with capture pre-disabled. The
-	// /mouse slash command still toggles either way at runtime.
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if *mouseFlag != "off" {
-		opts = append(opts, tea.WithMouseCellMotion())
-	}
+	opts := programOptions(*mouseFlag)
 	prog := tea.NewProgram(model, opts...)
 
 	finalModel, err := prog.Run()
@@ -132,6 +105,48 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+// newTopLevelModel builds the model of the interactive TUI: it saves its
+// session, and it starts from the saved session that --resume or --continue
+// asks for.
+func newTopLevelModel(proxyURL string, resumeFlag, continueFlag bool) tuiModel {
+	model := newTUIModel(proxyURL)
+	// Persistence is on for the top-level TUI. Demo child models are built
+	// via newTUIModel too but never flip this, so they never write sessions.
+	model.persistEnabled = true
+
+	// --continue / --resume reload a saved transcript before the alt-screen
+	// program starts (the resume picker reads stdin, which the alt-screen
+	// would otherwise capture). --resume takes precedence if both are set.
+	switch {
+	case resumeFlag:
+		applyResume(&model, flag.Arg(0))
+	case continueFlag:
+		applyContinue(&model)
+	}
+	return model
+}
+
+// programOptions returns the Bubble Tea options of the interactive TUI: the
+// alternate screen, and mouse capture unless the --mouse flag is "off".
+func programOptions(mouseFlag string) []tea.ProgramOption {
+	// Mouse cell-motion capture so the wheel scrolls the chat pane.
+	// Cell-motion (vs all-motion) only captures when buttons are held
+	// or pressed, which keeps idle text selection working on most
+	// modern terminals. iTerm2/Kitty/WezTerm let users hold Option/
+	// Shift while dragging to override capture entirely; that's the
+	// recommended escape hatch when copy/paste is needed.
+	//
+	// --mouse off (or ATLAS_TUI_MOUSE=off) skips the WithMouseCellMotion
+	// option entirely so users who prefer to select/copy without holding
+	// modifiers can launch the TUI with capture pre-disabled. The
+	// /mouse slash command still toggles either way at runtime.
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if mouseFlag != "off" {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	return opts
 }
 
 func envOr(key, fallback string) string {
