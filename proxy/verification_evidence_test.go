@@ -310,32 +310,29 @@ func TestABaselineMismatchInvalidatesEvidence(t *testing.T) {
 // staging can see that case.
 func TestOnlyACleanForegroundSuccessAuthorizes(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		outcome          stagingCommandOutcome
-		mutatedTarget    bool
-		mutatedWorkspace bool
+		name string
+		// change turns the fixture's clean exit zero into this row's ending.
+		change func(r *stagingCommandResult)
 	}{
-		{"exited non-zero", stagingExitedNonZero, false, false},
-		{"timed out", stagingTimedOut, false, false},
-		{"cancelled", stagingCancelled, false, false},
-		{"refused", stagingRefused, false, false},
-		{"mutated target", stagingMutatedTarget, false, false},
-		{"mutated workspace", stagingMutatedWorkspace, false, false},
-		{"unobservable", stagingUnobservable, false, false},
-		{"budget exceeded", stagingBudgetExceeded, false, false},
-		{"unavailable", stagingUnavailable, false, false},
-		{"exit zero that rewrote the candidate", stagingExitedZero, true, true},
-		{"exit zero that changed an input", stagingExitedZero, false, true},
+		{"exited non-zero", func(r *stagingCommandResult) { r.Outcome = stagingExitedNonZero }},
+		{"timed out", func(r *stagingCommandResult) { r.Outcome = stagingTimedOut }},
+		{"cancelled", func(r *stagingCommandResult) { r.Outcome = stagingCancelled }},
+		{"refused", func(r *stagingCommandResult) { r.Outcome = stagingRefused }},
+		{"mutated target", func(r *stagingCommandResult) { r.Outcome = stagingMutatedTarget }},
+		{"mutated workspace", func(r *stagingCommandResult) { r.Outcome = stagingMutatedWorkspace }},
+		{"unobservable", func(r *stagingCommandResult) { r.Outcome = stagingUnobservable }},
+		{"budget exceeded", func(r *stagingCommandResult) { r.Outcome = stagingBudgetExceeded }},
+		{"unavailable", func(r *stagingCommandResult) { r.Outcome = stagingUnavailable }},
+		{"exit zero that rewrote the candidate", func(r *stagingCommandResult) {
+			r.MutatedTarget, r.MutatedWorkspace = true, true
+			r.TargetHashAfter = contentSHA256("rewritten\n")
+		}},
+		{"exit zero that changed an input", func(r *stagingCommandResult) { r.MutatedWorkspace = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newVerificationFixture(t)
 			req := f.request()
-			req.Result.Outcome = tc.outcome
-			req.Result.MutatedTarget = tc.mutatedTarget
-			req.Result.MutatedWorkspace = tc.mutatedWorkspace
-			if tc.mutatedTarget {
-				req.Result.TargetHashAfter = contentSHA256("rewritten\n")
-			}
+			tc.change(&req.Result)
 			ev, ok := produceDeclaredVerificationEvidence(f.ctx, req)
 			if !ok {
 				return // declining outright is also a correct answer
