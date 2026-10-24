@@ -5,41 +5,30 @@ Status: accepted 2026-08
 ## Context
 `/embedding` on llama-server has two consumers inside ATLAS:
 
-- whole-text `C(x)`/`G(x)`, which scores a completed candidate, and
-- the per-step PRM path (`score-per-step`, PC-207), which scores every
-  token of a candidate as it is produced.
+- whole-text `C(x)`/`G(x)`, which scores a completed candidate from one
+  pooled vector (`extract_embedding`), and
+- the per-step path (`/internal/lens/score-per-step`), which scores every
+  token of a candidate and needs per-token vectors (`extract_per_token`).
 
-The first wants one pooled vector; the second needs per-token vectors.
+Both functions are in `geometric-lens/geometric_lens/embedding_extractor.py`.
 `--pooling` is server-global in llama.cpp, so one setting has to serve
-both, and the two requirements were treated as a conflict to be pinned
-rather than resolved. `mean` was pinned, and per-step raised
-`ValueError: extract_per_token needs per-token embeddings` on every
-call. The service fails soft, so each candidate scored the neutral
-default 0.500 and candidate selection ran with every candidate tied.
+both consumers, and only `--pooling none` returns per-token vectors
+(`extract_per_token` refuses a pooled answer).
 
-Normalization failed the same way, one layer down. Training read
-`/embedding` without an `embd_normalize` field; this llama.cpp build
-defaults that field to L2, but the stored training vectors
-(`training_embeddings_3840d.json`) have ‖v‖≈137, so the artifacts were
-fitted on unnormalized vectors. Serving normalized ones fed the cost
-field inputs 137x smaller than its calibration:
+Scale carries the signal. The shipped cost field is fitted on
+unnormalized mean-pooled vectors, so the lens keeps each vector's scale
+unless the artifact's contract says it was trained normalized
+(`extract_embedding`; `test_vector_scale_is_preserved` in
+`geometric-lens/tests/test_embedding_contract.py`). Normalization does not
+commute with pooling either: the mean of per-token unit vectors is not the
+normalized mean of the raw vectors (`extract_embedding`).
 
-| input | ‖v‖ | C(x) |
-|---|---|---|
-| clean function | 110.5 | 2.56 |
-| repetition loop | 142.9 | 9.46 |
-| truncated junk | 97.1 | 2.00 |
-| any of the three, L2-normalized | 1.00 | 0.76-0.78 |
-
-Calibration is `pass_energy_mean` 9.25, `fail_energy_mean` 11.81. The
-normalized column spans 0.02 across inputs a lens exists to tell apart.
-
-Both defects report healthy. `/health` and `/ready` return 200, the
-per-step endpoint returns `200 OK` carrying its neutral default, and
-`C(x)` returns a number in a plausible-looking range. The documented
-diagnostic in TROUBLESHOOTING.md asserted that a norm far from 1.0 meant
-a misconfigured server, which is the inverse of the truth and made the
-misconfiguration read as correct.
+A wrong convention passes the ordinary health checks: the services stay
+ready, and C(x) returns a number in a plausible-looking range
+(`_reject_prenormalized` in `embedding_extractor.py`). The drift check,
+which re-scores fixed reference texts, is what catches a shift in every
+energy, for a bundle that carries a `drift_fingerprint.json`
+(`check_fingerprint` in `geometric-lens/geometric_lens/drift.py`).
 
 ## Decision
 The lens derives the convention it needs from the most informative
@@ -62,22 +51,20 @@ settings to match its calibration.
   invisible in every health signal.
 
 ## Consequences
-Pooling mode becomes an operational detail rather than a correctness
-dependency, and per-step scoring produces signal for the first time in
-this deployment. Normalization no longer silently rescales the input to
-a fitted model.
+Pooling mode is an operational detail, not a correctness dependency. The
+whole-text vector is the same under `--pooling none` and `--pooling mean`
+(`test_pooling_mode_does_not_change_the_vector`), so both consumers share
+one server running `--pooling none`. Normalization does not rescale the
+input to a fitted model unless the artifact's contract says it was trained
+normalized (`test_normalized_contract_still_normalizes`; both tests are in
+`geometric-lens/tests/test_embedding_contract.py`).
 
-Both measured failures shared a shape: a fail-soft default that is
-indistinguishable from a real answer. `0.500` from a scorer that never
-ran reads exactly like `0.500` from one that did. Where a component
-degrades to a neutral value, the degradation needs to be visible in what
-it returns, not only in a log line — `n_tokens: 0` and `latency_ms: 0`
-were in the response the whole time and nothing was reading them.
-
-Every benchmark number recorded before this change was produced with the
-lens contributing nothing, so none of them is evidence for or against the
-lens. [Ed. 2026-09-25: an earlier version of this paragraph cited a "54% to
-75% task-success improvement" from harness fixes. No run in the repository
-supports that figure, and it is withdrawn.]
-Whether the lens earns its keep is now an open measurement, not a
-settled one.
+A fail-soft default must not be indistinguishable from a real answer:
+`0.500` from a scorer that never ran reads exactly like `0.500` from one
+that did. Where a component degrades to a neutral value, the degradation
+has to be visible in what it returns, not only in a log line. The lens
+answers an input it did not score as a typed failure with no number, and
+marks the fields it fills without a model or a calibration
+(`gx_available`, `cx_calibrated`;
+[ADR 0010](0010-lens-capacity-boundary-is-typed.md)). A lens that cannot
+score stops the run ([ADR 0011](0011-the-lens-is-required.md)).

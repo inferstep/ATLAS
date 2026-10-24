@@ -22,11 +22,11 @@ Status: Superseded by 0012 (2026-11)
 | Accepted | Decided. The ADR is merged and the RFC issue became an Epic. |
 | Superseded by NNNN | Replaced by a later ADR, which names this one. |
 
-An accepted ADR isn't rewritten. A later decision gets a new ADR that
-references it. Smaller changes are added to the status line with a date:
-*narrowed by NNNN* (a later ADR limits part of it), *revised* (a dated
-correction, explained in the text), or *retired* (the thing it governs was
-removed).
+An ADR states its decision as it stands. A later decision gets a new ADR
+that references it; a smaller change is made in the text and named on the
+status line with a date: *narrowed by NNNN* (a later ADR limits part of it),
+*revised* (a correction, now part of the text), or *retired* (the thing it
+governs was removed). Git keeps the earlier wording.
 
 ## Writing one
 
@@ -45,11 +45,11 @@ removed).
 | [0001](0001-local-single-user-trust-model.md) | Local single-user trust model | Accepted |
 | [0002](0002-keep-redis.md) | Keep Redis as the lens-service state store | Superseded by 0007 |
 | [0003](0003-per-model-bundles.md) | Direct mode model-agnostic; V3/Lens/ASA per-model bundles | Accepted |
-| [0004](0004-v3-fail-soft.md) | V3 failures fall back to the model's own content | Accepted, narrowed by 0011 |
+| [0004](0004-v3-fail-soft.md) | V3 failures fall back to the model's own content | Accepted, narrowed by 0011, revised 2026-09 |
 | [0005](0005-lens-optionality.md) | Lens is optional and calibration-gated | Superseded by 0011 |
 | [0006](0006-release-strategy.md) | Two-phase, test-gated, signed image releases | Accepted |
 | [0007](0007-sqlite-state-store.md) | SQLite as the lens-service state store | Accepted, retired 2026-09 |
 | [0008](0008-harness-mechanisms-over-model-instructions.md) | Harness mechanisms over model instructions | Accepted, revised 2026-09 |
 | [0009](0009-embedding-convention-owned-client-side.md) | The lens owns its embedding convention | Accepted |
 | [0010](0010-lens-capacity-boundary-is-typed.md) | The embedding capacity limit is a typed boundary, not a score | Accepted |
-| [0011](0011-the-lens-is-required.md) | The lens is required | Accepted |
+| [0011](0011-the-lens-is-required.md) | The lens is required | Accepted, revised 2026-09 |
