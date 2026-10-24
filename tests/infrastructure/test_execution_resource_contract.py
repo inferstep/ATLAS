@@ -231,10 +231,16 @@ def test_the_address_space_ceiling_stops_a_child_above_it():
 # --- time, output, processes -------------------------------------------------
 
 
-def test_a_command_past_its_time_is_timed_out(small):
-    r = run("sleep 60", dataclasses.replace(small, wall_seconds=2))
+@pytest.mark.parametrize("stdin", [
+    pytest.param(None, id="no input"),
+    # More than a pipe holds, to a command that never reads it.
+    pytest.param("x" * MiB, id="an input it never reads"),
+])
+def test_a_command_past_its_time_is_timed_out(small, stdin):
+    contract = dataclasses.replace(small, wall_seconds=2)
+    r = run("sleep 20", contract, stdin=stdin)
     assert r.outcome == rc.OUTCOME_TIMED_OUT
-    assert r.elapsed_seconds < 20
+    assert r.elapsed_seconds < contract.wall_seconds + contract.grace_seconds + 1
 
 
 def test_output_overflow_is_named_not_silently_truncated(small):

@@ -468,6 +468,31 @@ class _Pump(threading.Thread):
         return b"".join(self.chunks).decode("utf-8", "replace")
 
 
+class _Feed(threading.Thread):
+    """Writes the command's input into its stdin pipe, then closes the pipe.
+
+    A write blocks while the pipe is full, and a command that does not read its
+    input keeps it full. Written from here, the input cannot hold the sampling
+    loop, and with it every limit, off until the command ends. A command that
+    ends, or is killed, closes the pipe's other end, and the write stops.
+    """
+
+    def __init__(self, stream, data: bytes):
+        super().__init__(daemon=True)
+        self.stream, self.data = stream, data
+
+    def run(self) -> None:
+        try:
+            self.stream.write(self.data)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                self.stream.close()
+            except (OSError, ValueError):
+                pass
+
+
 def _exit_code(status) -> int:
     """A wait status as the exit code the rest of the system speaks.
 
@@ -520,16 +545,10 @@ def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
     out_pump, err_pump = _Pump(proc.stdout, half), _Pump(proc.stderr, half)
     out_pump.start()
     err_pump.start()
+    feed = None
     if stdin is not None:
-        try:
-            proc.stdin.write(stdin.encode())
-        except (OSError, ValueError):
-            pass
-        finally:
-            try:
-                proc.stdin.close()
-            except (OSError, ValueError):
-                pass
+        feed = _Feed(proc.stdin, stdin.encode())
+        feed.start()
 
     ceiling = contract.memory_bytes
     deadline = started + contract.wall_seconds
@@ -543,53 +562,58 @@ def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
     # descendant it reaped. A command that allocates a gigabyte and dies
     # between two samples leaves no trace in /proc by the time anyone looks;
     # it leaves an exact number here.
-    while True:
-        try:
-            done, st, usage = os.wait4(proc.pid, os.WNOHANG)
-        except ChildProcessError:
-            done, st, usage = proc.pid, 0, None
-        if done:
-            status = st
-            if usage is not None:
-                child_peak = usage.ru_maxrss * _MAXRSS_UNIT
-            outcome = OUTCOME_COMPLETED
-            break
-        rss, procs = group_usage(pgid, token)
-        peak_mem, peak_procs = max(peak_mem, rss), max(peak_procs, procs)
-        if out_pump.overflowed or err_pump.overflowed:
-            outcome = OUTCOME_OUTPUT_LIMIT
-            break
-        if cancelled is not None and cancelled():
-            outcome = OUTCOME_CANCELLED
-            break
-        if peak_mem >= ceiling:
-            # OUR decision, which is what makes it reportable.
-            outcome = OUTCOME_MEMORY_EXHAUSTED
-            break
-        if procs > contract.max_processes:
-            outcome = OUTCOME_PROCESS_LIMIT
-            break
-        if time.time() >= deadline:
-            outcome = OUTCOME_TIMED_OUT
-            break
-        time.sleep(contract.sample_interval)
+    try:
+        while True:
+            try:
+                done, st, usage = os.wait4(proc.pid, os.WNOHANG)
+            except ChildProcessError:
+                done, st, usage = proc.pid, 0, None
+            if done:
+                status = st
+                if usage is not None:
+                    child_peak = usage.ru_maxrss * _MAXRSS_UNIT
+                outcome = OUTCOME_COMPLETED
+                break
+            rss, procs = group_usage(pgid, token)
+            peak_mem, peak_procs = max(peak_mem, rss), max(peak_procs, procs)
+            if out_pump.overflowed or err_pump.overflowed:
+                outcome = OUTCOME_OUTPUT_LIMIT
+                break
+            if cancelled is not None and cancelled():
+                outcome = OUTCOME_CANCELLED
+                break
+            if peak_mem >= ceiling:
+                # OUR decision, which is what makes it reportable.
+                outcome = OUTCOME_MEMORY_EXHAUSTED
+                break
+            if procs > contract.max_processes:
+                outcome = OUTCOME_PROCESS_LIMIT
+                break
+            if time.time() >= deadline:
+                outcome = OUTCOME_TIMED_OUT
+                break
+            time.sleep(contract.sample_interval)
+    finally:
+        if outcome != OUTCOME_COMPLETED:
+            _kill_group(pgid, contract.grace_seconds)
+            _kill_token(token, contract.grace_seconds)
+            try:
+                done, st, usage = os.wait4(proc.pid, 0)
+                status = st
+                if usage is not None:
+                    child_peak = usage.ru_maxrss * _MAXRSS_UNIT
+            except OSError:  # ChildProcessError is an OSError
+                pass
+        out_pump.join(timeout=2)
+        err_pump.join(timeout=2)
+        # Nothing outlives the request, including on the ordinary path: a command
+        # that exited after forking a child into the background left it running.
+        _kill_group(pgid, 0.1)
+        survivors = _kill_token(token, contract.grace_seconds)
+        # Nothing holds the input pipe's other end now, so the feed's write has ended.
+        if feed is not None:
+            feed.join(timeout=2)
 
-    if outcome != OUTCOME_COMPLETED:
-        _kill_group(pgid, contract.grace_seconds)
-        _kill_token(token, contract.grace_seconds)
-        try:
-            done, st, usage = os.wait4(proc.pid, 0)
-            status = st
-            if usage is not None:
-                child_peak = usage.ru_maxrss * _MAXRSS_UNIT
-        except (ChildProcessError, OSError):
-            pass
-    out_pump.join(timeout=2)
-    err_pump.join(timeout=2)
-    # Nothing outlives the request, including on the ordinary path: a command
-    # that exited after forking a child into the background left it running.
-    _kill_group(pgid, 0.1)
-    survivors = _kill_token(token, contract.grace_seconds)
     proc.returncode = _exit_code(status)
     peak_mem = max(peak_mem, child_peak)
 
