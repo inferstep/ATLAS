@@ -64,8 +64,8 @@ withdrawn: this runner's LiveCodeBench loader cannot decode the dataset's
 hidden tests and falls back to the 1-5 examples printed in each problem, so
 every `pass` it reports means "passed the printed examples". In V3 mode it
 also counts a task as passed when any candidate passes them, and repair sees
-their expected output. See the notice at the top of
-[docs/reports/V3_ABLATION_STUDY.md](../../docs/reports/V3_ABLATION_STUDY.md);
+their expected output. See the withdrawal notice in the
+[CHANGELOG](../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746);
 the raw traces stay indexed in
 [docs/reports/ablation/README.md](../../docs/reports/ablation/README.md) so
 the withdrawal can be checked. Numbers from this runner are not LiveCodeBench

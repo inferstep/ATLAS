@@ -46,7 +46,7 @@
 - **2026-06-17** - **[V3.1.2 "Maia" 发布](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - 更广的硬件覆盖（ROCm / Metal / Vulkan）、自带模型的 Lens + ASA 训练、基于自有工作负载的在环 lens 重训练（后已移除，见 CHANGELOG），以及一轮 agent 可靠性加固
 - **2026-05-12** - **[V3.1.0 "Maia" 发布](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - 原生 Bubbletea TUI、一条命令的 bootstrap、流式 Lens + ASA 激活操控、感知 AST 的外科式编辑
 - **2026-03-26** - [Hacker News 首页](https://news.ycombinator.com/item?id=47533297) - 489 点赞、285 条评论
-- **2026-03-05** - **V3.0 发布** - 在冻结的 Qwen3-14B 上运行的多阶段 V3 流水线。*随本次发布公布的 LiveCodeBench 74.6% 已撤回：基准测试运行器从未运行 LiveCodeBench 的隐藏测试，并且只要三个候选之一、或看过失败输出的修复通过题面给出的示例，就把任务记为通过（[撤回说明](../../reports/V3_ABLATION_STUDY.md)）。当前产品重新验证后将重新测量。*
+- **2026-03-05** - **V3.0 发布** - 在冻结的 Qwen3-14B 上运行的多阶段 V3 流水线。*随本次发布公布的 LiveCodeBench 74.6% 已撤回：基准测试运行器从未运行 LiveCodeBench 的隐藏测试，并且只要三个候选之一、或看过失败输出的修复通过题面给出的示例，就把任务记为通过（[撤回说明](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)）。当前产品重新验证后将重新测量。*
 - **2026-02-18** - **[V2.0 发布](../../../CHANGELOG.md)** - 基准测试基础设施、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 评估套件
 
 ## ⭐ Star 历史
@@ -178,7 +178,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## ❤️ 支持 ATLAS
 
-ATLAS 由一名大学生在业余时间、用一块消费级 GPU 独立开发（[ATLAS 背后的故事](../../STORY.md)）。如果这个项目对你有帮助，并且你愿意帮它持续走下去，请考虑 **[在 GitHub 上赞助](https://github.com/sponsors/itigges22)**。
+ATLAS 由一名大学生在业余时间、用一块消费级 GPU 独立开发。如果这个项目对你有帮助，并且你愿意帮它持续走下去，请考虑 **[在 GitHub 上赞助](https://github.com/sponsors/itigges22)**。
 
 赞助将直接用于：
 

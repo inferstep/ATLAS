@@ -49,7 +49,7 @@
 - **2026-06-17** - **[V3.1.2 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - ハードウェア対応の拡大（ROCm / Metal / Vulkan）、持ち込みモデルの Lens + ASA トレーニング、自分のワークロードからのインザループ lens 再トレーニング（その後削除。CHANGELOG を参照）、エージェント信頼性の強化
 - **2026-05-12** - **[V3.1.0 "Maia" リリース](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - ネイティブ Bubbletea TUI、ワンコマンドブートストラップ、ストリーミング Lens + ASA 活性化ステアリング、AST 対応の外科的編集
 - **2026-03-26** - [Hacker News フロントページ](https://news.ycombinator.com/item?id=47533297) - 489 ポイント、285 コメント
-- **2026-03-05** - **V3.0 リリース** - 凍結された Qwen3-14B 上のマルチフェーズ V3 パイプライン。*このリリースで公表した LiveCodeBench 74.6% は撤回しました。ベンチマークランナーは LiveCodeBench の非公開テストを一度も実行しておらず、3 つの候補のいずれか、または失敗出力を見せた修復が問題文の例に合格すればタスクを合格としていました（[撤回のお知らせ](../../reports/V3_ABLATION_STUDY.md)）。現行製品の再検証後に改めて測定します。*
+- **2026-03-05** - **V3.0 リリース** - 凍結された Qwen3-14B 上のマルチフェーズ V3 パイプライン。*このリリースで公表した LiveCodeBench 74.6% は撤回しました。ベンチマークランナーは LiveCodeBench の非公開テストを一度も実行しておらず、3 つの候補のいずれか、または失敗出力を見せた修復が問題文の例に合格すればタスクを合格としていました（[撤回のお知らせ](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)）。現行製品の再検証後に改めて測定します。*
 - **2026-02-18** - **[V2.0 リリース](../../../CHANGELOG.md)** - ベンチマークインフラ、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 評価スイート
 
 ## ⭐ Star History
@@ -166,7 +166,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 - 構造的な呼び出しグラフ推論 ([#39](https://github.com/inferstep/ATLAS/issues/39) / [#125](https://github.com/inferstep/ATLAS/pull/125)、[@yogthos](https://github.com/yogthos) に感謝)。ARCHITECTURE.md の zh-CN / ja / ko 翻訳 ([#25](https://github.com/inferstep/ATLAS/issues/25))。
 
 **V3.2** - 次のマイルストーン: より深いコード推論。
-- RPG スタイルのアーキテクチャ優先プランニングは実装され ([#120](https://github.com/inferstep/ATLAS/issues/120))、A/B 測定のうえ削除されました: 参照モデルに対する改善はなく、プランニングレイテンシは約10倍でした。[#148](https://github.com/inferstep/ATLAS/issues/148) がその記録であり、設計研究は [docs/reports/RPG_WAVELET_PLANNING_V3_2.md](../../reports/RPG_WAVELET_PLANNING_V3_2.md) にあります。
+- RPG スタイルのアーキテクチャ優先プランニングは実装され ([#120](https://github.com/inferstep/ATLAS/issues/120))、A/B 測定のうえ削除されました: 参照モデルに対する改善はなく、プランニングレイテンシは約10倍でした。[#148](https://github.com/inferstep/ATLAS/issues/148) がその記録です。
 - 構造的コード推論（残り） — 出荷済みのコールグラフレイヤーを深掘りします ([#39](https://github.com/inferstep/ATLAS/issues/39))。
 - サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/inferstep/ATLAS/issues/9))。
 - 先送りしたインフラ: 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/inferstep/ATLAS/issues/102))。K3s / Kubernetes 上の ROCm。レジストリモデルの正式ベンチマーク — LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28))。
@@ -181,7 +181,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## ❤️ ATLAS を支援する
 
-ATLAS は、一人の大学生が自由時間に、1枚のコンシューマ GPU の上で開発しています（[ATLAS の背景ストーリー](../../STORY.md)）。このプロジェクトが役に立っていて、持続可能な形で続いてほしいと思っていただけたら、ぜひ **[GitHub でのスポンサー](https://github.com/sponsors/itigges22)** をご検討ください。
+ATLAS は、一人の大学生が自由時間に、1枚のコンシューマ GPU の上で開発しています。このプロジェクトが役に立っていて、持続可能な形で続いてほしいと思っていただけたら、ぜひ **[GitHub でのスポンサー](https://github.com/sponsors/itigges22)** をご検討ください。
 
 スポンサーシップは以下に直接充てられます:
 

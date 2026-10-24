@@ -55,13 +55,12 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) | The one rule that decides which V3 candidate lands, the proposal-versus-authorization split, hard vetoes, and what the terminal tells the user about delivered bytes |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common issues and solutions |
 | [SOURCES.md](SOURCES.md) | Research papers bucketed by status relative to the current release |
-| [STORY.md](STORY.md) | Project background |
 | [MAP.md](MAP.md) | This file |
 | [quality/gates.md](quality/gates.md) | The checks on a pull request, which are required, tool settings, and the measured baselines |
 | [adr/](adr/) | Architecture Decision Records (trust model, per-model bundles, the retired SQLite state store, harness mechanisms, …) |
 | [schemas/](schemas/) | Machine-readable contracts: proxy OpenAPI spec, SSE envelope and error-envelope JSON Schemas |
 | [lang/](lang/) | Translated documentation (zh-CN, ja, ko) |
-| [reports/](reports/) | Ablation studies and call-graph design notes; [reports/archive/](reports/archive/) holds historical status trackers |
+| [reports/](reports/) | The raw per-task traces of the V3.0 ablation run, whose result is withdrawn |
 
 Root docs: [README.md](../README.md), [CHANGELOG.md](../CHANGELOG.md),
 [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md), [SECURITY.md](../SECURITY.md),

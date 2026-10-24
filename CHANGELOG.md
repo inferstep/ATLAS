@@ -2408,7 +2408,7 @@ contributor setup, on top of the changes since 3.1.3 listed further down.
 
 - The V3.0 LiveCodeBench figure (74.6%) is withdrawn. The benchmark runner
   never ran LiveCodeBench's hidden tests (see the notice in
-  [V3_ABLATION_STUDY](docs/reports/V3_ABLATION_STUDY.md)). The README says
+  [V3_ABLATION_STUDY](https://github.com/inferstep/ATLAS/blob/01bdcc936ac65711a94ea369547bcacc971502fb/docs/reports/V3_ABLATION_STUDY.md)). The README says
   ATLAS has no current benchmark result.
 
 ### Measured reliability

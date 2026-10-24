@@ -45,7 +45,7 @@
 - **2026-06-17** - **[V3.1.2 "Maia" 출시](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - 더 넓은 하드웨어 지원(ROCm / Metal / Vulkan), 자체 모델 반입(BYO) Lens + ASA 학습, 사용자 자신의 워크로드로부터의 인루프 lens 재학습(이후 제거됨, CHANGELOG 참조), 에이전트 신뢰성 정비
 - **2026-05-12** - **[V3.1.0 "Maia" 출시](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - 네이티브 Bubbletea TUI, 원커맨드 부트스트랩, 스트리밍 Lens + ASA 활성화 스티어링, AST 인식 정밀 편집
 - **2026-03-26** - [Hacker News 첫 페이지](https://news.ycombinator.com/item?id=47533297) - 489 포인트, 285 댓글
-- **2026-03-05** - **V3.0 출시** - 동결된 Qwen3-14B 기반의 다단계 V3 파이프라인. *이 릴리스와 함께 발표한 LiveCodeBench 74.6% 수치는 철회되었습니다. 벤치마크 러너는 LiveCodeBench의 비공개 테스트를 한 번도 실행하지 않았고, 후보 3개 중 하나 또는 실패 출력을 보고 만든 수리 결과가 문제에 인쇄된 예제를 통과하면 과제를 통과로 셌습니다([철회 공지](../../reports/V3_ABLATION_STUDY.md)). 현재 제품을 다시 검증한 뒤 재측정합니다.*
+- **2026-03-05** - **V3.0 출시** - 동결된 Qwen3-14B 기반의 다단계 V3 파이프라인. *이 릴리스와 함께 발표한 LiveCodeBench 74.6% 수치는 철회되었습니다. 벤치마크 러너는 LiveCodeBench의 비공개 테스트를 한 번도 실행하지 않았고, 후보 3개 중 하나 또는 실패 출력을 보고 만든 수리 결과가 문제에 인쇄된 예제를 통과하면 과제를 통과로 셌습니다([철회 공지](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)). 현재 제품을 다시 검증한 뒤 재측정합니다.*
 - **2026-02-18** - **[V2.0 출시](../../../CHANGELOG.md)** - 벤치마크 인프라, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 평가 스위트
 
 ## ⭐ Star History
@@ -177,7 +177,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## ❤️ ATLAS 후원하기
 
-ATLAS는 대학생 한 명이 여가 시간에 소비자용 GPU 한 장으로 만들고 있습니다([ATLAS의 뒷이야기](../../STORY.md)). 이 프로젝트가 유용했고 지속 가능하도록 돕고 싶으시다면 **[GitHub 후원](https://github.com/sponsors/itigges22)**을 고려해 주세요.
+ATLAS는 대학생 한 명이 여가 시간에 소비자용 GPU 한 장으로 만들고 있습니다. 이 프로젝트가 유용했고 지속 가능하도록 돕고 싶으시다면 **[GitHub 후원](https://github.com/sponsors/itigges22)**을 고려해 주세요.
 
 후원금은 다음에 직접 쓰입니다:
 

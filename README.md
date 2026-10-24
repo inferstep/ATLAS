@@ -53,7 +53,7 @@
 - **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads (since removed; see the CHANGELOG), and an agent-reliability pass
 - **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
 - **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
-- **2026-03-05** - **V3.0 released** - the multi-phase V3 pipeline on frozen Qwen3-14B. *The 74.6% LiveCodeBench figure published with this release is withdrawn: the benchmark runner never ran LiveCodeBench's hidden tests, and it counted a task as passed when any of three candidates, or a repair shown the failing output, passed the examples printed in the problem ([withdrawal notice](docs/reports/V3_ABLATION_STUDY.md)). ATLAS will be re-measured once the current product is re-verified.*
+- **2026-03-05** - **V3.0 released** - the multi-phase V3 pipeline on frozen Qwen3-14B. *The 74.6% LiveCodeBench figure published with this release is withdrawn: the benchmark runner never ran LiveCodeBench's hidden tests, and it counted a task as passed when any of three candidates, or a repair shown the failing output, passed the examples printed in the problem ([withdrawal notice](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)). ATLAS will be re-measured once the current product is re-verified.*
 - **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
 
 ## ⭐ Star History
@@ -170,7 +170,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 - Structural call-graph reasoning ([#39](https://github.com/inferstep/ATLAS/issues/39) / [#125](https://github.com/inferstep/ATLAS/pull/125), thanks [@yogthos](https://github.com/yogthos)); ARCHITECTURE.md translated to zh-CN / ja / ko ([#25](https://github.com/inferstep/ATLAS/issues/25)).
 
 **V3.2** - Next milestone: deeper code reasoning.
-- RPG-style architecture-first planning was built ([#120](https://github.com/inferstep/ATLAS/issues/120)), A/B-measured, and removed: no improvement on the reference model at ~10x planning latency. [#148](https://github.com/inferstep/ATLAS/issues/148) is the record; the design study is [docs/reports/RPG_WAVELET_PLANNING_V3_2.md](docs/reports/RPG_WAVELET_PLANNING_V3_2.md).
+- RPG-style architecture-first planning was built ([#120](https://github.com/inferstep/ATLAS/issues/120)), A/B-measured, and removed: no improvement on the reference model at ~10x planning latency. [#148](https://github.com/inferstep/ATLAS/issues/148) is the record.
 - Structural code reasoning (tail) - deepen the shipped call-graph layer ([#39](https://github.com/inferstep/ATLAS/issues/39)).
 - Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/inferstep/ATLAS/issues/9)).
 - Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/inferstep/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28)).
@@ -185,7 +185,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## ❤️ Support ATLAS
 
-ATLAS is built by a single college student in his free time on a single consumer GPU ([the story behind ATLAS](docs/STORY.md)). If the project has been useful to you and you want to help keep it sustainable, please consider **[sponsoring on GitHub](https://github.com/sponsors/itigges22)**.
+ATLAS is built by a single college student in his free time on a single consumer GPU. If the project has been useful to you and you want to help keep it sustainable, please consider **[sponsoring on GitHub](https://github.com/sponsors/itigges22)**.
 
 Sponsorship directly funds:
 
