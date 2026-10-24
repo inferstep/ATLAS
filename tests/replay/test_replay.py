@@ -293,8 +293,8 @@ def model_server():
     server.shutdown()
 
 
-def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_which_model_it_was(model_server):
-    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, record.DONE]
+def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_which_model_it_was(model_server, monkeypatch):
+    monkeypatch.setattr(_ModelServer, "replies", [record.READ, record.EDIT, record.RUN, record.DONE])
     made = record.record("real_model_edit", model_at=model_server)
     # The folder of the model's file is a path of the server's machine, and it is not in the recording.
     assert made["source"] == {"task": record.TASK, "kind": "e2e", "model_replies": "captured", "what": "a session that a real model answers",
@@ -307,8 +307,8 @@ def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_w
     assert _ModelServer.tokens == [None] * 5
 
 
-def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_when_the_reply_is_whole(model_server):
-    _ModelServer.replies = [record.READ]
+def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_when_the_reply_is_whole(model_server, monkeypatch):
+    monkeypatch.setattr(_ModelServer, "replies", [record.READ])
     st = stage.Stage(upstreams={"model": record.model_server(model_server)})
     ports = st.start()
     try:
@@ -328,9 +328,9 @@ def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_whe
     assert b"".join(pieces).decode("utf-8") == kept and kept.endswith("data: [DONE]\n\n") and kept.count("[DONE]") == 1
 
 
-def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_written(model_server):
+def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_written(model_server, monkeypatch):
     done = {"type": "done", "summary": "Fixed the NameError. The model is in /a/folder/of/the/server/ on my machine."}
-    _ModelServer.replies = [record.READ, record.EDIT, record.RUN, done]
+    monkeypatch.setattr(_ModelServer, "replies", [record.READ, record.EDIT, record.RUN, done])
     with pytest.raises(SystemExit, match="holds words of a machine, so it was not written: /a/folder/of/the/server/"):
         record.record("real_model_edit", model_at=model_server)
 

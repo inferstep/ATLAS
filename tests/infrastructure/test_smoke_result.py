@@ -480,8 +480,8 @@ def test_the_line_for_a_server_that_is_not_available_holds_only_for_the_text_it_
     pytest.param((200, ["a text"]), "GitHub gave an answer of another shape", id="a list of texts"),
     pytest.param((200, None), "GitHub gave an answer of another shape", id="null"),
 ])
-def test_statuses_that_cannot_be_read_end_the_check_with_status_2_and_nothing_is_judged(changed, answer, why):
-    GitHub.answer = answer
+def test_statuses_that_cannot_be_read_end_the_check_with_status_2_and_nothing_is_judged(changed, answer, why, monkeypatch):
+    monkeypatch.setattr(GitHub, "answer", answer)
     # Not green and not the plain red: also the line for a server that is not available is not judged.
     for text in ("no line", no_server(changed.mark(changed.head))):
         done = changed.check(changed.base, changed.head, text)
@@ -491,9 +491,9 @@ def test_statuses_that_cannot_be_read_end_the_check_with_status_2_and_nothing_is
         assert TOKEN not in done.stderr
 
 
-def test_an_answer_that_is_cut_short_ends_the_check_with_status_2_too(changed):
+def test_an_answer_that_is_cut_short_ends_the_check_with_status_2_too(changed, monkeypatch):
     GitHub.on[changed.head] = [a_status()]
-    GitHub.cut_short = True
+    monkeypatch.setattr(GitHub, "cut_short", True)
     done = changed.check(changed.base, changed.head)
     assert done.returncode == 2, done.stdout + done.stderr
     assert "the statuses of the head commit cannot be read, so nothing was judged: GitHub gave no answer that can be read" in done.stderr
@@ -520,8 +520,8 @@ def test_a_head_that_is_no_full_commit_id_is_not_asked_of_github(head, monkeypat
 
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
-def test_an_answer_that_points_to_another_place_is_not_followed(changed, status):
-    GitHub.answer = (status, {})
+def test_an_answer_that_points_to_another_place_is_not_followed(changed, status, monkeypatch):
+    monkeypatch.setattr(GitHub, "answer", (status, {}))
     done = changed.check(changed.base, changed.head)
     assert done.returncode == 2
     assert f"GitHub answered {status}" in done.stderr

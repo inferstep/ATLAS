@@ -930,8 +930,8 @@ def written(tmp_path, monkeypatch, capsys, github):
     pytest.param([issue(12)], False, id="a week with nothing to clean"),
     pytest.param([issue(30, state="closed"), issue(12)], True, id="a closed and an open issue"),
 ])
-def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_changed(written, issues, anything):
-    GitHub.issues = issues
+def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_changed(written, issues, anything, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", issues)
     done = written(anything=anything)
     assert done.status == 0, done.printed
     assert [(method, path, token) for method, path, token, _body in GitHub.seen] == [("GET", LIST, f"Bearer {TOKEN}"), ("PATCH", "/repos/o/r/issues/12", f"Bearer {TOKEN}")]
@@ -955,8 +955,8 @@ def test_with_no_issue_and_nothing_to_clean_none_is_made(written):
 
 
 @pytest.mark.parametrize("anything", [pytest.param(True, id="something to clean"), pytest.param(False, id="nothing to clean")])
-def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(written, anything):
-    GitHub.issues = [issue(12, state="closed")]
+def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(written, anything, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12, state="closed")])
     done = written(anything=anything)
     assert done.status == 0, done.printed
     assert done.writes == []
@@ -964,8 +964,8 @@ def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(
                                          "open it again to start it.")
 
 
-def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(written):
-    GitHub.issues = [issue(12), issue(30)]
+def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12), issue(30)])
     done = written()
     assert done.status == 1
     assert done.writes == []
@@ -985,23 +985,25 @@ def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(writ
     pytest.param({**issue(5), "body": None}, id="no text"),
     pytest.param({**issue(5), "user": None}, id="no author"),
 ])
-def test_only_an_issue_that_the_jobs_own_account_made_and_that_starts_with_the_mark_counts(written, other):
+def test_only_an_issue_that_the_jobs_own_account_made_and_that_starts_with_the_mark_counts(written, other, monkeypatch):
     # GitHub is asked for the issues of that account only. The script does not rely on that: it reads who made each.
-    GitHub.issues = [other]
+    monkeypatch.setattr(GitHub, "issues", [other])
     done = written()
     assert done.status == 0, done.printed
     assert done.writes == [("POST", "/repos/o/r/issues", {"title": cleanup.TITLE, "body": done.text})]
 
 
-def test_every_page_of_the_list_is_read(written):
-    GitHub.issues, GitHub.pages = [issue(5, login="a-stranger"), issue(41)], 2
+def test_every_page_of_the_list_is_read(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(5, login="a-stranger"), issue(41)])
+    monkeypatch.setattr(GitHub, "pages", 2)
     done = written()
     assert [path for method, path, _token, _body in GitHub.seen if method == "GET"] == [LIST, SECOND_PAGE]
     assert done.writes == [("PATCH", "/repos/o/r/issues/41", {"body": done.text})]
 
 
-def test_a_next_page_at_another_address_is_not_followed_with_the_token(written):
-    GitHub.issues, GitHub.next_page = [issue(12)], '<http://127.0.0.1:9/repos/o/r/issues?page=2>; rel="next"'
+def test_a_next_page_at_another_address_is_not_followed_with_the_token(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "next_page", '<http://127.0.0.1:9/repos/o/r/issues?page=2>; rel="next"')
     done = written()
     assert done.status == 2
     assert "GitHub named a next page at another address" in done.printed
@@ -1015,8 +1017,9 @@ def test_a_next_page_at_another_address_is_not_followed_with_the_token(written):
     pytest.param({"PATCH": 403}, "GitHub answered 403 to PATCH", id="403 to PATCH"),
     pytest.param({"PATCH": 422}, "GitHub answered 422 to PATCH", id="422 to PATCH"),
 ])
-def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, fails, says):
-    GitHub.issues, GitHub.fails = [issue(12)], fails
+def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, fails, says, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "fails", fails)
     done = written()
     assert done.status == 2
     assert f"weekly cleanup: not judged: {says}" in done.printed
@@ -1024,8 +1027,9 @@ def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, f
     assert TOKEN not in done.printed + done.said
 
 
-def test_an_answer_that_points_to_another_address_is_not_followed_with_the_token(written):
-    GitHub.issues, GitHub.fails = [issue(12)], {"GET": 302}
+def test_an_answer_that_points_to_another_address_is_not_followed_with_the_token(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "fails", {"GET": 302})
     done = written()
     assert done.status == 2
     assert "GitHub answered 302 to GET" in done.printed
@@ -1038,8 +1042,8 @@ def test_an_answer_that_points_to_another_address_is_not_followed_with_the_token
     pytest.param(None, id="none"),
     pytest.param([12], id="a list"),
 ])
-def test_a_number_of_an_issue_that_is_no_number_is_not_put_into_an_address(written, number):
-    GitHub.issues = [issue(number)]
+def test_a_number_of_an_issue_that_is_no_number_is_not_put_into_an_address(written, number, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(number)])
     done = written()
     assert done.status == 2
     assert done.writes == []
@@ -1086,8 +1090,8 @@ def test_without_the_token_or_the_name_of_the_repository_nothing_is_asked(writte
     pytest.param({"text": "Made on 2026-10-12.\n"}, id="no mark"),
     pytest.param({"text": cleanup.MARK + "\n" + "x" * 70000}, id="over the limit"),
 ])
-def test_a_text_for_one_piece_or_with_no_mark_or_over_the_limit_is_never_written_into_the_issue(written, how):
-    GitHub.issues = [issue(12)]
+def test_a_text_for_one_piece_or_with_no_mark_or_over_the_limit_is_never_written_into_the_issue(written, how, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
     done = written(**how)
     assert done.status == 2
     assert "the text in the folder is not the weekly text" in done.printed
@@ -1099,8 +1103,8 @@ def test_a_text_for_one_piece_or_with_no_mark_or_over_the_limit_is_never_written
     pytest.param("\nSee #12.\n", id="a link to an issue"),
     pytest.param("\n```text\nnot closed @someone\n", id="in a block that is not closed"),
 ])
-def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written(written, more):
-    GitHub.issues = [issue(12)]
+def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written(written, more, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
     done = written(text=cleanup.MARK + "\nMade on 2026-10-12.\n" + more)
     assert done.status == 2
     assert "holds an `@` or a `#` with a number outside code marks and fenced blocks" in done.printed
@@ -1108,8 +1112,8 @@ def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written
     assert GitHub.seen == []
 
 
-def test_the_same_marks_inside_code_are_written(written):
-    GitHub.issues = [issue(12)]
+def test_the_same_marks_inside_code_are_written(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
     done = written(text=cleanup.MARK + "\nMade on 2026-10-12.\n\n`@someone #12`\n\n````diff\n+@someone\n```\n+Closes #5\n````\n")
     assert done.status == 0, done.printed
     assert len(done.writes) == 1
