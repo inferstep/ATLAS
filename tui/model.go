@@ -720,473 +720,582 @@ func errString(err error) string {
 	return err.Error()
 }
 
+// Update is Bubble Tea's message loop. Each type of message goes to its own
+// handler below. A key with no binding of its own, and any message not listed
+// here, goes on to the textarea.
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Permission modal gates all input: while a request is pending only
-		// the y/a/n (and esc) decision keys are live; every other key is
-		// swallowed so it never reaches the textarea or the normal switch.
-		// Ctrl+C / Ctrl+D still fall through to cancel/quit — cancelling the
-		// turn unblocks the proxy's permission wait via the request context.
-		if m.pendingPerm != nil {
-			if s := msg.String(); s != "ctrl+c" && s != "ctrl+d" {
-				return m.handlePermKey(msg)
-			}
-			m.pendingPerm = nil
-		}
-		switch msg.String() {
-		case "ctrl+c":
-			if m.turnActive && m.turnCancel != nil {
-				// First Ctrl+C cancels the in-flight turn; second quits.
-				// Belt-and-suspenders: cancel locally (closes TCP) AND
-				// POST /cancel so the proxy aborts even when buffered.
-				m.userCancelled = true
-				m.turnCancel()
-				sid := m.turnSessionID
-				proxyURL := m.proxyURL
-				m.turnActive = false
-				// Stop the encoding/decoding tick from repainting after
-				// cancel — otherwise the "encoding prompt … Ns" timer keeps
-				// ticking forever because promptEvalStart/streamingLLM were
-				// never cleared.
-				m.promptEvalStart = time.Time{}
-				m.streamingLLM = false
-				m.chat = append(m.chat, chatMessage{
-					Role: roleSystem, Meta: "cancelled",
-					Body: "turn cancelled",
-				})
-				return m, func() tea.Msg {
-					_ = cancelTurn(proxyURL, sid)
-					return nil
-				}
-			}
-			m.quitting = true
-			return m, tea.Quit
-		case "ctrl+d":
-			m.quitting = true
-			return m, tea.Quit
-
-		case "ctrl+l":
-			m.chat = nil
-			m.chatScroll = 0
-			// Start a fresh persistence session so the cleared transcript
-			// doesn't overwrite the saved one.
-			m.startNewSession()
-			return m, nil
-
-		case "ctrl+t":
-			// Cycle permission mode. Visible in header.
-			switch m.mode {
-			case "default":
-				m.mode = "accept-edits"
-			case "accept-edits":
-				m.mode = "yolo"
-			default:
-				m.mode = "default"
-			}
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "mode",
-				Body: fmt.Sprintf("mode → %s", m.mode),
-			})
-			return m, nil
-
-		case "ctrl+r":
-			if !m.turnActive && m.lastUserMsg != "" {
-				m.chat = append(m.chat, chatMessage{
-					Role: roleUser, Body: m.lastUserMsg,
-				})
-				return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
-			}
-			return m, nil
-
-		case "pgup":
-			m.scrollChat(10)
-			return m, nil
-		case "pgdown":
-			m.scrollChat(-10)
-			return m, nil
-		case "ctrl+home":
-			m.scrollChat(1 << 30) // clamped to lastChatTotal
-			return m, nil
-		case "ctrl+end":
-			m.chatScroll = 0
-			return m, nil
-		case "enter":
-			// Enter sends; Shift+Enter (or Alt+Enter) inserts newline.
-			// textarea handles Shift+Enter as KeyShiftEnter ("shift+enter").
-			if m.turnActive {
-				// Mid-turn Enter can't send — surface why instead of
-				// silently inserting a newline into the pending input.
-				m.showToast("turn in progress — Ctrl+C to cancel")
-				return m, nil
-			}
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
-				return m, nil
-			}
-			m.input.Reset()
-			dlog("user", "input", map[string]interface{}{"text": text})
-			// Bash mode: leading "!" runs as a shell command in the
-			// working dir, output appears as a system row. Same path
-			// as /run but with the conversational shorthand devs
-			// expect from Claude Code.
-			if strings.HasPrefix(text, "!") {
-				cmdStr := strings.TrimSpace(text[1:])
-				if cmdStr == "" {
-					m.chat = append(m.chat, chatMessage{
-						Role: roleSystem, Meta: "error",
-						Body: "Bash mode: type ! followed by a command.",
-					})
-					return m, nil
-				}
-				m.chat = append(m.chat, chatMessage{
-					Role: roleUser, Body: "! " + cmdStr, Echo: true,
-				})
-				return m, runShellCmd(m.workingDir, "!"+cmdStr,
-					[]string{"bash", "-lc", cmdStr})
-			}
-			// "?" alone (or with trailing whitespace) is a shorthand
-			// for /help — same convention as Claude Code so users
-			// don't have to remember the slash form.
-			if text == "?" {
-				text = "/help"
-			}
-			// Slash commands intercepted before agent send.
-			if consumed, slashCmd, quit := m.handleSlash(text); consumed {
-				dlog("slash", "dispatched", map[string]interface{}{
-					"input": text, "quit": quit,
-				})
-				if quit {
-					m.quitting = true
-				}
-				if slashCmd != nil {
-					cmds = append(cmds, slashCmd)
-				}
-				return m, tea.Batch(cmds...)
-			}
-			// Plain message → send to agent. Append context-files
-			// hint so the agent knows the user's chosen scope.
-			m.chat = append(m.chat, chatMessage{
-				Role: roleUser, Body: text,
-			})
-			m.lastUserMsg = text
-			dlog("turn", "started", map[string]interface{}{
-				"session_id": "(set in sendChatCmd)",
-				"len":        len(text),
-			})
-			cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
-			return m, tea.Batch(cmds...)
-		}
+		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		// Wheel routes to whichever pane the cursor is over so events,
-		// pipeline, files all scroll independently — not just chat.
-		if msg.Action == tea.MouseActionPress {
-			switch msg.Button {
-			case tea.MouseButtonWheelUp:
-				m.scrollPaneAt(msg.X, msg.Y, 3)
-				return m, nil
-			case tea.MouseButtonWheelDown:
-				m.scrollPaneAt(msg.X, msg.Y, -3)
-				return m, nil
-			}
-		}
-		// Highlight-to-copy in any pane. Press finds the pane under
-		// (X,Y); motion updates the end; release extracts text from
-		// that pane's snapshot and copies via OSC52 / CLI tool.
-		switch msg.Action {
-		case tea.MouseActionPress:
-			if msg.Button == tea.MouseButtonLeft {
-				if pane := findPane(msg.X, msg.Y); pane != nil {
-					m.selecting = true
-					m.selPane = pane.name
-					m.selStartX, m.selStartY = msg.X, msg.Y
-					m.selEndX, m.selEndY = msg.X, msg.Y
-					dlog("mouse", "press", map[string]interface{}{
-						"x": msg.X, "y": msg.Y, "pane": pane.name,
-						"paneTopY": pane.topY, "paneBottomY": pane.bottomY,
-						"viewStart": pane.viewStart, "lines": len(pane.lines),
-					})
-				}
-			}
-		case tea.MouseActionMotion:
-			if m.selecting {
-				m.selEndX, m.selEndY = msg.X, msg.Y
-			}
-		case tea.MouseActionRelease:
-			if m.selecting {
-				selPane := m.selPane
-				m.selecting = false
-				dy := m.selEndY - m.selStartY
-				if dy < 0 {
-					dy = -dy
-				}
-				dx := m.selEndX - m.selStartX
-				if dx < 0 {
-					dx = -dx
-				}
-				// Pure click (no drag) → no copy.
-				if dy == 0 && dx < 2 {
-					return m, nil
-				}
-				text := extractPaneSelection(selPane,
-					m.selStartY, m.selEndY,
-					m.selStartX, m.selEndX)
-				dlog("mouse", "release", map[string]interface{}{
-					"pane":   selPane,
-					"startX": m.selStartX, "startY": m.selStartY,
-					"endX": m.selEndX, "endY": m.selEndY,
-					"text_len": len(text),
-					"preview":  truncate(text, 60),
-				})
-				if text == "" {
-					m.showToast("nothing to copy")
-					return m, nil
-				}
-				if err := copyToClipboard(text); err != nil {
-					m.showToast(fmt.Sprintf("copy failed: %v", err))
-					return m, nil
-				}
-				m.showToast(fmt.Sprintf("✓ copied %d chars from %s pane",
-					len(text), selPane))
-				return m, nil
-			}
-		}
-		return m, nil
+		return m.handleMouse(msg)
 
 	case tea.WindowSizeMsg:
-		// Drag-resizing modern terminals fires WindowSizeMsg dozens of
-		// times in quick succession. Glamour init isn't free (it loads
-		// styles + builds a renderer); doing it on every event was
-		// queueing slow Updates behind a flood of resize messages.
-		// Skip the rebuild when only the height changed, and skip
-		// duplicate-width events entirely.
-		widthChanged := msg.Width != m.width
-		if msg.Width == m.width && msg.Height == m.height {
-			return m, nil
-		}
-		m.width = msg.Width
-		m.height = msg.Height
-		m.input.SetWidth(max(20, msg.Width-2))
-		if widthChanged {
-			style := os.Getenv("GLAMOUR_STYLE")
-			if style == "" {
-				style = "dark"
-			}
-			// Glamour wrap MUST match the chat box's content width or
-			// lipgloss expands the box past where the sidebar sits.
-			// Mirror panes.go's layout: sidebar 26 cols when W>=90,
-			// chat box border (2) + indent (2) on either side.
-			wrap := msg.Width - 6
-			if msg.Width >= 90 {
-				wrap = msg.Width - 26 - 6
-			}
-			if wrap < 20 {
-				wrap = 20
-			}
-			if wrap > 100 {
-				wrap = 100 // cap for readability — long lines hurt scanning
-			}
-			if r, err := glamour.NewTermRenderer(
-				glamour.WithStandardStyle(style),
-				glamour.WithWordWrap(wrap),
-			); err == nil {
-				m.chatRenderer = r
-			}
-		}
-		// Force a full repaint of the alt-screen so leftover content
-		// from the prior size doesn't bleed through. Without this,
-		// shrinking the terminal can leave stale rows on screen and
-		// growing it can leave the new edges blank until the next
-		// natural redraw.
-		return m, tea.ClearScreen
+		return m.handleWindowSize(msg)
 
 	case envelopeMsg:
-		// While the user has cancelled, drop the trailing flurry of
-		// cancellation-shaped envelopes (LLM error, stage_end with
-		// success=false) so the events pane and pipeline pane don't
-		// surface a misleading FAIL/ERROR row. The chat already shows
-		// "turn cancelled" — that's the single user-visible signal.
-		if m.userCancelled && envelopeLooksCancelled(msg.ev) {
-			dlog("event", "suppressed_cancel", map[string]interface{}{
-				"type": msg.ev.Type, "stage": msg.ev.Stage,
-			})
-			return m, waitForEnvelope(m.events)
-		}
-		m.state.apply(msg.ev)
-		m.envelope = append(m.envelope, msg.ev)
-		if len(m.envelope) > m.maxLines {
-			m.envelope = m.envelope[len(m.envelope)-m.maxLines:]
-		}
-		dlog("event", msg.ev.Type, map[string]interface{}{
-			"stage": msg.ev.Stage, "payload": msg.ev.Payload,
-		})
-		return m, waitForEnvelope(m.events)
+		return m.handleEnvelope(msg)
 
 	case chatStreamMsg:
-		if msg.ev.Type == "__turn_done__" {
-			m.turnActive = false
-			// A permission prompt can't outlive its turn — the proxy-side
-			// pending entry is gone, so answering would just 404. Clear
-			// the modal so input isn't gated by a dead prompt.
-			m.pendingPerm = nil
-			// Freeze the pass's written files for /review.
-			m.lastPassFiles = m.lastPassFiles[:0]
-			for p := range m.passWrites {
-				m.lastPassFiles = append(m.lastPassFiles, p)
-			}
-			sort.Strings(m.lastPassFiles)
-			var p struct {
-				Err string `json:"err"`
-			}
-			_ = json.Unmarshal(msg.ev.Data, &p)
-			if p.Err != "" && !m.userCancelled && !looksCancelled(p.Err) {
-				m.chat = append(m.chat, chatMessage{
-					Role: roleSystem, Meta: "error",
-					Body: p.Err,
-				})
-			}
-			dlog("turn", "ended", map[string]interface{}{"err": p.Err})
-			// Snapshot the completed turn so a later --continue/--resume
-			// reloads the full transcript.
-			m.saveSession()
-		} else {
-			// Skip dlog for llm_token — at ~30 tok/s a long generation
-			// produces thousands of entries and crowds out actually
-			// interesting events when reading the file.
-			if msg.ev.Type != "llm_token" {
-				dlog("chat", msg.ev.Type, map[string]interface{}{
-					"data": json.RawMessage(msg.ev.Data),
-				})
-			}
-			m.appendChatEvent(msg.ev)
-		}
-		return m, waitForChatEvent(m.chatEvents)
+		return m.handleChatStream(msg)
 
 	case slashResultMsg:
-		body := msg.output
-		if msg.err != nil {
-			if body == "" {
-				body = msg.err.Error()
-			} else {
-				body = body + "\n[error: " + msg.err.Error() + "]"
-			}
-		}
-		if body == "" {
-			body = "(no output)"
-		}
-		role := roleSystem
-		if msg.err != nil {
-			role = roleSystem
-		}
-		m.chat = append(m.chat, chatMessage{
-			Role: role, Meta: msg.command, Body: body,
-			Success: msg.err == nil,
-		})
-		dlog("slash", "result", map[string]interface{}{
-			"command": msg.command, "ok": msg.err == nil,
-			"output_len": len(msg.output),
-		})
-		return m, nil
+		return m.handleSlashResult(msg)
 
 	case tickMsg:
-		m.spinnerFrame++
-		// Prune expired toasts so the overlay disappears on its own.
-		if len(m.toasts) > 0 {
-			now := time.Now()
-			kept := m.toasts[:0]
-			for _, t := range m.toasts {
-				if t.ExpiresAt.After(now) {
-					kept = append(kept, t)
-				}
-			}
-			m.toasts = kept
-		}
-		// Tick-driven prompt-progress row update: while we're still in
-		// prompt eval (no first token yet), rewrite the streaming row
-		// every tick so the elapsed timer ticks smoothly even when the
-		// proxy's poller is silent (e.g. between /slots probes, or when
-		// /slots returns no token counters at all on this build).
-		if !m.promptEvalStart.IsZero() && m.streamingLLM {
-			elapsed := time.Since(m.promptEvalStart).Milliseconds()
-			m.replaceLLMRow(formatPromptProgress(
-				m.promptProcessed, m.promptTotal, m.promptPct, elapsed))
-		}
-		// Rescan files periodically so external changes (agent wrote
-		// a file via /workspace, user added a file in another shell)
-		// show up in the sidebar without a manual refresh. Dispatch
-		// async so a slow disk doesn't stall the spinner.
-		var refresh tea.Cmd
-		if time.Since(m.lastFileScan) > 4*time.Second {
-			m.lastFileScan = time.Now() // mark to debounce overlapping scans
-			refresh = scanFilesCmd(m.workingDir)
-		}
-		return m, tea.Batch(tickEvery(100*time.Millisecond), refresh)
+		return m.handleTick()
 
 	case scanFilesMsg:
-		// Result of an async scanFiles run. Apply only if newer than
-		// what we have, so an old/slow scan doesn't overwrite a more
-		// recent one.
-		if msg.at.After(m.lastFileScan) || m.lastFileScan.IsZero() {
-			m.fileEntries = msg.entries
-			m.lastFileScan = msg.at
-		}
-		return m, nil
+		return m.handleScanFiles(msg)
 
 	case calibrationStatusMsg:
-		// /v1/calibration/status fetch returned. Two cases:
-		//   1. Success: store the status AND kick off the periodic
-		//      refresh chain. Only schedule refresh on success — on
-		//      error we let the retry mechanism handle it, otherwise
-		//      we'd spawn a parallel refresh chain on every errored
-		//      retry attempt. Refresh takes over once the first
-		//      successful response lands.
-		//   2. Err: leave m.calibration nil so the badge shows
-		//      "cal …" and the retry tick gets to try again. No
-		//      refresh scheduled.
-		if msg.err == nil && msg.status != nil {
-			firstSuccess := m.calibration == nil
-			m.calibration = msg.status
-			if firstSuccess {
-				return m, scheduleCalibrationRefresh(calibrationRefreshInterval)
-			}
+		return m.handleCalibrationStatus(msg)
+
+	case calibrationRetryMsg:
+		return m.handleCalibrationRetry()
+
+	case calibrationRefreshMsg:
+		return m.handleCalibrationRefresh()
+	}
+
+	return m.forwardToInput(msg)
+}
+
+// handleKey runs the action bound to a key. While the permission modal is up,
+// only its answer keys and Ctrl+C / Ctrl+D act. A key with no binding of its
+// own goes on to the textarea.
+func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Permission modal gates all input: while a request is pending only
+	// the y/a/n (and esc) decision keys are live; every other key is
+	// swallowed so it never reaches the textarea or the normal switch.
+	// Ctrl+C / Ctrl+D still fall through to cancel/quit — cancelling the
+	// turn unblocks the proxy's permission wait via the request context.
+	if m.pendingPerm != nil {
+		if s := msg.String(); s != "ctrl+c" && s != "ctrl+d" {
+			return m.handlePermKey(msg)
+		}
+		m.pendingPerm = nil
+	}
+	switch msg.String() {
+	case "ctrl+c":
+		return m.cancelTurnOrQuit()
+	case "ctrl+d":
+		m.quitting = true
+		return m, tea.Quit
+
+	case "ctrl+l":
+		m.chat = nil
+		m.chatScroll = 0
+		// Start a fresh persistence session so the cleared transcript
+		// doesn't overwrite the saved one.
+		m.startNewSession()
+		return m, nil
+
+	case "ctrl+t":
+		return m.cycleMode()
+
+	case "ctrl+r":
+		if !m.turnActive && m.lastUserMsg != "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleUser, Body: m.lastUserMsg,
+			})
+			return m, m.sendChatCmd(m.lastUserMsg + m.contextSuffix())
 		}
 		return m, nil
 
-	case calibrationRetryMsg:
-		// Retry mechanism handles the "initial fetch missed because
-		// proxy hadn't finished starting up" race (common during
-		// compose-up). Capped at maxCalibrationRetries attempts.
-		// Once any response lands, we leave retry alone — the
-		// refresh tick (above) takes over for the longer-cadence
-		// re-probing that keeps the badge in sync with reality.
-		if m.calibration != nil {
-			return m, nil
-		}
-		if m.calibrationRetries >= maxCalibrationRetries {
-			return m, nil
-		}
-		m.calibrationRetries++
-		return m, tea.Batch(
-			fetchCalibrationStatusCmd(m.proxyURL),
-			scheduleCalibrationRetry(calibrationRetryInterval),
-		)
-
-	case calibrationRefreshMsg:
-		// Periodic refresh — runs forever after the first successful
-		// fetch lands. Re-fires the fetch and schedules the next
-		// refresh regardless of the prior verdict. Catches both
-		// warn→green transitions (user finished install) AND
-		// green→warn (user removed weights, swapped models). Cheap:
-		// 1 HTTP call per 30s.
-		return m, tea.Batch(
-			fetchCalibrationStatusCmd(m.proxyURL),
-			scheduleCalibrationRefresh(calibrationRefreshInterval),
-		)
+	case "pgup":
+		m.scrollChat(10)
+		return m, nil
+	case "pgdown":
+		m.scrollChat(-10)
+		return m, nil
+	case "ctrl+home":
+		m.scrollChat(1 << 30) // clamped to lastChatTotal
+		return m, nil
+	case "ctrl+end":
+		m.chatScroll = 0
+		return m, nil
+	case "enter":
+		return m.submitInput()
 	}
+	return m.forwardToInput(msg)
+}
 
+// cancelTurnOrQuit answers Ctrl+C: it cancels the turn in flight, or quits
+// when no turn runs.
+func (m tuiModel) cancelTurnOrQuit() (tea.Model, tea.Cmd) {
+	if m.turnActive && m.turnCancel != nil {
+		// First Ctrl+C cancels the in-flight turn; second quits.
+		// Belt-and-suspenders: cancel locally (closes TCP) AND
+		// POST /cancel so the proxy aborts even when buffered.
+		m.userCancelled = true
+		m.turnCancel()
+		sid := m.turnSessionID
+		proxyURL := m.proxyURL
+		m.turnActive = false
+		// Stop the encoding/decoding tick from repainting after
+		// cancel — otherwise the "encoding prompt … Ns" timer keeps
+		// ticking forever because promptEvalStart/streamingLLM were
+		// never cleared.
+		m.promptEvalStart = time.Time{}
+		m.streamingLLM = false
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "cancelled",
+			Body: "turn cancelled",
+		})
+		return m, func() tea.Msg {
+			_ = cancelTurn(proxyURL, sid)
+			return nil
+		}
+	}
+	m.quitting = true
+	return m, tea.Quit
+}
+
+// cycleMode answers Ctrl+T: it moves the permission mode on to the next one
+// and notes the new mode in the chat.
+func (m tuiModel) cycleMode() (tea.Model, tea.Cmd) {
+	// Cycle permission mode. Visible in header.
+	switch m.mode {
+	case "default":
+		m.mode = "accept-edits"
+	case "accept-edits":
+		m.mode = "yolo"
+	default:
+		m.mode = "default"
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "mode",
+		Body: fmt.Sprintf("mode → %s", m.mode),
+	})
+	return m, nil
+}
+
+// submitInput answers Enter: it runs a line that starts with "!" as a shell
+// command, runs a slash command, or sends the text to the agent as a new turn.
+func (m tuiModel) submitInput() (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	// Enter sends; Shift+Enter (or Alt+Enter) inserts newline.
+	// textarea handles Shift+Enter as KeyShiftEnter ("shift+enter").
+	if m.turnActive {
+		// Mid-turn Enter can't send — surface why instead of
+		// silently inserting a newline into the pending input.
+		m.showToast("turn in progress — Ctrl+C to cancel")
+		return m, nil
+	}
+	text := strings.TrimSpace(m.input.Value())
+	if text == "" {
+		return m, nil
+	}
+	m.input.Reset()
+	dlog("user", "input", map[string]interface{}{"text": text})
+	// Bash mode: leading "!" runs as a shell command in the
+	// working dir, output appears as a system row. Same path
+	// as /run but with the conversational shorthand devs
+	// expect from Claude Code.
+	if strings.HasPrefix(text, "!") {
+		cmdStr := strings.TrimSpace(text[1:])
+		if cmdStr == "" {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "Bash mode: type ! followed by a command.",
+			})
+			return m, nil
+		}
+		m.chat = append(m.chat, chatMessage{
+			Role: roleUser, Body: "! " + cmdStr, Echo: true,
+		})
+		return m, runShellCmd(m.workingDir, "!"+cmdStr,
+			[]string{"bash", "-lc", cmdStr})
+	}
+	// "?" alone (or with trailing whitespace) is a shorthand
+	// for /help — same convention as Claude Code so users
+	// don't have to remember the slash form.
+	if text == "?" {
+		text = "/help"
+	}
+	// Slash commands intercepted before agent send.
+	if consumed, slashCmd, quit := m.handleSlash(text); consumed {
+		dlog("slash", "dispatched", map[string]interface{}{
+			"input": text, "quit": quit,
+		})
+		if quit {
+			m.quitting = true
+		}
+		if slashCmd != nil {
+			cmds = append(cmds, slashCmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+	// Plain message → send to agent. Append context-files
+	// hint so the agent knows the user's chosen scope.
+	m.chat = append(m.chat, chatMessage{
+		Role: roleUser, Body: text,
+	})
+	m.lastUserMsg = text
+	dlog("turn", "started", map[string]interface{}{
+		"session_id": "(set in sendChatCmd)",
+		"len":        len(text),
+	})
+	cmds = append(cmds, m.sendChatCmd(text+m.contextSuffix()))
+	return m, tea.Batch(cmds...)
+}
+
+// handleMouse answers the mouse: the wheel scrolls the pane under the cursor,
+// and a left drag selects text in a pane and copies it on release.
+func (m tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Wheel routes to whichever pane the cursor is over so events,
+	// pipeline, files all scroll independently — not just chat.
+	if msg.Action == tea.MouseActionPress {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollPaneAt(msg.X, msg.Y, 3)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.scrollPaneAt(msg.X, msg.Y, -3)
+			return m, nil
+		}
+	}
+	// Highlight-to-copy in any pane. Press finds the pane under
+	// (X,Y); motion updates the end; release extracts text from
+	// that pane's snapshot and copies via OSC52 / CLI tool.
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button == tea.MouseButtonLeft {
+			m.startSelection(msg)
+		}
+	case tea.MouseActionMotion:
+		if m.selecting {
+			m.selEndX, m.selEndY = msg.X, msg.Y
+		}
+	case tea.MouseActionRelease:
+		if m.selecting {
+			return m.copySelection()
+		}
+	}
+	return m, nil
+}
+
+// startSelection starts a highlight-to-copy selection when a left press lands
+// inside a pane.
+func (m *tuiModel) startSelection(msg tea.MouseMsg) {
+	if pane := findPane(msg.X, msg.Y); pane != nil {
+		m.selecting = true
+		m.selPane = pane.name
+		m.selStartX, m.selStartY = msg.X, msg.Y
+		m.selEndX, m.selEndY = msg.X, msg.Y
+		dlog("mouse", "press", map[string]interface{}{
+			"x": msg.X, "y": msg.Y, "pane": pane.name,
+			"paneTopY": pane.topY, "paneBottomY": pane.bottomY,
+			"viewStart": pane.viewStart, "lines": len(pane.lines),
+		})
+	}
+}
+
+// copySelection ends the selection on release and copies the text it covers
+// to the clipboard. A click with no drag copies nothing.
+func (m tuiModel) copySelection() (tea.Model, tea.Cmd) {
+	selPane := m.selPane
+	m.selecting = false
+	dy := m.selEndY - m.selStartY
+	if dy < 0 {
+		dy = -dy
+	}
+	dx := m.selEndX - m.selStartX
+	if dx < 0 {
+		dx = -dx
+	}
+	// Pure click (no drag) → no copy.
+	if dy == 0 && dx < 2 {
+		return m, nil
+	}
+	text := extractPaneSelection(selPane,
+		m.selStartY, m.selEndY,
+		m.selStartX, m.selEndX)
+	dlog("mouse", "release", map[string]interface{}{
+		"pane":   selPane,
+		"startX": m.selStartX, "startY": m.selStartY,
+		"endX": m.selEndX, "endY": m.selEndY,
+		"text_len": len(text),
+		"preview":  truncate(text, 60),
+	})
+	if text == "" {
+		m.showToast("nothing to copy")
+		return m, nil
+	}
+	if err := copyToClipboard(text); err != nil {
+		m.showToast(fmt.Sprintf("copy failed: %v", err))
+		return m, nil
+	}
+	m.showToast(fmt.Sprintf("✓ copied %d chars from %s pane",
+		len(text), selPane))
+	return m, nil
+}
+
+// handleWindowSize takes the terminal's new size. It resizes the input and,
+// when the width changed, builds the markdown renderer again for the chat's
+// new width.
+func (m tuiModel) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	// Drag-resizing modern terminals fires WindowSizeMsg dozens of
+	// times in quick succession. Glamour init isn't free (it loads
+	// styles + builds a renderer); doing it on every event was
+	// queueing slow Updates behind a flood of resize messages.
+	// Skip the rebuild when only the height changed, and skip
+	// duplicate-width events entirely.
+	widthChanged := msg.Width != m.width
+	if msg.Width == m.width && msg.Height == m.height {
+		return m, nil
+	}
+	m.width = msg.Width
+	m.height = msg.Height
+	m.input.SetWidth(max(20, msg.Width-2))
+	if widthChanged {
+		style := os.Getenv("GLAMOUR_STYLE")
+		if style == "" {
+			style = "dark"
+		}
+		// Glamour wrap MUST match the chat box's content width or
+		// lipgloss expands the box past where the sidebar sits.
+		// Mirror panes.go's layout: sidebar 26 cols when W>=90,
+		// chat box border (2) + indent (2) on either side.
+		wrap := msg.Width - 6
+		if msg.Width >= 90 {
+			wrap = msg.Width - 26 - 6
+		}
+		if wrap < 20 {
+			wrap = 20
+		}
+		if wrap > 100 {
+			wrap = 100 // cap for readability — long lines hurt scanning
+		}
+		if r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle(style),
+			glamour.WithWordWrap(wrap),
+		); err == nil {
+			m.chatRenderer = r
+		}
+	}
+	// Force a full repaint of the alt-screen so leftover content
+	// from the prior size doesn't bleed through. Without this,
+	// shrinking the terminal can leave stale rows on screen and
+	// growing it can leave the new edges blank until the next
+	// natural redraw.
+	return m, tea.ClearScreen
+}
+
+// handleEnvelope applies one /events envelope to the pipeline state and the
+// events log, then waits for the next one.
+func (m tuiModel) handleEnvelope(msg envelopeMsg) (tea.Model, tea.Cmd) {
+	// While the user has cancelled, drop the trailing flurry of
+	// cancellation-shaped envelopes (LLM error, stage_end with
+	// success=false) so the events pane and pipeline pane don't
+	// surface a misleading FAIL/ERROR row. The chat already shows
+	// "turn cancelled" — that's the single user-visible signal.
+	if m.userCancelled && envelopeLooksCancelled(msg.ev) {
+		dlog("event", "suppressed_cancel", map[string]interface{}{
+			"type": msg.ev.Type, "stage": msg.ev.Stage,
+		})
+		return m, waitForEnvelope(m.events)
+	}
+	m.state.apply(msg.ev)
+	m.envelope = append(m.envelope, msg.ev)
+	if len(m.envelope) > m.maxLines {
+		m.envelope = m.envelope[len(m.envelope)-m.maxLines:]
+	}
+	dlog("event", msg.ev.Type, map[string]interface{}{
+		"stage": msg.ev.Stage, "payload": msg.ev.Payload,
+	})
+	return m, waitForEnvelope(m.events)
+}
+
+// handleChatStream takes one event of the /v1/agent turn: the turn-end marker
+// ends the turn, and any other event becomes chat rows. Then it waits for the
+// next event.
+func (m tuiModel) handleChatStream(msg chatStreamMsg) (tea.Model, tea.Cmd) {
+	if msg.ev.Type == "__turn_done__" {
+		m.turnActive = false
+		// A permission prompt can't outlive its turn — the proxy-side
+		// pending entry is gone, so answering would just 404. Clear
+		// the modal so input isn't gated by a dead prompt.
+		m.pendingPerm = nil
+		// Freeze the pass's written files for /review.
+		m.lastPassFiles = m.lastPassFiles[:0]
+		for p := range m.passWrites {
+			m.lastPassFiles = append(m.lastPassFiles, p)
+		}
+		sort.Strings(m.lastPassFiles)
+		var p struct {
+			Err string `json:"err"`
+		}
+		_ = json.Unmarshal(msg.ev.Data, &p)
+		if p.Err != "" && !m.userCancelled && !looksCancelled(p.Err) {
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: p.Err,
+			})
+		}
+		dlog("turn", "ended", map[string]interface{}{"err": p.Err})
+		// Snapshot the completed turn so a later --continue/--resume
+		// reloads the full transcript.
+		m.saveSession()
+	} else {
+		// Skip dlog for llm_token — at ~30 tok/s a long generation
+		// produces thousands of entries and crowds out actually
+		// interesting events when reading the file.
+		if msg.ev.Type != "llm_token" {
+			dlog("chat", msg.ev.Type, map[string]interface{}{
+				"data": json.RawMessage(msg.ev.Data),
+			})
+		}
+		m.appendChatEvent(msg.ev)
+	}
+	return m, waitForChatEvent(m.chatEvents)
+}
+
+// handleSlashResult shows the output of a slash command that ran in the
+// background as a system row.
+func (m tuiModel) handleSlashResult(msg slashResultMsg) (tea.Model, tea.Cmd) {
+	body := msg.output
+	if msg.err != nil {
+		if body == "" {
+			body = msg.err.Error()
+		} else {
+			body = body + "\n[error: " + msg.err.Error() + "]"
+		}
+	}
+	if body == "" {
+		body = "(no output)"
+	}
+	role := roleSystem
+	if msg.err != nil {
+		role = roleSystem
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: role, Meta: msg.command, Body: body,
+		Success: msg.err == nil,
+	})
+	dlog("slash", "result", map[string]interface{}{
+		"command": msg.command, "ok": msg.err == nil,
+		"output_len": len(msg.output),
+	})
+	return m, nil
+}
+
+// handleTick runs every 100ms: it moves the spinner on, drops expired toasts,
+// redraws the prompt-progress row and now and then scans the files again.
+func (m tuiModel) handleTick() (tea.Model, tea.Cmd) {
+	m.spinnerFrame++
+	// Prune expired toasts so the overlay disappears on its own.
+	if len(m.toasts) > 0 {
+		now := time.Now()
+		kept := m.toasts[:0]
+		for _, t := range m.toasts {
+			if t.ExpiresAt.After(now) {
+				kept = append(kept, t)
+			}
+		}
+		m.toasts = kept
+	}
+	// Tick-driven prompt-progress row update: while we're still in
+	// prompt eval (no first token yet), rewrite the streaming row
+	// every tick so the elapsed timer ticks smoothly even when the
+	// proxy's poller is silent (e.g. between /slots probes, or when
+	// /slots returns no token counters at all on this build).
+	if !m.promptEvalStart.IsZero() && m.streamingLLM {
+		elapsed := time.Since(m.promptEvalStart).Milliseconds()
+		m.replaceLLMRow(formatPromptProgress(
+			m.promptProcessed, m.promptTotal, m.promptPct, elapsed))
+	}
+	// Rescan files periodically so external changes (agent wrote
+	// a file via /workspace, user added a file in another shell)
+	// show up in the sidebar without a manual refresh. Dispatch
+	// async so a slow disk doesn't stall the spinner.
+	var refresh tea.Cmd
+	if time.Since(m.lastFileScan) > 4*time.Second {
+		m.lastFileScan = time.Now() // mark to debounce overlapping scans
+		refresh = scanFilesCmd(m.workingDir)
+	}
+	return m, tea.Batch(tickEvery(100*time.Millisecond), refresh)
+}
+
+// handleScanFiles takes the result of a file scan, unless a newer scan is
+// already shown.
+func (m tuiModel) handleScanFiles(msg scanFilesMsg) (tea.Model, tea.Cmd) {
+	// Result of an async scanFiles run. Apply only if newer than
+	// what we have, so an old/slow scan doesn't overwrite a more
+	// recent one.
+	if msg.at.After(m.lastFileScan) || m.lastFileScan.IsZero() {
+		m.fileEntries = msg.entries
+		m.lastFileScan = msg.at
+	}
+	return m, nil
+}
+
+// handleCalibrationStatus keeps a fetched calibration status for the badge.
+// The first one starts the periodic refresh.
+func (m tuiModel) handleCalibrationStatus(msg calibrationStatusMsg) (tea.Model, tea.Cmd) {
+	// /v1/calibration/status fetch returned. Two cases:
+	//   1. Success: store the status AND kick off the periodic
+	//      refresh chain. Only schedule refresh on success — on
+	//      error we let the retry mechanism handle it, otherwise
+	//      we'd spawn a parallel refresh chain on every errored
+	//      retry attempt. Refresh takes over once the first
+	//      successful response lands.
+	//   2. Err: leave m.calibration nil so the badge shows
+	//      "cal …" and the retry tick gets to try again. No
+	//      refresh scheduled.
+	if msg.err == nil && msg.status != nil {
+		firstSuccess := m.calibration == nil
+		m.calibration = msg.status
+		if firstSuccess {
+			return m, scheduleCalibrationRefresh(calibrationRefreshInterval)
+		}
+	}
+	return m, nil
+}
+
+// handleCalibrationRetry fetches the calibration status again while none has
+// arrived, at most maxCalibrationRetries times.
+func (m tuiModel) handleCalibrationRetry() (tea.Model, tea.Cmd) {
+	// Retry mechanism handles the "initial fetch missed because
+	// proxy hadn't finished starting up" race (common during
+	// compose-up). Capped at maxCalibrationRetries attempts.
+	// Once any response lands, we leave retry alone — the
+	// refresh tick (above) takes over for the longer-cadence
+	// re-probing that keeps the badge in sync with reality.
+	if m.calibration != nil {
+		return m, nil
+	}
+	if m.calibrationRetries >= maxCalibrationRetries {
+		return m, nil
+	}
+	m.calibrationRetries++
+	return m, tea.Batch(
+		fetchCalibrationStatusCmd(m.proxyURL),
+		scheduleCalibrationRetry(calibrationRetryInterval),
+	)
+}
+
+// handleCalibrationRefresh fetches the calibration status again and schedules
+// the next refresh.
+func (m tuiModel) handleCalibrationRefresh() (tea.Model, tea.Cmd) {
+	// Periodic refresh — runs forever after the first successful
+	// fetch lands. Re-fires the fetch and schedules the next
+	// refresh regardless of the prior verdict. Catches both
+	// warn→green transitions (user finished install) AND
+	// green→warn (user removed weights, swapped models). Cheap:
+	// 1 HTTP call per 30s.
+	return m, tea.Batch(
+		fetchCalibrationStatusCmd(m.proxyURL),
+		scheduleCalibrationRefresh(calibrationRefreshInterval),
+	)
+}
+
+// forwardToInput hands a message that no handler took to the textarea, and
+// sets the input mode from what is typed.
+func (m tuiModel) forwardToInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
 	// Forward remaining keystrokes to the textarea (typing, arrows…).
 	if !m.quitting {
 		var taCmd tea.Cmd
