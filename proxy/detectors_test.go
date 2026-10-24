@@ -1236,14 +1236,11 @@ func TestRefusedUnsafeMutationsCannotComplete(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			os.WriteFile(filepath.Join(dir, ".env"), []byte("S=1\n"), 0o644)
+			// The model tries the refused write twice, then says it is done.
+			plan := script(stepWrite(c.path, "SECRET=2\n"), stepWrite(c.path, "SECRET=2\n"),
+				stepDone("wrote the config"))
 			ctx, _, _, terminal := termFixture(t, dir, "Write the config file.", termCeiling,
-				func(i int, _ string) map[string]interface{} {
-					if i < 2 {
-						return map[string]interface{}{"type": "tool_call", "name": "write_file",
-							"args": map[string]string{"path": c.path, "content": "SECRET=2\n"}}
-					}
-					return map[string]interface{}{"type": "done", "summary": "wrote the config"}
-				})
+				func(i int, _ string) map[string]interface{} { return plan(i) })
 			if err := runAgentLoop(ctx, "Write the config file."); err != nil {
 				t.Fatal(err)
 			}
