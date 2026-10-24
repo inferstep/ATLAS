@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -265,63 +266,59 @@ func TestCallV3GenerateStreamingUndecodableResultNamesTheDecodeFailure(t *testin
 	}
 }
 
+// stalledGenerateServer is a V3 service that sends one progress event and then
+// stalls until the client hangs up or the test ends.
+func stalledGenerateServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	// release unblocks the stalled handler after the call returns: srv.Close
+	// waits for active handlers, and the server does not always see the
+	// client hang up.
+	release := make(chan struct{})
+	srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	})
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // cleanups run last-in first-out, so this runs before srv.Close
+	return srv
+}
+
 // A stalled V3 stream must end with an error at the first of: the configured
-// cap, half of the session's remaining time, or the user's cancel.
+// cap, half of the session's remaining time, or the user's cancel
+// (TestCancelAbortsAStalledV3Stream).
 func TestCallV3GenerateStreamingEndsAStalledStream(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		timeoutEnv  string        // ATLAS_V3_TIMEOUT, in seconds
-		session     time.Duration // time left in the session; 0 means no deadline
-		cancelAfter time.Duration // the user cancels after this; 0 means never
-		within      time.Duration // the call must return before this
-		namesTheCap bool          // the error names the cap, not an empty stream
+		name       string
+		timeoutEnv string        // ATLAS_V3_TIMEOUT, in seconds
+		session    time.Duration // time left in the session; 0 means no deadline
+		within     time.Duration // the call must return before this
 	}{
 		{name: "the configured cap fires",
-			timeoutEnv: "1", within: 5 * time.Second, namesTheCap: true},
+			timeoutEnv: "1", within: 5 * time.Second},
 		// Half of a long session is far above the cap, so the cap applies.
 		{name: "the cap bounds a long session",
-			timeoutEnv: "1", session: 10 * time.Minute, within: 5 * time.Second, namesTheCap: true},
+			timeoutEnv: "1", session: 10 * time.Minute, within: 5 * time.Second},
 		// With 6s left, V3 may have 3s, not 300s, so the run keeps as much
 		// again for the work still to do.
 		{name: "half of a short session",
-			timeoutEnv: "300", session: 6 * time.Second, within: 5 * time.Second, namesTheCap: true},
-		// The user presses Ctrl-C during a long PlanSearch.
-		{name: "cancel aborts",
-			timeoutEnv: "", cancelAfter: 150 * time.Millisecond, within: 3 * time.Second},
+			timeoutEnv: "300", session: 6 * time.Second, within: 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("ATLAS_V3_TIMEOUT", tc.timeoutEnv)
-			// release unblocks the stalled handler after the call returns:
-			// srv.Close waits for active handlers, and the server does not
-			// always see the client hang up.
-			release := make(chan struct{})
-			srv := fakeGenerateServer(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "text/event-stream")
-				sseLines(w, `data: {"stage":"plan_search","detail":"stalling"}`, ``)
-				select {
-				case <-r.Context().Done():
-				case <-release:
-				}
-			})
-			defer srv.Close()
-			defer close(release) // deferred calls run last-in first-out, so this runs before srv.Close
-
+			srv := stalledGenerateServer(t)
 			sessionCtx := context.Background()
 			if tc.session > 0 {
 				var cancel context.CancelFunc
 				sessionCtx, cancel = context.WithTimeout(sessionCtx, tc.session)
 				defer cancel()
 			}
-			callCtx := sessionCtx
-			if tc.cancelAfter > 0 {
-				var cancel context.CancelFunc
-				callCtx, cancel = context.WithCancel(sessionCtx)
-				defer cancel()
-				time.AfterFunc(tc.cancelAfter, cancel)
-			}
 
 			start := time.Now()
-			_, err := callV3GenerateStreaming(callCtx, srv.URL, V3GenerateRequest{}, nil)
+			_, err := callV3GenerateStreaming(sessionCtx, srv.URL, V3GenerateRequest{}, nil)
 			elapsed := time.Since(start)
 
 			if err == nil {
@@ -330,20 +327,38 @@ func TestCallV3GenerateStreamingEndsAStalledStream(t *testing.T) {
 			if elapsed > tc.within {
 				t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), tc.within)
 			}
-			if tc.session > 0 && sessionCtx.Err() != nil {
+			if sessionCtx.Err() != nil {
 				t.Errorf("V3 used up the whole session: %v", sessionCtx.Err())
 			}
 			// The cap firing and V3 finishing empty are different events with
 			// different fixes, so they must not share one message.
-			if tc.namesTheCap {
-				if strings.Contains(err.Error(), "without sending a result event") {
-					t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
-				}
-				if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
-					t.Errorf("the error does not name the cap that fired:\n%s", err)
-				}
+			if strings.Contains(err.Error(), "without sending a result event") {
+				t.Errorf("the cap firing is reported as V3 finishing empty:\n%s", err)
+			}
+			if !strings.Contains(err.Error(), "ATLAS_V3_TIMEOUT") {
+				t.Errorf("the error does not name the cap that fired:\n%s", err)
 			}
 		})
+	}
+}
+
+// The user presses Ctrl-C during a long PlanSearch.
+func TestCancelAbortsAStalledV3Stream(t *testing.T) {
+	t.Setenv("ATLAS_V3_TIMEOUT", "")
+	srv := stalledGenerateServer(t)
+	callCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(150*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := callV3GenerateStreaming(callCtx, srv.URL, V3GenerateRequest{}, nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("a stalled V3 run returned no error")
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("the call took %v, want under %v", elapsed.Round(time.Millisecond), 3*time.Second)
 	}
 }
 
@@ -404,14 +419,8 @@ func TestGeneratePlanDropsTokenNoiseFromTheStream(t *testing.T) {
 		}
 	}
 	// The structural stages are the whole point of streaming at all.
-	want := map[string]bool{"plan_start": false, "plan_candidate_scored": false, "plan_selected": false}
-	for _, s := range stages {
-		if _, ok := want[s]; ok {
-			want[s] = true
-		}
-	}
-	for s, seen := range want {
-		if !seen {
+	for _, s := range []string{"plan_start", "plan_candidate_scored", "plan_selected"} {
+		if !slices.Contains(stages, s) {
 			t.Errorf("structural stage %q never reached the stream (got %v)", s, stages)
 		}
 	}
@@ -492,7 +501,7 @@ func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
 	htmlBaseline := "<!DOCTYPE html>\n<html><body><canvas id=\"c\"></canvas></body></html>\n"
 	jsCandidate := "const c = document.getElementById('c');\nc.getContext('2d');\n"
 
-	if why := v3SwappedTheLanguage("index.html", htmlBaseline, jsCandidate); why == "" {
+	if v3SwappedTheLanguage("index.html", htmlBaseline, jsCandidate) == "" {
 		t.Fatal("fixture invalid: the gate must reject JS replacing HTML")
 	}
 
@@ -740,7 +749,7 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 	// The file every tool edits.
 	const original = "import math\n\n\ndef area(r):\n    if r < 0:\n        raise ValueError('neg')\n    return math.pi * r * r\n\n\ndef edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n"
 
-	for _, tool := range []struct {
+	type editTool struct {
 		name string
 		args map[string]interface{}
 		// the bytes the tool itself produces, before V3 is asked
@@ -748,87 +757,86 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 		// what V3 offers instead: a variant of the same span, so the drift
 		// gate has nothing to object to and authorization is what decides
 		candidate string
+	}
+	editFile := editTool{name: "edit_file",
+		edited:    strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative')", 1),
+		candidate: strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative radius')", 1),
+		args: map[string]interface{}{"path": "app.py",
+			"old_str": "raise ValueError('neg')",
+			"new_str": "raise ValueError('negative')"}}
+	insertAfter := editTool{name: "insert_after",
+		edited:    strings.Replace(original, "import math\n", "import math\nimport sys\n", 1),
+		candidate: strings.Replace(original, "import math\n", "import math\nimport sys  # v3\n", 1),
+		args: map[string]interface{}{"path": "app.py", "line": 1,
+			"content": "import sys"}}
+	replaceLines := editTool{name: "replace_lines",
+		edited:    strings.Replace(original, "    return math.pi * r * r", "    return math.pi * r ** 2", 1),
+		candidate: strings.Replace(original, "    return math.pi * r * r", "    return math.pi * pow(r, 2)", 1),
+		args: map[string]interface{}{"path": "app.py",
+			"start_line": 7, "end_line": 7,
+			"expected_first_line": "    return math.pi * r * r",
+			"expected_last_line":  "    return math.pi * r * r",
+			"content":             "    return math.pi * r ** 2"}}
+	structuralEdit := editTool{name: "structural_edit",
+		edited: strings.Replace(original,
+			"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
+			"def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n", 1),
+		candidate: strings.Replace(original,
+			"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
+			"def edge(r):\n    for _ in range(1):\n        pass\n    return 2.0 * math.pi * r\n", 1),
+		args: map[string]interface{}{"path": "app.py",
+			"selector": "function:edge",
+			"content":  "def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"}}
+
+	for _, tc := range []struct {
+		tool       editTool
+		mode       string
+		authorized bool
 	}{
-		{name: "edit_file",
-			edited:    strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative')", 1),
-			candidate: strings.Replace(original, "raise ValueError('neg')", "raise ValueError('negative radius')", 1),
-			args: map[string]interface{}{"path": "app.py",
-				"old_str": "raise ValueError('neg')",
-				"new_str": "raise ValueError('negative')"}},
-		{name: "insert_after",
-			edited:    strings.Replace(original, "import math\n", "import math\nimport sys\n", 1),
-			candidate: strings.Replace(original, "import math\n", "import math\nimport sys  # v3\n", 1),
-			args: map[string]interface{}{"path": "app.py", "line": 1,
-				"content": "import sys"}},
-		{name: "replace_lines",
-			edited:    strings.Replace(original, "    return math.pi * r * r", "    return math.pi * r ** 2", 1),
-			candidate: strings.Replace(original, "    return math.pi * r * r", "    return math.pi * pow(r, 2)", 1),
-			args: map[string]interface{}{"path": "app.py",
-				"start_line": 7, "end_line": 7,
-				"expected_first_line": "    return math.pi * r * r",
-				"expected_last_line":  "    return math.pi * r * r",
-				"content":             "    return math.pi * r ** 2"}},
-		{name: "structural_edit",
-			edited: strings.Replace(original,
-				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
-				"def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n", 1),
-			candidate: strings.Replace(original,
-				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2 * math.pi * r\n",
-				"def edge(r):\n    for _ in range(1):\n        pass\n    return 2.0 * math.pi * r\n", 1),
-			args: map[string]interface{}{"path": "app.py",
-				"selector": "function:edge",
-				"content":  "def edge(r):\n    for _ in range(1):\n        pass\n    return math.tau * r\n"}},
+		{editFile, "authorized candidate", true}, {editFile, "unauthorized candidate", false},
+		{insertAfter, "authorized candidate", true}, {insertAfter, "unauthorized candidate", false},
+		{replaceLines, "authorized candidate", true}, {replaceLines, "unauthorized candidate", false},
+		{structuralEdit, "authorized candidate", true}, {structuralEdit, "unauthorized candidate", false},
 	} {
-		for _, mode := range []struct {
-			name       string
-			authorized bool
-		}{{"authorized candidate", true}, {"unauthorized candidate", false}} {
-			t.Run(tool.name+"/"+mode.name, func(t *testing.T) {
-				dir := t.TempDir()
-				path := filepath.Join(dir, "app.py")
-				if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-					t.Fatal(err)
+		t.Run(tc.tool.name+"/"+tc.mode, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "app.py")
+			writeInWorkspace(t, dir, "app.py", original)
+			var authorizesNothing func(map[string]interface{})
+			if !tc.authorized {
+				// passed=true, and an envelope that authorizes nothing.
+				authorizesNothing = func(e map[string]interface{}) {
+					e["evaluation"].(map[string]interface{})["closure_eligible"] = false
+					e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
 				}
-				var env map[string]interface{}
-				if mode.authorized {
-					env = envelopeFor(t, tool.candidate, nil)
-				} else {
-					// passed=true, and an envelope that authorizes nothing.
-					env = envelopeFor(t, tool.candidate, func(e map[string]interface{}) {
-						e["evaluation"].(map[string]interface{})["closure_eligible"] = false
-						e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
-					})
-				}
-				srv := editV3ServerWithEdit(t, tool.candidate, true, env, tool.edited)
-				defer srv.Close()
+			}
+			env := envelopeFor(t, tc.tool.candidate, authorizesNothing)
+			srv := editV3ServerWithEdit(t, tc.tool.candidate, true, env, tc.tool.edited)
+			defer srv.Close()
 
-				ctx := writeGateCtx(t, srv.URL, srv.URL, dir)
-				ctx.PermissionMode = PermissionYolo
-				ctx.StreamFn = func(string, interface{}) {}
-				ctx.SessionWrites["app.py"] = true
-				ctx.RecordFileRead(path, original)
+			ctx := writeGateCtx(t, srv.URL, srv.URL, dir)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+			ctx.SessionWrites["app.py"] = true
+			ctx.RecordFileRead(path, original)
 
-				args, _ := json.Marshal(tool.args)
-				res := executeToolCall(tool.name, args, ctx)
-				if !res.Success {
-					t.Fatalf("%s failed: %s", tool.name, res.Error)
-				}
-				onDisk, _ := os.ReadFile(path)
-				if string(onDisk) != tool.edited {
-					t.Fatalf("V3's candidate replaced the caller's edit:\n got %q\nwant %q",
-						onDisk, tool.edited)
-				}
-				if mode.authorized {
-					return
-				}
-				// The "V3 verified this edit" nudge reads these fields, so
-				// empty fields keep it quiet.
-				if res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
-					res.PhaseSolved != "" || len(res.VerificationEvidence) != 0 {
-					t.Errorf("baseline edit carries V3 provenance: %+v", res)
-				}
-			})
-		}
+			args, _ := json.Marshal(tc.tool.args)
+			res := executeToolCall(tc.tool.name, args, ctx)
+			if !res.Success {
+				t.Fatalf("%s failed: %s", tc.tool.name, res.Error)
+			}
+			onDisk, _ := os.ReadFile(path)
+			if string(onDisk) != tc.tool.edited {
+				t.Fatalf("V3's candidate replaced the caller's edit:\n got %q\nwant %q",
+					onDisk, tc.tool.edited)
+			}
+			// The "V3 verified this edit" nudge reads these fields, so
+			// empty fields keep it quiet.
+			if !tc.authorized && (res.V3Used || res.CandidatesTested != 0 || res.WinningScore != 0 ||
+				res.PhaseSolved != "" || len(res.VerificationEvidence) != 0) {
+				t.Errorf("baseline edit carries V3 provenance: %+v", res)
+			}
+		})
 	}
 }
 

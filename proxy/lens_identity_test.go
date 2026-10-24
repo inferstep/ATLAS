@@ -54,24 +54,21 @@ func TestLensInvocationVectorsReproduce(t *testing.T) {
 		t.Fatalf("too few vectors: %d", len(spec.Vectors))
 	}
 	for _, v := range spec.Vectors {
+		// A vector with no invocation id is a request id that derives none.
+		hasIdentity, want := v.InvocationID != nil, ""
+		if hasIdentity {
+			want = *v.InvocationID
+		}
 		got, ok := lensInvocationID(v.RequestID)
-		if v.InvocationID == nil {
-			if ok || got != "" {
-				t.Errorf("%q (%s): expected no identity, got %q", v.RequestID, v.Note, got)
-			}
-			if pat.MatchString(v.RequestID) {
-				t.Errorf("%q: pattern accepts a request id the vectors reject", v.RequestID)
-			}
-			continue
+		if ok != hasIdentity {
+			t.Errorf("%q (%s): derives an identity: %v, want %v", v.RequestID, v.Note, ok, hasIdentity)
 		}
-		if !ok || got != *v.InvocationID {
-			t.Errorf("%q (%s): got %q, want %q", v.RequestID, v.Note, got, *v.InvocationID)
+		if got != want {
+			t.Errorf("%q (%s): got %q, want %q", v.RequestID, v.Note, got, want)
 		}
-		if !lensInvocationFormat.MatchString(got) || len(got) != lensInvocationTotalLe {
-			t.Errorf("%q: format %q", v.RequestID, got)
-		}
-		if !pat.MatchString(v.RequestID) {
-			t.Errorf("%q: pattern rejects a request id the vectors accept", v.RequestID)
+		if pat.MatchString(v.RequestID) != hasIdentity {
+			t.Errorf("%q: the request id pattern accepts it: %v, but the vectors give it an identity: %v",
+				v.RequestID, !hasIdentity, hasIdentity)
 		}
 	}
 }
@@ -131,7 +128,7 @@ func TestLensInvocationIsDeterministicDistinctBoundedAndTyped(t *testing.T) {
 		if !ok || a != b {
 			t.Fatalf("not deterministic for %q", rid)
 		}
-		if len(a) != lensInvocationTotalLe || !strings.HasPrefix(a, lensInvocationPrefix) {
+		if len(a) != lensInvocationTotalLe || !lensInvocationFormat.MatchString(a) {
 			t.Fatalf("format %q", a)
 		}
 		if prev, dup := seen[a]; dup {
@@ -221,8 +218,8 @@ func (c *lensCapture) server(t *testing.T) *httptest.Server {
 }
 
 func TestEveryPerWriteScoreInARequestSendsTheSamePair(t *testing.T) {
-	cap := &lensCapture{}
-	srv := cap.server(t)
+	capture := &lensCapture{}
+	srv := capture.server(t)
 	defer srv.Close()
 	ctx := lensCtx("req-0011223344556677")
 	for _, content := range []string{"def f():\n    return 1\n", "x = 1\n"} {
@@ -231,19 +228,19 @@ func TestEveryPerWriteScoreInARequestSendsTheSamePair(t *testing.T) {
 		}
 	}
 	want, _ := lensInvocationID("req-0011223344556677")
-	if len(cap.pairs) != 2 {
-		t.Fatalf("calls %d", len(cap.pairs))
+	if len(capture.pairs) != 2 {
+		t.Fatalf("calls %d", len(capture.pairs))
 	}
-	for i, p := range cap.pairs {
+	for i, p := range capture.pairs {
 		if p[0] != "req-0011223344556677" || p[1] != want {
-			t.Errorf("call %d (%s): pair %v", i, cap.paths[i], p)
+			t.Errorf("call %d (%s): pair %v", i, capture.paths[i], p)
 		}
 	}
 }
 
 func TestConcurrentRequestsKeepTheirOwnLensPair(t *testing.T) {
-	cap := &lensCapture{}
-	srv := cap.server(t)
+	capture := &lensCapture{}
+	srv := capture.server(t)
 	defer srv.Close()
 	const workers, rounds = 48, 6
 	var wg sync.WaitGroup
@@ -259,10 +256,10 @@ func TestConcurrentRequestsKeepTheirOwnLensPair(t *testing.T) {
 		}(w)
 	}
 	wg.Wait()
-	if len(cap.pairs) != workers*rounds {
-		t.Fatalf("calls %d", len(cap.pairs))
+	if len(capture.pairs) != workers*rounds {
+		t.Fatalf("calls %d", len(capture.pairs))
 	}
-	for _, p := range cap.pairs {
+	for _, p := range capture.pairs {
 		want, _ := lensInvocationID(p[0])
 		if p[1] != want {
 			t.Fatalf("pair exchanged across requests: %v", p)
@@ -271,8 +268,8 @@ func TestConcurrentRequestsKeepTheirOwnLensPair(t *testing.T) {
 }
 
 func TestCancelledOrExpiredContextStopsLensCalls(t *testing.T) {
-	cap := &lensCapture{}
-	srv := cap.server(t)
+	capture := &lensCapture{}
+	srv := capture.server(t)
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(lensCtx("req-0011223344556677"))
 	cancel()
@@ -280,8 +277,8 @@ func TestCancelledOrExpiredContextStopsLensCalls(t *testing.T) {
 		t.Fatalf("scored=%v down=%q on a cancelled context: cancellation is not the lens being down",
 			scored, down)
 	}
-	if len(cap.pairs) != 0 {
-		t.Fatalf("%d call(s) reached the Lens after cancellation", len(cap.pairs))
+	if len(capture.pairs) != 0 {
+		t.Fatalf("%d call(s) reached the Lens after cancellation", len(capture.pairs))
 	}
 	expired, cancel2 := context.WithTimeout(lensCtx("req-0011223344556677"), time.Nanosecond)
 	defer cancel2()
@@ -289,7 +286,7 @@ func TestCancelledOrExpiredContextStopsLensCalls(t *testing.T) {
 	if _, scored, down := scoreContentForAgent(expired, srv.URL, "x = 1\n"); scored || down != "" {
 		t.Fatalf("scored=%v down=%q on an expired context", scored, down)
 	}
-	if len(cap.pairs) != 0 {
+	if len(capture.pairs) != 0 {
 		t.Fatal("a call reached the Lens after the deadline")
 	}
 }

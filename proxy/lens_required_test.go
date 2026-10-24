@@ -275,7 +275,7 @@ func TestALensThatStopsScoringInsideV3LeavesAnEditUnapplied(t *testing.T) {
 		t.Fatalf("terminal %q/%q, want lens_unavailable: %s",
 			r.terminal["status"], r.terminal["reason"], r.describe())
 	}
-	if disk := r.disk(t, "mod.py"); disk != accountingSeed {
+	if r.disk(t, "mod.py") != accountingSeed {
 		t.Errorf("mod.py changed although the lens could not score the edit")
 	}
 }
