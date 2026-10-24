@@ -21,6 +21,12 @@ It remains useful as frozen provenance, but current runtime interventions stay
 disabled until `atlas lens build` produces a complete bundle for the selected
 model.
 
+`phase0_stats.json`, `retrain_stats.json` and `gx_train_stats.json` are training
+statistics kept for reference; each gives its sample counts and, where it has
+them, its model and date. The service does not load them: it loads its model
+files in `geometric-lens/geometric_lens/service.py` and
+`geometric-lens/geometric_lens/identity.py`, and neither names these three.
+
 ## Training Data
 
 **In-repo sample**: `geometric-lens/data/sample/embeddings.json` — 10 embeddings (5 PASS, 5 FAIL) showing the training-data format (`{"embeddings": [...], "labels": [1|0, ...]}`; 3840-dim, from a Gemma 4 12B bench run).
@@ -35,14 +41,6 @@ model.
 | 5120-dim variant | 520 | — | — | 5120 | 53MB |
 
 Note: The large training files (>2MB) are stored on HuggingFace, not in the git repo. Only the sample and model weights are committed.
-
-## Training Stats
-
-| File | Contents |
-|------|---------|
-| `phase0_stats.json` | Phase 0 C(x) training: Val AUC 0.9467, Sep 2.04x, 3-fold CV |
-| `retrain_stats.json` | C(x) retrain: Val AUC 0.8245, 800 samples |
-| `gx_train_stats.json` | G(x) XGBoost: 13,398 samples, PCA-128 + SupCon + LDA |
 
 ## Training
 

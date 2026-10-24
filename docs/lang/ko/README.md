@@ -84,8 +84,6 @@
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 모델 자체 임베딩 위에서 동작하는 에너지 기반 스코어링. 외부 오라클 불필요. (["Geometric Lens"란?](../../ARCHITECTURE.md#why-geometric-lens))
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 후보 품질을 스코어링하는 모델 hidden-dim→512→128→1 MLP
    - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 선택에 쓰이는 XGBoost 앙상블
-   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - AST 인식 코드 검색과 프로젝트 인덱싱
-   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling으로 필요한 후보에 연산 집중
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 빌드 검증을 위한 격리 실행 환경.
    - 다중 언어 실행: Python, Rust, Go, C, Shell 등

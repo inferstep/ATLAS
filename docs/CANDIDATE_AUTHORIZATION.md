@@ -1,17 +1,23 @@
 # Candidate authorization: obligations, evidence, and candidate staging
 
-**For a request that declares structured obligations, this decides whether a
-generated candidate lands.** For a request that declares none it has nothing to
-say, and the existing decision in [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) keeps its
-exact previous behaviour.
+**This decides whether a generated candidate lands.** It owns the answer for a
+request that declares its outputs, and for a `work` request whose model call
+names a structured mutation target
+([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md#the-structured-mutation-target));
+see `authorizeCandidateDelivery` in `proxy/candidate_delivery.go`. A request
+that sends no contract, or a `question`, gets no V3 candidate
+(`candidate_undeliverable` in `proxy/candidate_reachability.go`), except under
+the operator's capture-only acquisition, which generates one and never delivers
+it ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md#the-acquisition-control)).
 
-It was observe-only for three slices first — computed beside the live answer and
-discarded — so the two could be compared before either depended on the other.
-That comparison is `proxy/delivery_agreement_test.go`, and it is what this now
-rests on.
+`proxy/delivery_agreement_test.go` drives each shape a request takes through the
+real write path. It checks that a candidate lands exactly when this decision
+says it delivers, with the bytes the decision named, and never for a request
+the decision does not own.
 
-Feasibility is still observe-only: `observeInvocationFeasibility` runs before
-generation, its value is discarded, and nothing is skipped.
+Feasibility is observe-only: `observeInvocationFeasibility` runs before
+generation and records its answer to private telemetry, and generation goes
+ahead whatever it says (`proxy/feasibility_decision.go`).
 
 ## Obligations: what a task owes
 
@@ -218,8 +224,6 @@ final-byte observation         the exact bytes are fixed; both producers speak
         ▼
 authorizeCandidateDelivery     the typed decision, and a grant if it authorizes
         │
-        ├── contractless ──────► the existing decision delivers, unchanged
-        │
         ├── refused ───────────► the caller's own content is restored
         │
         ▼
@@ -293,8 +297,7 @@ statement about disk.
 
 A sandbox outage makes the gate report `not_run` — not a pass, not a failure,
 nothing checked. No syntax evidence exists, so a **structured request refuses
-the candidate and keeps the caller's content.** The previous behaviour delivered
-the winner on the envelope's word alone.
+the candidate and keeps the caller's content.**
 
 This is fail-closed by design, and it is a real operational consequence: with the
 sandbox down, structured requests stop delivering candidates rather than
@@ -417,7 +420,7 @@ from what is available then.
 | `proxy/authorization_grant.go` | the one-time grant: minting, consumption, retirement |
 | `proxy/candidate_delivery.go` | the live authorization owner and the grant consumer |
 | `proxy/delivery_settlement.go` | post-delivery existence settlement |
-| `proxy/feasibility_decision.go` | `decideInvocationFeasibility` (still observe-only) |
+| `proxy/feasibility_decision.go` | `decideInvocationFeasibility` (observe-only) |
 | `sandbox/executor_server.py` | `/shell` observation — facts, no conclusions |
 
 ## Telemetry
@@ -427,9 +430,7 @@ and nowhere else: no SSE event, no model-visible text.
 
 `influences_live_decision` is **derived, not asserted**: true for a request with
 structured obligations, because there the decision owns delivery, and false for
-one without. It said false while nothing read the answer; leaving that in place
-once the typed path started deciding would have made every record a lie about
-its own weight.
+one without.
 
 No command text, candidate bytes, source fragments, stdout, stderr, prompts or
 credentials enter any log or telemetry surface.

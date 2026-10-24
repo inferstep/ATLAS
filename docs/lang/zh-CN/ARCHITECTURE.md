@@ -591,10 +591,6 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 
-<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
-
-> **已移除的子系统。** 早期版本在 lens 内部附带了 RAG/PageIndex 项目索引器、BM25 模式匹配器，以及基于 Thompson 采样的置信度路由器。它们只能通过产品中无人调用的 lens 端点触达，已在 2026-08 的简化行动中移除（见 CHANGELOG）。那套栈中最后残留的模式缓存也已于 2026-09 移除：它保存了每个成功会话（包括评测运行）的解答，并作为“经验”注入之后的每次运行，因而成了从测试集通向产品的通道。
-
 ---
 
 ## 6. Sandbox

@@ -85,8 +85,6 @@
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
    - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 用于候选选择的 XGBoost 集成
-   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - 感知 AST 的代码检索与项目索引
-   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling 把算力路由到真正需要的候选
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
    - 多语言执行：Python、Rust、Go、C、Shell 等

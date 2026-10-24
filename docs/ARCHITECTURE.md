@@ -854,9 +854,7 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
-
-> **Removed subsystems.** Earlier releases shipped a RAG/PageIndex project indexer, a BM25 pattern matcher, and a Thompson-Sampling confidence router inside the lens. They were reachable only through lens endpoints nothing in the product called, and were removed in the 2026-08 simplification campaign (see CHANGELOG). The pattern cache, the last of that stack, was removed in 2026-09: it stored the solution of every successful session, evaluation runs included, and injected "lessons" into every later run, which made it a channel from the test set into the product.
+> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`geometric-lens/main.py`).
 
 ---
 

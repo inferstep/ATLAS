@@ -2,24 +2,19 @@
 
 A JetBrains IDE client for the [ATLAS](https://github.com/inferstep/ATLAS) agent proxy — a thin UI layer wrapping `atlas-proxy`'s agent loop with no agent logic in the plugin itself.
 
-**Status: Stage 6 — hardening and release.** Tracking [issue #35](https://github.com/inferstep/ATLAS/issues/35), one pull request per stage. Stage 1 proved a Jewel Compose panel can mount in the ATLAS tool window, follow the IDE theme and recompose incrementally as frames arrive. Stage 2 added the Kotlin client for the atlas-proxy HTTP API. Stage 3 wired the two together: the panel is a real chat, and a turn now carries history, a task contract and the session allowlist, with the permission prompts answered in the tool window. Stage 4 added diff review and the workspace checks around it: the change a file-writing call is predicted to make, the exact change it made, and a warning when the proxy is editing a different folder. Stage 5 adds the IDE integration around that conversation: settings and credential-store token storage, a proxy status bar, model/V3 progress and the plan in the panel, native notifications for prompts and failures, and the actions that operate the same session from anywhere in the IDE. Stage 6 is the release pass: Plugin Verifier across all four products on the 2026.1 and 2026.2 lines, the distribution audited for what it must and must not contain, the same checks in CI, and the verifier's findings fixed.
+**Status: Stage 6 — hardening and release**, tracked in [issue #35](https://github.com/inferstep/ATLAS/issues/35), one pull request per stage.
 
-## Spike results
+## Compose and Jewel in the tool window
 
-| Question | Result |
-|---|---|
-| Compose panel mounts in a Swing tool window | Works, once `plugin.xml` depends on `com.intellij.modules.compose` |
-| Incremental streaming recomposition | Works — each stub frame appends and recomposes |
-| IDE theme bridging | Works via `SwingBridgeTheme` |
-| Jewel Markdown rendering | Works, through the `intellij.platform.compose.markdown` content module (see below) |
+The chat panel is a Jewel Compose panel in a Swing tool window (`src/main/kotlin/com/inferstep/atlas/ui/AtlasToolWindowFactory.kt`). It follows the IDE theme through `SwingBridgeTheme`, and it renders the assistant's text with Jewel's Markdown renderer (`src/main/kotlin/com/inferstep/atlas/ui/AtlasChatPanel.kt`).
 
-`composeUI()` only adds a *compile-time* dependency. Without the matching `<depends>com.intellij.modules.compose</depends>` in the descriptor the tool window throws `NoClassDefFoundError: androidx/compose/ui/awt/ComposePanel` on a product that does not enable Compose for other plugins — PyCharm 2026.1 was the one that caught it, even though the class is in its distribution.
+`composeUI()` only adds a *compile-time* dependency. Without the matching `<depends>com.intellij.modules.compose</depends>` in the descriptor the tool window throws `NoClassDefFoundError: androidx/compose/ui/awt/ComposePanel` on a product that does not enable Compose for other plugins, PyCharm 2026.1 among them, even though the class is in its distribution.
 
 Jewel's Markdown renderer is reached by **module name, not by plugin id.** The `intellij.platform.jewel.markdown.*` modules ship in every 2026.1 product, but a `<depends>` takes a plugin id and these are content modules: `<depends>intellij.platform.jewel.markdown.core</depends>` names nothing and makes the platform refuse to load the plugin. The platform's own descriptor declares `intellij.platform.compose.markdown` with `visibility="public"` (in `lib/product-backend.jar` as `META-INF/plugin.xml` on IDEA 2026.1.3 and `META-INF/PythonPlugin.xml` on PyCharm 2026.1), and that one module pulls in Compose plus every Jewel Markdown module. So the descriptor says `<dependencies><module name="intellij.platform.compose.markdown"/></dependencies>`.
 
-The build side names the modules too, because `bundledModule` attaches the jar of the module it is given and not that module's declared dependencies: the aggregator `intellij.platform.compose.markdown` carries no classes of its own, so `intellij.platform.jewel.markdown.core` and `intellij.platform.jewel.markdown.ideLafBridgeStyling` are declared for the compiler. `ProvideMarkdownStyling(project)` paints the Markdown with the IDE's theme, the way `SwingBridgeTheme` does for the surrounding Compose content.
+The build side names the modules too, because `bundledModule` attaches the jar of the module it is given and not that module's declared dependencies: the aggregator `intellij.platform.compose.markdown` carries no classes of its own, so `intellij.platform.jewel.markdown.core` and `intellij.platform.jewel.markdown.ideLafBridgeStyling` are declared for the compiler.
 
-`AtlasToolWindowFactoryTest` still guards the `<depends>` half: a `<depends>` on an `intellij.platform.jewel` module disables the plugin, and that is the mistake the test fails on.
+`AtlasToolWindowFactoryTest` guards the descriptor: it fails when the `<depends>` on `com.intellij.modules.compose` is missing, and when a `<depends>` names an `intellij.platform.jewel` module, which disables the plugin.
 
 ## How it works
 
@@ -127,10 +122,11 @@ deliberately **not** wired up. v1 is parity with the VS Code client's protocol,
 session and permission behaviour, and the answer on #35 was to leave align for a
 later stage, so the plugin can say the folder is wrong but not fix it.
 
-**Not seen on screen.** No diff has been opened in an IDE here. The session
-suites cover the predictions, the snapshots and both workspace checks;
-`AtlasDiffViewer` and the VFS refresh are covered by nothing except the
-`runPyCharm` smoke run, which this stage has not had either.
+**Not seen on screen.** The session suites cover the predictions, the
+snapshots and both workspace checks, and `AtlasWorkspaceRefreshTest` covers
+the VFS refresh. No test covers the diff window itself (`AtlasDiffViewer`);
+a manual `runPyCharm` smoke run is the check that would cover it
+([Smoke-test status](#smoke-test-status)).
 
 ## The IDE integration (Stage 5)
 
@@ -152,7 +148,7 @@ src/main/kotlin/com/inferstep/atlas/ui/AtlasActions.kt             # commands re
 
 **The status bar polls `/ready` and probes a route that needs the token.** The item shows `ATLAS` when every gate passes, `ATLAS · starting` with the failing gates in its tooltip, `ATLAS · offline` when the proxy cannot be reached, and `ATLAS · token` when `/workspace` answers 401. The token probe is separate because `/ready` is open: a wrong or missing token would otherwise leave the item looking ready. It runs only after `/ready` answered, so an unreachable proxy reads `offline` rather than `token` and a poll waits for one time limit rather than two; a rejection belongs to the address and token it was learned on, so changing either starts over. Polling pauses while a turn streams and refreshes when it ends; the interval is settable from 5 to 3600 seconds. `/v1/calibration/status` is fetched at startup and on **ATLAS: Refresh Status & Calibration**, not on every poll, because each call re-probes the lens service. A 5-second timeout keeps a blackholed host from leaving the item on "starting" forever. Clicking the item opens the common actions in a popup.
 
-**Progress and the plan are state, not a second transcript.** `ChatSession` now reads the `llm_*`, `v3_*` and `plan_*` events it used to ignore: a transient line under the mode controls shows thinking, prompt-evaluation percentage, the current V3 stage, a veto or a lens intervention, and the panel draws the generated plan with the steps `plan_adherence` marked satisfied. The line is cleared at the end of the turn, so a replay never shows a stale spinner; the plan is cleared when the next turn starts or the conversation is reset.
+**Progress and the plan are state, not a second transcript.** `ChatSession` reads the `llm_*`, `v3_*` and `plan_*` events: a transient line under the mode controls shows thinking, prompt-evaluation percentage, the current V3 stage, a veto or a lens intervention, and the panel draws the generated plan with the steps `plan_adherence` marked satisfied. The line is cleared at the end of the turn, so a replay never shows a stale spinner; the plan is cleared when the next turn starts or the conversation is reset.
 
 **Notifications mirror the two things that can wait for the user.** A `permission_request` opens the inline card and a native notification with **View Diff** (when a prediction exists), **Allow Once**, **Allow for Session** (not for a deletion) and **Deny**; the first answer wins. A new error notice opens an error notification with **Open Chat** and **Settings**, and the workspace-mismatch notice opens a warning notification. The notifier observes `ChatSession.state`, not the panel, so a closed tool window does not silence a prompt.
 
@@ -160,7 +156,7 @@ src/main/kotlin/com/inferstep/atlas/ui/AtlasActions.kt             # commands re
 
 **The tool window draws its own icon.** `plugin.xml`'s `<toolWindow>` names `icons/toolwindow.svg`, a 13 x 13 mark — the size the platform draws a stripe button at — with a `_dark` file beside it that the platform selects by suffix, the same light/dark split as the 40 x 40 plugin icons. `AtlasToolWindowIconTest` holds the descriptor entry, both files at 13 x 13 with the mark's four steps, stem and dot, and the pair's shared geometry, so an edit to one theme cannot leave the other drawing a different mark. `scripts/check-distribution.sh` audits only the two `META-INF` plugin icons, so this test is what stands between a renamed file and the platform's default square.
 
-**Not seen on screen.** The descriptor test checks that the settings page, the status bar factory, the notification group and the actions are registered; `AtlasStatusTest` covers the `/ready` rules, and `AtlasConfigurableTest` and `AtlasProjectServiceTest` exercise the settings/service wiring under the platform test framework. The status bar's polling loop, the popup menus and notification actions themselves, and every surface's actual appearance, have not been exercised in a running IDE. A `runPyCharm` session that opens Settings, saves a token, watches the status bar go ready, allows a prompt from the notification and opens its diff is the check that would close that gap.
+**Not seen on screen.** The descriptor test checks that the settings page, the status bar factory, the notification group and the actions are registered; `AtlasStatusTest` covers the `/ready` rules, and `AtlasConfigurableTest` and `AtlasProjectServiceTest` exercise the settings/service wiring under the platform test framework. The status bar's polling loop, the popup menus and notification actions themselves, and every surface's actual appearance are covered by no test in a running IDE. A `runPyCharm` session that opens Settings, saves a token, watches the status bar go ready, allows a prompt from the notification and opens its diff is the check that would close that gap.
 
 ## Hardening and release (Stage 6)
 
@@ -219,8 +215,8 @@ newer API. Verifying against a newer build is the forward-compatibility check.
   an override and an invocation, disappeared from both reports.
 - **Jewel's Markdown composable and `SwingBridgeTheme` remain reported.** Both
   are experimental API in 2026.2 and the Markdown composable is deprecated
-  there too. No plugin-visible replacement exists (see the Stage 1 spike
-  results), so they stay, are reported, and are read at release rather than
+  there too. No plugin-visible replacement exists (see
+  [Compose and Jewel in the tool window](#compose-and-jewel-in-the-tool-window)), so they stay, are reported, and are read at release rather than
   muted.
 
 The task fails on compatibility warnings and problems,
@@ -261,10 +257,11 @@ platform bump would need a hand regeneration and review.
 
 ### What Stage 6 does not prove
 
-Four-way binary compatibility is now checked. The **on-screen** behaviour is
-not: no IDE has been launched here, no live atlas-proxy was run, and Windows is
-still untried. The smoke-test table below is unchanged, and a `runPyCharm` run
-against a live proxy remains the check that would close the UI half.
+Four-way binary compatibility is checked (Plugin Verifier, in
+`.github/workflows/jetbrains-plugin.yml`). The **on-screen** behaviour is
+unverified: no check launches an IDE against a live atlas-proxy, and Windows is
+untried. A `runPyCharm` run against a live proxy is the check that would close
+the UI half ([Smoke-test status](#smoke-test-status)).
 
 ## Tests
 
@@ -306,7 +303,7 @@ The fixture (`MockProxy`) is a real server on `com.sun.net.httpserver`, so the t
 
 The plugin is written in Kotlin 2.3.20 against the IntelliJ Platform 2026.1.3 SDK. Kotlin language and API levels are pinned to 2.3 because the IDE bundles the 2.3.x standard library; compiling against a newer level produces bytecode the platform cannot load.
 
-The spike uses the Compose runtime and Jewel modules bundled with IntelliJ Platform 2026.1.3: Compose Multiplatform 1.10.0 and Jewel 0.37. `composeUI()` supplies the Compose modules (including the runtime split) and, transitively, the Jewel widgets the plugin uses, and `bundledModule(...)` supplies Jewel's Markdown modules; nothing is packaged into the plugin. The build-side declaration is only half of it, though: `plugin.xml` depends on `com.intellij.modules.compose` and names `intellij.platform.compose.markdown` as a module, and that is what puts the classes on the plugin's classloader at runtime. `SwingBridgeTheme` maps the active Swing Look and Feel into the Compose content.
+The plugin uses the Compose runtime and Jewel modules bundled with IntelliJ Platform 2026.1.3: Compose Multiplatform 1.10.0 and Jewel 0.37. `composeUI()` supplies the Compose modules (including the runtime split) and, transitively, the Jewel widgets the plugin uses, and `bundledModule(...)` supplies Jewel's Markdown modules; nothing is packaged into the plugin. The build-side declaration is only half of it, though: `plugin.xml` depends on `com.intellij.modules.compose` and names `intellij.platform.compose.markdown` as a module, and that is what puts the classes on the plugin's classloader at runtime. `SwingBridgeTheme` maps the active Swing Look and Feel into the Compose content (`build.gradle.kts`, `src/main/resources/META-INF/plugin.xml`).
 
 ## Building and running
 
@@ -393,16 +390,7 @@ outside the lock entirely, so a verifier run resolves those from the platform's 
 
 Each `runIde`-family task launches a sandboxed IDE with the built plugin, so the tool window can be checked in that product by hand. These are manual runs, not tests, and none of them is wired into CI.
 
-| Run task | Product | Smoke-tested by hand |
-|---|---|---|
-| `runIde` | IntelliJ IDEA | no |
-| `runPyCharm` | PyCharm 2026.1 | **yes** — `PY-261.22158.340` |
-| `runWebStorm` | WebStorm 2026.1 | no |
-| `runGoLand` | GoLand 2026.1 | no |
-
-Neither the Stage 3 chat, the Stage 4 diffs nor the Stage 5 IDE integration have been **launched in any of them**: the panel, its streaming, its prompt cards, its Cancel button, the diff window, the settings page, the status bar and the notification actions are covered by the platform, JVM and descriptor tests above and by nothing else. A `runPyCharm` session against a live proxy, with settings opened, a token saved and an edit allowed from the notification and its diff opened, is the check that would close that gap, and it has not been run yet.
-
-The PyCharm run is the one that reproduced the Stage 1 `NoClassDefFoundError` above, and the one that confirmed the Markdown route. With the tool window forced visible so its content factory actually runs, the plugin loads (`Loaded custom plugins: ATLAS` in the sandbox log, with no `has dependency on … which is not installed` line for it), the tool window mounts, Jewel's Markdown renderer composes the assistant text, and no exception names the plugin. The other three have not been launched — their sandboxes have no project or tool-window state, so the tool window was never exercised. Four-way **binary** compatibility is checked by Plugin Verifier; the on-screen behaviour is not. Treat the UI as unverified until each run task has been smoke-tested.
+The on-screen behaviour is unverified: the panel, its streaming, its prompt cards, its Cancel button, the diff window, the settings page, the status bar and the notification actions are covered by the platform, JVM and descriptor tests above and by nothing else. A `runPyCharm` session against a live proxy, with settings opened, a token saved, an edit allowed from the notification and its diff opened, is the check that would close that gap. Four-way **binary** compatibility is checked by Plugin Verifier. Treat the UI as unverified until each run task has been smoke-tested.
 
 ## Kotlin style
 

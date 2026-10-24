@@ -152,7 +152,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo systemctl restart docker
    ```
 
-2. **RHEL 9 — add CUDA repo + install open-dkms module** (verified working on RHEL 9.7 with RTX 5060 Ti):
+2. **RHEL 9 — add CUDA repo + install open-dkms module:**
    ```bash
    # Add NVIDIA's CUDA repo
    sudo dnf config-manager --add-repo \
@@ -296,8 +296,6 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 ```
 
 **Important: do NOT set `ATLAS_HSA_OVERRIDE_GFX_VERSION` for gfx1200/gfx1201.** ROCm 7.0+ supports these targets natively; overriding the GFX version inside Docker causes a mismatch between the compiled kernels and the runtime target, which results in crashes. Leave `ATLAS_HSA_OVERRIDE_GFX_VERSION` unset (the default).
-
-> Tested on AMD Radeon AI PRO R9700 (gfx1201) with ROCm 7.2, `ATLAS_ROCM_TAG=7.2.3-complete`. The hidden-states patch applies cleanly to the pinned llama.cpp SHA. Inference runs correctly across text generation and embedding generation without any additional flags.
 
 ### ROCm container can't pull `rocm/rocm-terminal`
 
@@ -515,7 +513,7 @@ an issue with `nvidia-smi` output and the first 50 llama-server log lines.
 
 ### Model Loading on CPU Instead of GPU
 
-**Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
+**Symptom:** Generation at ~2 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
 
 **Fix:** Ensure `-ngl 99` (`--n-gpu-layers`) is set (offloads all layers to GPU). In Docker Compose the entrypoint sets it by default. For bare metal, check the command:
 ```bash
@@ -815,7 +813,7 @@ A message is conversational only when it is under 12 characters (`hi`, `thanks`,
 
 ### Requests Refused: the Lens Cannot Score
 
-**Symptom:** A request fails at once with HTTP 503 `dependency_down`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
+**Symptom:** A request fails at once with HTTP 503 `dependency_unavailable`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
 
 **Impact:** No request runs until the lens can score. This is deliberate: the lens is required ([ADR 0011](adr/0011-the-lens-is-required.md)). A run that stopped says whether it changed files before it stopped.
 
@@ -980,7 +978,7 @@ The model is running on CPU instead of GPU. Check:
 2. `-ngl 99` (`--n-gpu-layers`) — are all layers offloaded?
 3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
 
-**Expected performance:** there is no current reference figure; throughput depends on the model, quantization and grammar mode. An earlier ~51 tok/s figure came from a configuration that no longer exists.
+**Expected performance:** throughput depends on the model, quantization and grammar mode.
 
 ### V3 Pipeline Takes Several Minutes
 

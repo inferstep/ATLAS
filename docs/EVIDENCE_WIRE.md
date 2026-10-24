@@ -2,10 +2,10 @@
 
 The V3 service answers `/v3/generate` with a `passed` boolean, a phase name and
 a score. None of those says what was actually demonstrated: `passed` covers a
-compile smoke, a partial oracle score and a complete one indistinguishably, and
-the proxy had no way to tell them apart. The envelope carries the evidence
-itself, versioned, so a consumer can read what happened instead of guessing
-from a boolean.
+compile smoke, a partial oracle score and a complete one indistinguishably, so
+the proxy cannot tell them apart from those fields. The envelope carries the
+evidence itself, versioned, so a consumer can read what happened instead of
+guessing from a boolean.
 
 The envelope decides which bytes are a **candidate**. A generated candidate may
 replace the caller's content, and carry V3 provenance, only when the envelope
@@ -13,13 +13,13 @@ is available and self-consistent, its selection concluded a `verified_winner`,
 its record is closure-eligible, and its hash names the exact bytes Go would
 write.
 
-For a request that declares structured obligations that is necessary and no
-longer sufficient: the typed authorization path also has to grant it, and a
-refusal there keeps the caller's own content. See
-[CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md). For a request that
-declares none, what follows is the whole rule and is unchanged. `passed`, `phase_solved`, `winning_score` and the verification-evidence
-strings authorize nothing; `passed` stays on the wire as a compatibility and
-telemetry field.
+That is necessary, not sufficient: the typed authorization path also has to
+grant the candidate, and a refusal there keeps the caller's own content (see
+[CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md)). A request that sends
+no contract, or a `question`, gets no V3 candidate to deliver
+(`candidateDeliverable` in `proxy/candidate_reachability.go`). `passed`,
+`phase_solved`, `winning_score` and the verification-evidence strings authorize
+nothing; `passed` stays on the wire as a compatibility and telemetry field.
 
 Because sanitisation rewrites a candidate after the service earned its
 evidence, authorization is re-asked of the final bytes: a hash that no longer
@@ -35,13 +35,15 @@ use.
 | `v3-service/pipeline.py` | Orchestration: runs verifiers, supplies the selected record | Decide wire shape |
 | `v3-service/adapters.py` | Adapter knowledge: which criteria an adapter can observe, what its grading means in contract terms, and the live-record → contract-record bridge | Decide closure, ranking or selection |
 | `v3-service/main.py` | Transport: calls `adapters.evidence_envelope`, writes its output | Hold any policy — pinned by `test_main_serialises_but_decides_nothing` |
-| `v3-service/evidence.py` | Compatibility only, pending retirement | Gain any new behaviour — pinned by `test_no_new_behaviour_was_added_to_the_retiring_prototype` |
 | `proxy/types.go` | The one Go wire representation, beside `V3GenerateResponse` | — |
 | `proxy/v3_bridge.go` | The response boundary: decode plus strict validation and availability | Re-derive domain policy, or infer strength from `passed`/`phase_solved`/`winning_score`/`verification_evidence` |
 
-No separate evidence module exists on either side. One contract, one serialiser,
-one wire type, one validator — pinned by
-`test_one_canonical_contract_one_serialiser_no_duplicate_policy`.
+No separate evidence module exists on either side, and no compatibility module
+stands in for one (`test_the_retiring_prototype_is_gone`). One contract, one
+serialiser, one wire type, one validator — pinned by
+`test_one_canonical_contract_one_serialiser_no_duplicate_policy` and
+`test_no_compatibility_aliases_or_duplicate_implementations_remain`. The three
+tests are in `tests/v3-service/test_contract_genericity.py`.
 
 Local `ToolResult` validation (syntax, structural) stays completely separate:
 it says what **the proxy** checked about the bytes it wrote. The envelope says
@@ -161,9 +163,7 @@ Three names, three different artifacts:
 | generated alternatives | PlanSearch / DivSampling members |
 
 So `best_not_closure_eligible` means "best in the pool, the incumbent
-included". Before #259 the incumbent was only prose, so the phrase meant
-"best among the V3-generated candidates". Across 112 recorded sessions,
-V3's winner then replaced the model's file in all 33 of its deliveries.
+included".
 
 ## Benchmark-only pool capture
 
@@ -188,22 +188,3 @@ and no other surface; `test_candidate_bytes_reach_no_serialiser_or_emitter`
 pins that. The sink names the bytes the **service returned**, never the
 delivered artifact: only Go knows what was written, so the delivered hash
 is joined offline from the runner's authorization telemetry.
-
-## `evidence.py`: retired
-
-The prototype that predated `contract.py` is **deleted**. Every symbol moved to
-the layer that owns it, with no compatibility module, alias or shim left behind:
-
-| Was in `evidence.py` | Now |
-| --- | --- |
-| `select_adapter`, adapter id constants | `adapters.py` — adapter routing (`adapters.ADAPTER_*`) |
-| `js_is_instrumentable`, `extract_inline_script`, `js_probe_source_inline`, `js_probe_source`, `parse_probe_output`, `combine_runs`, the JS harness and its regexes, `INTERACTIVE_REQUIRED` / `INTERACTIVE_OPTIONAL` | **deleted** — the browser probe was a verifier for one artifact class with criteria named for one game; removed with the evidence modes that gated it |
-| `result`, `result_from_adapter`, `grade_interactive` | `adapters.contract_record`, which builds contract records from raw observations |
-| `selection_mode`, `probing_enabled`, `selection_enabled`, `OFF`/`SHADOW`/`ENFORCE` | **deleted** — there is one mode: the adapter's own record decides closure, `contract.select` fills the envelope's selection, the lens chooses the delivered bytes |
-| `may_return_early`, `may_return_early_result`, `at_least`, `rank_key`, `STRENGTH_ORDER` and the prototype strength scale | **deleted** — superseded by `contract.select`, `contract.rank_key` and the contract's own strength ordering |
-
-Sentinels in `tests/v3-service/test_contract_genericity.py` prove the file is
-gone, that no Python file imports it, that each moved symbol has exactly one
-definition in exactly one owner, and that the superseded policy has no
-definition anywhere. `tests/v3-service/test_capability_matrix.py` proves that
-no browser-probe or game-shaped criterion vocabulary survives in the service.

@@ -459,10 +459,6 @@ C(x) 정규화는 `sigmoid(steepness × (energy - midpoint))`입니다. 선택�
 
 > **참고:** 모델 가중치(.pt, .pkl 파일)는 저장소에 커밋되지 않습니다 — 학습 중에 빌드되어 컨테이너 이미지에 구워지거나 런타임에 마운트됩니다. 모델 파일이 없으면 서비스는 우아하게 성능 저하됩니다: C(x)는 중립 에너지를 반환하고, G(x)는 `gx_score: 0.5`와 `verdict: "unavailable"`을 반환합니다. 학습 데이터와 가중치는 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)에서 제공됩니다.
 
-<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
-
-> **제거된 서브시스템.** 이전 릴리스에는 RAG/PageIndex 프로젝트 인덱서, BM25 패턴 매처, 그리고 Thompson 샘플링 기반 신뢰도 라우터가 렌즈 안에 들어 있었습니다. 이들은 제품에서 아무도 호출하지 않는 렌즈 엔드포인트를 통해서만 접근할 수 있었고, 2026-08 단순화 캠페인에서 제거되었습니다(CHANGELOG 참고). 그 스택에서 마지막으로 남아 있던 패턴 캐시도 2026-09에 제거되었습니다. 평가 실행을 포함한 모든 성공 세션의 해답을 저장해 이후 모든 실행에 '교훈'으로 주입했기 때문에, 테스트 세트에서 제품으로 이어지는 통로였습니다.
-
 ---
 
 ## 6. Sandbox
