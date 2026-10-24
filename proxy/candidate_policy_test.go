@@ -116,7 +116,7 @@ func TestLegacyVerificationCannotProduceBehavioralAuthority(t *testing.T) {
 			t.Fatal("an untyped command declared behavioral strength")
 		}
 	}
-	if got := authorizationFloor(obs); got == VerificationKindBehavioral {
+	if authorizationFloor(obs) == VerificationKindBehavioral {
 		t.Fatal("an untyped command raised the floor to behavioral")
 	}
 }

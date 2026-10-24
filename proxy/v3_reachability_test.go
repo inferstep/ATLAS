@@ -238,7 +238,7 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 				t.Errorf("the producer was consulted %d times for an undeliverable candidate", w.v3Calls)
 			}
 			if got := w.disk(t); got != reachBaseline {
-				t.Error("the model's own bytes are not what landed")
+				t.Errorf("the model's own bytes are not what landed: got %v", got)
 			}
 			if res.AuthorizedDeliveryHash != "" {
 				t.Errorf("an undeliverable request named an authorization: %q", res.AuthorizedDeliveryHash)
@@ -328,7 +328,7 @@ func TestADeliveryIsNotAClaimThatTheRequestIsComplete(t *testing.T) {
 		t.Fatalf("the write failed: %+v", res)
 	}
 	if got := w.disk(t); got != reachWinner {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	status, reason := finalizeCompletion(w.ctx, &runState{}, reachProse, "")
 	if status == TerminalCompleted {
@@ -448,7 +448,7 @@ func TestAnAutomaticDeliveryCreatesNoObligation(t *testing.T) {
 		t.Fatalf("the write failed: %+v", res)
 	}
 	if got := w.disk(t); got != reachWinner {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	if after := len(requestObligations(w.ctx)); after != before {
 		t.Errorf("the delivery created %d obligations", after-before)

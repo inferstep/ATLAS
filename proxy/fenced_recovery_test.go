@@ -573,7 +573,7 @@ func TestFencedChannelRecoveryIdentityAndScope(t *testing.T) {
 		defer cancel()
 		ctx.Ctx = workCtx
 		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
-			t.Error("recovery ran with less budget than it needs to be acted on")
+			t.Errorf("recovery ran with less budget than it needs to be acted on: got %v", msg)
 		}
 	})
 
@@ -581,11 +581,11 @@ func TestFencedChannelRecoveryIdentityAndScope(t *testing.T) {
 		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 		st := &runState{}
 		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
-			t.Error("recovery offered before the channel was spent")
+			t.Errorf("recovery offered before the channel was spent: got %v", msg)
 		}
 		ctx.FencedFailures = map[string]int{fencedKey(ctx, "solve.py"): 1}
 		if msg := fencedChannelRecovery(ctx, st, "solve.py"); msg != "" {
-			t.Error("recovery offered with allowance remaining")
+			t.Errorf("recovery offered with allowance remaining: got %v", msg)
 		}
 	})
 }

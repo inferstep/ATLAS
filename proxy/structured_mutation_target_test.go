@@ -26,7 +26,7 @@ func TestTUIAutomaticRequestDeliversTheSelectedCandidateToTheStructuredTarget(t 
 		t.Fatalf("delivery failed: %+v", res)
 	}
 	if got := w.disk(t); got != routeWinner {
-		t.Fatalf("disk holds the baseline; the selected candidate was not delivered to the structured target")
+		t.Fatalf("disk holds the baseline; the selected candidate was not delivered to the structured target: got %v", got)
 	}
 	if res.AuthorizedDeliveryHash != contentSHA256(routeWinner) {
 		t.Error("the result does not name the authorization it spent")

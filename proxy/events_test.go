@@ -326,7 +326,7 @@ func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
 		b.unsubscribe(ch)
 	}
 	// A new subscriber is refused once draining has begun.
-	if ch := b.subscribe(); ch != nil {
+	if b.subscribe() != nil {
 		t.Error("a subscriber was accepted after draining began")
 	}
 	if !b.isDraining() {

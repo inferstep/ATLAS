@@ -33,7 +33,7 @@ func TestAnAutomaticCandidateDoesNotLandWhenItsDeclaredCheckNeverRan(t *testing.
 	w.ctx.SandboxURL = checkerDown.URL
 
 	w.write(t)
-	if got := w.disk(t); got == routeWinner {
+	if w.disk(t) == routeWinner {
 		t.Fatal("the candidate landed although its declared syntax check never ran")
 	}
 }

@@ -285,7 +285,7 @@ func TestASelectionMismatchIsAttributedFromTheLiveOwner(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if got := w.disk(t); got == routeWinner {
+	if w.disk(t) == routeWinner {
 		t.Fatal("a candidate the service did not name landed")
 	}
 	attr := attributionRecords(recs)
@@ -677,7 +677,7 @@ func TestTheModelIsToldWhenACandidateReplacedItsEdit(t *testing.T) {
 				t.Errorf("the model was never told the bytes on disk are not its edit")
 			}
 			if seen := r.ctx.FilesRead[filepath.Join(r.dir, "mod.py")]; seen != c.winner {
-				t.Errorf("read state does not follow what landed")
+				t.Errorf("read state does not follow what landed: got %v", seen)
 			}
 		})
 	}

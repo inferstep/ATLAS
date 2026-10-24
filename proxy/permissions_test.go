@@ -69,7 +69,7 @@ func TestDenyWritePathAllowsLookalikes(t *testing.T) {
 		}
 	}
 	for _, path := range []string{".env", "certs/tls.pem", "a/b/c/service.key"} {
-		if reason := denyWritePathReason(path); reason == "" {
+		if denyWritePathReason(path) == "" {
 			t.Errorf("denyWritePathReason(%q) allowed, want denied", path)
 		}
 	}
@@ -147,7 +147,7 @@ func TestAwaitPermissionAllow(t *testing.T) {
 		t.Fatalf("decision POST status = %d, want 200", w.Code)
 	}
 	if got := <-done; !got {
-		t.Error("awaitPermission returned false for an allow decision")
+		t.Errorf("awaitPermission returned false for an allow decision: got %v", got)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestAwaitPermissionDeny(t *testing.T) {
 	waitForPending(t, "sess-deny", "call_2")
 	postDecision(t, `{"session_id":"sess-deny","tool_call_id":"call_2","decision":"deny"}`)
 	if got := <-done; got {
-		t.Error("awaitPermission returned true for a deny decision")
+		t.Errorf("awaitPermission returned true for a deny decision: got %v", got)
 	}
 	if ctx.isToolAllowed("delete_file") {
 		t.Error("deny should not whitelist the tool")
@@ -186,7 +186,7 @@ func TestAwaitPermissionSessionScopeWhitelists(t *testing.T) {
 	waitForPending(t, "sess-scope", "call_3")
 	postDecision(t, `{"session_id":"sess-scope","tool_call_id":"call_3","decision":"allow","scope":"session"}`)
 	if got := <-done; !got {
-		t.Fatal("awaitPermission returned false for an allow decision")
+		t.Fatalf("awaitPermission returned false for an allow decision: got %v", got)
 	}
 	if !ctx.isToolAllowed("run_command") {
 		t.Error("session-scope allow should whitelist run_command for the turn")
@@ -201,7 +201,7 @@ func TestAwaitPermissionCancelDenies(t *testing.T) {
 	waitForPending(t, "sess-cancel", "call_4")
 	cancel()
 	if got := <-done; got {
-		t.Error("awaitPermission should deny when the context is cancelled")
+		t.Errorf("awaitPermission should deny when the context is cancelled: got %v", got)
 	}
 }
 

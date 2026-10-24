@@ -708,7 +708,7 @@ func TestFalseSuccessSummariesNeverShipOnANonCompletedRun(t *testing.T) {
 	for task, prose := range falseSuccessSummaries {
 		t.Run(task, func(t *testing.T) {
 			// The claim is detected as a claim.
-			if claim := completionClaimIn(prose); claim == "" {
+			if completionClaimIn(prose) == "" {
 				t.Fatalf("no completion claim detected in the summary:\n%s", prose)
 			}
 			ctx := NewAgentContext(t.TempDir(), Tier2Medium)

@@ -137,7 +137,7 @@ func TestAStructuralEditWithANewBodyIsNotAResend(t *testing.T) {
 	if msg := identicalRetryRefusal(ctx, "structural_edit", call("def update():\n    pass\n")); msg != "" {
 		t.Fatalf("a corrected body was refused as a byte-for-byte re-send: %q", msg)
 	}
-	if msg := identicalRetryRefusal(ctx, "structural_edit", call("def update(:\n    pass\n")); msg == "" {
+	if identicalRetryRefusal(ctx, "structural_edit", call("def update(:\n    pass\n")) == "" {
 		t.Fatal("an identical re-send of a refused call is not refused")
 	}
 	// The repeat window keeps its own identity: the selector, whatever the body.

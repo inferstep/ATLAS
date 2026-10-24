@@ -120,7 +120,7 @@ func TestARetainedBaselineLandsTheCallersOwnBytes(t *testing.T) {
 		t.Fatalf("the caller's own content did not land: %v", res.Error)
 	}
 	if got := w.disk(t); got != routeBaseline {
-		t.Fatal("disk does not hold the caller's bytes")
+		t.Fatalf("disk does not hold the caller's bytes: got %v", got)
 	}
 	if res.AuthorizedDeliveryHash != "" {
 		t.Error("a retained baseline claimed an authorized delivery")
@@ -168,7 +168,7 @@ func TestAMateriallyDifferentCandidateStillMintsAndConsumesOneGrant(t *testing.T
 		t.Fatalf("minted %d consumed %d, want exactly one of each", minted, consumed)
 	}
 	if got := w.disk(t); got != routeWinner {
-		t.Error("the authorized candidate did not land")
+		t.Errorf("the authorized candidate did not land: got %v", got)
 	}
 	ends := recordsOfKind(recs, "shadow_delivery_disposition")
 	if len(ends) != 1 || ends[0]["disposition"] != string(deliveryConsumedAndLanded) {

@@ -541,7 +541,7 @@ func TestRunFirstInstructionNamesTheToolThatCanRunTheFile(t *testing.T) {
 	if strings.Contains(server, "run_command") {
 		t.Errorf("server script must not be sent to run_command: %s", server)
 	}
-	if r := foregroundServerRejectionWithSource("python3 app.py", workspaceFileReader(ctx)); r == "" {
+	if foregroundServerRejectionWithSource("python3 app.py", workspaceFileReader(ctx)) == "" {
 		t.Fatalf("fixture app.py is not detected as a server; the test proves nothing")
 	}
 

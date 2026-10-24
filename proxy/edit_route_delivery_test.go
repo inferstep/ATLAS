@@ -131,6 +131,6 @@ func TestARejectedEditCandidateKeepsTheModelsOwnEdit(t *testing.T) {
 		t.Error("a refusal claimed an authorized candidate")
 	}
 	if got := w.disk(t); got != editOriginal {
-		t.Error("the route wrote something before its caller decided to")
+		t.Errorf("the route wrote something before its caller decided to: got %v", got)
 	}
 }

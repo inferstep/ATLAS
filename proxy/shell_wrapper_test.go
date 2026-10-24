@@ -126,7 +126,7 @@ func TestValidateShellCommandLimitsWrapperDepth(t *testing.T) {
 			}
 		})
 	}
-	if got := validateShellCommand(strings.Repeat("eval ", 16) + "rm -rf /"); got == "" {
+	if validateShellCommand(strings.Repeat("eval ", 16)+"rm -rf /") == "" {
 		t.Error("catastrophic command at the depth limit was allowed")
 	}
 }

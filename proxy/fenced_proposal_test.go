@@ -702,7 +702,7 @@ func TestRefusedReplacementStateBounds(t *testing.T) {
 			t.Fatal("no recovery offered")
 		}
 		if again := rejectedProposalRecovery(ctx, st, "./solve.py", k2, sha); again != "" {
-			t.Error("the alias bought a second recovery")
+			t.Errorf("the alias bought a second recovery: got %v", again)
 		}
 	})
 
@@ -842,7 +842,7 @@ func TestRefusedReplacementGenerationsDoNotStarve(t *testing.T) {
 			t.Errorf("generation %d started at %d proposals, want 1 — the previous "+
 				"generation's hashes were carried over", gen+1, n)
 		}
-		if msg := rejectedProposalRecovery(ctx, st, "solve.py", canon, sha); msg == "" {
+		if rejectedProposalRecovery(ctx, st, "solve.py", canon, sha) == "" {
 			t.Fatalf("generation %d was refused a recovery by the path's own history", gen+1)
 		}
 		if len(st.c4Rejected) != 1 {
@@ -899,7 +899,7 @@ func TestRefusedReplacementCeilingFailsClosed(t *testing.T) {
 	if len(st.c4Rejected) > maxC4Generations {
 		t.Errorf("eviction exceeded the ceiling: %d", len(st.c4Rejected))
 	}
-	if msg := rejectedProposalRecovery(ctx, st, "ninth.py", canon, sha); msg == "" {
+	if rejectedProposalRecovery(ctx, st, "ninth.py", canon, sha) == "" {
 		t.Error("the ninth path was still denied after room was made")
 	}
 }

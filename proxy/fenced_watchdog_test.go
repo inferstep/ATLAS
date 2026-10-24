@@ -201,7 +201,7 @@ func TestWatchdogCancelsOnlyTheChildAndChargesTheAllowance(t *testing.T) {
 	}
 	// A cancelled zero-content attempt is a failure and must consume budget,
 	// or the loop restarts it on the next write_file.
-	if n := ctx.FencedFailures[fencedKey(ctx, "solve.py")]; n == 0 {
+	if ctx.FencedFailures[fencedKey(ctx, "solve.py")] == 0 {
 		t.Error("watchdog cancellation consumed no allowance")
 	}
 	// One stall turns the channel off for the session, so the next

@@ -259,7 +259,7 @@ func TestTheCutAttemptIsPutBackIntoTheConversation(t *testing.T) {
 			t.Errorf("the elision is not stated: %q", got[len(got)-90:])
 		}
 		if n := len([]rune(attemptEcho(long, false))); n <= cutAttemptKeepRunes {
-			t.Error("an elided reply lost its marker")
+			t.Errorf("an elided reply lost its marker: got %v", n)
 		}
 		if strings.Contains(attemptEcho(long, false), "cut here") {
 			t.Error("a reply that was not cut is described as cut")

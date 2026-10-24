@@ -339,7 +339,7 @@ func TestBrokenArtifactRecoveryArmsOnTheRecurrence(t *testing.T) {
 	// Once per evidence generation, and an alias is the same generation.
 	for _, spelling := range []string{"solve.py", "./solve.py"} {
 		if again := brokenArtifactRecovery(ctx, st, spelling); again != "" {
-			t.Errorf("%s bought a second recovery", spelling)
+			t.Errorf("%s bought a second recovery: got %v", spelling, again)
 		}
 	}
 	// A different path is a different problem.
@@ -353,9 +353,9 @@ func TestBrokenArtifactRecoveryArmsOnTheRecurrence(t *testing.T) {
 		ValidationDetail: "line 1: expected ':'", ValidatedHash: h,
 	}
 	if first := brokenArtifactRecovery(ctx, st, "other.py"); first != "" {
-		t.Error("another path inherited solve.py's recurrence")
+		t.Errorf("another path inherited solve.py's recurrence: got %v", first)
 	}
-	if second := brokenArtifactRecovery(ctx, st, "other.py"); second == "" {
+	if brokenArtifactRecovery(ctx, st, "other.py") == "" {
 		t.Error("another path was denied its own recovery")
 	}
 }
@@ -381,7 +381,7 @@ func TestBrokenArtifactRecoveryRearmsOnNewEvidence(t *testing.T) {
 	ctx.Ledger[key].ValidationDetail = "line 1: still expected ':'"
 	ctx.RecordBodySeen(filepath.Join(ctx.WorkingDir, "solve.py"))
 	if msg := brokenArtifactRecovery(ctx, st, "solve.py"); msg != "" {
-		t.Error("the new generation recovered on one accidental no-op")
+		t.Errorf("the new generation recovered on one accidental no-op: got %v", msg)
 	}
 	msg := brokenArtifactRecovery(ctx, st, "solve.py")
 	if msg == "" {
@@ -531,7 +531,7 @@ func TestNoopEditRecoveryCountsTheRefusalOnce(t *testing.T) {
 		t.Errorf("the recovery helper wrote failure accounting of its own: %v",
 			ctx.RecentFailurePaths)
 	}
-	if msg := brokenArtifactRecovery(ctx, st, "solve.py"); msg == "" {
+	if brokenArtifactRecovery(ctx, st, "solve.py") == "" {
 		t.Fatal("the recurrence did not arm")
 	}
 	if len(ctx.RecentFailurePaths) != before {

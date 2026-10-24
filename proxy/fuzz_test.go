@@ -345,7 +345,7 @@ func FuzzToolCallPathsStayInTheWorkspace(f *testing.F) {
 	f.Fuzz(func(t *testing.T, toolIndex uint8, args []byte) {
 		tool := tools[int(toolIndex)%len(tools)]
 		ctx := &AgentContext{WorkingDir: root, HostWorkingDir: "/Users/test/project"}
-		if refusal := validateToolWorkspacePaths(tool, args, ctx); refusal != "" {
+		if validateToolWorkspacePaths(tool, args, ctx) != "" {
 			return
 		}
 		paths, ok := handlerPaths(tool, args)

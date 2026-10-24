@@ -292,7 +292,7 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := len(got.OutputPaths()); n != 1 {
-		t.Fatalf("aliases did not dedupe: %v", got.OutputPaths())
+		t.Fatalf("aliases did not dedupe: %v: got %v", got.OutputPaths(), n)
 	}
 }
 

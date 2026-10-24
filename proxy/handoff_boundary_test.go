@@ -249,7 +249,7 @@ func TestAdoptionReportsTheActualDeliveredState(t *testing.T) {
 		t.Fatalf("the producer was consulted %d times, want 1", w.v3Calls)
 	}
 	if got := w.disk(t); got != handoffDelivered {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	next := w.prompt(t, 1)
 
@@ -282,7 +282,7 @@ func TestAnUnreplacedWriteSaysNothingAboutSupersession(t *testing.T) {
 		`{"type":"done","summary":"done"}`,
 	})
 	if got := w.disk(t); got != handoffSubmitted {
-		t.Fatalf("precondition: the model's own bytes are not on disk")
+		t.Fatalf("precondition: the model's own bytes are not on disk: got %v", got)
 	}
 	if strings.Contains(w.prompt(t, 1), "are NOT the ones you sent") {
 		t.Error("an unreplaced write claimed its content was replaced")
@@ -370,7 +370,7 @@ func TestCandidateAdoptionDoesNotCertifyTheRequest(t *testing.T) {
 		`{"type":"done","summary":"done"}`,
 	})
 	if got := w.disk(t); got != handoffDelivered {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	// The pipeline's build check is not evidence that the user's request is
 	// finished, and the turn after an adoption must not be told it is.
@@ -404,7 +404,7 @@ func TestCandidateAdoptionDoesNotFinishThePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := w.disk(t); got != handoffDelivered {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	if w.ctx.Plan == nil || len(w.ctx.Plan.Steps) != 2 {
 		t.Fatalf("precondition: the run dropped or replaced the plan: %+v", w.ctx.Plan)

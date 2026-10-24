@@ -900,8 +900,8 @@ func TestApprovedDeletionCompletionMatrix(t *testing.T) {
 			r.check(t, c.name)
 			t.Logf("   summary=%.150s", r.terminal["summary"])
 			if got := NormalizeTerminalStatus(r.terminal["status"]); got != c.wantStatus {
-				t.Errorf("status=%q reason=%q, want %s",
-					r.terminal["status"], r.terminal["reason"], c.wantStatus)
+				t.Errorf("status=%q (read as %q) reason=%q, want %s",
+					r.terminal["status"], got, r.terminal["reason"], c.wantStatus)
 			}
 			if r.terminal["reason"] != c.wantReason {
 				t.Errorf("reason=%q, want %q", r.terminal["reason"], c.wantReason)
