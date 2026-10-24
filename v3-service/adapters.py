@@ -473,11 +473,11 @@ class LLMAdapter:
                             line = raw.decode("utf-8", "replace").rstrip("\r\n")
                             if not line.startswith("data:"):
                                 continue
-                            payload = line[5:].lstrip()
-                            if payload == "[DONE]":
+                            event = line[5:].lstrip()
+                            if event == "[DONE]":
                                 break
                             try:
-                                chunk = json.loads(payload)
+                                chunk = json.loads(event)
                             except json.JSONDecodeError:
                                 continue
                             choices = chunk.get("choices") or []
