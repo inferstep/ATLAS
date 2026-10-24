@@ -98,7 +98,7 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | `context.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 봉쇄, 세션 파일 매니페스트 |
 | `permissions.go` | 권한 게이트(`/v1/permission`), 트러스트 모드, 하드 차단 패턴 |
 | `lens.go` | 렌즈 스코어링 호출, 캘리브레이션 상태 |
-| `guardrails.go` | 도구별 스티어링 가드(축소, 누락된 명령/모듈 스티어, doctype 제거) |
+| `guardrails*.go` | 도구별 스티어링 가드(축소, 누락된 명령/모듈 스티어, doctype 제거) |
 | `shell_wrapper.go` | `validateShellCommand` 뒤의 명령 정책: 복합 명령을 나누고, 실행 래퍼(`sh -c`, `eval` 등) 안을 최대 16단계까지 살펴보며, 치명적인 명령과 검사할 수 없는 래퍼를 거부 |
 | `events.go` | 타입 엔벨로프 브로커(`/events`)와 SSE 배관 |
 | `v3_bridge.go` | v3-service의 `/v3/generate` + `/v3/plan`용 SSE 클라이언트 |
@@ -262,7 +262,7 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 
 ### 안전 제한
 
-운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails.go`와 `proxy/agent.go`에 있습니다.
+운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails*.go`와 `proxy/agent.go`에 있습니다.
 
 | 제한 | 값 | 용도 |
 |-------|-------|---------|
@@ -271,7 +271,7 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 | V3 대화형 벽시계 상한 | 단일 V3 파이프라인 호출은 `ATLAS_V3_TIMEOUT`(기본 180초)으로 상한; 타임아웃 시 프록시는 모델의 구문 게이트를 통과한 내용으로 폴백(`0`은 비활성화) | 긴 수리 정체 상황에서도 대화형 세션의 응답성 유지 |
 | 턴별 추론 예산 | ~6144 추론 토큰 후 스트림을 끊음(`ATLAS_REASONING_BUDGET`, 0은 비활성화); 복구는 내장된 tool_call을 추출하거나 다시 프롬프트함 | 추론 나선을 제한 |
 | 기존 파일에 대한 write_file | 파일이 5줄 초과면 거부; .py/.html/.htm에서는 단계별 문법 게이트가 `structural_edit`로 스티어 | 정밀 편집(`edit_file`) 또는 노드 전체 편집(`structural_edit`)을 강제 |
-| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
+| 의심스러운 축소 가드 | `oldSize >= 100B`이고 `newSize < 64B`일 때 `structural_edit`/`edit_file` 거부(`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | 파괴적 스텁 재작성이 디스크에 닿기 전에 포착 |
 | structural_edit 폭주 콘텐츠 가드 | `content` > 8 KB AND > 파일 크기의 4배일 때 거부 | 교체 노드로 방출된 추론 누출 덩어리를 포착 |
 | 에러 루프 브레이커 | 연속 3회 실패 | 폭주하는 실패 사이클 중단 |
 | 탐색 예산 | 연속 4회 읽기 전용 호출에서 넛지; 5회 이상에서 강화된 넛지. 읽기는 항상 실행됩니다 — 넛지는 *다음* 턴을 쓰기 쪽으로 유도할 뿐입니다 | 무한정 탐색하는 대신 쓰도록 모델을 유도 |

@@ -98,7 +98,7 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
 | `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
 | `lens.go` | lens 打分调用、校准状态 |
-| `guardrails.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
+| `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
 | `shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
 | `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
@@ -387,7 +387,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 
 ### 安全限制
 
-面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails.go` 和 `proxy/agent.go`。
+面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/agent.go`。
 
 | 限制 | 取值 | 用途 |
 |-------|-------|---------|
@@ -396,7 +396,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 | V3 交互式墙钟上限 | 单次 V3 pipeline 调用被限制在 `ATLAS_V3_TIMEOUT`（默认 180s）；超时时代理回退到模型自身的语法门控内容（`0` 禁用） | 在长时间修复停滞下保持交互式会话的响应 |
 | 逐轮推理预算 | 在约 6144 个推理 token 后切断流（`ATLAS_REASONING_BUDGET`，0 禁用）；恢复时从推理中提取一个内嵌的 tool_call 或重新提示 | 限定推理螺旋 |
 | 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `structural_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`structural_edit`） |
-| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
+| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
 | structural_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
 | 错误循环熔断器 | 连续 3 次失败 | 停止失控的失败循环 |
 | 探索预算 | 连续 4 次只读调用时提示（nudge）；5 次以上时升级提示。读取始终会执行 —— 提示是把*下一*轮引向写入 | 推动模型去写，而不是无限探索 |

@@ -974,7 +974,7 @@ type AgentContext struct {
 	// HumanTask (fenced blocks, "exactly ...:" lines). Landed writes are
 	// verified against these and whitespace-only drift is repaired
 	// mechanically — the model plans, the harness copies. See
-	// extractLiteralBlocks / repairLiteralDrift in guardrails.go.
+	// extractLiteralBlocks / repairLiteralDrift in guardrails_write.go.
 	LiteralBlocks []string
 
 	// FencedCalls / FencedTokens account the @fenced sub-calls

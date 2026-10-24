@@ -47,7 +47,6 @@
  "files": {
   "atlas/commands/lens.py": 1554,
   "proxy/agent.go": 9915,
-  "proxy/guardrails.go": 3794,
   "proxy/tools.go": 6913,
   "proxy/types.go": 2080,
   "sandbox/executor_server.py": 2140,

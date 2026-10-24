@@ -35,7 +35,7 @@ Each user message drives an agent loop that runs until the model emits
    `run_command`, `run_background`, `tail_background`,
    `stop_background`). Per-tool
    guardrails: read-tracking, mtime checks, default-deny patterns,
-   suspicious-shrinkage guard (`guardrails.go`).
+   suspicious-shrinkage guard (`guardrails_write.go`).
 4. **V3 routing for T2+ writes** — when the file being written
    qualifies (≥ 10 lines with logic indicators, or a recognized
    code/markup extension — `classifyFileTier` in `tools.go`), the

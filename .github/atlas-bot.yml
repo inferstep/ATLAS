@@ -56,7 +56,7 @@ pull_requests:
     proxy/agent.go: the agent loop
     proxy/tools.go: the tool handlers
     proxy/gates*: the guards
-    proxy/guardrails.go: the guards
+    proxy/guardrails*: the guards
     proxy/permissions.go: the guards
     proxy/authorization_*: the guards
     proxy/shell_wrapper.go: the guards
