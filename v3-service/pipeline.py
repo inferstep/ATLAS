@@ -3,6 +3,7 @@ verification, the lens/structural/call-graph vetoes, candidate selection,
 the repair phases, stage telemetry, and the /v3/generate problem builder."""
 
 import base64
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -13,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from stages.llm_client import extract_code_for_problem
 from stages.budget_forcing import BudgetForcing, BudgetForcingConfig
@@ -1345,6 +1346,94 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
 # V3PipelineService._run_impl reads top to bottom as these steps.
 
 
+@dataclasses.dataclass(frozen=True)
+class _RunContext:
+    """What every step of one run reads and none reassigns.
+
+    The request's own values, the clock, the run's emit and check_client,
+    its adapters, the capture sink, and the result dict the steps fill in.
+    _run_impl builds it once its setup is done; a step unpacks the fields it
+    uses.
+    """
+    problem: str
+    task_id: str
+    files: Dict[str, str]
+    file_path: str
+    build_command: str
+    working_dir: str
+    baseline_code: str
+    budget_ms: Optional[float]
+    start: float
+    events: List[Dict[str, Any]]
+    emit: Any
+    check_client: Any
+    llm: Any
+    sandbox: Any
+    embed: Any
+    task_input_file: str
+    smoke_language: str
+    capture: Any
+    result: Dict[str, Any]
+
+
+class _Probe(NamedTuple):
+    """The phase-zero probe as the later phases read it: its code, its
+    combined Lens scores and its sandbox verdict. With no probe code it is
+    unscored and not passed, and `evidence` is None."""
+    code: str
+    scores: Dict[str, Any]
+    energy_raw: Any
+    energy_norm: Any
+    cx_calibrated: bool
+    passed: bool
+    stdout: str
+    stderr: str
+    evidence: Any
+
+
+def _score_and_test_probe(ctx, probe_code, tokens, verified_sandbox):
+    """Score the probe with the combined C(x)+G(x) call and verify it in the
+    sandbox; its tokens count toward the run once it produced code."""
+    emit, result = ctx.emit, ctx.result
+    # Score and test probe with self-generated tests. The probe is the
+    # only candidate the CxGx gate below can see, so it is scored with
+    # the combined C(x)+G(x) call — one embedding extraction, both
+    # models — rather than C(x) alone.
+    probe_scores = dict(scoring.NEUTRAL_COMBINED)
+    probe_energy_raw, probe_energy_norm = 0.0, 0.5
+    probe_cx_calibrated = False
+    probe_passed = False
+    probe_stdout = probe_stderr = ""
+    probe_evidence = None
+    if probe_code:
+        probe_scores = scoring.score_candidate_combined(probe_code)
+        probe_energy_raw = probe_scores["cx_energy"]
+        probe_energy_norm = probe_scores["cx_normalized"]
+        probe_cx_calibrated = probe_scores["cx_calibrated"]
+        probe_failure = probe_scores.get("failure")
+        probe_scored = probe_energy_raw is not None
+        if probe_scored:
+            norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
+            detail = (f"C(x)={probe_energy_raw:.2f} norm={norm_label} "
+                      f"G(x)={float(probe_scores['gx_score']):.2f} "
+                      f"({probe_scores['verdict']})")
+        else:
+            # No score to report: the allocator below reads the verdict
+            # "unscored" and keeps its floor, and says so.
+            detail = (f"unscored "
+                      f"({scoring.describe_lens_failure(probe_failure or {})})")
+        emit("probe_scored", detail,
+             scored=probe_scored,
+             gx_score=probe_scores["gx_score"],
+             gx_available=probe_scores["gx_available"],
+             verdict=probe_scores["verdict"],
+             failure=probe_failure)
+        probe_passed, probe_stdout, probe_stderr, probe_evidence = verified_sandbox(probe_code)
+        emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
+        result["total_tokens"] += tokens
+    return _Probe(probe_code, probe_scores, probe_energy_raw, probe_energy_norm,
+                  probe_cx_calibrated, probe_passed, probe_stdout, probe_stderr,
+                  probe_evidence)
 def _smoke_language(file_path):
     """The language the smoke check verifies the target file in: from its
     extension, or Python when the task names no file."""
@@ -1652,56 +1741,16 @@ class V3PipelineService:
         task_input_file = _task_input_file(files)
         embed = adapters.EmbedAdapter()
         result = _new_result(task_id)
+        ctx = _RunContext(problem=problem, task_id=task_id, files=files, file_path=file_path,
+                          build_command=build_command, working_dir=working_dir,
+                          baseline_code=baseline_code, budget_ms=budget_ms, start=start, events=events,
+                          emit=emit, check_client=check_client, llm=llm, sandbox=sandbox, embed=embed,
+                          task_input_file=task_input_file, smoke_language=smoke_language,
+                          capture=capture, result=result)
 
         # ===== PHASE 0: PROBE =====
-        emit("probe", "Generating probe candidate...")
-        # Light probe first (1024 thinking tokens), retry with standard if fails
-        try:
-            chatml = self.budget_forcing.format_chatml(problem, "light")
-            response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-            probe_code = extract_code_for_problem(response, problem)
-            if probe_code:
-                emit("probe_light", f"Light probe: {len(probe_code)} chars, {tokens} tokens, {t_ms:.0f}ms")
-        except Exception as e:
-            emit("probe_error", str(e))
-            probe_code = ""
-
-        if not probe_code:
-            emit("probe_retry", "Light probe failed — retrying with standard budget")
-            try:
-                chatml = self.budget_forcing.format_chatml(problem, "standard")
-                response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-                probe_code = extract_code_for_problem(response, problem)
-            except Exception as e:
-                emit("probe_error", str(e))
-
-        if not probe_code:
-            emit("probe_failed", "No code extracted from probe")
-            # Generate with the minimal reasoning budget
-            chatml = self.budget_forcing.format_chatml(problem, "nothink")
-            response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
-            probe_code = extract_code_for_problem(response, problem)
-
-        # Classify task type. Interactive tasks (games, UIs, framework code)
-        # skip synthetic I/O self-tests entirely — those tests would fail by
-        # construction, falsely triggering PR-CoT/refinement on working code.
-        # See ISSUES.md PC-022.
-        task_type = scoring.classify_task_type(problem)
-        emit("task_type", task_type)
-        result["task_type"] = task_type
-
-        # Generate self-tests (algorithmic tasks only) — used for sandbox verification
-        self_tests = None
-        if task_type == "algorithmic":
-            emit("self_test_gen", "Generating verification tests...")
-            try:
-                self_tests = self.self_test_gen.generate(problem, llm, task_id)
-                emit("self_test_done", f"{len(self_tests.test_cases)} test cases")
-                result["total_tokens"] += self_tests.generation_tokens
-            except Exception as e:
-                emit("self_test_error", str(e)[:200])
-        else:
-            emit("self_test_skip", "Interactive task — using compile smoke-test")
+        probe_code, tokens = self._generate_probe(ctx)
+        task_type, self_tests = self._classify_task(ctx)
 
         # Computed once, before verified_sandbox's first caller (the phase-0
         # probe). The phase-3 regeneration below also writes generated cases,
@@ -1844,41 +1893,10 @@ class V3PipelineService:
             # command still gets to speak.
             return verify_build_if_requested(out, err)
 
-        # Score and test probe with self-generated tests. The probe is the
-        # only candidate the CxGx gate below can see, so it is scored with
-        # the combined C(x)+G(x) call — one embedding extraction, both
-        # models — rather than C(x) alone.
-        probe_scores = dict(scoring.NEUTRAL_COMBINED)
-        probe_energy_raw, probe_energy_norm = 0.0, 0.5
-        probe_cx_calibrated = False
-        probe_passed = False
-        probe_stdout = probe_stderr = ""
-        if probe_code:
-            probe_scores = scoring.score_candidate_combined(probe_code)
-            probe_energy_raw = probe_scores["cx_energy"]
-            probe_energy_norm = probe_scores["cx_normalized"]
-            probe_cx_calibrated = probe_scores["cx_calibrated"]
-            probe_failure = probe_scores.get("failure")
-            probe_scored = probe_energy_raw is not None
-            if probe_scored:
-                norm_label = f"{probe_energy_norm:.2f}" if probe_cx_calibrated else "uncalibrated"
-                detail = (f"C(x)={probe_energy_raw:.2f} norm={norm_label} "
-                          f"G(x)={float(probe_scores['gx_score']):.2f} "
-                          f"({probe_scores['verdict']})")
-            else:
-                # No score to report: the allocator below reads the verdict
-                # "unscored" and keeps its floor, and says so.
-                detail = (f"unscored "
-                          f"({scoring.describe_lens_failure(probe_failure or {})})")
-            emit("probe_scored", detail,
-                 scored=probe_scored,
-                 gx_score=probe_scores["gx_score"],
-                 gx_available=probe_scores["gx_available"],
-                 verdict=probe_scores["verdict"],
-                 failure=probe_failure)
-            probe_passed, probe_stdout, probe_stderr, probe_evidence = verified_sandbox(probe_code)
-            emit("probe_sandbox", f"passed={probe_passed} stderr={probe_stderr[:80] if probe_stderr else ''}")
-            result["total_tokens"] += tokens
+        probe = _score_and_test_probe(ctx, probe_code, tokens, verified_sandbox)
+        probe_scores, probe_energy_raw, probe_energy_norm = probe.scores, probe.energy_raw, probe.energy_norm
+        probe_cx_calibrated, probe_passed = probe.cx_calibrated, probe.passed
+        probe_stdout, probe_stderr, probe_evidence = probe.stdout, probe.stderr, probe.evidence
 
         # Evidence strength decides whether phase 0 may close the pipeline.
         # A compile smoke on interactive code demonstrates only that the file
@@ -2937,6 +2955,65 @@ class V3PipelineService:
             # PR-CoT alone issues two calls — so a boundary check that
             # reserves one call is already wrong by the second.
             return finish_with_best(f"budget exhausted mid-pipeline ({exc})")
+
+    def _generate_probe(self, ctx):
+        """Phase 0's probe candidate: a light thinking budget first, then the
+        standard one, then none. Returns its code and the last call's tokens."""
+        problem, llm, emit = ctx.problem, ctx.llm, ctx.emit
+        emit("probe", "Generating probe candidate...")
+        # Light probe first (1024 thinking tokens), retry with standard if fails
+        try:
+            chatml = self.budget_forcing.format_chatml(problem, "light")
+            response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
+            probe_code = extract_code_for_problem(response, problem)
+            if probe_code:
+                emit("probe_light", f"Light probe: {len(probe_code)} chars, {tokens} tokens, {t_ms:.0f}ms")
+        except Exception as e:
+            emit("probe_error", str(e))
+            probe_code = ""
+
+        if not probe_code:
+            emit("probe_retry", "Light probe failed — retrying with standard budget")
+            try:
+                chatml = self.budget_forcing.format_chatml(problem, "standard")
+                response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
+                probe_code = extract_code_for_problem(response, problem)
+            except Exception as e:
+                emit("probe_error", str(e))
+
+        if not probe_code:
+            emit("probe_failed", "No code extracted from probe")
+            # Generate with the minimal reasoning budget
+            chatml = self.budget_forcing.format_chatml(problem, "nothink")
+            response, tokens, t_ms = llm(chatml, BASE_TEMPERATURE, MAX_TOKENS, 42)
+            probe_code = extract_code_for_problem(response, problem)
+        return probe_code, tokens
+
+    def _classify_task(self, ctx):
+        """The task's type and, for an algorithmic task, its generated
+        self-tests (None when there are none)."""
+        problem, llm, task_id, emit, result = ctx.problem, ctx.llm, ctx.task_id, ctx.emit, ctx.result
+        # Classify task type. Interactive tasks (games, UIs, framework code)
+        # skip synthetic I/O self-tests entirely — those tests would fail by
+        # construction, falsely triggering PR-CoT/refinement on working code.
+        # See ISSUES.md PC-022.
+        task_type = scoring.classify_task_type(problem)
+        emit("task_type", task_type)
+        result["task_type"] = task_type
+
+        # Generate self-tests (algorithmic tasks only) — used for sandbox verification
+        self_tests = None
+        if task_type == "algorithmic":
+            emit("self_test_gen", "Generating verification tests...")
+            try:
+                self_tests = self.self_test_gen.generate(problem, llm, task_id)
+                emit("self_test_done", f"{len(self_tests.test_cases)} test cases")
+                result["total_tokens"] += self_tests.generation_tokens
+            except Exception as e:
+                emit("self_test_error", str(e)[:200])
+        else:
+            emit("self_test_skip", "Interactive task — using compile smoke-test")
+        return task_type, self_tests
 
 
 # --- Problem Builder for /v3/generate ----------------------------------------
