@@ -140,9 +140,7 @@ func TestARefusedDeliveryLeavesTheTargetAlone(t *testing.T) {
 			return w.path, w.code, &forged
 		}, "candidate_hash_mismatch", 1},
 		{"the target was rewritten", func(t *testing.T, w *deliveryWorld) (string, string, *authorizationGrant) {
-			if err := os.WriteFile(w.path, []byte("SOMEONE ELSE = 1\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			writeInWorkspace(t, w.ctx.WorkingDir, "solve.py", "SOMEONE ELSE = 1\n")
 			return w.path, w.code, w.grant
 		}, "", 0},
 		// A delivery must not bring back a file that was deliberately removed.
@@ -400,15 +398,7 @@ func newRouteWorldWithClosure(t *testing.T, contract string,
 			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
 		case strings.HasSuffix(r.URL.Path, "/shell"):
 			if shellGone {
-				// The connection dies mid-request: a transport failure, not a
-				// refusal, which is what an executor that is not there looks
-				// like from here.
-				if hj, ok := w.(http.Hijacker); ok {
-					if conn, _, err := hj.Hijack(); err == nil {
-						conn.Close()
-						return
-					}
-				}
+				dropConnection(w)
 				return
 			}
 			stub.srv.Config.Handler.ServeHTTP(w, r)
@@ -428,6 +418,19 @@ func newRouteWorldWithClosure(t *testing.T, contract string,
 	}
 	return &routeWorld{ctx: ctx, dir: dir, path: filepath.Join(dir, "solve.py"),
 		winner: routeWinner, shell: stub, gen: &generateCalls, shellGone: &shellGone}
+}
+
+// dropConnection makes the connection die mid-request: a transport failure,
+// not a refusal, which is what an executor that is not there looks like from
+// here.
+func dropConnection(w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return
+	}
+	if conn, _, err := hj.Hijack(); err == nil {
+		conn.Close()
+	}
 }
 
 // generateCalls is how many times the pipeline was actually asked for
@@ -455,22 +458,32 @@ func (w *routeWorld) disk(t *testing.T) string {
 // can be authorized against it; letting the service's own closure verdict
 // deliver would be the producer of a candidate certifying that candidate.
 func TestTheRouteDeliversOnlyAnAuthorizedWinner(t *testing.T) {
+	// What the write leaves: the bytes on disk, and what the result says about
+	// them.
+	type outcome struct {
+		disk           string
+		v3Used         bool
+		authorizedHash string
+		provenance     string
+	}
+	winner := outcome{disk: routeWinner, v3Used: true, authorizedHash: contentSHA256(routeWinner),
+		provenance: DeliveryFromStrictCandidate}
+	ownBytes := outcome{disk: routeBaseline, provenance: DeliveryFromModelProposal}
 	for _, tc := range []struct {
 		name     string
 		contract string
 		commands map[string]stubEffect
-		wantDisk string
-		wantV3   bool
+		want     outcome
 	}{
 		{"declared output", `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-			nil, routeWinner, true},
+			nil, winner},
 		// The declared command fails, so the obligation is owed and the typed
 		// answer refuses.
 		{"declared command that fails", `{"task_mode":"work","output_knowledge":"declared",` +
 			`"expected_outputs":["solve.py"],"verification_knowledge":"declared","verification":["pytest -q"]}`,
-			map[string]stubEffect{"pytest -q": {ExitCode: 1}}, routeBaseline, false},
-		{"no contract", "", nil, routeBaseline, false},
-		{"a question", `{"task_mode":"question"}`, nil, routeBaseline, false},
+			map[string]stubEffect{"pytest -q": {ExitCode: 1}}, ownBytes},
+		{"no contract", "", nil, ownBytes},
+		{"a question", `{"task_mode":"question"}`, nil, ownBytes},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newRouteWorld(t, tc.contract, tc.commands)
@@ -481,21 +494,10 @@ func TestTheRouteDeliversOnlyAnAuthorizedWinner(t *testing.T) {
 			if res == nil || !res.Success {
 				t.Fatalf("the write did not succeed: %+v", res)
 			}
-			if got := w.disk(t); got != tc.wantDisk {
-				t.Errorf("disk holds %q, want %q", got, tc.wantDisk)
-			}
-			if res.V3Used != tc.wantV3 {
-				t.Errorf("V3Used=%v, want %v", res.V3Used, tc.wantV3)
-			}
-			wantHash := ""
-			if tc.wantV3 {
-				wantHash = contentSHA256(routeWinner)
-			}
-			if res.AuthorizedDeliveryHash != wantHash {
-				t.Errorf("the result names authorization %q, want %q", res.AuthorizedDeliveryHash, wantHash)
-			}
-			if !tc.wantV3 && res.DeliveryProvenance != DeliveryFromModelProposal {
-				t.Errorf("provenance %q, want the model's own proposal", res.DeliveryProvenance)
+			got := outcome{disk: w.disk(t), v3Used: res.V3Used,
+				authorizedHash: res.AuthorizedDeliveryHash, provenance: res.DeliveryProvenance}
+			if got != tc.want {
+				t.Errorf("the write left %#v, want %#v", got, tc.want)
 			}
 			if liveGrantCount(w.ctx) != 0 {
 				t.Error("a grant was left live after the write")
