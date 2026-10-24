@@ -35,29 +35,24 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 
 	cases := []struct {
 		name, path, url string
-		nilCtx          bool
 		want            ValidationStatus
 	}{
 		// Applicability is decided BEFORE availability: an unsupported
 		// extension is not_applicable even with no sandbox configured.
-		{"unsupported extension, no sandbox", "notes.txt", "", false, ValidationNotApplicable},
-		{"unsupported extension, sandbox up", "notes.txt", valid.URL, false, ValidationNotApplicable},
-		{"jinja is not whole-file gated", "page.jinja", valid.URL, false, ValidationNotApplicable},
-		{"applicable, no sandbox", "mod.py", "", false, ValidationNotRun},
-		{"applicable, nil context", "mod.py", valid.URL, true, ValidationNotRun},
-		{"applicable, unreachable", "mod.py", deadURL, false, ValidationNotRun},
-		{"applicable, non-200", "mod.py", five00.URL, false, ValidationNotRun},
-		{"applicable, undecodable", "mod.py", broken.URL, false, ValidationNotRun},
-		{"demonstrated pass", "mod.py", valid.URL, false, ValidationPassed},
-		{"demonstrated failure", "mod.py", invalid.URL, false, ValidationFailed},
+		{"unsupported extension, no sandbox", "notes.txt", "", ValidationNotApplicable},
+		{"unsupported extension, sandbox up", "notes.txt", valid.URL, ValidationNotApplicable},
+		{"jinja is not whole-file gated", "page.jinja", valid.URL, ValidationNotApplicable},
+		{"applicable, no sandbox", "mod.py", "", ValidationNotRun},
+		{"applicable, unreachable", "mod.py", deadURL, ValidationNotRun},
+		{"applicable, non-200", "mod.py", five00.URL, ValidationNotRun},
+		{"applicable, undecodable", "mod.py", broken.URL, ValidationNotRun},
+		{"demonstrated pass", "mod.py", valid.URL, ValidationPassed},
+		{"demonstrated failure", "mod.py", invalid.URL, ValidationFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var ctx *AgentContext
-			if !c.nilCtx {
-				ctx = NewAgentContext(t.TempDir(), Tier2Medium)
-				ctx.SandboxURL = c.url
-			}
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+			ctx.SandboxURL = c.url
 			got := sandboxSyntaxOutcome(ctx, c.path, "A = 1\n")
 			if got.Status != c.want {
 				t.Errorf("Status = %q, want %q (detail %q)", got.Status, c.want, got.Detail)
@@ -74,6 +69,18 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 				t.Error("not_applicable must not count as applicable")
 			}
 		})
+	}
+}
+
+// With no session at all, an applicable file is a check that did not run, and
+// the wrapper does not refuse it.
+func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
+	got := sandboxSyntaxOutcome(nil, "mod.py", "A = 1\n")
+	if got.Status != ValidationNotRun {
+		t.Errorf("Status = %q, want %q (detail %q)", got.Status, ValidationNotRun, got.Detail)
+	}
+	if _, ok := checkSandboxSyntax(nil, "mod.py", "A = 1\n"); !ok {
+		t.Error("wrapper ok = false, want true -- fail-open behavior changed")
 	}
 }
 
@@ -110,120 +117,121 @@ func TestFallbackSyntaxAggregate(t *testing.T) {
 
 // Composites through the production producer, with request counting so the
 // short circuit is proven rather than assumed.
-func TestFallbackSyntaxComposites(t *testing.T) {
-	const jinja = "page.jinja" // NOT in syntaxGateLanguages; IS embedded-capable
-	withScript := "<html><script>let a = 1;</script></html>"
 
-	newSvc := func(embCalls *int, status int, body string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/internal/embedded_script_check") {
-				*embCalls++
-				w.WriteHeader(status)
-				w.Write([]byte(body))
-				return
-			}
-			// whole-file sandbox check
+const jinjaPage = "page.jinja" // NOT in syntaxGateLanguages; IS embedded-capable
+const pageWithScript = "<html><script>let a = 1;</script></html>"
+
+// embeddedCheckStub answers the embedded-script check with body, counting
+// those calls in embCalls, and fails every whole-file sandbox check.
+func embeddedCheckStub(embCalls *int, body string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/internal/embedded_script_check") {
+			*embCalls++
 			w.WriteHeader(200)
-			w.Write([]byte(`{"valid":false,"errors":["SyntaxError: whole-file bad"]}`))
-		}))
+			w.Write([]byte(body))
+			return
+		}
+		// whole-file sandbox check
+		w.WriteHeader(200)
+		w.Write([]byte(`{"valid":false,"errors":["SyntaxError: whole-file bad"]}`))
+	}))
+}
+
+func TestFallbackSyntaxJinjaEmbeddedPassIsAPass(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
+	if o.WholeFile.Status != ValidationNotApplicable {
+		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
 	}
+	if o.Embedded.Status != ValidationPassed {
+		t.Errorf("Embedded = %q, want passed", o.Embedded.Status)
+	}
+	if got := o.aggregate().Status; got != ValidationPassed {
+		t.Errorf("aggregate = %q, want passed", got)
+	}
+	if calls != 1 {
+		t.Errorf("embedded calls = %d, want 1", calls)
+	}
+}
 
-	t.Run("jinja embedded passes -> aggregate passed", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, withScript)
-		if o.WholeFile.Status != ValidationNotApplicable {
-			t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
-		}
-		if o.Embedded.Status != ValidationPassed {
-			t.Errorf("Embedded = %q, want passed", o.Embedded.Status)
-		}
-		if got := o.aggregate().Status; got != ValidationPassed {
-			t.Errorf("aggregate = %q, want passed", got)
-		}
-		if calls != 1 {
-			t.Errorf("embedded calls = %d, want 1", calls)
-		}
-	})
+func TestFallbackSyntaxJinjaEmbeddedUnavailableIsNotRun(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = "", "" // service absent
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
+	if o.WholeFile.Status != ValidationNotApplicable {
+		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
+	}
+	if o.Embedded.Status != ValidationNotRun {
+		t.Errorf("Embedded = %q, want not_run", o.Embedded.Status)
+	}
+	if got := o.aggregate().Status; got != ValidationNotRun {
+		t.Errorf("aggregate = %q, want not_run", got)
+	}
+}
 
-	t.Run("jinja embedded unavailable -> aggregate not_run", func(t *testing.T) {
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = "", "" // service absent
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, withScript)
-		if o.WholeFile.Status != ValidationNotApplicable {
-			t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
-		}
-		if o.Embedded.Status != ValidationNotRun {
-			t.Errorf("Embedded = %q, want not_run", o.Embedded.Status)
-		}
-		if got := o.aggregate().Status; got != ValidationNotRun {
-			t.Errorf("aggregate = %q, want not_run", got)
-		}
-	})
+func TestFallbackSyntaxJinjaEmbeddedFindingIsAFailure(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls,
+		`{"ok":true,"findings":[{"line":1,"message":"stray paren","snippet":"x)"}]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	agg := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript).aggregate()
+	if agg.Status != ValidationFailed {
+		t.Fatalf("aggregate = %q, want failed", agg.Status)
+	}
+	if !strings.HasPrefix(agg.Detail, embeddedScriptErrPrefix) {
+		t.Errorf("diagnostic lost its prefix: %q", agg.Detail)
+	}
+	// Wrapper parity: only a demonstrated failure refuses.
+	msg, ok := checkFallbackSyntax(ctx, jinjaPage, pageWithScript)
+	if ok || msg != agg.Detail {
+		t.Errorf("wrapper ok=%v msg=%q, want false and the same diagnostic", ok, msg)
+	}
+}
 
-	t.Run("jinja embedded finding -> aggregate failed", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200,
-			`{"ok":true,"findings":[{"line":1,"message":"stray paren","snippet":"x)"}]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		agg := fallbackSyntaxOutcomeFor(ctx, jinja, withScript).aggregate()
-		if agg.Status != ValidationFailed {
-			t.Fatalf("aggregate = %q, want failed", agg.Status)
-		}
-		if !strings.HasPrefix(agg.Detail, embeddedScriptErrPrefix) {
-			t.Errorf("diagnostic lost its prefix: %q", agg.Detail)
-		}
-		// Wrapper parity: only a demonstrated failure refuses.
-		msg, ok := checkFallbackSyntax(ctx, jinja, withScript)
-		if ok || msg != agg.Detail {
-			t.Errorf("wrapper ok=%v msg=%q, want false and the same diagnostic", ok, msg)
-		}
-	})
+func TestFallbackSyntaxWholeFileFailureShortCircuitsTheEmbeddedCall(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	// .html IS whole-file gated, and the stub fails it.
+	o := fallbackSyntaxOutcomeFor(ctx, "page.html", pageWithScript)
+	if o.WholeFile.Status != ValidationFailed {
+		t.Fatalf("WholeFile = %q, want failed", o.WholeFile.Status)
+	}
+	if calls != 0 {
+		t.Errorf("embedded calls = %d, want 0 -- the short circuit was lost", calls)
+	}
+	if o.Embedded.Status != ValidationNotRun {
+		t.Errorf("Embedded = %q, want not_run (skipped but applicable)", o.Embedded.Status)
+	}
+	if o.aggregate().Status != ValidationFailed {
+		t.Error("aggregate must remain the whole-file failure")
+	}
+}
 
-	t.Run("whole-file failure short-circuits the embedded call", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		// .html IS whole-file gated, and the stub fails it.
-		o := fallbackSyntaxOutcomeFor(ctx, "page.html", withScript)
-		if o.WholeFile.Status != ValidationFailed {
-			t.Fatalf("WholeFile = %q, want failed", o.WholeFile.Status)
-		}
-		if calls != 0 {
-			t.Errorf("embedded calls = %d, want 0 -- the short circuit was lost", calls)
-		}
-		if o.Embedded.Status != ValidationNotRun {
-			t.Errorf("Embedded = %q, want not_run (skipped but applicable)", o.Embedded.Status)
-		}
-		if o.aggregate().Status != ValidationFailed {
-			t.Error("aggregate must remain the whole-file failure")
-		}
-	})
-
-	t.Run("no embedded content -> not_applicable, zero calls", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = "", svc.URL
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, "<html><p>no script here</p></html>")
-		if o.Embedded.Status != ValidationNotApplicable {
-			t.Errorf("Embedded = %q, want not_applicable", o.Embedded.Status)
-		}
-		if calls != 0 {
-			t.Errorf("embedded calls = %d, want 0", calls)
-		}
-		if o.aggregate().Status != ValidationNotApplicable {
-			t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
-		}
-	})
+func TestFallbackSyntaxNoEmbeddedContentIsNotApplicable(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = "", svc.URL
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, "<html><p>no script here</p></html>")
+	if o.Embedded.Status != ValidationNotApplicable {
+		t.Errorf("Embedded = %q, want not_applicable", o.Embedded.Status)
+	}
+	if calls != 0 {
+		t.Errorf("embedded calls = %d, want 0", calls)
+	}
+	if o.aggregate().Status != ValidationNotApplicable {
+		t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
+	}
 }
 
 // --- The deliverable ledger -------------------------------------------------

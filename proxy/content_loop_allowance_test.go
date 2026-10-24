@@ -39,6 +39,22 @@ func repeatingBody() string {
 		strings.Repeat(`x = 1\nx = 1\n`, 400)
 }
 
+// streamInChunks sends content as chat-completion deltas of 256 bytes,
+// flushing each one, then ends the stream: a long body arrives the way
+// llama-server sends it, a piece at a time.
+func streamInChunks(rw http.ResponseWriter, content string) {
+	rw.Header().Set("Content-Type", "text/event-stream")
+	for i := 0; i < len(content); i += 256 {
+		end := min(i+256, len(content))
+		d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": content[i:end]}}}})
+		fmt.Fprintf(rw, "data: %s\n\n", d)
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	fmt.Fprint(rw, "data: [DONE]\n\n")
+}
+
 // runLoopWorld plays the given per-turn scripts; an empty string means "emit a
 // repeating, unterminated call" (which the content-loop detector cuts).
 func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWorld {
@@ -50,8 +66,41 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 	if err := os.WriteFile(filepath.Join(w.dir, "app.py"), []byte("v = 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	srv := loopWorldServer(w, scripts)
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(w.dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.StreamFn = func(et string, data interface{}) {
+		if et != "done" {
+			return
+		}
+		b, _ := json.Marshal(data)
+		var m map[string]interface{}
+		_ = json.Unmarshal(b, &m)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		for k, v := range m {
+			w.terminal[k] = fmt.Sprint(v)
+		}
+	}
+	if err := runAgentLoop(ctx, "Add a pause flag to app.py."); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// loopWorldServer stands in for every service the loop calls. The sandbox
+// passes every syntax check, recording the code it was given, and runs every
+// command with no output except the mount probe, which it answers from w.dir.
+// V3 and the internal services are unavailable. The model plays one script
+// per turn (an empty one is the repeating body), then says it is done.
+func loopWorldServer(w *loopWorld, scripts []string) *httptest.Server {
 	turn := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			var in struct{ Code string }
@@ -84,14 +133,6 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 		turn++
 		w.prompts = append(w.prompts, string(body))
 		w.mu.Unlock()
-		rw.Header().Set("Content-Type", "text/event-stream")
-		send := func(s string) {
-			d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
-			fmt.Fprintf(rw, "data: %s\n\n", d)
-			if f, ok := rw.(http.Flusher); ok {
-				f.Flush()
-			}
-		}
 		script := `{"type":"done","summary":"finished"}`
 		if k < len(scripts) {
 			script = scripts[k]
@@ -99,39 +140,8 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 		if script == "" {
 			script = repeatingBody()
 		}
-		for i := 0; i < len(script); i += 256 {
-			end := i + 256
-			if end > len(script) {
-				end = len(script)
-			}
-			send(script[i:end])
-		}
-		fmt.Fprint(rw, "data: [DONE]\n\n")
+		streamInChunks(rw, script)
 	}))
-	t.Cleanup(srv.Close)
-
-	ctx := NewAgentContext(w.dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.VerifyOnHost = true
-	ctx.StreamFn = func(et string, data interface{}) {
-		if et != "done" {
-			return
-		}
-		b, _ := json.Marshal(data)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		for k, v := range m {
-			w.terminal[k] = fmt.Sprint(v)
-		}
-	}
-	if err := runAgentLoop(ctx, "Add a pause flag to app.py."); err != nil {
-		t.Fatal(err)
-	}
-	return w
 }
 
 func edit(line int, text string) string {
@@ -255,20 +265,7 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 		if n >= 2 {
 			cancel() // the user hung up while the model was repeating
 		}
-		rw.Header().Set("Content-Type", "text/event-stream")
-		body := repeatingBody()
-		for i := 0; i < len(body); i += 256 {
-			end := i + 256
-			if end > len(body) {
-				end = len(body)
-			}
-			d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": body[i:end]}}}})
-			fmt.Fprintf(rw, "data: %s\n\n", d)
-			if f, ok := rw.(http.Flusher); ok {
-				f.Flush()
-			}
-		}
-		fmt.Fprint(rw, "data: [DONE]\n\n")
+		streamInChunks(rw, repeatingBody())
 	}))
 	defer srv.Close()
 

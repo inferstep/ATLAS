@@ -179,17 +179,26 @@ func TestEnvelopeSurvivesDecodeWithoutFieldLoss(t *testing.T) {
 	}
 }
 
+// response decodes the case's service response; a golden case that does not decode is a broken fixture.
+func (c evidenceCase) response(t *testing.T) V3GenerateResponse {
+	t.Helper()
+	var got V3GenerateResponse
+	if err := json.Unmarshal(c.Response, &got); err != nil {
+		t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
+	}
+	return got
+}
+
 // Every golden case, and what a strict consumer must conclude from it. The
 // expectations travel with the bytes, so adding a case on the Python side
-// automatically binds this side to it.
+// automatically binds this side to it. This test and the two after it read
+// the same cases: the availability of each, then what a non-available and an
+// available envelope must say.
 func TestGoldenCaseAvailability(t *testing.T) {
 	for _, c := range evidenceCases(t) {
 		c := c
 		t.Run(c.ID, func(t *testing.T) {
-			var got V3GenerateResponse
-			if err := json.Unmarshal(c.Response, &got); err != nil {
-				t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
-			}
+			got := c.response(t)
 			availability, reason := got.Evidence.Validate()
 			if string(availability) != c.Expect.Availability {
 				t.Fatalf("availability = %q (%s), want %q -- %s",
@@ -199,15 +208,40 @@ func TestGoldenCaseAvailability(t *testing.T) {
 				!strings.Contains(reason, c.Expect.ReasonContains) {
 				t.Errorf("reason = %q, want it to name %q", reason, c.Expect.ReasonContains)
 			}
-			if availability != EvidenceAvailable {
-				// Unavailable and absent are never verdicts about the candidate.
-				if got.Evidence.Available() {
-					t.Error("a non-available envelope must not read as available")
-				}
-				if reason == "" {
-					t.Error("a non-available envelope must say why")
-				}
-				return
+		})
+	}
+}
+
+// Unavailable and absent are never verdicts about the candidate.
+func TestGoldenCasesThatAreNotAvailableAreNoVerdict(t *testing.T) {
+	for _, c := range evidenceCases(t) {
+		if c.Expect.Availability == string(EvidenceAvailable) {
+			continue // TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			got := c.response(t)
+			if got.Evidence.Available() {
+				t.Error("a non-available envelope must not read as available")
+			}
+			if _, reason := got.Evidence.Validate(); reason == "" {
+				t.Error("a non-available envelope must say why")
+			}
+		})
+	}
+}
+
+// An available envelope carries the strength and selection its producer
+// declared, and its hash names the delivered bytes exactly when the producer
+// declared that it does.
+func TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict(t *testing.T) {
+	for _, c := range evidenceCases(t) {
+		if c.Expect.Availability != string(EvidenceAvailable) {
+			continue // TestGoldenCasesThatAreNotAvailableAreNoVerdict
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			got := c.response(t)
+			if got.Evidence == nil {
+				t.Fatalf("%s is declared available but its response has no envelope", c.ID)
 			}
 			if got.Evidence.Evaluation.EvidenceStrength != c.Expect.EvidenceStrength {
 				t.Errorf("strength = %q, want %q",
@@ -332,14 +366,8 @@ func TestEnvelopeReachesTelemetryAndNotTheToolResult(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := w.(http.Flusher)
 			// The service's own bytes, forwarded verbatim.
-			for _, line := range []string{"event: result", "data: " + string(raw), "", "data: [DONE]", ""} {
-				fmt.Fprint(w, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(w, "event: result", "data: "+string(raw), "", "data: [DONE]", "")
 		case "/internal/cyclomatic_complexity":
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
 		case "/internal/structural_check":
@@ -475,8 +503,6 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 		name       string
 		passed     bool
 		mutate     func(map[string]interface{})
-		omit       bool
-		code       string
 		authorized bool
 		reason     string
 	}{
@@ -504,8 +530,6 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			e["identity"].(map[string]interface{})["candidate_content_hash"] =
 				"0000000000000000000000000000000000000000000000000000000000000000"
 		}, reason: "evidence describes a different candidate"},
-		{name: "passed with no envelope at all", passed: true, omit: true,
-			reason: "no evidence envelope"},
 		{name: "passed with an unknown wire version", passed: true, mutate: func(e map[string]interface{}) {
 			e["wire_version"] = "99.0.0"
 		}, reason: "unsupported wire version 99.0.0"},
@@ -518,20 +542,11 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 		// The envelope is authoritative in BOTH directions: a service that
 		// verified a winner has said so, whatever the legacy boolean carries.
 		{name: "not passed with a verified envelope", passed: false, authorized: true},
-		{name: "verified envelope with empty code", passed: true, code: " ",
-			reason: "evidence describes a different candidate"},
 	} {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			code := authCandidate
-			if c.code != "" {
-				code = c.code
-			}
-			var env map[string]interface{}
-			if !c.omit {
-				env = envelopeFor(t, authCandidate, c.mutate)
-			}
-			res := responseWith(t, code, c.passed, env)
+			env := envelopeFor(t, authCandidate, c.mutate)
+			res := responseWith(t, authCandidate, c.passed, env)
 
 			got, why := v3DeliveryAuthorized(res, res.Code)
 			if got != c.authorized {
@@ -545,14 +560,45 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			// caller's own are a proposal whatever the service concluded, and
 			// what happens to them is decided after they have been staged.
 			proposal, proposed := proposedV3Candidate(res, authBaseline)
-			if strings.TrimSpace(code) == "" || code == authBaseline {
-				if proposed {
-					t.Errorf("empty or identical bytes were proposed")
-				}
-			} else if !proposed || proposal != code {
+			if !proposed || proposal != authCandidate {
 				t.Errorf("proposal = %q/%v, want the candidate offered", proposal, proposed)
 			}
 		})
+	}
+}
+
+// A passing response with no envelope at all authorizes nothing. Its bytes
+// still differ from the caller's own, so they are still a proposal.
+func TestAPassedResponseWithNoEnvelopeIsNotAuthorized(t *testing.T) {
+	res := responseWith(t, authCandidate, true, nil)
+
+	ok, why := v3DeliveryAuthorized(res, res.Code)
+	if ok {
+		t.Fatalf("authorized = true (%s), want false", why)
+	}
+	if why != "no evidence envelope" {
+		t.Errorf("reason = %q, want the missing envelope", why)
+	}
+	proposal, proposed := proposedV3Candidate(res, authBaseline)
+	if !proposed || proposal != authCandidate {
+		t.Errorf("proposal = %q/%v, want the candidate offered", proposal, proposed)
+	}
+}
+
+// A verified envelope over code that is only whitespace authorizes nothing,
+// and blank bytes are never proposed.
+func TestAVerifiedEnvelopeOverBlankCodeIsNotAuthorized(t *testing.T) {
+	res := responseWith(t, " ", true, envelopeFor(t, authCandidate, nil))
+
+	ok, why := v3DeliveryAuthorized(res, res.Code)
+	if ok {
+		t.Fatalf("authorized = true (%s), want false", why)
+	}
+	if why != "evidence describes a different candidate" {
+		t.Errorf("reason = %q, want the hash mismatch", why)
+	}
+	if _, proposed := proposedV3Candidate(res, authBaseline); proposed {
+		t.Errorf("empty or identical bytes were proposed")
 	}
 }
 
@@ -769,13 +815,7 @@ func TestAuthorizationReasonIsRecordedInTelemetryOnly(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := w.(http.Flusher)
-			for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
-				fmt.Fprint(w, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(w, "event: result", "data: "+string(body), "", "data: [DONE]", "")
 		case "/internal/structural_check":
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
 		default:

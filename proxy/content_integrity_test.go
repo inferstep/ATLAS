@@ -32,7 +32,8 @@ type integrityRun struct {
 	errors   []map[string]interface{}
 	terminal map[string]string
 	fencedN  int
-	prompts  []string // main-loop request bodies, in order: what the model was told
+	prompts  []string   // main-loop request bodies, in order: what the model was told
+	mu       sync.Mutex // guards the fields above while the loop runs
 }
 
 func integrityLoop(t *testing.T, request string, preexisting map[string]string, turns []string,
@@ -55,63 +56,7 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		}
 	}
 	run := &integrityRun{dir: dir, terminal: map[string]string{}}
-	var mu sync.Mutex
-	i := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
-			return
-		case strings.HasSuffix(r.URL.Path, "/execute"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": string(b), "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": "", "exit_code": 0})
-			return
-		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-			http.NotFound(w, r)
-			return
-		}
-		raw, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		send := func(s string) {
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}
-		if strings.Contains(string(raw), "single fenced block") {
-			mu.Lock()
-			run.fencedN++
-			mu.Unlock()
-			if fencedReply == nil {
-				send("no block here")
-				return
-			}
-			send(fencedReply(string(raw)))
-			return
-		}
-		mu.Lock()
-		k := i
-		i++
-		run.prompts = append(run.prompts, string(raw))
-		mu.Unlock()
-		if k >= 40 {
-			http.Error(w, "turn ceiling", http.StatusInsufficientStorage)
-			return
-		}
-		if k < len(turns) {
-			send(turns[k])
-			return
-		}
-		send(`{"type":"done","summary":"wrote the file"}`)
-	}))
+	srv := integrityServer(run, turns, fencedReply)
 	t.Cleanup(srv.Close)
 
 	ctx := NewAgentContext(dir, Tier2Medium)
@@ -124,8 +69,8 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		b, _ := json.Marshal(data)
 		var m map[string]interface{}
 		_ = json.Unmarshal(b, &m)
-		mu.Lock()
-		defer mu.Unlock()
+		run.mu.Lock()
+		defer run.mu.Unlock()
 		switch et {
 		case "tool_result":
 			run.results = append(run.results, m)
@@ -146,6 +91,71 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		t.Fatalf("loop error: %v", err)
 	}
 	return run
+}
+
+// integrityServer stands in for every service the loop calls. The sandbox
+// passes every syntax check and runs every command with no output, except the
+// mount probe, which it answers from run.dir. V3 and the internal services are
+// unavailable, as when they fail. The model plays turns in order, then says it
+// is done; a fenced sub-call gets fencedReply, or a reply with no block when
+// fencedReply is nil.
+func integrityServer(run *integrityRun, turns []string, fencedReply func(prompt string) string) *httptest.Server {
+	i := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(run.dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": "", "exit_code": 0})
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		send := func(s string) {
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}
+		if strings.Contains(string(raw), "single fenced block") {
+			run.mu.Lock()
+			run.fencedN++
+			run.mu.Unlock()
+			if fencedReply == nil {
+				send("no block here")
+				return
+			}
+			send(fencedReply(string(raw)))
+			return
+		}
+		run.mu.Lock()
+		k := i
+		i++
+		run.prompts = append(run.prompts, string(raw))
+		run.mu.Unlock()
+		if k >= 40 {
+			http.Error(w, "turn ceiling", http.StatusInsufficientStorage)
+			return
+		}
+		if k < len(turns) {
+			send(turns[k])
+			return
+		}
+		send(`{"type":"done","summary":"wrote the file"}`)
+	}))
 }
 
 func toolCall(name string, args map[string]interface{}) string {
@@ -236,24 +246,39 @@ func TestInlineWritesLandExactlyTheDecodedBytes(t *testing.T) {
 	cases := append([]struct{ name, path, body string }{}, integrityPayloads...)
 	cases = append(cases, struct{ name, path, body string }{"5000-line file", "long.py", longPayload()})
 	for _, c := range cases {
+		if _, refused := inlineRefused[c.name]; refused {
+			continue // TestAmbiguousInlinePayloadsAreRefusedWithTheReason
+		}
 		t.Run(c.name, func(t *testing.T) {
 			run := integrityLoop(t, writeReq, nil,
 				[]string{toolCall("write_file", map[string]interface{}{"path": c.path, "content": c.body})}, nil)
-			if why, refuse := inlineRefused[c.name]; refuse {
-				if got, ok := run.disk(t, c.path); ok {
-					t.Fatalf("ambiguous inline content was written instead of refused: %q", got)
-				}
-				if !run.told("NOT performed", why, "@fenced") {
-					t.Errorf("the model was not told why and how to resend (%q)", why)
-				}
-				return
-			}
 			got, ok := run.disk(t, c.path)
 			if !ok {
 				t.Fatalf("not written; feedback: %.400s", run.feedback())
 			}
 			if got != c.body {
 				t.Errorf("bytes changed on the way to disk\n want %q\n  got %q", truncateStr(c.body, 300), truncateStr(got, 300))
+			}
+		})
+	}
+}
+
+// The payloads in inlineRefused are refused in the JSON channel, and the model
+// is told why and how to resend them.
+func TestAmbiguousInlinePayloadsAreRefusedWithTheReason(t *testing.T) {
+	for _, c := range integrityPayloads {
+		why, refused := inlineRefused[c.name]
+		if !refused {
+			continue // TestInlineWritesLandExactlyTheDecodedBytes
+		}
+		t.Run(c.name, func(t *testing.T) {
+			run := integrityLoop(t, writeReq, nil,
+				[]string{toolCall("write_file", map[string]interface{}{"path": c.path, "content": c.body})}, nil)
+			if got, ok := run.disk(t, c.path); ok {
+				t.Fatalf("ambiguous inline content was written instead of refused: %q", got)
+			}
+			if !run.told("NOT performed", why, "@fenced") {
+				t.Errorf("the model was not told why and how to resend (%q)", why)
 			}
 		})
 	}
