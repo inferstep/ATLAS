@@ -2368,6 +2368,213 @@ def _deliver_selected(ctx, selected, winner):
     return result
 
 
+def _test_and_select(ctx, run_pool, verified_sandbox, self_tests, _task):
+    """Phase one after generation: sandbox-test the pool, fall back to
+    consensus, apply the three vetoes and select. Returns the finished run,
+    or None when nothing is selectable."""
+    emit, files, file_path, smoke_language = ctx.emit, ctx.files, ctx.file_path, ctx.smoke_language
+    pool_members, passing = _test_pool(ctx, run_pool, verified_sandbox, _task)
+    passing = _agree_by_consensus(ctx, passing, pool_members, self_tests)
+    passing = _lens_veto(passing, emit)
+    passing = _structural_veto(passing, files, smoke_language, emit)
+    passing = _call_graph_veto(passing, files, file_path, smoke_language, emit)
+    return _select(ctx, passing)
+
+
+def _enter_repair(ctx, run_pool, task_type):
+    """Phase 3's entry. With the budget spent, or for an interactive task
+    whose submitted baseline compiles, the best so far is the result: it is
+    returned. Else None, and repair runs."""
+    check_client, emit, sandbox = ctx.check_client, ctx.emit, ctx.sandbox
+    baseline_code, smoke_language, file_path = ctx.baseline_code, ctx.smoke_language, ctx.file_path
+    # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
+    check_client()
+    if _out_of_budget(ctx):
+        return _finish_with_best(ctx, run_pool, "budget spent before the repair phase")
+    # Preserve the existing repair-budget rule: if every candidate
+    # failed and the submitted interactive baseline compiles, return
+    # to the outer loop with that baseline rather than spending more
+    # generations. An import comparison rejects observed regressions;
+    # it does not prove requested features or justify relaxing this
+    # rule. A compiling baseline is NOT necessarily a runnable app.
+    if task_type == "interactive" and baseline_code:
+        base_ok, _, _ = scoring.smoke_compile_check(
+            baseline_code, sandbox, language=smoke_language, filename=file_path)
+        if base_ok:
+            emit("repair_skip_baseline_ok",
+                 "interactive task and the baseline compiles — no verified "
+                 "replacement; retaining the baseline under the existing "
+                 "repair-budget rule",
+                 strategy="repair", task_type=task_type)
+            return _finish_with_best(
+                ctx, run_pool, "interactive task: baseline meets the compile bar, repair skipped")
+    emit("phase3", "All candidates failed — entering repair phase...",
+         failing=len([c for c in run_pool.members() if not c.get("passed")]))
+    return None
+
+
+def _failing_candidates(run_pool):
+    """Every pool member that did not pass, easiest first, as the
+    FailingCandidate list repair works on."""
+    failing = [
+        FailingCandidate(
+            index=c["index"], code=c["code"],
+            error_output=c.get("stderr", ""),
+        )
+        # The incumbent too: the caller's own file is a candidate, and
+        # when it fails, it is the likeliest one to repair.
+        for c in sorted(run_pool.members(), key=energy_rank_key) if not c.get("passed")
+    ]
+    return failing
+
+
+def _call_chain_context(ctx, failing):
+    """The call-graph context of the first failing candidate's failing
+    function, built once for both repair strategies; "" when there is none."""
+    files, emit = ctx.files, ctx.emit
+    # GH #39 point 3: build call-graph context for the failing
+    # function once, reuse across PR-CoT + refinement. Skips
+    # cleanly when stderr isn't a Python traceback or the failing
+    # function isn't defined in the project — both arms get plain
+    # error_output in that case. The block is a multi-hop
+    # reachability slice (entry-point path, transitive impact,
+    # callees). Fail-soft on any graph failure.
+    chain_context_block = ""
+    if failing:
+        failing_func = symbols._failing_function_from_stderr(failing[0].error_output)
+        if failing_func and files:
+            try:
+                from graph import repair_context as _cg_repair
+                chain_context_block = _cg_repair(files, failing_func, transitive=True)
+            except Exception as cge:
+                print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
+            if chain_context_block:
+                emit("call_chain_context",
+                     f"Built call-chain for failing `{failing_func}`",
+                     function=failing_func)
+                print(
+                    f"  [phase3] call-chain context built for `{failing_func}`",
+                    flush=True,
+                )
+    return chain_context_block
+
+
+def _enriched_error(stderr: str, chain_context_block: str) -> str:
+    """Append call-chain context to a candidate's stderr if available."""
+    if not chain_context_block:
+        return stderr
+    return (stderr or "") + "\n\n" + chain_context_block
+
+
+def _check_repair(ctx, failing, pr_result, repair_code, verified_sandbox, _task):
+    """One PR-CoT repair: its cost and lineage, its sandbox verification, and
+    its capture record. Returns (passed, its verification evidence)."""
+    file_path, emit, capture = ctx.file_path, ctx.emit, ctx.capture
+    # Lineage: a repair is a child of the candidate it was
+    # asked to fix. Without the link a repaired artifact
+    # looks like a fresh generation and its parent's
+    # evidence cannot be found again.
+    capture.note_cost(
+        code=repair_code or None, phase="repair_pr_cot",
+        tokens=getattr(pr_result, "total_tokens", 0),
+        latency_ms=getattr(pr_result, "total_time_ms", 0.0),
+        parent_code=(failing[0].code if failing else None))
+    passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+    # Repairs are late-generated candidates.  In evidence
+    # mode they need the same observational Lens record as
+    # phase-one candidates; otherwise a successful repair
+    # is captured with an empty Lens object and the frozen
+    # diagnostic cannot prove its pre-score token bound.
+    # Keep this capture-only so ordinary product behavior
+    # and live repair selection remain unchanged.
+    repair_lens = (_lens_view(repair_code)
+                   if capture.enabled else None)
+    # A repair is a candidate. It used to be captured with
+    # record=None, so the sealed Stage-A run holds three
+    # pool members with adapter None and an empty record --
+    # a candidate nothing can say anything about. Same
+    # canonical adapter->contract path as every other
+    # candidate; it adds no generation and no sandbox run
+    # of its own.
+    capture.note_candidate(
+        role="repair", index=None, code=repair_code,
+        accepted=passed,
+        record=_evaluate_candidate(
+            file_path, repair_code, passed, emit,
+            task=_task),
+        phase="repair_pr_cot", lens=repair_lens)
+    return passed, repair_evidence
+
+
+def _refinement_affordable(ctx, failing):
+    """Strategy 2's gate: the refinement loop runs only when there is a
+    failing candidate and the remaining clock affords one iteration."""
+    emit, llm, start, budget_ms = ctx.emit, ctx.llm, ctx.start, ctx.budget_ms
+    # Strategy 2: Refinement Loop — entered only when the remaining
+    # wall-clock can afford one iteration. H200 join: 453/487
+    # refinement entries timed out with ZERO completed iterations
+    # while burning ~6 minutes each; one iteration is ~3 sequential
+    # LLM calls, estimated at the per-call latency observed on THIS
+    # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
+    # bridge enforces — starting work the bridge will abandon only
+    # delays the fallback the user ends up with.
+    run_refinement = bool(failing)
+    if run_refinement:
+        est_ms = estimate_iteration_ms(getattr(llm, "avg_call_ms", 0.0))
+        remaining_ms = _remaining_budget_ms(start, budget_ms)
+        if (remaining_ms is not None
+                and not can_afford_iteration(remaining_ms, est_ms)):
+            run_refinement = False
+            emit("refinement_skip",
+                 f"remaining budget {remaining_ms / 1000:.0f}s cannot "
+                 f"afford one iteration (~{est_ms / 1000:.0f}s) — "
+                 f"skipping to fallback",
+                 strategy="refinement",
+                 remaining_ms=round(remaining_ms),
+                 estimated_iteration_ms=round(est_ms))
+    if run_refinement and _out_of_budget(ctx):
+        run_refinement = False
+    return run_refinement
+
+
+def _leave_baseline(ctx, run_pool):
+    """The end of a run with nothing verified: no code, so the caller keeps
+    its own gated baseline. Returns the result."""
+    emit, result, start, events = ctx.emit, ctx.result, ctx.start, ctx.events
+    # ===== FALLBACK: Return best candidate even if none passed =====
+    # Vetoed candidates are excluded outright: a veto means "executes
+    # but is wrong" (stub, NameError-in-waiting), which is worse than
+    # an honest sandbox failure — and returning one is exactly the
+    # May 7 dashboard-stub failure mode. If every candidate was
+    # vetoed, return no code; the caller falls back to its baseline.
+    # Nothing verified, so nothing is returned. The caller's
+    # baseline is the model's own write, which is syntax- and
+    # structure-gated; a candidate that failed the sandbox is not
+    # better than that, and ranking failures by energy picks among
+    # them without evidence.
+    #
+    # Measured: across one 28-session run, 0 of 44 candidates passed
+    # the sandbox, and this path still handed back a failing one 11
+    # times — the proxy logged each as a V3 write and put it on disk
+    # over the model's own. The run that shipped that behaviour
+    # scored 20/28 to 17/28 against the run that did not.
+    #
+    # Same reasoning the vetoed branch below already used, and the
+    # same as the budget boundary: "executes but is wrong" is worse
+    # than an honest failure.
+    unverified = [c for c in run_pool.members() if not c.get("vetoed_by")]
+    if unverified:
+        emit("fallback_unverified",
+             f"{len(unverified)} candidate(s), none passed verification — "
+             f"leaving the caller's gated baseline in place")
+    elif run_pool.members():
+        emit("fallback_all_vetoed",
+             "Every candidate was vetoed — returning no code")
+    result["total_time_ms"] = (time.time() - start) * 1000
+    result["events"] = events
+    return result
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2729,285 +2936,15 @@ class V3PipelineService:
             self._generate_by_div_sampling(ctx, candidates, k, bf_tier)
             result["candidates_generated"] = len(candidates)
 
-            pool_members, passing = _test_pool(ctx, run_pool, verified_sandbox, _task)
-            passing = _agree_by_consensus(ctx, passing, pool_members, self_tests)
-
-            passing = _lens_veto(passing, emit)
-            passing = _structural_veto(passing, files, smoke_language, emit)
-            passing = _call_graph_veto(passing, files, file_path, smoke_language, emit)
-
-            finished = _select(ctx, passing)
+            finished = _test_and_select(ctx, run_pool, verified_sandbox, self_tests, _task)
             if finished is not None:
                 return finished
-
-            # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
-            check_client()
-            if _out_of_budget(ctx):
-                return _finish_with_best(ctx, run_pool, "budget spent before the repair phase")
-            # Preserve the existing repair-budget rule: if every candidate
-            # failed and the submitted interactive baseline compiles, return
-            # to the outer loop with that baseline rather than spending more
-            # generations. An import comparison rejects observed regressions;
-            # it does not prove requested features or justify relaxing this
-            # rule. A compiling baseline is NOT necessarily a runnable app.
-            if task_type == "interactive" and baseline_code:
-                base_ok, _, _ = scoring.smoke_compile_check(
-                    baseline_code, sandbox, language=smoke_language, filename=file_path)
-                if base_ok:
-                    emit("repair_skip_baseline_ok",
-                         "interactive task and the baseline compiles — no verified "
-                         "replacement; retaining the baseline under the existing "
-                         "repair-budget rule",
-                         strategy="repair", task_type=task_type)
-                    return _finish_with_best(
-                        ctx, run_pool, "interactive task: baseline meets the compile bar, repair skipped")
-            emit("phase3", "All candidates failed — entering repair phase...",
-                 failing=len([c for c in run_pool.members() if not c.get("passed")]))
-
-            failing = [
-                FailingCandidate(
-                    index=c["index"], code=c["code"],
-                    error_output=c.get("stderr", ""),
-                )
-                # The incumbent too: the caller's own file is a candidate, and
-                # when it fails, it is the likeliest one to repair.
-                for c in sorted(run_pool.members(), key=energy_rank_key) if not c.get("passed")
-            ]
-
-            # Repair runs the SAME self-tests phase 0 generated —
-            # verified_sandbox closes over them and records each score as a
-            # diagnostic. Regenerate only when phase 0 produced none (e.g. a
-            # transient LLM failure); a failed retry here must not downgrade an
-            # existing good set to None. Interactive tasks repair against
-            # compile-smoke (PC-022).
-            if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
-                emit("self_test_gen", "Generating self-tests...")
-                try:
-                    self_tests = self.self_test_gen.generate(problem, llm, task_id)
-                    emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
-                    result["total_tokens"] += self_tests.generation_tokens
-                except Exception as e:
-                    emit("self_test_error", str(e)[:200])
-
-            # GH #39 point 3: build call-graph context for the failing
-            # function once, reuse across PR-CoT + refinement. Skips
-            # cleanly when stderr isn't a Python traceback or the failing
-            # function isn't defined in the project — both arms get plain
-            # error_output in that case. The block is a multi-hop
-            # reachability slice (entry-point path, transitive impact,
-            # callees). Fail-soft on any graph failure.
-            chain_context_block = ""
-            if failing:
-                failing_func = symbols._failing_function_from_stderr(failing[0].error_output)
-                if failing_func and files:
-                    try:
-                        from graph import repair_context as _cg_repair
-                        chain_context_block = _cg_repair(files, failing_func, transitive=True)
-                    except Exception as cge:
-                        print(f"  [phase3] graph repair-context skipped: {cge}", flush=True)
-                    if chain_context_block:
-                        emit("call_chain_context",
-                             f"Built call-chain for failing `{failing_func}`",
-                             function=failing_func)
-                        print(
-                            f"  [phase3] call-chain context built for `{failing_func}`",
-                            flush=True,
-                        )
-
-            def _enriched_error(stderr: str) -> str:
-                """Append call-chain context to a candidate's stderr if available."""
-                if not chain_context_block:
-                    return stderr
-                return (stderr or "") + "\n\n" + chain_context_block
-
-            # Strategy 1: PR-CoT Quick Repair
-            if failing and _out_of_budget(ctx):
-                return _finish_with_best(ctx, run_pool, "budget spent before PR-CoT repair")
-            if failing:
-                emit("pr_cot", "Attempting PR-CoT repair...",
-                     strategy="pr_cot", failing=len(failing))
-                best_failing = failing[0]
-                try:
-                    pr_result = self.pr_cot.repair(
-                        problem=problem,
-                        code=best_failing.code,
-                        error=_enriched_error(best_failing.error_output),
-                        llm_call=llm,
-                        task_id=task_id,
-                    )
-                    result["total_tokens"] += pr_result.total_tokens
-                    for repair_code in pr_result.repairs:
-                        # Lineage: a repair is a child of the candidate it was
-                        # asked to fix. Without the link a repaired artifact
-                        # looks like a fresh generation and its parent's
-                        # evidence cannot be found again.
-                        capture.note_cost(
-                            code=repair_code or None, phase="repair_pr_cot",
-                            tokens=getattr(pr_result, "total_tokens", 0),
-                            latency_ms=getattr(pr_result, "total_time_ms", 0.0),
-                            parent_code=(failing[0].code if failing else None))
-                        passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
-                        # Repairs are late-generated candidates.  In evidence
-                        # mode they need the same observational Lens record as
-                        # phase-one candidates; otherwise a successful repair
-                        # is captured with an empty Lens object and the frozen
-                        # diagnostic cannot prove its pre-score token bound.
-                        # Keep this capture-only so ordinary product behavior
-                        # and live repair selection remain unchanged.
-                        repair_lens = (_lens_view(repair_code)
-                                       if capture.enabled else None)
-                        # A repair is a candidate. It used to be captured with
-                        # record=None, so the sealed Stage-A run holds three
-                        # pool members with adapter None and an empty record --
-                        # a candidate nothing can say anything about. Same
-                        # canonical adapter->contract path as every other
-                        # candidate; it adds no generation and no sandbox run
-                        # of its own.
-                        capture.note_candidate(
-                            role="repair", index=None, code=repair_code,
-                            accepted=passed,
-                            record=_evaluate_candidate(
-                                file_path, repair_code, passed, emit,
-                                task=_task),
-                            phase="repair_pr_cot", lens=repair_lens)
-                        if passed:
-                            emit("pr_cot_pass", "PR-CoT repair succeeded!",
-                                 strategy="pr_cot", tokens=pr_result.total_tokens)
-                            result["passed"] = True
-                            result["code"] = repair_code
-                            result["phase_solved"] = "pr_cot"
-                            result["total_time_ms"] = (time.time() - start) * 1000
-                            result["verification_evidence"] = repair_evidence
-                            result["events"] = events
-                            return result
-                    emit("pr_cot_failed", "PR-CoT repair did not produce passing code")
-                except scoring.LensUnavailable:
-                    raise
-                except Exception as e:
-                    emit("pr_cot_error", str(e)[:200])
-
-            # Strategy 2: Refinement Loop — entered only when the remaining
-            # wall-clock can afford one iteration. H200 join: 453/487
-            # refinement entries timed out with ZERO completed iterations
-            # while burning ~6 minutes each; one iteration is ~3 sequential
-            # LLM calls, estimated at the per-call latency observed on THIS
-            # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
-            # bridge enforces — starting work the bridge will abandon only
-            # delays the fallback the user ends up with.
-            run_refinement = bool(failing)
-            if run_refinement:
-                est_ms = estimate_iteration_ms(getattr(llm, "avg_call_ms", 0.0))
-                remaining_ms = _remaining_budget_ms(start, budget_ms)
-                if (remaining_ms is not None
-                        and not can_afford_iteration(remaining_ms, est_ms)):
-                    run_refinement = False
-                    emit("refinement_skip",
-                         f"remaining budget {remaining_ms / 1000:.0f}s cannot "
-                         f"afford one iteration (~{est_ms / 1000:.0f}s) — "
-                         f"skipping to fallback",
-                         strategy="refinement",
-                         remaining_ms=round(remaining_ms),
-                         estimated_iteration_ms=round(est_ms))
-            if run_refinement and _out_of_budget(ctx):
-                run_refinement = False
-            if run_refinement:
-                check_client()
-                emit("refinement", "Starting refinement loop...",
-                     strategy="refinement", failing=len(failing))
-                # GH #39 point 3: enrich each failing candidate's error_output
-                # with call-chain context so the refinement loop sees it on
-                # every iteration. Cheap (chain_context_block is built once
-                # above and reused).
-                failing_for_refinement = failing
-                if chain_context_block:
-                    failing_for_refinement = [
-                        FailingCandidate(
-                            index=c.index,
-                            code=c.code,
-                            error_output=_enriched_error(c.error_output),
-                        )
-                        for c in failing
-                    ]
-                try:
-                    ref_result = self.refinement_loop.run(
-                        problem=problem,
-                        failing_candidates=failing_for_refinement,
-                        original_constraints=[],
-                        llm_call=llm,
-                        sandbox_run=sandbox,
-                        embed_call=embed,
-                        task_id=task_id,
-                    )
-                    result["total_tokens"] += ref_result.total_tokens
-                    if ref_result.solved:
-                        passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
-                        # Refinement winners are late-generated candidates too;
-                        # apply the same capture-only Lens observation as the
-                        # PR-CoT repair path above.
-                        refinement_lens = (_lens_view(ref_result.winning_code)
-                                           if capture.enabled else None)
-                        # Same gap the repair path had: a refinement winner
-                        # is a candidate, and a candidate with no record is one
-                        # nothing can say anything about.
-                        capture.note_candidate(
-                            role="refinement", index=None,
-                            code=ref_result.winning_code, accepted=passed,
-                            record=_evaluate_candidate(
-                                file_path, ref_result.winning_code, passed,
-                                emit, task=_task),
-                            phase="refinement", lens=refinement_lens)
-                        if passed:
-                            emit("refinement_pass",
-                                 f"Refinement solved in {ref_result.total_iterations} iterations!",
-                                 strategy="refinement",
-                                 iterations=ref_result.total_iterations,
-                                 tokens=ref_result.total_tokens)
-                            result["passed"] = True
-                            result["code"] = ref_result.winning_code
-                            result["phase_solved"] = "refinement"
-                            result["total_time_ms"] = (time.time() - start) * 1000
-                            result["verification_evidence"] = refinement_evidence
-                            result["events"] = events
-                            return result
-                        emit("refinement_verify_failed", (stderr or "")[:200])
-                    emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
-                except scoring.LensUnavailable:
-                    raise
-                except Exception as e:
-                    emit("refinement_error", str(e)[:200])
-
-            # ===== FALLBACK: Return best candidate even if none passed =====
-            # Vetoed candidates are excluded outright: a veto means "executes
-            # but is wrong" (stub, NameError-in-waiting), which is worse than
-            # an honest sandbox failure — and returning one is exactly the
-            # May 7 dashboard-stub failure mode. If every candidate was
-            # vetoed, return no code; the caller falls back to its baseline.
-            # Nothing verified, so nothing is returned. The caller's
-            # baseline is the model's own write, which is syntax- and
-            # structure-gated; a candidate that failed the sandbox is not
-            # better than that, and ranking failures by energy picks among
-            # them without evidence.
-            #
-            # Measured: across one 28-session run, 0 of 44 candidates passed
-            # the sandbox, and this path still handed back a failing one 11
-            # times — the proxy logged each as a V3 write and put it on disk
-            # over the model's own. The run that shipped that behaviour
-            # scored 20/28 to 17/28 against the run that did not.
-            #
-            # Same reasoning the vetoed branch below already used, and the
-            # same as the budget boundary: "executes but is wrong" is worse
-            # than an honest failure.
-            unverified = [c for c in run_pool.members() if not c.get("vetoed_by")]
-            if unverified:
-                emit("fallback_unverified",
-                     f"{len(unverified)} candidate(s), none passed verification — "
-                     f"leaving the caller's gated baseline in place")
-            elif run_pool.members():
-                emit("fallback_all_vetoed",
-                     "Every candidate was vetoed — returning no code")
-            result["total_time_ms"] = (time.time() - start) * 1000
-            result["events"] = events
-            return result
+            finished = _enter_repair(ctx, run_pool, task_type)
+            if finished is not None:
+                return finished
+            failing = _failing_candidates(run_pool)
+            self_tests = self._regenerate_self_tests(ctx, task_type, self_tests)
+            return self._repair(ctx, run_pool, failing, verified_sandbox, _task)
         except adapters.BudgetExhausted as exc:
             # An anytime algorithm whose clock expires owes its caller the
             # best answer it has. Raised from the adapter rather than
@@ -3194,6 +3131,156 @@ class V3PipelineService:
             raise
         except Exception as e:
             emit("divsampling_error", str(e)[:200])
+
+    def _regenerate_self_tests(self, ctx, task_type, self_tests):
+        """Phase 3 generates self-tests only when phase 0 produced none; a
+        failed retry keeps what there was. Returns the run's self-tests."""
+        problem, llm, task_id, emit, result = ctx.problem, ctx.llm, ctx.task_id, ctx.emit, ctx.result
+        # Repair runs the SAME self-tests phase 0 generated —
+        # verified_sandbox closes over them and records each score as a
+        # diagnostic. Regenerate only when phase 0 produced none (e.g. a
+        # transient LLM failure); a failed retry here must not downgrade an
+        # existing good set to None. Interactive tasks repair against
+        # compile-smoke (PC-022).
+        if task_type == "algorithmic" and not (self_tests and self_tests.test_cases):
+            emit("self_test_gen", "Generating self-tests...")
+            try:
+                self_tests = self.self_test_gen.generate(problem, llm, task_id)
+                emit("self_test_done", f"{len(self_tests.test_cases)} test cases generated")
+                result["total_tokens"] += self_tests.generation_tokens
+            except Exception as e:
+                emit("self_test_error", str(e)[:200])
+        return self_tests
+
+    def _repair(self, ctx, run_pool, failing, verified_sandbox, _task):
+        """Phase 3's two strategies, PR-CoT then the refinement loop, each
+        given the failing function's call-chain context. With nothing
+        verified the caller keeps its baseline. Returns the result."""
+        chain_context_block = _call_chain_context(ctx, failing)
+        finished = self._repair_with_pr_cot(ctx, run_pool, failing, verified_sandbox, _task, chain_context_block)
+        if finished is not None:
+            return finished
+        run_refinement = _refinement_affordable(ctx, failing)
+        if run_refinement:
+            finished = self._refine(ctx, failing, verified_sandbox, _task, chain_context_block)
+            if finished is not None:
+                return finished
+        return _leave_baseline(ctx, run_pool)
+
+    def _repair_with_pr_cot(self, ctx, run_pool, failing, verified_sandbox, _task, chain_context_block):
+        """Strategy 1: PR-CoT repairs the easiest failing candidate, and the
+        first repair that verifies is the finished run, returned. Else None.
+        With the budget spent it does not start: the best so far is returned."""
+        problem, task_id, llm, emit, result, start, events = (
+            ctx.problem, ctx.task_id, ctx.llm, ctx.emit, ctx.result, ctx.start, ctx.events)
+        # Strategy 1: PR-CoT Quick Repair
+        if failing and _out_of_budget(ctx):
+            return _finish_with_best(ctx, run_pool, "budget spent before PR-CoT repair")
+        if failing:
+            emit("pr_cot", "Attempting PR-CoT repair...",
+                 strategy="pr_cot", failing=len(failing))
+            best_failing = failing[0]
+            try:
+                pr_result = self.pr_cot.repair(
+                    problem=problem,
+                    code=best_failing.code,
+                    error=_enriched_error(best_failing.error_output, chain_context_block),
+                    llm_call=llm,
+                    task_id=task_id,
+                )
+                result["total_tokens"] += pr_result.total_tokens
+                for repair_code in pr_result.repairs:
+                    passed, repair_evidence = _check_repair(ctx, failing, pr_result, repair_code, verified_sandbox, _task)
+                    if passed:
+                        emit("pr_cot_pass", "PR-CoT repair succeeded!",
+                             strategy="pr_cot", tokens=pr_result.total_tokens)
+                        result["passed"] = True
+                        result["code"] = repair_code
+                        result["phase_solved"] = "pr_cot"
+                        result["total_time_ms"] = (time.time() - start) * 1000
+                        result["verification_evidence"] = repair_evidence
+                        result["events"] = events
+                        return result
+                emit("pr_cot_failed", "PR-CoT repair did not produce passing code")
+            except scoring.LensUnavailable:
+                raise
+            except Exception as e:
+                emit("pr_cot_error", str(e)[:200])
+        return None
+
+    def _refine(self, ctx, failing, verified_sandbox, _task, chain_context_block):
+        """Strategy 2: the refinement loop over every failing candidate, each
+        error given the call-chain context. A winner that verifies is the
+        finished run, returned. Else None."""
+        problem, task_id, llm, sandbox, embed, check_client = (
+            ctx.problem, ctx.task_id, ctx.llm, ctx.sandbox, ctx.embed, ctx.check_client)
+        file_path, emit, capture, result, start, events = (
+            ctx.file_path, ctx.emit, ctx.capture, ctx.result, ctx.start, ctx.events)
+        check_client()
+        emit("refinement", "Starting refinement loop...",
+             strategy="refinement", failing=len(failing))
+        # GH #39 point 3: enrich each failing candidate's error_output
+        # with call-chain context so the refinement loop sees it on
+        # every iteration. Cheap (chain_context_block is built once
+        # above and reused).
+        failing_for_refinement = failing
+        if chain_context_block:
+            failing_for_refinement = [
+                FailingCandidate(
+                    index=c.index,
+                    code=c.code,
+                    error_output=_enriched_error(c.error_output, chain_context_block),
+                )
+                for c in failing
+            ]
+        try:
+            ref_result = self.refinement_loop.run(
+                problem=problem,
+                failing_candidates=failing_for_refinement,
+                original_constraints=[],
+                llm_call=llm,
+                sandbox_run=sandbox,
+                embed_call=embed,
+                task_id=task_id,
+            )
+            result["total_tokens"] += ref_result.total_tokens
+            if ref_result.solved:
+                passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                # Refinement winners are late-generated candidates too;
+                # apply the same capture-only Lens observation as the
+                # PR-CoT repair path above.
+                refinement_lens = (_lens_view(ref_result.winning_code)
+                                   if capture.enabled else None)
+                # Same gap the repair path had: a refinement winner
+                # is a candidate, and a candidate with no record is one
+                # nothing can say anything about.
+                capture.note_candidate(
+                    role="refinement", index=None,
+                    code=ref_result.winning_code, accepted=passed,
+                    record=_evaluate_candidate(
+                        file_path, ref_result.winning_code, passed,
+                        emit, task=_task),
+                    phase="refinement", lens=refinement_lens)
+                if passed:
+                    emit("refinement_pass",
+                         f"Refinement solved in {ref_result.total_iterations} iterations!",
+                         strategy="refinement",
+                         iterations=ref_result.total_iterations,
+                         tokens=ref_result.total_tokens)
+                    result["passed"] = True
+                    result["code"] = ref_result.winning_code
+                    result["phase_solved"] = "refinement"
+                    result["total_time_ms"] = (time.time() - start) * 1000
+                    result["verification_evidence"] = refinement_evidence
+                    result["events"] = events
+                    return result
+                emit("refinement_verify_failed", (stderr or "")[:200])
+            emit("refinement_failed", f"Exhausted {ref_result.total_iterations} iterations")
+        except scoring.LensUnavailable:
+            raise
+        except Exception as e:
+            emit("refinement_error", str(e)[:200])
+        return None
 
 
 # --- Problem Builder for /v3/generate ----------------------------------------
