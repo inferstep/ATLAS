@@ -65,7 +65,7 @@
   "proxy/verification_evidence.go:produceDeclaredVerificationEvidence": 101,
   "sandbox/executor_server.py:_syntax_check_impl": 255,
   "sandbox/executor_server.py:run_shell": 105,
-  "sandbox/resource_contract.py:run_bounded": 143,
+  "sandbox/resource_contract.py:run_bounded": 144,
   "scripts/code_quality.py:analyze": 105,
   "scripts/derive_ablation.py:derive_condition": 112,
   "scripts/e2e-reliability.py:run_session": 140,

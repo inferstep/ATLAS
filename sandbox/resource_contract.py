@@ -610,7 +610,8 @@ def run_bounded(cmd: List[str], contract: ResourceContract,  # noqa: C901
         # that exited after forking a child into the background left it running.
         _kill_group(pgid, 0.1)
         survivors = _kill_token(token, contract.grace_seconds)
-        # Nothing holds the input pipe's other end now, so the feed's write has ended.
+        # Once the command's processes are gone, the feed's write has ended; the
+        # join is bounded for one that is not.
         if feed is not None:
             feed.join(timeout=2)
 

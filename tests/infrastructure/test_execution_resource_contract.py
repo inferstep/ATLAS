@@ -240,7 +240,7 @@ def test_a_command_past_its_time_is_timed_out(small, stdin):
     contract = dataclasses.replace(small, wall_seconds=2)
     r = run("sleep 20", contract, stdin=stdin)
     assert r.outcome == rc.OUTCOME_TIMED_OUT
-    assert r.elapsed_seconds < contract.wall_seconds + contract.grace_seconds + 1
+    assert r.elapsed_seconds < contract.wall_seconds + contract.grace_seconds + 2
 
 
 def test_output_overflow_is_named_not_silently_truncated(small):
