@@ -219,7 +219,7 @@ class RefinementLoop:
             telemetry_dir.mkdir(parents=True, exist_ok=True)
             self._events_file = telemetry_dir / "refinement_loop_events.jsonl"
 
-    def run(self, problem: str,  # noqa: C901
+    def run(self, problem: str,
             failing_candidates: List[FailingCandidate],
             original_constraints: List[str],
             llm_call: Optional[LLMCallable] = None,
@@ -256,15 +256,7 @@ class RefinementLoop:
         total_tokens = 0
 
         # Track all failed embeddings for distance checking
-        all_failed_embeddings: List[List[float]] = []
-        if embed_call is not None:
-            for c in failing_candidates:
-                try:
-                    emb = embed_call(c.code)
-                    all_failed_embeddings.append(emb)
-                except Exception:  # noqa: S110
-                    # best-effort: swallow on failure (caller continues)
-                    pass
+        all_failed_embeddings = self._embed_failing_candidates(failing_candidates, embed_call)
 
         # Current failure set (mutable across iterations)
         current_failures = list(failing_candidates)
@@ -303,42 +295,13 @@ class RefinementLoop:
 
             # Step 3: Generate code from best hypothesis
             best = refinement.hypotheses[0]
-            code = ""
-            gen_tokens = 0
-
-            if code_gen is not None:
-                code, gen_tokens, _ = code_gen(
-                    problem, best.constraints, 42 + iteration
-                )
-            elif llm_call is not None:
-                # Fallback: use LLM directly
-                code_prompt = self._build_code_prompt(
-                    problem, best.constraints, best.approach
-                )
-                code_response, gen_tokens, _ = llm_call(
-                    code_prompt, 0.2, 4096, 42 + iteration
-                )
-                code = extract_code_for_problem(
-                    code_response, problem, fallback="last"
-                )
+            code, gen_tokens = self._code_for_hypothesis(problem, best, code_gen, llm_call, iteration)
 
             total_tokens += gen_tokens
 
             # Step 4: Test in sandbox
-            passed, stdout, stderr = sandbox_run(code, "")
-            error_output = stderr if not passed else ""
-
-            iter_time = (time.time() - iter_start) * 1000
-            iter_result = IterationResult(
-                iteration=iteration,
-                hypothesis_used=best,
-                code_generated=code,
-                passed=passed,
-                error=error_output,
-                tokens_used=gen_tokens,
-                time_ms=iter_time,
-            )
-            result.iterations.append(iter_result)
+            passed, error_output = self._test_in_sandbox(sandbox_run, code, iteration, best,
+                                                         gen_tokens, iter_start, result)
 
             if passed:
                 # Success!
@@ -348,18 +311,95 @@ class RefinementLoop:
                 break
             else:
                 # Add to failure set
-                current_failures.append(FailingCandidate(
-                    code=code, error_output=error_output,
-                    index=len(current_failures),
-                ))
-                if embed_call is not None:
-                    try:
-                        emb = embed_call(code)
-                        all_failed_embeddings.append(emb)
-                    except Exception:  # noqa: S110
-                        # best-effort: swallow on failure (caller continues)
-                        pass
+                self._add_failure(current_failures, all_failed_embeddings, code, error_output, embed_call)
 
+        return self._finish_run(result, start_time, total_tokens, task_id)
+
+    @staticmethod
+    def _embed_failing_candidates(failing_candidates: List[FailingCandidate],
+                                  embed_call: Optional[EmbedCallable]) -> List[List[float]]:
+        """The embeddings of the failing candidates, for distance checking.
+        A candidate whose embedding fails is left out."""
+        all_failed_embeddings: List[List[float]] = []
+        if embed_call is not None:
+            for c in failing_candidates:
+                try:
+                    emb = embed_call(c.code)
+                    all_failed_embeddings.append(emb)
+                except Exception:  # noqa: S110
+                    # best-effort: swallow on failure (caller continues)
+                    pass
+        return all_failed_embeddings
+
+    def _code_for_hypothesis(self, problem: str, best: RefinedHypothesis,
+                             code_gen: Optional[CodeGenCallable],
+                             llm_call: Optional[LLMCallable],
+                             iteration: int) -> Tuple[str, int]:
+        """Step 3: code from the best hypothesis, by code_gen when there is one,
+        else from the LLM directly. Returns (code, tokens)."""
+        code = ""
+        gen_tokens = 0
+
+        if code_gen is not None:
+            code, gen_tokens, _ = code_gen(
+                problem, best.constraints, 42 + iteration
+            )
+        elif llm_call is not None:
+            # Fallback: use LLM directly
+            code_prompt = self._build_code_prompt(
+                problem, best.constraints, best.approach
+            )
+            code_response, gen_tokens, _ = llm_call(
+                code_prompt, 0.2, 4096, 42 + iteration
+            )
+            code = extract_code_for_problem(
+                code_response, problem, fallback="last"
+            )
+        return code, gen_tokens
+
+    @staticmethod
+    def _test_in_sandbox(sandbox_run: SandboxCallable, code: str, iteration: int,
+                         best: RefinedHypothesis, gen_tokens: int, iter_start: float,
+                         result: RefinementResult) -> Tuple[bool, str]:
+        """Step 4: run the code in the sandbox and add the iteration to
+        result.iterations. Returns (passed, error_output)."""
+        passed, _, stderr = sandbox_run(code, "")
+        error_output = stderr if not passed else ""
+
+        iter_time = (time.time() - iter_start) * 1000
+        iter_result = IterationResult(
+            iteration=iteration,
+            hypothesis_used=best,
+            code_generated=code,
+            passed=passed,
+            error=error_output,
+            tokens_used=gen_tokens,
+            time_ms=iter_time,
+        )
+        result.iterations.append(iter_result)
+        return passed, error_output
+
+    @staticmethod
+    def _add_failure(current_failures: List[FailingCandidate],
+                     all_failed_embeddings: List[List[float]], code: str,
+                     error_output: str, embed_call: Optional[EmbedCallable]) -> None:
+        """Add a failed attempt to the failure set, and its embedding to the
+        failed embeddings."""
+        current_failures.append(FailingCandidate(
+            code=code, error_output=error_output,
+            index=len(current_failures),
+        ))
+        if embed_call is not None:
+            try:
+                emb = embed_call(code)
+                all_failed_embeddings.append(emb)
+            except Exception:  # noqa: S110
+                # best-effort: swallow on failure (caller continues)
+                pass
+
+    def _finish_run(self, result: RefinementResult, start_time: float,
+                    total_tokens: int, task_id: str) -> RefinementResult:
+        """The run's reason when none was set, its totals, and its telemetry line."""
         if not result.solved and not result.reason:
             result.reason = "max_iterations_exhausted"
 

@@ -334,45 +334,10 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "file_path or baseline_code required"})
             return
 
-        # Build problem description from the adapter request
-        problem = _build_problem_from_request(
-            file_path, baseline_code, project_context,
-            framework, build_command, constraints, user_message,
-        )
+        problem, files = self._pipeline_inputs(file_path, baseline_code, project_context, framework,
+                                               build_command, constraints, user_message, tier)
 
-        # Build file context for the pipeline
-        files = dict(project_context) if project_context else {}
-
-        print(f"[generate] file={file_path} framework={framework} tier=T{tier}", flush=True)
-        if build_command:
-            print(f"[generate] requested build command: {build_command}", flush=True)
-        print(f"[generate] constraints: {constraints}", flush=True)
-
-        # Stream V3 pipeline progress as SSE events, then final result as JSON
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-
-        def emit_progress(stage, detail="", **data):
-            """Stream progress events to the Go proxy."""
-            payload = {"stage": stage, "detail": detail}
-            if data:
-                payload["data"] = data
-            event = json.dumps(payload)
-            try:
-                self.wfile.write(f"data: {event}\n\n".encode())
-                self.wfile.flush()
-                # Also log for debugging
-                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
-                      flush=True)
-            except (BrokenPipeError, ConnectionResetError):
-                # Client gone — flag it so pipeline.run aborts at the
-                # next phase boundary instead of grinding on.
-                emit_progress.disconnected = True
-            except Exception as e:
-                print(f"  [SSE ERROR] {e}", flush=True)
-
+        emit_progress = self._open_generate_stream()
         scope, stop_watch, watcher = _watch_parent_for(self, "generate")
         # Trace identity is a JOIN KEY, never authority: it may be missing, it
         # may repeat, and the invocation id is what makes a pool unique.
@@ -401,19 +366,77 @@ class V3Handler(BaseHTTPRequestHandler):
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
         except scoring.LensUnavailable as e:
-            # The lens is required: the run stops, and the caller is told why
-            # in the result it is waiting for. No code is sent, not even the
-            # baseline, so nothing can read this as a finished generation.
-            print(f"[generate] stopped: the lens cannot score ({e.reason})", flush=True)
-            self._write_result({
-                "code": "", "passed": False, "phase_solved": "lens_unavailable",
-                "candidates_tested": 0, "winning_score": 0.0,
-                "lens_unavailable": e.reason,
-            })
+            self._write_lens_unavailable(e)
             return
         finally:
             _release_scope(scope, stop_watch, watcher, "generate")
+        self._write_generate_result(result, baseline_code)
 
+    @staticmethod
+    def _pipeline_inputs(file_path, baseline_code, project_context, framework,
+                         build_command, constraints, user_message, tier):
+        """The problem statement and the file context the pipeline runs on,
+        built from the request fields. Logs what was asked."""
+        # Build problem description from the adapter request
+        problem = _build_problem_from_request(
+            file_path, baseline_code, project_context,
+            framework, build_command, constraints, user_message,
+        )
+
+        # Build file context for the pipeline
+        files = dict(project_context) if project_context else {}
+
+        print(f"[generate] file={file_path} framework={framework} tier=T{tier}", flush=True)
+        if build_command:
+            print(f"[generate] requested build command: {build_command}", flush=True)
+        print(f"[generate] constraints: {constraints}", flush=True)
+        return problem, files
+
+    def _open_generate_stream(self):
+        """Start the SSE response, and return the progress callback that
+        writes the pipeline's events to it."""
+        # Stream V3 pipeline progress as SSE events, then final result as JSON
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit_progress(stage, detail="", **data):
+            """Stream progress events to the Go proxy."""
+            payload = {"stage": stage, "detail": detail}
+            if data:
+                payload["data"] = data
+            event = json.dumps(payload)
+            try:
+                self.wfile.write(f"data: {event}\n\n".encode())
+                self.wfile.flush()
+                # Also log for debugging
+                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
+            except (BrokenPipeError, ConnectionResetError):
+                # Client gone — flag it so pipeline.run aborts at the
+                # next phase boundary instead of grinding on.
+                emit_progress.disconnected = True
+            except Exception as e:
+                print(f"  [SSE ERROR] {e}", flush=True)
+
+        return emit_progress
+
+    def _write_lens_unavailable(self, e):
+        """The result when the lens cannot score: no code, and the reason."""
+        # The lens is required: the run stops, and the caller is told why
+        # in the result it is waiting for. No code is sent, not even the
+        # baseline, so nothing can read this as a finished generation.
+        print(f"[generate] stopped: the lens cannot score ({e.reason})", flush=True)
+        self._write_result({
+            "code": "", "passed": False, "phase_solved": "lens_unavailable",
+            "candidates_tested": 0, "winning_score": 0.0,
+            "lens_unavailable": e.reason,
+        })
+
+    def _write_generate_result(self, result, baseline_code):
+        """The final result of /v3/generate: the baseline when the run gave no
+        code, the response fields, and the evidence envelope."""
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
         if not result.get("code") and baseline_code:
@@ -511,26 +534,7 @@ class V3Handler(BaseHTTPRequestHandler):
         print(f"[plan] msg={user_message[:80]!r} cwd={working_dir} files={len(project_context)} n={n_candidates}",
               flush=True)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-
-        def emit_progress(stage, detail="", **data):
-            payload = {"stage": stage, "detail": detail}
-            if data:
-                payload["data"] = data
-            event = json.dumps(payload)
-            try:
-                self.wfile.write(f"data: {event}\n\n".encode())
-                self.wfile.flush()
-                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
-                      flush=True)
-            except BrokenPipeError:
-                # best-effort: swallow on failure (caller continues)
-                pass
-            except Exception as e:
-                print(f"  [SSE plan ERROR] {e}", flush=True)
+        emit_progress = self._open_plan_stream()
 
         scope, stop_watch, watcher = _watch_parent_for(self, "plan")
         trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
@@ -567,6 +571,32 @@ class V3Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             # best-effort: swallow on failure (caller continues)
             pass
+
+    def _open_plan_stream(self):
+        """Start the SSE response, and return the progress callback that
+        writes the planner's events to it."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit_progress(stage, detail="", **data):
+            payload = {"stage": stage, "detail": detail}
+            if data:
+                payload["data"] = data
+            event = json.dumps(payload)
+            try:
+                self.wfile.write(f"data: {event}\n\n".encode())
+                self.wfile.flush()
+                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
+            except BrokenPipeError:
+                # best-effort: swallow on failure (caller continues)
+                pass
+            except Exception as e:
+                print(f"  [SSE plan ERROR] {e}", flush=True)
+
+        return emit_progress
 
     def _handle_structural_edit(self):
         """POST /internal/structural_edit — friendly-selector structural replacement.

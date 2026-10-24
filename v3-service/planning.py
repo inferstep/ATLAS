@@ -326,7 +326,7 @@ def normalize_plan(plan: dict) -> Tuple[dict, List[str]]:
     return plan, notes
 
 
-def _score_plan(plan: dict, user_message: str,  # noqa: C901
+def _score_plan(plan: dict, user_message: str,
                 existing_files: set = frozenset()) -> Tuple[float, List[str]]:
     """Heuristic plan scorer. Returns (score in [0,1], reasons[]).
 
@@ -360,6 +360,20 @@ def _score_plan(plan: dict, user_message: str,  # noqa: C901
     else:
         return 0.0, ["empty plan"]
 
+    score = _score_verify_step(plan, steps, score, reasons)
+    score = _score_clobbered_files(steps, existing_files, score, reasons)
+    score = _score_target_overlap(steps, user_message, score, reasons)
+
+    if plan.get("rationale"):
+        score += 0.1
+        reasons.append("rationale present")
+
+    return min(score, 1.0), reasons
+
+
+def _score_verify_step(plan: dict, steps: list, score: float, reasons: List[str]) -> float:
+    """_score_plan's verify-step part: the score with it added, and its
+    reasons added to `reasons`."""
     verify_step_id = plan.get("verify_step")
     verify_step = None
     for s in steps:
@@ -382,7 +396,13 @@ def _score_plan(plan: dict, user_message: str,  # noqa: C901
             reasons.append("verify_step doesn't reference a verification command")
     else:
         reasons.append("missing or invalid verify_step")
+    return score
 
+
+def _score_clobbered_files(steps: list, existing_files: set, score: float,
+                           reasons: List[str]) -> float:
+    """_score_plan's penalty for a step that creates a file already there:
+    the score with it applied, and its reason added to `reasons`."""
     # Planning to CREATE a file that already exists. Measured on aoc_sonar:
     # the winning plan's step 1 was `write_file input.txt` — "create the
     # necessary input data" — against a 2000-line fixture already on disk.
@@ -409,7 +429,13 @@ def _score_plan(plan: dict, user_message: str,  # noqa: C901
             "plans to create file(s) that already exist: "
             + ", ".join(sorted(set(clobbered))[:3])
             + " — edit them instead of recreating them")
+    return score
 
+
+def _score_target_overlap(steps: list, user_message: str, score: float,
+                          reasons: List[str]) -> float:
+    """_score_plan's credit for steps that target files the user named: the
+    score with it added, and its reason added to `reasons`."""
     # Target-vs-user-message overlap. If the user said "fix index.html",
     # plans that touch index.html beat plans that don't.
     # Length bounds (max 128 for the stem, max 16 for the extension) cap
@@ -431,12 +457,7 @@ def _score_plan(plan: dict, user_message: str,  # noqa: C901
         score += target_score
         if target_hits:
             reasons.append(f"{target_hits} step(s) target user-mentioned files")
-
-    if plan.get("rationale"):
-        score += 0.1
-        reasons.append("rationale present")
-
-    return min(score, 1.0), reasons
+    return score
 
 
 def generate_plan(
@@ -505,6 +526,42 @@ def generate_plan(
 
     prompt = _build_plan_prompt(user_message, working_dir, project_context, sorted(existing))
 
+    candidates = _sample_plans(llm, prompt, plan_max_tokens, n_candidates, user_message, existing, emit)
+
+    # Pick winner. Tie-break: shorter plan wins (less waffle).
+    best_idx = _pick_winner(candidates)
+
+    # A penalty is not a floor. If the winner still only starts a server, the
+    # plan is asserting that setup is verification, and the agent will follow
+    # it -- which is exactly how a broken game shipped as "complete and
+    # verified". Strip the claim rather than pass it on: the loop's own
+    # verification gate then governs, and it demands a real green run.
+    if best_idx >= 0:
+        winner = candidates[best_idx][0]
+        if winner and winner.get("verify_is_setup_only"):
+            winner.pop("verify_step", None)
+            winner["verify_step_removed"] = "setup-only verification is not verification"
+            emit("plan_verify_stripped",
+                 "winning plan's verify_step only started a server — removed, "
+                 "the agent's verification gate governs instead")
+
+    if best_idx < 0:
+        return _fallback_plan(working_dir, candidates, emit)
+
+    plan, score, reasons = candidates[best_idx]
+    plan["candidates_tested"] = len([c for c in candidates if c[0] is not None])
+    plan["winning_score"] = score
+    plan["winning_index"] = best_idx
+    plan["reasons"] = reasons
+    emit("plan_selected", f"plan {best_idx+1} won (score={score:.2f})",
+         index=best_idx, score=score, steps=len(plan.get("steps") or []))
+    return plan
+
+
+def _sample_plans(llm, prompt: str, plan_max_tokens: int, n_candidates: int,
+                  user_message: str, existing: set, emit) -> List[Tuple[Optional[dict], float, List[str]]]:
+    """One candidate plan per temperature, each parsed, normalised and scored:
+    (plan, score, reasons), with plan None for a candidate that failed."""
     candidates: List[Tuple[Optional[dict], float, List[str]]] = []
     # Diverse sampling via temperature spread. Cheap version of V3's
     # PlanSearch — three samples at 0.3 / 0.5 / 0.7 give us breadth
@@ -539,8 +596,12 @@ def generate_plan(
         emit("plan_candidate_scored", f"candidate {i+1} score={score:.2f}",
              index=i, score=score, reasons=reasons)
         candidates.append((plan, score, reasons))
+    return candidates
 
-    # Pick winner. Tie-break: shorter plan wins (less waffle).
+
+def _pick_winner(candidates: List[Tuple[Optional[dict], float, List[str]]]) -> int:
+    """The index of the highest-scoring parsed candidate, the shorter plan on
+    a tie; -1 when no candidate parsed."""
     best_idx = -1
     best_score = -1.0
     best_steps = 999
@@ -552,44 +613,24 @@ def generate_plan(
             best_score = score
             best_steps = n_steps
             best_idx = i
+    return best_idx
 
-    # A penalty is not a floor. If the winner still only starts a server, the
-    # plan is asserting that setup is verification, and the agent will follow
-    # it -- which is exactly how a broken game shipped as "complete and
-    # verified". Strip the claim rather than pass it on: the loop's own
-    # verification gate then governs, and it demands a real green run.
-    if best_idx >= 0:
-        winner = candidates[best_idx][0]
-        if winner and winner.get("verify_is_setup_only"):
-            winner.pop("verify_step", None)
-            winner["verify_step_removed"] = "setup-only verification is not verification"
-            emit("plan_verify_stripped",
-                 "winning plan's verify_step only started a server — removed, "
-                 "the agent's verification gate governs instead")
 
-    if best_idx < 0:
-        # All candidates failed. Return a minimal fallback so the agent
-        # loop doesn't block — the plan-adherence gate will be lenient
-        # if it sees this shape.
-        emit("plan_failed", "no candidate parsed — returning fallback")
-        return {
-            "steps": [
-                {"id": "s1", "action": "investigate the request and act",
-                 "target": working_dir, "why": "planner failed; deferring to agent"},
-            ],
-            "verify_step": None,
-            "candidates_tested": len(candidates),
-            "winning_score": 0.0,
-            "winning_index": -1,
-            "rationale": "planner-pipeline fallback (no parseable candidate)",
-            "reasons": ["all candidates failed to parse"],
-        }
-
-    plan, score, reasons = candidates[best_idx]
-    plan["candidates_tested"] = len([c for c in candidates if c[0] is not None])
-    plan["winning_score"] = score
-    plan["winning_index"] = best_idx
-    plan["reasons"] = reasons
-    emit("plan_selected", f"plan {best_idx+1} won (score={score:.2f})",
-         index=best_idx, score=score, steps=len(plan.get("steps") or []))
-    return plan
+def _fallback_plan(working_dir: str, candidates: list, emit) -> dict:
+    """The one-step plan /v3/plan returns when no candidate parsed."""
+    # All candidates failed. Return a minimal fallback so the agent
+    # loop doesn't block — the plan-adherence gate will be lenient
+    # if it sees this shape.
+    emit("plan_failed", "no candidate parsed — returning fallback")
+    return {
+        "steps": [
+            {"id": "s1", "action": "investigate the request and act",
+             "target": working_dir, "why": "planner failed; deferring to agent"},
+        ],
+        "verify_step": None,
+        "candidates_tested": len(candidates),
+        "winning_score": 0.0,
+        "winning_index": -1,
+        "rationale": "planner-pipeline fallback (no parseable candidate)",
+        "reasons": ["all candidates failed to parse"],
+    }
