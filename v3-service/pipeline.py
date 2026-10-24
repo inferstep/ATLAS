@@ -1340,6 +1340,144 @@ def _consensus_winners(candidates, test_cases, sandbox, emit,
     return best
 
 
+# --- The steps of a pipeline run ---------------------------------------------
+#
+# V3PipelineService._run_impl reads top to bottom as these steps.
+
+
+def _smoke_language(file_path):
+    """The language the smoke check verifies the target file in: from its
+    extension, or Python when the task names no file."""
+    # PC-048: derive language from the target file's extension. Used
+    # by smoke_compile_check below to pick the right syntax checker, and
+    # to keep the Python-only checks off other files. Python only when no
+    # file_path is supplied (a bench task names no file).
+    _ext = Path(file_path).suffix.lower() if file_path else ""
+    # Only languages scoring.smoke_compile_check can actually verify —
+    # an entry here that the checker rejects would fail every candidate
+    # with "verification unavailable" instead of checking anything.
+    _ext_to_lang = {
+        ".py": "python", ".pyw": "python", ".pyi": "python",
+        ".html": "html", ".htm": "html",
+        ".json": "json",
+        ".yaml": "yaml", ".yml": "yaml",
+        ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+        ".ts": "typescript", ".tsx": "typescript",
+        ".xml": "xml",
+        ".sh": "bash", ".bash": "bash",
+        ".go": "go",
+        ".java": "java",
+        ".kt": "kotlin",
+        ".rs": "rust",
+        ".rb": "ruby",
+        ".php": "php",
+    }
+    # A named file of a class the checker cannot verify keeps its own
+    # name, so it fails as "verification unavailable". Defaulting it to
+    # Python parsed a stylesheet, a C file or a Makefile as Python: every
+    # candidate failed with a SyntaxError that said nothing about the
+    # file, and the Python-only checks ran on it.
+    if file_path:
+        smoke_language = _ext_to_lang.get(_ext, _ext.lstrip(".") or "unknown")
+    else:
+        smoke_language = "python"
+    return smoke_language
+
+
+def _with_file_context(problem, files):
+    """The problem, with the project's existing files in front of it when
+    the caller sent any."""
+    # If existing file context is provided, prepend it to the problem
+    # so all V3 modules (PlanSearch, PR-CoT, etc.) can see the code
+    if files:
+        file_context_parts = []
+        for fname, content in files.items():
+            file_context_parts.append(f"### Existing file: {fname}\n```\n{content}\n```")
+        problem = (
+            "The following files already exist in the project:\n\n"
+            + "\n\n".join(file_context_parts)
+            + "\n\n---\n\nTask:\n" + problem
+        )
+    return problem
+
+
+def _progress_emitter(events, start, progress_callback):
+    """The run's emit(stage, detail, **data). It keeps every event but a
+    token in `events` and streams each one to the progress callback."""
+    def emit(stage, detail="", **data):
+        ev = {"stage": stage, "detail": detail, "t": time.time() - start}
+        if data:
+            ev["data"] = data
+        # Token deltas stream live through the callback but are not
+        # stored: one dict per token would make the final `event: result`
+        # frame multi-MB on long generations.
+        if stage != "token":
+            events.append(ev)
+        if progress_callback:
+            try:
+                progress_callback(stage, detail, **data)
+            except TypeError:
+                progress_callback(stage, detail)
+    return emit
+
+
+def _client_check(progress_callback, cancel_scope, task_id):
+    """The run's check_client(), which the phases call at their boundaries."""
+    def check_client():
+        """Abort at phase boundaries once the SSE client disconnects.
+        The handler sets `disconnected` on the callback when a write
+        hits BrokenPipeError; a dead client must not keep burning GPU."""
+        if getattr(progress_callback, "disconnected", False):
+            raise adapters.ClientDisconnected(f"client disconnected during task {task_id}")
+        if cancel_scope is not None and cancel_scope.cancelled:
+            raise adapters.Cancelled(f"request cancelled during task {task_id}")
+    return check_client
+
+
+def _new_llm(emit, start, budget_ms, cancel_scope,
+             request_identity=None):
+    """The run's generation adapter: it streams to emit, carries the
+    request's cancel scope and identity, and stops at the run's deadline."""
+    # The adapter refuses to start a generation that cannot finish
+    # before the cap, so every phase and every loop inside one is
+    # covered by a single check rather than a boundary guard each.
+    _budget_ms = _remaining_budget_ms(start, budget_ms)
+    llm = adapters.LLMAdapter(progress_callback=emit)
+    # The request's cancellation handle. Every generation this adapter
+    # opens registers with it, so the handler can close them all the
+    # moment the parent goes away -- without waiting to discover a broken
+    # SSE write, which never happens while a call is in flight.
+    llm.cancel_scope = cancel_scope
+    # The identity every generation this adapter opens is sent under.
+    # Set beside cancel_scope because it has the same lifetime and the
+    # same reason for living on the adapter: PlanSearch dispatches from
+    # worker threads, and a thread inherits neither a ContextVar nor a
+    # local — it only sees the request-scoped object it was handed.
+    llm.request_identity = request_identity
+    # Assigned rather than passed to the constructor: tests substitute
+    # their own LLM doubles here, and a new required kwarg would break
+    # every one of them for a value only the real adapter reads.
+    if _budget_ms is not None:
+        llm.deadline = start + _budget_ms / 1000.0
+    return llm
+
+
+def _new_result(task_id):
+    """The result a run fills in: not passed, no code, no phase solved."""
+    result = {
+        "task_id": task_id,
+        "passed": False,
+        "code": "",
+        "phase_solved": "none",
+        "candidates_generated": 0,
+        "total_tokens": 0,
+        "total_time_ms": 0.0,
+        "events": [],
+        "verification_evidence": [],
+    }
+    return result
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -1496,98 +1634,12 @@ class V3PipelineService:
         events = []
         files = files or {}
         capture = _capture if _capture is not None else _PoolCapture.disabled()
-
-        # PC-048: derive language from the target file's extension. Used
-        # by smoke_compile_check below to pick the right syntax checker, and
-        # to keep the Python-only checks off other files. Python only when no
-        # file_path is supplied (a bench task names no file).
-        _ext = Path(file_path).suffix.lower() if file_path else ""
-        # Only languages scoring.smoke_compile_check can actually verify —
-        # an entry here that the checker rejects would fail every candidate
-        # with "verification unavailable" instead of checking anything.
-        _ext_to_lang = {
-            ".py": "python", ".pyw": "python", ".pyi": "python",
-            ".html": "html", ".htm": "html",
-            ".json": "json",
-            ".yaml": "yaml", ".yml": "yaml",
-            ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-            ".ts": "typescript", ".tsx": "typescript",
-            ".xml": "xml",
-            ".sh": "bash", ".bash": "bash",
-            ".go": "go",
-            ".java": "java",
-            ".kt": "kotlin",
-            ".rs": "rust",
-            ".rb": "ruby",
-            ".php": "php",
-        }
-        # A named file of a class the checker cannot verify keeps its own
-        # name, so it fails as "verification unavailable". Defaulting it to
-        # Python parsed a stylesheet, a C file or a Makefile as Python: every
-        # candidate failed with a SyntaxError that said nothing about the
-        # file, and the Python-only checks ran on it.
-        if file_path:
-            smoke_language = _ext_to_lang.get(_ext, _ext.lstrip(".") or "unknown")
-        else:
-            smoke_language = "python"
-
-        # If existing file context is provided, prepend it to the problem
-        # so all V3 modules (PlanSearch, PR-CoT, etc.) can see the code
-        if files:
-            file_context_parts = []
-            for fname, content in files.items():
-                file_context_parts.append(f"### Existing file: {fname}\n```\n{content}\n```")
-            problem = (
-                "The following files already exist in the project:\n\n"
-                + "\n\n".join(file_context_parts)
-                + "\n\n---\n\nTask:\n" + problem
-            )
-
-        def emit(stage, detail="", **data):
-            ev = {"stage": stage, "detail": detail, "t": time.time() - start}
-            if data:
-                ev["data"] = data
-            # Token deltas stream live through the callback but are not
-            # stored: one dict per token would make the final `event: result`
-            # frame multi-MB on long generations.
-            if stage != "token":
-                events.append(ev)
-            if progress_callback:
-                try:
-                    progress_callback(stage, detail, **data)
-                except TypeError:
-                    progress_callback(stage, detail)
-
-        def check_client():
-            """Abort at phase boundaries once the SSE client disconnects.
-            The handler sets `disconnected` on the callback when a write
-            hits BrokenPipeError; a dead client must not keep burning GPU."""
-            if getattr(progress_callback, "disconnected", False):
-                raise adapters.ClientDisconnected(f"client disconnected during task {task_id}")
-            if cancel_scope is not None and cancel_scope.cancelled:
-                raise adapters.Cancelled(f"request cancelled during task {task_id}")
-
-        # The adapter refuses to start a generation that cannot finish
-        # before the cap, so every phase and every loop inside one is
-        # covered by a single check rather than a boundary guard each.
-        _budget_ms = _remaining_budget_ms(start, budget_ms)
-        llm = adapters.LLMAdapter(progress_callback=emit)
-        # The request's cancellation handle. Every generation this adapter
-        # opens registers with it, so the handler can close them all the
-        # moment the parent goes away -- without waiting to discover a broken
-        # SSE write, which never happens while a call is in flight.
-        llm.cancel_scope = cancel_scope
-        # The identity every generation this adapter opens is sent under.
-        # Set beside cancel_scope because it has the same lifetime and the
-        # same reason for living on the adapter: PlanSearch dispatches from
-        # worker threads, and a thread inherits neither a ContextVar nor a
-        # local — it only sees the request-scoped object it was handed.
-        llm.request_identity = request_identity
-        # Assigned rather than passed to the constructor: tests substitute
-        # their own LLM doubles here, and a new required kwarg would break
-        # every one of them for a value only the real adapter reads.
-        if _budget_ms is not None:
-            llm.deadline = start + _budget_ms / 1000.0
+        smoke_language = _smoke_language(file_path)
+        problem = _with_file_context(problem, files)
+        emit = _progress_emitter(events, start, progress_callback)
+        check_client = _client_check(progress_callback, cancel_scope, task_id)
+        llm = _new_llm(emit, start, budget_ms, cancel_scope,
+                       request_identity=request_identity)
         # PC-046: ship the user's other project files into the sandbox so
         # multi-file imports resolve. `files` is the same Dict that V3
         # already prepends to the LLM prompt above; passing it to the
@@ -1599,18 +1651,7 @@ class V3PipelineService:
         # the program with these files on disk and no stdin.
         task_input_file = _task_input_file(files)
         embed = adapters.EmbedAdapter()
-
-        result = {
-            "task_id": task_id,
-            "passed": False,
-            "code": "",
-            "phase_solved": "none",
-            "candidates_generated": 0,
-            "total_tokens": 0,
-            "total_time_ms": 0.0,
-            "events": [],
-            "verification_evidence": [],
-        }
+        result = _new_result(task_id)
 
         # ===== PHASE 0: PROBE =====
         emit("probe", "Generating probe candidate...")
