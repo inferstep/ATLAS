@@ -23,7 +23,7 @@ class AtlasSettingsTest {
 
         assertEquals(want, settings.resolvedProxyUrl(environment), name)
         assertEquals(
-            AtlasConnection(want, "env-token"),
+            AtlasConnection(want, environment.token),
             settings.connection(storedToken = null, environment = environment),
             name,
         )
@@ -38,7 +38,7 @@ class AtlasSettingsTest {
             settings.connection(storedToken = " stored-token ", environment = environment).token,
         )
         assertEquals(
-            "env-token",
+            environment.token,
             settings.connection(storedToken = "  ", environment = environment).token,
         )
     }

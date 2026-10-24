@@ -104,15 +104,16 @@ class PermissionFlowTest {
             val ui = FakeUi()
             val allowed = linkedSetOf("edit_file")
             val flow = PermissionFlow(allowed, ui, this)
+            val session = "sess-1"
 
-            flow.handleRequest(poster, "sess-1", request("edit_file"))
+            flow.handleRequest(poster, session, request("edit_file"))
             letTheLaunchedWorkRun()
 
             // TUI convention: auto-allow posts scope "once", not "session".
             assertEquals(
                 listOf(
                     PermissionDecisionRequest(
-                        "sess-1",
+                        session,
                         "call-edit_file",
                         PermissionDecision.ALLOW,
                         PermissionScope.ONCE,
@@ -137,8 +138,9 @@ class PermissionFlowTest {
         val ui = FakeUi()
         val allowed = linkedSetOf<String>()
         val flow = PermissionFlow(allowed, ui, this)
+        val session = "sess-1"
 
-        flow.handleRequest(poster, "sess-1", request(tool))
+        flow.handleRequest(poster, session, request(tool))
         val pending = ui.prompts.single()
         assertEquals(tool, pending.request.toolName, name)
 
@@ -146,7 +148,7 @@ class PermissionFlowTest {
         letTheLaunchedWorkRun()
 
         assertEquals(
-            listOf(PermissionDecisionRequest("sess-1", "call-$tool", decision, scope)),
+            listOf(PermissionDecisionRequest(session, "call-$tool", decision, scope)),
             poster.decisions,
             name,
         )
@@ -231,9 +233,11 @@ class PermissionFlowTest {
             val poster = FakePoster()
             val ui = FakeUi()
             val flow = PermissionFlow(linkedSetOf(), ui, this)
+            val session = "sess-7"
+            val editCall = "call-2"
 
-            flow.handleRequest(poster, "sess-7", request("write_file", "call-1"))
-            flow.handleRequest(poster, "sess-7", request("edit_file", "call-2"))
+            flow.handleRequest(poster, session, request("write_file", "call-1"))
+            flow.handleRequest(poster, session, request("edit_file", editCall))
             val second = ui.prompts[1]
 
             assertFalse(flow.settleById(9999, PermissionChoice.DENY))
@@ -243,8 +247,8 @@ class PermissionFlowTest {
             assertEquals(
                 listOf(
                     PermissionDecisionRequest(
-                        "sess-7",
-                        "call-2",
+                        session,
+                        editCall,
                         PermissionDecision.ALLOW,
                         PermissionScope.ONCE,
                     ),

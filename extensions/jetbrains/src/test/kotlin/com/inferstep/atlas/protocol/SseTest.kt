@@ -29,7 +29,7 @@ class SseTest {
     @Test
     fun `a frame split at any byte boundary reassembles, multibyte characters included`() {
         val text = "héllo→ 日本語 — ok"
-        val bytes = (frame("text", """{"content":"$text"}""") + "data: [DONE]\n\n").toByteArray()
+        val bytes = (frame("text", """{"content":"$text"}""") + DONE).toByteArray()
 
         // Chunk size 1 splits inside "data:", inside the JSON, between the two
         // newlines and inside every multibyte character.
@@ -53,7 +53,7 @@ class SseTest {
             collect(
                 listOf(
                     frame("tool_result", """{"tool":"read_file","success":true,"data":"$big"}"""),
-                    "data: [DONE]\n\n",
+                    DONE,
                 ),
             )
 
@@ -72,7 +72,7 @@ class SseTest {
         parser.feed(frame("text", """{"content":"x"}""").toByteArray())
         assertFalse(parser.isDone)
 
-        parser.feed("data: [DONE]\n\n".toByteArray())
+        parser.feed(DONE.toByteArray())
         assertTrue(parser.isDone)
     }
 
@@ -83,6 +83,9 @@ class SseTest {
     }
 
     companion object {
+        /** The sentinel frame that ends a stream. */
+        private const val DONE = "data: [DONE]\n\n"
+
         private fun frame(
             type: String,
             data: String,
@@ -97,7 +100,7 @@ class SseTest {
                         ": connected\n\n: heartbeat\n\n",
                         frame("text", """{"content":"hello"}"""),
                         frame("done", """{"summary":""}"""),
-                        "data: [DONE]\n\n",
+                        DONE,
                     ),
                     listOf("""text {"content":"hello"}""", """done {"summary":""}"""),
                 ),
@@ -106,7 +109,7 @@ class SseTest {
                     listOf(
                         "data: {not json}\n\n",
                         frame("text", """{"content":"ok"}"""),
-                        "data: [DONE]\n\n",
+                        DONE,
                     ),
                     listOf("""text {"content":"ok"}"""),
                 ),
@@ -115,7 +118,7 @@ class SseTest {
                     listOf(
                         """data: {"data":{"content":"no type"}}""" + "\n\n",
                         """data: {"type":"","data":{}}""" + "\n\n",
-                        "data: [DONE]\n\n",
+                        DONE,
                     ),
                     emptyList<String>(),
                 ),
@@ -140,7 +143,7 @@ class SseTest {
                 ),
                 Arguments.of(
                     "anything after the sentinel is ignored",
-                    listOf("data: [DONE]\n\n", frame("text", """{"content":"late"}""")),
+                    listOf(DONE, frame("text", """{"content":"late"}""")),
                     emptyList<String>(),
                 ),
             )

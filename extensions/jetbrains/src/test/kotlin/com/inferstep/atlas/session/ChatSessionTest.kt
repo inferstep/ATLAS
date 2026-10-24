@@ -458,10 +458,11 @@ class ChatSessionTest {
     @Test
     fun `says when the proxy edits another folder, and stays quiet when it agrees`() =
         runBlocking {
+            val openFolder = "/home/isaac/demo2"
             val misaligned =
                 SessionFixture(
                     emptyList(),
-                    FakeWorkspace(root = "/home/isaac/demo2"),
+                    FakeWorkspace(root = openFolder),
                     probe =
                         WorkspaceProbe {
                             WorkspaceResponse(projectDir = "/home/isaac/snake-game")
@@ -476,8 +477,8 @@ class ChatSessionTest {
             val aligned =
                 SessionFixture(
                     emptyList(),
-                    FakeWorkspace(root = "/home/isaac/demo2"),
-                    probe = WorkspaceProbe { WorkspaceResponse(projectDir = "/home/isaac/demo2") },
+                    FakeWorkspace(root = openFolder),
+                    probe = WorkspaceProbe { WorkspaceResponse(projectDir = openFolder) },
                 )
             aligned.session.checkWorkspace()
             assertEquals(0, aligned.state.entries.size)

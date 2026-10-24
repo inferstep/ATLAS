@@ -131,7 +131,7 @@ class AtlasClientTest {
 
                     client.postPermissionDecision(
                         PermissionDecisionRequest(
-                            sessionId = "client-1",
+                            sessionId = SESSION_ID,
                             toolCallId = prompt.toolCallId,
                             decision = PermissionDecision.ALLOW,
                             scope = PermissionScope.ONCE,
@@ -210,12 +210,12 @@ class AtlasClientTest {
         runBlocking {
             MockProxy().use { proxy ->
                 AtlasClient(proxy.url).use { client ->
-                    assertTrue(client.cancelTurn("client-1"))
+                    assertTrue(client.cancelTurn(SESSION_ID))
                 }
             }
             MockProxy(MockProxy.Options(cancelStatus = 404)).use { proxy ->
                 AtlasClient(proxy.url).use { client ->
-                    assertFalse(client.cancelTurn("client-1"))
+                    assertFalse(client.cancelTurn(SESSION_ID))
                 }
             }
         }
@@ -227,7 +227,7 @@ class AtlasClientTest {
         // exception that would mask the turn's own ending.
         val port = ServerSocket(0).use { it.localPort }
         AtlasClient("http://127.0.0.1:$port").use { client ->
-            assertFalse(runBlocking { client.cancelTurn("client-1") })
+            assertFalse(runBlocking { client.cancelTurn(SESSION_ID) })
         }
     }
 
@@ -365,12 +365,12 @@ class AtlasClientTest {
             message = "do the thing",
             workingDir = "/workspace",
             mode = PermissionMode.YOLO,
-            sessionId = "client-1",
+            sessionId = SESSION_ID,
         )
 
     private fun decision(): PermissionDecisionRequest =
         PermissionDecisionRequest(
-            sessionId = "client-1",
+            sessionId = SESSION_ID,
             toolCallId = "call_0",
             decision = PermissionDecision.DENY,
             scope = PermissionScope.ONCE,
@@ -378,6 +378,9 @@ class AtlasClientTest {
 
     private companion object {
         const val PROMPT_TIMEOUT_MS = 20_000L
+
+        // The session of the client's turn; its decisions and its cancel name it.
+        const val SESSION_ID = "client-1"
 
         @JvmStatic
         fun failedTurns(): List<Arguments> =
