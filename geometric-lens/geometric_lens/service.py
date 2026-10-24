@@ -635,27 +635,13 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         }
 
     try:
-        import numpy as np
-        import torch
-        from geometric_lens.embed_capacity import finite_array
-        from geometric_lens.embedding_extractor import (
-            extract_per_layer_per_token,
-            extract_per_token,
-        )
-
         (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
          gx_top_dims, cx_cfg, gx_thresholds) = _snapshot_weights()
 
         start = time.monotonic()
 
         # Pull per-token hidden states from llama-server
-        if layer is None:
-            per_token_vecs, hidden_dim = extract_per_token(query)
-            tap_label = "last"
-        else:
-            per_layer, _, hidden_dim = extract_per_layer_per_token(query, [int(layer)])
-            per_token_vecs = per_layer[int(layer)]
-            tap_label = str(layer)
+        per_token_vecs, hidden_dim, tap_label = _per_token_hidden_states(query, layer)
 
         n_tokens = len(per_token_vecs)
         if n_tokens == 0:
@@ -669,66 +655,17 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
             }
 
         # Batched C(x): one MLP forward over [n_tokens, hidden_dim]
-        x = torch.tensor(per_token_vecs, dtype=torch.float32)
-        with torch.no_grad():
-            cx_raw = cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
-        # One NaN or infinite token would carry into every aggregate, so
-        # the whole text is unscored, typed, rather than numbered.
-        cx_raw = finite_array(cx_raw, "cx_energy")
-        if cx_cfg is None:
-            cx_norm = np.full(n_tokens, 0.5, dtype=float)
-        else:
-            midpoint = cx_cfg["midpoint"]
-            steepness = cx_cfg["steepness"]
-            z = np.clip(steepness * (cx_raw - midpoint), -709.0, 709.0)
-            cx_norm = finite_array(1.0 / (1.0 + np.exp(-z)), "cx_normalized")
+        cx_raw, cx_norm = _per_step_cx(cost_field, per_token_vecs, n_tokens, cx_cfg)
 
         # Batched G(x) when XGBoost is loaded
-        gx_available = gx_xgboost is not None and gx_pca_components is not None
-        if gx_available:
-            emb_np = np.asarray(per_token_vecs, dtype=np.float32)
-            x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
-            proba = gx_xgboost.predict_proba(x_pca)
-            gx_scores = finite_array(proba[:, 1], "gx_score")
-        else:
-            gx_scores = np.full(n_tokens, 0.5, dtype=float)
+        gx_available, gx_scores = _per_step_gx(
+            gx_xgboost, gx_pca_components, gx_pca_mean, per_token_vecs, n_tokens)
 
-        per_step = []
-        for i in range(n_tokens):
-            score = float(gx_scores[i])
-            if gx_available and gx_thresholds is not None:
-                if score < gx_thresholds["severe"]:
-                    verdict = "likely_incorrect"
-                elif score < gx_thresholds["low"]:
-                    verdict = "uncertain"
-                else:
-                    verdict = "likely_correct"
-            elif gx_available:
-                verdict = "uncalibrated"
-            else:
-                verdict = "unavailable"
-            per_step.append({
-                "token_idx":     i,
-                "cx_energy":     float(cx_raw[i]),
-                "cx_normalized": float(cx_norm[i]),
-                "gx_score":      score,
-                "gx_verdict":    verdict,
-            })
+        per_step = _per_step_records(n_tokens, cx_raw, cx_norm, gx_scores,
+                                     gx_available, gx_thresholds)
 
-        aggregate = {
-            "cx_energy_min":  float(cx_raw.min()),
-            "cx_energy_max":  float(cx_raw.max()),
-            "cx_energy_mean": float(cx_raw.mean()),
-            "cx_norm_min":    float(cx_norm.min()),
-            "cx_norm_max":    float(cx_norm.max()),
-            "cx_norm_mean":   float(cx_norm.mean()),
-            "gx_score_min":   float(gx_scores.min()),
-            "gx_score_max":   float(gx_scores.max()),
-            "gx_score_mean":  float(gx_scores.mean()),
-            # token index where the lens first sees a low-quality state —
-            # the natural "stop generating" signal for PC-207 callers.
-            "first_off_rails_idx": int(np.argmax(gx_scores < gx_thresholds["off_rails"])) if gx_available and gx_thresholds is not None and (gx_scores < gx_thresholds["off_rails"]).any() else -1,
-        }
+        aggregate = _per_step_aggregate(cx_raw, cx_norm, gx_scores,
+                                        gx_available, gx_thresholds)
 
         elapsed_ms = (time.monotonic() - start) * 1000
         # !r on tap_label — user-controllable string (layer id from
@@ -766,3 +703,110 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
         return unscored_per_step(
             failure_record(e, "per-step"),
             f"{type(e).__name__}: per-step evaluation failed (see service log)")
+
+
+def _per_token_hidden_states(query: str, layer: Optional[int]):
+    """The per-token hidden states of `query` from llama-server (at `layer`, or
+    the last layer when None), their width, and the label of the layer read."""
+    from geometric_lens.embedding_extractor import (
+        extract_per_layer_per_token,
+        extract_per_token,
+    )
+
+    if layer is None:
+        per_token_vecs, hidden_dim = extract_per_token(query)
+        tap_label = "last"
+    else:
+        per_layer, _, hidden_dim = extract_per_layer_per_token(query, [int(layer)])
+        per_token_vecs = per_layer[int(layer)]
+        tap_label = str(layer)
+    return per_token_vecs, hidden_dim, tap_label
+
+
+def _per_step_cx(cost_field, per_token_vecs, n_tokens: int, cx_cfg):
+    """Batched C(x) over every token: the raw energies and their normalized values."""
+    import numpy as np
+    import torch
+    from geometric_lens.embed_capacity import finite_array
+
+    x = torch.tensor(per_token_vecs, dtype=torch.float32)
+    with torch.no_grad():
+        cx_raw = cost_field(x).squeeze(-1).cpu().numpy()  # (n_tokens,)
+    # One NaN or infinite token would carry into every aggregate, so
+    # the whole text is unscored, typed, rather than numbered.
+    cx_raw = finite_array(cx_raw, "cx_energy")
+    if cx_cfg is None:
+        cx_norm = np.full(n_tokens, 0.5, dtype=float)
+    else:
+        midpoint = cx_cfg["midpoint"]
+        steepness = cx_cfg["steepness"]
+        z = np.clip(steepness * (cx_raw - midpoint), -709.0, 709.0)
+        cx_norm = finite_array(1.0 / (1.0 + np.exp(-z)), "cx_normalized")
+    return cx_raw, cx_norm
+
+
+def _per_step_gx(gx_xgboost, gx_pca_components, gx_pca_mean, per_token_vecs,
+                 n_tokens: int):
+    """Batched G(x) over every token, or 0.5 placeholders when no G(x) model is
+    loaded; also says whether the scores are real."""
+    import numpy as np
+    from geometric_lens.embed_capacity import finite_array
+
+    gx_available = gx_xgboost is not None and gx_pca_components is not None
+    if gx_available:
+        emb_np = np.asarray(per_token_vecs, dtype=np.float32)
+        x_pca = (emb_np - gx_pca_mean) @ gx_pca_components.T
+        proba = gx_xgboost.predict_proba(x_pca)
+        gx_scores = finite_array(proba[:, 1], "gx_score")
+    else:
+        gx_scores = np.full(n_tokens, 0.5, dtype=float)
+    return gx_available, gx_scores
+
+
+def _per_step_records(n_tokens: int, cx_raw, cx_norm, gx_scores,
+                      gx_available: bool, gx_thresholds) -> list:
+    """One record per token: its C(x) energy, normalized energy, G(x) score and verdict."""
+    per_step = []
+    for i in range(n_tokens):
+        score = float(gx_scores[i])
+        if gx_available and gx_thresholds is not None:
+            if score < gx_thresholds["severe"]:
+                verdict = "likely_incorrect"
+            elif score < gx_thresholds["low"]:
+                verdict = "uncertain"
+            else:
+                verdict = "likely_correct"
+        elif gx_available:
+            verdict = "uncalibrated"
+        else:
+            verdict = "unavailable"
+        per_step.append({
+            "token_idx":     i,
+            "cx_energy":     float(cx_raw[i]),
+            "cx_normalized": float(cx_norm[i]),
+            "gx_score":      score,
+            "gx_verdict":    verdict,
+        })
+    return per_step
+
+
+def _per_step_aggregate(cx_raw, cx_norm, gx_scores, gx_available: bool,
+                        gx_thresholds) -> dict:
+    """Min, max and mean of the per-token scores, and the first off-rails token."""
+    import numpy as np
+
+    aggregate = {
+        "cx_energy_min":  float(cx_raw.min()),
+        "cx_energy_max":  float(cx_raw.max()),
+        "cx_energy_mean": float(cx_raw.mean()),
+        "cx_norm_min":    float(cx_norm.min()),
+        "cx_norm_max":    float(cx_norm.max()),
+        "cx_norm_mean":   float(cx_norm.mean()),
+        "gx_score_min":   float(gx_scores.min()),
+        "gx_score_max":   float(gx_scores.max()),
+        "gx_score_mean":  float(gx_scores.mean()),
+        # token index where the lens first sees a low-quality state —
+        # the natural "stop generating" signal for PC-207 callers.
+        "first_off_rails_idx": int(np.argmax(gx_scores < gx_thresholds["off_rails"])) if gx_available and gx_thresholds is not None and (gx_scores < gx_thresholds["off_rails"]).any() else -1,
+    }
+    return aggregate
