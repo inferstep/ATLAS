@@ -54,7 +54,8 @@ def test_test_input_is_sent_as_stdin(monkeypatch):
     sandbox = adapters.SandboxAdapter()
     ok, out, err = sandbox("print(int(input()) + 4)", "3")
 
-    assert ok and out == "7\n"
+    assert ok
+    assert out == "7\n"
     assert captured["url"].endswith("/execute")
     assert captured["body"]["stdin"] == "3"
     assert captured["body"]["code"] == "print(int(input()) + 4)"
@@ -72,11 +73,10 @@ def test_no_test_input_omits_stdin(monkeypatch):
     assert "stdin" not in captured["body"]
 
 
-def test_stdin_field_name_matches_executor_schema():
+def test_stdin_field_name_matches_executor_schema(monkeypatch):
     """The adapter's field name is only honest if the server declares it:
     load the real executor module and check ExecuteRequest."""
-    if str(SANDBOX_DIR) not in sys.path:
-        sys.path.insert(0, str(SANDBOX_DIR))
+    monkeypatch.syspath_prepend(str(SANDBOX_DIR))
     module_path = SANDBOX_DIR / "executor_server.py"
     spec = importlib.util.spec_from_file_location(
         "atlas_sandbox_executor_stdin", module_path)
@@ -137,10 +137,9 @@ def test_omitting_files_leaves_every_existing_caller_unchanged(monkeypatch):
     assert captured["body"]["files"] == {"helper.py": "X = 1\n"}
 
 
-def test_files_field_name_matches_executor_schema():
+def test_files_field_name_matches_executor_schema(monkeypatch):
     """Same honesty check the stdin field gets: the server must declare it."""
-    if str(SANDBOX_DIR) not in sys.path:
-        sys.path.insert(0, str(SANDBOX_DIR))
+    monkeypatch.syspath_prepend(str(SANDBOX_DIR))
     module_path = SANDBOX_DIR / "executor_server.py"
     spec = importlib.util.spec_from_file_location(
         "atlas_sandbox_executor_files", module_path)

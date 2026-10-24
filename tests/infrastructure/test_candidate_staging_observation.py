@@ -150,6 +150,12 @@ def test_a_clean_run_is_not_flagged_as_a_timeout(executor):
     assert res.success is True
 
 
+def test_the_answer_says_how_long_the_command_ran(executor):
+    res = shell(executor, "sleep 0.3")
+    assert res.elapsed_ms >= 300
+    assert res.elapsed_ms < 30_000
+
+
 # --- isolation ---------------------------------------------------------------
 
 def test_the_candidate_never_reaches_the_production_workspace(executor):

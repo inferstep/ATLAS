@@ -191,6 +191,11 @@ def test_shell_overlay_rejects_path_traversal(tmp_path):
     sandbox = _load_sandbox_module()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    request = sandbox.ShellRequest(
+        command="true",
+        cwd=str(workspace),
+        files={"../escape.py": "print('nope')\n"},
+    )
 
     previous_root = sandbox.WORKSPACE_ROOT
     previous_base = sandbox.WORKSPACE_BASE
@@ -198,12 +203,7 @@ def test_shell_overlay_rejects_path_traversal(tmp_path):
     sandbox.WORKSPACE_BASE = tmp_path
     try:
         with pytest.raises(HTTPException):
-            run_shell_sync(sandbox, sandbox.ShellRequest(
-                    command="true",
-                    cwd=str(workspace),
-                    files={"../escape.py": "print('nope')\n"},
-                )
-            )
+            run_shell_sync(sandbox, request)
     finally:
         sandbox.WORKSPACE_ROOT = previous_root
         sandbox.WORKSPACE_BASE = previous_base
@@ -314,6 +314,11 @@ def test_shell_snapshot_fails_when_byte_limit_is_exceeded(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "small.txt").write_text("too many bytes for this test")
+    request = sandbox.ShellRequest(
+        command="true",
+        cwd=str(workspace),
+        files={"candidate.py": "print('ok')\n"},
+    )
 
     previous_root = sandbox.WORKSPACE_ROOT
     previous_base = sandbox.WORKSPACE_BASE
@@ -323,12 +328,7 @@ def test_shell_snapshot_fails_when_byte_limit_is_exceeded(tmp_path):
     sandbox.SHELL_SNAPSHOT_MAX_BYTES = 4
     try:
         with pytest.raises(HTTPException) as exc:
-            run_shell_sync(sandbox, sandbox.ShellRequest(
-                    command="true",
-                    cwd=str(workspace),
-                    files={"candidate.py": "print('ok')\n"},
-                )
-            )
+            run_shell_sync(sandbox, request)
     finally:
         sandbox.WORKSPACE_ROOT = previous_root
         sandbox.WORKSPACE_BASE = previous_base
@@ -422,7 +422,8 @@ def test_python_syntax_check_handles_a_subdirectory_path(tmp_path):
     # And a real error is still reported (not masked by a write failure).
     errs = sandbox._syntax_check_impl(
         "python", "def f(\n", tmp_path, filename="src/pkg/app.py")
-    assert errs and any("line" in e.lower() or "syntax" in e.lower() for e in errs), errs
+    assert errs, errs
+    assert any("line" in e.lower() or "syntax" in e.lower() for e in errs), errs
 
 
 # --- the Jinja checker's tool dependency must be baked (audit, 2026-09-15) ---
@@ -489,7 +490,77 @@ def test_a_checker_that_finished_still_gives_its_verdict(tmp_path, monkeypatch):
 
     resp = sandbox.syntax_check(sandbox.SyntaxCheckRequest(code="x = 1\n", language="python"))
 
-    assert resp.valid is True and resp.status == "checked" and resp.errors == []
+    assert resp.valid is True
+    assert resp.status == "checked"
+    assert resp.errors == []
+
+
+# --- each checker reads the file the caller named, and its errors come back ---
+#
+# A language that has an outside checker writes the code under the name the
+# caller sent, runs the checker on that file, and makes its errors out of what
+# the checker said. The checker's answer is given by hand, so this holds on a
+# system that has none of the checkers.
+
+@pytest.mark.parametrize("lang, filename, checked, said, command, errors", [
+    pytest.param("typescript", "src/app.ts", "src/app.ts",
+        {"stdout": "src/app.ts(1,8): error TS1005: ')' expected.\n"},
+        ["tsc", "--noEmit", "--strict", "{file}"],
+        ["src/app.ts(1,8): error TS1005: ')' expected."], id="typescript"),
+    pytest.param("go", "cmd/main.go", "cmd/main.go",
+        {"stderr": "main.go:1:8: expected ')', found newline\n"},
+        ["gofmt", "-e", "{file}"],
+        ["main.go:1:8: expected ')', found newline"], id="go"),
+    pytest.param("java", None, "Main.java",
+        {"stderr": "Main.java:1: error: ')' expected\n1 error\n"},
+        ["javac", "-XDshould-stop.ifNoError=PARSE", "-d", "{ws}", "{file}"],
+        ["Main.java:1: error: ')' expected"], id="java"),
+    pytest.param("kotlin", "src/App.kt", "src/App.kt",
+        {"stderr": "src/App.kt:1:8: error: syntax error: Expecting ')'\n"},
+        ["kotlinc", "-d", "{ws}/synccheck_out", "{file}"],
+        ["src/App.kt:1:8: error: syntax error: Expecting ')'"], id="kotlin"),
+    pytest.param("rust", "src/main.rs", "src/main.rs",
+        {"stderr": "error: mismatched closing delimiter\n --> src/main.rs:1:8\n"},
+        ["rustc", "--edition", "2021", "--crate-type", "bin", "{file}", "-o", "/dev/null"],
+        ["error: mismatched closing delimiter"], id="rust"),
+    pytest.param("c", "src/app.c", "src/app.c",
+        {"stderr": "src/app.c:1:8: error: expected ')' at end of input\n"},
+        ["gcc", "-std=c17", "-fsyntax-only", "{file}"],
+        ["src/app.c:1:8: error: expected ')' at end of input"], id="c"),
+    pytest.param("cpp", "src/app.cpp", "src/app.cpp",
+        {"stderr": "src/app.cpp:1:8: error: expected ')' at end of input\n"},
+        ["g++", "-std=c++17", "-fsyntax-only", "{file}"],
+        ["src/app.cpp:1:8: error: expected ')' at end of input"], id="cpp"),
+    pytest.param("ruby", "lib/app.rb", "lib/app.rb",
+        {"stderr": "lib/app.rb:1: syntax error, unexpected end-of-input\n"},
+        ["ruby", "-c", "{file}"],
+        ["lib/app.rb:1: syntax error, unexpected end-of-input"], id="ruby"),
+    pytest.param("php", "src/app.php", "src/app.php",
+        {"stderr": "PHP Parse error:  syntax error, unexpected end of file in src/app.php on line 1\n",
+         "stdout": "Errors parsing src/app.php\n"},
+        ["php", "-l", "{file}"],
+        ["PHP Parse error:  syntax error, unexpected end of file in src/app.php on line 1"], id="php"),
+    pytest.param("bash", "bin/run.sh", "bin/run.sh",
+        {"stderr": "bin/run.sh: line 1: syntax error near unexpected token `newline'\n"},
+        ["bash", "-n", "{file}"],
+        ["bin/run.sh: line 1: syntax error near unexpected token `newline'"], id="bash"),
+])
+def test_each_checker_reads_the_file_the_caller_named_and_its_errors_come_back(
+        tmp_path, monkeypatch, lang, filename, checked, said, command, errors):
+    sandbox = _load_sandbox_module()
+    ran = []
+
+    def checker(cmd, timeout, cwd=None, env=None, stdin=None, cancelled=None):
+        ran.append(cmd)
+        return {"success": False, "returncode": 1, "outcome": "completed", "stdout": "", "stderr": "", **said}
+
+    monkeypatch.setattr(sandbox, "_run_cmd", checker)
+
+    got = sandbox._syntax_check_impl(lang, "broken (\n", tmp_path, filename)
+
+    assert ran == [[part.format(ws=tmp_path, file=tmp_path / checked) for part in command]]
+    assert (tmp_path / checked).read_text() == "broken (\n"
+    assert got == errors
 
 
 # --- a JavaScript verdict does not depend on how Node guesses the module type --
@@ -536,7 +607,10 @@ def test_a_javascript_error_names_the_file_the_caller_sent(tmp_path):
 
     errors = sandbox._syntax_check_impl("javascript", "const x = (1 + 2;\n", tmp_path, "src/app.js")
 
-    assert errors and "app.js" in errors[0] and ".cjs" not in errors[0] and ".mjs" not in errors[0]
+    assert errors
+    assert "app.js" in errors[0]
+    assert ".cjs" not in errors[0]
+    assert ".mjs" not in errors[0]
 
 
 @_requires_node
@@ -588,7 +662,8 @@ def test_java_references_to_siblings_are_not_syntax_errors(tmp_path):
 
     broken = "public class Broken {\n    void f() {\n        int x = 5\n    }\n}\n"
     errors = sandbox._syntax_check_impl("java", broken, tmp_path / "b")
-    assert errors and "';' expected" in errors[0]
+    assert errors
+    assert "';' expected" in errors[0]
 
 
 @_requires_kotlinc
@@ -599,7 +674,8 @@ def test_kotlin_unresolved_references_are_not_syntax_errors(tmp_path):
 
     broken = 'fun main() {\n    println("hi"\n}\n'
     errors = sandbox._syntax_check_impl("kotlin", broken, tmp_path / "b", "Main.kt")
-    assert errors and "syntax error" in errors[0].lower()
+    assert errors
+    assert "syntax error" in errors[0].lower()
 
 
 # --- the HTML check can fail ----------------------------------------------------
