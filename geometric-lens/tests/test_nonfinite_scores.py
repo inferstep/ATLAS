@@ -89,7 +89,8 @@ def _assert_unscored_combined(out):
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert out[key] is None, key
-    assert out["cx_calibrated"] is False and out["gx_available"] is False
+    assert out["cx_calibrated"] is False
+    assert out["gx_available"] is False
     assert out["verdict"] == "unscored"
     json.dumps(out, allow_nan=False)
 
@@ -131,7 +132,8 @@ def test_a_nonfinite_per_step_score_unscores_the_answer(monkeypatch, token_energ
     out = service.evaluate_per_step("def f(): pass")
     assert out["scored"] is False
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
-    assert out["per_step"] == [] and out["aggregate"] == {}
+    assert out["per_step"] == []
+    assert out["aggregate"] == {}
     assert out["n_tokens"] == 0
     json.dumps(out, allow_nan=False)
 
@@ -183,11 +185,13 @@ def test_nonfinite_and_nonnumeric_values_are_not_scores(value):
 def test_finite_energies_including_negative_and_zero_stay_scores(monkeypatch, value):
     _weights(monkeypatch, _ConstField(value), _ConstGx(0.8))
     out = service.evaluate_combined("def f(): pass")
-    assert out["scored"] is True and out.get("failure") is None
+    assert out["scored"] is True
+    assert out.get("failure") is None
     assert out["cx_energy"] == pytest.approx(value, rel=1e-6)  # float32 forward
     assert math.isfinite(out["cx_normalized"])
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["scored"] is True and per_step["n_tokens"] == 3
+    assert per_step["scored"] is True
+    assert per_step["n_tokens"] == 3
     assert per_step["aggregate"]["cx_energy_min"] == pytest.approx(value, rel=1e-6)
 
 
@@ -196,9 +200,11 @@ def test_the_lens_has_no_off_switch(monkeypatch):
     old .env changes nothing, and the lens still scores."""
     monkeypatch.setenv("GEOMETRIC_LENS_ENABLED", "false")
     out = service.evaluate_combined("def f(): pass")
-    assert out["enabled"] is True and out["scored"] is True
+    assert out["enabled"] is True
+    assert out["scored"] is True
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["scored"] is True and per_step["n_tokens"] == 3
+    assert per_step["scored"] is True
+    assert per_step["n_tokens"] == 3
 
 
 def test_a_lens_without_models_is_unchanged(monkeypatch):
@@ -208,10 +214,12 @@ def test_a_lens_without_models_is_unchanged(monkeypatch):
     _weights(monkeypatch, _ConstField(float("nan")))
     monkeypatch.setattr(service, "_ensure_models_loaded", lambda: False)
     out = service.evaluate_combined("def f(): pass")
-    assert out["enabled"] is False and out["cx_energy"] == 0.0
+    assert out["enabled"] is False
+    assert out["cx_energy"] == 0.0
     assert "failure" not in out
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["enabled"] is False and per_step["n_tokens"] == 0
+    assert per_step["enabled"] is False
+    assert per_step["n_tokens"] == 0
 
 
 def test_nonfinite_failure_is_its_own_kind():

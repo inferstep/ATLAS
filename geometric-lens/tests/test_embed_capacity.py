@@ -249,7 +249,8 @@ def test_plain_upstream_500_is_not_a_capacity_finding():
     out = service.evaluate_combined(text_of(20))
     assert out["scored"] is False
     assert out["failure"]["kind"] == "model_server_error"
-    assert out["cx_energy"] is None and out["gx_score"] is None
+    assert out["cx_energy"] is None
+    assert out["gx_score"] is None
 
 
 def test_unreachable_model_server_is_typed(monkeypatch):
@@ -380,7 +381,8 @@ def test_endpoint_failures_carry_no_numbers(app_client, monkeypatch):
                            json={"text": "def f(): pass"}).json()
     assert per_step["scored"] is False
     assert per_step["failure"]["kind"] == "internal"
-    assert per_step["aggregate"] == {} and per_step["per_step"] == []
+    assert per_step["aggregate"] == {}
+    assert per_step["per_step"] == []
     assert per_step["n_tokens"] == 0
 
     combined = client.post("/internal/lens/gx-score",
@@ -420,7 +422,8 @@ class _NonFiniteField(_TinyCostField):
 
 def _standard_json(response):
     assert response.status_code == 200
-    assert "NaN" not in response.text and "Infinity" not in response.text
+    assert "NaN" not in response.text
+    assert "Infinity" not in response.text
     return json.loads(response.text)
 
 
@@ -434,8 +437,10 @@ def test_score_text_endpoint_reports_a_nonfinite_energy_unscored(app_client, mon
     monkeypatch.setattr(service, "_cost_field", _NonFiniteField(value))
     out = _standard_json(client.post("/internal/lens/score-text",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["calibrated"] is False
-    assert out["energy"] is None and out["normalized"] is None
+    assert out["scored"] is False
+    assert out["calibrated"] is False
+    assert out["energy"] is None
+    assert out["normalized"] is None
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
 
 
@@ -447,7 +452,8 @@ def test_gx_score_endpoint_reports_a_nonfinite_energy_unscored(app_client, monke
                  {"midpoint": 0.5, "steepness": 4.0}, None))
     out = _standard_json(client.post("/internal/lens/gx-score",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["verdict"] == "unscored"
+    assert out["scored"] is False
+    assert out["verdict"] == "unscored"
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert out[key] is None, key
     assert out["failure"] == {"kind": ec.KIND_NONFINITE, "field": "cx_energy",
@@ -462,8 +468,10 @@ def test_per_step_endpoint_reports_a_nonfinite_energy_unscored(app_client, monke
                  {"midpoint": 0.5, "steepness": 4.0}, None))
     out = _standard_json(client.post("/internal/lens/score-per-step",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["n_tokens"] == 0
-    assert out["per_step"] == [] and out["aggregate"] == {}
+    assert out["scored"] is False
+    assert out["n_tokens"] == 0
+    assert out["per_step"] == []
+    assert out["aggregate"] == {}
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
     assert out["failure"]["field"] == "cx_energy"
 
@@ -479,7 +487,8 @@ def test_drift_withdraws_the_per_step_thresholds(app_client, monkeypatch):
     monkeypatch.setattr(service, "evaluate_per_step", lambda text, layer=None: dict(scored))
     monkeypatch.setitem(main._BOOT_STATE, "fingerprint_ok", True)
     fresh = client.post("/internal/lens/score-per-step", json={"text": "x = 1"}).json()
-    assert fresh["drifted"] is False and fresh["thresholds"] is not None
+    assert fresh["drifted"] is False
+    assert fresh["thresholds"] is not None
     monkeypatch.setitem(main._BOOT_STATE, "fingerprint_ok", False)
     drifted = client.post("/internal/lens/score-per-step", json={"text": "x = 1"}).json()
     assert drifted["drifted"] is True
