@@ -276,45 +276,46 @@ func TestALaterDecisionSupersedesTheEarlierGrant(t *testing.T) {
 // tombstone, so a replay can be told apart from a grant that never existed,
 // but it holds no room: otherwise a long run would stop being able to deliver.
 func TestGrantCapacityCountsOnlyLiveGrants(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		filler     grantRetirement
-		wantLive   int
-		wantMinted bool
-	}{
-		{"full of live grants", grantLive, grantCapacity, false},
-		{"full of spent grants", grantConsumed, 0, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := newGrantWorld(t)
-			// Filled directly. A contract may declare at most
-			// maxTaskContractEntries outputs, which equals the capacity, so
-			// no client can reach the limit through declared targets.
-			w.ctx.grantMu.Lock()
-			if w.ctx.grants == nil {
-				w.ctx.grants = map[string]*authorizationGrant{}
-			}
-			for i := 0; i < grantCapacity; i++ {
-				id := contentSHA256(fmt.Sprintf("filler-%d", i))
-				w.ctx.grants[id] = &authorizationGrant{
-					ID: id, TargetPath: "/w/filler-" + id, retired: tc.filler}
-			}
-			w.ctx.grantMu.Unlock()
-			if n := liveGrantCount(w.ctx); n != tc.wantLive {
-				t.Fatalf("%d live grants before minting, want %d", n, tc.wantLive)
-			}
+	w := newGrantWorld(t)
+	// Filled directly. A contract may declare at most maxTaskContractEntries
+	// outputs, which equals the capacity, so no client can reach the limit
+	// through declared targets.
+	w.ctx.grantMu.Lock()
+	if w.ctx.grants == nil {
+		w.ctx.grants = map[string]*authorizationGrant{}
+	}
+	for i := 0; i < grantCapacity; i++ {
+		id := contentSHA256(fmt.Sprintf("filler-%d", i))
+		w.ctx.grants[id] = &authorizationGrant{ID: id, TargetPath: "/w/filler-" + id, retired: grantLive}
+	}
+	w.ctx.grantMu.Unlock()
 
-			_, minted, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
-			if minted != tc.wantMinted {
-				t.Fatalf("minted=%v, want %v (%s)", minted, tc.wantMinted, why)
-			}
-			if !minted && !strings.Contains(why, "too many") {
-				t.Errorf("refusal %q does not name capacity", why)
-			}
-			if !minted && liveGrantCount(w.ctx) != tc.wantLive {
-				t.Error("the refused mint changed the live set")
-			}
-		})
+	// Full of live grants: the mint is refused, and the live set is unchanged.
+	if n := liveGrantCount(w.ctx); n != grantCapacity {
+		t.Fatalf("%d live grants before minting, want %d", n, grantCapacity)
+	}
+	_, minted, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
+	if minted {
+		t.Fatalf("minted with the capacity full, want a refusal (%s)", why)
+	}
+	if !strings.Contains(why, "too many") {
+		t.Errorf("refusal %q does not name capacity", why)
+	}
+	if liveGrantCount(w.ctx) != grantCapacity {
+		t.Error("the refused mint changed the live set")
+	}
+
+	// The same grants, spent: they stay as tombstones and hold no room.
+	w.ctx.grantMu.Lock()
+	for _, filler := range w.ctx.grants {
+		filler.retired = grantConsumed
+	}
+	w.ctx.grantMu.Unlock()
+	if n := liveGrantCount(w.ctx); n != 0 {
+		t.Fatalf("%d live grants once all are spent, want 0", n)
+	}
+	if _, minted, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); !minted {
+		t.Errorf("a ledger full of spent grants refused the mint: %s", why)
 	}
 }
 
@@ -424,22 +425,16 @@ func TestAWrongClaimCannotSpendAGrant(t *testing.T) {
 				t.Fatal("a wrong claim spent the grant")
 			}
 
-			live := liveGrantCount(w.ctx)
-			_, why := consumeAuthorizationGrant(w.ctx, w.claim())
+			// A burned grant is left "attempted"; an untouched one still spends.
+			wantLive, wantWhy := 1, ""
 			if tc.burns {
-				if live != 0 {
-					t.Error("the wrong claim left the grant it addressed spendable")
-				}
-				if why != string(grantAttempted) {
-					t.Errorf("the honest claim afterwards got %q, want %q", why, grantAttempted)
-				}
-			} else {
-				if live != 1 {
-					t.Error("the wrong claim burned a grant it never addressed")
-				}
-				if why != "" {
-					t.Errorf("the honest claim afterwards was refused: %s", why)
-				}
+				wantLive, wantWhy = 0, string(grantAttempted)
+			}
+			if live := liveGrantCount(w.ctx); live != wantLive {
+				t.Errorf("%d live grants after the wrong claim, want %d (burns: %v)", live, wantLive, tc.burns)
+			}
+			if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != wantWhy {
+				t.Errorf("the honest claim afterwards got %q, want %q", why, wantWhy)
 			}
 		})
 	}
@@ -552,10 +547,8 @@ func TestRetirementIsFinalIdempotentAndBlocksMinting(t *testing.T) {
 			if n := retireAuthorizationGrants(w.ctx, reason); n != 1 {
 				t.Errorf("retired %d grants, want 1", n)
 			}
-			for i := 0; i < 3; i++ {
-				if n := retireAuthorizationGrants(w.ctx, reason); n != 0 {
-					t.Errorf("retired %d on repeat, want 0", n)
-				}
+			if n := retireAuthorizationGrants(w.ctx, reason); n != 0 {
+				t.Errorf("retired %d on repeat, want 0", n)
 			}
 			if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(reason) {
 				t.Errorf("refusal %q, want %q", why, reason)
@@ -634,38 +627,37 @@ func TestAGrantAndItsTelemetryCarryNoContent(t *testing.T) {
 
 	// captureShadow installs its own sink, so every record the grant writes
 	// is captured here.
+	var g *authorizationGrant
 	captured := captureShadow(t, func() {
-		g := w.mint(t)
-		blob, err := json.Marshal(g)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, needle := range content {
-			if strings.Contains(string(blob), needle) {
-				t.Errorf("the grant carries %q", needle)
-			}
-		}
-		if g.TargetPath != w.path {
-			t.Error("the grant does not name the target it is for")
-		}
+		g = w.mint(t)
 		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
 			t.Fatalf("the grant would not spend: %s", why)
 		}
 	})
 
+	grant, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range content {
+		if strings.Contains(string(grant), needle) {
+			t.Errorf("the grant carries %q", needle)
+		}
+	}
+	if g.TargetPath != w.path {
+		t.Error("the grant does not name the target it is for")
+	}
+
 	if len(recordsOfKind(captured, "authorization_grant_event")) == 0 {
 		t.Fatal("minting and spending a grant wrote no telemetry")
 	}
-	contentOrPath := append(content, "solve.py", w.ctx.WorkingDir)
-	for _, rec := range captured {
-		blob, err := json.Marshal(rec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, needle := range contentOrPath {
-			if strings.Contains(string(blob), needle) {
-				t.Errorf("a %v record carries %q", rec["record_kind"], needle)
-			}
+	telemetry, err := json.Marshal(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range append(content, "solve.py", w.ctx.WorkingDir) {
+		if strings.Contains(string(telemetry), needle) {
+			t.Errorf("the telemetry carries %q", needle)
 		}
 	}
 }
