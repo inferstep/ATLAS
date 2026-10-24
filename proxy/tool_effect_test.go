@@ -725,6 +725,15 @@ func TestModelPromptBytesAreUnchangedByClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The model's turns, one per request; the last repeats on any later turn.
+	plan := script(
+		stepRead("solve.py"),
+		// Classified as none.
+		stepEdit("solve.py", "NOT PRESENT", "B = 2"),
+		// Classified as applied.
+		dlMove("solve.py", "final.py"),
+		stepDone("renamed solve.py"))
+
 	var mu sync.Mutex
 	turn := 0
 	var prompts []string
@@ -760,24 +769,7 @@ func TestModelPromptBytesAreUnchangedByClassification(t *testing.T) {
 		n := turn
 		mu.Unlock()
 
-		var payload map[string]interface{}
-		switch n {
-		case 1:
-			payload = map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]string{"path": "solve.py"}}
-		case 2:
-			// Classified as none.
-			payload = map[string]interface{}{"type": "tool_call", "name": "edit_file",
-				"args": map[string]string{"path": "solve.py",
-					"old_str": "NOT PRESENT", "new_str": "B = 2"}}
-		case 3:
-			// Classified as applied.
-			payload = map[string]interface{}{"type": "tool_call", "name": "move_file",
-				"args": map[string]string{"source": "solve.py", "destination": "final.py"}}
-		default:
-			payload = map[string]interface{}{"type": "done", "summary": "renamed solve.py"}
-		}
-		call, _ := json.Marshal(payload)
+		call, _ := json.Marshal(plan(n - 1)) // n counts the requests from 1
 		d, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{
 				{"delta": map[string]string{"content": string(call)}}}})
