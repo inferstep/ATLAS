@@ -113,65 +113,7 @@ def outstanding():
 func newReachWorld(t *testing.T, contract string) *reachWorld {
 	t.Helper()
 	w := &reachWorld{dir: t.TempDir(), winner: reachWinner, broken: map[string]bool{}}
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/v3/generate"):
-			w.v3Calls++
-			selected := w.selects
-			if selected == "" {
-				selected = contentSHA256(w.winner)
-			}
-			body, _ := json.Marshal(map[string]interface{}{
-				"code": w.winner, "passed": true, "phase_solved": "phase_one",
-				"candidates_tested": 5, "winning_score": 0.9,
-				"evidence": map[string]interface{}{
-					"wire_version": "1.0.0", "record_schema_version": "1.1.0",
-					"identity": map[string]interface{}{
-						"contract_id": "c.v1", "contract_version": "1",
-						"adapter_id": "python_compile", "adapter_version": "0.1.0-prototype",
-						"artifact_scope": "inventory.py", "evaluation_context_hash": "ctx",
-						"candidate_content_hash": selected,
-					},
-					"evaluation": map[string]interface{}{
-						"execution_status": "ok", "supported": !w.unsupported,
-						"evidence_strength": "syntax", "requirements_complete": true,
-						"closure_eligible": false,
-						"quality": map[string]interface{}{
-							"required_coverage": 1.0, "optional_quality": 1.0, "overall": 1.0},
-					},
-					"coverage":  map[string]interface{}{"required": []string{}, "demonstrated": []string{}},
-					"selection": map[string]interface{}{"status": "best_not_closure_eligible", "reason": "highest"},
-					"delivery": map[string]interface{}{
-						"delivered_content_hash": selected, "describes_delivered_candidate": true},
-				},
-			})
-			rw.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := rw.(http.Flusher)
-			for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
-				fmt.Fprint(rw, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			var in struct {
-				Code string `json:"code"`
-			}
-			json.NewDecoder(r.Body).Decode(&in)
-			if w.broken[in.Code] {
-				json.NewEncoder(rw).Encode(map[string]interface{}{
-					"valid": false, "errors": []string{"SyntaxError: invalid syntax (line 9)"}})
-				return
-			}
-			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
-		case r.URL.Path == "/internal/structural_check":
-			json.NewEncoder(rw).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(rw).Encode(map[string]interface{}{"functions": []interface{}{}})
-		default:
-			json.NewEncoder(rw).Encode(map[string]interface{}{"ok": true})
-		}
-	}))
+	srv := httptest.NewServer(http.HandlerFunc(w.serve))
 	t.Cleanup(srv.Close)
 
 	ctx := NewAgentContext(w.dir, Tier2Medium)
@@ -186,6 +128,69 @@ func newReachWorld(t *testing.T, contract string) *reachWorld {
 	}
 	w.ctx = ctx
 	return w
+}
+
+// serve is the stub server of a reachWorld: the producer returns w.winner
+// with evidence that names w.selects (or the winner), the sandbox fails the
+// syntax check of anything in w.broken, and every other check passes.
+func (w *reachWorld) serve(rw http.ResponseWriter, r *http.Request) {
+	switch {
+	case strings.Contains(r.URL.Path, "/v3/generate"):
+		w.v3Calls++
+		selected := w.selects
+		if selected == "" {
+			selected = contentSHA256(w.winner)
+		}
+		body, _ := json.Marshal(map[string]interface{}{
+			"code": w.winner, "passed": true, "phase_solved": "phase_one",
+			"candidates_tested": 5, "winning_score": 0.9,
+			"evidence": map[string]interface{}{
+				"wire_version": "1.0.0", "record_schema_version": "1.1.0",
+				"identity": map[string]interface{}{
+					"contract_id": "c.v1", "contract_version": "1",
+					"adapter_id": "python_compile", "adapter_version": "0.1.0-prototype",
+					"artifact_scope": "inventory.py", "evaluation_context_hash": "ctx",
+					"candidate_content_hash": selected,
+				},
+				"evaluation": map[string]interface{}{
+					"execution_status": "ok", "supported": !w.unsupported,
+					"evidence_strength": "syntax", "requirements_complete": true,
+					"closure_eligible": false,
+					"quality": map[string]interface{}{
+						"required_coverage": 1.0, "optional_quality": 1.0, "overall": 1.0},
+				},
+				"coverage":  map[string]interface{}{"required": []string{}, "demonstrated": []string{}},
+				"selection": map[string]interface{}{"status": "best_not_closure_eligible", "reason": "highest"},
+				"delivery": map[string]interface{}{
+					"delivered_content_hash": selected, "describes_delivered_candidate": true},
+			},
+		})
+		rw.Header().Set("Content-Type", "text/event-stream")
+		fl, _ := rw.(http.Flusher)
+		for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
+			fmt.Fprint(rw, line+"\n")
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		var in struct {
+			Code string `json:"code"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		if w.broken[in.Code] {
+			json.NewEncoder(rw).Encode(map[string]interface{}{
+				"valid": false, "errors": []string{"SyntaxError: invalid syntax (line 9)"}})
+			return
+		}
+		json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
+	case r.URL.Path == "/internal/structural_check":
+		json.NewEncoder(rw).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(rw).Encode(map[string]interface{}{"functions": []interface{}{}})
+	default:
+		json.NewEncoder(rw).Encode(map[string]interface{}{"ok": true})
+	}
 }
 
 // write makes the model's own write_file call, through the real dispatch.
@@ -237,18 +242,36 @@ func TestARequestWithNoDeliverableTargetNeverReachesTheProducer(t *testing.T) {
 			if w.v3Calls != 0 {
 				t.Errorf("the producer was consulted %d times for an undeliverable candidate", w.v3Calls)
 			}
-			if got := w.disk(t); got != reachBaseline {
-				t.Errorf("the model's own bytes are not what landed: got %v", got)
-			}
-			if res.AuthorizedDeliveryHash != "" {
-				t.Errorf("an undeliverable request named an authorization: %q", res.AuthorizedDeliveryHash)
-			}
 			var reasons []string
 			for _, r := range bypassRecords(recs) {
 				reasons = append(reasons, fmt.Sprint(r["reason"]))
 			}
 			if len(reasons) != 1 || reasons[0] != string(bypassCandidateUndeliverable) {
 				t.Errorf("bypass reasons %v, want exactly [%s]", reasons, bypassCandidateUndeliverable)
+			}
+		})
+	}
+}
+
+// The same requests land the model's own bytes, under no authorization.
+func TestARequestWithNoDeliverableTargetLandsTheModelsOwnBytes(t *testing.T) {
+	for _, tc := range []struct{ name, contract string }{
+		{"no task_contract at all", ""},
+		{"a question", `{"task_mode":"question"}`},
+		{"a question naming automatic_v3", `{"task_mode":"question","candidate_policy":"automatic_v3"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newReachWorld(t, tc.contract)
+			var res *ToolResult
+			captureShadow(t, func() { res = w.write(t) })
+			if res == nil || !res.Success {
+				t.Fatalf("the model's own write failed: %+v", res)
+			}
+			if got := w.disk(t); got != reachBaseline {
+				t.Errorf("the model's own bytes are not what landed: got %v", got)
+			}
+			if res.AuthorizedDeliveryHash != "" {
+				t.Errorf("an undeliverable request named an authorization: %q", res.AuthorizedDeliveryHash)
 			}
 		})
 	}

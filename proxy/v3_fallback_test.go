@@ -61,6 +61,11 @@ type fallbackStub struct {
 	events   []string // "syntax" / "structural" / "v3", in arrival order
 	unexpect []string
 	target   string // absolute destination, for diagnostics the route builds from it
+
+	// What the stub server answers with, and the request it may cancel.
+	opts       fallbackOpts
+	cancel     context.CancelFunc
+	syntaxSeen int
 }
 
 func (s *fallbackStub) record(kind string) {
@@ -93,66 +98,71 @@ type fallbackOpts struct {
 	before           func(t *testing.T, dir string)
 }
 
+// serve is the stub server of runFallback: generation fails as a service
+// error (after it aborts the request when opts.cancelOnGenerate), the
+// structural check reports opts.introduces, and the syntax check answers
+// opts.syntaxVerdicts in order, or a non-200 when opts.syntaxDown. Any other
+// endpoint is recorded as unexpected.
+func (st *fallbackStub) serve(w http.ResponseWriter, r *http.Request) {
+	o := st.opts
+	switch {
+	case r.URL.Path == "/v3/generate":
+		st.record("v3")
+		if o.cancelOnGenerate {
+			st.cancel()
+		}
+		// A non-200 is the ordinary service-error case: generation was
+		// entered and failed, which is exactly this branch's trigger.
+		http.Error(w, "V3 service error", http.StatusBadGateway)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+	case r.URL.Path == "/internal/structural_check":
+		st.record("structural")
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		src, _ := body["source"].(string)
+		out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+		if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
+			out["unresolved"] = []string{o.introduces}
+		}
+		json.NewEncoder(w).Encode(out)
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		st.record("syntax")
+		if o.syntaxDown {
+			http.Error(w, "checker unavailable", http.StatusInternalServerError)
+			return
+		}
+		st.mu.Lock()
+		i := st.syntaxSeen
+		st.syntaxSeen++
+		st.mu.Unlock()
+		valid := true
+		if len(o.syntaxVerdicts) > 0 {
+			if i >= len(o.syntaxVerdicts) {
+				i = len(o.syntaxVerdicts) - 1
+			}
+			valid = o.syntaxVerdicts[i]
+		}
+		out := map[string]interface{}{"valid": valid}
+		if !valid {
+			out["errors"] = []string{fbSyntaxDetail}
+		}
+		json.NewEncoder(w).Encode(out)
+	default:
+		st.mu.Lock()
+		st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "unexpected endpoint", http.StatusTeapot)
+	}
+}
+
 func runFallback(t *testing.T, o fallbackOpts) (*ToolResult, string, *fallbackStub, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	st := &fallbackStub{}
 	reqCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var syntaxSeen int
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v3/generate":
-			st.record("v3")
-			if o.cancelOnGenerate {
-				cancel()
-			}
-			// A non-200 is the ordinary service-error case: generation was
-			// entered and failed, which is exactly this branch's trigger.
-			http.Error(w, "V3 service error", http.StatusBadGateway)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			st.record("structural")
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
-			if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
-				out["unresolved"] = []string{o.introduces}
-			}
-			json.NewEncoder(w).Encode(out)
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			st.record("syntax")
-			if o.syntaxDown {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			mu.Lock()
-			i := syntaxSeen
-			syntaxSeen++
-			mu.Unlock()
-			valid := true
-			if len(o.syntaxVerdicts) > 0 {
-				if i >= len(o.syntaxVerdicts) {
-					i = len(o.syntaxVerdicts) - 1
-				}
-				valid = o.syntaxVerdicts[i]
-			}
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{fbSyntaxDetail}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
+	st := &fallbackStub{opts: o, cancel: cancel}
+	srv := httptest.NewServer(http.HandlerFunc(st.serve))
 	defer srv.Close()
 
 	target := filepath.Join(dir, o.rel)

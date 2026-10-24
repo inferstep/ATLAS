@@ -58,7 +58,29 @@ func TestNoBareWriteLandsServiceAuthoredBytes(t *testing.T) {
 	// The four edit tools used to write a service proposal with a bare
 	// os.WriteFile. Any function that both consumes an improved candidate and
 	// writes it itself is that bypass returning.
-	files := proxyFiles(t)
+	for _, fn := range functionCalls(proxyFiles(t)) {
+		if !fn.calls["improveContentWithV3"] {
+			continue
+		}
+		if !registeredV3DeliveryRoute(fn.owner) {
+			t.Errorf("%s consumes a service proposal and is not a registered route", fn.owner)
+		}
+		if fn.calls["WriteFile"] || fn.calls["atomicReplaceFile"] {
+			t.Errorf("%s writes a service proposal itself instead of delivering it", fn.owner)
+		}
+	}
+}
+
+// funcCalls is one function of the package and the names it calls.
+type funcCalls struct {
+	owner string          // "file.go:identity", as the registry names routes
+	calls map[string]bool // each called name, plain or as a selector
+}
+
+// functionCalls lists every function with a body in files, with the names it
+// calls.
+func functionCalls(files map[string]*ast.File) []funcCalls {
+	var out []funcCalls
 	for name, f := range files {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
@@ -79,18 +101,10 @@ func TestNoBareWriteLandsServiceAuthoredBytes(t *testing.T) {
 				}
 				return true
 			})
-			if !calls["improveContentWithV3"] {
-				continue
-			}
-			owner := name + ":" + funcIdentity(fd)
-			if !registeredV3DeliveryRoute(owner) {
-				t.Errorf("%s consumes a service proposal and is not a registered route", owner)
-			}
-			if calls["WriteFile"] || calls["atomicReplaceFile"] {
-				t.Errorf("%s writes a service proposal itself instead of delivering it", owner)
-			}
+			out = append(out, funcCalls{owner: name + ":" + funcIdentity(fd), calls: calls})
 		}
 	}
+	return out
 }
 
 func TestTheRegistryNamesOnlyRealRoutes(t *testing.T) {

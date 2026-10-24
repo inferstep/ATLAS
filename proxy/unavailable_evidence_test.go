@@ -17,60 +17,66 @@ import (
 // Nothing here adds a way to deliver unchecked. Every row below still keeps
 // the caller's own content.
 
-func TestTheUnavailableEvidenceReasonMatrix(t *testing.T) {
-	const declared = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`
-	withCommand := `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
+const (
+	unavailableDeclared    = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`
+	unavailableWithCommand = `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
 		`"verification_knowledge":"declared","verification":["pytest -q"]}`
+)
 
-	for _, c := range []struct {
-		name, contract string
-		commands       map[string]stubEffect
-		before         func(t *testing.T, w *routeWorld)
-		want           AuthorizationReason
-	}{
-		{name: "structural producer unreachable",
-			contract: declared,
-			before:   func(t *testing.T, w *routeWorld) { w.ctx.SandboxURL = "http://127.0.0.1:1" },
-			want:     ReasonProducerUnavailable},
+// unavailableEvidenceRows are the unmet prerequisites the two tests below run:
+// each one's truthful reason, and the setup that makes it so.
+var unavailableEvidenceRows = []struct {
+	name, contract string
+	commands       map[string]stubEffect
+	before         func(t *testing.T, w *routeWorld)
+	want           AuthorizationReason
+}{
+	{name: "structural producer unreachable",
+		contract: unavailableDeclared,
+		before:   func(t *testing.T, w *routeWorld) { w.ctx.SandboxURL = "http://127.0.0.1:1" },
+		want:     ReasonProducerUnavailable},
 
-		{name: "no structural producer configured",
-			contract: declared,
-			before:   func(t *testing.T, w *routeWorld) { w.ctx.SandboxURL = "" },
-			want:     ReasonProducerUnavailable},
+	{name: "no structural producer configured",
+		contract: unavailableDeclared,
+		before:   func(t *testing.T, w *routeWorld) { w.ctx.SandboxURL = "" },
+		want:     ReasonProducerUnavailable},
 
-		{name: "declared command executor unreachable",
-			contract: withCommand,
-			before: func(t *testing.T, w *routeWorld) {
-				// The structural gate answers; only staging cannot reach one.
-				*w.shellGone = true
-			},
-			want: ReasonProducerUnavailable},
+	{name: "declared command executor unreachable",
+		contract: unavailableWithCommand,
+		before: func(t *testing.T, w *routeWorld) {
+			// The structural gate answers; only staging cannot reach one.
+			*w.shellGone = true
+		},
+		want: ReasonProducerUnavailable},
 
-		{name: "declared command refused by the safety gate",
-			contract: `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
-				`"verification_knowledge":"declared","verification":["rm -rf /"]}`,
-			want: ReasonEvidenceRefused},
+	{name: "declared command refused by the safety gate",
+		contract: `{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],` +
+			`"verification_knowledge":"declared","verification":["rm -rf /"]}`,
+		want: ReasonEvidenceRefused},
 
-		{name: "declared command timed out",
-			contract: withCommand,
-			commands: map[string]stubEffect{"pytest -q": {ExitCode: -1, TimedOut: true}},
-			want:     ReasonEvidenceTimedOut},
+	{name: "declared command timed out",
+		contract: unavailableWithCommand,
+		commands: map[string]stubEffect{"pytest -q": {ExitCode: -1, TimedOut: true}},
+		want:     ReasonEvidenceTimedOut},
 
-		{name: "declared command ran and failed",
-			contract: withCommand,
-			commands: map[string]stubEffect{"pytest -q": {ExitCode: 1}},
-			want:     ReasonEvidenceExecutionFailed},
+	{name: "declared command ran and failed",
+		contract: unavailableWithCommand,
+		commands: map[string]stubEffect{"pytest -q": {ExitCode: 1}},
+		want:     ReasonEvidenceExecutionFailed},
 
-		{name: "declared command rewrote the candidate",
-			contract: withCommand,
-			commands: map[string]stubEffect{"pytest -q": {ExitCode: 0, WriteTarget: "rewritten\n"}},
-			want:     ReasonEvidenceExecutionFailed},
+	{name: "declared command rewrote the candidate",
+		contract: unavailableWithCommand,
+		commands: map[string]stubEffect{"pytest -q": {ExitCode: 0, WriteTarget: "rewritten\n"}},
+		want:     ReasonEvidenceExecutionFailed},
 
-		{name: "declared command could not be observed",
-			contract: withCommand,
-			commands: map[string]stubEffect{"pytest -q": {ExitCode: 0, Truncated: true}},
-			want:     ReasonProducerNotRun},
-	} {
+	{name: "declared command could not be observed",
+		contract: unavailableWithCommand,
+		commands: map[string]stubEffect{"pytest -q": {ExitCode: 0, Truncated: true}},
+		want:     ReasonProducerNotRun},
+}
+
+func TestTheUnavailableEvidenceReasonMatrix(t *testing.T) {
+	for _, c := range unavailableEvidenceRows {
 		t.Run(c.name, func(t *testing.T) {
 			w := newRouteWorld(t, c.contract, c.commands)
 			if c.before != nil {
@@ -91,8 +97,24 @@ func TestTheUnavailableEvidenceReasonMatrix(t *testing.T) {
 			if got[0]["authorized"] != false {
 				t.Error("an unmet prerequisite authorized")
 			}
-			// Fail-closed, every row: the caller's own content survives and
-			// nothing unchecked lands.
+		})
+	}
+}
+
+// Fail-closed, every row: the caller's own content survives, nothing
+// unchecked lands, and no authorization is spent.
+func TestAnUnmetPrerequisiteKeepsTheCallersContent(t *testing.T) {
+	for _, c := range unavailableEvidenceRows {
+		t.Run(c.name, func(t *testing.T) {
+			w := newRouteWorld(t, c.contract, c.commands)
+			if c.before != nil {
+				c.before(t, w)
+			}
+			recs := captureShadow(t, func() {
+				if _, err := w.write(t); err != nil {
+					t.Fatalf("write failed: %v", err)
+				}
+			})
 			onDisk, err := os.ReadFile(w.path)
 			if err != nil {
 				t.Fatal(err)

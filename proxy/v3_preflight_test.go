@@ -65,6 +65,8 @@ type preflightStub struct {
 	mu       sync.Mutex
 	events   []string // "syntax" / "embedded" / "structural" / "v3", in arrival order
 	unexpect []string
+
+	unavailableFor string // content carrying this gets a non-200 from /syntax-check
 }
 
 func (s *preflightStub) record(kind string) {
@@ -82,46 +84,52 @@ type preflightOpts struct {
 	before         func(t *testing.T, dir string)
 }
 
+// serve is the stub server of runPreflight: it records each request in order,
+// answers every check as passing except a syntax check of content that does
+// not parse, answers a non-200 to a syntax check of content that carries
+// unavailableFor, and records any other endpoint as unexpected.
+func (st *preflightStub) serve(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v3/"):
+		st.record("v3")
+		// A 418 sends writeFileWithV3 down its fallback. That is fine here:
+		// everything this fixture asserts is measured BEFORE this point.
+		http.Error(w, "V3 generation stub", http.StatusTeapot)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+	case r.URL.Path == "/internal/embedded_script_check":
+		st.record("embedded")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
+	case r.URL.Path == "/internal/structural_check":
+		st.record("structural")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		st.record("syntax")
+		var in struct{ Code string }
+		json.NewDecoder(r.Body).Decode(&in)
+		if st.unavailableFor != "" && strings.Contains(in.Code, st.unavailableFor) {
+			http.Error(w, "checker unavailable", http.StatusInternalServerError)
+			return
+		}
+		valid := !strings.Contains(in.Code, preflightSyntaxMark)
+		out := map[string]interface{}{"valid": valid}
+		if !valid {
+			out["errors"] = []string{preflightSyntaxDetail}
+		}
+		json.NewEncoder(w).Encode(out)
+	default:
+		st.mu.Lock()
+		st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "unexpected endpoint", http.StatusTeapot)
+	}
+}
+
 func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *preflightStub) {
 	t.Helper()
 	dir := t.TempDir()
-	st := &preflightStub{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/v3/"):
-			st.record("v3")
-			// A 418 sends writeFileWithV3 down its fallback. That is fine here:
-			// everything this fixture asserts is measured BEFORE this point.
-			http.Error(w, "V3 generation stub", http.StatusTeapot)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/embedded_script_check":
-			st.record("embedded")
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			st.record("structural")
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			st.record("syntax")
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if o.unavailableFor != "" && strings.Contains(in.Code, o.unavailableFor) {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			valid := !strings.Contains(in.Code, preflightSyntaxMark)
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{preflightSyntaxDetail}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
+	st := &preflightStub{unavailableFor: o.unavailableFor}
+	srv := httptest.NewServer(http.HandlerFunc(st.serve))
 	defer srv.Close()
 
 	target := filepath.Join(dir, o.rel)

@@ -214,6 +214,26 @@ func TestWriteFileDirectClassification(t *testing.T) {
 			if res.ValidationStatus != c.wantStatus {
 				t.Errorf("ValidationStatus = %q, want %q", res.ValidationStatus, c.wantStatus)
 			}
+		})
+	}
+}
+
+// The same direct writes land their exact bytes, and the result, fully
+// classified, never claims a pass that no check made.
+func TestWriteFileDirectLandsItsBytesWithoutClaimingAPass(t *testing.T) {
+	for _, c := range []struct{ name, file, content string }{
+		{"non-code write", "notes.txt", "hello\n"},
+		{"recognized code, unvalidated at this layer", "mod.py", "A = 1\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+
+			args, _ := json.Marshal(map[string]string{"path": c.file, "content": c.content})
+			res := executeToolCall("write_file", args, ctx)
+
 			if res.ValidationStatus.Passed() {
 				t.Error("a successful write must not synthesize validation passed")
 			}
@@ -258,11 +278,39 @@ func TestWriteFileRefusalBeforeMutationLeavesBytes(t *testing.T) {
 	}
 }
 
-// Invalid code reports syntax/failed whether it lands or not. New code lands
-// with a warning: applied and failed are separate facts. Healthy code the
-// session wrote is protected from an invalid overwrite: refused, and the old
-// bytes stay. Both checks examine the exact bytes the write path used.
+// Invalid code reports syntax/failed whether it lands or not, and the result
+// carries the checker's own diagnostic. Both checks examine the exact bytes
+// the write path used.
 func TestAnInvalidWriteReportsSyntaxFailedWhetherItLandsOrNot(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		priorValid bool
+	}{
+		{"new file lands", false},
+		{"overwrite of healthy code is refused", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.priorValid {
+				writeWithSyntaxChecker(t, dir, "mod.py", banLoopValidBody)
+			}
+			_, res := writeWithSyntaxChecker(t, dir, "mod.py", banLoopInvalidBody)
+
+			if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
+				t.Errorf("validation = %q/%q, want syntax/failed",
+					res.ValidationKind, res.ValidationStatus)
+			}
+			if res.ValidationDetail == "" {
+				t.Error("ValidationDetail must carry the real diagnostic")
+			}
+		})
+	}
+}
+
+// New invalid code lands with a warning: applied and failed are separate
+// facts. Healthy code the session wrote is protected from an invalid
+// overwrite: refused, and the old bytes stay.
+func TestAnInvalidWriteLandsOnlyWhereNoHealthyCodeIsReplaced(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		priorValid   bool
@@ -285,13 +333,6 @@ func TestAnInvalidWriteReportsSyntaxFailedWhetherItLandsOrNot(t *testing.T) {
 			}
 			if res.MutationStatus != tc.wantMutation {
 				t.Errorf("MutationStatus = %q, want %q", res.MutationStatus, tc.wantMutation)
-			}
-			if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationFailed {
-				t.Errorf("validation = %q/%q, want syntax/failed",
-					res.ValidationKind, res.ValidationStatus)
-			}
-			if res.ValidationDetail == "" {
-				t.Error("ValidationDetail must carry the real diagnostic")
 			}
 			if got != tc.wantOnDisk {
 				t.Errorf("bytes on disk = %q, want %q", got, tc.wantOnDisk)

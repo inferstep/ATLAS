@@ -157,8 +157,6 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 		wantReason  string
 		wantGates   int
 		wantTurns   int
-		// A phrase the summary must hold; empty checks nothing.
-		wantSummaryPhrase string
 	}{
 		{
 			name:      "deferral after a tool is sent back, then answered",
@@ -236,7 +234,6 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 				textReply("That depends on scale and hosting. How many members do you expect, and will it run on a hosted service or your own machine?"),
 			},
 			wantStatus: TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 1,
-			wantSummaryPhrase: "Waiting for your answer",
 		},
 		{
 			// Asked after looking: legitimate as far as the run can tell.
@@ -247,7 +244,6 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 				textReply("I read keys.py. Which customer field is supposed to identify a cached price, the tier or the id?"),
 			},
 			wantStatus: TerminalIncomplete, wantReason: "clarification_requested", wantGates: 0, wantTurns: 2,
-			wantSummaryPhrase: "Waiting for your answer",
 		},
 		{
 			name:      "answer with an offer in the cache workspace completes",
@@ -285,8 +281,56 @@ func TestEachReplyKindEndsTheRunWithItsOwnStatus(t *testing.T) {
 			if census["gate"] != tc.wantGates || *turns != tc.wantTurns {
 				t.Errorf("want %d gate events in %d turns, got %d in %d", tc.wantGates, tc.wantTurns, census["gate"], *turns)
 			}
-			if !strings.Contains(terminal["summary"], tc.wantSummaryPhrase) {
-				t.Errorf("the summary does not say %q: %q", tc.wantSummaryPhrase, terminal["summary"])
+		})
+	}
+}
+
+// A clarification ends the run waiting for the user, and its summary says so.
+func TestAClarificationSaysItIsWaitingForTheAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		workspace map[string]string
+		request   string
+		// The model's reply on turn i is replies[i]; the last one repeats.
+		replies []map[string]interface{}
+	}{
+		{
+			// Nothing to inspect, so a question is the right reply.
+			name:      "clarification in an empty workspace awaits the user",
+			workspace: nil, request: "help me choose a database for my club's membership app",
+			replies: []map[string]interface{}{
+				textReply("That depends on scale and hosting. How many members do you expect, and will it run on a hosted service or your own machine?"),
+			},
+		},
+		{
+			// Asked after looking: legitimate as far as the run can tell.
+			name:      "clarification after reading awaits the user",
+			workspace: cacheWorkspace, request: cacheQuestion,
+			replies: []map[string]interface{}{
+				readFileReply("keys.py"),
+				textReply("I read keys.py. Which customer field is supposed to identify a cached price, the tier or the id?"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, src := range tc.workspace {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, _, _, terminal := termFixture(t, dir, tc.request, termCeiling,
+				func(i int, _ string) map[string]interface{} {
+					return tc.replies[min(i, len(tc.replies)-1)]
+				})
+
+			if err := runAgentLoop(ctx, tc.request); err != nil {
+				t.Fatal(err)
+			}
+
+			const waiting = "Waiting for your answer"
+			if !strings.Contains(terminal["summary"], waiting) {
+				t.Errorf("the summary does not say %q: %q", waiting, terminal["summary"])
 			}
 		})
 	}

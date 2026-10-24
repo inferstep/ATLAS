@@ -65,27 +65,37 @@ func inputFields(tool *ToolDef) map[string]bool {
 }
 
 // Every tool in the registry is under the policy its effect calls for, so a
-// new tool cannot fall outside it by having a new name.
-func TestEveryToolIsUnderThePolicyForWhatItDoes(t *testing.T) {
+// new tool cannot fall outside it by having a new name. A tool that runs
+// commands asks in default mode, and one that takes a command refuses what the
+// policy refuses.
+func TestEveryCommandToolIsUnderTheCommandPolicy(t *testing.T) {
 	ask := &AgentContext{PermissionMode: PermissionDefault}
 	for _, tool := range allTools() {
-		fields := inputFields(tool)
-		switch {
-		case tool.Effect == ToolEffectCommandUnobserved:
-			if !needsPermission(ask, tool.Name, json.RawMessage(`{}`)) {
-				t.Errorf("%s runs commands without asking in default mode", tool.Name)
+		if tool.Effect != ToolEffectCommandUnobserved {
+			continue
+		}
+		if !needsPermission(ask, tool.Name, json.RawMessage(`{}`)) {
+			t.Errorf("%s runs commands without asking in default mode", tool.Name)
+		}
+		if inputFields(tool)["command"] {
+			if deny, _ := shouldDenyToolCall(tool.Name, commandArgs("env rm -rf /")); !deny {
+				t.Errorf("%s runs a command the policy refuses", tool.Name)
 			}
-			if fields["command"] {
-				if deny, _ := shouldDenyToolCall(tool.Name, commandArgs("env rm -rf /")); !deny {
-					t.Errorf("%s runs a command the policy refuses", tool.Name)
-				}
-			}
-		case tool.Effect == ToolEffectDirectMutation && tool.Name != "delete_file" && fields["path"]:
+		}
+	}
+}
+
+// A tool that writes to a path refuses a credential file. delete_file is
+// decided per object instead, and it always asks.
+func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
+	for _, tool := range allTools() {
+		if tool.Effect == ToolEffectDirectMutation && tool.Name != "delete_file" && inputFields(tool)["path"] {
 			if deny, _ := shouldDenyToolCall(tool.Name, json.RawMessage(`{"path":"config/.env"}`)); !deny {
 				t.Errorf("%s writes .env", tool.Name)
 			}
 		}
 	}
+	ask := &AgentContext{PermissionMode: PermissionDefault}
 	if !needsPermission(ask, "delete_file", json.RawMessage(`{}`)) {
 		t.Error("delete_file does not ask")
 	}
