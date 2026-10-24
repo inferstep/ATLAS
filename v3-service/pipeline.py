@@ -1842,6 +1842,28 @@ def _finish_with_best(ctx, run_pool, reason: str) -> Dict[str, Any]:
     return result
 
 
+def _seed_with_probe(candidates, probe, probe_result):
+    """Phase one's first candidate: the probe, as candidate 0 with its
+    phase-zero evidence, when it produced code."""
+    probe_code, probe_scores, probe_passed = probe.code, probe.scores, probe.passed
+    probe_energy_raw, probe_energy_norm, probe_cx_calibrated = probe.energy_raw, probe.energy_norm, probe.cx_calibrated
+    probe_stdout, probe_stderr, probe_evidence = probe.stdout, probe.stderr, probe.evidence
+    # Start with probe if it produced code
+    if probe_code:
+        candidates.append({
+            # Phase-zero evidence is cached here so candidate zero is
+            # never re-probed, and never enters selection with defaults.
+            # One canonical record, no parallel copies of its fields.
+            "contract_record": probe_result,
+            "index": 0, "code": probe_code,
+            "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
+            "energy_calibrated": probe_cx_calibrated,
+            "lens_failure": probe_scores.get("failure"),
+            "passed": probe_passed, "stdout": probe_stdout, "stderr": probe_stderr,
+            "verification_evidence": probe_evidence,
+        })
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2169,9 +2191,6 @@ class V3PipelineService:
             return verify_build_if_requested(out, err)
 
         probe = _score_and_test_probe(ctx, probe_code, tokens, verified_sandbox)
-        probe_scores, probe_energy_raw, probe_energy_norm = probe.scores, probe.energy_raw, probe.energy_norm
-        probe_cx_calibrated, probe_passed = probe.cx_calibrated, probe.passed
-        probe_stdout, probe_stderr, probe_evidence = probe.stdout, probe.stderr, probe.evidence
 
         # Evidence strength decides whether phase 0 may close the pipeline.
         # A compile smoke on interactive code demonstrates only that the file
@@ -2201,126 +2220,9 @@ class V3PipelineService:
         candidates = []
         run_pool = _RunPool(incumbent, candidates, probe_code)
         try:
-
-            # Start with probe if it produced code
-            if probe_code:
-                candidates.append({
-                    # Phase-zero evidence is cached here so candidate zero is
-                    # never re-probed, and never enters selection with defaults.
-                    # One canonical record, no parallel copies of its fields.
-                    "contract_record": probe_result,
-                    "index": 0, "code": probe_code,
-                    "energy": probe_energy_raw, "energy_norm": probe_energy_norm,
-                    "energy_calibrated": probe_cx_calibrated,
-                    "lens_failure": probe_scores.get("failure"),
-                    "passed": probe_passed, "stdout": probe_stdout, "stderr": probe_stderr,
-                    "verification_evidence": probe_evidence,
-                })
-
-            remaining_k = max(0, k - len(candidates))
-
-            # Step 1A: PlanSearch
-            if remaining_k > 0:
-                emit("plansearch", f"Generating {remaining_k} plans...",
-                     plans=remaining_k)
-                try:
-                    ps_result = self.plan_search.generate(
-                        problem, task_id, llm, num_plans=remaining_k,
-                        # The allocator's tier, not the signature default:
-                        # generate() was silently running "standard" thinking
-                        # depth whatever the CxGx gate decided (audit finding).
-                        budget_tier=budget_tier,
-                    )
-                    # PlanSearch reports one aggregate for the whole batch, so
-                    # a per-candidate split would be invented. It is recorded as
-                    # named shared overhead instead: the ledger stays exact and
-                    # says which phase the cost belongs to.
-                    capture.note_cost(code=None, phase="plansearch",
-                                      tokens=getattr(ps_result, "total_tokens", 0),
-                                      latency_ms=getattr(ps_result, "total_time_ms", 0.0))
-                    for i, code in enumerate(ps_result.candidates):
-                        if code:
-                            candidates.append({
-                                "index": len(candidates), "code": code,
-                                "passed": False, "stdout": "", "stderr": "",
-                                **_lens_view(code),
-                            })
-                            capture.note_lens_candidate(
-                                role="generated", index=candidates[-1]["index"],
-                                code=code, phase="plansearch_scored",
-                                lens=_candidate_lens_payload(candidates[-1]))
-                            _note_lens(emit, candidates[-1], "plansearch")
-                    result["total_tokens"] += ps_result.total_tokens
-                    emit("plansearch_done",
-                         f"{len(ps_result.candidates)} candidates from PlanSearch",
-                         candidates=len(ps_result.candidates),
-                         tokens=ps_result.total_tokens)
-                except PlanSearchInfrastructureError as e:
-                    # PlanSearch never reached the model. DivSampling still
-                    # fills the slots below — that is unchanged — but the
-                    # backfill must not be the only trace of what happened:
-                    # an empty PlanSearch batch and a refused one produce the
-                    # same candidate count, and only one of them is a result.
-                    partial = getattr(e, "result", None)
-                    if partial is not None:
-                        capture.note_cost(
-                            code=None, phase="plansearch",
-                            tokens=getattr(partial, "total_tokens", 0),
-                            latency_ms=getattr(partial, "total_time_ms", 0.0))
-                        result["total_tokens"] += getattr(partial, "total_tokens", 0)
-                    emit("plansearch_error", str(e)[:200],
-                         kind="infrastructure",
-                         infrastructure_failures=len(getattr(e, "failures", ())))
-                except scoring.LensUnavailable:
-                    raise
-                except Exception as e:
-                    emit("plansearch_error", str(e)[:200], kind="stage")
-
-            # Step 1B: DivSampling to fill remaining slots
-            remaining_k = max(0, k - len(candidates))
-            if remaining_k > 0:
-                emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
-                     slots=remaining_k)
-                for idx in range(remaining_k):
-                    check_client()
-                    if _out_of_budget(ctx):
-                        emit("divsampling_stop",
-                             f"budget spent after {len(candidates)} candidate(s)")
-                        break
-                    try:
-                        perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
-                        chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
-                        response, tokens, t_ms = llm(
-                            chatml, DIVERSITY_TEMPERATURE,
-                            self.budget_forcing.get_max_tokens(bf_tier),
-                            42 + len(candidates) + idx,
-                        )
-                        code = extract_code_for_problem(response, problem)
-                        # Attribute at the site that owns the bytes: this call
-                        # produced this candidate, so no sibling thread can be
-                        # charged for it. A call that yielded nothing usable is
-                        # shared overhead, not a free candidate.
-                        capture.note_cost(code=code or None, phase="divsampling",
-                                          tokens=tokens, latency_ms=t_ms)
-                        if code:
-                            candidates.append({
-                                "index": len(candidates), "code": code,
-                                "passed": False, "stdout": "", "stderr": "",
-                                **_lens_view(code),
-                            })
-                            capture.note_lens_candidate(
-                                role="generated", index=candidates[-1]["index"],
-                                code=code, phase="divsampling_scored",
-                                lens=_candidate_lens_payload(candidates[-1]))
-                            _note_lens(emit, candidates[-1], "divsampling")
-                        result["total_tokens"] += tokens
-                    except scoring.LensUnavailable:
-                        raise
-                    except Exception as e:
-                        emit("divsampling_error", str(e)[:200])
-                emit("divsampling_done", f"{len(candidates)} total candidates",
-                     total=len(candidates))
-
+            _seed_with_probe(candidates, probe, probe_result)
+            self._generate_from_plans(ctx, candidates, k, budget_tier)
+            self._generate_by_div_sampling(ctx, candidates, k, bf_tier)
             result["candidates_generated"] = len(candidates)
 
             # ===== SANDBOX TESTING =====
@@ -3073,6 +2975,126 @@ class V3PipelineService:
         else:
             emit("self_test_skip", "Interactive task — using compile smoke-test")
         return task_type, self_tests
+
+    def _generate_from_plans(self, ctx, candidates, k, budget_tier):
+        """Step 1A: PlanSearch writes a candidate for each open slot; each is
+        Lens-scored as it arrives and appended to `candidates`."""
+        problem, task_id, llm, capture, emit, result = (
+            ctx.problem, ctx.task_id, ctx.llm, ctx.capture, ctx.emit, ctx.result)
+        remaining_k = max(0, k - len(candidates))
+
+        # Step 1A: PlanSearch
+        if remaining_k > 0:
+            emit("plansearch", f"Generating {remaining_k} plans...",
+                 plans=remaining_k)
+            try:
+                ps_result = self.plan_search.generate(
+                    problem, task_id, llm, num_plans=remaining_k,
+                    # The allocator's tier, not the signature default:
+                    # generate() was silently running "standard" thinking
+                    # depth whatever the CxGx gate decided (audit finding).
+                    budget_tier=budget_tier,
+                )
+                # PlanSearch reports one aggregate for the whole batch, so
+                # a per-candidate split would be invented. It is recorded as
+                # named shared overhead instead: the ledger stays exact and
+                # says which phase the cost belongs to.
+                capture.note_cost(code=None, phase="plansearch",
+                                  tokens=getattr(ps_result, "total_tokens", 0),
+                                  latency_ms=getattr(ps_result, "total_time_ms", 0.0))
+                for i, code in enumerate(ps_result.candidates):
+                    if code:
+                        candidates.append({
+                            "index": len(candidates), "code": code,
+                            "passed": False, "stdout": "", "stderr": "",
+                            **_lens_view(code),
+                        })
+                        capture.note_lens_candidate(
+                            role="generated", index=candidates[-1]["index"],
+                            code=code, phase="plansearch_scored",
+                            lens=_candidate_lens_payload(candidates[-1]))
+                        _note_lens(emit, candidates[-1], "plansearch")
+                result["total_tokens"] += ps_result.total_tokens
+                emit("plansearch_done",
+                     f"{len(ps_result.candidates)} candidates from PlanSearch",
+                     candidates=len(ps_result.candidates),
+                     tokens=ps_result.total_tokens)
+            except PlanSearchInfrastructureError as e:
+                # PlanSearch never reached the model. DivSampling still
+                # fills the slots below — that is unchanged — but the
+                # backfill must not be the only trace of what happened:
+                # an empty PlanSearch batch and a refused one produce the
+                # same candidate count, and only one of them is a result.
+                partial = getattr(e, "result", None)
+                if partial is not None:
+                    capture.note_cost(
+                        code=None, phase="plansearch",
+                        tokens=getattr(partial, "total_tokens", 0),
+                        latency_ms=getattr(partial, "total_time_ms", 0.0))
+                    result["total_tokens"] += getattr(partial, "total_tokens", 0)
+                emit("plansearch_error", str(e)[:200],
+                     kind="infrastructure",
+                     infrastructure_failures=len(getattr(e, "failures", ())))
+            except scoring.LensUnavailable:
+                raise
+            except Exception as e:
+                emit("plansearch_error", str(e)[:200], kind="stage")
+
+    def _generate_by_div_sampling(self, ctx, candidates, k, bf_tier):
+        """Step 1B: DivSampling fills the slots PlanSearch left, one call at a
+        time, until they are full or the budget is spent."""
+        emit, check_client = ctx.emit, ctx.check_client
+        # Step 1B: DivSampling to fill remaining slots
+        remaining_k = max(0, k - len(candidates))
+        if remaining_k > 0:
+            emit("divsampling", f"Filling {remaining_k} slots with diverse sampling...",
+                 slots=remaining_k)
+            for idx in range(remaining_k):
+                check_client()
+                if _out_of_budget(ctx):
+                    emit("divsampling_stop",
+                         f"budget spent after {len(candidates)} candidate(s)")
+                    break
+                self._div_sample(ctx, candidates, idx, bf_tier)
+            emit("divsampling_done", f"{len(candidates)} total candidates",
+                 total=len(candidates))
+
+    def _div_sample(self, ctx, candidates, idx, bf_tier):
+        """One DivSampling call: a perturbed problem, one generation, and the
+        candidate it yields, Lens-scored and appended to `candidates`."""
+        problem, task_id, llm, capture, emit, result = (
+            ctx.problem, ctx.task_id, ctx.llm, ctx.capture, ctx.emit, ctx.result)
+        try:
+            perturbed = self.div_sampling.apply(problem, len(candidates) + idx, task_id)
+            chatml = self.budget_forcing.format_chatml(perturbed, bf_tier)
+            response, tokens, t_ms = llm(
+                chatml, DIVERSITY_TEMPERATURE,
+                self.budget_forcing.get_max_tokens(bf_tier),
+                42 + len(candidates) + idx,
+            )
+            code = extract_code_for_problem(response, problem)
+            # Attribute at the site that owns the bytes: this call
+            # produced this candidate, so no sibling thread can be
+            # charged for it. A call that yielded nothing usable is
+            # shared overhead, not a free candidate.
+            capture.note_cost(code=code or None, phase="divsampling",
+                              tokens=tokens, latency_ms=t_ms)
+            if code:
+                candidates.append({
+                    "index": len(candidates), "code": code,
+                    "passed": False, "stdout": "", "stderr": "",
+                    **_lens_view(code),
+                })
+                capture.note_lens_candidate(
+                    role="generated", index=candidates[-1]["index"],
+                    code=code, phase="divsampling_scored",
+                    lens=_candidate_lens_payload(candidates[-1]))
+                _note_lens(emit, candidates[-1], "divsampling")
+            result["total_tokens"] += tokens
+        except scoring.LensUnavailable:
+            raise
+        except Exception as e:
+            emit("divsampling_error", str(e)[:200])
 
 
 # --- Problem Builder for /v3/generate ----------------------------------------
