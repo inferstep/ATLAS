@@ -54,7 +54,8 @@ def test_moving_the_template_into_the_route_is_refused_although_it_is_valid_pyth
                           selector="function:index", content=template)
     assert res["success"] is False
     err = res["error"]
-    assert "is only" in err and "your replacement is" in err
+    assert "is only" in err
+    assert "your replacement is" in err
     assert "HTML_TEMPLATE" in err          # names where the bulk actually lives
     assert "replace_lines" in err          # and a tool that can reach into it
     assert "was NOT modified" in err

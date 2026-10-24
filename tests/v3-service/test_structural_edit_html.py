@@ -78,7 +78,8 @@ def test_entity_encoded_replacement_names_the_encoding_first():
     assert not res.get("success")
     err = res["error"]
     assert "HTML-escaped characters" in err
-    assert "&lt;" in err and "&gt;" in err
+    assert "&lt;" in err
+    assert "&gt;" in err
 
 
 def test_a_plain_quoting_slip_in_a_small_node_gets_only_the_quoting_checklist():
@@ -149,7 +150,8 @@ def test_truncated_template_names_edit_file_as_the_route():
     assert not res.get("success")
     err = res["error"]
     assert "template literal" in err
-    assert "edit_file" in err and "one unique line" in err
+    assert "edit_file" in err
+    assert "one unique line" in err
 
 
 # --- large-node steer ----------------------------------------------------

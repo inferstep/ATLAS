@@ -98,11 +98,13 @@ def test_stray_paren_in_python_template_string_is_rejected():
     # The line number must be the line of the .py FILE, not of the string.
     file_lines = source.split("\n")
     assert file_lines[f["line"] - 1].strip() == f["text"]
-    assert "ArrowDown" in f["text"] and f["text"].endswith("'DOWN');")
+    assert "ArrowDown" in f["text"]
+    assert f["text"].endswith("'DOWN');")
     assert f["kind"] == "javascript"
     assert f["message"] == "unexpected `)`"
     # The model has to know WHICH string to go fix.
-    assert "HTML_TEMPLATE" in f["where"] and "<script>" in f["where"]
+    assert "HTML_TEMPLATE" in f["where"]
+    assert "<script>" in f["where"]
     assert "delete the stray `)`" in f["hint"]
 
 
@@ -282,7 +284,8 @@ NOT_JAVASCRIPT = ('<html><body><script type="%s">\n'
 ])
 def test_reports_nothing(path, source):
     res = main.embedded_script_check(path, source)
-    assert res["ok"] is True and res["findings"] == [], res
+    assert res["ok"] is True, res
+    assert res["findings"] == [], res
 
 
 # --- fail-soft ------------------------------------------------------------
@@ -292,7 +295,8 @@ def test_missing_grammar_reports_not_ok_never_raises(monkeypatch):
     caller fails open), not crash the endpoint."""
     monkeypatch.setattr(symbols, "_EMBEDDED_SCRIPT_AVAILABLE", False)
     res = symbols.embedded_script_check("app.py", flask_app(BROKEN_HANDLER))
-    assert res["ok"] is False and "error" in res
+    assert res["ok"] is False
+    assert "error" in res
 
 
 # --- stopped render loop -----------------------------------------------------
