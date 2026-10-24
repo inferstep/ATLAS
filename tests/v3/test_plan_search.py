@@ -283,7 +283,8 @@ def test_refused_code_calls_stop_the_search_and_keep_the_plans_and_tokens_spent(
         plan_search.generate(SAMPLE_PROBLEM, "LCB_001", model)
 
     result = refused.value.result
-    assert len(result.constraint_sets) == 3 and len(result.plans) == 3
+    assert len(result.constraint_sets) == 3
+    assert len(result.plans) == 3
     assert result.candidates == []
     assert result.total_tokens == 10 + 3 * 20
     event = json.loads((tmp_path / "plan_search_events.jsonl").read_text())
