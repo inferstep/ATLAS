@@ -4,9 +4,6 @@
   "file_lines": 1500
  },
  "functions": {
-  "atlas/commands/lens.py:_check_model_inner": 151,
-  "atlas/commands/lens.py:_emit_build": 328,
-  "atlas/commands/lens.py:_emit_publish": 240,
   "atlas/commands/model.py:_emit_install": 167,
   "atlas/commands/model.py:_stream_download_locked": 209,
   "atlas/commands/model.py:main": 111,
@@ -39,7 +36,6 @@
   "v3-service/symbols.py:structural_edit": 297
  },
  "files": {
-  "atlas/commands/lens.py": 1554,
   "proxy/agent.go": 9915,
   "proxy/guardrails.go": 3794,
   "proxy/tools.go": 6913,
