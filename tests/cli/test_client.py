@@ -81,8 +81,8 @@ def test_probe_llama_reads_reachability_dim_and_patch(monkeypatch, health_reply,
 
     probe = client.probe_llama("http://llama:8080")
 
-    assert (probe.reachable, probe.embedding_dim,
-            probe.has_hidden_states_patch) == expected
+    got = (probe.reachable, probe.embedding_dim, probe.has_hidden_states_patch)
+    assert got == expected
 
 
 def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):

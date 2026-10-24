@@ -23,21 +23,21 @@ func TestEveryExitAfterAToolCallAnswersIt(t *testing.T) {
 	}
 	lines := strings.Split(string(src), "\n")
 
-	open, close := -1, -1
+	opening, closing := -1, -1
 	for i, ln := range lines {
 		if strings.Contains(ln, "pendingToolCall = parsed.Name") {
-			open = i
+			opening = i
 		}
-		if strings.Contains(ln, `pendingToolCall = ""`) && i > open && open != -1 {
-			close = i
+		if strings.Contains(ln, `pendingToolCall = ""`) && i > opening && opening != -1 {
+			closing = i
 		}
 	}
-	if open == -1 || close == -1 {
+	if opening == -1 || closing == -1 {
 		t.Fatal("could not locate the tool_call announcement and its result; " +
 			"if this moved, move the invariant with it")
 	}
 
-	for i := open; i < close; i++ {
+	for i := opening; i < closing; i++ {
 		if strings.Contains(lines[i], `ctx.Stream("done"`) {
 			t.Errorf("agent.go:%d ends the stream between announcing a tool_call "+
 				"and answering it, leaving an orphaned call. Use endStream(summary) "+

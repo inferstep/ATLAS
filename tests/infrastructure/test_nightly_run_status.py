@@ -1291,7 +1291,7 @@ def test_the_key_is_in_no_command_of_a_smoke_run_and_in_nothing_that_it_leaves(t
         assert proof.count(".") == 2
     assert run.report["sent"] == "sent: 1"
     calls = run.calls()
-    assert {"docker", "python-for-the-run", "nvidia-smi", "openssl"} == {call["tool"] for call in calls}
+    assert {call["tool"] for call in calls} == {"docker", "python-for-the-run", "nvidia-smi", "openssl"}
     for call in calls:
         held = " ".join([*call["environment"], *call["environment"].values()])
         assert KEY not in held, call["tool"]

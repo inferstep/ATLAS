@@ -122,13 +122,15 @@ def test_checks_ran_takes_its_base_from_the_rule_and_from_nowhere_else(monkeypat
 
 def test_a_checkout_that_is_not_the_merge_of_the_pull_request_stops_with_a_fix(rule, moved):
     root, began, _, head = moved
+    event = pull_request("0" * 40, began)
     with pytest.raises(rule.NotTheExpectedCheckout, match="the second of them the head of the pull request") as other:
-        rule.base_of(root, "pull_request", pull_request("0" * 40, began))
+        rule.base_of(root, "pull_request", event)
     assert "no other base is taken in its place" in str(other.value)
     assert "Fix: let the checkout step take the event's own commit" in str(other.value)
     git(root, "checkout", "-q", "--detach", head)
+    event = pull_request(head, began)
     with pytest.raises(rule.NotTheExpectedCheckout, match=r"it has 1 parent\(s\)"):
-        rule.base_of(root, "pull_request", pull_request(head, began))
+        rule.base_of(root, "pull_request", event)
 
 
 def test_in_the_merge_queue_the_base_is_the_one_parent_the_queue_built_on(rule, moved):

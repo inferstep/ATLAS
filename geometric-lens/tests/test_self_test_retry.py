@@ -77,9 +77,9 @@ def test_evaluate_energy_raises_instead_of_returning_zeros(monkeypatch):
 
 def test_a_reference_that_cannot_be_scored_is_not_drift(tmp_path):
     drift.write_fingerprint(str(tmp_path), lambda _t: 20.0)
+    reset = _raise(urllib.error.URLError("connection reset"))
     with pytest.raises(urllib.error.URLError):
-        drift.check_fingerprint(str(tmp_path),
-                                _raise(urllib.error.URLError("connection reset")))
+        drift.check_fingerprint(str(tmp_path), reset)
     present, ok, _ = drift.check_fingerprint(str(tmp_path), lambda _t: 20.0)
     assert present and ok
 

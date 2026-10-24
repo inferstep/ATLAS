@@ -344,9 +344,9 @@ func stepRead(p string) map[string]interface{} {
 		"args": map[string]string{"path": p}}
 }
 
-func stepEdit(p, old, new string) map[string]interface{} {
+func stepEdit(p, old, replacement string) map[string]interface{} {
 	return map[string]interface{}{"type": "tool_call", "name": "edit_file",
-		"args": map[string]string{"path": p, "old_str": old, "new_str": new}}
+		"args": map[string]string{"path": p, "old_str": old, "new_str": replacement}}
 }
 
 func stepStructural(p, selector, content string) map[string]interface{} {

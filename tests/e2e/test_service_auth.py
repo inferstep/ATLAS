@@ -21,7 +21,7 @@ pytestmark = [
 ]
 
 
-@pytest.fixture()
+@pytest.fixture
 def proxy(tmp_path):
     port, proc = start_proxy({
         # No llama needed: auth is rejected before any upstream call.

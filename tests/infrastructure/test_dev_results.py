@@ -82,8 +82,9 @@ def test_the_newest_of_several_runs_counts_and_a_run_of_another_commit_does_not(
 
 
 def test_a_commit_with_no_queue_run_fails_with_the_words_that_say_what_to_do(lookup):
+    api = github([])
     with pytest.raises(lookup.NoRun) as none:
-        lookup.queue_run(github([]), "o/r", SHA)
+        lookup.queue_run(api, "o/r", SHA)
     message = str(none.value)
     assert message.startswith("this commit did not come through the merge queue; start `tests` for it by hand")
     assert "merge-back" in message
@@ -118,9 +119,9 @@ def test_the_lookup_waits_until_the_queues_run_has_ended(lookup):
 
 def test_a_run_that_does_not_end_in_time_fails_and_says_so(lookup):
     clock = Clock()
+    api = github([a_run(status="in_progress", conclusion=None)])
     with pytest.raises(lookup.NoRun, match=r"has not ended after 10 minutes \(run 7\).*Fix:"):
-        lookup.ended(github([a_run(status="in_progress", conclusion=None)]), "o/r", SHA, limit=600,
-                     pause=clock.pause, clock=clock)
+        lookup.ended(api, "o/r", SHA, limit=600, pause=clock.pause, clock=clock)
     assert clock.now == 600
 
 

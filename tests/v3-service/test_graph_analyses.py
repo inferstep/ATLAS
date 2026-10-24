@@ -150,5 +150,6 @@ class TestDispatch:
         assert analyses.run_analysis(g, "cycles") == ["recurse"]
 
     def test_unknown_analysis_raises(self):
+        graph = _graph()
         with pytest.raises(ValueError):
-            analyses.run_analysis(_graph(), "nonsense")
+            analyses.run_analysis(graph, "nonsense")

@@ -100,8 +100,9 @@ def test_a_suite_that_changed_after_the_freeze_is_refused(tmp_path, tamper, want
 
 
 def test_a_runtime_the_sandbox_lacks_is_refused(tmp_path):
+    suite = make_suite(tmp_path, runtime="cobol")
     with pytest.raises(S.SuiteError, match="runtime 'cobol'"):
-        S.load_suite(make_suite(tmp_path, runtime="cobol"))
+        S.load_suite(suite)
 
 
 # --- grading ---------------------------------------------------------------------

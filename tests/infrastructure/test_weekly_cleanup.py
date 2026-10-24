@@ -781,8 +781,9 @@ def test_no_patch_is_cut_and_the_text_is_never_over_the_limit():
 
 
 def test_a_text_that_cannot_be_made_short_enough_is_not_judged():
+    pieces = pieces_with([10, 10, 10, 10, 10])
     with pytest.raises(cleanup.NotJudged, match="the text of the issue has \\d+ characters, and the limit is 500"):
-        cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces_with([10, 10, 10, 10, 10]), limit=500)
+        cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces, limit=500)
 
 
 def test_a_long_list_of_what_is_left_out_is_cut_with_a_word_and_the_file_of_the_run_holds_all_of_it(made):

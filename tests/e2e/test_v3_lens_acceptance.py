@@ -299,7 +299,7 @@ def v3_service(fake_llama, fake_lens, sandbox_executor):
     proc.wait(timeout=10)
 
 
-@pytest.fixture()
+@pytest.fixture
 def workspace(workspace_root):
     ws = workspace_root / f"v3e2e-{uuid.uuid4().hex[:8]}"
     ws.mkdir(parents=True)
@@ -307,7 +307,7 @@ def workspace(workspace_root):
     shutil.rmtree(ws, ignore_errors=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def proxy(fake_llama, fake_lens, v3_service, sandbox_executor):
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",

@@ -328,9 +328,12 @@ def test_startup_identity_restores_on_exception(monkeypatch):
     monkeypatch.setenv(mt.STARTUP_REQUEST_ID_ENV, "probe-req")
     monkeypatch.setenv(mt.STARTUP_INVOCATION_ID_ENV, "probe-inv")
     sl.bind_identity("", "")
-    with pytest.raises(RuntimeError):
+    def a_boot_that_fails():
         with mt.startup_identity():
             raise RuntimeError("boot failed")
+
+    with pytest.raises(RuntimeError):
+        a_boot_that_fails()
     assert sl.current_identity() == ("", "")
 
 

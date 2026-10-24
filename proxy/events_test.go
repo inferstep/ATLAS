@@ -134,6 +134,7 @@ func TestBrokerUnsubscribeStopsDelivery(t *testing.T) {
 
 	// And the channel must drain to closed (not block).
 	for range ch {
+		// Each value is dropped: only the close ends the loop.
 	}
 }
 

@@ -80,7 +80,8 @@ class TestCache:
 
     def test_hash_includes_path(self):
         assert file_hash("a.py", "x") != file_hash("b.py", "x")
-        assert file_hash("a.py", "x") == file_hash("a.py", "x")
+        a_hash = file_hash("a.py", "x")
+        assert file_hash("a.py", "x") == a_hash  # the same path and content, the same hash
 
     @needs_tree_sitter
     def test_lru_eviction(self):

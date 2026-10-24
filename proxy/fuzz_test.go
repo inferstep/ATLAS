@@ -451,11 +451,11 @@ func insideWorkspace(root, resolved string) bool {
 		if _, err := os.Lstat(prefix); err != nil {
 			return true // nothing exists below here, so no link can lead out
 		}
-		real, err := filepath.EvalSymlinks(prefix)
+		realPrefix, err := filepath.EvalSymlinks(prefix)
 		if err != nil {
 			return false
 		}
-		if realRel, err := filepath.Rel(realRoot, real); err != nil || outside(realRel) {
+		if realRel, err := filepath.Rel(realRoot, realPrefix); err != nil || outside(realRel) {
 			return false
 		}
 	}

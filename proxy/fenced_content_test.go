@@ -390,7 +390,7 @@ func TestChannelIdentityStaysRaw(t *testing.T) {
 		}
 	}
 	// And the ban's three operations agree with each other.
-	var lookup, record, clear int
+	var lookup, record, cleared int
 	for _, line := range strings.Split(string(src), "\n") {
 		l := strings.TrimSpace(line)
 		switch {
@@ -399,12 +399,12 @@ func TestChannelIdentityStaysRaw(t *testing.T) {
 		case strings.Contains(l, "recordFailedToolCall(ctx, parsed.Name,"):
 			record++
 		case strings.Contains(l, "clearFailedToolCall(ctx"):
-			clear++
+			cleared++
 		}
 	}
-	t.Logf("FailedToolCalls operations: %d lookup, %d record, %d clear", lookup, record, clear)
-	if lookup != 1 || clear != 1 {
-		t.Errorf("expected one lookup and one clear, got %d/%d", lookup, clear)
+	t.Logf("FailedToolCalls operations: %d lookup, %d record, %d clear", lookup, record, cleared)
+	if lookup != 1 || cleared != 1 {
+		t.Errorf("expected one lookup and one clear, got %d/%d", lookup, cleared)
 	}
 }
 

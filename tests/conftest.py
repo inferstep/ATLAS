@@ -116,9 +116,9 @@ if _HAS_HTTPX:
         with httpx.Client(base_url=DASHBOARD_URL, timeout=DEFAULT_TIMEOUT) as client:
             yield client
 
-    @pytest.fixture(scope="function")
-    def test_user(api_portal_client) -> Generator:
-        """Create a test user and clean up after test."""
+    @pytest.fixture
+    def test_user(api_portal_client) -> "TestUser":
+        """Create a test user."""
         unique_id = str(uuid.uuid4())[:8]
         user = TestUser(
             username=f"testuser_{unique_id}",
@@ -133,9 +133,9 @@ if _HAS_HTTPX:
             data = response.json()
             user.jwt_token = data.get("token") or data.get("access_token")
             user.is_admin = data.get("is_admin", False)
-        yield user
+        return user
 
-    @pytest.fixture(scope="function")
+    @pytest.fixture
     def test_api_key(api_portal_client, test_user) -> Generator:
         """Create a test API key for the test user."""
         if not test_user.jwt_token:
@@ -162,7 +162,7 @@ if _HAS_HTTPX:
             )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def test_project_dir() -> Generator[str, None, None]:
     """
     Create a temporary project directory with sample code files.
