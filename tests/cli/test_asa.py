@@ -538,4 +538,6 @@ def test_main_with_no_subcommand_shows_help(capsys):
     rc = asa.main([])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "check" in out and "build" in out and "publish" in out
+    assert "check" in out
+    assert "build" in out
+    assert "publish" in out
