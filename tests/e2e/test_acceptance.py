@@ -196,7 +196,8 @@ def test_full_agent_turn_read_edit_verify_permission_done(proxy, workspace):
 
     # The edit really landed: the sandbox verified the FIXED file.
     final = (workspace / "app.py").read_text()
-    assert NEW_STR in final and "nmae" not in final
+    assert NEW_STR in final
+    assert "nmae" not in final
 
     # The verification ran in the real sandbox executor (py_compile
     # writes __pycache__ next to the file).

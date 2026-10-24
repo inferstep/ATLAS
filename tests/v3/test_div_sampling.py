@@ -43,8 +43,10 @@ def test_every_default_perturbation_is_constructive_prose_without_code():
         assert len(p.text) > 10, f"Perturbation {p.label} has too-short text"
         for pattern in destructive_patterns:
             assert pattern not in p.text.lower(), f"{p.label} contains {pattern!r}"
-        assert "\ndef " not in p.text and not p.text.startswith("def ")
-        assert "\nimport " not in p.text and not p.text.startswith("import ")
+        assert "\ndef " not in p.text
+        assert not p.text.startswith("def ")
+        assert "\nimport " not in p.text
+        assert not p.text.startswith("import ")
         assert "```" not in p.text
 
 

@@ -65,7 +65,8 @@ class TestJsGoldenParity:
     def test_method_contains(self):
         g = extract_file("pipe.js", JS_FIXTURE)
         pairs = {(c.parent, c.child) for c in g.contains}
-        assert ("Pipeline", "run") in pairs and ("Pipeline", "load") in pairs
+        assert ("Pipeline", "run") in pairs
+        assert ("Pipeline", "load") in pairs
 
 
 class TestMixedProject:
@@ -81,8 +82,10 @@ class TestMixedProject:
         assert callees(g, "js_fn") == ["helper"]
 
     def test_is_supported(self):
-        assert is_js("x.js") and is_js("x.mjs")
-        assert is_supported("x.py") and is_supported("x.jsx")
+        assert is_js("x.js")
+        assert is_js("x.mjs")
+        assert is_supported("x.py")
+        assert is_supported("x.jsx")
         assert not is_supported("x.md")
 
 

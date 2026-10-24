@@ -56,7 +56,8 @@ def test_nonfinite_score_field_is_unscored(monkeypatch, field, value):
     out = scoring.score_candidate_combined("code")
     failure = out.pop("failure")
     assert out == UNSCORED
-    assert failure["kind"] == NONFINITE_SCORE and failure["field"] == field
+    assert failure["kind"] == NONFINITE_SCORE
+    assert failure["field"] == field
 
     scored = scoring.score_candidate("code")
     assert scored == (None, None, False)
@@ -91,7 +92,8 @@ def test_nonfinite_per_step_aggregate_is_unscored(monkeypatch, value):
 def test_finite_energies_including_negative_and_zero_survive(monkeypatch, energy):
     _answer(monkeypatch, {**SCORED, "cx_energy": energy})
     out = scoring.score_candidate_combined("code")
-    assert out["cx_energy"] == energy and out["verdict"] == "likely_correct"
+    assert out["cx_energy"] == energy
+    assert out["verdict"] == "likely_correct"
     assert "failure" not in out
     assert scoring.score_candidate("code") == (energy, 0.3, True)
 
@@ -107,4 +109,5 @@ def test_a_disabled_lens_is_unavailable_not_neutral(monkeypatch):
 def test_per_step_finite_answer_survives(monkeypatch):
     _answer(monkeypatch, PER_STEP)
     out = scoring.score_candidate_per_step("code")
-    assert out["gx_score_min"] == 0.6 and math.isfinite(out["cx_norm_max"])
+    assert out["gx_score_min"] == 0.6
+    assert math.isfinite(out["cx_norm_max"])

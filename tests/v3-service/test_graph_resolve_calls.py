@@ -24,7 +24,8 @@ HELPER = "def helper():\n    return 1\n"
 def test_identifier_calls_only():
     code = "def f():\n    g()\n    obj.method()\n    h(x)\n"
     names = _extract_python_call_targets(code.encode("utf-8"))
-    assert "g" in names and "h" in names
+    assert "g" in names
+    assert "h" in names
     assert "method" not in names  # attribute call skipped
 
 

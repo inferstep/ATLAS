@@ -190,7 +190,8 @@ def test_a_change_of_the_carried_text_holds_only_a_real_models_recording_without
     if problem is None:
         assert problems == []
     else:
-        assert problems and problem in problems[0], problems
+        assert problems, problems
+        assert problem in problems[0], problems
     if replies == "captured":
         made_with, today = re.fullmatch(r"made with text ([0-9a-f]{12}), today's is ([0-9a-f]{12}); the carried parts are "
                                         r"not compared", result["text_note"]).groups()
@@ -233,7 +234,8 @@ def test_a_change_in_the_order_of_calls_cannot_be_written_again(normal, proxy_bi
     made = copy.deepcopy(normal)
     made["exchanges"][0], made["exchanges"][1] = made["exchanges"][1], made["exchanges"][0]
     new, problem = rewrite.rewritten(made, proxy_binary, tmp_path)
-    assert problem and "the order of its calls changed" in problem
+    assert problem
+    assert "the order of its calls changed" in problem
     assert new["expected"] == made["expected"]
 
 
@@ -301,7 +303,8 @@ def test_a_session_that_a_real_model_answers_is_recorded_with_what_it_said_and_w
                               "commit": made["source"]["commit"], "model": "a-model.gguf", "model_server": "b1-stand-in"}
     # What the model server said is kept as it came, each reply in its small pieces.
     said = [exchange["response"]["body"] for exchange in made["exchanges"] if exchange["service"] == "model"]
-    assert len(said) == 4 and all(body.count("data: ") > 5 for body in said)
+    assert len(said) == 4
+    assert all(body.count("data: ") > 5 for body in said)
     assert made["expected"]["events"][-1]["type"] == "done"
     # The model server was asked five things, which model it is and four replies, and no token went with any.
     assert _ModelServer.tokens == [None] * 5
@@ -322,10 +325,13 @@ def test_a_piece_of_the_models_reply_reaches_the_proxy_when_it_comes_and_not_whe
     finally:
         st.stop()
     # The stand-in model server takes half a second from its first piece to its last. So do the pieces here.
-    assert len(came) > 5 and came[-1] - came[0] > 0.3
+    assert len(came) > 5
+    assert came[-1] - came[0] > 0.3
     # What came is the reply, once, and it is what the stage keeps.
     kept = st.exchanges[0]["response"]["body"]
-    assert b"".join(pieces).decode("utf-8") == kept and kept.endswith("data: [DONE]\n\n") and kept.count("[DONE]") == 1
+    assert b"".join(pieces).decode("utf-8") == kept
+    assert kept.endswith("data: [DONE]\n\n")
+    assert kept.count("[DONE]") == 1
 
 
 def test_a_recording_that_holds_a_folder_of_the_model_servers_machine_is_not_written(model_server):
@@ -354,7 +360,8 @@ def test_the_sandbox_of_a_recording_gets_a_small_fixed_environment_and_nothing_o
         sandbox.terminate()
         sandbox.communicate(timeout=10)
     environment = dict(line.split("=", 1) for line in json.loads(said[2])["stdout"].splitlines() if "=" in line)
-    assert "A_VALUE_OF_THE_PERSON_WHO_RECORDS" not in environment and "PATH" in environment, environment
+    assert "A_VALUE_OF_THE_PERSON_WHO_RECORDS" not in environment, environment
+    assert "PATH" in environment, environment
     # Its home folder is a folder of the recording, and not the home of the person who records.
     assert environment["HOME"] == str(tmp_path / "sandbox-home")
 
@@ -368,5 +375,7 @@ def test_a_case_of_a_real_model_and_a_port_go_together():
 
 def test_a_case_of_the_smoke_set_takes_its_text_and_its_files_from_the_driver_of_the_nightly_run():
     case = record.real_model_case("real_model_ask_explain")
-    assert case["source"]["kind"] == "smoke" and "find_duplicates" in case["request"]["message"]
-    assert list(case["files"]) == ["orders.py"] and case["request"]["task_contract"] == {"task_mode": "question"}
+    assert case["source"]["kind"] == "smoke"
+    assert "find_duplicates" in case["request"]["message"]
+    assert list(case["files"]) == ["orders.py"]
+    assert case["request"]["task_contract"] == {"task_mode": "question"}

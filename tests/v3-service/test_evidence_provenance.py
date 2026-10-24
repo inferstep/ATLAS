@@ -144,7 +144,8 @@ def test_evidence_may_not_authorize_its_obligation(source, required, observed, r
     b = binding(source=source, required_strength=required, observed_strength=observed)
     assert b["source"] == source    # recorded all the same
     ok, why = P.may_authorize(b)
-    assert not ok and reason in why
+    assert not ok
+    assert reason in why
 
 
 # --- binding: evidence cannot cross an identity -----------------------------
@@ -189,8 +190,10 @@ def test_identical_identity_binds():
 def test_a_binding_carries_no_candidate_bytes():
     b = binding()
     for k, v in b.items():
-        assert "def " not in str(v) and "import " not in str(v), k
-    assert "candidate_code" not in b and "code" not in b
+        assert "def " not in str(v), k
+        assert "import " not in str(v), k
+    assert "candidate_code" not in b
+    assert "code" not in b
 
 
 # --- inert: nothing consumes this yet ---------------------------------------

@@ -17,7 +17,9 @@ def test_unknown_subcommand_prints_usage_and_exits_2(monkeypatch, capsys):
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "unknown subcommand" in err
-    assert "doctor" in err and "compose" in err  # usage list
+    # usage list
+    assert "doctor" in err
+    assert "compose" in err
 
 
 def test_help_flag_prints_usage_and_exits_0(monkeypatch, capsys):
@@ -71,7 +73,8 @@ def test_bare_atlas_without_tty_points_to_doctor(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "needs a terminal" in err
     assert "atlas doctor" in err
-    assert "subcommands:" in err and "bench" in err
+    assert "subcommands:" in err
+    assert "bench" in err
 
 
 def test_bare_atlas_tui_failure_points_to_doctor(monkeypatch, capsys):

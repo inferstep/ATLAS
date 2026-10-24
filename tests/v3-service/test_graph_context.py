@@ -41,7 +41,8 @@ class TestRepairContext:
         # load calls clean -> clean is a callee
         assert "clean" in ctx
         # path from an entry point (main) to load
-        assert "Call path" in ctx and "→" in ctx
+        assert "Call path" in ctx
+        assert "→" in ctx
 
     @pytest.mark.parametrize("files, function", [
         pytest.param(PROJECT, "does_not_exist", id="function-absent"),
@@ -67,7 +68,9 @@ class TestSymbolNeighborhood:
 
     def test_unknown_symbol_empty(self):
         nb = graph.symbol_neighborhood(PROJECT, "nope")
-        assert nb["callers"] == [] and nb["callees"] == [] and nb["impact"] == []
+        assert nb["callers"] == []
+        assert nb["callees"] == []
+        assert nb["impact"] == []
         assert nb["defined_in"] == []
 
     def test_prebuilt_graph_reused(self):

@@ -115,4 +115,5 @@ def test_decorated_function():
 
 def test_empty_and_nonpython():
     assert extract_file("a.py", "").defines == []
-    assert is_python("x.py") and not is_python("x.md")
+    assert is_python("x.py")
+    assert not is_python("x.md")

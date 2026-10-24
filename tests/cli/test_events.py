@@ -57,7 +57,9 @@ def test_event_round_trips_through_compact_json_and_through_dict():
     assert ev.duration_ms == 4523
 
     raw = ev.to_json()
-    assert ", " not in raw and ": " not in raw  # compact separators
+    # compact separators
+    assert ", " not in raw
+    assert ": " not in raw
     assert parse_envelope(raw) == ev
     assert parse_envelope(ev.to_dict()) == ev
 

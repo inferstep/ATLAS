@@ -93,7 +93,8 @@ def test_combined_unscored_answer_carries_no_numbers(monkeypatch, answer,
                                                      failure_kind):
     _lens_answers(monkeypatch, answer)
     out = best_of_k.score_candidate_combined("text", "http://lens")
-    assert out["cx_energy"] is None and out["gx_score"] is None
+    assert out["cx_energy"] is None
+    assert out["gx_score"] is None
     assert out["verdict"] == "unscored"
     assert out["failure"]["kind"] == failure_kind
 
@@ -108,7 +109,8 @@ def test_combined_nonfinite_field_is_unscored(monkeypatch, field, value):
                                 "gx_available": True,
                                 "verdict": "likely_correct", field: value})
     out = best_of_k.score_candidate_combined("text", "http://lens")
-    assert out["cx_energy"] is None and out["gx_score"] is None
+    assert out["cx_energy"] is None
+    assert out["gx_score"] is None
     assert out["verdict"] == "unscored"
     assert out["failure"]["kind"] == "nonfinite_score"
 

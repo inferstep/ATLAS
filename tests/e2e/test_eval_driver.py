@@ -80,7 +80,8 @@ def test_the_check_gives_the_same_result_for_a_relative_and_an_absolute_path(tmp
     assert driver.main(["check", str(suite), "--image", "img"]) == 0
     # The grader is mounted by the same absolute path both times: docker
     # reads a relative host path as a volume name.
-    assert len(seen) == 4 and len(set(seen)) == 1
+    assert len(seen) == 4
+    assert len(set(seen)) == 1
     assert Path(seen[0].split(":")[0]).is_absolute()
 
 
@@ -119,7 +120,8 @@ def test_only_exit_0_and_1_grade_the_work(code, outcome):
 def test_the_grader_runs_sealed(tmp_path):
     task = S.load_suite(make_suite(tmp_path))[0]
     argv = G.grader_argv(task, tmp_path / "copy", "sandbox:x")
-    assert argv[:4] == ["docker", "run", "--rm", "--network"] and argv[4] == "none"
+    assert argv[:4] == ["docker", "run", "--rm", "--network"]
+    assert argv[4] == "none"
     assert f"{task.grader}:/grade:ro" in argv
     assert argv[-4:] == ["sandbox:x", "60", "/grade", "/w"]
 
@@ -156,7 +158,8 @@ def test_a_workspace_that_cannot_be_copied_is_a_grader_error(tmp_path, monkeypat
         raise G.shutil.Error([("src", "dst", "unreadable")])
     monkeypatch.setattr(G.shutil, "copytree", fails)
     got = G.grade(task, tmp_path, "img", run=fake_docker)
-    assert got.outcome == G.GRADER_ERROR and "could not be copied" in got.reason
+    assert got.outcome == G.GRADER_ERROR
+    assert "could not be copied" in got.reason
 
 
 def test_controls_that_do_not_separate_are_named(tmp_path):
@@ -260,10 +263,12 @@ def test_the_baseline_writes_runs_and_finishes(tmp_path):
 def test_the_baseline_samples_as_atlas_does_with_no_grammar(tmp_path):
     _, fake, _ = _run_baseline(tmp_path, ['{"tool": "done", "summary": "."}'])
     body = fake.bodies[0]
-    assert body["samplers"] == ["top_k"] and body["top_k"] == 1
+    assert body["samplers"] == ["top_k"]
+    assert body["top_k"] == 1
     assert body["max_tokens"] == 8192
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
-    assert "grammar" not in body and "response_format" not in body
+    assert "grammar" not in body
+    assert "response_format" not in body
     assert body["messages"][0]["content"] == B.SYSTEM_PROMPT
 
 
@@ -292,7 +297,8 @@ def test_the_oldest_results_give_way_when_the_context_is_full():
             {"role": "assistant", "content": "a2"}, {"role": "user", "content": "recent"}]
     fitted = B.fit_context(msgs, 8192 + 20000)
     assert fitted[3]["content"] == "[result omitted: 90000 characters]"
-    assert fitted[:2] == msgs[:2] and fitted[5]["content"] == "recent"
+    assert fitted[:2] == msgs[:2]
+    assert fitted[5]["content"] == "recent"
 
 
 # --- the report ------------------------------------------------------------------
@@ -313,7 +319,8 @@ def test_the_summary_counts_false_completions_and_keeps_no_task_text():
     assert (s["graded"], s["passed"], s["grader_errors"]) == (3, 2, 1)
     assert (s["completed"], s["false_completed"], s["passed_not_completed"]) == (2, 1, 1)
     assert s["tasks_whose_repeats_disagree"] == 1
-    assert "t1" not in json.dumps(s) and "t2" not in json.dumps(s)
+    assert "t1" not in json.dumps(s)
+    assert "t2" not in json.dumps(s)
 
 
 def test_the_report_gives_pass_rates_by_kind():
@@ -331,7 +338,8 @@ def test_the_arms_are_compared_with_an_interval():
     a = [_rec(f"t{i}", 1, "completed", G.PASS if i < 8 else G.FAIL) for i in range(10)]
     b = [_rec(f"t{i}", 1, "completed", G.PASS if i < 4 else G.FAIL) for i in range(10)]
     d = R.compare(a, b)["pass_rate_difference"]
-    assert d["estimate"] == 0.4 and d["ci95"][0] < 0.4 < d["ci95"][1]
+    assert d["estimate"] == 0.4
+    assert d["ci95"][0] < 0.4 < d["ci95"][1]
 
 
 # --- the driver ------------------------------------------------------------------
@@ -340,7 +348,8 @@ def test_the_reliability_runner_loads():
     """stack_identity reaches the #241 checks through this loader; the other
     driver tests replace stack_identity, so none of them load the module."""
     rel = driver._reliability_runner()
-    assert callable(rel.deployed_identity) and callable(rel.stack_identity)
+    assert callable(rel.deployed_identity)
+    assert callable(rel.stack_identity)
 
 
 def test_the_development_stack_is_never_measured(tmp_path):
@@ -348,7 +357,8 @@ def test_the_development_stack_is_never_measured(tmp_path):
                               "--image", "i", "--compose-project", "atlas",
                               "--workspace-root", str(tmp_path), "--commit", "b0e6013"])
     _, problems = driver.stack_identity(args)
-    assert problems and "development stack" in problems[0]
+    assert problems
+    assert "development stack" in problems[0]
 
 
 class FakeHost:
@@ -400,31 +410,39 @@ def test_a_record_ties_its_result_to_suite_image_session_and_model(tmp_path, mon
     """#275: every field that ties a result to the frozen suite, the grader
     image, the session, the driver and the model."""
     code, recs, suite = _run_driver(monkeypatch, tmp_path, FakeHost())
-    assert code == 0 and len(recs) == 2
+    assert code == 0
+    assert len(recs) == 2
     r = recs[0]
     assert r["suite_sha256"] == S.sha256_file(suite / "suite.json")
     assert (r["kind"], r["lang"], r["task_network"]) == ("cli", "python", False)
     assert r["grader_image"] == {"ref": "sandbox:eval", "id": "sha256:" + "ab" * 32}
     assert "graded with sha256:" in r["grade_output"]     # graded by ID, whole output kept
-    assert r["subdir"].startswith("eval-baseline-") and r["subdir"] != recs[1]["subdir"]
-    assert r["started_utc"].endswith("Z") and "T" in r["started_utc"]
+    assert r["subdir"].startswith("eval-baseline-")
+    assert r["subdir"] != recs[1]["subdir"]
+    assert r["started_utc"].endswith("Z")
+    assert "T" in r["started_utc"]
     assert r["sandbox_network"] == {"egress": True, "networks": {"atlaseval_sandbox-net": False}}
     assert r["driver"] == {"commit": "0123456789abcdef0123456789abcdef01234567", "dirty": False}
     assert r["context_tokens"] == 32768
     assert r["model"] == {"n_ctx": 32768, "model": "gemma",
                           "model_path": "/models/gemma.gguf", "build_info": "b6000"}
-    assert r["session_timeout_s"] == 600 and r["stack"] == {"commit": "b0e6013"}
-    assert (tmp_path / "w").is_dir() and len(list((tmp_path / "w").iterdir())) == 2
+    assert r["session_timeout_s"] == 600
+    assert r["stack"] == {"commit": "b0e6013"}
+    assert (tmp_path / "w").is_dir()
+    assert len(list((tmp_path / "w").iterdir())) == 2
 
 
 def test_a_budget_that_is_not_the_stacks_is_refused(tmp_path, monkeypatch):
     code, recs, _ = _run_driver(monkeypatch, tmp_path, FakeHost(timeout=900))
-    assert code == 2 and recs == []
+    assert code == 2
+    assert recs == []
 
 
 def test_an_older_proxy_that_reports_no_timeout_is_recorded_as_such(tmp_path, monkeypatch):
     code, recs, _ = _run_driver(monkeypatch, tmp_path, FakeHost(timeout=None), arm="atlas")
-    assert code == 0 and recs[0]["session_timeout_s"] is None and "model" not in recs[0]
+    assert code == 0
+    assert recs[0]["session_timeout_s"] is None
+    assert "model" not in recs[0]
 
 
 def test_an_internal_sandbox_network_has_no_egress():
@@ -454,7 +472,8 @@ def test_a_grader_image_docker_does_not_know_is_refused_before_any_check(tmp_pat
 def test_the_grader_output_is_kept_whole_up_to_the_cap():
     assert G.full_output("a\nb\n", "warn\n") == "a\nb\n\n[stderr]\nwarn\n"
     big = G.full_output("x" * (G.OUTPUT_CAP + 5), "")
-    assert big.startswith("x" * 10) and big.endswith(f"[cut: the grader wrote {G.OUTPUT_CAP + 5} characters]")
+    assert big.startswith("x" * 10)
+    assert big.endswith(f"[cut: the grader wrote {G.OUTPUT_CAP + 5} characters]")
 
 
 def test_an_unknown_task_id_is_refused(tmp_path):

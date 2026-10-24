@@ -47,9 +47,11 @@ def test_collect_excludes_source_and_has_schema(tmp_path, monkeypatch):
 
     bundle = diagnostics._collect(str(tmp_path), 10)
     assert bundle["schema_version"] == 1
-    assert "meta" in bundle and "config" in bundle
+    assert "meta" in bundle
+    assert "config" in bundle
     # no source-code section
-    assert "source" not in bundle and "files" not in bundle
+    assert "source" not in bundle
+    assert "files" not in bundle
 
 
 def test_recent_logs_hide_the_password_of_a_url(tmp_path, monkeypatch):
