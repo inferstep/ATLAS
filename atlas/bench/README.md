@@ -59,15 +59,13 @@ differ deliberately; read bench numbers with that in mind:
 
 ## Published results
 
-None current. The V3 (14B) ablation study's 74.6% LiveCodeBench figure is
-withdrawn: this runner's LiveCodeBench loader cannot decode the dataset's
-hidden tests and falls back to the 1-5 examples printed in each problem, so
-every `pass` it reports means "passed the printed examples". In V3 mode it
+None current. This runner's LiveCodeBench loader cannot decode the dataset's
+hidden tests and falls back to the examples printed in each problem
+(`_extract_test_cases` in [datasets/livecodebench.py](datasets/livecodebench.py)),
+so every `pass` it reports means "passed the printed examples". In V3 mode it
 also counts a task as passed when any candidate passes them, and repair sees
-their expected output. See the withdrawal notice in the
-[CHANGELOG](../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746);
-the raw traces stay indexed in
-[docs/reports/ablation/README.md](../../docs/reports/ablation/README.md) so
-the withdrawal can be checked. Numbers from this runner are not LiveCodeBench
-pass@1 until those are fixed. Per-registry-model numbers will be tracked in
+their expected output (the
+[CHANGELOG](../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)
+has the details). Numbers from this runner are not LiveCodeBench pass@1 until
+those are fixed. Per-registry-model numbers will be tracked in
 [#28](https://github.com/inferstep/ATLAS/issues/28).

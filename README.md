@@ -43,18 +43,9 @@
 
 ---
 
-## 📰 Latest News
+## 📰 Latest release
 
-- **2026-10-24** - **[V3.1.7 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.7)** - security fixes for the service token, the proxy's file reads, the TUI's terminal output, the tool-call path check, where commands run, rollback signatures, the lens check's file loading and the proxy's requests, and installer fixes ([advisories](https://github.com/inferstep/ATLAS/security/advisories)). Please upgrade.
-- **2026-10-01** - **[V3.1.6 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.6)** - security fix for the command policy ([GHSA-m9w4-p32x-chx9](https://github.com/inferstep/ATLAS/security/advisories/GHSA-m9w4-p32x-chx9), reported and fixed by [@Rendegou](https://github.com/Rendegou)). Please upgrade.
-- **2026-09-29** - **[V3.1.5 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.5)** - security fix for tool argument names ([GHSA-c3p6-m657-h629](https://github.com/inferstep/ATLAS/security/advisories/GHSA-c3p6-m657-h629)). Please upgrade.
-- **2026-09-27** - **[V3.1.4 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.4)** - the move to inferstep/ATLAS, security fixes ([GHSA-5hvw-59r4-7rcq](https://github.com/inferstep/ATLAS/security/advisories/GHSA-5hvw-59r4-7rcq)), and the contributor setup.
-- **2026-07-06** - **[V3.1.3 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)** - production-platform pass: staged upgrade/rollback with auto-restore, SQLite state store (no more Redis), signed artifact manifests, structured logs + correlation IDs, interactive permissions, session resume, and two adversarial bug-fix sweeps
-- **2026-06-17** - **[V3.1.2 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - broader hardware reach (ROCm / Metal / Vulkan), bring-your-own-model Lens + ASA training, in-the-loop lens retraining from your own workloads (since removed; see the CHANGELOG), and an agent-reliability pass
-- **2026-05-12** - **[V3.1.0 "Maia" released](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - native Bubbletea TUI, one-command bootstrap, streaming Lens + ASA activation steering, AST-aware surgical edits
-- **2026-03-26** - [Hacker News front page](https://news.ycombinator.com/item?id=47533297) - 489 points, 285 comments
-- **2026-03-05** - **V3.0 released** - the multi-phase V3 pipeline on frozen Qwen3-14B. *The 74.6% LiveCodeBench figure published with this release is withdrawn: the benchmark runner never ran LiveCodeBench's hidden tests, and it counted a task as passed when any of three candidates, or a repair shown the failing output, passed the examples printed in the problem ([withdrawal notice](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)). ATLAS will be re-measured once the current product is re-verified.*
-- **2026-02-18** - **[V2.0 released](CHANGELOG.md)** - benchmark infrastructure, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode evaluation suite
+**[V3.1.7 "Maia"](https://github.com/inferstep/ATLAS/releases/tag/v3.1.7)** is the current release. Its notes are on that release page and in the [CHANGELOG](CHANGELOG.md).
 
 ## ⭐ Star History
 
@@ -152,7 +143,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 ## ⚠️ Known Limitations
 
 - **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md).
-- **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see Latest News), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
+- **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see the [CHANGELOG](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code.
 - **Grammar-constrained decoding is slower than unconstrained decoding.**
 
@@ -160,17 +151,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## 🗺️ Roadmap
 
-**V3.1.3 "Maia"** - Current release. Production-platform pass on top of V3.1.2: staged `atlas upgrade`/`rollback` with automatic restore, SQLite state store replacing Redis ([ADR 0007](docs/adr/0007-sqlite-state-store.md); retired on `dev` in 2026-09 with the pattern cache, its only user), signed artifact manifests, structured JSON logs with cross-service correlation IDs, interactive permission prompts, session resume, typed config validation/migration, and two adversarial bug-fix sweeps (33 confirmed fixes).
-
-**V3.1.2 "Maia"** - Broader hardware reach, bring-your-own-model training, and an agent-reliability pass on top of the V3.1.0 base (TUI, one-command install, streaming Lens + ASA).
-- Hardware reach: AMD ROCm via llama.cpp incl. RDNA4 / RX 9070 (gfx1200/gfx1201) ([#26](https://github.com/inferstep/ATLAS/issues/26)); Apple Silicon native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32), see [SETUP_MACOS.md](docs/SETUP_MACOS.md)); Vulkan universal fallback covering AMD / Intel / Snapdragon / Apple-via-MoltenVK / CPU ([#114](https://github.com/inferstep/ATLAS/issues/114)).
-- Bring-your-own-model: local Lens training pipeline (`atlas lens build`, [#100](https://github.com/inferstep/ATLAS/issues/100)) and ASA per-model calibration parity (`atlas asa check/build/publish`, [#113](https://github.com/inferstep/ATLAS/issues/113)) - train Lens + ASA artifacts for additional GGUFs, with per-model operating thresholds that ship with the lens.
-- In-the-loop lens training (TUI `/good` · `/bad` · `/deny` → `atlas lens retrain`) shipped in this release and was removed on `dev` in 2026-09: the corpus it collected mixed evaluation runs into training data. See the CHANGELOG.
-- Agent reliability: tool-result visibility fix, read-dedup, traceback → directed-edit, `move_file`, pip-install / case-mismatch steers, sandbox shell policy + host-sized cgroup limits.
-- Structural call-graph reasoning ([#39](https://github.com/inferstep/ATLAS/issues/39) / [#125](https://github.com/inferstep/ATLAS/pull/125), thanks [@yogthos](https://github.com/yogthos)); ARCHITECTURE.md translated to zh-CN / ja / ko ([#25](https://github.com/inferstep/ATLAS/issues/25)).
-
 **V3.2** - Next milestone: deeper code reasoning.
-- RPG-style architecture-first planning was built ([#120](https://github.com/inferstep/ATLAS/issues/120)), A/B-measured, and removed: no improvement on the reference model at ~10x planning latency. [#148](https://github.com/inferstep/ATLAS/issues/148) is the record.
 - Structural code reasoning (tail) - deepen the shipped call-graph layer ([#39](https://github.com/inferstep/ATLAS/issues/39)).
 - Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/inferstep/ATLAS/issues/9)).
 - Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/inferstep/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28)).

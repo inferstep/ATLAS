@@ -39,14 +39,9 @@
 
 ---
 
-## 📰 최신 소식
+## 📰 최신 릴리스
 
-- **2026-07-06** - **[V3.1.3 "Maia" 출시](https://github.com/itigges22/ATLAS/releases/tag/v3.1.3)** - 프로덕션 플랫폼 정비: 자동 복원을 갖춘 단계적 업그레이드/롤백, SQLite 상태 저장소(Redis 제거), 서명된 아티팩트 매니페스트, 구조화 로그 + 상관관계 ID, 대화형 권한, 세션 재개, 그리고 두 차례의 적대적 버그 수정 스윕
-- **2026-06-17** - **[V3.1.2 "Maia" 출시](https://github.com/itigges22/ATLAS/releases/tag/v3.1.2)** - 더 넓은 하드웨어 지원(ROCm / Metal / Vulkan), 자체 모델 반입(BYO) Lens + ASA 학습, 사용자 자신의 워크로드로부터의 인루프 lens 재학습(이후 제거됨, CHANGELOG 참조), 에이전트 신뢰성 정비
-- **2026-05-12** - **[V3.1.0 "Maia" 출시](https://github.com/itigges22/ATLAS/releases/tag/v3.1.0)** - 네이티브 Bubbletea TUI, 원커맨드 부트스트랩, 스트리밍 Lens + ASA 활성화 스티어링, AST 인식 정밀 편집
-- **2026-03-26** - [Hacker News 첫 페이지](https://news.ycombinator.com/item?id=47533297) - 489 포인트, 285 댓글
-- **2026-03-05** - **V3.0 출시** - 동결된 Qwen3-14B 기반의 다단계 V3 파이프라인. *이 릴리스와 함께 발표한 LiveCodeBench 74.6% 수치는 철회되었습니다. 벤치마크 러너는 LiveCodeBench의 비공개 테스트를 한 번도 실행하지 않았고, 후보 3개 중 하나 또는 실패 출력을 보고 만든 수리 결과가 문제에 인쇄된 예제를 통과하면 과제를 통과로 셌습니다([철회 공지](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)). 현재 제품을 다시 검증한 뒤 재측정합니다.*
-- **2026-02-18** - **[V2.0 출시](../../../CHANGELOG.md)** - 벤치마크 인프라, HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 평가 스위트
+현재 릴리스는 **[V3.1.7 "Maia"](https://github.com/inferstep/ATLAS/releases/tag/v3.1.7)**입니다. 릴리스 노트는 해당 릴리스 페이지와 [CHANGELOG](../../../CHANGELOG.md)에 있습니다.
 
 ## ⭐ Star History
 
@@ -145,7 +140,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 ## ⚠️ 알려진 제한 사항
 
 - **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/itigges22/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md).
-- **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고(최신 소식 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/itigges22/ATLAS/issues/28)에서 추적합니다.
+- **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/itigges22/ATLAS/issues/28)에서 추적합니다.
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다.
 - **문법 제약 디코딩은 제약 없는 디코딩보다 느립니다.**
 
@@ -153,16 +148,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## 🗺️ 로드맵
 
-**V3.1.3 "Maia"** - 현재 릴리스. V3.1.2 위에 얹은 프로덕션 플랫폼 정비: 자동 복원을 갖춘 단계적 `atlas upgrade`/`rollback`, Redis를 대체하는 SQLite 상태 저장소([ADR 0007](../../adr/0007-sqlite-state-store.md); 2026-09 `dev`에서 유일한 사용처였던 패턴 캐시와 함께 폐기), 서명된 아티팩트 매니페스트, 서비스 간 상관관계 ID를 갖춘 구조화 JSON 로그, 대화형 권한 프롬프트, 세션 재개, 타입 기반 설정 검증/마이그레이션, 그리고 두 차례의 적대적 버그 수정 스윕(확정 수정 33건).
-
-**V3.1.2 "Maia"** - V3.1.0 기반(TUI, 원커맨드 설치, 스트리밍 Lens + ASA) 위에 얹은 더 넓은 하드웨어 지원, 자체 모델 반입 학습, 에이전트 신뢰성 정비.
-- 하드웨어 지원: llama.cpp 경유 AMD ROCm — RDNA4 / RX 9070 (gfx1200/gfx1201) 포함 ([#26](https://github.com/itigges22/ATLAS/issues/26)); Apple Silicon 네이티브 macOS 하이브리드 Metal 경로 ([#32](https://github.com/itigges22/ATLAS/issues/32), [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고); AMD / Intel / Snapdragon / MoltenVK 경유 Apple / CPU를 커버하는 Vulkan 범용 폴백 ([#114](https://github.com/itigges22/ATLAS/issues/114)).
-- 자체 모델 반입: 로컬 Lens 학습 파이프라인(`atlas lens build`, [#100](https://github.com/itigges22/ATLAS/issues/100))과 ASA 모델별 캘리브레이션 패리티(`atlas asa check/build/publish`, [#113](https://github.com/itigges22/ATLAS/issues/113)) — 추가 GGUF에 대한 Lens + ASA 아티팩트 학습과, lens에 함께 실리는 모델별 운영 임계값.
-- 에이전트 신뢰성: 도구 결과 가시성 수정, 읽기 중복 제거, 트레이스백 → 지시된 편집, `move_file`, pip-install / 대소문자 불일치 스티어, 샌드박스 셸 정책 + 호스트 크기의 cgroup 제한.
-- 구조적 콜 그래프 추론([#39](https://github.com/itigges22/ATLAS/issues/39) / [#125](https://github.com/itigges22/ATLAS/pull/125), [@yogthos](https://github.com/yogthos) 감사합니다); ARCHITECTURE.md의 zh-CN / ja / ko 번역([#25](https://github.com/itigges22/ATLAS/issues/25)).
-
 **V3.2** - 다음 마일스톤: 더 깊은 코드 추론과 계획.
-- 아키텍처 우선 계획 페이즈 — RPG 스타일의 계획 후 채우기: 모듈 범위에서 계획하고 함수 범위에서 구현 ([#120](https://github.com/itigges22/ATLAS/issues/120), PR [#124](https://github.com/itigges22/ATLAS/pull/124)).
 - 구조적 코드 추론 (후속) — 솔버 기반 도달성 분석 + 다중 해상도 "어떤 파일이 중요한가" 검색을 위한 구문 비의존적 wavelet 분해 ([#39](https://github.com/itigges22/ATLAS/issues/39)).
 - 샘플링 기반 추론 — 효율성과 품질 향상 ([#9](https://github.com/itigges22/ATLAS/issues/9)).
 - 이월된 인프라: 자동화된 HuggingFace 제출 파이프라인 ([#102](https://github.com/itigges22/ATLAS/issues/102)); K3s / Kubernetes 상의 ROCm; 공식 레지스트리 모델 벤치마크 — LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
