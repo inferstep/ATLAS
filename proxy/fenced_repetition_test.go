@@ -418,8 +418,7 @@ func fencedLoopFixture(t *testing.T, dir string, maxTurns int,
 const fencedTurnCeiling = 30
 
 // The same failing @fenced write, under one spelling or two, reaches one
-// honest terminal well inside the ceiling. The allowance still caps the
-// sub-generations, and the target is never written.
+// honest terminal well inside the ceiling.
 func TestRepeatedFencedFailureReachesABoundedTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -456,6 +455,32 @@ func TestRepeatedFencedFailureReachesABoundedTerminal(t *testing.T) {
 			if st.Completed() {
 				t.Error("a run that wrote nothing reported completion")
 			}
+		})
+	}
+}
+
+// In the same runs, the allowance still caps the sub-generations, every call
+// gets its result, and the target is never written.
+func TestRepeatedFencedFailureStaysInsideTheAllowanceAndNeverWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		spellings []string
+	}{
+		{"one spelling", []string{"solve.py"}},
+		{"two spellings of one file", []string{"solve.py", "./solve.py"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, _, _, census, _ := fencedLoopFixture(t, dir, fencedTurnCeiling,
+				func(i int, _ string) map[string]interface{} {
+					return map[string]interface{}{"type": "tool_call", "name": "write_file",
+						"args": map[string]string{
+							"path": tc.spellings[i%len(tc.spellings)], "content": "@fenced"}}
+				})
+			if err := runAgentLoop(ctx, "Write solve.py."); err != nil {
+				t.Fatalf("loop error: %v", err)
+			}
+
 			if ctx.FencedCalls > maxFencedFailuresPerPath {
 				t.Errorf("%d fenced sub-generations, allowance is %d",
 					ctx.FencedCalls, maxFencedFailuresPerPath)

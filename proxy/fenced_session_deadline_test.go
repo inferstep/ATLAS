@@ -158,11 +158,9 @@ func TestWorkDeadlineEmitsExactlyOneTimedOutTerminal(t *testing.T) {
 			dir := t.TempDir()
 			ctx, terminal, census := timeoutFixture(t, dir, where)
 
-			start := time.Now()
 			if err := runAgentLoop(ctx, "Do something long."); err != nil {
 				t.Fatalf("agent loop error: %v", err)
 			}
-			elapsed := time.Since(start)
 
 			if terminal["status"] != string(TerminalTimedOut) {
 				t.Errorf("status = %q, want timed_out (summary=%q)",
@@ -174,22 +172,39 @@ func TestWorkDeadlineEmitsExactlyOneTimedOutTerminal(t *testing.T) {
 			if census["done"] != 1 {
 				t.Errorf("%d terminal events", census["done"])
 			}
-			// The terminal arrives AFTER the work context is dead, which is
-			// the whole point of the split.
+			if strings.Contains(terminal["summary"], "is on disk and parses") {
+				t.Errorf("a timeout implied completion: %q", terminal["summary"])
+			}
+			t.Logf("terminal=%v", terminal)
+		})
+	}
+}
+
+// The terminal arrives AFTER the work context is dead, which is the whole
+// point of the split, while the response lifetime lives on, and well inside
+// the reserve.
+func TestTheWorkDeadlineEndsTheWorkButNotTheResponse(t *testing.T) {
+	for _, where := range []string{"llm", "tool"} {
+		t.Run("deadline during the "+where, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx, _, _ := timeoutFixture(t, dir, where)
+
+			start := time.Now()
+			if err := runAgentLoop(ctx, "Do something long."); err != nil {
+				t.Fatalf("agent loop error: %v", err)
+			}
+			elapsed := time.Since(start)
+
 			if ctx.Ctx.Err() == nil {
 				t.Error("work context outlived the deadline")
 			}
 			if ctx.RequestCtx.Err() != nil {
 				t.Error("the response lifetime died with the work")
 			}
-			// Well inside the reserve.
 			if elapsed > 20*time.Second {
 				t.Errorf("finalisation took %v", elapsed)
 			}
-			if strings.Contains(terminal["summary"], "is on disk and parses") {
-				t.Errorf("a timeout implied completion: %q", terminal["summary"])
-			}
-			t.Logf("elapsed=%v terminal=%v", elapsed, terminal)
+			t.Logf("elapsed=%v", elapsed)
 		})
 	}
 }
@@ -199,10 +214,9 @@ func TestWorkDeadlineEmitsExactlyOneTimedOutTerminal(t *testing.T) {
 // Whatever is on disk, a timeout is never a completion.
 func TestTimeoutRestorationObeysTheSameEligibilityRules(t *testing.T) {
 	for _, c := range []struct {
-		name        string
-		seed        func(t *testing.T, ctx *AgentContext, dir string)
-		wantBytes   string
-		wantRestore bool
+		name      string
+		seed      func(t *testing.T, ctx *AgentContext, dir string)
+		wantBytes string
 	}{
 		{name: "demonstrably safer checkpoint is restored",
 			seed: func(t *testing.T, ctx *AgentContext, dir string) {
@@ -212,7 +226,7 @@ func TestTimeoutRestorationObeysTheSameEligibilityRules(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "solve.py"),
 					[]byte("def f():\n    return [1]]\n"), 0o644)
 			},
-			wantBytes: "def f():\n    return [1]\n", wantRestore: true},
+			wantBytes: "def f():\n    return [1]\n"},
 		{name: "invalid bytes with no checkpoint are kept",
 			seed: func(t *testing.T, ctx *AgentContext, dir string) {
 				// Written broken from the start, so nothing was ever valid.
@@ -250,19 +264,34 @@ func TestTimeoutRestorationObeysTheSameEligibilityRules(t *testing.T) {
 			if string(got) != c.wantBytes {
 				t.Errorf("disk = %q, want %q", got, c.wantBytes)
 			}
-			if c.wantRestore {
-				if !strings.Contains(terminal["summary"], "Put back the last version") {
-					t.Errorf("restore was not disclosed: %q", terminal["summary"])
-				}
-				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-				if d == nil || d.CurrentHash != hashBytes(got) {
-					t.Error("the ledger does not describe the restored bytes")
-				}
-			}
 			if terminal["status"] != string(TerminalTimedOut) {
 				t.Errorf("status = %q, want timed_out", terminal["status"])
 			}
 		})
+	}
+}
+
+// When a timeout puts back a demonstrably safer checkpoint, the terminal says
+// so, and the ledger describes the bytes it put back.
+func TestATimeoutRestoreIsDisclosedAndInTheLedger(t *testing.T) {
+	dir := t.TempDir()
+	ctx, terminal, _ := timeoutFixture(t, dir, "llm")
+	args, _ := json.Marshal(map[string]string{
+		"path": "solve.py", "content": "def f():\n    return [1]\n"})
+	executeToolCall("write_file", args, ctx)
+	os.WriteFile(filepath.Join(dir, "solve.py"),
+		[]byte("def f():\n    return [1]]\n"), 0o644)
+
+	if err := runAgentLoop(ctx, "Do something long."); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+	if !strings.Contains(terminal["summary"], "Put back the last version") {
+		t.Errorf("restore was not disclosed: %q", terminal["summary"])
+	}
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	if d == nil || d.CurrentHash != hashBytes(got) {
+		t.Error("the ledger does not describe the restored bytes")
 	}
 }
 

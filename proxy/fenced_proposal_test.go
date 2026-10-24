@@ -66,6 +66,13 @@ type c4Run struct {
 	writes     int // successful write_file results
 	checks     []syntaxCheck
 	recoveries []string
+
+	// What the stub server answers with: fencedBodies feeds the @fenced
+	// sub-call in order, and plan is the scripted model. mu guards the run's
+	// fields against the server and the event stream.
+	fencedBodies []string
+	plan         func(i int, r *c4Run) map[string]interface{}
+	mu           sync.Mutex
 }
 
 // c4Fixture runs the real loop with a genuine Python syntax check. fencedBodies
@@ -73,76 +80,9 @@ type c4Run struct {
 func c4Fixture(t *testing.T, fencedBodies []string,
 	plan func(i int, r *c4Run) map[string]interface{}) *c4Run {
 	t.Helper()
-	r := &c4Run{dir: t.TempDir(), census: map[string]int{}, terminal: map[string]string{}}
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case strings.HasPrefix(req.URL.Path, "/v3/"), strings.HasPrefix(req.URL.Path, "/internal/"):
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		case strings.HasSuffix(req.URL.Path, "/syntax-check"):
-			var in struct{ Code string }
-			json.NewDecoder(req.Body).Decode(&in)
-			d := c4Syntax(in.Code)
-			mu.Lock()
-			r.checks = append(r.checks, syntaxCheck{
-				Hash: hashBytes([]byte(in.Code))[:12], Valid: d == "", Detail: d})
-			mu.Unlock()
-			if d != "" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"valid": false, "errors": []string{d}})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
-			return
-		case strings.HasSuffix(req.URL.Path, "/execute"):
-			var in struct{ Code string }
-			json.NewDecoder(req.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(r.dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": string(b), "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true, "stdout": "", "exit_code": 0})
-			return
-		case !strings.HasSuffix(req.URL.Path, "/v1/chat/completions"):
-			http.NotFound(w, req)
-			return
-		}
-		raw, _ := io.ReadAll(req.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		if strings.Contains(string(raw), "single fenced block") {
-			mu.Lock()
-			n := r.fetches
-			r.fetches++
-			mu.Unlock()
-			body := "no block"
-			if n < len(fencedBodies) {
-				body = "```python\n" + fencedBodies[n] + "```"
-			}
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{{"delta": map[string]string{"content": body}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-			return
-		}
-		mu.Lock()
-		i := r.turns
-		r.turns++
-		mu.Unlock()
-		if i >= 30 {
-			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
-			return
-		}
-		mu.Lock()
-		call, _ := json.Marshal(plan(i, r))
-		mu.Unlock()
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-	}))
+	r := &c4Run{dir: t.TempDir(), census: map[string]int{}, terminal: map[string]string{},
+		fencedBodies: fencedBodies, plan: plan}
+	srv := httptest.NewServer(http.HandlerFunc(r.serve))
 	t.Cleanup(srv.Close)
 
 	r.ctx = NewAgentContext(r.dir, Tier2Medium)
@@ -151,49 +91,125 @@ func c4Fixture(t *testing.T, fencedBodies []string,
 	r.ctx.TrustMode = trustFullyTrusted
 	r.ctx.VerifyOnHost = true
 	r.ctx.MaxTurns = 0
-	r.ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		mu.Lock()
-		defer mu.Unlock()
-		r.census[et]++
-		switch et {
-		case "tool_result":
-			var ok struct {
-				Success bool
-				Tool    string
-			}
-			if json.Unmarshal(b, &ok) == nil && ok.Success && ok.Tool == "write_file" {
-				r.writes++
-			}
-			var tr struct{ Error string }
-			if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, c4Marker) {
-				r.recoveries = append(r.recoveries, tr.Error)
-			}
-			// Only a real syntax-gate evaluation counts. The resend ban
-			// quotes the original refusal back, so it carries the same
-			// phrase without any proposal having been looked at.
-			if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, "it was NOT written") &&
-				!strings.Contains(tr.Error, "byte for byte") &&
-				!strings.Contains(tr.Error, "no longer available") {
-				r.refusals = append(r.refusals, tr.Error)
-			}
-		case "gate":
-			var g struct{ Gate, Reason string }
-			if json.Unmarshal(b, &g) == nil {
-				r.gates = append(r.gates, g.Gate+": "+g.Reason)
-			}
-		case "done":
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				r.terminal[k] = v
-			}
-		case "tool_call":
-			r.calls = append(r.calls, string(b))
-		}
-	}
+	r.ctx.StreamFn = r.record
 	runAgentLoop(r.ctx, "Write solve.py so it prints 7, then run it.")
 	return r
+}
+
+// serve is the stub server of c4Fixture: V3 and internal services are down,
+// the syntax check is a real Python parse, the sandbox runs nothing, the
+// @fenced sub-call returns the next of fencedBodies, and every other model
+// turn is the next call of the scripted plan.
+func (r *c4Run) serve(w http.ResponseWriter, req *http.Request) {
+	switch {
+	case strings.HasPrefix(req.URL.Path, "/v3/"), strings.HasPrefix(req.URL.Path, "/internal/"):
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	case strings.HasSuffix(req.URL.Path, "/syntax-check"):
+		var in struct{ Code string }
+		json.NewDecoder(req.Body).Decode(&in)
+		d := c4Syntax(in.Code)
+		r.mu.Lock()
+		r.checks = append(r.checks, syntaxCheck{
+			Hash: hashBytes([]byte(in.Code))[:12], Valid: d == "", Detail: d})
+		r.mu.Unlock()
+		if d != "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": false, "errors": []string{d}})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+		return
+	case strings.HasSuffix(req.URL.Path, "/execute"):
+		var in struct{ Code string }
+		json.NewDecoder(req.Body).Decode(&in)
+		if strings.Contains(in.Code, ".atlas-mount-probe") {
+			b, _ := os.ReadFile(filepath.Join(r.dir, ".atlas-mount-probe"))
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": string(b), "exit_code": 0})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true, "stdout": "", "exit_code": 0})
+		return
+	case !strings.HasSuffix(req.URL.Path, "/v1/chat/completions"):
+		http.NotFound(w, req)
+		return
+	}
+	raw, _ := io.ReadAll(req.Body)
+	w.Header().Set("Content-Type", "text/event-stream")
+	if strings.Contains(string(raw), "single fenced block") {
+		r.mu.Lock()
+		n := r.fetches
+		r.fetches++
+		r.mu.Unlock()
+		body := "no block"
+		if n < len(r.fencedBodies) {
+			body = "```python\n" + r.fencedBodies[n] + "```"
+		}
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": body}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		return
+	}
+	r.mu.Lock()
+	i := r.turns
+	r.turns++
+	r.mu.Unlock()
+	if i >= 30 {
+		http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
+		return
+	}
+	r.mu.Lock()
+	call, _ := json.Marshal(r.plan(i, r))
+	r.mu.Unlock()
+	d, _ := json.Marshal(map[string]interface{}{
+		"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+}
+
+// record is the event stream of c4Fixture: it counts events by type and keeps
+// what the tests read from them.
+func (r *c4Run) record(et string, data interface{}) {
+	b, _ := json.Marshal(data)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.census[et]++
+	switch et {
+	case "tool_result":
+		var ok struct {
+			Success bool
+			Tool    string
+		}
+		if json.Unmarshal(b, &ok) == nil && ok.Success && ok.Tool == "write_file" {
+			r.writes++
+		}
+		var tr struct{ Error string }
+		if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, c4Marker) {
+			r.recoveries = append(r.recoveries, tr.Error)
+		}
+		// Only a real syntax-gate evaluation counts. The resend ban
+		// quotes the original refusal back, so it carries the same
+		// phrase without any proposal having been looked at.
+		if json.Unmarshal(b, &tr) == nil && strings.Contains(tr.Error, "it was NOT written") &&
+			!strings.Contains(tr.Error, "byte for byte") &&
+			!strings.Contains(tr.Error, "no longer available") {
+			r.refusals = append(r.refusals, tr.Error)
+		}
+	case "gate":
+		var g struct{ Gate, Reason string }
+		if json.Unmarshal(b, &g) == nil {
+			r.gates = append(r.gates, g.Gate+": "+g.Reason)
+		}
+	case "done":
+		var m map[string]string
+		json.Unmarshal(b, &m)
+		for k, v := range m {
+			r.terminal[k] = v
+		}
+	case "tool_call":
+		r.calls = append(r.calls, string(b))
+	}
 }
 
 // subject names the bytes a check was about, so a proposal check can be told
@@ -374,80 +390,80 @@ func c4JSON(s string) string {
 }
 
 // The two bounds that must survive the identity change, each owned by a
-// different mechanism.
-func TestInvalidProposalsStayBounded(t *testing.T) {
-	t.Run("identical resolved bytes hit the resend ban", func(t *testing.T) {
-		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
-			if i == 0 {
-				return c4Write("solve.py", c4Valid)
-			}
+// different mechanism: identical resolved bytes hit the resend ban, and
+// endlessly changing invalid proposals hit the failure ceiling.
+func TestIdenticalInvalidProposalsHitTheResendBan(t *testing.T) {
+	r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+		if i == 0 {
+			return c4Write("solve.py", c4Valid)
+		}
+		return c4Write("solve.py", c4BadA)
+	})
+	r.log(t, "A")
+	if r.turns >= 30 {
+		t.Fatalf("%d turns without a terminal", r.turns)
+	}
+	if r.terminal["reason"] != "repeated_refusal" {
+		t.Errorf("reason=%q, want repeated_refusal", r.terminal["reason"])
+	}
+	if len(r.refusals) != 1 {
+		t.Errorf("%d syntax evaluations of one unchanging proposal, want 1", len(r.refusals))
+	}
+	if r.disk(t) != c4Valid {
+		t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
+	}
+}
+
+func TestEverChangingInvalidProposalsHitTheFailureCeiling(t *testing.T) {
+	bad := []string{c4BadA, c4BadB, c4BadC}
+	r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+		if i == 0 {
+			return c4Write("solve.py", c4Valid)
+		}
+		// Never repeats a proposal: a fresh trailing comment each time.
+		return c4Write("solve.py",
+			bad[(i-1)%len(bad)]+fmt.Sprintf("# attempt %d\n", i))
+	})
+	r.log(t, "B2")
+	if r.turns >= 30 {
+		t.Fatalf("%d turns without a terminal", r.turns)
+	}
+	if r.terminal["reason"] != "failure_ceiling" {
+		t.Errorf("reason=%q, want failure_ceiling — the bound for proposals that never repeat",
+			r.terminal["reason"])
+	}
+	if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
+		t.Errorf("a run that never landed a valid replacement reported %q", r.terminal["status"])
+	}
+	if r.disk(t) != c4Valid {
+		t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
+	}
+}
+
+// Neither bound gets in the way of a model that corrects itself.
+func TestAnInvalidThenValidProposalStillCompletes(t *testing.T) {
+	r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
+		switch i {
+		case 0:
+			return c4Write("solve.py", c4Valid)
+		case 1:
 			return c4Write("solve.py", c4BadA)
-		})
-		r.log(t, "A")
-		if r.turns >= 30 {
-			t.Fatalf("%d turns without a terminal", r.turns)
+		case 2:
+			return c4Write("solve.py", c4Fixed)
+		case 3:
+			return map[string]interface{}{"type": "tool_call", "name": "run_command",
+				"args": map[string]string{"command": "python3 solve.py"}}
 		}
-		if r.terminal["reason"] != "repeated_refusal" {
-			t.Errorf("reason=%q, want repeated_refusal", r.terminal["reason"])
-		}
-		if len(r.refusals) != 1 {
-			t.Errorf("%d syntax evaluations of one unchanging proposal, want 1", len(r.refusals))
-		}
-		if r.disk(t) != c4Valid {
-			t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
-		}
+		return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
 	})
-
-	t.Run("endlessly changing invalid proposals hit the failure ceiling", func(t *testing.T) {
-		bad := []string{c4BadA, c4BadB, c4BadC}
-		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
-			if i == 0 {
-				return c4Write("solve.py", c4Valid)
-			}
-			// Never repeats a proposal: a fresh trailing comment each time.
-			return c4Write("solve.py",
-				bad[(i-1)%len(bad)]+fmt.Sprintf("# attempt %d\n", i))
-		})
-		r.log(t, "B2")
-		if r.turns >= 30 {
-			t.Fatalf("%d turns without a terminal", r.turns)
-		}
-		if r.terminal["reason"] != "failure_ceiling" {
-			t.Errorf("reason=%q, want failure_ceiling — the bound for proposals that never repeat",
-				r.terminal["reason"])
-		}
-		if NormalizeTerminalStatus(r.terminal["status"]).Completed() {
-			t.Errorf("a run that never landed a valid replacement reported %q", r.terminal["status"])
-		}
-		if r.disk(t) != c4Valid {
-			t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
-		}
-	})
-
-	t.Run("invalid then valid still completes without ceremony", func(t *testing.T) {
-		r := c4Fixture(t, nil, func(i int, _ *c4Run) map[string]interface{} {
-			switch i {
-			case 0:
-				return c4Write("solve.py", c4Valid)
-			case 1:
-				return c4Write("solve.py", c4BadA)
-			case 2:
-				return c4Write("solve.py", c4Fixed)
-			case 3:
-				return map[string]interface{}{"type": "tool_call", "name": "run_command",
-					"args": map[string]string{"command": "python3 solve.py"}}
-			}
-			return map[string]interface{}{"type": "done", "summary": "solve.py prints 7"}
-		})
-		r.log(t, "C")
-		if r.terminal["status"] != string(TerminalCompleted) {
-			t.Errorf("terminal %q/%q, want completed",
-				r.terminal["status"], r.terminal["reason"])
-		}
-		if r.disk(t) != c4Fixed {
-			t.Errorf("the correction did not land: %q", r.disk(t))
-		}
-	})
+	r.log(t, "C")
+	if r.terminal["status"] != string(TerminalCompleted) {
+		t.Errorf("terminal %q/%q, want completed",
+			r.terminal["status"], r.terminal["reason"])
+	}
+	if r.disk(t) != c4Fixed {
+		t.Errorf("the correction did not land: %q", r.disk(t))
+	}
 }
 
 // --- Recovery for refused replacements of known-good bytes ------------------
@@ -484,14 +500,20 @@ func c4RecoveryPlan(readsRecovery bool, bodies []string) func(int, *c4Run) map[s
 	}
 }
 
+// c4RefusedReplacements are the two ways the scripted model of
+// c4RecoveryPlan keeps sending a replacement that the syntax gate refuses.
+var c4RefusedReplacements = []struct {
+	name   string
+	bodies []string
+}{
+	{"the same invalid proposal, repeated", []string{c4BadA}},
+	{"two distinct invalid proposals", []string{c4BadA, c4BadB}},
+}
+
+// The recovery is offered once, quotes the diagnostic of the proposal that
+// triggered it, and the model that reads it completes the run.
 func TestRefusedReplacementRecovery(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		bodies []string
-	}{
-		{"the same invalid proposal, repeated", []string{c4BadA}},
-		{"two distinct invalid proposals", []string{c4BadA, c4BadB}},
-	} {
+	for _, c := range c4RefusedReplacements {
 		t.Run(c.name, func(t *testing.T) {
 			r := c4Fixture(t, nil, c4RecoveryPlan(true, c.bodies))
 			r.log(t, c.name)
@@ -499,11 +521,29 @@ func TestRefusedReplacementRecovery(t *testing.T) {
 			if n := len(r.recoveries); n != 1 {
 				t.Fatalf("%d recoveries, want exactly one", n)
 			}
+			// The recovery quotes the diagnostic for the bytes just refused.
+			last := c4Syntax(c.bodies[len(c.bodies)-1])
+			if !strings.Contains(r.recoveries[0], last) {
+				t.Errorf("the recovery does not carry the diagnostic for the "+
+					"proposal that triggered it (want %q):\n%.400s", last, r.recoveries[0])
+			}
 			if r.terminal["status"] != string(TerminalCompleted) ||
 				r.terminal["reason"] != "deliverables_demonstrated" {
 				t.Fatalf("terminal %q/%q, want completed/deliverables_demonstrated",
 					r.terminal["status"], r.terminal["reason"])
 			}
+		})
+	}
+}
+
+// The correction the model sends after the recovery lands, and the ledger
+// holds a current syntax pass for exactly those bytes.
+func TestRefusedReplacementCorrectionLandsValidated(t *testing.T) {
+	for _, c := range c4RefusedReplacements {
+		t.Run(c.name, func(t *testing.T) {
+			r := c4Fixture(t, nil, c4RecoveryPlan(true, c.bodies))
+			r.log(t, c.name)
+
 			if r.disk(t) != c4Fixed {
 				t.Errorf("the correction did not land: %q", r.disk(t))
 			}
@@ -515,24 +555,16 @@ func TestRefusedReplacementRecovery(t *testing.T) {
 				kind != ValidationKindSyntax {
 				t.Errorf("validation on the current hash is %s/%s, want syntax/passed", kind, status)
 			}
-			if r.census["done"] != 1 {
-				t.Errorf("%d terminal events", r.census["done"])
-			}
-			if r.census["tool_call"] != r.census["tool_result"] {
-				t.Errorf("call/result balance: %d vs %d",
-					r.census["tool_call"], r.census["tool_result"])
-			}
-			// The recovery quotes the diagnostic for the bytes just refused.
-			last := c4Syntax(c.bodies[len(c.bodies)-1])
-			if !strings.Contains(r.recoveries[0], last) {
-				t.Errorf("the recovery does not carry the diagnostic for the "+
-					"proposal that triggered it (want %q):\n%.400s", last, r.recoveries[0])
-			}
 		})
+	}
+}
 
-		t.Run(c.name+" — without the recovery", func(t *testing.T) {
-			// The same fixture, with a model that never reads the recovery:
-			// it never corrects itself.
+// The same fixture, with a model that never reads the recovery: it never
+// corrects itself, so the run ends without a completion and the known-good
+// bytes stay.
+func TestRefusedReplacementWithoutTheRecoveryNeverCompletes(t *testing.T) {
+	for _, c := range c4RefusedReplacements {
+		t.Run(c.name, func(t *testing.T) {
 			r := c4Fixture(t, nil, c4RecoveryPlan(false, c.bodies))
 			r.log(t, c.name+"/ignored")
 			if r.turns >= 30 {
@@ -545,14 +577,26 @@ func TestRefusedReplacementRecovery(t *testing.T) {
 			if r.disk(t) != c4Valid {
 				t.Errorf("the known-good bytes did not survive: %q", r.disk(t))
 			}
-			if r.census["done"] != 1 {
-				t.Errorf("%d terminal events", r.census["done"])
-			}
-			if r.census["tool_call"] != r.census["tool_result"] {
-				t.Errorf("call/result balance: %d vs %d",
-					r.census["tool_call"], r.census["tool_result"])
-			}
 		})
+	}
+}
+
+// Whether the model reads the recovery or not, the run ends with one terminal
+// event, and every call has its result.
+func TestRefusedReplacementRunEndsOnceWithEveryCallAnswered(t *testing.T) {
+	for _, c := range c4RefusedReplacements {
+		for _, readsRecovery := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, readsRecovery=%v", c.name, readsRecovery), func(t *testing.T) {
+				r := c4Fixture(t, nil, c4RecoveryPlan(readsRecovery, c.bodies))
+				if r.census["done"] != 1 {
+					t.Errorf("%d terminal events", r.census["done"])
+				}
+				if r.census["tool_call"] != r.census["tool_result"] {
+					t.Errorf("call/result balance: %d vs %d",
+						r.census["tool_call"], r.census["tool_result"])
+				}
+			})
+		}
 	}
 }
 
@@ -651,169 +695,173 @@ func TestRefusedReplacementEligibility(t *testing.T) {
 	}
 }
 
-// The positive path, and everything the state must and must not do.
+// The write_file arguments of the refused proposals the state tests below
+// record: BadA and BadB for solve.py, and BadA under another spelling of it.
+var (
+	c4BadAArgs      = `{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`
+	c4BadBArgs      = `{"path":"solve.py","content":` + c4JSON(c4BadB) + `}`
+	c4BadAAliasArgs = `{"path":"./solve.py","content":` + c4JSON(c4BadA) + `}`
+)
+
+// The positive path, and what the state must and must not do, one test each.
+func TestRefusedReplacementDiagnosticIsThisProposalsOwn(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	a, ra := c4Refusal(c4BadAArgs)
+	noteRejectedProposal(ctx, st, "write_file", a, ra)
+	b, rb := c4Refusal(c4BadBArgs)
+	rb.ValidationDetail = "unmatched ']' (line 2)"
+	key, shaB, n := noteRejectedProposal(ctx, st, "write_file", b, rb)
+	if n != 2 {
+		t.Fatalf("distinct proposals = %d, want 2", n)
+	}
+	msg := rejectedProposalRecovery(ctx, st, "solve.py", key, shaB)
+	if !strings.Contains(msg, "unmatched ']' (line 2)") {
+		t.Errorf("the recovery does not carry this proposal's diagnostic:\n%s", msg)
+	}
+	if strings.Contains(msg, "invalid syntax (line 3)") {
+		t.Errorf("the recovery carried the OTHER proposal's diagnostic:\n%s", msg)
+	}
+}
+
+func TestRefusedReplacementUnknownProposalHashGetsNoRecovery(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	a, ra := c4Refusal(c4BadAArgs)
+	key, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+	if msg := rejectedProposalRecovery(ctx, st, "solve.py", key,
+		hashBytes([]byte(c4BadC))); msg != "" {
+		t.Errorf("bytes that were never refused drew a recovery:\n%.150s", msg)
+	}
+}
+
+func TestRefusedReplacementAliasesShareOneGenerationAndOneRecovery(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	a, ra := c4Refusal(c4BadAArgs)
+	k1, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+	al, ral := c4Refusal(c4BadAAliasArgs)
+	k2, sha, n := noteRejectedProposal(ctx, st, "write_file", al, ral)
+	if k1 != k2 {
+		t.Errorf("alias spellings built separate generations:\n%q\n%q", k1, k2)
+	}
+	if n != 1 {
+		t.Errorf("the same bytes under another spelling counted as a new proposal (n=%d)", n)
+	}
+	if rejectedProposalRecovery(ctx, st, "solve.py", k2, sha) == "" {
+		t.Fatal("no recovery offered")
+	}
+	if again := rejectedProposalRecovery(ctx, st, "./solve.py", k2, sha); again != "" {
+		t.Errorf("the alias bought a second recovery: got %v", again)
+	}
+}
+
+func TestRefusedReplacementNewSurvivingBytesAreANewGeneration(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	a, ra := c4Refusal(c4BadAArgs)
+	k1, shaA, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+	if rejectedProposalRecovery(ctx, st, "solve.py", k1, shaA) == "" {
+		t.Fatal("no recovery offered")
+	}
+	// The model lands something else valid, and a different proposal is
+	// refused against the new bytes.
+	os.WriteFile(filepath.Join(ctx.WorkingDir, "solve.py"), []byte(c4Fixed), 0o644)
+	h := hashBytes([]byte(c4Fixed))
+	d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+	d.CurrentHash, d.ValidatedHash = h, h
+	b, rb := c4Refusal(c4BadBArgs)
+	k2, shaB, n := noteRejectedProposal(ctx, st, "write_file", b, rb)
+	// One entry per path, so the key is stable; the generation inside it
+	// changes. The old hashes and diagnostics go with the bytes they
+	// described.
+	if k2 != k1 {
+		t.Fatalf("the path's entry moved: %q -> %q", k1, k2)
+	}
+	ev := st.c4Rejected[k2]
+	if ev == nil || ev.diskHash != h {
+		t.Fatal("the entry still describes the previous surviving bytes")
+	}
+	if n != 1 || len(ev.order) != 1 {
+		t.Errorf("the new generation started at %d proposals, want 1", n)
+	}
+	if _, stale := ev.diagnostics[shaA]; stale {
+		t.Error("a diagnostic from the previous generation survived")
+	}
+	if rejectedProposalRecovery(ctx, st, "solve.py", k2, shaB) == "" {
+		t.Error("the new generation was denied its own recovery")
+	}
+}
+
+func TestRefusedReplacementSeparatePathsAreIndependent(t *testing.T) {
+	ctx, st, _ := c4State(t, nil)
+	other := filepath.Join(ctx.WorkingDir, "helper.py")
+	os.WriteFile(other, []byte(c4Valid), 0o644)
+	h := hashBytes([]byte(c4Valid))
+	ctx.Ledger[ledgerKey(ctx, "helper.py")] = &DeliverableState{
+		Path: "helper.py", CurrentHash: h, Generation: 1,
+		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidatedHash: h,
+	}
+	a, ra := c4Refusal(c4BadAArgs)
+	k1, sha1, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+	rejectedProposalRecovery(ctx, st, "solve.py", k1, sha1)
+
+	o, ro := c4Refusal(`{"path":"helper.py","content":` + c4JSON(c4BadA) + `}`)
+	k2, sha2, n := noteRejectedProposal(ctx, st, "write_file", o, ro)
+	if k1 == k2 || n != 1 {
+		t.Errorf("helper.py inherited solve.py's generation (n=%d)", n)
+	}
+	if rejectedProposalRecovery(ctx, st, "helper.py", k2, sha2) == "" {
+		t.Error("solve.py's recovery spent helper.py's")
+	}
+}
+
+func TestRefusedReplacementRunThatIsEndingOrOutOfBudgetRecoversNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*AgentContext)
+	}{
+		{"cancelled", func(ctx *AgentContext) {
+			c, cancel := context.WithCancel(context.Background())
+			cancel()
+			ctx.Ctx = c
+		}},
+		{"under the recovery floor", func(ctx *AgentContext) {
+			c, cancel := context.WithDeadline(context.Background(),
+				time.Now().Add(5*time.Second))
+			t.Cleanup(cancel)
+			ctx.Ctx = c
+		}},
+	} {
+		ctx, st, _ := c4State(t, nil)
+		a, ra := c4Refusal(c4BadAArgs)
+		key, sha, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
+		tc.set(ctx)
+		if msg := rejectedProposalRecovery(ctx, st, "solve.py", key, sha); msg != "" {
+			t.Errorf("%s: recovered anyway: %.100s", tc.name, msg)
+		}
+	}
+}
+
+// The state is bounded: past maxC4Proposals refused proposals for one path,
+// it holds no more than the bound, and every retained one keeps its diagnostic.
 func TestRefusedReplacementStateBounds(t *testing.T) {
-	badA := `{"path":"solve.py","content":` + c4JSON(c4BadA) + `}`
-	badB := `{"path":"solve.py","content":` + c4JSON(c4BadB) + `}`
-	aliasA := `{"path":"./solve.py","content":` + c4JSON(c4BadA) + `}`
-
-	t.Run("a diagnostic never describes a different proposal", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		a, ra := c4Refusal(badA)
+	ctx, st, _ := c4State(t, nil)
+	for i := 0; i < maxC4Proposals+4; i++ {
+		body := c4BadA + fmt.Sprintf("# %d\n", i)
+		a, ra := c4Refusal(`{"path":"solve.py","content":` + c4JSON(body) + `}`)
 		noteRejectedProposal(ctx, st, "write_file", a, ra)
-		b, rb := c4Refusal(badB)
-		rb.ValidationDetail = "unmatched ']' (line 2)"
-		key, shaB, n := noteRejectedProposal(ctx, st, "write_file", b, rb)
-		if n != 2 {
-			t.Fatalf("distinct proposals = %d, want 2", n)
+	}
+	ev := st.c4Rejected[ledgerKey(ctx, "solve.py")]
+	if ev == nil {
+		t.Fatal("nothing was recorded")
+	}
+	if len(ev.order) > maxC4Proposals {
+		t.Errorf("proposal list is unbounded: %d", len(ev.order))
+	}
+	// Every retained hash still has its own diagnostic.
+	for _, h := range ev.order {
+		if ev.diagnostics[h] == "" {
+			t.Errorf("proposal %.12s is retained without its diagnostic", h)
 		}
-		msg := rejectedProposalRecovery(ctx, st, "solve.py", key, shaB)
-		if !strings.Contains(msg, "unmatched ']' (line 2)") {
-			t.Errorf("the recovery does not carry this proposal's diagnostic:\n%s", msg)
-		}
-		if strings.Contains(msg, "invalid syntax (line 3)") {
-			t.Errorf("the recovery carried the OTHER proposal's diagnostic:\n%s", msg)
-		}
-	})
-
-	t.Run("an unknown proposal hash gets no diagnostic and no recovery", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		a, ra := c4Refusal(badA)
-		key, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
-		if msg := rejectedProposalRecovery(ctx, st, "solve.py", key,
-			hashBytes([]byte(c4BadC))); msg != "" {
-			t.Errorf("bytes that were never refused drew a recovery:\n%.150s", msg)
-		}
-	})
-
-	t.Run("aliases share one generation and one recovery", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		a, ra := c4Refusal(badA)
-		k1, _, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
-		al, ral := c4Refusal(aliasA)
-		k2, sha, n := noteRejectedProposal(ctx, st, "write_file", al, ral)
-		if k1 != k2 {
-			t.Errorf("alias spellings built separate generations:\n%q\n%q", k1, k2)
-		}
-		if n != 1 {
-			t.Errorf("the same bytes under another spelling counted as a new proposal (n=%d)", n)
-		}
-		if rejectedProposalRecovery(ctx, st, "solve.py", k2, sha) == "" {
-			t.Fatal("no recovery offered")
-		}
-		if again := rejectedProposalRecovery(ctx, st, "./solve.py", k2, sha); again != "" {
-			t.Errorf("the alias bought a second recovery: got %v", again)
-		}
-	})
-
-	t.Run("new surviving bytes are a new generation", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		a, ra := c4Refusal(badA)
-		k1, shaA, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
-		if rejectedProposalRecovery(ctx, st, "solve.py", k1, shaA) == "" {
-			t.Fatal("no recovery offered")
-		}
-		// The model lands something else valid, and a different proposal is
-		// refused against the new bytes.
-		os.WriteFile(filepath.Join(ctx.WorkingDir, "solve.py"), []byte(c4Fixed), 0o644)
-		h := hashBytes([]byte(c4Fixed))
-		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-		d.CurrentHash, d.ValidatedHash = h, h
-		b, rb := c4Refusal(badB)
-		k2, shaB, n := noteRejectedProposal(ctx, st, "write_file", b, rb)
-		// One entry per path, so the key is stable; the generation inside it
-		// changes. The old hashes and diagnostics go with the bytes they
-		// described.
-		if k2 != k1 {
-			t.Fatalf("the path's entry moved: %q -> %q", k1, k2)
-		}
-		ev := st.c4Rejected[k2]
-		if ev == nil || ev.diskHash != h {
-			t.Fatal("the entry still describes the previous surviving bytes")
-		}
-		if n != 1 || len(ev.order) != 1 {
-			t.Errorf("the new generation started at %d proposals, want 1", n)
-		}
-		if _, stale := ev.diagnostics[shaA]; stale {
-			t.Error("a diagnostic from the previous generation survived")
-		}
-		if rejectedProposalRecovery(ctx, st, "solve.py", k2, shaB) == "" {
-			t.Error("the new generation was denied its own recovery")
-		}
-	})
-
-	t.Run("separate paths are independent", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		other := filepath.Join(ctx.WorkingDir, "helper.py")
-		os.WriteFile(other, []byte(c4Valid), 0o644)
-		h := hashBytes([]byte(c4Valid))
-		ctx.Ledger[ledgerKey(ctx, "helper.py")] = &DeliverableState{
-			Path: "helper.py", CurrentHash: h, Generation: 1,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
-			ValidatedHash: h,
-		}
-		a, ra := c4Refusal(badA)
-		k1, sha1, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
-		rejectedProposalRecovery(ctx, st, "solve.py", k1, sha1)
-
-		o, ro := c4Refusal(`{"path":"helper.py","content":` + c4JSON(c4BadA) + `}`)
-		k2, sha2, n := noteRejectedProposal(ctx, st, "write_file", o, ro)
-		if k1 == k2 || n != 1 {
-			t.Errorf("helper.py inherited solve.py's generation (n=%d)", n)
-		}
-		if rejectedProposalRecovery(ctx, st, "helper.py", k2, sha2) == "" {
-			t.Error("solve.py's recovery spent helper.py's")
-		}
-	})
-
-	t.Run("a run that is ending or out of budget recovers nothing", func(t *testing.T) {
-		for _, tc := range []struct {
-			name string
-			set  func(*AgentContext)
-		}{
-			{"cancelled", func(ctx *AgentContext) {
-				c, cancel := context.WithCancel(context.Background())
-				cancel()
-				ctx.Ctx = c
-			}},
-			{"under the recovery floor", func(ctx *AgentContext) {
-				c, cancel := context.WithDeadline(context.Background(),
-					time.Now().Add(5*time.Second))
-				t.Cleanup(cancel)
-				ctx.Ctx = c
-			}},
-		} {
-			ctx, st, _ := c4State(t, nil)
-			a, ra := c4Refusal(badA)
-			key, sha, _ := noteRejectedProposal(ctx, st, "write_file", a, ra)
-			tc.set(ctx)
-			if msg := rejectedProposalRecovery(ctx, st, "solve.py", key, sha); msg != "" {
-				t.Errorf("%s: recovered anyway: %.100s", tc.name, msg)
-			}
-		}
-	})
-
-	t.Run("the state is bounded", func(t *testing.T) {
-		ctx, st, _ := c4State(t, nil)
-		for i := 0; i < maxC4Proposals+4; i++ {
-			body := c4BadA + fmt.Sprintf("# %d\n", i)
-			a, ra := c4Refusal(`{"path":"solve.py","content":` + c4JSON(body) + `}`)
-			noteRejectedProposal(ctx, st, "write_file", a, ra)
-		}
-		ev := st.c4Rejected[ledgerKey(ctx, "solve.py")]
-		if ev == nil {
-			t.Fatal("nothing was recorded")
-		}
-		if len(ev.order) > maxC4Proposals {
-			t.Errorf("proposal list is unbounded: %d", len(ev.order))
-		}
-		// Every retained hash still has its own diagnostic.
-		for _, h := range ev.order {
-			if ev.diagnostics[h] == "" {
-				t.Errorf("proposal %.12s is retained without its diagnostic", h)
-			}
-		}
-	})
+	}
 }
 
 // A path that lands new bytes again and again starts a new generation each
