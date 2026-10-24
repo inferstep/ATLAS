@@ -1,0 +1,262 @@
+package main
+
+import (
+	"encoding/json"
+	"slices"
+	"testing"
+)
+
+// The planner is prompted to name tools verbatim, so a freeform action
+// ("verify with curl") counts as off-plan.
+func TestActionMatchesTool(t *testing.T) {
+	for _, c := range []struct {
+		action, tool string
+		want         bool
+	}{
+		{"read_file", "read_file", true},
+		{"read", "read_file", true},
+		{"write_file", "write_file", true},
+		{"edit", "edit_file", true},
+		{"run_command", "run_command", true},
+		{"run", "run_command", true},
+		// The edit tools are one family: an edit_file step is satisfied by
+		// whichever of them made the edit.
+		{"edit_file", "insert_after", true},
+		{"edit_file", "structural_edit", true},
+		{"edit_file", "replace_lines", true},
+		{"investigate the bug", "read_file", false},
+		{"verify with curl", "run_command", false},
+		// Replacing a whole file is a different act from editing one.
+		{"write_file", "edit_file", false},
+		{"", "read_file", false},
+		{"read", "", false},
+	} {
+		t.Run(c.action+" by "+c.tool, func(t *testing.T) {
+			if got := actionMatchesTool(c.action, c.tool); got != c.want {
+				t.Errorf("actionMatchesTool(%q, %q) = %v, want %v", c.action, c.tool, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTargetsOverlap(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"app.py", "app.py", true},
+		{"app.py", "/workspace/app.py", true},
+		{"templates/index.html", "/workspace/templates/index.html", true},
+		{"./app.py", "app.py", true},
+		{"app.py", "tests/app.py", true},
+		// A path matches at a component boundary only.
+		{"app.py", "tests/test_app.py", false},
+		{"app.py", "src/main.go", false},
+		{"curl http://localhost:5000/", "curl http://localhost:5000/hello", true},
+		{"", "app.py", false},
+	} {
+		t.Run(c.a+" and "+c.b, func(t *testing.T) {
+			if got := targetsOverlap(c.a, c.b); got != c.want {
+				t.Errorf("targetsOverlap(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}
+
+func TestExtractToolTarget(t *testing.T) {
+	for _, c := range []struct {
+		tool, args, want string
+	}{
+		{"read_file", `{"path": "app.py"}`, "app.py"},
+		{"write_file", `{"path": "x.py", "content": "..."}`, "x.py"},
+		{"edit_file", `{"path": "y.py", "old_str": "a", "new_str": "b"}`, "y.py"},
+		{"structural_edit", `{"path": "y.py", "selector": "function:f", "content": "def f(): pass"}`, "y.py"},
+		{"insert_after", `{"path": "y.py", "line": 3, "content": "x = 1"}`, "y.py"},
+		{"replace_lines", `{"path": "y.py", "start_line": 1, "end_line": 2, "content": "x = 1"}`, "y.py"},
+		{"run_command", `{"command": "pytest tests/"}`, "pytest tests/"},
+		{"list_directory", `{"path": "src"}`, "src"},
+		{"plan_revise", `{"reason": "x"}`, ""}, // no target of its own
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			if got := extractToolTarget(c.tool, json.RawMessage(c.args)); got != c.want {
+				t.Errorf("extractToolTarget(%s, %s) = %q, want %q", c.tool, c.args, got, c.want)
+			}
+		})
+	}
+}
+
+// A call satisfies the first unsatisfied step whose action matches the tool
+// and whose target, when both have one, is the call's.
+func TestMatchPlanStep(t *testing.T) {
+	if got := matchPlanStep(nil, nil, "read_file", nil); got != -1 {
+		t.Errorf("with no plan: matched step %d, want -1", got)
+	}
+	plan := &Plan{Steps: []PlanStep{
+		{ID: "s1", Action: "read_file", Target: "templates/index.html"},
+		{ID: "s2", Action: "edit_file", Target: "templates/index.html"},
+		{ID: "s3", Action: "run_command", Target: "curl http://localhost:5000/"},
+	}}
+	for _, c := range []struct {
+		name       string
+		satisfied  []bool
+		tool, args string
+		want       int
+	}{
+		{"a read of the step's file by its full path", []bool{false, false, false},
+			"read_file", `{"path": "/workspace/templates/index.html"}`, 0},
+		{"a step already satisfied is not matched again", []bool{true, false, false},
+			"read_file", `{"path": "/workspace/templates/index.html"}`, -1},
+		{"an edit", []bool{true, false, false},
+			"edit_file", `{"path": "templates/index.html"}`, 1},
+		{"an edit by another edit tool", []bool{true, false, false},
+			"insert_after", `{"path": "templates/index.html"}`, 1},
+		{"an edit of another file", []bool{true, false, false},
+			"insert_after", `{"path": "templates/other.html"}`, -1},
+		{"a whole-file write is not an edit", []bool{true, false, false},
+			"write_file", `{"path": "templates/index.html", "content": "x"}`, -1},
+		{"the step's command, past an unsatisfied step it does not match", []bool{true, false, false},
+			"run_command", `{"command": "curl http://localhost:5000/"}`, 2},
+		{"a tool no step names", []bool{false, false, false},
+			"list_directory", `{"path": "."}`, -1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := matchPlanStep(plan, c.satisfied, c.tool, json.RawMessage(c.args)); got != c.want {
+				t.Errorf("%s %s matched step %d, want %d", c.tool, c.args, got, c.want)
+			}
+		})
+	}
+}
+
+// Satisfied steps and the off-plan streak, call by call. Exploration neither
+// satisfies a step nor counts as off-plan; the streak asks for a revision at
+// planAutoReviseThreshold (5) calls, and no longer once the revisions are used up.
+func TestRecordPlanAdherence(t *testing.T) {
+	ctx := &AgentContext{}
+	if recordPlanAdherence(ctx, "read_file", nil, true) {
+		t.Fatal("with no plan, a call asked for a revision")
+	}
+	if ctx.PlanStepsSatisfied != nil {
+		t.Fatal("with no plan, satisfied steps were allocated")
+	}
+
+	ctx.Plan = &Plan{VerifyStep: "s2", Steps: []PlanStep{
+		{ID: "s1", Action: "read_file", Target: "app.py"},
+		{ID: "s2", Action: "run_command", Target: "pytest"},
+	}}
+	for _, call := range []struct {
+		why        string
+		tool, args string
+		success    bool
+		wantRevise bool
+		wantStreak int
+		satisfied  []bool
+	}{
+		{"an on-plan read satisfies s1", "read_file", `{"path": "app.py"}`, true, false, 0, []bool{true, false}},
+		{"exploration is neutral", "list_directory", `{"path": "."}`, true, false, 0, []bool{true, false}},
+		{"a failed run of the verify step satisfies nothing and is off-plan", "run_command", `{"command": "pytest"}`, false, false, 1, []bool{true, false}},
+		{"off-plan 2", "run_command", `{"command": "echo a"}`, true, false, 2, []bool{true, false}},
+		{"off-plan 3", "run_command", `{"command": "echo b"}`, true, false, 3, []bool{true, false}},
+		{"off-plan 4", "run_command", `{"command": "echo c"}`, true, false, 4, []bool{true, false}},
+		{"off-plan 5 asks for a revision", "run_command", `{"command": "echo d"}`, true, true, 5, []bool{true, false}},
+	} {
+		revise := recordPlanAdherence(ctx, call.tool, json.RawMessage(call.args), call.success)
+		if revise != call.wantRevise {
+			t.Errorf("%s: revise %v, want %v", call.why, revise, call.wantRevise)
+		}
+		if ctx.PlanOffStreak != call.wantStreak {
+			t.Errorf("%s: streak %d, want %d", call.why, ctx.PlanOffStreak, call.wantStreak)
+		}
+		if !slices.Equal(ctx.PlanStepsSatisfied, call.satisfied) {
+			t.Errorf("%s: satisfied %v, want %v", call.why, ctx.PlanStepsSatisfied, call.satisfied)
+		}
+	}
+
+	ctx.PlanRevisions = planMaxRevisions
+	if recordPlanAdherence(ctx, "run_command", json.RawMessage(`{"command": "echo e"}`), true) {
+		t.Errorf("past the revision cap a streak of %d still asked for a revision", ctx.PlanOffStreak)
+	}
+}
+
+// revisePlan's guards return before the planner is called and before any
+// plan_revise event: the TUI renders that event, and with no revision behind
+// it the user is shown work that did not happen.
+func TestRevisePlanGuardsEmitNoEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  *AgentContext
+	}{
+		{"nil plan", &AgentContext{Plan: nil}},
+		{"at the revision cap", &AgentContext{
+			Plan:          &Plan{Steps: []PlanStep{{ID: "s1", Action: "read_file", Target: "a.py"}}},
+			PlanRevisions: planMaxRevisions,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []string
+			tc.ctx.StreamFn = func(kind string, _ interface{}) { events = append(events, kind) }
+			revisePlan(tc.ctx, "add a health endpoint", "off-plan thrash")
+			if len(events) != 0 {
+				t.Errorf("guard must return before streaming, got events %v", events)
+			}
+			if tc.ctx.PlanRevisions > planMaxRevisions {
+				t.Errorf("revision counter advanced past the cap: %d", tc.ctx.PlanRevisions)
+			}
+		})
+	}
+}
+
+// A revision with the same steps is not a revision, whatever its rationale
+// says; revisePlan then drops the plan rather than bounce the model on it again.
+func TestSamePlanSteps(t *testing.T) {
+	readThenEdit := func(rationale string) *Plan {
+		return &Plan{Rationale: rationale, Steps: []PlanStep{
+			{ID: "s1", Action: "read_file", Target: "app.py"},
+			{ID: "s2", Action: "structural_edit", Target: "app.py"},
+		}}
+	}
+	for _, c := range []struct {
+		name string
+		a, b *Plan
+		want bool
+	}{
+		{"the same steps", readThenEdit(""), readThenEdit(""), true},
+		{"the same steps, reworded", readThenEdit("fix it"), readThenEdit("repair the thing"), true},
+		{"different actions", readThenEdit(""), &Plan{Steps: []PlanStep{
+			{ID: "s1", Action: "edit_file", Target: "app.py"},
+			{ID: "s2", Action: "run_command", Target: "pytest"},
+		}}, false},
+		{"a different number of steps", readThenEdit(""), &Plan{Steps: []PlanStep{
+			{ID: "s1", Action: "read_file", Target: "app.py"},
+		}}, false},
+		{"no first plan", nil, readThenEdit(""), false},
+		{"no second plan", readThenEdit(""), nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := samePlanSteps(c.a, c.b); got != c.want {
+				t.Errorf("samePlanSteps = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// The verification gate shows this hint when it refuses a `done`. It must name
+// something to run even when the plan does not: an empty hint renders as
+// "run  to prove it".
+func TestPlanVerifyHint(t *testing.T) {
+	generic := "the appropriate test/curl/run command"
+	for _, c := range []struct {
+		name string
+		plan *Plan
+		want string
+	}{
+		{"no plan", nil, generic},
+		{"a plan with no verify step", &Plan{VerifyStep: ""}, generic},
+		{"a verify step", &Plan{VerifyStep: "pytest -q test_app.py"}, "pytest -q test_app.py"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := planVerifyHint(c.plan); got != c.want {
+				t.Errorf("planVerifyHint = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

@@ -114,5 +114,5 @@ Both are paid up front before the agent's first tool call. The investment is rec
 | v3-service plan endpoint | `tests/v3-service/test_plan_scoring.py` (scorer); parser smoke-tested via `curl /v3/plan` | scorer credits a verify step that runs the program, its tests or a probe, and credits neither a static check (build, parse, linter) nor a recon call; parser tolerance (fences, prose preamble, brace-depth nesting) is exercised by the 3-candidate sampler |
 | proxy bridge | `proxy/v3_bridge_test.go` | SSE parse, missing-result error, stage routing |
 | proxy hook | `proxy/agent_test.go` | priority-file pickup, truncation thresholds, fallback walk, tier/length gating |
-| proxy adherence | `proxy/gates_test.go` | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
+| proxy adherence | `proxy/gates_plan_test.go`; `proxy/gates_test.go` for the system prompt | match logic (tool name + path suffix), failed-call exclusion, revision cap, system-prompt rendering |
 | TUI rendering | `tui/plan_test.go` | `planView` state transitions, plan_loaded replacement on revise, off-plan silence |
