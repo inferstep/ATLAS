@@ -1563,6 +1563,10 @@ func TestRunServerStartupFailureReturns(t *testing.T) {
 // A hook that hangs is cut off by its own margin, and a failing hook is
 // reported without hanging the process.
 func TestCloseHooksAreBounded(t *testing.T) {
+	prev := defaultBroker
+	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defer func() { defaultBroker = prev }()
+
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	srv := &http.Server{Handler: http.NewServeMux()}
 	signals := make(chan os.Signal, 1)
