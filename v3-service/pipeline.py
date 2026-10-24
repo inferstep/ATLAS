@@ -1677,6 +1677,171 @@ def _evaluate_probe(ctx, probe, _task):
     return probe_result, None
 
 
+def _allocate(ctx, probe, diagnostic_total_candidates):
+    """Phase 2: k and the thinking tier from the CxGx gate, on the probe's
+    Lens scores and the clock; a diagnostic floor may raise k. Returns
+    (k, budget_tier, bf_tier)."""
+    check_client, emit, llm, start, budget_ms = ctx.check_client, ctx.emit, ctx.llm, ctx.start, ctx.budget_ms
+    probe_energy_norm, probe_cx_calibrated, probe_scores = probe.energy_norm, probe.cx_calibrated, probe.scores
+    # ===== PHASE 2: CxGx K ALLOCATION =====
+    # The probe failed verification, so this task is not trivial: C(x)
+    # picks a base tier, G(x) escalates it, and k never drops below the
+    # gate's k=3 floor (what this phase allocated unconditionally
+    # before the gate existed).
+    #
+    # Live-path difference from the bench the gate was measured on: the
+    # proxy's V3 bridge abandons this call after ATLAS_V3_TIMEOUT
+    # (default 180s), a cap the bench never had. An unbounded escalation
+    # to k=8 here would spend the whole budget on generation and hand
+    # the user a timeout fallback instead of the k=3 answer the clock
+    # could have produced — the failure mode the phase-3 refinement gate
+    # already fixes. So the remaining wall-clock and the per-call
+    # latency observed on THIS task go into the allocation, and the gate
+    # lowers the tier to what the budget can actually generate. The
+    # floor is not budget-dependent: k=3 is what would have run anyway.
+    check_client()
+    emit("phase2", "Allocating compute budget...")
+    alloc = cxgx_gate.allocate(
+        cx_normalized=probe_energy_norm,
+        cx_calibrated=probe_cx_calibrated,
+        gx_score=probe_scores["gx_score"],
+        gx_available=probe_scores["gx_available"],
+        gx_verdict=probe_scores["verdict"],
+        remaining_ms=_remaining_budget_ms(start, budget_ms),
+        observed_llm_call_ms=getattr(llm, "avg_call_ms", 0.0),
+    )
+    k, budget_tier = alloc.k, alloc.tier
+    bf_tier = budget_tier
+    # Diagnostic floor: raises the pool, never lowers it, and leaves the
+    # tier and every budget guard exactly as allocated.
+    if diagnostic_total_candidates and diagnostic_total_candidates > k:
+        emit("diagnostic_allocation",
+             f"k raised {k} -> {diagnostic_total_candidates} for measurement",
+             allocated_k=k, diagnostic_k=diagnostic_total_candidates)
+        k = diagnostic_total_candidates
+    emit("phase2_allocated", f"k={k} tier={budget_tier}",
+         k=k, tier=budget_tier, base_tier=alloc.base_tier,
+         gx_escalation=alloc.gx_escalation,
+         capped_from=alloc.capped_from, reason=alloc.reason)
+    return k, budget_tier, bf_tier
+
+
+@dataclasses.dataclass
+class _RunPool:
+    """The selectable pool of one run from phase one on: the incumbent, when
+    the caller sent one, and the generated candidates, the probe first when
+    it produced code. `probe_code` names candidate zero in the capture."""
+    incumbent: Optional[Dict[str, Any]]
+    candidates: List[Dict[str, Any]]
+    probe_code: str
+
+    def members(self):
+        """The selectable pool: the incumbent, when the caller sent one,
+        and every generated candidate. `candidates` stays the generated
+        ones alone, so `k` counts generations and nothing else."""
+        incumbent, candidates = self.incumbent, self.candidates
+        return ([incumbent] if incumbent else []) + candidates
+
+
+def _out_of_budget(ctx, reserve_ms: Optional[float] = None) -> bool:
+    """True when too little of ATLAS_V3_TIMEOUT is left to start more
+    work and still hand back a result.
+
+    The reserve defaults to the cost of one more LLM call as observed
+    on this run, plus room to serialize the result. A flat reserve is
+    useless here: measured 2026-08-03, a phase-3 entry check with 20s
+    left passed, PR-CoT then spent 31s on one call and the cap landed
+    mid-way through the next. The unit of work is a generation, so
+    that is what has to fit.
+
+    The refinement loop was the only phase that checked at all, and it
+    checked once. Everything ahead of it — probe, self-tests,
+    PlanSearch, sandbox, PR-CoT — ran unguarded.
+    """
+    start, budget_ms, llm = ctx.start, ctx.budget_ms, ctx.llm
+    left = _remaining_budget_ms(start, budget_ms)
+    if left is None:
+        return False
+    if reserve_ms is None:
+        observed = getattr(llm, "avg_call_ms", 0.0) or 0.0
+        reserve_ms = max(20000.0, observed * 1.2 + 10000.0)
+    return left < reserve_ms
+
+
+def _finish_with_best(ctx, run_pool, reason: str) -> Dict[str, Any]:
+    """Hand back the best candidate found so far.
+
+    V3 is an anytime algorithm — the refinement loop is budget-gated,
+    so it expands to fill the budget rather than converging early.
+    Measured 2026-08-03 on one task: a 180s budget produced 9 LLM
+    calls and 5 sandbox verifications, a 420s budget 21 calls and 10.
+    It is not interrupted mid-something-it-would-finish; the clock is
+    its terminal condition.
+
+    An anytime algorithm whose clock expires has to return its best
+    answer. This one returned nothing: the caller's deadline cancelled
+    the request, every verified candidate was discarded, and the write
+    fell back to the model's own output — 16 of 41 write calls in one
+    28-session run, ~48 of the 56 minutes spent in them.
+
+    Vetoed candidates stay excluded for the same reason the end-of-run
+    fallback excludes them: "executes but is wrong" is worse than an
+    honest failure.
+    """
+    emit, capture, result, start, budget_ms, events = (
+        ctx.emit, ctx.capture, ctx.result, ctx.start, ctx.budget_ms, ctx.events)
+    candidates, members, probe_code = run_pool.candidates, run_pool.members, run_pool.probe_code
+    emit("budget_exhausted", reason,
+         candidates=len(candidates),
+         remaining_ms=round(_remaining_budget_ms(start, budget_ms) or 0))
+    pool = [c for c in members() if not c.get("vetoed_by")]
+    passing = _without_retypings([c for c in pool if c.get("passed")], emit)
+    chosen = None
+    if passing:
+        passing.sort(key=energy_rank_key)
+        chosen = passing[0]
+        result["passed"] = True
+        if chosen.get("incumbent"):
+            result["phase_solved"] = "incumbent"
+        else:
+            result["phase_solved"] = "budget"
+    else:
+        # No code rather than an unverified candidate. The caller's
+        # baseline is the model's own write, which is syntax- and
+        # structure-gated; a candidate that failed the sandbox is
+        # not better than that, and ranking the failures by energy
+        # picks among them without evidence.
+        #
+        # Measured across a 28-session run: 7 of 8 returns took the
+        # unverified path and task success fell 20/28 to 17/28 —
+        # aoc_course and aoc_slope went 2/2 to 0/2 — while harness
+        # integrity reached 28/28. The same reasoning the vetoed
+        # path already uses: "executes but is wrong" is worse than
+        # an honest failure.
+        emit("budget_no_verified_candidate",
+             f"{len(pool)} candidate(s), none verified — "
+             f"leaving the caller's gated baseline in place")
+    # A budget boundary can land after Lens scoring but before the
+    # sandbox loop.  Preserve those scored candidates as explicitly
+    # unverified observations so diagnostic capture accounts for
+    # every pre-score tokenization/embedding without changing which
+    # candidate the live pipeline returns.
+    for candidate in pool:
+        _capture_pool_member(capture, candidate, probe_code)
+    capture.note_pool(
+        phase="budget", pool=passing,
+        lens_index=(chosen or {}).get("index"),
+        status="budget_exhausted", reason=reason,
+        ineligible=len(pool) - len(passing))
+    if chosen is not None:
+        result["code"] = chosen["code"]
+        result["verification_evidence"] = chosen.get("verification_evidence", [])
+        result["winning_score"] = chosen.get("energy_norm", 0.0)
+    result["total_time_ms"] = (time.time() - start) * 1000
+    result["events"] = events
+    return result
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2029,149 +2194,12 @@ class V3PipelineService:
         if finished is not None:
             return finished
 
-        # ===== PHASE 2: CxGx K ALLOCATION =====
-        # The probe failed verification, so this task is not trivial: C(x)
-        # picks a base tier, G(x) escalates it, and k never drops below the
-        # gate's k=3 floor (what this phase allocated unconditionally
-        # before the gate existed).
-        #
-        # Live-path difference from the bench the gate was measured on: the
-        # proxy's V3 bridge abandons this call after ATLAS_V3_TIMEOUT
-        # (default 180s), a cap the bench never had. An unbounded escalation
-        # to k=8 here would spend the whole budget on generation and hand
-        # the user a timeout fallback instead of the k=3 answer the clock
-        # could have produced — the failure mode the phase-3 refinement gate
-        # already fixes. So the remaining wall-clock and the per-call
-        # latency observed on THIS task go into the allocation, and the gate
-        # lowers the tier to what the budget can actually generate. The
-        # floor is not budget-dependent: k=3 is what would have run anyway.
-        check_client()
-        emit("phase2", "Allocating compute budget...")
-        alloc = cxgx_gate.allocate(
-            cx_normalized=probe_energy_norm,
-            cx_calibrated=probe_cx_calibrated,
-            gx_score=probe_scores["gx_score"],
-            gx_available=probe_scores["gx_available"],
-            gx_verdict=probe_scores["verdict"],
-            remaining_ms=_remaining_budget_ms(start, budget_ms),
-            observed_llm_call_ms=getattr(llm, "avg_call_ms", 0.0),
-        )
-        k, budget_tier = alloc.k, alloc.tier
-        bf_tier = budget_tier
-        # Diagnostic floor: raises the pool, never lowers it, and leaves the
-        # tier and every budget guard exactly as allocated.
-        if diagnostic_total_candidates and diagnostic_total_candidates > k:
-            emit("diagnostic_allocation",
-                 f"k raised {k} -> {diagnostic_total_candidates} for measurement",
-                 allocated_k=k, diagnostic_k=diagnostic_total_candidates)
-            k = diagnostic_total_candidates
-        emit("phase2_allocated", f"k={k} tier={budget_tier}",
-             k=k, tier=budget_tier, base_tier=alloc.base_tier,
-             gx_escalation=alloc.gx_escalation,
-             capped_from=alloc.capped_from, reason=alloc.reason)
+        k, budget_tier, bf_tier = _allocate(ctx, probe, diagnostic_total_candidates)
 
         # ===== PHASE 1: CONSTRAINT-DIVERSE CANDIDATE GENERATION =====
         emit("phase1", f"Generating {k} diverse candidates...", k=k)
         candidates = []
-
-        def members():
-            """The selectable pool: the incumbent, when the caller sent one,
-            and every generated candidate. `candidates` stays the generated
-            ones alone, so `k` counts generations and nothing else."""
-            return ([incumbent] if incumbent else []) + candidates
-
-        def out_of_budget(reserve_ms: Optional[float] = None) -> bool:
-            """True when too little of ATLAS_V3_TIMEOUT is left to start more
-            work and still hand back a result.
-
-            The reserve defaults to the cost of one more LLM call as observed
-            on this run, plus room to serialize the result. A flat reserve is
-            useless here: measured 2026-08-03, a phase-3 entry check with 20s
-            left passed, PR-CoT then spent 31s on one call and the cap landed
-            mid-way through the next. The unit of work is a generation, so
-            that is what has to fit.
-
-            The refinement loop was the only phase that checked at all, and it
-            checked once. Everything ahead of it — probe, self-tests,
-            PlanSearch, sandbox, PR-CoT — ran unguarded.
-            """
-            left = _remaining_budget_ms(start, budget_ms)
-            if left is None:
-                return False
-            if reserve_ms is None:
-                observed = getattr(llm, "avg_call_ms", 0.0) or 0.0
-                reserve_ms = max(20000.0, observed * 1.2 + 10000.0)
-            return left < reserve_ms
-
-        def finish_with_best(reason: str) -> Dict[str, Any]:
-            """Hand back the best candidate found so far.
-
-            V3 is an anytime algorithm — the refinement loop is budget-gated,
-            so it expands to fill the budget rather than converging early.
-            Measured 2026-08-03 on one task: a 180s budget produced 9 LLM
-            calls and 5 sandbox verifications, a 420s budget 21 calls and 10.
-            It is not interrupted mid-something-it-would-finish; the clock is
-            its terminal condition.
-
-            An anytime algorithm whose clock expires has to return its best
-            answer. This one returned nothing: the caller's deadline cancelled
-            the request, every verified candidate was discarded, and the write
-            fell back to the model's own output — 16 of 41 write calls in one
-            28-session run, ~48 of the 56 minutes spent in them.
-
-            Vetoed candidates stay excluded for the same reason the end-of-run
-            fallback excludes them: "executes but is wrong" is worse than an
-            honest failure.
-            """
-            emit("budget_exhausted", reason,
-                 candidates=len(candidates),
-                 remaining_ms=round(_remaining_budget_ms(start, budget_ms) or 0))
-            pool = [c for c in members() if not c.get("vetoed_by")]
-            passing = _without_retypings([c for c in pool if c.get("passed")], emit)
-            chosen = None
-            if passing:
-                passing.sort(key=energy_rank_key)
-                chosen = passing[0]
-                result["passed"] = True
-                if chosen.get("incumbent"):
-                    result["phase_solved"] = "incumbent"
-                else:
-                    result["phase_solved"] = "budget"
-            else:
-                # No code rather than an unverified candidate. The caller's
-                # baseline is the model's own write, which is syntax- and
-                # structure-gated; a candidate that failed the sandbox is
-                # not better than that, and ranking the failures by energy
-                # picks among them without evidence.
-                #
-                # Measured across a 28-session run: 7 of 8 returns took the
-                # unverified path and task success fell 20/28 to 17/28 —
-                # aoc_course and aoc_slope went 2/2 to 0/2 — while harness
-                # integrity reached 28/28. The same reasoning the vetoed
-                # path already uses: "executes but is wrong" is worse than
-                # an honest failure.
-                emit("budget_no_verified_candidate",
-                     f"{len(pool)} candidate(s), none verified — "
-                     f"leaving the caller's gated baseline in place")
-            # A budget boundary can land after Lens scoring but before the
-            # sandbox loop.  Preserve those scored candidates as explicitly
-            # unverified observations so diagnostic capture accounts for
-            # every pre-score tokenization/embedding without changing which
-            # candidate the live pipeline returns.
-            for candidate in pool:
-                _capture_pool_member(capture, candidate, probe_code)
-            capture.note_pool(
-                phase="budget", pool=passing,
-                lens_index=(chosen or {}).get("index"),
-                status="budget_exhausted", reason=reason,
-                ineligible=len(pool) - len(passing))
-            if chosen is not None:
-                result["code"] = chosen["code"]
-                result["verification_evidence"] = chosen.get("verification_evidence", [])
-                result["winning_score"] = chosen.get("energy_norm", 0.0)
-            result["total_time_ms"] = (time.time() - start) * 1000
-            result["events"] = events
-            return result
+        run_pool = _RunPool(incumbent, candidates, probe_code)
         try:
 
             # Start with probe if it produced code
@@ -2255,7 +2283,7 @@ class V3PipelineService:
                      slots=remaining_k)
                 for idx in range(remaining_k):
                     check_client()
-                    if out_of_budget():
+                    if _out_of_budget(ctx):
                         emit("divsampling_stop",
                              f"budget spent after {len(candidates)} candidate(s)")
                         break
@@ -2298,7 +2326,7 @@ class V3PipelineService:
             # ===== SANDBOX TESTING =====
             # The incumbent is in the pool from here on: tested once already,
             # ranked with the rest.
-            pool_members = members()
+            pool_members = run_pool.members()
             emit("sandbox_test", f"Testing {len(pool_members)} candidates...",
                  candidates=len(pool_members))
             # Sort by energy (easy first) for early-exit potential; an
@@ -2713,8 +2741,8 @@ class V3PipelineService:
 
             # ===== PHASE 3: VERIFIED ITERATIVE REFINEMENT =====
             check_client()
-            if out_of_budget():
-                return finish_with_best("budget spent before the repair phase")
+            if _out_of_budget(ctx):
+                return _finish_with_best(ctx, run_pool, "budget spent before the repair phase")
             # Preserve the existing repair-budget rule: if every candidate
             # failed and the submitted interactive baseline compiles, return
             # to the outer loop with that baseline rather than spending more
@@ -2730,10 +2758,10 @@ class V3PipelineService:
                          "replacement; retaining the baseline under the existing "
                          "repair-budget rule",
                          strategy="repair", task_type=task_type)
-                    return finish_with_best(
-                        "interactive task: baseline meets the compile bar, repair skipped")
+                    return _finish_with_best(
+                        ctx, run_pool, "interactive task: baseline meets the compile bar, repair skipped")
             emit("phase3", "All candidates failed — entering repair phase...",
-                 failing=len([c for c in members() if not c.get("passed")]))
+                 failing=len([c for c in run_pool.members() if not c.get("passed")]))
 
             failing = [
                 FailingCandidate(
@@ -2742,7 +2770,7 @@ class V3PipelineService:
                 )
                 # The incumbent too: the caller's own file is a candidate, and
                 # when it fails, it is the likeliest one to repair.
-                for c in sorted(members(), key=energy_rank_key) if not c.get("passed")
+                for c in sorted(run_pool.members(), key=energy_rank_key) if not c.get("passed")
             ]
 
             # Repair runs the SAME self-tests phase 0 generated —
@@ -2792,8 +2820,8 @@ class V3PipelineService:
                 return (stderr or "") + "\n\n" + chain_context_block
 
             # Strategy 1: PR-CoT Quick Repair
-            if failing and out_of_budget():
-                return finish_with_best("budget spent before PR-CoT repair")
+            if failing and _out_of_budget(ctx):
+                return _finish_with_best(ctx, run_pool, "budget spent before PR-CoT repair")
             if failing:
                 emit("pr_cot", "Attempting PR-CoT repair...",
                      strategy="pr_cot", failing=len(failing))
@@ -2879,7 +2907,7 @@ class V3PipelineService:
                          strategy="refinement",
                          remaining_ms=round(remaining_ms),
                          estimated_iteration_ms=round(est_ms))
-            if run_refinement and out_of_budget():
+            if run_refinement and _out_of_budget(ctx):
                 run_refinement = False
             if run_refinement:
                 check_client()
@@ -2968,12 +2996,12 @@ class V3PipelineService:
             # Same reasoning the vetoed branch below already used, and the
             # same as the budget boundary: "executes but is wrong" is worse
             # than an honest failure.
-            unverified = [c for c in members() if not c.get("vetoed_by")]
+            unverified = [c for c in run_pool.members() if not c.get("vetoed_by")]
             if unverified:
                 emit("fallback_unverified",
                      f"{len(unverified)} candidate(s), none passed verification — "
                      f"leaving the caller's gated baseline in place")
-            elif members():
+            elif run_pool.members():
                 emit("fallback_all_vetoed",
                      "Every candidate was vetoed — returning no code")
             result["total_time_ms"] = (time.time() - start) * 1000
@@ -2985,7 +3013,7 @@ class V3PipelineService:
             # checked at phase boundaries: every phase runs its own loop —
             # PR-CoT alone issues two calls — so a boundary check that
             # reserves one call is already wrong by the second.
-            return finish_with_best(f"budget exhausted mid-pipeline ({exc})")
+            return _finish_with_best(ctx, run_pool, f"budget exhausted mid-pipeline ({exc})")
 
     def _generate_probe(self, ctx):
         """Phase 0's probe candidate: a light thinking budget first, then the
