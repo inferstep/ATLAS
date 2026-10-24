@@ -1864,6 +1864,111 @@ def _seed_with_probe(candidates, probe, probe_result):
         })
 
 
+def _test_pool(ctx, run_pool, verified_sandbox, _task):
+    """Sandbox-test every pool member, easiest first, and give each its
+    contract record. The incumbent and a candidate already verified keep
+    their verdict. Returns (pool_members, passing)."""
+    emit, check_client, capture, file_path = ctx.emit, ctx.check_client, ctx.capture, ctx.file_path
+    candidates, probe_code = run_pool.candidates, run_pool.probe_code
+    # ===== SANDBOX TESTING =====
+    # The incumbent is in the pool from here on: tested once already,
+    # ranked with the rest.
+    pool_members = run_pool.members()
+    emit("sandbox_test", f"Testing {len(pool_members)} candidates...",
+         candidates=len(pool_members))
+    # Sort by energy (easy first) for early-exit potential; an
+    # unscored candidate has no energy and goes last.
+    candidates.sort(key=energy_rank_key)
+    pool_members.sort(key=energy_rank_key)
+
+    passing = []
+    for c in pool_members:
+        check_client()
+        if c.get("incumbent"):
+            # Checked once, above, on its exact bytes; a failure is
+            # final and it enters repair like any failing candidate.
+            _capture_pool_member(capture, c, probe_code)
+            if c.get("passed"):
+                passing.append(c)
+            continue
+        if c.get("passed"):
+            # Cached execution result -- do NOT skip evidence. This
+            # `continue` is exactly how candidate zero escaped the
+            # "one evaluation path": compile smoke set passed=True for
+            # an interactive artifact, so the real Snake candidate
+            # entered the pool with no behavioural evidence at all and
+            # rank_key saw defaults for it.
+            if "contract_record" not in c:
+                c["contract_record"] = _evaluate_candidate(
+                    file_path, c["code"], True, emit, task=_task)
+            _capture_pool_member(capture, c, probe_code)
+            passing.append(c)
+            continue
+        sb_start = time.time()
+        passed, stdout, stderr, verification_evidence = verified_sandbox(c["code"])
+        sb_ms = int((time.time() - sb_start) * 1000)
+        c["passed"] = passed
+        c["stdout"] = stdout
+        c["stderr"] = stderr
+        c["verification_evidence"] = verification_evidence
+        # ONE structured evaluation path: candidate zero and every
+        # generated candidate get the same adapter, the same probe and
+        # the same evidence record. Two sets of verification semantics
+        # is how the boolean survived into the candidate path, letting
+        # ATLAS generate alternatives it could not rank.
+        c["contract_record"] = _evaluate_candidate(
+            file_path, c["code"], passed, emit, task=_task)
+        _capture_pool_member(capture, c, probe_code)
+        if passed:
+            passing.append(c)
+            emit("sandbox_pass", f"Candidate {c['index']} passed",
+                 index=c["index"], elapsed_ms=sb_ms,
+                 energy=c.get("energy_norm", 0.0))
+        else:
+            emit("sandbox_fail", f"Candidate {c['index']} failed",
+                 index=c["index"], elapsed_ms=sb_ms,
+                 stderr=(stderr or "")[:120])
+
+    emit("sandbox_done", f"{len(passing)}/{len(pool_members)} passed",
+         passed=len(passing), total=len(pool_members))
+    return pool_members, passing
+
+
+def _agree_by_consensus(ctx, passing, pool_members, self_tests):
+    """When nothing passed, the candidates that agree on the generated
+    inputs (CodeT) become selectable, marked consensus. Returns passing."""
+    sandbox, emit, task_input_file = ctx.sandbox, ctx.emit, ctx.task_input_file
+    # Nothing passed: every candidate failed to execute (or, outside
+    # Python, its syntax check) or failed the project's build command.
+    # The generated cases decided none of that -- they carry no
+    # rejection authority -- so this runs whenever nothing passed and
+    # a generated suite exists.
+    #
+    # Fall back to the agreement signal CodeT actually uses: run the
+    # candidates on the generated INPUTS and take the largest cluster
+    # that produced the same answers. The generated expected outputs
+    # are not used. Measured across 42 verifications in one run: all
+    # 42 scored 0/N against them, and a candidate pulled from those
+    # logs passed immediately against a correct expected value.
+    #
+    # Agreement is not verification. Winners are marked `consensus`,
+    # never `passed`, and a candidate that failed a project check is
+    # left out: a candidate that failed the project's own build
+    # command is still one that failed it.
+    if not passing and self_tests and self_tests.test_cases:
+        agreed = _consensus_winners(
+            [c for c in pool_members if not _failed_a_project_check(c)],
+            self_tests.test_cases, sandbox, emit, task_input_file)
+        for c in agreed:
+            c["consensus"] = True
+            passing.append(c)
+        if agreed:
+            emit("sandbox_done",
+                 f"0/{len(pool_members)} passed; {len(agreed)} agree, selectable by consensus",
+                 passed=0, agreed=len(agreed), total=len(pool_members))
+    return passing
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2225,96 +2330,8 @@ class V3PipelineService:
             self._generate_by_div_sampling(ctx, candidates, k, bf_tier)
             result["candidates_generated"] = len(candidates)
 
-            # ===== SANDBOX TESTING =====
-            # The incumbent is in the pool from here on: tested once already,
-            # ranked with the rest.
-            pool_members = run_pool.members()
-            emit("sandbox_test", f"Testing {len(pool_members)} candidates...",
-                 candidates=len(pool_members))
-            # Sort by energy (easy first) for early-exit potential; an
-            # unscored candidate has no energy and goes last.
-            candidates.sort(key=energy_rank_key)
-            pool_members.sort(key=energy_rank_key)
-
-            passing = []
-            for c in pool_members:
-                check_client()
-                if c.get("incumbent"):
-                    # Checked once, above, on its exact bytes; a failure is
-                    # final and it enters repair like any failing candidate.
-                    _capture_pool_member(capture, c, probe_code)
-                    if c.get("passed"):
-                        passing.append(c)
-                    continue
-                if c.get("passed"):
-                    # Cached execution result -- do NOT skip evidence. This
-                    # `continue` is exactly how candidate zero escaped the
-                    # "one evaluation path": compile smoke set passed=True for
-                    # an interactive artifact, so the real Snake candidate
-                    # entered the pool with no behavioural evidence at all and
-                    # rank_key saw defaults for it.
-                    if "contract_record" not in c:
-                        c["contract_record"] = _evaluate_candidate(
-                            file_path, c["code"], True, emit, task=_task)
-                    _capture_pool_member(capture, c, probe_code)
-                    passing.append(c)
-                    continue
-                sb_start = time.time()
-                passed, stdout, stderr, verification_evidence = verified_sandbox(c["code"])
-                sb_ms = int((time.time() - sb_start) * 1000)
-                c["passed"] = passed
-                c["stdout"] = stdout
-                c["stderr"] = stderr
-                c["verification_evidence"] = verification_evidence
-                # ONE structured evaluation path: candidate zero and every
-                # generated candidate get the same adapter, the same probe and
-                # the same evidence record. Two sets of verification semantics
-                # is how the boolean survived into the candidate path, letting
-                # ATLAS generate alternatives it could not rank.
-                c["contract_record"] = _evaluate_candidate(
-                    file_path, c["code"], passed, emit, task=_task)
-                _capture_pool_member(capture, c, probe_code)
-                if passed:
-                    passing.append(c)
-                    emit("sandbox_pass", f"Candidate {c['index']} passed",
-                         index=c["index"], elapsed_ms=sb_ms,
-                         energy=c.get("energy_norm", 0.0))
-                else:
-                    emit("sandbox_fail", f"Candidate {c['index']} failed",
-                         index=c["index"], elapsed_ms=sb_ms,
-                         stderr=(stderr or "")[:120])
-
-            emit("sandbox_done", f"{len(passing)}/{len(pool_members)} passed",
-                 passed=len(passing), total=len(pool_members))
-
-            # Nothing passed: every candidate failed to execute (or, outside
-            # Python, its syntax check) or failed the project's build command.
-            # The generated cases decided none of that -- they carry no
-            # rejection authority -- so this runs whenever nothing passed and
-            # a generated suite exists.
-            #
-            # Fall back to the agreement signal CodeT actually uses: run the
-            # candidates on the generated INPUTS and take the largest cluster
-            # that produced the same answers. The generated expected outputs
-            # are not used. Measured across 42 verifications in one run: all
-            # 42 scored 0/N against them, and a candidate pulled from those
-            # logs passed immediately against a correct expected value.
-            #
-            # Agreement is not verification. Winners are marked `consensus`,
-            # never `passed`, and a candidate that failed a project check is
-            # left out: a candidate that failed the project's own build
-            # command is still one that failed it.
-            if not passing and self_tests and self_tests.test_cases:
-                agreed = _consensus_winners(
-                    [c for c in pool_members if not _failed_a_project_check(c)],
-                    self_tests.test_cases, sandbox, emit, task_input_file)
-                for c in agreed:
-                    c["consensus"] = True
-                    passing.append(c)
-                if agreed:
-                    emit("sandbox_done",
-                         f"0/{len(pool_members)} passed; {len(agreed)} agree, selectable by consensus",
-                         passed=0, agreed=len(agreed), total=len(pool_members))
+            pool_members, passing = _test_pool(ctx, run_pool, verified_sandbox, _task)
+            passing = _agree_by_consensus(ctx, passing, pool_members, self_tests)
 
             # ===== LENS VETO =====
             # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
