@@ -117,7 +117,55 @@ func editLoopFixture(t *testing.T, seed map[string]string, contract, prompt stri
 			t.Fatal(err)
 		}
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	srv := httptest.NewServer(editLoopServer(r, plan, opt))
+	t.Cleanup(srv.Close)
+	r.ctx = NewAgentContext(r.dir, Tier2Medium)
+	r.ctx.InferenceURL, r.ctx.SandboxURL, r.ctx.V3URL = srv.URL, srv.URL, srv.URL
+	if opt.lensOff {
+		r.ctx.LensURL = srv.URL
+	}
+	r.ctx.PermissionMode = PermissionYolo
+	r.ctx.TrustMode = trustFullyTrusted
+	r.ctx.VerifyOnHost = true
+	r.ctx.MaxTurns = 0
+	// Every production request carries an id; the automatic route's identity
+	// checks refuse a candidate whose binding has none.
+	r.ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-edit-loop")
+	if contract != "" {
+		r.ctx.TaskContract = mustContract(t, r.dir, contract)
+	}
+	r.ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.census[et]++
+		switch et {
+		case "tool_call":
+			var tc struct{ Name string }
+			json.Unmarshal(b, &tc)
+			r.seq = append(r.seq, tc.Name)
+		case "tool_result":
+			var m map[string]interface{}
+			json.Unmarshal(b, &m)
+			r.results = append(r.results, m)
+		case "done":
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				r.terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(r.ctx, prompt)
+	return r
+}
+
+// editLoopServer stands in for the model, V3, the lens and the sandbox behind
+// editLoopFixture; opt sets what V3, the lens and the syntax check answer. Each
+// model turn is counted in r.turns, its prompt kept in r.prompts, and answered
+// with plan's call, up to twenty turns.
+func editLoopServer(r *editLoop, plan func(i int) map[string]interface{}, opt editLoopOptions) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.URL.Path == "/internal/lens/score-per-step" && opt.lensOff:
 			json.NewEncoder(w).Encode(map[string]interface{}{"enabled": false})
@@ -176,47 +224,7 @@ func editLoopFixture(t *testing.T, seed map[string]string, contract, prompt stri
 		d, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-	}))
-	t.Cleanup(srv.Close)
-	r.ctx = NewAgentContext(r.dir, Tier2Medium)
-	r.ctx.InferenceURL, r.ctx.SandboxURL, r.ctx.V3URL = srv.URL, srv.URL, srv.URL
-	if opt.lensOff {
-		r.ctx.LensURL = srv.URL
 	}
-	r.ctx.PermissionMode = PermissionYolo
-	r.ctx.TrustMode = trustFullyTrusted
-	r.ctx.VerifyOnHost = true
-	r.ctx.MaxTurns = 0
-	// Every production request carries an id; the automatic route's identity
-	// checks refuse a candidate whose binding has none.
-	r.ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-edit-loop")
-	if contract != "" {
-		r.ctx.TaskContract = mustContract(t, r.dir, contract)
-	}
-	r.ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.census[et]++
-		switch et {
-		case "tool_call":
-			var tc struct{ Name string }
-			json.Unmarshal(b, &tc)
-			r.seq = append(r.seq, tc.Name)
-		case "tool_result":
-			var m map[string]interface{}
-			json.Unmarshal(b, &m)
-			r.results = append(r.results, m)
-		case "done":
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				r.terminal[k] = v
-			}
-		}
-	}
-	runAgentLoop(r.ctx, prompt)
-	return r
 }
 
 // serveV3Winner answers /v3/generate with an authorized winner and the

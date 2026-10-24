@@ -41,7 +41,44 @@ func steerFixture(t *testing.T, seed map[string]string,
 	var mu sync.Mutex
 	fenced := 0
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(steerServer(dir, plan, &mu, &turns, &fenced))
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		census["_fenced"] = fenced
+		if et == "gate" || et == "tool_result" {
+			bounces = append(bounces, et+"|"+string(b))
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Rewrite app.py so it prints 7.")
+	return ctx, dir, &turns, census, terminal, &bounces
+}
+
+// steerServer stands in for the model, the sandbox and the V3 service behind
+// steerFixture. V3 and the internal endpoints are down. Each model turn is
+// counted in turns and answered with plan's call, up to wsCeiling; a request
+// for a single fenced block is counted in fenced and gets none. mu guards both
+// counts.
+func steerServer(dir string, plan func(i int, prompt string) map[string]interface{},
+	mu *sync.Mutex, turns, fenced *int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -72,7 +109,7 @@ func steerFixture(t *testing.T, seed map[string]string,
 		w.Header().Set("Content-Type", "text/event-stream")
 		if strings.Contains(string(raw), "single fenced block") {
 			mu.Lock()
-			fenced++
+			*fenced++
 			mu.Unlock()
 			d, _ := json.Marshal(map[string]interface{}{
 				"choices": []map[string]interface{}{
@@ -81,8 +118,8 @@ func steerFixture(t *testing.T, seed map[string]string,
 			return
 		}
 		mu.Lock()
-		i := turns
-		turns++
+		i := *turns
+		*turns++
 		mu.Unlock()
 		if i >= wsCeiling {
 			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
@@ -93,98 +130,110 @@ func steerFixture(t *testing.T, seed map[string]string,
 			"choices": []map[string]interface{}{
 				{"delta": map[string]string{"content": string(call)}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-	}))
-	t.Cleanup(srv.Close)
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.VerifyOnHost = true
-	ctx.MaxTurns = 0
-	ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		mu.Lock()
-		defer mu.Unlock()
-		census[et]++
-		census["_fenced"] = fenced
-		if et == "gate" || et == "tool_result" {
-			bounces = append(bounces, et+"|"+string(b))
-		}
-		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
-		}
 	}
-	runAgentLoop(ctx, "Rewrite app.py so it prints 7.")
-	return ctx, dir, &turns, census, terminal, &bounces
 }
 
 // Over the five-line carve-out, so the existing-file steer applies: below it
 // there is no edit-vs-rewrite distinction and a full write is allowed.
 const steerSeed = "def solve():\n    total = 0\n    for i in range(3):\n        total += i\n    return 1\n\n\nprint(solve())\n"
 
-func TestIgnoredWriteSteeringIsBounded(t *testing.T) {
-	for _, c := range []struct {
-		name, marker string
-		preRead      bool
-	}{
-		{"never read", "has not read it", false},
-		{"already read", "write_file is for creating new files", true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			ctx, dir, turns, census, terminal, bounces := steerFixture(t,
-				map[string]string{"app.py": steerSeed},
-				func(i int, _ string) map[string]interface{} {
-					if c.preRead && i == 0 {
-						return map[string]interface{}{"type": "tool_call", "name": "read_file",
-							"args": map[string]string{"path": "app.py"}}
-					}
-					return map[string]interface{}{"type": "tool_call", "name": "write_file",
-						"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
-				})
-			t.Logf("%s: turns=%d status=%q reason=%q", c.name, *turns,
-				terminal["status"], terminal["reason"])
-
-			steered := false
-			for _, b := range *bounces {
-				if strings.Contains(b, c.marker) {
-					steered = true
-				}
-			}
-			if !steered {
-				t.Fatalf("the fixture never reached the %q steer", c.name)
-			}
-			if *turns >= wsCeiling {
-				t.Fatalf("%d turns without a terminal", *turns)
-			}
-			if census["done"] != 1 {
-				t.Errorf("%d terminal events", census["done"])
-			}
-			if NormalizeTerminalStatus(terminal["status"]).Completed() {
-				t.Errorf("a run that only ever repeated a refused write reported %q",
-					terminal["status"])
-			}
-			if census["tool_call"] != census["tool_result"] {
-				t.Errorf("call/result balance: %d vs %d",
-					census["tool_call"], census["tool_result"])
-			}
-			// The file is untouched and unowned.
-			const wfPath = "app.py"
-			got, _ := os.ReadFile(filepath.Join(dir, wfPath))
-			if string(got) != steerSeed {
-				t.Errorf("the refused write reached disk: %q", got)
-			}
-			// The bounded recovery does show the file once, on purpose --
-			// see TestUnreadSteerRecoveryShowsTheFile. What it must never do
-			// is hand the model ownership of a file it did not write.
-			if ctx.SessionWrites[wfPath] {
-				t.Error("a refused write manufactured session ownership")
-			}
+// The "read it first" steer, ignored: the model never reads app.py and only
+// ever repeats the refused write.
+func TestIgnoredWriteSteeringIsBoundedWhenNeverRead(t *testing.T) {
+	ctx, dir, turns, census, terminal, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
 		})
+	t.Logf("never read: turns=%d status=%q reason=%q", *turns,
+		terminal["status"], terminal["reason"])
+
+	steered := false
+	for _, b := range *bounces {
+		if strings.Contains(b, "has not read it") {
+			steered = true
+		}
+	}
+	if !steered {
+		t.Fatal("the fixture never reached the never-read steer")
+	}
+	if *turns >= wsCeiling {
+		t.Fatalf("%d turns without a terminal", *turns)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that only ever repeated a refused write reported %q",
+			terminal["status"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+	// The file is untouched and unowned.
+	const wfPath = "app.py"
+	got, _ := os.ReadFile(filepath.Join(dir, wfPath))
+	if string(got) != steerSeed {
+		t.Errorf("the refused write reached disk: %q", got)
+	}
+	// The bounded recovery does show the file once, on purpose --
+	// see TestUnreadSteerRecoveryShowsTheFile. What it must never do
+	// is hand the model ownership of a file it did not write.
+	if ctx.SessionWrites[wfPath] {
+		t.Error("a refused write manufactured session ownership")
+	}
+}
+
+// The "use edit_file" steer, ignored: the model reads app.py first, then only
+// ever repeats the refused write.
+func TestIgnoredWriteSteeringIsBoundedWhenAlreadyRead(t *testing.T) {
+	ctx, dir, turns, census, terminal, bounces := steerFixture(t,
+		map[string]string{"app.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			if i == 0 {
+				return map[string]interface{}{"type": "tool_call", "name": "read_file",
+					"args": map[string]string{"path": "app.py"}}
+			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": "app.py", "content": "print(7)\n"}}
+		})
+	t.Logf("already read: turns=%d status=%q reason=%q", *turns,
+		terminal["status"], terminal["reason"])
+
+	steered := false
+	for _, b := range *bounces {
+		if strings.Contains(b, "write_file is for creating new files") {
+			steered = true
+		}
+	}
+	if !steered {
+		t.Fatal("the fixture never reached the already-read steer")
+	}
+	if *turns >= wsCeiling {
+		t.Fatalf("%d turns without a terminal", *turns)
+	}
+	if census["done"] != 1 {
+		t.Errorf("%d terminal events", census["done"])
+	}
+	if NormalizeTerminalStatus(terminal["status"]).Completed() {
+		t.Errorf("a run that only ever repeated a refused write reported %q",
+			terminal["status"])
+	}
+	if census["tool_call"] != census["tool_result"] {
+		t.Errorf("call/result balance: %d vs %d",
+			census["tool_call"], census["tool_result"])
+	}
+	// The file is untouched and unowned: a refused write must never hand the
+	// model ownership of a file it did not write.
+	const wfPath = "app.py"
+	got, _ := os.ReadFile(filepath.Join(dir, wfPath))
+	if string(got) != steerSeed {
+		t.Errorf("the refused write reached disk: %q", got)
+	}
+	if ctx.SessionWrites[wfPath] {
+		t.Error("a refused write manufactured session ownership")
 	}
 }
 
@@ -233,55 +282,70 @@ func TestFollowingTheFirstSteerStillCompletes(t *testing.T) {
 }
 
 // Path identity under ignored steering: aliases converge on one target, and
-// distinct paths stay independent of each other.
-func TestIgnoredSteeringPathIdentity(t *testing.T) {
-	write := func(path string) map[string]interface{} {
-		return map[string]interface{}{"type": "tool_call", "name": "write_file",
-			"args": map[string]string{"path": path, "content": "print(7)\n"}}
-	}
-	for _, c := range []struct {
-		name       string
-		second     string
-		sameTarget bool
-	}{
-		{"aliases are one target", "./app.py", true},
-		{"distinct paths are independent", "util.py", false},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, dir, turns, _, terminal, _ := steerFixture(t,
-				map[string]string{"app.py": steerSeed, "util.py": steerSeed},
-				func(i int, _ string) map[string]interface{} {
-					if i%2 == 0 {
-						return write("app.py")
-					}
-					return write(c.second)
-				})
-			t.Logf("%s: turns=%d status=%q reason=%q",
-				c.name, *turns, terminal["status"], terminal["reason"])
+// distinct paths stay independent of each other. Either way the run is bounded
+// and honest; the difference is WHEN it ends.
 
-			// Either way the run is bounded and honest.
-			if *turns >= wsCeiling {
-				t.Fatalf("%d turns without a terminal", *turns)
+// Alternating aliases is one path repeating, so the consecutive-same-path rule
+// ends it at three.
+func TestIgnoredSteeringAliasesAreOneTarget(t *testing.T) {
+	_, dir, turns, _, terminal, _ := steerFixture(t,
+		map[string]string{"app.py": steerSeed, "util.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			path := "app.py"
+			if i%2 == 1 {
+				path = "./app.py"
 			}
-			if terminal["reason"] != "repeated_refusal" {
-				t.Fatalf("reason=%q, want repeated_refusal", terminal["reason"])
-			}
-			// The difference is WHEN. Alternating aliases is one path
-			// repeating, so the consecutive-same-path rule ends it at three.
-			// Two real paths is not a stuck loop, so it survives past three
-			// and is bounded by the total-failure ceiling instead.
-			if c.sameTarget && *turns > 3 {
-				t.Errorf("aliases did not converge on one target: %d turns", *turns)
-			}
-			if !c.sameTarget && *turns <= 3 {
-				t.Errorf("distinct paths were treated as one stuck path: %d turns", *turns)
-			}
-			for _, f := range []string{"app.py", "util.py"} {
-				if got, _ := os.ReadFile(filepath.Join(dir, f)); string(got) != steerSeed {
-					t.Errorf("%s was overwritten by a refused write: %q", f, got)
-				}
-			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": path, "content": "print(7)\n"}}
 		})
+	t.Logf("aliases are one target: turns=%d status=%q reason=%q",
+		*turns, terminal["status"], terminal["reason"])
+
+	if *turns >= wsCeiling {
+		t.Fatalf("%d turns without a terminal", *turns)
+	}
+	if terminal["reason"] != "repeated_refusal" {
+		t.Fatalf("reason=%q, want repeated_refusal", terminal["reason"])
+	}
+	if *turns > 3 {
+		t.Errorf("aliases did not converge on one target: %d turns", *turns)
+	}
+	for _, f := range []string{"app.py", "util.py"} {
+		if got, _ := os.ReadFile(filepath.Join(dir, f)); string(got) != steerSeed {
+			t.Errorf("%s was overwritten by a refused write: %q", f, got)
+		}
+	}
+}
+
+// Two real paths is not a stuck loop, so it survives past three and is bounded
+// by the total-failure ceiling instead.
+func TestIgnoredSteeringDistinctPathsAreIndependent(t *testing.T) {
+	_, dir, turns, _, terminal, _ := steerFixture(t,
+		map[string]string{"app.py": steerSeed, "util.py": steerSeed},
+		func(i int, _ string) map[string]interface{} {
+			path := "app.py"
+			if i%2 == 1 {
+				path = "util.py"
+			}
+			return map[string]interface{}{"type": "tool_call", "name": "write_file",
+				"args": map[string]string{"path": path, "content": "print(7)\n"}}
+		})
+	t.Logf("distinct paths are independent: turns=%d status=%q reason=%q",
+		*turns, terminal["status"], terminal["reason"])
+
+	if *turns >= wsCeiling {
+		t.Fatalf("%d turns without a terminal", *turns)
+	}
+	if terminal["reason"] != "repeated_refusal" {
+		t.Fatalf("reason=%q, want repeated_refusal", terminal["reason"])
+	}
+	if *turns <= 3 {
+		t.Errorf("distinct paths were treated as one stuck path: %d turns", *turns)
+	}
+	for _, f := range []string{"app.py", "util.py"} {
+		if got, _ := os.ReadFile(filepath.Join(dir, f)); string(got) != steerSeed {
+			t.Errorf("%s was overwritten by a refused write: %q", f, got)
+		}
 	}
 }
 
@@ -349,10 +413,9 @@ func TestUnreadSteerRecoveryShowsTheFile(t *testing.T) {
 		if strings.HasPrefix(b, "gate|") && strings.Contains(b, "here it is") {
 			offers++
 		}
-		if strings.HasPrefix(b, "tool_result|") && strings.Contains(b, "here it is") {
-			if strings.Contains(b, "range(3)") && strings.Contains(b, "print(solve())") {
-				shown++
-			}
+		if strings.HasPrefix(b, "tool_result|") && strings.Contains(b, "here it is") &&
+			strings.Contains(b, "range(3)") && strings.Contains(b, "print(solve())") {
+			shown++
 		}
 	}
 	if offers != 1 {
@@ -398,23 +461,21 @@ func TestAlreadyReadSteerRecoveryRemindsWithoutRereading(t *testing.T) {
 
 	var offers int
 	for _, b := range *bounces {
-		if !strings.Contains(b, "You do not need to read it again") {
+		switch {
+		case !strings.Contains(b, "You do not need to read it again"):
 			continue
-		}
-		if strings.HasPrefix(b, "gate|") {
+		case strings.HasPrefix(b, "gate|"):
 			offers++
-			continue
-		}
-		if !strings.HasPrefix(b, "tool_result|") {
-			continue
-		}
-		if strings.Contains(b, "range(3)") {
-			t.Error("the reminder re-showed a file the model had already read")
-		}
-		// Both edit tools stay on the table; neither is imposed.
-		for _, tool := range []string{"edit_file", "structural_edit"} {
-			if !strings.Contains(b, tool) {
-				t.Errorf("the reminder does not leave %s available", tool)
+		case strings.HasPrefix(b, "tool_result|"):
+			if strings.Contains(b, "range(3)") {
+				t.Error("the reminder re-showed a file the model had already read")
+			}
+			// Both edit tools stay on the table; neither is imposed.
+			if !strings.Contains(b, "edit_file") {
+				t.Error("the reminder does not leave edit_file available")
+			}
+			if !strings.Contains(b, "structural_edit") {
+				t.Error("the reminder does not leave structural_edit available")
 			}
 		}
 	}

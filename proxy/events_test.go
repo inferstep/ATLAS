@@ -401,24 +401,9 @@ func TestHandleEventsReturnsOnDrain(t *testing.T) {
 // construction (NewEventID) and timestamp is wall clock. Nothing else is
 // normalised — payloads, types, stages and ordering are compared as they arrive.
 func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
-	collect := func(capture bool) []string {
-		if capture {
-			dir := t.TempDir()
-			t.Setenv("ATLAS_DIAGNOSTIC_DIR", dir)
-			t.Setenv("ATLAS_SHADOW_CAPTURE", "events.jsonl")
-			sink, err := openShadowSink()
-			if err != nil {
-				t.Fatalf("sink: %v", err)
-			}
-			activeShadowSink.Store(sink)
-			defer func() {
-				sink.close(context.Background(), 5*time.Second)
-				activeShadowSink.Store(nil)
-			}()
-		} else {
-			activeShadowSink.Store(nil)
-		}
-
+	// collect connects to /events, emits three envelopes and returns what the
+	// stream carried.
+	collect := func() []string {
 		srv := httptest.NewServer(http.HandlerFunc(handleEvents))
 		defer srv.Close()
 		resp, err := http.Get(srv.URL)
@@ -476,8 +461,24 @@ func TestEventsStreamIsUnchangedByShadowCapture(t *testing.T) {
 		return got
 	}
 
-	off := collect(false)
-	on := collect(true)
+	// Capture off.
+	activeShadowSink.Store(nil)
+	off := collect()
+
+	// Capture on: a live sink writing to a private file.
+	t.Setenv("ATLAS_DIAGNOSTIC_DIR", t.TempDir())
+	t.Setenv("ATLAS_SHADOW_CAPTURE", "events.jsonl")
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	activeShadowSink.Store(sink)
+	defer func() {
+		sink.close(context.Background(), 5*time.Second)
+		activeShadowSink.Store(nil)
+	}()
+	on := collect()
+
 	if len(off) != len(on) {
 		t.Fatalf("%d events with capture off, %d with it on", len(off), len(on))
 	}
