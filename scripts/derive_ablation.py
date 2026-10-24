@@ -62,6 +62,57 @@ CONDITIONS = {
 }
 
 
+def _derive_from_passing(task_data: dict, condition: dict, telemetry: dict,
+                         candidates: list, passing: list) -> dict:
+    """Replay Phase 1 selection for a task with passing candidates: the S* winner
+    of Condition F when the condition has Phase 2 and S* ran, else its strategy."""
+    strategy = condition["selection_strategy"]
+
+    if condition["include_phase2"] and len(passing) >= 2:
+        # Phase 2 (S*) tiebreaking was applied in Condition F.
+        # If S* triggered in F, use its result for D. Otherwise
+        # fall through to lens selection. The S* result is the same
+        # because candidates are identical.
+        s_star_triggered = telemetry.get("s_star_triggered", False)
+        if s_star_triggered:
+            # S* already picked the winner in F — same result for D
+            return {
+                "task_id": task_data["task_id"],
+                "passed": True,
+                "code": task_data.get("code", ""),
+                "phase_solved": "phase1",
+                "candidates_generated": len(candidates),
+                "total_tokens": task_data.get("total_tokens", 0),
+                "derived_from": "condition_F",
+                "selection_strategy": strategy,
+                "s_star_triggered": True,
+            }
+
+    # Apply selection strategy
+    candidate_infos = [
+        CandidateInfo(
+            index=c.get("index", i),
+            code=c.get("code", ""),
+            energy=c.get("energy", 0.0),
+            passed=True,
+        )
+        for i, c in enumerate(passing)
+    ]
+    selected = select_candidate(candidate_infos, strategy=strategy, seed=42)
+    code = selected.code if selected else passing[0]["code"]
+
+    return {
+        "task_id": task_data["task_id"],
+        "passed": True,
+        "code": code,
+        "phase_solved": "phase1",
+        "candidates_generated": len(candidates),
+        "total_tokens": task_data.get("total_tokens", 0),
+        "derived_from": "condition_F",
+        "selection_strategy": strategy,
+    }
+
+
 def derive_condition(task_data: dict, condition: dict) -> dict:
     """Replay selection logic for one task under a given condition.
 
@@ -93,51 +144,7 @@ def derive_condition(task_data: dict, condition: dict) -> dict:
 
     # Phase 1 selection (without Phase 3)
     if passing:
-        strategy = condition["selection_strategy"]
-
-        if condition["include_phase2"] and len(passing) >= 2:
-            # Phase 2 (S*) tiebreaking was applied in Condition F.
-            # If S* triggered in F, use its result for D. Otherwise
-            # fall through to lens selection. The S* result is the same
-            # because candidates are identical.
-            s_star_triggered = telemetry.get("s_star_triggered", False)
-            if s_star_triggered:
-                # S* already picked the winner in F — same result for D
-                return {
-                    "task_id": task_data["task_id"],
-                    "passed": True,
-                    "code": task_data.get("code", ""),
-                    "phase_solved": "phase1",
-                    "candidates_generated": len(candidates),
-                    "total_tokens": task_data.get("total_tokens", 0),
-                    "derived_from": "condition_F",
-                    "selection_strategy": strategy,
-                    "s_star_triggered": True,
-                }
-
-        # Apply selection strategy
-        candidate_infos = [
-            CandidateInfo(
-                index=c.get("index", i),
-                code=c.get("code", ""),
-                energy=c.get("energy", 0.0),
-                passed=True,
-            )
-            for i, c in enumerate(passing)
-        ]
-        selected = select_candidate(candidate_infos, strategy=strategy, seed=42)
-        code = selected.code if selected else passing[0]["code"]
-
-        return {
-            "task_id": task_data["task_id"],
-            "passed": True,
-            "code": code,
-            "phase_solved": "phase1",
-            "candidates_generated": len(candidates),
-            "total_tokens": task_data.get("total_tokens", 0),
-            "derived_from": "condition_F",
-            "selection_strategy": strategy,
-        }
+        return _derive_from_passing(task_data, condition, telemetry, candidates, passing)
 
     # No passing candidates
     if condition["include_phase3"]:

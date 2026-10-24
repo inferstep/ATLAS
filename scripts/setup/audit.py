@@ -97,6 +97,24 @@ class Audit:
         act = ok(f"repos/{self.full}/actions/permissions")
 
         # CI/CD
+        self._ci_cd_rows(wf_perm, act)
+
+        # Members
+        self._members_rows()
+
+        # Org
+        self._org_rows(org)
+
+        # Repo
+        self._repo_branch_rows(wf_perm)
+        alerts = self._repo_setting_rows()
+
+        # Ops
+        self._ops_rows(alerts)
+
+    def _ci_cd_rows(self, wf_perm: dict, act: dict) -> None:
+        """The CI/CD rows: what workflows may do, which actions may run and whether they are pinned,
+        the runners, and the enterprise row."""
         self.add("CI/CD", "Workflows can't approve PRs",
                  FAIL if wf_perm["can_approve_pull_request_reviews"] else PASS,
                  f"can_approve_pull_request_reviews={wf_perm['can_approve_pull_request_reviews']}")
@@ -122,14 +140,16 @@ class Audit:
                      f"{runners} self-hosted runners (GitHub-hosted only)")
         self.add("Enterprise", "All six enterprise items", NA, "Free org, no enterprise account")
 
-        # Members
+    def _members_rows(self) -> None:
+        """The member rows: the org owners, and the activity reviews done by hand."""
         admins = [m["login"] for m in ok(f"orgs/{self.org}/members?role=admin&per_page=100")]
         self.add("Members", "Fewer than three org owners", PASS if len(admins) < 3 else FAIL,
                  f"owners: {', '.join(admins)}")
         self.add("Members", "Admins active in last 6 months", MANUAL, "quarterly access review")
         self.add("Members", "Members active in last 6 months", MANUAL, "quarterly access review; inactivity drops a rung")
 
-        # Org
+    def _org_rows(self, org: dict) -> None:
+        """The org rows: 2FA, what members may do, SSO, and the org webhooks."""
         self.add("Org", "2FA enforced", PASS if org.get("two_factor_requirement_enabled") else FAIL,
                  f"two_factor_requirement_enabled={org.get('two_factor_requirement_enabled')}")
         self.add("Org", "Default member permission restricted",
@@ -149,7 +169,9 @@ class Audit:
             for item in ("Org webhooks use SSL", "Org webhooks have a secret"):
                 self.add("Org", item, MANUAL, f"reading org hooks needs admin:org_hook (HTTP {hooks_status})")
 
-        # Repo
+    def _repo_branch_rows(self, wf_perm: dict) -> None:
+        """The first repo rows: the last push, the workflow settings, the scorecard, and the reviews,
+        checks and rules on the default branch."""
         pushed = dt.datetime.strptime(self.repo_info["pushed_at"], "%Y-%m-%dT%H:%M:%SZ")
         days = (dt.datetime.now(dt.timezone.utc) - pushed.replace(tzinfo=dt.timezone.utc)).days
         self.add("Repo", "Updated at least quarterly", PASS if days <= 90 else FAIL, f"last push {days} days ago")
@@ -178,6 +200,10 @@ class Audit:
         self.add("Repo", "Dependency review enabled", PASS if dep_review else FAIL,
                  f"workflow on {self.default}: {'dependency-review.yml' in self.workflows}; required: "
                  f"{any(c['context'] == 'dependency review' for c in checks)}")
+
+    def _repo_setting_rows(self) -> int:
+        """The other repo rows: alerts, forking, conversations, webhooks, signing, re-approval, who may push,
+        admins, code owners and dismissal. Returns the vulnerability-alerts status, which an Ops row uses."""
         alerts = gh(f"repos/{self.full}/vulnerability-alerts")[0]
         self.add("Repo", "Vulnerability alerts enabled", PASS if alerts == 204 else FAIL, f"HTTP {alerts}")
         self.add("Repo", "Forking not allowed", EXC if self.repo_info.get("allow_forking") else PASS,
@@ -205,8 +231,10 @@ class Audit:
         dismissal = self.pr_param("dismissal_restriction") or {}
         self.add("Repo", "Restrict who can dismiss reviews", PASS if dismissal.get("enabled") else FAIL,
                  f"dismissal_restriction enabled={dismissal.get('enabled')}")
+        return alerts
 
-        # Ops
+    def _ops_rows(self, alerts: int) -> None:
+        """The ops rows: membership, incident response, scanning and compliance tooling."""
         self.add("Ops", "Managed from one central account", MANUAL, "the lead's account owns the org")
         members = {m["login"] for m in ok(f"orgs/{self.org}/members?per_page=100")}
         in_teams = {m["login"] for t in ok(f"orgs/{self.org}/teams") for m in ok(f"orgs/{self.org}/teams/{t['slug']}/members")}
