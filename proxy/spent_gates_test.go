@@ -121,39 +121,55 @@ func TestASpentRedirectGateCompletesWithACaveat(t *testing.T) {
 }
 
 // Bytes that changed after the run that verified them are unverified whether
-// or not the artifact gate still has a bounce. Where verification was
-// demanded, that ends the run incomplete; where it was not, it is a caveat.
+// or not the artifact gate still has a bounce. Where verification was not
+// demanded, that is a caveat.
 func TestASpentArtifactGateLeavesTheRunUnverified(t *testing.T) {
-	for _, demanded := range []bool{false, true} {
-		ctx, dir := sepCtx(t, nil)
-		sepWrite(t, ctx, dir, "app.py", "print('ok')\n")
-		withSyntaxSandbox(t, ctx)
-		st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 2}
-		st.observeVerification(ctx, "", 1, "python3 app.py", ranClean("ok\n"))
-		// A shell write after the verifying run: nothing re-ran it.
-		if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('changed')\n"), 0o644); err != nil {
-			t.Fatal(err)
+	ctx, dir := sepCtx(t, nil)
+	sepWrite(t, ctx, dir, "app.py", "print('ok')\n")
+	withSyntaxSandbox(t, ctx)
+	st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 2}
+	st.observeVerification(ctx, "", 1, "python3 app.py", ranClean("ok\n"))
+	// A shell write after the verifying run: nothing re-ran it.
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('changed')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st.userWantsVerification = false
+	prompt := "Fix app.py."
+	for i := 0; i < 2*maxGateBounces+1; i++ {
+		if gate, _ := st.exitGates(ctx, prompt, "Finished."); gate == "" {
+			break
 		}
-		st.userWantsVerification = demanded
-		prompt := "Fix app.py."
-		for i := 0; i < 2*maxGateBounces+1; i++ {
-			if gate, _ := st.exitGates(ctx, prompt, "Finished."); gate == "" {
-				break
-			}
+	}
+	status, reason := finalizeCompletion(ctx, st, prompt, "")
+	if status != TerminalCompleted {
+		t.Fatalf("not demanded: terminal = %s/%s, want completed with a caveat", status, reason)
+	}
+	if s := honestTerminalSummary(ctx, st, status, reason, "Finished."); !strings.Contains(s, "app.py changed after the run that verified it") {
+		t.Fatalf("summary does not carry the drift caveat: %q", s)
+	}
+}
+
+// Where verification was demanded, the same drift ends the run incomplete.
+func TestASpentArtifactGateEndsADemandedVerificationIncomplete(t *testing.T) {
+	ctx, dir := sepCtx(t, nil)
+	sepWrite(t, ctx, dir, "app.py", "print('ok')\n")
+	withSyntaxSandbox(t, ctx)
+	st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 2}
+	st.observeVerification(ctx, "", 1, "python3 app.py", ranClean("ok\n"))
+	// A shell write after the verifying run: nothing re-ran it.
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("print('changed')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st.userWantsVerification = true
+	prompt := "Fix app.py."
+	for i := 0; i < 2*maxGateBounces+1; i++ {
+		if gate, _ := st.exitGates(ctx, prompt, "Finished."); gate == "" {
+			break
 		}
-		status, reason := finalizeCompletion(ctx, st, prompt, "")
-		if demanded {
-			if status != TerminalIncomplete || reason != "verification_demanded_unmet" {
-				t.Fatalf("demanded: terminal = %s/%s, want incomplete/verification_demanded_unmet", status, reason)
-			}
-			continue
-		}
-		if status != TerminalCompleted {
-			t.Fatalf("not demanded: terminal = %s/%s, want completed with a caveat", status, reason)
-		}
-		if s := honestTerminalSummary(ctx, st, status, reason, "Finished."); !strings.Contains(s, "app.py changed after the run that verified it") {
-			t.Fatalf("summary does not carry the drift caveat: %q", s)
-		}
+	}
+	status, reason := finalizeCompletion(ctx, st, prompt, "")
+	if status != TerminalIncomplete || reason != "verification_demanded_unmet" {
+		t.Fatalf("demanded: terminal = %s/%s, want incomplete/verification_demanded_unmet", status, reason)
 	}
 }
 
@@ -183,25 +199,21 @@ func TestACleanExitReportsNothingUnresolved(t *testing.T) {
 // works" over code nothing ran is not shown word for word.
 func TestAParseOnlyCompletionSaysSo(t *testing.T) {
 	cases := []struct {
-		name, file, body, command, prose string
-		wantReason                       string
-		wantPrefix, wantContains         string
+		name, file, body, prose  string
+		wantPrefix, wantContains string
 	}{
-		{"claims over unrun code", "solve.py", "print(1)\n", "",
-			"All tests pass and everything works.", "deliverables_parse_only",
+		{"claims over unrun code", "solve.py", "print(1)\n",
+			"All tests pass and everything works.",
 			"solve.py parses, but nothing in this run ran it.", "which nothing in this run checked"},
-		{"a plain account over unrun code", "solve.py", "print(1)\n", "",
-			"Wrote solve.py.", "deliverables_parse_only",
+		{"a plain account over unrun code", "solve.py", "print(1)\n",
+			"Wrote solve.py.",
 			"Wrote solve.py.", "solve.py parses, but nothing in this run ran it."},
-		{"a negated claim is not a claim", "solve.py", "print(1)\n", "",
-			"Wrote solve.py; I did not verify it works correctly.", "deliverables_parse_only",
+		{"a negated claim is not a claim", "solve.py", "print(1)\n",
+			"Wrote solve.py; I did not verify it works correctly.",
 			"Wrote solve.py;", "solve.py parses, but nothing in this run ran it."},
-		{"a page nothing loaded", "index.html", "<!DOCTYPE html><html><body><canvas></canvas></body></html>\n", "",
-			"I built a fully working snake game.", "deliverables_parse_only",
+		{"a page nothing loaded", "index.html", "<!DOCTYPE html><html><body><canvas></canvas></body></html>\n",
+			"I built a fully working snake game.",
 			"index.html parses, but nothing in this run ran it.", "which nothing in this run checked"},
-		{"code that ran", "solve.py", "print(1)\n", "python3 solve.py",
-			"All tests pass and everything works.", "deliverables_demonstrated",
-			"All tests pass and everything works.", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -209,21 +221,33 @@ func TestAParseOnlyCompletionSaysSo(t *testing.T) {
 			sepWrite(t, ctx, dir, c.file, c.body)
 			withSyntaxSandbox(t, ctx)
 			st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 1}
-			if c.command != "" {
-				st.observeVerification(ctx, "", 1, c.command, ranClean("1\n"))
-			}
 			status, reason := finalizeCompletion(ctx, st, "Write "+c.file+".", "")
-			if status != TerminalCompleted || reason != c.wantReason {
-				t.Fatalf("terminal = %s/%s, want completed/%s", status, reason, c.wantReason)
+			if status != TerminalCompleted || reason != "deliverables_parse_only" {
+				t.Fatalf("terminal = %s/%s, want completed/deliverables_parse_only", status, reason)
 			}
 			summary := honestTerminalSummary(ctx, st, status, reason, c.prose)
 			if !strings.HasPrefix(summary, c.wantPrefix) || !strings.Contains(summary, c.wantContains) {
 				t.Fatalf("summary = %q", summary)
 			}
-			if c.command != "" && summary != c.prose {
-				t.Fatalf("a demonstrated completion's account was changed: %q", summary)
-			}
 		})
+	}
+}
+
+// Code that ran is a demonstrated completion, and its account is shown word
+// for word.
+func TestADemonstratedCompletionKeepsItsAccount(t *testing.T) {
+	ctx, dir := sepCtx(t, nil)
+	sepWrite(t, ctx, dir, "solve.py", "print(1)\n")
+	withSyntaxSandbox(t, ctx)
+	st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 1}
+	st.observeVerification(ctx, "", 1, "python3 solve.py", ranClean("1\n"))
+	status, reason := finalizeCompletion(ctx, st, "Write solve.py.", "")
+	if status != TerminalCompleted || reason != "deliverables_demonstrated" {
+		t.Fatalf("terminal = %s/%s, want completed/deliverables_demonstrated", status, reason)
+	}
+	prose := "All tests pass and everything works."
+	if summary := honestTerminalSummary(ctx, st, status, reason, prose); summary != prose {
+		t.Fatalf("a demonstrated completion's account was changed: %q", summary)
 	}
 }
 

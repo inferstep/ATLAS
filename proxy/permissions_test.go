@@ -243,62 +243,37 @@ func waitForPending(t *testing.T, sessionID, callID string) {
 
 func TestNeedsPermission(t *testing.T) {
 	args := json.RawMessage(`{}`)
+	// The user approved run_command with session scope earlier this turn.
+	sessionApproved := &AgentContext{}
+	sessionApproved.allowToolForTurn("run_command")
+	acceptEdits := &AgentContext{PermissionMode: PermissionAcceptEdits}
 
-	t.Run("yolo mode approves everything", func(t *testing.T) {
-		for _, ctx := range []*AgentContext{
-			{YoloMode: true},
-			{PermissionMode: PermissionYolo},
-		} {
-			if needsPermission(ctx, "run_command", args) {
-				t.Errorf("yolo context still prompts for run_command")
+	for _, c := range []struct {
+		name string
+		ctx  *AgentContext
+		tool string
+		want bool
+	}{
+		{"yolo mode approves everything: the yolo flag", &AgentContext{YoloMode: true}, "run_command", false},
+		{"yolo mode approves everything: the yolo permission mode", &AgentContext{PermissionMode: PermissionYolo}, "run_command", false},
+		{"unknown tool always prompts", &AgentContext{}, "no_such_tool", true},
+		{"read-only tools never prompt", &AgentContext{}, "read_file", false},
+		{"destructive tools prompt in default mode: run_command", &AgentContext{}, "run_command", true},
+		{"destructive tools prompt in default mode: write_file", &AgentContext{}, "write_file", true},
+		{"session-approved tool skips the prompt", sessionApproved, "run_command", false},
+		{"session approval is per-tool, not global", sessionApproved, "write_file", true},
+		{"accept-edits auto-approves edits: write_file", acceptEdits, "write_file", false},
+		{"accept-edits auto-approves edits: edit_file", acceptEdits, "edit_file", false},
+		{"accept-edits auto-approves edits: structural_edit", acceptEdits, "structural_edit", false},
+		{"accept-edits auto-approves edits: move_file", acceptEdits, "move_file", false},
+		{"accept-edits does not approve commands", acceptEdits, "run_command", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := needsPermission(c.ctx, c.tool, args); got != c.want {
+				t.Errorf("needsPermission(%s) = %v, want %v", c.tool, got, c.want)
 			}
-		}
-	})
-
-	t.Run("unknown tool always prompts", func(t *testing.T) {
-		if !needsPermission(&AgentContext{}, "no_such_tool", args) {
-			t.Errorf("unknown tool did not prompt")
-		}
-	})
-
-	t.Run("read-only tools never prompt", func(t *testing.T) {
-		if needsPermission(&AgentContext{}, "read_file", args) {
-			t.Errorf("read_file prompted in default mode")
-		}
-	})
-
-	t.Run("destructive tools prompt in default mode", func(t *testing.T) {
-		if !needsPermission(&AgentContext{}, "run_command", args) {
-			t.Errorf("run_command did not prompt in default mode")
-		}
-		if !needsPermission(&AgentContext{}, "write_file", args) {
-			t.Errorf("write_file did not prompt in default mode")
-		}
-	})
-
-	t.Run("session-approved tool skips the prompt", func(t *testing.T) {
-		ctx := &AgentContext{}
-		ctx.allowToolForTurn("run_command")
-		if needsPermission(ctx, "run_command", args) {
-			t.Errorf("session-approved run_command still prompts")
-		}
-		// Approval is per-tool, not global.
-		if !needsPermission(ctx, "write_file", args) {
-			t.Errorf("write_file inherited run_command's approval")
-		}
-	})
-
-	t.Run("accept-edits auto-approves edits but not commands", func(t *testing.T) {
-		ctx := &AgentContext{PermissionMode: PermissionAcceptEdits}
-		for _, tool := range []string{"write_file", "edit_file", "structural_edit", "move_file"} {
-			if needsPermission(ctx, tool, args) {
-				t.Errorf("%s prompted in accept-edits mode", tool)
-			}
-		}
-		if !needsPermission(ctx, "run_command", args) {
-			t.Errorf("run_command did not prompt in accept-edits mode")
-		}
-	})
+		})
+	}
 }
 
 func TestResolveTrustModeDefault(t *testing.T) {
@@ -429,27 +404,20 @@ func TestDeletePermissionNamesTheTarget(t *testing.T) {
 	}
 }
 
-// 3/5/6/7: unsafe targets must never reach the user, and an approval must be
-// bound to what was inspected.
-func TestDeletePermissionPreflightAndBinding(t *testing.T) {
+// 3/5/6/7: unsafe targets must never reach the user. A target the proxy would
+// refuse is refused without a prompt.
+func TestDeletePermissionPreflightRefusesWithoutAsking(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "keep.py"), []byte("A = 1\n"), 0o644)
 	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
 	os.WriteFile(filepath.Join(dir, "pkg", "mod.py"), []byte("A = 1\n"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "emptydir"), 0o755)
 
-	for _, c := range []struct {
-		name, args string
-		wantAsk    bool
-	}{
-		{"path escape", `{"path":"../../etc/passwd"}`, false},
-		{"absolute escape", `{"path":"/etc/passwd"}`, false},
-		{"blank path", `{"path":""}`, false},
-		{"malformed args", `{"path":123}`, false},
-		{"missing target", `{"path":"gone.py"}`, false},
-		{"non-empty directory", `{"path":"pkg"}`, false},
-		{"regular file", `{"path":"keep.py"}`, true},
-		{"empty directory", `{"path":"emptydir"}`, true},
+	for _, c := range []struct{ name, args string }{
+		{"path escape", `{"path":"../../etc/passwd"}`},
+		{"absolute escape", `{"path":"/etc/passwd"}`},
+		{"blank path", `{"path":""}`},
+		{"malformed args", `{"path":123}`},
+		{"missing target", `{"path":"gone.py"}`},
+		{"non-empty directory", `{"path":"pkg"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx, cancel := deletePermCtx(t, "sess-pf-"+strings.ReplaceAll(c.name, " ", ""), dir)
@@ -460,20 +428,40 @@ func TestDeletePermissionPreflightAndBinding(t *testing.T) {
 					asked++
 				}
 			}
-			if !c.wantAsk {
-				// Nothing should block; the call must be refused without a
-				// prompt. A short fail-safe keeps the parent's blocking
-				// behaviour observable instead of hanging the suite.
-				t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
-				allowed := awaitPermission(ctx, "delete_file", "call_pf", json.RawMessage(c.args))
-				if allowed {
-					t.Errorf("%s was allowed without a user decision", c.name)
+			// Nothing should block; the call must be refused without a
+			// prompt. A short fail-safe keeps the parent's blocking
+			// behaviour observable instead of hanging the suite.
+			t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
+			allowed := awaitPermission(ctx, "delete_file", "call_pf", json.RawMessage(c.args))
+			if allowed {
+				t.Errorf("%s was allowed without a user decision", c.name)
+			}
+			if asked != 0 {
+				t.Errorf("%s emitted %d permission request(s); the user must never be "+
+					"asked about a target the proxy would refuse", c.name, asked)
+			}
+		})
+	}
+}
+
+// A target the proxy accepts reaches the user, in exactly one prompt.
+func TestDeletePermissionAsksOnceAboutAnAcceptedTarget(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "keep.py"), []byte("A = 1\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "emptydir"), 0o755)
+
+	for _, c := range []struct{ name, args string }{
+		{"regular file", `{"path":"keep.py"}`},
+		{"empty directory", `{"path":"emptydir"}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := deletePermCtx(t, "sess-pf-"+strings.ReplaceAll(c.name, " ", ""), dir)
+			defer cancel()
+			asked := 0
+			ctx.StreamFn = func(et string, _ interface{}) {
+				if et == "permission_request" {
+					asked++
 				}
-				if asked != 0 {
-					t.Errorf("%s emitted %d permission request(s); the user must never be "+
-						"asked about a target the proxy would refuse", c.name, asked)
-				}
-				return
 			}
 			needsObjectHold(t)
 			done := make(chan bool, 1)
@@ -834,8 +822,6 @@ func TestAbsoluteSymlinkIsRefusedByContainment(t *testing.T) {
 
 // Structural: one handshake, no verb list, and deletion cannot be allowlisted.
 func TestDeleteConfirmationStructure(t *testing.T) {
-	read := func(f string) string { b, _ := os.ReadFile(f); return string(b) }
-
 	// The rejected extractor and every verb table stay gone.
 	entries, _ := os.ReadDir(".")
 	self := "permissions_test.go" // this file necessarily spells the banned names
@@ -843,7 +829,7 @@ func TestDeleteConfirmationStructure(t *testing.T) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || e.Name() == self {
 			continue
 		}
-		body := read(e.Name())
+		body := readSourceForTest(t, e.Name())
 		for _, banned := range []string{"explicitDeleteIntent", "deleteVerbs",
 			"deleteClauseUnsupported", "deleteHedgeWords", "maxDeleteIntentPaths"} {
 			if strings.Contains(body, banned) {
@@ -853,8 +839,27 @@ func TestDeleteConfirmationStructure(t *testing.T) {
 		}
 	}
 
-	// The confirmation path consults no natural-language helper.
-	perms := read("permissions.go")
+	// Exactly one handshake: one emitter, one endpoint, one pending store.
+	perms := readSourceForTest(t, "permissions.go")
+	if n := strings.Count(perms, `ctx.Stream("permission_request"`); n != 1 {
+		t.Errorf("%d permission_request emitters, want exactly one", n)
+	}
+	if n := strings.Count(readSourceForTest(t, "main.go"), `"/v1/permission"`); n != 1 {
+		t.Errorf("%d permission endpoints registered, want exactly one", n)
+	}
+
+	// delete_file can never be added to the turn allowlist by an approval.
+	if strings.Contains(perms, `allowToolForTurn(toolName)`) {
+		before := perms[:strings.Index(perms, `allowToolForTurn(toolName)`)]
+		if !strings.Contains(before, `toolName == "delete_file"`) {
+			t.Error("the session-scope allowlist is reachable without a delete_file guard")
+		}
+	}
+}
+
+// The confirmation path consults no natural-language helper.
+func TestTheDeleteConfirmationPathConsultsNoLanguageHelper(t *testing.T) {
+	perms := readSourceForTest(t, "permissions.go")
 	i := strings.Index(perms, "func inspectDeleteTarget")
 	j := strings.Index(perms, "func takeDeleteApproval")
 	if i < 0 || j < 0 || j < i {
@@ -869,27 +874,13 @@ func TestDeleteConfirmationStructure(t *testing.T) {
 				"structural, never linguistic", nl)
 		}
 	}
+}
 
-	// Exactly one handshake: one emitter, one endpoint, one pending store.
-	if n := strings.Count(perms, `ctx.Stream("permission_request"`); n != 1 {
-		t.Errorf("%d permission_request emitters, want exactly one", n)
-	}
-	if n := strings.Count(read("main.go"), `"/v1/permission"`); n != 1 {
-		t.Errorf("%d permission endpoints registered, want exactly one", n)
-	}
-
-	// delete_file can never be added to the turn allowlist by an approval.
-	if strings.Contains(perms, `allowToolForTurn(toolName)`) {
-		before := perms[:strings.Index(perms, `allowToolForTurn(toolName)`)]
-		if !strings.Contains(before, `toolName == "delete_file"`) {
-			t.Error("the session-scope allowlist is reachable without a delete_file guard")
-		}
-	}
-
-	// Revalidation lives next to the removal, not somewhere hopeful. The
-	// revalidation is the identity comparison; the take happens earlier, on
-	// purpose, so that every attempt spends the approval (below).
-	tools := read("tools.go")
+// Revalidation lives next to the removal, not somewhere hopeful. The
+// revalidation is the identity comparison; the take happens earlier, on
+// purpose, so that every attempt spends the approval.
+func TestTheDeleteApprovalIsSpentFirstAndRevalidatedAtTheRemoval(t *testing.T) {
+	tools := readSourceForTest(t, "tools.go")
 	reval := strings.Index(tools, "approved.identityMatches(now)")
 	rm := strings.Index(tools, "if rmErr := os.Remove(path)")
 	if reval < 0 || rm < 0 || reval > rm || rm-reval > 1600 {
@@ -1065,14 +1056,8 @@ func TestEveryModeAsksExactlyOnceForADeletion(t *testing.T) {
 	}
 }
 
-// Exact prompt counts per outcome: the answered paths each begin with one
-// request; only the refused-before-asking shapes produce none.
+// An answered delete prompt, approved or denied, was shown exactly once.
 func TestDeletePromptCounts(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "ok.py"), []byte("A\n"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
-	os.WriteFile(filepath.Join(dir, "pkg", "m.py"), []byte("A\n"), 0o644)
-
 	answered := []struct{ name, decision string }{
 		{"approve", "allow"}, {"deny", "deny"},
 	}
@@ -1102,49 +1087,62 @@ func TestDeletePromptCounts(t *testing.T) {
 			}
 		})
 	}
-	t.Run("timeout", func(t *testing.T) {
-		needsObjectHold(t)
-		d := t.TempDir()
-		os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
-		ctx, cancel := deletePermCtx(t, "sess-count-timeout", d)
-		defer cancel()
-		prompts := 0
-		ctx.StreamFn = func(et string, _ interface{}) {
-			if et == "permission_request" {
-				prompts++
-			}
+}
+
+// A delete prompt that nobody answers times out without an approval, and was
+// shown exactly once.
+func TestADeletePromptNobodyAnsweredWasShownOnce(t *testing.T) {
+	needsObjectHold(t)
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
+	ctx, cancel := deletePermCtx(t, "sess-count-timeout", d)
+	defer cancel()
+	prompts := 0
+	ctx.StreamFn = func(et string, _ interface{}) {
+		if et == "permission_request" {
+			prompts++
 		}
-		t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
-		if awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"f.py"}`)) {
-			t.Error("a timeout was allowed")
+	}
+	t.Setenv("ATLAS_PERMISSION_TIMEOUT_SEC", "1")
+	if awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"f.py"}`)) {
+		t.Error("a timeout was allowed")
+	}
+	if prompts != 1 {
+		t.Errorf("timeout: %d prompts, want 1", prompts)
+	}
+}
+
+// A delete prompt whose request was cancelled was shown exactly once.
+func TestADeletePromptWhoseRequestWasCancelledWasShownOnce(t *testing.T) {
+	needsObjectHold(t)
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
+	ctx, cancel := deletePermCtx(t, "sess-count-cancel", d)
+	prompts := 0
+	ctx.StreamFn = func(et string, _ interface{}) {
+		if et == "permission_request" {
+			prompts++
 		}
-		if prompts != 1 {
-			t.Errorf("timeout: %d prompts, want 1", prompts)
-		}
-	})
-	t.Run("cancel", func(t *testing.T) {
-		needsObjectHold(t)
-		d := t.TempDir()
-		os.WriteFile(filepath.Join(d, "f.py"), []byte("A\n"), 0o644)
-		ctx, cancel := deletePermCtx(t, "sess-count-cancel", d)
-		prompts := 0
-		ctx.StreamFn = func(et string, _ interface{}) {
-			if et == "permission_request" {
-				prompts++
-			}
-		}
-		done := make(chan bool, 1)
-		go func() {
-			done <- awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"f.py"}`))
-		}()
-		waitForPending(t, "sess-count-cancel", "c")
-		cancel()
-		<-done
-		if prompts != 1 {
-			t.Errorf("cancel: %d prompts, want 1", prompts)
-		}
-	})
-	// Refused before asking: zero prompts.
+	}
+	done := make(chan bool, 1)
+	go func() {
+		done <- awaitPermission(ctx, "delete_file", "c", json.RawMessage(`{"path":"f.py"}`))
+	}()
+	waitForPending(t, "sess-count-cancel", "c")
+	cancel()
+	<-done
+	if prompts != 1 {
+		t.Errorf("cancel: %d prompts, want 1", prompts)
+	}
+}
+
+// Refused before asking: zero prompts.
+func TestADeletionRefusedBeforeAskingShowsNoPrompt(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "ok.py"), []byte("A\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
+	os.WriteFile(filepath.Join(dir, "pkg", "m.py"), []byte("A\n"), 0o644)
+
 	for _, c := range []struct{ name, args string }{
 		{"escape", `{"path":"../../etc/passwd"}`},
 		{"blank", `{"path":""}`},
@@ -1152,7 +1150,7 @@ func TestDeletePromptCounts(t *testing.T) {
 		{"missing", `{"path":"gone.py"}`},
 		{"non-empty directory", `{"path":"pkg"}`},
 	} {
-		t.Run("zero/"+c.name, func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			ctx, cancel := deletePermCtx(t, "sess-zero-"+strings.ReplaceAll(c.name, " ", "-"), dir)
 			defer cancel()
 			prompts := 0
@@ -1291,6 +1289,7 @@ func approveAndDelete(t *testing.T, ctx *AgentContext, sess, callID, rel string,
 
 func TestFulfilledDeletionRecord(t *testing.T) {
 	needsObjectHold(t)
+	noChurn := func(string, string) {}
 	for _, c := range []struct {
 		name     string
 		setup    func(dir string) string
@@ -1301,11 +1300,11 @@ func TestFulfilledDeletionRecord(t *testing.T) {
 		{"approved and removed", func(dir string) string {
 			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
 			return "a.py"
-		}, "allow", nil, true},
+		}, "allow", noChurn, true},
 		{"denied", func(dir string) string {
 			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
 			return "a.py"
-		}, "deny", nil, false},
+		}, "deny", noChurn, false},
 		{"stale identity", func(dir string) string {
 			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
 			return "a.py"
@@ -1315,16 +1314,16 @@ func TestFulfilledDeletionRecord(t *testing.T) {
 		{"empty directory approved", func(dir string) string {
 			os.MkdirAll(filepath.Join(dir, "d"), 0o755)
 			return "d"
-		}, "allow", nil, true},
+		}, "allow", noChurn, true},
 		{"symlink approved", func(dir string) string {
 			os.WriteFile(filepath.Join(dir, "real.py"), []byte("A\n"), 0o644)
 			os.Symlink("real.py", filepath.Join(dir, "l.py"))
 			return "l.py"
-		}, "allow", nil, true},
+		}, "allow", noChurn, true},
 		{"alias spelling", func(dir string) string {
 			os.WriteFile(filepath.Join(dir, "a.py"), []byte("A\n"), 0o644)
 			return "./a.py"
-		}, "allow", nil, true},
+		}, "allow", noChurn, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1333,10 +1332,7 @@ func TestFulfilledDeletionRecord(t *testing.T) {
 			ctx, cancel := deletePermCtx(t, sess, dir)
 			defer cancel()
 			ctx.StreamFn = func(string, interface{}) {}
-			var churn func()
-			if c.churn != nil {
-				churn = func() { c.churn(dir, rel) }
-			}
+			churn := func() { c.churn(dir, rel) }
 			f, _ := approveAndDelete(t, ctx, sess, "call_0", rel, c.decision, churn)
 			t.Logf("%s: fulfilled=%v", c.name, f != nil)
 			if (f != nil) != c.want {
@@ -1350,16 +1346,28 @@ func TestFulfilledDeletionRecord(t *testing.T) {
 					t.Error("the record is not bound to a ledger generation")
 				}
 			}
-			// The symlink's target is never fulfilled by the link's removal.
-			if strings.Contains(c.name, "symlink") {
-				if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "real.py")); ok {
-					t.Error("removing the link fulfilled its target")
-				}
-				if _, err := os.Stat(filepath.Join(dir, "real.py")); err != nil {
-					t.Errorf("the target was removed: %v", err)
-				}
-			}
 		})
+	}
+}
+
+// The symlink's target is never fulfilled by the link's removal, and it stays.
+func TestRemovingASymlinkNeverFulfilsItsTarget(t *testing.T) {
+	needsObjectHold(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "real.py"), []byte("A\n"), 0o644)
+	os.Symlink("real.py", filepath.Join(dir, "l.py"))
+	sess := "sess-ful-symlink-target"
+	ctx, cancel := deletePermCtx(t, sess, dir)
+	defer cancel()
+	ctx.StreamFn = func(string, interface{}) {}
+	if f, _ := approveAndDelete(t, ctx, sess, "call_0", "l.py", "allow", nil); f == nil {
+		t.Fatal("the approved removal of the link left no fulfilled record")
+	}
+	if _, ok := fulfilledDeletionFor(ctx, filepath.Join(dir, "real.py")); ok {
+		t.Error("removing the link fulfilled its target")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real.py")); err != nil {
+		t.Errorf("the target was removed: %v", err)
 	}
 }
 
@@ -1467,9 +1475,11 @@ func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// Provenance: the grant is written in one place, and only the endpoint can
-	// reach it.
+// Provenance: the grant is written in one place, and only the endpoint can
+// reach it.
+func TestTheDeletionGrantIsWrittenInOnePlace(t *testing.T) {
 	perms, _ := os.ReadFile("permissions.go")
 	if n := strings.Count(string(perms), "ctx.approvedDelete = &approvedDeletion{"); n != 1 {
 		t.Errorf("%d writers of the approval grant, want exactly one", n)
@@ -1490,12 +1500,27 @@ func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
 				}
 			}
 		}
-		// Promotion happens in exactly one place.
+	}
+}
+
+// Promotion happens in exactly one place.
+func TestFulfilledDeletionsArePromotedInOnePlace(t *testing.T) {
+	entries, _ := os.ReadDir(".")
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		b, _ := os.ReadFile(n)
+		s := string(b)
 		if c := strings.Count(s, "promoteFulfilledDeletion("); c > 0 && n != "gates.go" && n != "permissions.go" {
 			t.Errorf("%s promotes fulfilled deletions; only the ledger may", n)
 		}
 	}
-	// The record is internal: no wire type carries it.
+}
+
+// The record is internal: no wire type carries it.
+func TestTheDeletionRecordNeverReachesTheWire(t *testing.T) {
 	types, _ := os.ReadFile("types.go")
 	for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
 		"`json:\"deletion_attempt"} {
