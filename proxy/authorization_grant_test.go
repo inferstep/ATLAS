@@ -184,6 +184,21 @@ func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
 			}
 			w.in.Evidence = kept
 		}},
+		// With a V3 service record, the strict basis also needs the record to
+		// be readable and its adapter to support the artifact.
+		{"a service record that cannot be read", nil, func(w *grantWorld) {
+			w.in.Envelope = &V3EvidenceEnvelope{Evaluation: V3EvidenceEvaluation{Supported: true}}
+		}},
+		{"an adapter that does not support the artifact", nil, func(w *grantWorld) {
+			w.in.Envelope = &V3EvidenceEnvelope{
+				WireVersion: evidenceWireMajor + ".0",
+				Identity: V3EvidenceIdentity{ContractID: "contract", ContractVersion: "1", ArtifactScope: "file",
+					EvaluationContextHash: "context", CalibrationID: "calibration"},
+				Evaluation: V3EvidenceEvaluation{ExecutionStatus: "ok", EvidenceStrength: "syntax"},
+				Selection:  V3EvidenceSelection{Status: "no_verified_winner"},
+			}
+		}},
+		{"output knowledge not declared", nil, func(w *grantWorld) { w.in.OutputKnowledgeDeclared = false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newGrantWorld(t, tc.commands...)
@@ -195,6 +210,18 @@ func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
 				t.Error("a grant was minted")
 			}
 		})
+	}
+}
+
+// On the automatic basis, with no declared outputs, only the model's own
+// structured call can ground the target, and a call of another request
+// grounds nothing.
+func TestTheAutomaticBasisMintsNothingForATargetNoCallOfThisRequestGrounds(t *testing.T) {
+	w := newGrantWorld(t)
+	w.in.OutputKnowledgeDeclared = false
+	w.in.Scope.RequestID = "req-somebody-else"
+	if _, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisAutomaticV3); ok || why != structuredTargetNotThisRequest {
+		t.Errorf("minted %v with %q, want no grant and %q", ok, why, structuredTargetNotThisRequest)
 	}
 }
 
