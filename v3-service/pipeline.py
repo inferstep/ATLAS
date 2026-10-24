@@ -2575,6 +2575,207 @@ def _leave_baseline(ctx, run_pool):
     return result
 
 
+class _CandidateVerifier:
+    """verified_sandbox(code) of one run: sandbox + verification of one
+    candidate, as steps.
+
+    It holds what every check reads: the run context, the task type, the
+    import comparison against the submitted file (None when it does not
+    apply), whether the generated cases are a trusted oracle, and
+    `self_tests`, the run's generated suite. Phase 3 sets `self_tests` again
+    when it generates a suite, so a repair runs the new cases.
+    """
+
+    def __init__(self, ctx, task_type, self_tests, import_comparison, has_trusted_oracle):
+        self.ctx = ctx
+        self.task_type = task_type
+        self.self_tests = self_tests
+        self.import_comparison = import_comparison
+        self.has_trusted_oracle = has_trusted_oracle
+
+    def __call__(self, code):
+        """Sandbox + verification. Algorithmic tasks: execution, with the
+        I/O self-tests recorded as diagnostics; interactive: compile smoke.
+
+        A replacement for a file the caller already wrote must first keep
+        that file's role: every top-level name it binds (#259). It runs
+        here, ahead of the sandbox, so every path that can hand back code
+        -- phase one, PR-CoT, refinement, the budget boundary -- is held
+        to it, and the reason reaches repair as the error to fix."""
+        sandbox, smoke_language, task_type = self.ctx.sandbox, self.ctx.smoke_language, self.task_type
+        verification_evidence: List[Dict[str, Any]] = []
+
+        failed_role = self._check_role(code, verification_evidence)
+        if failed_role is not None:
+            return failed_role
+
+        # Non-Python candidates always use the language-aware syntax path.
+        # Python self-tests cannot establish correctness for another language.
+        if smoke_language not in ("python", "py"):
+            return self._smoke_other_language(code, verification_evidence)
+
+        # Interactive tasks: skip the run-and-test; just verify the code
+        # parses and compiles. Running curses/pygame/flask in the sandbox
+        # would fail for environmental reasons (no TTY, no display) even
+        # when the code is correct — see PC-022.
+        if task_type == "interactive":
+            return self._smoke_interactive(code, verification_evidence)
+
+        ok, out, err = sandbox(code)
+        if not ok:
+            return False, out, err, verification_evidence
+        self._record_self_tests(code)
+        # The verdict is the part that does not depend on the self-test
+        # cases: the candidate executed, and the project's own build
+        # command still gets to speak.
+        return self._verify_build_if_requested(code, verification_evidence, out, err)
+
+    def _check_role(self, code, verification_evidence):
+        """The submitted file's role (#259): a replacement must keep every
+        top-level name the file binds. Returns the failed verdict, or None."""
+        baseline_code, file_path, files, emit = self.ctx.baseline_code, self.ctx.file_path, self.ctx.files, self.ctx.emit
+        if baseline_code and code != baseline_code:
+            dropped = symbols.dropped_top_level_names(
+                baseline_code, code, file_path, files)
+            if dropped:
+                shown = ", ".join(dropped[:6]) + (" and more" if len(dropped) > 6 else "")
+                reason = (f"role check: this candidate drops {shown}, which "
+                          f"{Path(file_path).name if file_path else 'the file'} "
+                          f"has now. A replacement must keep every top-level "
+                          f"name the file binds.")
+                emit("role_check", reason, dropped=dropped)
+                verification_evidence.append({
+                    "verifier": "incumbent_role", "status": "failed",
+                    "dropped": dropped, "stderr": reason})
+                return False, "", reason, verification_evidence
+        return None
+
+    def _verify_build_if_requested(self, code, verification_evidence, out="", err=""):
+        """The checks after the syntax check or the run: the import comparison
+        against the submitted file, then the project's build command."""
+        import_comparison, emit, sandbox = self.import_comparison, self.ctx.emit, self.ctx.sandbox
+        build_command, file_path, files, working_dir = (
+            self.ctx.build_command, self.ctx.file_path, self.ctx.files, self.ctx.working_dir)
+        if import_comparison is not None:
+            admitted, diagnostic, runtime_evidence = import_comparison.check(code)
+            verification_evidence.append(runtime_evidence)
+            emit("runtime_compare", runtime_evidence["status"],
+                 status=runtime_evidence["status"], admitted=admitted,
+                 reason=runtime_evidence.get("reason", ""),
+                 candidate_hash=runtime_evidence["candidate_hash"])
+            if not admitted:
+                return False, out, diagnostic, verification_evidence
+        ok, build_out, build_err, evidence = scoring.verify_build_command(
+            code=code,
+            sandbox=sandbox,
+            build_command=build_command,
+            file_path=file_path,
+            project_files=files,
+            working_dir=working_dir or "/workspace",
+            emit=emit,
+        )
+        if evidence:
+            verification_evidence.append(evidence)
+        if not ok:
+            return False, build_out, build_err, verification_evidence
+        return True, out, err, verification_evidence
+
+    def _smoke_other_language(self, code, verification_evidence):
+        """A candidate in another language than Python: its language-aware
+        syntax check, then the checks after it."""
+        sandbox, smoke_language, file_path, emit = self.ctx.sandbox, self.ctx.smoke_language, self.ctx.file_path, self.ctx.emit
+        ok, out, err = scoring.smoke_compile_check(code, sandbox, language=smoke_language, filename=file_path)
+        emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
+        if not ok:
+            return ok, out, err, verification_evidence
+        return self._verify_build_if_requested(code, verification_evidence, out, err)
+
+    def _smoke_interactive(self, code, verification_evidence):
+        """An interactive Python task: the compile smoke and the interactive
+        lint instead of a run, then the checks after them."""
+        sandbox, smoke_language, file_path, emit = self.ctx.sandbox, self.ctx.smoke_language, self.ctx.file_path, self.ctx.emit
+        # PC-048: pass the detected language so HTML/JSON/etc. files
+        # don't get parsed as Python (which produces spurious
+        # SYNTAX_ERROR cascades into PR-CoT repair + LLM timeouts).
+        ok, out, err = scoring.smoke_compile_check(code, sandbox, language=smoke_language, filename=file_path)
+        emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
+        if not ok:
+            return ok, out, err, verification_evidence
+        # Interactive lint is Python-AST based — only meaningful for
+        # Python files. Skip for HTML/CSS/JSON/etc.
+        if smoke_language not in ("python", "py"):
+            return True, out, err, verification_evidence
+        # Interactive lint: catch raw stdin reads / blocking input loops
+        # that compile fine but don't actually work for keystroke
+        # handling (PC-034).
+        lint_ok, lint_reason = scoring.interactive_lint(code)
+        if lint_ok:
+            emit("interactive_lint",
+                 f"SKIPPED ({lint_reason})" if lint_reason else "OK")
+            return self._verify_build_if_requested(code, verification_evidence, out, err)
+        emit("interactive_lint", f"FAIL: {lint_reason}")
+        return False, out, f"interactive_lint: {lint_reason}", verification_evidence
+
+    def _record_self_tests(self, code):
+        """Run the generated cases on a candidate that executed and record its
+        score. Diagnostics only: the cases carry no rejection authority."""
+        self_tests, sandbox, task_input_file = self.self_tests, self.ctx.sandbox, self.ctx.task_input_file
+        capture, emit, _has_trusted_oracle = self.ctx.capture, self.ctx.emit, self.has_trusted_oracle
+        if self_tests and self_tests.test_cases:
+            p = 0
+            observed = []
+            for i, tc in enumerate(self_tests.test_cases):
+                try:
+                    tc_code, tc_files = _make_self_test(
+                        code, tc, task_input_file)
+                    tp, to, te = sandbox(tc_code, files=tc_files)
+                    if tp and "SELF_TEST_PASS" in to:
+                        p += 1
+                    observed.append(_capture_case(i, tc, tp, to, te))
+                except Exception as ex:
+                    observed.append(_capture_case(i, tc, False, "", "",
+                                                  harness_error=str(ex)[:200]))
+            total = len(self_tests.test_cases)
+            # p and total are computed here and discarded at the return
+            # below, which hands back a boolean. Capture keeps them,
+            # and the per-case pairs behind them, without touching the
+            # verdict.
+            capture.note_oracle(code, observed, p, total)
+            emit("self_test_verify", f"{p}/{total} passed")
+            if not _has_trusted_oracle:
+                # Observed, recorded, and given no authority. These cases
+                # were written by the same model as the candidate, from
+                # the problem statement alone; letting them reject is how
+                # a candidate that matched the task's own reference on
+                # every input scored 2/5 and was discarded. The score and
+                # every per-case pair stay in telemetry and in the pool
+                # capture for offline analysis -- what changes is that
+                # nothing downstream reads them as a verdict.
+                emit("self_test_untrusted",
+                     f"{p}/{total} against model-generated cases — "
+                     f"diagnostic only, no rejection authority",
+                     cases=total, passed_cases=p,
+                     provenance=PROVENANCE_GENERATED)
+
+
+def _new_verifier(ctx, task_type, self_tests):
+    """The run's verified_sandbox, with the trusted-oracle answer and the
+    import comparison it needs, both settled before its first call."""
+    sandbox, baseline_code, file_path, working_dir = ctx.sandbox, ctx.baseline_code, ctx.file_path, ctx.working_dir
+    smoke_language, start, budget_ms, check_client = ctx.smoke_language, ctx.start, ctx.budget_ms, ctx.check_client
+    # Computed once, before verified_sandbox's first caller (the phase-0
+    # probe). The phase-3 regeneration below also writes generated cases,
+    # so it cannot change the answer.
+    _has_trusted_oracle = _trusted_oracle(self_tests)
+
+    import_comparison = None
+    if task_type == "interactive" and smoke_language == "python" and baseline_code and file_path:
+        import_comparison = PythonImportComparison(
+            sandbox, baseline_code, file_path, working_dir,
+            remaining_ms=lambda: _remaining_budget_ms(start, budget_ms), check_cancel=check_client)
+    return _CandidateVerifier(ctx, task_type, self_tests, import_comparison, _has_trusted_oracle)
+
+
 class V3PipelineService:
     """Full V3 pipeline for a single coding task, with streaming progress."""
 
@@ -2713,7 +2914,7 @@ class V3PipelineService:
             print(f"  [telemetry] pipeline summary write failed (non-fatal): {e}",
                   flush=True)
 
-    def _run_impl(self, problem: str, task_id: str = "cli",  # noqa: C901
+    def _run_impl(self, problem: str, task_id: str = "cli",
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
                   working_dir: str = "/workspace", baseline_code: str = "",
@@ -2759,148 +2960,7 @@ class V3PipelineService:
         # ===== PHASE 0: PROBE =====
         probe_code, tokens = self._generate_probe(ctx)
         task_type, self_tests = self._classify_task(ctx)
-
-        # Computed once, before verified_sandbox's first caller (the phase-0
-        # probe). The phase-3 regeneration below also writes generated cases,
-        # so it cannot change the answer.
-        _has_trusted_oracle = _trusted_oracle(self_tests)
-
-        import_comparison = None
-        if task_type == "interactive" and smoke_language == "python" and baseline_code and file_path:
-            import_comparison = PythonImportComparison(
-                sandbox, baseline_code, file_path, working_dir,
-                remaining_ms=lambda: _remaining_budget_ms(start, budget_ms), check_cancel=check_client)
-
-        def verified_sandbox(code, extra_test=""):  # noqa: C901
-            """Sandbox + verification. Algorithmic tasks: execution, with the
-            I/O self-tests recorded as diagnostics; interactive: compile smoke.
-
-            A replacement for a file the caller already wrote must first keep
-            that file's role: every top-level name it binds (#259). It runs
-            here, ahead of the sandbox, so every path that can hand back code
-            -- phase one, PR-CoT, refinement, the budget boundary -- is held
-            to it, and the reason reaches repair as the error to fix."""
-            verification_evidence: List[Dict[str, Any]] = []
-
-            if baseline_code and code != baseline_code:
-                dropped = symbols.dropped_top_level_names(
-                    baseline_code, code, file_path, files)
-                if dropped:
-                    shown = ", ".join(dropped[:6]) + (" and more" if len(dropped) > 6 else "")
-                    reason = (f"role check: this candidate drops {shown}, which "
-                              f"{Path(file_path).name if file_path else 'the file'} "
-                              f"has now. A replacement must keep every top-level "
-                              f"name the file binds.")
-                    emit("role_check", reason, dropped=dropped)
-                    verification_evidence.append({
-                        "verifier": "incumbent_role", "status": "failed",
-                        "dropped": dropped, "stderr": reason})
-                    return False, "", reason, verification_evidence
-
-            def verify_build_if_requested(out="", err=""):
-                if import_comparison is not None:
-                    admitted, diagnostic, runtime_evidence = import_comparison.check(code)
-                    verification_evidence.append(runtime_evidence)
-                    emit("runtime_compare", runtime_evidence["status"],
-                         status=runtime_evidence["status"], admitted=admitted,
-                         reason=runtime_evidence.get("reason", ""),
-                         candidate_hash=runtime_evidence["candidate_hash"])
-                    if not admitted:
-                        return False, out, diagnostic, verification_evidence
-                ok, build_out, build_err, evidence = scoring.verify_build_command(
-                    code=code,
-                    sandbox=sandbox,
-                    build_command=build_command,
-                    file_path=file_path,
-                    project_files=files,
-                    working_dir=working_dir or "/workspace",
-                    emit=emit,
-                )
-                if evidence:
-                    verification_evidence.append(evidence)
-                if not ok:
-                    return False, build_out, build_err, verification_evidence
-                return True, out, err, verification_evidence
-
-            # Non-Python candidates always use the language-aware syntax path.
-            # Python self-tests cannot establish correctness for another language.
-            if smoke_language not in ("python", "py"):
-                ok, out, err = scoring.smoke_compile_check(code, sandbox, language=smoke_language, filename=file_path)
-                emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
-                if not ok:
-                    return ok, out, err, verification_evidence
-                return verify_build_if_requested(out, err)
-
-            # Interactive tasks: skip the run-and-test; just verify the code
-            # parses and compiles. Running curses/pygame/flask in the sandbox
-            # would fail for environmental reasons (no TTY, no display) even
-            # when the code is correct — see PC-022.
-            if task_type == "interactive":
-                # PC-048: pass the detected language so HTML/JSON/etc. files
-                # don't get parsed as Python (which produces spurious
-                # SYNTAX_ERROR cascades into PR-CoT repair + LLM timeouts).
-                ok, out, err = scoring.smoke_compile_check(code, sandbox, language=smoke_language, filename=file_path)
-                emit("smoke_check", f"compile={'OK' if ok else 'FAIL'} ({smoke_language})")
-                if not ok:
-                    return ok, out, err, verification_evidence
-                # Interactive lint is Python-AST based — only meaningful for
-                # Python files. Skip for HTML/CSS/JSON/etc.
-                if smoke_language not in ("python", "py"):
-                    return True, out, err, verification_evidence
-                # Interactive lint: catch raw stdin reads / blocking input loops
-                # that compile fine but don't actually work for keystroke
-                # handling (PC-034).
-                lint_ok, lint_reason = scoring.interactive_lint(code)
-                if lint_ok:
-                    emit("interactive_lint",
-                         f"SKIPPED ({lint_reason})" if lint_reason else "OK")
-                    return verify_build_if_requested(out, err)
-                emit("interactive_lint", f"FAIL: {lint_reason}")
-                return False, out, f"interactive_lint: {lint_reason}", verification_evidence
-
-            ok, out, err = sandbox(code)
-            if not ok:
-                return False, out, err, verification_evidence
-            if self_tests and self_tests.test_cases:
-                p = 0
-                observed = []
-                for i, tc in enumerate(self_tests.test_cases):
-                    try:
-                        tc_code, tc_files = _make_self_test(
-                            code, tc, task_input_file)
-                        tp, to, te = sandbox(tc_code, files=tc_files)
-                        if tp and "SELF_TEST_PASS" in to:
-                            p += 1
-                        observed.append(_capture_case(i, tc, tp, to, te))
-                    except Exception as ex:
-                        observed.append(_capture_case(i, tc, False, "", "",
-                                                      harness_error=str(ex)[:200]))
-                total = len(self_tests.test_cases)
-                # p and total are computed here and discarded at the return
-                # below, which hands back a boolean. Capture keeps them,
-                # and the per-case pairs behind them, without touching the
-                # verdict.
-                capture.note_oracle(code, observed, p, total)
-                emit("self_test_verify", f"{p}/{total} passed")
-                if not _has_trusted_oracle:
-                    # Observed, recorded, and given no authority. These cases
-                    # were written by the same model as the candidate, from
-                    # the problem statement alone; letting them reject is how
-                    # a candidate that matched the task's own reference on
-                    # every input scored 2/5 and was discarded. The score and
-                    # every per-case pair stay in telemetry and in the pool
-                    # capture for offline analysis -- what changes is that
-                    # nothing downstream reads them as a verdict.
-                    emit("self_test_untrusted",
-                         f"{p}/{total} against model-generated cases — "
-                         f"diagnostic only, no rejection authority",
-                         cases=total, passed_cases=p,
-                         provenance=PROVENANCE_GENERATED)
-            # The verdict is the part that does not depend on the self-test
-            # cases: the candidate executed, and the project's own build
-            # command still gets to speak.
-            return verify_build_if_requested(out, err)
-
+        verified_sandbox = _new_verifier(ctx, task_type, self_tests)
         probe = _score_and_test_probe(ctx, probe_code, tokens, verified_sandbox)
 
         # Evidence strength decides whether phase 0 may close the pipeline.
@@ -2935,7 +2995,6 @@ class V3PipelineService:
             self._generate_from_plans(ctx, candidates, k, budget_tier)
             self._generate_by_div_sampling(ctx, candidates, k, bf_tier)
             result["candidates_generated"] = len(candidates)
-
             finished = _test_and_select(ctx, run_pool, verified_sandbox, self_tests, _task)
             if finished is not None:
                 return finished
@@ -2944,6 +3003,7 @@ class V3PipelineService:
                 return finished
             failing = _failing_candidates(run_pool)
             self_tests = self._regenerate_self_tests(ctx, task_type, self_tests)
+            verified_sandbox.self_tests = self_tests
             return self._repair(ctx, run_pool, failing, verified_sandbox, _task)
         except adapters.BudgetExhausted as exc:
             # An anytime algorithm whose clock expires owes its caller the
