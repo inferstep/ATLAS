@@ -191,7 +191,8 @@ def test_h5_corrupt_write(rel, tmp_path, files, must_exist, defect):
     if defect is None:
         assert found == []
     else:
-        assert len(found) == 1 and found[0].startswith(defect), found
+        assert len(found) == 1, found
+        assert found[0].startswith(defect), found
 
 
 # --- H6 service fault ------------------------------------------------------
@@ -482,11 +483,13 @@ def test_stack_identity_records_what_the_proxy_reports(rel):
     finally:
         srv.shutdown()
     assert got["grammar_mode"] == "loose"
-    assert got["asa"] == "active" and got["lens"] == "supported"
+    assert got["asa"] == "active"
+    assert got["lens"] == "supported"
     assert got["errors"] == {}
     # Unreachable: recorded as such, never a crash.
     down = rel.stack_identity("http://127.0.0.1:9")
-    assert down["grammar_mode"] is None and set(down["errors"]) == {"version", "calibration"}
+    assert down["grammar_mode"] is None
+    assert set(down["errors"]) == {"version", "calibration"}
 
 
 # --- the workspace mounts of the stack under measurement --------------------
@@ -521,7 +524,8 @@ def test_a_stack_whose_proxy_and_sandbox_have_other_folders_is_refused_under_any
     for project, proxy, sandbox in (("atlas", "atlas-atlas-proxy-1", "atlas-sandbox-1"),
                                     ("atlas-nightly", "atlas-nightly-atlas-proxy-1", "atlas-nightly-sandbox-1")):
         problems = rel.preflight(sandbox, "_reliability", project, run=_mounts({proxy: "/a", sandbox: "/b"}))
-        assert len(problems) == 1 and "proxy=/a sandbox=/b" in problems[0], problems
+        assert len(problems) == 1, problems
+        assert "proxy=/a sandbox=/b" in problems[0], problems
 
 
 def test_a_run_gives_the_check_of_mounts_the_project_name_it_was_started_with(rel):
@@ -534,7 +538,8 @@ def test_a_run_gives_the_check_of_mounts_the_project_name_it_was_started_with(re
 def test_a_folder_that_the_sandbox_does_not_have_is_refused(rel):
     mounts = {"atlas-atlas-proxy-1": "/a", "atlas-sandbox-1": "/a"}
     problems = rel.preflight("atlas-sandbox-1", "_reliability", run=_mounts(mounts, folders=()))
-    assert len(problems) == 1 and "/workspace/_reliability does not exist inside atlas-sandbox-1" in problems[0]
+    assert len(problems) == 1
+    assert "/workspace/_reliability does not exist inside atlas-sandbox-1" in problems[0]
 
 
 # --- stack stability (#240) ---------------------------------------------------
@@ -642,7 +647,8 @@ def test_a_stack_is_verified_only_with_the_images_deployed_for_its_commit(rel, t
 def test_a_stack_with_no_deploy_record_is_unverified_not_refused(rel, tmp_path):
     ident = rel.deployed_identity("atlas", tmp_path / "none", "b0e6013",
                                   run=_fake_images(_IMAGES))
-    assert not ident["mismatch"] and not ident["verified"]
+    assert not ident["mismatch"]
+    assert not ident["verified"]
     assert ident["images"] == _IMAGES
     assert "unverified" in ident["problems"][0]
 
