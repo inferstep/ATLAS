@@ -84,6 +84,27 @@ func TestFeasibilityMatrix(t *testing.T) {
 		expectFeasibility(t, "two commands", d, true, FeasibilityClosurePathAvailable)
 	})
 
+	t.Run("declared command on a build without staging", func(t *testing.T) {
+		_, obs := rolesFixture(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
+		d := decideInvocationFeasibility(feasibilityInput{
+			Obligations:       obs,
+			AuthorizedTargets: authorizedTargets(obs),
+			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+		})
+		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
+		if len(d.Unreachable) != 1 ||
+			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
+			t.Errorf("unreachable %v, want the declared command", d.Unreachable)
+		}
+	})
+}
+
+// An existing baseline owes preservation, which has no producer: it is
+// reachable exactly when the evidence that speaks for the candidate reaches
+// the strength the baseline holds.
+func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 	t.Run("syntax baseline is reachable from what syntax evidence produces", func(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
@@ -138,22 +159,6 @@ func TestFeasibilityMatrix(t *testing.T) {
 			decideInvocationFeasibility(in), true, FeasibilityClosurePathAvailable)
 	})
 
-	t.Run("declared command on a build without staging", func(t *testing.T) {
-		_, obs := rolesFixture(t,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
-		d := decideInvocationFeasibility(feasibilityInput{
-			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
-		})
-		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
-		if len(d.Unreachable) != 1 ||
-			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
-			t.Errorf("unreachable %v, want the declared command", d.Unreachable)
-		}
-	})
-
 	t.Run("existing validated baseline", func(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
@@ -179,7 +184,11 @@ func TestFeasibilityMatrix(t *testing.T) {
 		expectFeasibility(t, "behavioral baseline", d, true,
 			FeasibilityClosurePathAvailable)
 	})
+}
 
+// With nothing the invocation can close -- an unsupported obligation, no
+// contract, no target, or a kind with no role -- there is no closure path.
+func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 	t.Run("unsupported obligation", func(t *testing.T) {
 		exists, _ := newTaskObligation(ObligationArtifactExists, "a.py", "", true)
 		unsup, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)

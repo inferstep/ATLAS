@@ -200,31 +200,14 @@ func TestReadFileRecordsWhatItShowed(t *testing.T) {
 	}
 }
 
-// End to end: a truncated read, an answer about code past the cut, and one
-// bounce that sends the model back to read it.
-func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
-	dir := t.TempDir()
-	src := planningSource()
-	for len(src) < 2*maxReadFileBytes {
-		src += "# more padding past the end\n"
-	}
-	if err := os.WriteFile(filepath.Join(dir, "planning.py"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+// planModelServer is a model server that answers its i-th request with
+// plan(i), and refuses any request after the eighth. It has no slots to erase,
+// and every other service is unavailable.
+func planModelServer(t *testing.T, plan func(i int) map[string]interface{}) *httptest.Server {
+	t.Helper()
 	var mu sync.Mutex
 	turns := 0
-	plan := func(i int) map[string]interface{} {
-		switch i {
-		case 0:
-			return map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]string{"path": "planning.py"}}
-		case 2:
-			return map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]interface{}{"path": "planning.py", "offset": 400, "limit": 40}}
-		}
-		return map[string]interface{}{"type": "text", "content": unshownAnswer}
-	}
-	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/slots/") {
 			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
 			return
@@ -243,17 +226,40 @@ func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 			return
 		}
 		call, _ := json.Marshal(plan(i))
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		serveReply(w, string(call))
 	}))
-	t.Cleanup(inference.Close)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// End to end: a truncated read, an answer about code past the cut, and one
+// bounce that sends the model back to read it.
+func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
+	dir := t.TempDir()
+	src := planningSource()
+	for len(src) < 2*maxReadFileBytes {
+		src += "# more padding past the end\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning.py"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inference := planModelServer(t, func(i int) map[string]interface{} {
+		switch i {
+		case 0:
+			return map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]string{"path": "planning.py"}}
+		case 2:
+			return map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]interface{}{"path": "planning.py", "offset": 400, "limit": 40}}
+		}
+		return map[string]interface{}{"type": "text", "content": unshownAnswer}
+	})
 
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.InferenceURL = inference.URL
 	ctx.PermissionMode = PermissionYolo
 	ctx.MaxTurns = 0
+	var mu sync.Mutex
 	var gates []string
 	terminal := map[string]string{}
 	ctx.StreamFn = func(et string, data interface{}) {
@@ -267,11 +273,7 @@ func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 			}
 		}
 		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
+			json.Unmarshal(b, &terminal) // adds the payload's keys to the map
 		}
 	}
 	runAgentLoop(ctx, "Why does the planner pick a longer plan when two plans tie? Do not change the code.")

@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"strings"
 	"testing"
@@ -236,46 +234,7 @@ func TestEveryProcessSpawnIsRegistered(t *testing.T) {
 	allowed := map[string]string{
 		"tools.go:runLocally": "the opt-in host route, bounded by ulimit and its own process group",
 	}
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := map[string]bool{}
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			fd, ok := n.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				return true
-			}
-			ast.Inspect(fd.Body, func(inner ast.Node) bool {
-				sel, ok := inner.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				pkg, ok := sel.X.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				spawns := (pkg.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command")) ||
-					(pkg.Name == "os" && sel.Sel.Name == "StartProcess") ||
-					(pkg.Name == "syscall" && sel.Sel.Name == "Exec")
-				if spawns {
-					found[name+":"+fd.Name.Name] = true
-				}
-				return true
-			})
-			return true
-		})
-	}
+	found := processSpawnSites(proxyFiles(t))
 	for site := range found {
 		if _, ok := allowed[site]; !ok {
 			t.Errorf("%s spawns a process and is not a registered execution owner. "+
@@ -290,6 +249,40 @@ func TestEveryProcessSpawnIsRegistered(t *testing.T) {
 				"anything: remove it from the registry rather than leaving a hole", site)
 		}
 	}
+}
+
+// processSpawnSites names, as file:function, every function in files whose
+// body refers to a way to start a process.
+func processSpawnSites(files map[string]*ast.File) map[string]bool {
+	found := map[string]bool{}
+	for name, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			fd, ok := n.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				return true
+			}
+			ast.Inspect(fd.Body, func(inner ast.Node) bool {
+				if sel, ok := inner.(*ast.SelectorExpr); ok && startsAProcess(sel) {
+					found[name+":"+fd.Name.Name] = true
+				}
+				return true
+			})
+			return true
+		})
+	}
+	return found
+}
+
+// startsAProcess reports whether sel names a way to start a process:
+// exec.Command and its variants, os.StartProcess or syscall.Exec.
+func startsAProcess(sel *ast.SelectorExpr) bool {
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return (pkg.Name == "exec" && strings.HasPrefix(sel.Sel.Name, "Command")) ||
+		(pkg.Name == "os" && sel.Sel.Name == "StartProcess") ||
+		(pkg.Name == "syscall" && sel.Sel.Name == "Exec")
 }
 
 // The host route carries the same ceiling, from the same operator value, and

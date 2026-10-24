@@ -59,47 +59,7 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 			}
 			json.NewEncoder(w).Encode(out)
 		case strings.HasSuffix(r.URL.Path, "/shell"):
-			// The executor's half of staging: overlay in, hashes either side
-			// out. It draws no conclusion, exactly as the real one does not.
-			var in struct {
-				Command      string            `json:"command"`
-				Files        map[string]string `json:"files"`
-				ObservePaths []string          `json:"observe_paths"`
-			}
-			if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.ObservePaths) == 0 {
-				http.Error(w, "staging requires an overlay and an observation",
-					http.StatusBadRequest)
-				return
-			}
-			world.shellRuns++
-			exit := world.shellExit
-			if world.shellFail[in.Command] {
-				exit = 1
-			}
-			observed := in.ObservePaths[0]
-			before := contentSHA256(in.Files[observed])
-			after, ws := before, "ws-before"
-			if world.shellMutate {
-				after = contentSHA256("rewritten\n")
-				ws = "ws-after"
-			}
-			if world.shellInput {
-				// The candidate is untouched; something else in the workspace
-				// is not.
-				ws = "ws-after"
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success":   exit == 0 && !world.shellTimeout,
-				"exit_code": exit,
-				"outcome":   "completed",
-				"stdout":    "", "stderr": "", "timed_out": world.shellTimeout,
-				"observation": map[string]interface{}{
-					"target_before":    map[string]string{observed: before},
-					"target_after":     map[string]string{observed: after},
-					"workspace_before": "ws-before", "workspace_after": ws,
-					"workspace_files": 2, "digest_truncated": false,
-				},
-			})
+			world.serveShell(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -116,6 +76,51 @@ func newMatrixWorld(t *testing.T, contract, filename, code string, valid bool) *
 	world.ctx, world.path, world.code, world.sandbox = ctx, resolved, code, srv
 	world.hash = fileSHA256(ctx, resolved)
 	return world
+}
+
+// serveShell is the executor's half of staging: overlay in, hashes either
+// side out. It draws no conclusion, exactly as the real one does not. The
+// world's shell fields script what the command does.
+func (w *matrixWorld) serveShell(rw http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Command      string            `json:"command"`
+		Files        map[string]string `json:"files"`
+		ObservePaths []string          `json:"observe_paths"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.ObservePaths) == 0 {
+		http.Error(rw, "staging requires an overlay and an observation",
+			http.StatusBadRequest)
+		return
+	}
+	w.shellRuns++
+	exit := w.shellExit
+	if w.shellFail[in.Command] {
+		exit = 1
+	}
+	observed := in.ObservePaths[0]
+	before := contentSHA256(in.Files[observed])
+	after, ws := before, "ws-before"
+	if w.shellMutate {
+		after = contentSHA256("rewritten\n")
+		ws = "ws-after"
+	}
+	if w.shellInput {
+		// The candidate is untouched; something else in the workspace
+		// is not.
+		ws = "ws-after"
+	}
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success":   exit == 0 && !w.shellTimeout,
+		"exit_code": exit,
+		"outcome":   "completed",
+		"stdout":    "", "stderr": "", "timed_out": w.shellTimeout,
+		"observation": map[string]interface{}{
+			"target_before":    map[string]string{observed: before},
+			"target_after":     map[string]string{observed: after},
+			"workspace_before": "ws-before", "workspace_after": ws,
+			"workspace_files": 2, "digest_truncated": false,
+		},
+	})
 }
 
 func (w *matrixWorld) obligations() []taskObligation {
@@ -186,251 +191,266 @@ func (w *matrixWorld) stagedRun(obl taskObligation, outcome stagingCommandOutcom
 	}
 }
 
-func TestEvidenceMatrix(t *testing.T) {
-	const secretCode = "TOKEN = 'hunter2'\nprint(7)\n"
+// matrixSecretCode is the candidate every matrix row starts from. No byte of it
+// may appear in a binding.
+const matrixSecretCode = "TOKEN = 'hunter2'\nprint(7)\n"
 
-	t.Run("syntax-only structured task", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-			"solve.py", secretCode, true)
-		obs := w.obligations()
-		var syn taskObligation
-		for _, o := range obs {
-			if o.Kind == ObligationSyntacticValidity {
-				syn = o
-			}
+// A syntax-only structured task: the proxy's syntax evidence closes the syntax
+// obligation.
+func TestEvidenceMatrixSyntaxOnlyStructuredTask(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
+		"solve.py", matrixSecretCode, true)
+	obs := w.obligations()
+	var syn taskObligation
+	for _, o := range obs {
+		if o.Kind == ObligationSyntacticValidity {
+			syn = o
 		}
-		if syn.ID == "" {
-			t.Fatalf("no syntax obligation derived: %v", obs)
-		}
-		ev, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
-			Obligation: syn, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash,
-			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
-			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
-		})
-		if !ok {
-			t.Fatal("a structured syntax task produced no evidence")
-		}
-		if authorized, why := ev.Authorizes(); !authorized {
-			t.Errorf("proxy syntax evidence did not close a syntax obligation: %s", why)
-		}
-		assertNoLeak(t, "syntax-only", ev, secretCode, "hunter2", "TOKEN")
-		assertDirectJoin(t, "syntax-only", ev, "req-matrix", "inv-1", "cand-1", w.hash)
+	}
+	if syn.ID == "" {
+		t.Fatalf("no syntax obligation derived: %v", obs)
+	}
+	ev, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
+		Obligation: syn, Path: w.path, CandidateBytes: w.code,
+		CandidateHash: w.hash,
+		Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+		InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
 	})
+	if !ok {
+		t.Fatal("a structured syntax task produced no evidence")
+	}
+	if authorized, why := ev.Authorizes(); !authorized {
+		t.Errorf("proxy syntax evidence did not close a syntax obligation: %s", why)
+	}
+	assertNoLeak(t, "syntax-only", ev, matrixSecretCode, "hunter2", "TOKEN")
+	assertDirectJoin(t, "syntax-only", ev, "req-matrix", "inv-1", "cand-1", w.hash)
+}
 
-	t.Run("behavioral requirement on a syntax-only producer", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","verification_knowledge":"declared","verification":["pytest -q"]}`,
-			"solve.py", secretCode, true)
-		var cmd taskObligation
-		for _, o := range w.obligations() {
-			if o.Kind == ObligationDeclaredCommand {
-				cmd = o
-			}
+// A behavioural requirement on a syntax-only producer: the structural gate
+// cannot speak for a declared command, which stays owed.
+func TestEvidenceMatrixBehavioralRequirementOnASyntaxOnlyProducer(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","verification_knowledge":"declared","verification":["pytest -q"]}`,
+		"solve.py", matrixSecretCode, true)
+	var cmd taskObligation
+	for _, o := range w.obligations() {
+		if o.Kind == ObligationDeclaredCommand {
+			cmd = o
 		}
-		if cmd.ID == "" {
-			t.Fatal("no declared-command obligation derived")
-		}
-		// The structural gate cannot speak for it.
-		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
-			Obligation: cmd, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash,
-			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
-			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
-		}); ok {
-			t.Error("the syntax producer described a behavioural obligation")
-		}
-		// And nothing ran it, so the obligation is still owed.
-		_, missing := declaredVerificationCoverage([]taskObligation{cmd}, nil)
-		if len(missing) != 1 {
-			t.Error("an unrun declared command was not reported as owed")
-		}
-	})
+	}
+	if cmd.ID == "" {
+		t.Fatal("no declared-command obligation derived")
+	}
+	// The structural gate cannot speak for it.
+	if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
+		Obligation: cmd, Path: w.path, CandidateBytes: w.code,
+		CandidateHash: w.hash,
+		Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+		InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
+	}); ok {
+		t.Error("the syntax producer described a behavioural obligation")
+	}
+	// And nothing ran it, so the obligation is still owed.
+	_, missing := declaredVerificationCoverage([]taskObligation{cmd}, nil)
+	if len(missing) != 1 {
+		t.Error("an unrun declared command was not reported as owed")
+	}
+}
 
-	t.Run("one declared command", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
-			"solve.py", secretCode, true)
-		var cmd taskObligation
-		for _, o := range w.obligations() {
-			if o.Kind == ObligationDeclaredCommand {
-				cmd = o
-			}
+// One declared command, staged against the exact bytes, closes its obligation.
+func TestEvidenceMatrixOneDeclaredCommand(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
+		"solve.py", matrixSecretCode, true)
+	var cmd taskObligation
+	for _, o := range w.obligations() {
+		if o.Kind == ObligationDeclaredCommand {
+			cmd = o
 		}
-		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
-			w.stagedRun(cmd, stagingExitedZero, false, false))
-		if !ok {
-			t.Fatal("an exact declared command produced no evidence")
-		}
-		// A command declared without a type is a runtime fact: it ran against
-		// these bytes and exited zero. Reaching behavioral takes a typed
-		// declaration and assets the client owns.
-		if ev.Provenance.ObservedStrength != VerificationKindRuntime {
-			t.Errorf("strength %q, want runtime", ev.Provenance.ObservedStrength)
-		}
-		met, missing := declaredVerificationCoverage([]taskObligation{cmd}, []proxyEvidence{ev})
-		if len(met) != 1 || len(missing) != 0 {
-			t.Errorf("met %v missing %v, want the one command met", met, missing)
-		}
-		assertNoLeak(t, "one command", ev, secretCode, "hunter2", "python3 solve.py")
-		assertDirectJoin(t, "one command", ev, "req-matrix", "inv-1", "cand-1", w.hash)
-	})
+	}
+	ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+		w.stagedRun(cmd, stagingExitedZero, false, false))
+	if !ok {
+		t.Fatal("an exact declared command produced no evidence")
+	}
+	// A command declared without a type is a runtime fact: it ran against
+	// these bytes and exited zero. Reaching behavioral takes a typed
+	// declaration and assets the client owns.
+	if ev.Provenance.ObservedStrength != VerificationKindRuntime {
+		t.Errorf("strength %q, want runtime", ev.Provenance.ObservedStrength)
+	}
+	met, missing := declaredVerificationCoverage([]taskObligation{cmd}, []proxyEvidence{ev})
+	if len(met) != 1 || len(missing) != 0 {
+		t.Errorf("met %v missing %v, want the one command met", met, missing)
+	}
+	assertNoLeak(t, "one command", ev, matrixSecretCode, "hunter2", "python3 solve.py")
+	assertDirectJoin(t, "one command", ev, "req-matrix", "inv-1", "cand-1", w.hash)
+}
 
-	t.Run("multiple declared commands", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","verification_knowledge":"declared",`+
-				`"verification":["python3 solve.py","ruff check ."]}`,
-			"solve.py", secretCode, true)
-		var cmds []taskObligation
-		for _, o := range w.obligations() {
-			if o.Kind == ObligationDeclaredCommand {
-				cmds = append(cmds, o)
-			}
+// Of several declared commands, one staged run closes one and leaves the
+// other owed.
+func TestEvidenceMatrixMultipleDeclaredCommands(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","verification_knowledge":"declared",`+
+			`"verification":["python3 solve.py","ruff check ."]}`,
+		"solve.py", matrixSecretCode, true)
+	var cmds []taskObligation
+	for _, o := range w.obligations() {
+		if o.Kind == ObligationDeclaredCommand {
+			cmds = append(cmds, o)
 		}
-		if len(cmds) != 2 {
-			t.Fatalf("derived %d command obligations, want 2", len(cmds))
-		}
-		var evidence []proxyEvidence
-		ev, ok := produceDeclaredVerificationEvidence(w.ctx,
-			w.stagedRun(cmds[0], stagingExitedZero, false, false))
-		if !ok {
-			t.Fatal("the first command produced no evidence")
-		}
-		evidence = append(evidence, ev)
-		met, missing := declaredVerificationCoverage(cmds, evidence)
-		if len(met) != 1 || len(missing) != 1 {
-			t.Errorf("met %v missing %v, want one of each", met, missing)
-		}
-		assertNoLeak(t, "multiple commands", ev, secretCode, "hunter2",
-			cmds[0].Subject, cmds[1].Subject)
-	})
+	}
+	if len(cmds) != 2 {
+		t.Fatalf("derived %d command obligations, want 2", len(cmds))
+	}
+	var evidence []proxyEvidence
+	ev, ok := produceDeclaredVerificationEvidence(w.ctx,
+		w.stagedRun(cmds[0], stagingExitedZero, false, false))
+	if !ok {
+		t.Fatal("the first command produced no evidence")
+	}
+	evidence = append(evidence, ev)
+	met, missing := declaredVerificationCoverage(cmds, evidence)
+	if len(met) != 1 || len(missing) != 1 {
+		t.Errorf("met %v missing %v, want one of each", met, missing)
+	}
+	assertNoLeak(t, "multiple commands", ev, matrixSecretCode, "hunter2",
+		cmds[0].Subject, cmds[1].Subject)
+}
 
-	t.Run("stale workspace", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
-			"solve.py", secretCode, true)
-		var cmd taskObligation
-		for _, o := range w.obligations() {
-			if o.Kind == ObligationDeclaredCommand {
-				cmd = o
-			}
+// A workspace that moves while the staged command runs: the record keeps the
+// workspace it was bound to, so it no longer binds to the live one.
+func TestEvidenceMatrixStaleWorkspace(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","verification_knowledge":"declared","verification":["python3 solve.py"]}`,
+		"solve.py", matrixSecretCode, true)
+	var cmd taskObligation
+	for _, o := range w.obligations() {
+		if o.Kind == ObligationDeclaredCommand {
+			cmd = o
 		}
-		req := w.stagedRun(cmd, stagingExitedZero, false, false)
-		// The workspace moves while the staged command is running.
-		if err := os.WriteFile(w.path, []byte("print(8)\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		bumpWorkspace(w.ctx, w.path, contentSHA256("print(8)\n"))
-		liveGen, liveHash := workspaceIdentity(w.ctx)
-		if liveHash == req.Identity.WorkspaceStateHash {
-			t.Fatal("the workspace did not actually move")
-		}
+	}
+	req := w.stagedRun(cmd, stagingExitedZero, false, false)
+	// The workspace moves while the staged command is running.
+	if err := os.WriteFile(w.path, []byte("print(8)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bumpWorkspace(w.ctx, w.path, contentSHA256("print(8)\n"))
+	liveGen, liveHash := workspaceIdentity(w.ctx)
+	if liveHash == req.Identity.WorkspaceStateHash {
+		t.Fatal("the workspace did not actually move")
+	}
 
-		ev, ok := produceDeclaredVerificationEvidence(w.ctx, req)
-		if !ok {
-			t.Fatal("the row produced no evidence")
-		}
-		// The record is stamped with the workspace the staging run was bound
-		// to, not with whatever the workspace becomes afterwards. That is what
-		// makes staleness DETECTABLE.
-		if ev.Provenance.WorkspaceStateHash != req.Identity.WorkspaceStateHash {
-			t.Error("the record followed the workspace instead of recording it")
-		}
-		asked := ev.Provenance
-		asked.WorkspaceGeneration, asked.WorkspaceStateHash = liveGen, liveHash
-		if ok, _ := ev.Provenance.BindsTo(asked); ok {
-			t.Error("evidence from a superseded workspace still binds to the live one")
-		}
-	})
+	ev, ok := produceDeclaredVerificationEvidence(w.ctx, req)
+	if !ok {
+		t.Fatal("the row produced no evidence")
+	}
+	// The record is stamped with the workspace the staging run was bound
+	// to, not with whatever the workspace becomes afterwards. That is what
+	// makes staleness DETECTABLE.
+	if ev.Provenance.WorkspaceStateHash != req.Identity.WorkspaceStateHash {
+		t.Error("the record followed the workspace instead of recording it")
+	}
+	asked := ev.Provenance
+	asked.WorkspaceGeneration, asked.WorkspaceStateHash = liveGen, liveHash
+	if ok, _ := ev.Provenance.BindsTo(asked); ok {
+		t.Error("evidence from a superseded workspace still binds to the live one")
+	}
+}
 
-	t.Run("existing validated baseline", func(t *testing.T) {
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
-			"solve.py", secretCode, true)
-		if w.ctx.Ledger == nil {
-			w.ctx.Ledger = map[string]*DeliverableState{}
+// An existing validated baseline owes preservation, which no producer here
+// may speak for, and its identity names no bytes.
+func TestEvidenceMatrixExistingValidatedBaseline(t *testing.T) {
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
+		"solve.py", matrixSecretCode, true)
+	if w.ctx.Ledger == nil {
+		w.ctx.Ledger = map[string]*DeliverableState{}
+	}
+	w.ctx.Ledger[w.path] = &DeliverableState{
+		Path: w.path, CurrentHash: w.hash, Generation: 1,
+		ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
+		ValidatedHash: w.hash,
+	}
+	var base taskObligation
+	for _, o := range w.obligations() {
+		if o.Kind == ObligationBaselinePreserved {
+			base = o
 		}
-		w.ctx.Ledger[w.path] = &DeliverableState{
-			Path: w.path, CurrentHash: w.hash, Generation: 1,
-			ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationPassed,
-			ValidatedHash: w.hash,
-		}
-		var base taskObligation
-		for _, o := range w.obligations() {
-			if o.Kind == ObligationBaselinePreserved {
-				base = o
-			}
-		}
-		if base.ID == "" {
-			t.Fatal("a validated baseline owed no preservation")
-		}
-		if base.RequiredStrength != "syntax" {
-			t.Errorf("baseline floor %q, want the syntax it has", base.RequiredStrength)
-		}
-		// No producer here owns preservation, so nothing may speak for it.
-		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
-			Obligation: base, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash,
-			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
-			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
-		}); ok {
-			t.Error("the syntax producer claimed a baseline survived")
-		}
-		// The identity a replacement would be bound against names no bytes.
-		id := baselineIdentityFor(w.ctx, w.path)
-		if id == "" {
-			t.Error("a validated baseline has no identity")
-		}
-		if strings.Contains(id, "hunter2") || strings.Contains(id, secretCode) {
-			t.Errorf("baseline identity %q carries content", id)
-		}
-	})
+	}
+	if base.ID == "" {
+		t.Fatal("a validated baseline owed no preservation")
+	}
+	if base.RequiredStrength != "syntax" {
+		t.Errorf("baseline floor %q, want the syntax it has", base.RequiredStrength)
+	}
+	// No producer here owns preservation, so nothing may speak for it.
+	if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
+		Obligation: base, Path: w.path, CandidateBytes: w.code,
+		CandidateHash: w.hash,
+		Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+		InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
+	}); ok {
+		t.Error("the syntax producer claimed a baseline survived")
+	}
+	// The identity a replacement would be bound against names no bytes.
+	id := baselineIdentityFor(w.ctx, w.path)
+	if id == "" {
+		t.Error("a validated baseline has no identity")
+	}
+	if strings.Contains(id, "hunter2") || strings.Contains(id, matrixSecretCode) {
+		t.Errorf("baseline identity %q carries content", id)
+	}
+}
 
-	t.Run("model-generated self-test", func(t *testing.T) {
-		// The client declared nothing. The model wrote its own test and ran it
-		// green against the exact bytes.
-		w := newMatrixWorld(t, `{"task_mode":"work"}`, "solve.py", secretCode, true)
-		obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 test_solve.py",
-			VerificationKindRuntime, true)
-		if !ok {
-			t.Fatal("obligation refused")
-		}
-		if _, ok := produceDeclaredVerificationEvidence(w.ctx,
-			w.stagedRun(obl, stagingExitedZero, false, false)); ok {
-			t.Error("a model-generated self-test produced trusted evidence")
-		}
-		if len(w.obligations()) != 0 {
-			t.Error("a contractless request produced structured obligations")
-		}
-	})
+// A model-generated self-test is not a declared command and produces no
+// trusted evidence.
+func TestEvidenceMatrixModelGeneratedSelfTest(t *testing.T) {
+	// The client declared nothing. The model wrote its own test and ran it
+	// green against the exact bytes.
+	w := newMatrixWorld(t, `{"task_mode":"work"}`, "solve.py", matrixSecretCode, true)
+	obl, ok := newTaskObligation(ObligationDeclaredCommand, "python3 test_solve.py",
+		VerificationKindRuntime, true)
+	if !ok {
+		t.Fatal("obligation refused")
+	}
+	if _, ok := produceDeclaredVerificationEvidence(w.ctx,
+		w.stagedRun(obl, stagingExitedZero, false, false)); ok {
+		t.Error("a model-generated self-test produced trusted evidence")
+	}
+	if len(w.obligations()) != 0 {
+		t.Error("a contractless request produced structured obligations")
+	}
+}
 
-	t.Run("unsupported artifact", func(t *testing.T) {
-		// A class the structural gate does not govern. The obligation still
-		// exists for existence; nothing can speak for its structure.
-		w := newMatrixWorld(t,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
-			"notes.md", "# notes\n", true)
-		obs := w.obligations()
-		for _, o := range obs {
-			if o.Kind == ObligationSyntacticValidity {
-				t.Error("a class the gate does not govern owed syntax")
-			}
+// An unsupported artifact owes no syntax, and nothing may speak for an
+// unsupported obligation.
+func TestEvidenceMatrixUnsupportedArtifact(t *testing.T) {
+	// A class the structural gate does not govern. The obligation still
+	// exists for existence; nothing can speak for its structure.
+	w := newMatrixWorld(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["notes.md"]}`,
+		"notes.md", "# notes\n", true)
+	obs := w.obligations()
+	for _, o := range obs {
+		if o.Kind == ObligationSyntacticValidity {
+			t.Error("a class the gate does not govern owed syntax")
 		}
-		unsup, ok := newTaskObligation(ObligationUnsupported, "something we cannot name", "", true)
-		if !ok {
-			t.Fatal("an unsupported obligation could not be represented")
-		}
-		if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
-			Obligation: unsup, Path: w.path, CandidateBytes: w.code,
-			CandidateHash: w.hash,
-			Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
-			InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
-		}); ok {
-			t.Error("a producer spoke for an unsupported obligation")
-		}
-		if got := authorizationFloor([]taskObligation{unsup}); got != "oracle" {
-			t.Errorf("an unsupported obligation left the floor reachable at %q", got)
-		}
-	})
+	}
+	unsup, ok := newTaskObligation(ObligationUnsupported, "something we cannot name", "", true)
+	if !ok {
+		t.Fatal("an unsupported obligation could not be represented")
+	}
+	if _, ok := produceSyntaxEvidence(w.ctx, syntaxEvidenceRequest{
+		Obligation: unsup, Path: w.path, CandidateBytes: w.code,
+		CandidateHash: w.hash,
+		Outcome:       fallbackSyntaxOutcomeFor(w.ctx, w.path, w.code).aggregate(),
+		InvocationID:  "inv-1", CandidateInstanceID: "cand-1",
+	}); ok {
+		t.Error("a producer spoke for an unsupported obligation")
+	}
+	if got := authorizationFloor([]taskObligation{unsup}); got != "oracle" {
+		t.Errorf("an unsupported obligation left the floor reachable at %q", got)
+	}
 }

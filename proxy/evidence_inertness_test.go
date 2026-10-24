@@ -105,27 +105,36 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	}
 }
 
-// TestNoProducerReachesTheDeliveryGraph pins the direction: a producer may
-// never call a delivery decision, and a delivery decision may never call a
-// producer.
+// evidenceProducers are the functions that build evidence and obligations.
+// The two guards below pin the direction between them and the delivery
+// decisions.
+var evidenceProducers = map[string]bool{
+	"produceSyntaxEvidence":               true,
+	"produceDeclaredVerificationEvidence": true,
+	"declaredVerificationCoverage":        true,
+	"deriveTaskObligations":               true,
+	"newTaskObligation":                   true,
+}
+
+// TestNoProducerReachesTheDeliveryGraph pins one direction: a producer may
+// never call a delivery decision.
 func TestNoProducerReachesTheDeliveryGraph(t *testing.T) {
 	files := proxyFiles(t)
-	producers := map[string]bool{
-		"produceSyntaxEvidence":               true,
-		"produceDeclaredVerificationEvidence": true,
-		"declaredVerificationCoverage":        true,
-		"deriveTaskObligations":               true,
-		"newTaskObligation":                   true,
-	}
 	for _, fn := range deliveryDecisions {
 		for site := range callSites(files, fn) {
 			caller := site[strings.Index(site, ":")+1:]
-			if producers[caller] {
+			if evidenceProducers[caller] {
 				t.Errorf("producer %s calls the delivery decision %s", caller, fn)
 			}
 		}
 	}
-	for fn := range producers {
+}
+
+// TestNoDeliveryDecisionReachesAProducer pins the other: a delivery decision
+// may never call a producer.
+func TestNoDeliveryDecisionReachesAProducer(t *testing.T) {
+	files := proxyFiles(t)
+	for fn := range evidenceProducers {
 		for site := range callSites(files, fn) {
 			for _, d := range deliveryDecisions {
 				if strings.HasSuffix(site, ":"+d) {

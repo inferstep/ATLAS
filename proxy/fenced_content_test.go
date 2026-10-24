@@ -286,14 +286,11 @@ func TestOneConstrainedRetryMayFollowAZeroByteFailure(t *testing.T) {
 // allowance bounds it.
 func TestFencedAdmissionObservesTheWorkDeadline(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		left     time.Duration // time to the work deadline; 0: no deadline
-		admitted bool
+		name string
+		left time.Duration // time to the work deadline; 0: no deadline
 	}{
-		{"no deadline", 0, true},
-		{"ten minutes left", 10 * time.Minute, true},
-		{"two seconds left", 2 * time.Second, false},
-		{"half a second left", 500 * time.Millisecond, false},
+		{"no deadline", 0},
+		{"ten minutes left", 10 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -306,23 +303,55 @@ func TestFencedAdmissionObservesTheWorkDeadline(t *testing.T) {
 				ctx.Ctx = session
 			}
 
-			if got := fencedFitsRemainingBudget(ctx); got != tc.admitted {
-				t.Fatalf("fencedFitsRemainingBudget = %v, want %v", got, tc.admitted)
+			if !fencedFitsRemainingBudget(ctx) {
+				t.Fatal("fencedFitsRemainingBudget = false, want true")
 			}
 			_, err := fetchFencedContent(ctx, "raw", "solve.py")
 			if err == nil {
 				t.Fatal("the stub never sends a block, so the fetch must fail")
 			}
-			if tc.admitted && calls != maxFencedFailuresPerPath {
+			if calls != maxFencedFailuresPerPath {
 				t.Errorf("%d generations, want the allowance (%d)", calls, maxFencedFailuresPerPath)
 			}
-			if !tc.admitted && (calls != 0 || !strings.Contains(err.Error(), "session budget")) {
+		})
+	}
+}
+
+// A fetch that does not fit before the work deadline is refused before it
+// starts a generation, and the refusal names the budget.
+func TestAFencedFetchThatDoesNotFitTheWorkDeadlineIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		left time.Duration // time to the work deadline
+	}{
+		{"two seconds left", 2 * time.Second},
+		{"half a second left", 500 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := fencedFailStub(t, &calls, -1)
+			defer srv.Close()
+			ctx := fencedCtx(t, srv.URL)
+			session, cancel := context.WithTimeout(context.Background(), tc.left)
+			defer cancel()
+			ctx.Ctx = session
+
+			if fencedFitsRemainingBudget(ctx) {
+				t.Fatal("fencedFitsRemainingBudget = true, want false")
+			}
+			_, err := fetchFencedContent(ctx, "raw", "solve.py")
+			if err == nil {
+				t.Fatal("the stub never sends a block, so the fetch must fail")
+			}
+			if calls != 0 || !strings.Contains(err.Error(), "session budget") {
 				t.Errorf("a refused fetch spent %d generations or did not name the budget: %v", calls, err)
 			}
 		})
 	}
+}
 
-	// The default budget (600s, 30s reserve) leaves room for a fetch.
+// The default budget (600s, 30s reserve) leaves room for a fetch.
+func TestTheDefaultWorkDeadlineAdmitsAFencedFetch(t *testing.T) {
 	t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", "")
 	total, reserve := sessionBudget()
 	if total-reserve <= fencedFirstContentTimeout()+fencedReserve {

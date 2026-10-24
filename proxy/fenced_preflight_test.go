@@ -16,26 +16,29 @@ import (
 // channel opens only for a call that can execute. The preflight runs the
 // checks the tool runs anyway, by calling them, so it decides nothing new.
 
+// unusableWriteCalls are write_file arguments that cannot execute: no path, a
+// path that is not one, a path outside the workspace, or a deny-listed one.
+var unusableWriteCalls = []struct{ name, args string }{
+	{"no arguments", ``},
+	{"null arguments", `null`},
+	{"malformed shape", `{"path":123,"content":"@fenced"}`},
+	{"missing path", `{"content":"@fenced"}`},
+	{"blank path", `{"path":"","content":"@fenced"}`},
+	{"whitespace path", `{"path":"   ","content":"@fenced"}`},
+	{"tab path", `{"path":"\t\n","content":"@fenced"}`},
+	{"workspace escape", `{"path":"../outside.py","content":"@fenced"}`},
+	{"absolute escape", `{"path":"/etc/passwd","content":"@fenced"}`},
+	{"deny-listed", `{"path":".env","content":"@fenced"}`},
+	{"deny-listed key", `{"path":"id_rsa.pem","content":"@fenced"}`},
+}
+
 // The property the whole design rests on: every call the preflight refuses is
 // also refused by the tool, which is what makes "decline to resolve, then let
 // the tool answer" safe rather than a way to write "@fenced" to disk.
 func TestPreflightRefusalsAreASubsetOfTheToolsOwn(t *testing.T) {
-	for _, c := range []struct{ name, args string }{
-		{"no arguments", ``},
-		{"null arguments", `null`},
-		{"malformed shape", `{"path":123,"content":"@fenced"}`},
-		{"missing path", `{"content":"@fenced"}`},
-		{"blank path", `{"path":"","content":"@fenced"}`},
-		{"whitespace path", `{"path":"   ","content":"@fenced"}`},
-		{"tab path", `{"path":"\t\n","content":"@fenced"}`},
-		{"workspace escape", `{"path":"../outside.py","content":"@fenced"}`},
-		{"absolute escape", `{"path":"/etc/passwd","content":"@fenced"}`},
-		{"deny-listed", `{"path":".env","content":"@fenced"}`},
-		{"deny-listed key", `{"path":"id_rsa.pem","content":"@fenced"}`},
-	} {
+	for _, c := range unusableWriteCalls {
 		t.Run(c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 			ctx.PermissionMode = PermissionYolo
 			ctx.StreamFn = func(string, interface{}) {}
 
@@ -46,7 +49,7 @@ func TestPreflightRefusalsAreASubsetOfTheToolsOwn(t *testing.T) {
 			if why == "" {
 				t.Error("refused without saying why")
 			}
-			// The tool refuses it too, with no mutation and nothing on disk.
+			// The tool refuses it too, with no mutation.
 			res := executeToolCall("write_file", json.RawMessage(c.args), ctx)
 			if res.Success {
 				t.Fatalf("the tool accepted what the preflight refused: %s", c.args)
@@ -54,6 +57,23 @@ func TestPreflightRefusalsAreASubsetOfTheToolsOwn(t *testing.T) {
 			if res.MutationStatus != MutationNone {
 				t.Errorf("MutationStatus = %q, want none", res.MutationStatus)
 			}
+		})
+	}
+}
+
+// The tool's refusal of such a call is a classified one, and it leaves nothing
+// behind: no file on disk and nothing in the ledger.
+func TestAnUnusableWriteIsRefusedWithoutATrace(t *testing.T) {
+	for _, c := range unusableWriteCalls {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.PermissionMode = PermissionYolo
+			ctx.StreamFn = func(string, interface{}) {}
+
+			// The preflight first, then the tool, as on the loop's path.
+			fencedCallIsExecutable("write_file", json.RawMessage(c.args), ctx)
+			res := executeToolCall("write_file", json.RawMessage(c.args), ctx)
 			if !res.Classified() {
 				t.Errorf("unclassified refusal: %+v", res)
 			}
