@@ -14,7 +14,6 @@ generated tests as an oracle. It runs candidates on the generated INPUTS and
 clusters them by agreement. These tests pin that behaviour.
 """
 
-import json
 import subprocess
 import sys
 import tempfile

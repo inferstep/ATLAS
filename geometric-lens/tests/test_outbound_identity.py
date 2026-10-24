@@ -221,7 +221,7 @@ def test_middleware_binds_both_ids_for_the_request_and_clears_after(app_client, 
     assert r.status_code == 200 and r.headers.get("X-ATLAS-Request-ID") == "req-m"
     assert seen["during"] == ("req-m", "inv-m")
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("req-m", "inv-m")
-    r = client.get("/internal/_identity_probe_test")
+    client.get("/internal/_identity_probe_test")
     assert seen["during"] == ("", "") and (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "")
 
 
@@ -274,7 +274,8 @@ def test_concurrent_http_requests_keep_their_own_pairs(app_client, stub):
 # --- structural guards ----------------------------------------------------------------
 
 def _src(name):
-    return open(os.path.join(ROOT, name), encoding="utf-8").read()
+    with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
+        return fh.read()
 
 
 def test_every_model_bound_call_uses_the_single_transport():
@@ -290,7 +291,8 @@ def test_no_second_identity_store_exists():
     for dirpath, _d, files in os.walk(os.path.join(ROOT, "geometric_lens")):
         for f in files:
             if f.endswith(".py") and f != "structured_log.py":
-                text = open(os.path.join(dirpath, f), encoding="utf-8").read()
+                with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                    text = fh.read()
                 assert "ContextVar(" not in text, f
     assert "ContextVar(" not in _src("main.py")
 

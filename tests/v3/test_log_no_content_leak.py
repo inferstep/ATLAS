@@ -229,7 +229,8 @@ def test_operational_record_schema_is_closed():
         logging.LogRecord("t", logging.INFO, __file__, 1, "m", None, None)))
     assert set(rec) <= {"ts", "level", "service", "logger", "msg",
                         "request_id", "invocation_id", "exc"}
-    src = ast.parse(open(os.path.join(V3, "structured_log.py"), encoding="utf-8").read())
+    with open(os.path.join(V3, "structured_log.py"), encoding="utf-8") as fh:
+        src = ast.parse(fh.read())
     fmt = next(n for n in ast.walk(src)
                if isinstance(n, ast.FunctionDef) and n.name == "format")
     keys = set()
@@ -252,7 +253,8 @@ def test_private_evidence_still_retains_candidate_bytes():
     """Sanitising operational logs must not destroy the governed evidence
     records, which are required to carry the candidate and its hash."""
     import pipeline
-    src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
+    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
+        src = fh.read()
     assert "code_b64" in src, "the pool capture stopped retaining candidate bytes"
     assert "code_sha256" in src, "the pool capture stopped retaining the content hash"
     assert hasattr(pipeline, "_PoolCapture")
@@ -296,7 +298,8 @@ def test_every_sse_debug_print_goes_through_the_reducer():
     """Structural: a new SSE debug line that formats `detail` directly would
     reintroduce exactly this leak."""
     import ast
-    src = open(os.path.join(V3, "main.py"), encoding="utf-8").read()
+    with open(os.path.join(V3, "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
     bad = []
     for i, line in enumerate(src.splitlines(), start=1):
         if "[SSE" not in line or "print(" not in line:
@@ -310,7 +313,8 @@ def test_every_sse_debug_print_goes_through_the_reducer():
 def test_sse_emitter_payload_to_the_proxy_is_unchanged():
     """Only the local debug line is reduced. The SSE event the proxy receives
     must still carry the full detail, or model-visible behaviour changes."""
-    src = open(os.path.join(V3, "main.py"), encoding="utf-8").read()
+    with open(os.path.join(V3, "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
     assert 'payload = {"stage": stage, "detail": detail}' in src, (
         "the SSE payload stopped carrying the full detail; that is a "
         "behaviour change, not an observability change")

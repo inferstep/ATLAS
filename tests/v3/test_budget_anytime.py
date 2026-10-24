@@ -12,7 +12,6 @@ fell back to the model's own output: 16 of 41 write calls in one 28-session
 run, ~48 of the 56 minutes spent in them.
 """
 
-import os
 import time
 
 import pytest
@@ -151,9 +150,7 @@ def test_reserve_covers_one_more_generation(monkeypatch):
 
 
 def test_a_disabled_cap_never_trips_the_guard(monkeypatch):
-    import types
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "0")
-    llm = types.SimpleNamespace(avg_call_ms=60_000)
     start = time.time() - 10_000
 
     left = pipeline._remaining_budget_ms(start)

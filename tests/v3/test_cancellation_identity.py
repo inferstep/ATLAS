@@ -187,5 +187,5 @@ def test_governed_logger_copies_remain_byte_identical():
         os.path.join(root, "sandbox", "structured_log.py"),
         os.path.join(root, "v3-service", "structured_log.py"),
     ]
-    digests = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in copies}
+    digests = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in copies}
     assert len(set(digests.values())) == 1, digests

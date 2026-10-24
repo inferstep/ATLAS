@@ -135,7 +135,8 @@ def test_two_concurrent_requests_cannot_exchange_identities():
 def test_both_handlers_bind_the_invocation_id():
     """Planner, generation, cancellation and teardown records all come from a
     handler that ran _watch_parent_for, which is where the binding lives."""
-    src = ast.parse(open(os.path.join(V3, "main.py"), encoding="utf-8").read())
+    with open(os.path.join(V3, "main.py"), encoding="utf-8") as fh:
+        src = ast.parse(fh.read())
     watcher = next(n for n in ast.walk(src)
                    if isinstance(n, ast.FunctionDef) and n.name == "_watch_parent_for")
     names = {getattr(c.func, "id", None) or getattr(c.func, "attr", None)
