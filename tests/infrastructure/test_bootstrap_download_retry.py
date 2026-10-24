@@ -175,7 +175,8 @@ def test_a_step_that_fails_and_prints_nothing_is_tried_again_and_says_so(tmp_pat
     (tmp_path / "fetch").chmod(0o755)
     done = run(tmp_path, 'retry_download "The package download" -- fetch\necho "the install goes on"\n')
     # With errexit on, as in the script, the last try that failed stops the script with its status.
-    assert done.returncode == 3 and "the install goes on" not in done.stdout
+    assert done.returncode == 3
+    assert "the install goes on" not in done.stdout
     assert (tmp_path / "fetch.calls").read_text().count("x") == 3
     assert retry_lines(done) == [f"WARN The package download failed (exit 3): no output. Trying it again in 0s (try {n} of 3)…"
                                  for n in (2, 3)]
@@ -187,7 +188,8 @@ def test_the_command_is_run_as_it_is_written_with_its_arguments(tmp_path):
     done = run(tmp_path, 'retry_download "A step" -- show "two words" --only-if x\n')
     assert done.stdout == "<two words><--only-if><x>"
     wrong = run(tmp_path, 'retry_download "A step" --sometimes -- show || echo "status $?"\n')
-    assert "is not an option of it" in wrong.stdout and wrong.stdout.rstrip().endswith("status 2")
+    assert "is not an option of it" in wrong.stdout
+    assert wrong.stdout.rstrip().endswith("status 2")
 
 
 @pytest.mark.parametrize("download_fails, download_says, build_fails, asked, says, last_line", [
@@ -253,5 +255,6 @@ def test_the_wait_between_two_tries_is_kept(tmp_path):
     stand_in(tmp_path, fails=1, says=TIMED_OUT)
     start = time.monotonic()
     done = run(tmp_path, 'retry_download "The package download" -- fetch\n', wait="1")
-    assert done.returncode == 0 and "Trying it again in 1s (try 2 of 3)" in done.stdout
+    assert done.returncode == 0
+    assert "Trying it again in 1s (try 2 of 3)" in done.stdout
     assert 1.0 <= time.monotonic() - start < 15

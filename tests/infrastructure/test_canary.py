@@ -226,7 +226,8 @@ def test_a_planted_file_stays_valid_where_its_reader_needs_that(canary, manifest
     assert budgets["deterministic_max"]["proxy_binary_bytes"] == 1
     changed = [line for line in (checkout / "proxy/agent.go").read_text(encoding="utf-8").splitlines()
                if "canaryreference" in line]
-    assert len(changed) == 1 and changed[0].startswith("\tsb.WriteString(")
+    assert len(changed) == 1
+    assert changed[0].startswith("\tsb.WriteString(")
 
 
 def test_the_planted_function_is_over_the_size_limit(canary, manifest, checkout):
@@ -376,7 +377,8 @@ def test_a_check_with_no_plant_that_does_not_pass_is_named_unless_the_list_says_
     for name in with_no_plant(listed):
         message = only(judged(canary, listed, runs_as_listed(listed) + [{**ended, "name": name}]))
         assert f"`{name}` ended as `{conclusion}` on the canary, and the list gives it no violation and no side effect" in message
-        assert "`side_effects`" in message and "Fix:" in message
+        assert "`side_effects`" in message
+        assert "Fix:" in message
     assert judged(canary, listed, runs_as_listed(listed) + [{**ended, "name": SIDE, "conclusion": "failure"}]) == []
 
 

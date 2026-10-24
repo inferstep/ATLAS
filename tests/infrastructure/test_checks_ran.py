@@ -535,21 +535,25 @@ def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_no
         # Two answers 5xx, then the answer: three tries, with a wait that grows.
         _GitHub.statuses = [502, 503, 200]
         assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
-        assert slept == [10, 30] and _GitHub.statuses == []
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
         # A connection that ends with no answer, and an answer that breaks off in its middle, are asked again too.
         _GitHub.statuses, slept[:] = ["silent", "broken", 200], []
         assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
-        assert slept == [10, 30] and _GitHub.statuses == []
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
         # An answer that says no is not asked again, and the words say what GitHub answered.
         _GitHub.statuses, slept[:] = [404], []
         with pytest.raises(RuntimeError, match=r"^GitHub answered \S+ with 404 Not Found$"):
             ran.api("repos/o/r/actions/runs", "a-token")
-        assert slept == [] and _GitHub.statuses == []
+        assert slept == []
+        assert _GitHub.statuses == []
         # A longer outage: five tries, almost four minutes, and the words say that GitHub did not answer.
         _GitHub.statuses = [502] * 5
         with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: HTTP Error 502: Bad Gateway$"):
             ran.api("repos/o/r/actions/runs", "a-token")
-        assert slept == [10, 30, 60, 120] and _GitHub.statuses == []
+        assert slept == [10, 30, 60, 120]
+        assert _GitHub.statuses == []
     finally:
         server.shutdown()
         server.server_close()

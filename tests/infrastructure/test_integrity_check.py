@@ -1226,7 +1226,8 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)
     assert "/tests/integration/" in targets
     files = sorted(target for target in targets if target.endswith(".py"))
-    assert files and all((root / target.lstrip("/")).is_file() for target in files)
+    assert files
+    assert all((root / target.lstrip("/")).is_file() for target in files)
     # The gates page lists each of these files, so that the page and the hook say the same.
     page = (root / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     assert [target for target in files if f"`{target.lstrip('/')}`" not in page] == []

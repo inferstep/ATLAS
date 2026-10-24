@@ -203,17 +203,23 @@ def test_the_published_jar_with_good_settings_has_no_finding(tmp_path, address):
 def test_a_jar_that_is_not_the_published_one_of_the_version_in_the_settings_is_found(tmp_path, jar, version):
     settings = settings_text(distributionUrl=f"https\\://services.gradle.org/distributions/gradle-{version}-bin.zip")
     findings = findings_for_a_wrapper(tmp_path, settings, jar=jar)
-    assert len(findings) == 1 and f"is not the wrapper jar that Gradle published for {version}" in findings[0], findings
-    assert SUMS_HERE[version] in findings[0] and hashlib.sha256(jar).hexdigest() in findings[0]
-    assert "Fix:" in findings[0] and "not with this wrapper" in findings[0]
+    assert len(findings) == 1, findings
+    assert f"is not the wrapper jar that Gradle published for {version}" in findings[0], findings
+    assert SUMS_HERE[version] in findings[0]
+    assert hashlib.sha256(jar).hexdigest() in findings[0]
+    assert "Fix:" in findings[0]
+    assert "not with this wrapper" in findings[0]
 
 
 @pytest.mark.parametrize("version", ["9.7.0", "9.9", "10.0.0-rc-1"])
 def test_a_version_with_no_line_is_found_and_the_message_says_what_to_do(tmp_path, version):
     settings = settings_text(distributionUrl=f"https\\://services.gradle.org/distributions/gradle-{version}-bin.zip")
     findings = findings_for_a_wrapper(tmp_path, settings)
-    assert len(findings) == 1 and "has no line for that version" in findings[0], findings
-    assert f"`{version} <sum>`" in findings[0] and PAGE in findings[0] and "a maintainer adds one line" in findings[0]
+    assert len(findings) == 1, findings
+    assert "has no line for that version" in findings[0], findings
+    assert f"`{version} <sum>`" in findings[0]
+    assert PAGE in findings[0]
+    assert "a maintainer adds one line" in findings[0]
     assert "in a pull request of its own that merges first" in findings[0]
     assert hashlib.sha256(A_JAR).hexdigest() in findings[0]
 
@@ -257,7 +263,9 @@ def test_a_version_with_no_line_is_found_and_the_message_says_what_to_do(tmp_pat
 ])
 def test_a_setting_that_is_not_as_today_is_found(tmp_path, settings, words):
     findings = findings_for_a_wrapper(tmp_path, settings)
-    assert len(findings) == 1 and words in findings[0] and "Fix:" in findings[0], findings
+    assert len(findings) == 1, findings
+    assert words in findings[0], findings
+    assert "Fix:" in findings[0], findings
 
 
 def test_each_wrong_setting_has_a_finding_of_its_own(tmp_path):
@@ -272,7 +280,8 @@ def test_each_wrong_setting_has_a_finding_of_its_own(tmp_path):
 ])
 def test_a_wrapper_with_one_of_its_two_files_is_found(tmp_path, jar, settings, missing):
     findings = findings_for_a_wrapper(tmp_path, settings, jar=jar)
-    assert len(findings) == 1 and f"has no `{missing}`" in findings[0], findings
+    assert len(findings) == 1, findings
+    assert f"has no `{missing}`" in findings[0], findings
 
 
 def test_every_folder_with_a_jar_or_with_settings_is_a_wrapper():
@@ -298,7 +307,8 @@ def test_every_folder_with_a_jar_or_with_settings_is_a_wrapper():
 def test_the_list_takes_a_version_and_a_sum_on_a_line_and_nothing_else(text, versions, words):
     sums, findings = published(text)
     assert sorted(sums) == versions
-    assert len(findings) == len(words) and all(word in finding for word, finding in zip(words, findings)), findings
+    assert len(findings) == len(words), findings
+    assert all(word in finding for word, finding in zip(words, findings)), findings
 
 
 # The settings file: the plain form, and each form that Java's reader takes and that is not plain.
@@ -374,7 +384,8 @@ NOT_PLAIN = {
 @pytest.mark.parametrize("text", NOT_PLAIN.values(), ids=NOT_PLAIN.keys())
 def test_a_settings_file_that_is_not_in_the_plain_form_is_found(tmp_path, text):
     findings = findings_for_a_wrapper(tmp_path, text)
-    assert findings and all("is not in the plain form" in finding and "Fix:" in finding for finding in findings), findings
+    assert findings, findings
+    assert all("is not in the plain form" in finding and "Fix:" in finding for finding in findings), findings
     assert all("Java's own reader" in finding for finding in findings)
 
 
@@ -387,11 +398,14 @@ def test_a_settings_file_that_is_not_in_the_plain_form_is_found(tmp_path, text):
 def test_a_key_that_stands_twice_is_found(tmp_path, line, key):
     for place, text in enumerate((GOOD_TEXT + line, line + GOOD_TEXT)):
         findings = findings_for_a_wrapper(tmp_path / str(place), text)
-        assert len(findings) == 1 and f"gives `{key}` a second time" in findings[0] and "Fix:" in findings[0], findings
+        assert len(findings) == 1, findings
+        assert f"gives `{key}` a second time" in findings[0], findings
+        assert "Fix:" in findings[0], findings
 
 
 def test_a_file_that_is_not_plain_gets_no_other_finding(tmp_path):
     # The jar is another one too, and nothing is said of it: what the test would read is not what the wrapper reads.
     findings = findings_for_a_wrapper(tmp_path, GOOD_TEXT + "validateDistributionUrl:false\n", jar=b"changed")
-    assert len(findings) == 1 and "line 5, is not in the plain form" in findings[0], findings
+    assert len(findings) == 1, findings
+    assert "line 5, is not in the plain form" in findings[0], findings
     assert "'validateDistributionUrl:false'" in findings[0]

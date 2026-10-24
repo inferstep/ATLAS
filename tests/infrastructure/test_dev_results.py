@@ -87,7 +87,8 @@ def test_a_commit_with_no_queue_run_fails_with_the_words_that_say_what_to_do(loo
     message = str(none.value)
     assert message.startswith("this commit did not come through the merge queue; start `tests` for it by hand")
     assert "merge-back" in message
-    assert "Fix:" in message and "gh workflow run test.yml --ref" in message
+    assert "Fix:" in message
+    assert "gh workflow run test.yml --ref" in message
     assert "artifact" not in message.lower()
 
 
@@ -158,7 +159,8 @@ def test_the_report_jobs_the_lookup_reads_are_the_jobs_the_coverage_upload_needs
 def test_the_tests_workflow_does_not_start_on_a_push_to_dev_and_can_be_started_by_hand():
     on = triggers("test.yml")
     assert on["push"]["branches"] == ["main"]
-    assert "dev" in on["pull_request"]["branches"] and "dev" in on["merge_group"]["branches"]
+    assert "dev" in on["pull_request"]["branches"]
+    assert "dev" in on["merge_group"]["branches"]
     assert "workflow_dispatch" in on
 
 
@@ -202,16 +204,19 @@ def test_a_failed_report_job_of_the_queues_run_is_a_notice_with_its_name_and_no_
     assert step["if"] == "steps.run.outputs.tests-passed != 'true'"
     assert step["env"] == {"NOT_PASSED": "${{ steps.run.outputs.not-passed }}"}
     assert step["run"].startswith('echo "::notice title=coverage not uploaded::')
-    assert "$NOT_PASSED" in step["run"] and "exit" not in step["run"]
+    assert "$NOT_PASSED" in step["run"]
+    assert "exit" not in step["run"]
     assert "The test results are sent." in step["run"]
 
 
 def test_no_report_of_the_queues_run_fails_the_job_and_does_not_read_as_nothing_to_send():
     step = steps_of("dev-results.yml", "queue-results")[3]
     assert 'if [ "${#found[@]}" -eq 0 ]; then' in step["run"]
-    assert "::error title=no reports to send::" in step["run"] and "exit 1" in step["run"]
+    assert "::error title=no reports to send::" in step["run"]
+    assert "exit 1" in step["run"]
     assert "Fix:" in step["run"]
-    assert "if" not in step and "continue-on-error" not in step
+    assert "if" not in step
+    assert "continue-on-error" not in step
 
 
 def test_the_cache_job_saves_under_the_key_and_folders_that_the_pull_request_jobs_read():
@@ -219,7 +224,8 @@ def test_the_cache_job_saves_under_the_key_and_folders_that_the_pull_request_job
     assert cache_step(mine)["with"] == cache_step(theirs)["with"]
     assert cache_step(mine)["uses"] == cache_step(theirs)["uses"]
     setup = [next(step for step in steps if str(step.get("uses", "")).startswith("actions/setup-go@")) for steps in (mine, theirs)]
-    assert setup[0]["with"] == setup[1]["with"] and setup[0]["uses"] == setup[1]["uses"]
+    assert setup[0]["with"] == setup[1]["with"]
+    assert setup[0]["uses"] == setup[1]["uses"]
     points = [next(step["run"] for step in steps if "GOCACHE=" in str(step.get("run", ""))) for steps in (mine, theirs)]
     assert points[0] == points[1]
     jobs = workflow("dev-results.yml")["jobs"]
@@ -238,11 +244,13 @@ def test_the_build_for_the_cache_is_the_test_gates_own_command_with_no_test_to_r
     build, gates = load("go_test_build"), load("production-readiness")
     command, folder, env = build.build_command(module, str(tmp_path))
     gate = gates._gates(())[f"go-{module}-test"]
-    assert command[:2] == ["go", "test"] and command[-3:] == ["-run", "^$", "./..."]
+    assert command[:2] == ["go", "test"]
+    assert command[-3:] == ["-run", "^$", "./..."]
     assert "-json" not in command
     without = [part for part in command[:-3] + ["./..."] if not part.startswith("-cover")]
     assert without == list(gate.command), "the build flags differ from the gate's"
-    assert f"-coverprofile={tmp_path.resolve() / ('go-' + module + '.out')}" in command and "-covermode=atomic" in command
+    assert f"-coverprofile={tmp_path.resolve() / ('go-' + module + '.out')}" in command
+    assert "-covermode=atomic" in command
     assert folder == ROOT / module
     assert "GOCACHE" in env
 
@@ -271,7 +279,8 @@ def test_an_upload_action_sends_each_report_with_its_flag_and_fails_when_an_uplo
     uploads = [step for step in steps if str(step.get("uses", "")).startswith("codecov/codecov-action@")]
     assert [step["with"]["flags"] for step in uploads] == flags
     for step in uploads:
-        assert step["with"]["fail_ci_if_error"] is True and step["with"]["use_oidc"] is True
+        assert step["with"]["fail_ci_if_error"] is True
+        assert step["with"]["use_oidc"] is True
         assert step["with"].get("report_type") == kind
         assert "if" in step, "an upload with no report to send must be left out, and say so"
 
@@ -301,8 +310,10 @@ def test_the_promotion_finds_the_tests_run_by_commit_and_names_no_event():
     """On dev that run is the merge queue's. A lookup by event or by branch would find none."""
     promote = workflow("build-images.yml")["jobs"]["promote"]
     wait = next(step["run"] for step in promote["steps"] if "gh run list" in str(step.get("run", "")))
-    assert '--workflow test.yml' in wait and '--commit "${GITHUB_SHA}"' in wait
-    assert "--event" not in wait and "--branch" not in wait
+    assert '--workflow test.yml' in wait
+    assert '--commit "${GITHUB_SHA}"' in wait
+    assert "--event" not in wait
+    assert "--branch" not in wait
     assert 'if [ "$conclusion" = "success" ]; then' in wait
     assert "start the workflow tests by hand" in wait
 
@@ -310,7 +321,8 @@ def test_the_promotion_finds_the_tests_run_by_commit_and_names_no_event():
 def test_the_extensions_results_job_has_nothing_to_send_when_no_file_was_made_and_is_not_red_for_it():
     steps = steps_of("vscode-extension.yml", "test-results-upload")
     download = next(step for step in steps if str(step.get("uses", "")).startswith("actions/download-artifact@"))
-    assert download["with"].get("pattern") == "coverage-typescript" and "name" not in download["with"]
+    assert download["with"].get("pattern") == "coverage-typescript"
+    assert "name" not in download["with"]
     assert download["with"].get("merge-multiple") is True
     check = next(step for step in steps if step.get("id") == "results")
     assert "::notice title=no test results for typescript::" in check["run"]
@@ -331,7 +343,8 @@ def test_a_pull_request_that_changes_the_results_path_tries_the_lookup_and_sends
     uses = [str(step.get("uses", "")) for step in job["steps"]]
     assert not [use for use in uses if use.startswith(("codecov/", "./"))], "the check must send nothing"
     lookup_step = next(step for step in job["steps"] if step.get("id") == "run")
-    assert "scripts/queue_run.py" in lookup_step["run"] and "--plain" in lookup_step["run"]
+    assert "scripts/queue_run.py" in lookup_step["run"]
+    assert "--plain" in lookup_step["run"]
     assert 'git rev-list --first-parent -n 5 "$BASE"' in lookup_step["run"]
 
 
@@ -372,21 +385,25 @@ def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_no
         # Two answers 5xx, then the answer: three tries, with a wait that grows.
         _GitHub.statuses = [502, 503, 200]
         assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
-        assert slept == [10, 30] and _GitHub.statuses == []
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
         # A connection that ends with no answer, and an answer that breaks off in its middle, are asked again too.
         _GitHub.statuses, slept[:] = ["silent", "broken", 200], []
         assert lookup.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
-        assert slept == [10, 30] and _GitHub.statuses == []
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
         # An answer that says no is not asked again, and the words say what GitHub answered.
         _GitHub.statuses, slept[:] = [404], []
         with pytest.raises(RuntimeError, match=r"^GitHub answered \S+ with 404 Not Found$"):
             lookup.api("repos/o/r/actions/runs", "a-token")
-        assert slept == [] and _GitHub.statuses == []
+        assert slept == []
+        assert _GitHub.statuses == []
         # A longer outage: five tries, almost four minutes, and the words say that GitHub did not answer.
         _GitHub.statuses = [502] * 5
         with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: HTTP Error 502: Bad Gateway$"):
             lookup.api("repos/o/r/actions/runs", "a-token")
-        assert slept == [10, 30, 60, 120] and _GitHub.statuses == []
+        assert slept == [10, 30, 60, 120]
+        assert _GitHub.statuses == []
     finally:
         server.shutdown()
         server.server_close()

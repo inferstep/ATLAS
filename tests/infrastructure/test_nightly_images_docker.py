@@ -45,7 +45,8 @@ def test_the_removal_takes_no_tag_away_that_is_not_the_runs_own():
         # The night's removal of its last image: the two names that the run gave it go. The other name stays.
         assert images.remove_own_name(OWN, nightly.must, nightly.ended) == "yes"
         assert images.remove_pull(by_digest, nightly.must, nightly.ended) == "yes"
-        assert not is_there(OWN) and not is_there(by_digest)
+        assert not is_there(OWN)
+        assert not is_there(by_digest)
         assert is_there(OF_ANOTHER_REPOSITORY)
 
         # The same once more, and now a tag of the same repository names the image too. The run's own name goes.
@@ -57,7 +58,9 @@ def test_the_removal_takes_no_tag_away_that_is_not_the_runs_own():
         said = images.remove_pull(by_digest, nightly.must, nightly.ended)
         assert said == f"kept: {A_TAG_OF_THE_REPOSITORY} names the same image, and Docker would remove that tag too"
         assert not is_there(OWN)
-        assert is_there(A_TAG_OF_THE_REPOSITORY) and is_there(OF_ANOTHER_REPOSITORY) and is_there(by_digest)
+        assert is_there(A_TAG_OF_THE_REPOSITORY)
+        assert is_there(OF_ANOTHER_REPOSITORY)
+        assert is_there(by_digest)
     finally:
         # Each name of this test goes by its own name. With the last tag of a repository on an image, Docker
         # removes that repository's name by digest too.

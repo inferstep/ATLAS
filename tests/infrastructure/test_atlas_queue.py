@@ -74,11 +74,14 @@ def test_a_job_runs_holding_the_lock_with_its_note_and_then_frees_both(tmp_path)
 
     assert job.wait(timeout=20) == 3
     note = json.loads((tmp_path / "note.json").read_text())
-    assert note["what"] == "a fault run" and note["yields"] is True
-    assert note["command"][:2] == ["sh", "-c"] and note["process_group"] > 1
+    assert note["what"] == "a fault run"
+    assert note["yields"] is True
+    assert note["command"][:2] == ["sh", "-c"]
+    assert note["process_group"] > 1
     # Six of the server's eight CPUs for its containers, and nice 10 for the job itself.
     assert (tmp_path / "limits.txt").read_text() == "6 10\n"
-    assert lock_is_free(tmp_path) and not (tmp_path / "q" / "holder.json").exists()
+    assert lock_is_free(tmp_path)
+    assert not (tmp_path / "q" / "holder.json").exists()
 
 
 def test_a_job_waits_while_another_run_holds_the_queue(tmp_path, sleeping_group):
@@ -87,9 +90,11 @@ def test_a_job_waits_while_another_run_holds_the_queue(tmp_path, sleeping_group)
     job = start_queue(tmp_path, "dev", command="touch ran")
 
     time.sleep(1)
-    assert job.poll() is None and not (tmp_path / "ran").exists()
+    assert job.poll() is None
+    assert not (tmp_path / "ran").exists()
     held.close()
-    assert job.wait(timeout=20) == 0 and (tmp_path / "ran").exists()
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "ran").exists()
 
 
 def test_the_nightly_asks_a_job_to_yield_and_the_job_stops_its_command(tmp_path):
@@ -100,10 +105,12 @@ def test_the_nightly_asks_a_job_to_yield_and_the_job_stops_its_command(tmp_path)
 
     assert nightly.wait(timeout=20) == 0
     assert "asked for it" in nightly.stdout.read()
-    assert job.wait(timeout=20) == 0 and (tmp_path / "stopped").read_text() == "stopped\n"
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "stopped").read_text() == "stopped\n"
     assert (tmp_path / "late.txt").read_text() == "0\n"
     # The nightly's request ends with it.
-    assert lock_is_free(tmp_path) and not (tmp_path / "q" / "yield").exists()
+    assert lock_is_free(tmp_path)
+    assert not (tmp_path / "q" / "yield").exists()
 
 
 def test_a_job_stops_its_command_when_it_is_told_to_stop(tmp_path):
@@ -113,7 +120,8 @@ def test_a_job_stops_its_command_when_it_is_told_to_stop(tmp_path):
 
     job.send_signal(signal.SIGHUP)
 
-    assert job.wait(timeout=20) == 0 and (tmp_path / "stopped").read_text() == "stopped\n"
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "stopped").read_text() == "stopped\n"
     assert lock_is_free(tmp_path)
 
 
@@ -129,10 +137,12 @@ def test_no_job_takes_the_queue_while_the_nightly_runs_beside_a_stuck_holder(tmp
 
     held.close()
 
-    assert job.wait(timeout=20) == 0 and (tmp_path / "ran-after-the-nightly").exists()
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "ran-after-the-nightly").exists()
     assert nightly.wait(timeout=20) == 0
     output = nightly.stdout.read()
-    assert "does not run the noted command" in output and "the nightly runs beside it" in output
+    assert "does not run the noted command" in output
+    assert "the nightly runs beside it" in output
 
 
 def test_a_yield_request_older_than_12_hours_is_ignored(tmp_path):
@@ -142,7 +152,8 @@ def test_a_yield_request_older_than_12_hours_is_ignored(tmp_path):
 
     job = start_queue(tmp_path, "dev", command="sleep 0.5; touch ran")
 
-    assert job.wait(timeout=20) == 0 and (tmp_path / "ran").exists()
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "ran").exists()
 
 
 def test_the_nightly_stops_a_holder_that_does_not_yield_after_its_wait(tmp_path, sleeping_group):
@@ -153,7 +164,8 @@ def test_the_nightly_stops_a_holder_that_does_not_yield_after_its_wait(tmp_path,
     handle = atlas_queue.wait_for_the_lock(tmp_path / "q", "nightly", None, poll_s=0.05, yield_wait_s=0.2,
                                            stop_wait_s=0.2, kill=lambda group, signum: sent.append((group, signum)))
 
-    assert handle is None and sent == [(sleeping_group.pid, signal.SIGTERM)]
+    assert handle is None
+    assert sent == [(sleeping_group.pid, signal.SIGTERM)]
     held.close()
 
 
@@ -165,11 +177,15 @@ def test_the_nightly_never_stops_a_smoke_run_and_goes_before_a_waiting_job(tmp_p
     job = start_queue(tmp_path, "dev", command="test -e nightly-done && touch ran-after-the-nightly")
 
     time.sleep(1.5)
-    assert sleeping_group.poll() is None and nightly.poll() is None and job.poll() is None
+    assert sleeping_group.poll() is None
+    assert nightly.poll() is None
+    assert job.poll() is None
     held.close()
 
-    assert nightly.wait(timeout=20) == 0 and (tmp_path / "nightly-done").exists()
-    assert job.wait(timeout=20) == 0 and (tmp_path / "ran-after-the-nightly").exists()
+    assert nightly.wait(timeout=20) == 0
+    assert (tmp_path / "nightly-done").exists()
+    assert job.wait(timeout=20) == 0
+    assert (tmp_path / "ran-after-the-nightly").exists()
 
 
 @pytest.mark.parametrize("group, command, refused_because", [
@@ -198,7 +214,9 @@ def test_the_nightly_refuses_to_signal_a_group_the_note_cannot_name_safely(sleep
     done = atlas_queue.stop_the_holder({"process_group": group, "command": command},
                                        kill=lambda group, signum: sent.append((group, signum)))
 
-    assert done.startswith("refused") and refused_because in done and sent == []
+    assert done.startswith("refused")
+    assert refused_because in done
+    assert sent == []
 
 
 @pytest.mark.parametrize("role, options", [
@@ -212,5 +230,6 @@ def test_a_run_that_cannot_start_runs_nothing_and_ends_with_status_75(tmp_path, 
     run = start_queue(tmp_path, role, *options, command="touch ran")
 
     assert run.wait(timeout=20) == 75
-    assert "not started" in run.stdout.read() and not (tmp_path / "ran").exists()
+    assert "not started" in run.stdout.read()
+    assert not (tmp_path / "ran").exists()
     held.close()

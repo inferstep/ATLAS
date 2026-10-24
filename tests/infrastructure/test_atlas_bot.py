@@ -165,7 +165,8 @@ def test_config_reads_the_repo_settings(cfg):
     assert cfg["project"] == {"owner": "inferstep", "number": 1}
     assert cfg["bot"]["login"] == BOT
     assert cfg["links"]["start_here"].startswith("https://github.com/orgs/inferstep/projects/1/")
-    assert cfg["areas"]["proxy/"] == "area/proxy" and cfg["areas"][".github/"] == "area/ci"
+    assert cfg["areas"]["proxy/"] == "area/proxy"
+    assert cfg["areas"][".github/"] == "area/ci"
 
 
 def test_every_area_label_is_one_the_label_script_creates(cfg):
@@ -205,7 +206,9 @@ def test_the_command_alone_on_the_first_line_claims_and_gets_no_answer_about_its
     assert ("assign", 7, "alice") in api.log
     assert ("status", "ITEM7", "In Progress") in api.log
     (reply,) = api.said(7)
-    assert bot_mod.marker("claim", "alice") in reply and "@maint" in reply and "Closes #7" in reply
+    assert bot_mod.marker("claim", "alice") in reply
+    assert "@maint" in reply
+    assert "Closes #7" in reply
     assert "not-alone" not in reply
 
 
@@ -381,7 +384,8 @@ def test_unclaim_returns_the_issue_to_ready(api, cfg):
     api.issues[7]["assignees"] = ["alice"]
     api.cards[7]["status"] = "In Progress"
     run(api, cfg).claim(claim_event(api, 7, "/unclaim"))
-    assert ("unassign", 7, "alice") in api.log and ("status", "ITEM7", "Ready") in api.log
+    assert ("unassign", 7, "alice") in api.log
+    assert ("status", "ITEM7", "Ready") in api.log
 
 
 def test_one_claimant_per_issue_read_from_the_current_issue_not_the_event_copy(api, cfg):
@@ -499,7 +503,8 @@ def test_the_events_are_not_asked_for_a_claim_that_is_young_or_has_a_pull_reques
     claimed(api, 30)
     api.pulls = [{"number": 9, "title": "t", "body": "Refs #7", "labels": [], "user": {"login": "alice", "type": "User"}}]
     run(api, cfg).stale()
-    assert asked == [] and api.log == []
+    assert asked == []
+    assert api.log == []
 
 
 class Recorded(bot_mod.API):
@@ -559,7 +564,8 @@ def test_ready_and_blocked_are_mirrored_to_labels(api, cfg):
     api.cards[9] = {"id": "ITEM9", "status": "Blocked", "shepherd": ""}
     run(api, cfg).sync()
     assert ("add_labels", 7, ("status/ready",)) in api.log
-    assert ("add_labels", 8, ("status/blocked",)) in api.log and ("remove_label", 8, "status/ready") in api.log
+    assert ("add_labels", 8, ("status/blocked",)) in api.log
+    assert ("remove_label", 8, "status/ready") in api.log
     assert ("remove_label", 9, "status/blocked") in api.log
 
 
@@ -647,7 +653,8 @@ def test_first_pull_requests_are_welcomed_once(api, cfg):
                   "created_at": stamp(30), "user": {"login": "old"}}]
     run(api, cfg).sync()
     run(api, cfg).sync()
-    assert len(api.said(41)) == 1 and "first pull request" in api.said(41)[0]
+    assert len(api.said(41)) == 1
+    assert "first pull request" in api.said(41)[0]
     assert api.said(42) == []
 
 
@@ -701,7 +708,10 @@ def test_rfc_links_related_open_rfcs_and_epics(api, cfg):
         {"number": 12, "title": "Unrelated epic", "assignees": []}]
     run(api, cfg).rfc_dedupe({"issue": {"number": 50}})
     reply = api.said(50)[0]
-    assert "#34" in reply and "@maint" in reply and "#50" not in reply and "#12" not in reply
+    assert "#34" in reply
+    assert "@maint" in reply
+    assert "#50" not in reply
+    assert "#12" not in reply
 
 
 @pytest.mark.parametrize("kind, linked", [("RFC", True), ("Bug", False), ("Task", False), (None, False)])
@@ -733,14 +743,16 @@ def test_a_commit_on_dev_closes_the_issue_it_names(api, cfg):
 def test_a_merged_pull_request_closes_the_issue_it_names(api, cfg):
     api.merged = [{"number": 246, "body": "Fixes #7\n\n## What changed"}]
     run(api, cfg).sync()
-    assert closed(api) == [7] and "in #246" in api.said(7)[0]
+    assert closed(api) == [7]
+    assert "in #246" in api.said(7)[0]
 
 
 def test_closing_twice_is_one_comment_and_one_close(api, cfg):
     api.commits = [{"sha": "aaaaaaa1", "message": "Closes #7"}, {"sha": "bbbbbbb2", "message": "resolves: #7"}]
     run(api, cfg).sync()
     run(api, cfg).sync()
-    assert closed(api) == [7] and len(api.said(7)) == 1
+    assert closed(api) == [7]
+    assert len(api.said(7)) == 1
 
 
 def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_its_own_issue(api, cfg):
@@ -749,7 +761,8 @@ def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_i
     path = os.path.join(ROOT, "tests", "fixtures", "commit_message_with_a_quoted_closing_line.txt")
     with open(path, encoding="utf-8") as fh:
         message = fh.read()
-    assert "\nCloses #401\n" in message and "with `Closes #253`, was opened" in message
+    assert "\nCloses #401\n" in message
+    assert "with `Closes #253`, was opened" in message
     api.issues[401] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
     api.issues[253] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
     api.commits = [{"sha": "c445002d11", "message": message}]
@@ -757,7 +770,8 @@ def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_i
     api.merged = [{"number": 405, "body": message.split("\n", 2)[2].replace("\n", "\r\n")}]
     run(api, cfg).sync()
     assert closed(api) == [401]
-    assert api.said(253) == [] and api.issues[253]["state"] == "open"
+    assert api.said(253) == []
+    assert api.issues[253]["state"] == "open"
 
 
 @pytest.mark.parametrize("text", [
@@ -788,7 +802,8 @@ def test_a_text_with_no_closing_line_outside_code_closes_nothing(api, cfg, text)
     api.commits = [{"sha": "eeeeeee5", "message": f"fix(proxy): x\n\n{text}\n"}]
     api.merged = [{"number": 246, "body": f"## What changed\r\n\r\n{text}\r\n"}]
     run(api, cfg).sync()
-    assert 7 not in closed(api) and api.said(7) == []
+    assert 7 not in closed(api)
+    assert api.said(7) == []
 
 
 @pytest.mark.parametrize("text, numbers", [
@@ -818,7 +833,8 @@ def test_a_closing_line_closes_the_issues_it_names(api, cfg, text, numbers):
 
 
 def test_a_text_that_is_not_there_closes_nothing():
-    assert bot_mod.closed_by(None) == [] and bot_mod.closed_by("") == []
+    assert bot_mod.closed_by(None) == []
+    assert bot_mod.closed_by("") == []
 
 
 def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
@@ -827,7 +843,8 @@ def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
                      "pull_request": {}}
     api.commits = [{"sha": "ddddddd4", "message": "Closes #8, closes #9, closes #999"}]
     run(api, cfg).sync()
-    assert closed(api) == [] and api.said(8) == api.said(9) == []
+    assert closed(api) == []
+    assert api.said(8) == api.said(9) == []
 
 
 # --- the rights of each workflow's token -------------------------------------
