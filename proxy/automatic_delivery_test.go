@@ -459,6 +459,19 @@ func TestAutomaticSharesTheOneAuthorizationAndDeliveryOwner(t *testing.T) {
 	if !strings.Contains(grant, "basis == grantBasisAutomaticV3") {
 		t.Error("the automatic basis does not carry its declared-command requirement")
 	}
+}
+
+// The policy and the vetoes are decided once, in the authorization owner, and
+// the two routes hand it their facts.
+func TestTheRoutesHandTheirFactsToTheOneAuthorizationOwner(t *testing.T) {
+	body := map[string]string{}
+	for _, f := range []string{"candidate_delivery.go", "tools.go", "edit_route_delivery.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body[f] = codeWithoutComments(string(src))
+	}
 	// The delivery file does not look up the policy for itself.
 	for _, banned := range []string{"candidatePolicyOf", "decideCandidatePolicy"} {
 		if strings.Contains(body["candidate_delivery.go"], banned) {

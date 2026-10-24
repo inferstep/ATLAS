@@ -150,10 +150,7 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 		case "gate":
 			// Proves the ban branch specifically, not merely that some
 			// breaker stopped the session.
-			b, err := json.Marshal(data)
-			if err != nil {
-				return
-			}
+			b, _ := json.Marshal(data)
 			if strings.Contains(string(b), "no longer available") {
 				banEntries++
 			}
@@ -162,9 +159,8 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 			}
 		case "done":
 			doneEvents++
-			if b, err := json.Marshal(data); err == nil {
-				doneSummary = string(b)
-			}
+			b, _ := json.Marshal(data)
+			doneSummary = string(b)
 		}
 	}
 
@@ -193,9 +189,6 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 	// withdraws the tool. Either may answer; the property here is that the
 	// loop stops. TestBannedEditLoopEntersTheBanBranch covers the ban branch
 	// itself, on a shape the recovery does not own.
-	if banEntries != 0 {
-		t.Logf("the ban branch also fired (%d)", banEntries)
-	}
 	if recoveries == 0 && banEntries == 0 {
 		t.Fatal("neither the refused-replacement recovery nor the ban branch " +
 			"answered the re-send, so this run measured some other breaker")
