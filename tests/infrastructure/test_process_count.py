@@ -73,7 +73,8 @@ def test_a_process_that_runs_is_seen_and_is_gone_when_it_ends():
 @pytest.mark.parametrize("name", COUNTING_TESTS)
 def test_the_sandbox_tests_count_processes_only_through_the_helper(name):
     source = (HERE / name).read_text(encoding="utf-8")
-    assert "glob.glob(" not in source and "os.listdir(\"/proc\")" not in source, (
-        f"{name} reads /proc by itself. Fix: count with `sleeping` of tests/infrastructure/proc_files.py, which "
-        "fails where it cannot see a process at all.")
+    for call in ("glob.glob(", "os.listdir(\"/proc\")"):
+        assert call not in source, (
+            f"{name} reads /proc by itself. Fix: count with `sleeping` of tests/infrastructure/proc_files.py, "
+            "which fails where it cannot see a process at all.")
     assert "return len(sleeping(seconds))" in source

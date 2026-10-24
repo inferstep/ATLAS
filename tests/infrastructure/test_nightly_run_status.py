@@ -938,7 +938,8 @@ def test_with_too_little_room_on_dockers_disk_the_tip_of_a_smoke_branch_is_not_d
     a_smoke_is_there(night, github)
     mode, commit, why = nightly.what_is_due(settings(night, "--reserve-gb", "99999"), NOON)
     assert (mode, commit) == (None, None)
-    assert why.startswith("nothing is started: too little room on Docker's disk (") and why.endswith(" GB free, 99999.0 GB needed)")
+    assert why.startswith("nothing is started: too little room on Docker's disk (")
+    assert why.endswith(" GB free, 99999.0 GB needed)")
 
 
 @pytest.mark.parametrize("record, why", [

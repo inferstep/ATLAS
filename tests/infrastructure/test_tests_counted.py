@@ -238,9 +238,10 @@ def number_of_tests(file):
     for function in functions:
         tables = [mark for mark in function.decorator_list if "parametrize" in ast.unparse(mark)]
         values = [mark.args[1] for mark in tables if isinstance(mark, ast.Call) and len(mark.args) > 1]
-        assert len(values) == len(tables) and all(isinstance(value, (ast.List, ast.Tuple)) for value in values), (
-            f"{file}: the values of {function.name} are not written out as a list in its mark, so this test cannot count "
-            "them. Fix: write them as a list there.")
+        why = (f"{file}: the values of {function.name} are not written out as a list in its mark, so this test cannot "
+               "count them. Fix: write them as a list there.")
+        assert len(values) == len(tables), why
+        assert all(isinstance(value, (ast.List, ast.Tuple)) for value in values), why
         count += math.prod(len(value.elts) for value in values)
     return count
 

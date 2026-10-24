@@ -42,7 +42,8 @@ def reports():
 
 def test_the_three_scripts_use_the_same_two_names():
     assert nightly.STATUS == {"night": LIST["status"], "one commit": smoke.STATUS}
-    assert smoke.STATUS == "server/smoke" and LIST["status"] == "server/nightly"
+    assert smoke.STATUS == "server/smoke"
+    assert LIST["status"] == "server/nightly"
 
 
 def test_the_two_checks_take_the_statuses_of_the_same_account():

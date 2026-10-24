@@ -85,7 +85,8 @@ def test_an_action_from_the_workflows_own_commit_is_not_named(steps):
 ])
 def test_an_action_from_another_commits_tree_is_named(steps, says):
     found = not_from_the_own_commit(steps)
-    assert len(found) == 1 and says in found[0], found
+    assert len(found) == 1, found
+    assert says in found[0], found
 
 
 def test_every_job_takes_its_local_actions_from_the_commit_of_its_workflow_file():

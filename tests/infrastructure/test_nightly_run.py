@@ -376,15 +376,21 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
     assert night.did() == ["git clone"] + ONE_HEAD + ["look"] + IMAGES + WITH_THE_CARD
     # The free room on Docker's disk, in GB, before the run and after it.
-    assert isinstance(night.report["free_gb_before"], float) and isinstance(night.report["free_gb_after"], float)
+    assert isinstance(night.report["free_gb_before"], float)
+    assert isinstance(night.report["free_gb_after"], float)
     report = night.report
-    assert report["result"] == "passed" and report["commit"] == HEAD and report["stale"] == []
-    assert report["left_stack"] == "none" and report["script"] == "as it was started"
-    assert report["waited_for_images"] == "0 s" and report["card"] == "no process computes on it"
+    assert report["result"] == "passed"
+    assert report["commit"] == HEAD
+    assert report["stale"] == []
+    assert report["left_stack"] == "none"
+    assert report["script"] == "as it was started"
+    assert report["waited_for_images"] == "0 s"
+    assert report["card"] == "no process computes on it"
     assert set(report["images"]) == set(nightly.IMAGES)
     for service, about in report["images"].items():
         assert about["image"] == f"ghcr.io/inferstep/{nightly.IMAGES[service]}:dev"
-        assert about["digest"].startswith("sha256:") and about["commit"] == HEAD
+        assert about["digest"].startswith("sha256:")
+        assert about["commit"] == HEAD
     assert report["tasks"] == [{"task": task, "seconds": 10.5 + n, "passed": True, "defects": 0} for n, task in enumerate(nightly.TASKS)]
     assert report["tests"] == {"expected": MODEL_TESTS, "collected": MODEL_TESTS, "passed": MODEL_TESTS, "failed": 0, "skipped": 0,
                                "failed_tests": [],
@@ -394,7 +400,8 @@ def test_a_night_does_its_steps_in_order_and_the_report_holds_what_it_measured(t
             "the proxy's /ready": {"status": 200, "answer": WHOLE["proxy/ready"][1]},
             "the lens's /ready": {"status": 200, "answer": WHOLE["lens/ready"][1]},
             "the lens's /health": {"status": 200, "answer": WHOLE["lens/health"][1]}}
-    assert report["not_whole_at_the_end"] == [] and report["stack_stopped"] == "yes"
+    assert report["not_whole_at_the_end"] == []
+    assert report["stack_stopped"] == "yes"
     assert report["mode"] == "night"
     # No key was given: the status of the night waits, and the run asked GitHub nothing.
     assert report["sent"] == "not sent: no key: the run was started without --status-key or without --status-app; waits: 1"
@@ -412,23 +419,32 @@ def test_the_stack_has_a_name_and_ports_of_its_own_and_the_driver_and_the_tests_
         assert args[args.index("-f") + 1] == str(night.dir / "tree" / "docker-compose.yml")
     settings = (night.dir / "run.env").read_text().splitlines()
     # The server's own settings come first, and the run's settings after them, so a port of the server's file does not hold.
-    assert settings[0] == "ATLAS_MODEL_FILE=model.gguf" and settings.index("ATLAS_PROXY_PORT=8090") < settings.index("ATLAS_PROXY_PORT=18090")
-    assert "ATLAS_IMAGE_TAG=dev" in settings and f"ATLAS_PROJECT_DIR={night.dir / 'workspace'}" in settings
+    assert settings[0] == "ATLAS_MODEL_FILE=model.gguf"
+    assert settings.index("ATLAS_PROXY_PORT=8090") < settings.index("ATLAS_PROXY_PORT=18090")
+    assert "ATLAS_IMAGE_TAG=dev" in settings
+    assert f"ATLAS_PROJECT_DIR={night.dir / 'workspace'}" in settings
     assert f"ATLAS_SECRETS_DIR={night.dir / 'secrets'}" in settings
     # The proxy and the sandbox mount the same workspace: both run as the user of the run.
     for name in ("ATLAS_PROXY_UID", "ATLAS_SANDBOX_UID"):
-        assert f"{name}={os.getuid()}" in settings and f"{name.replace('UID', 'GID')}={os.getgid()}" in settings
+        assert f"{name}={os.getuid()}" in settings
+        assert f"{name.replace('UID', 'GID')}={os.getgid()}" in settings
     driver = next(call for call in calls if call["tool"] == "python-for-the-run" and "e2e" in call["args"][0])
     said = dict(zip(driver["args"][1::2], driver["args"][2::2]))
-    assert said["--url"] == "http://127.0.0.1:18090" and said["--tasks"] == ",".join(nightly.TASKS) and said["--reps"] == "1"
-    assert said["--compose-project"] == "atlas-nightly" and said["--sandbox-container"] == "atlas-nightly-sandbox-1"
-    assert said["--workspace"] == str(night.dir / "workspace" / "_reliability") and said["--commit"] == HEAD
+    assert said["--url"] == "http://127.0.0.1:18090"
+    assert said["--tasks"] == ",".join(nightly.TASKS)
+    assert said["--reps"] == "1"
+    assert said["--compose-project"] == "atlas-nightly"
+    assert said["--sandbox-container"] == "atlas-nightly-sandbox-1"
+    assert said["--workspace"] == str(night.dir / "workspace" / "_reliability")
+    assert said["--commit"] == HEAD
     tests = next(call for call in calls if call["args"][:2] == ["-m", "pytest"])
     assert tests["args"][2:5] == ["-m", "integration", "tests/infrastructure/test_llm.py"]
-    assert tests["env"]["SANDBOX_URL"] == "http://127.0.0.1:18020" and tests["env"]["LLAMA_URL"] == "http://127.0.0.1:18080"
+    assert tests["env"]["SANDBOX_URL"] == "http://127.0.0.1:18020"
+    assert tests["env"]["LLAMA_URL"] == "http://127.0.0.1:18080"
     assert tests["env"]["ATLAS_PROXY_URL"] == "http://127.0.0.1:18090"
     # One of the tests compares the served model with this name, and skips when it has none.
-    assert tests["env"]["ATLAS_MODEL_NAME"] == "model" and driver["env"]["ATLAS_MODEL_NAME"] == "model"
+    assert tests["env"]["ATLAS_MODEL_NAME"] == "model"
+    assert driver["env"]["ATLAS_MODEL_NAME"] == "model"
     assert [call["env"] for call in calls if call["tool"] in ("git", "docker", "nvidia-smi") and "ATLAS_MODEL_NAME" in call["env"]] == []
 
 
@@ -450,7 +466,8 @@ def test_beside_a_token_file_in_its_folder_the_run_starts_no_stack_and_says_how_
     (night.dir / "secrets" / "service-token").write_text("a token of an earlier setup")
     night.run()
     assert night.done.returncode == 1
-    assert "secrets/service-token is there" in night.report["result"] and "Fix: remove that file." in night.report["result"]
+    assert "secrets/service-token is there" in night.report["result"]
+    assert "Fix: remove that file." in night.report["result"]
     assert "stack up" not in night.did()
 
 
@@ -469,15 +486,21 @@ def test_with_an_image_that_was_not_built_from_the_head_the_night_is_not_run_and
     assert night.done.returncode == 0
     assert night.report["result"] == says
     did = night.did()
-    assert "card" not in did and "stack up" not in did and "driver" not in did and "tests" not in did
-    assert "tasks" not in night.report and "tests" not in night.report and "stack_stopped" not in night.report
+    assert "card" not in did
+    assert "stack up" not in did
+    assert "driver" not in did
+    assert "tests" not in did
+    assert "tasks" not in night.report
+    assert "tests" not in night.report
+    assert "stack_stopped" not in night.report
 
 
 def test_a_pull_that_does_not_fit_with_the_reserve_after_it_does_not_start_and_the_run_is_not_run(tmp_path):
     night = Night(tmp_path).run("--reserve-gb", "99999")
     assert re.fullmatch(r"not run: too little room for the pull of ghcr\.io/inferstep/atlas-llama@sha256:[0-9a-f]{64} "
                         r"\([\d.]+ GB free, 99999\.0 GB needed\)", night.report["result"]), night.report["result"]
-    assert "image pull" not in night.did() and "stack up" not in night.did()
+    assert "image pull" not in night.did()
+    assert "stack up" not in night.did()
 
 
 @pytest.mark.parametrize("service", sorted(nightly.IMAGES))
@@ -493,7 +516,8 @@ def test_each_of_the_five_images_is_compared_with_the_head(service):
 def test_images_that_come_some_minutes_after_the_push_are_waited_for(tmp_path):
     # The first look finds the images of the commit before; the second finds the images of the head.
     night = Night(tmp_path, built_from=[dict.fromkeys(nightly.IMAGES.values(), OLD), {}]).run("--image-wait-minutes", "0.02")
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
+    assert night.done.returncode == 0
+    assert night.report["result"] == "passed"
     assert night.report["waited_for_images"] == "0.12 s"
     assert night.did() == ["git clone"] + ONE_HEAD + ["look"] + IMAGES + ONE_HEAD + IMAGES + WITH_THE_CARD
 
@@ -502,13 +526,15 @@ def test_images_that_do_not_come_in_the_time_of_the_wait_leave_the_night_not_run
     night = Night(tmp_path, built_from={"atlas-v3": OLD}).run("--image-wait-minutes", "0.02")
     assert night.done.returncode == 0
     assert night.report["result"] == stale("atlas-v3")
-    assert night.report["waited_for_images"] == "1.2 s" and night.did().count("image pull") == 5 * 11
+    assert night.report["waited_for_images"] == "1.2 s"
+    assert night.did().count("image pull") == 5 * 11
 
 
 def test_when_the_branch_moves_during_the_wait_the_run_measures_its_new_head(tmp_path):
     # The images are of a newer push than the head that was taken first.
     night = Night(tmp_path, head=[HEAD, NEWER], built_from=dict.fromkeys(nightly.IMAGES.values(), NEWER)).run("--image-wait-minutes", "0.02")
-    assert night.report["result"] == "passed" and night.report["commit"] == NEWER
+    assert night.report["result"] == "passed"
+    assert night.report["commit"] == NEWER
     driver = next(call for call in night.calls() if call["tool"] == "python-for-the-run" and "e2e" in call["args"][0])
     assert driver["args"][driver["args"].index("--commit") + 1] == NEWER
 
@@ -532,7 +558,8 @@ def test_when_a_process_holds_the_card_the_run_starts_no_stack_and_gives_the_amo
     night = Night(tmp_path, card=["4242, 13200", "4250, 300"]).run()
     assert night.done.returncode == 0
     assert night.report["result"] == "not run: the card was in use (2 process(es) hold 13500 MiB)"
-    assert night.did()[-1] == "card" and "stack_stopped" not in night.report
+    assert night.did()[-1] == "card"
+    assert "stack_stopped" not in night.report
     assert nightly.NOT_RUN == "not run: the card was in use"
 
 
@@ -554,14 +581,16 @@ def test_how_the_answer_of_the_card_is_read(monkeypatch, status, printed, in_use
 
 def test_a_card_that_cannot_be_read_counts_as_free_and_the_report_says_why(tmp_path):
     night = Night(tmp_path, fail=["nvidia-smi"]).run()
-    assert night.report["result"] == "passed" and night.report["card"] == "not read: nvidia-smi ended with status 1"
+    assert night.report["result"] == "passed"
+    assert night.report["card"] == "not read: nvidia-smi ended with status 1"
 
 
 def test_without_nvidia_smi_the_run_goes_on_and_the_report_says_that_the_card_was_not_read(tmp_path):
     night = Night(tmp_path)
     (tmp_path / "bin" / "nvidia-smi").unlink()
     night.run()
-    assert night.report["result"] == "passed" and night.report["card"].startswith("not read: nvidia-smi gave no answer")
+    assert night.report["result"] == "passed"
+    assert night.report["card"].startswith("not read: nvidia-smi gave no answer")
 
 
 def test_a_run_holds_the_lock_while_its_stack_runs(tmp_path):
@@ -590,7 +619,8 @@ def test_the_pulls_come_before_the_lock_and_the_time_limit_does_not_count_them(t
             fcntl.flock(other, fcntl.LOCK_UN)
     finally:
         process.communicate(timeout=60)
-    assert process.returncode == 0 and night.report["result"] == "passed"
+    assert process.returncode == 0
+    assert night.report["result"] == "passed"
 
 
 def test_a_lock_file_that_cannot_be_used_fails_the_run_and_the_report_says_in_which_step(tmp_path):
@@ -612,7 +642,8 @@ def test_a_second_run_does_not_stop_the_stack_of_a_run_that_is_in_its_middle(tmp
         night.wait_for("driver")
         before = night.did()
         second = subprocess.run(night.command(), env=night.env(), capture_output=True, text=True, timeout=60, check=False)
-        assert second.returncode == 0 and "another run of this folder is going" in second.stdout
+        assert second.returncode == 0
+        assert "another run of this folder is going" in second.stdout
         assert night.did() == before, "the second run called a tool while the first run was in its middle"
     finally:
         first.communicate(timeout=60)
@@ -625,8 +656,10 @@ def test_only_one_run_of_a_folder_goes_at_a_time(tmp_path):
     with open(night.dir / "run.lock", "a") as going:
         fcntl.flock(going, fcntl.LOCK_EX)
         night.run()
-    assert night.done.returncode == 0 and "another run of this folder is going" in night.done.stdout
-    assert night.calls() == [] and not (night.dir / "reports").exists()
+    assert night.done.returncode == 0
+    assert "another run of this folder is going" in night.done.stdout
+    assert night.calls() == []
+    assert not (night.dir / "reports").exists()
 
 
 # --- what fails a run ---------------------------------------------------------------------------------------------
@@ -652,9 +685,12 @@ def test_a_step_that_fails_ends_the_run_with_its_reason_and_the_stack_is_stopped
     before_the_stop = [step for step in did if step not in ("logs", "stack down")]
     assert before_the_stop[-1] == last_step, did
     if "stack up" in did:
-        assert did[-1] == "stack down" and did.count("stack down") == 1 and night.report["stack_stopped"] == "yes"
+        assert did[-1] == "stack down"
+        assert did.count("stack down") == 1
+        assert night.report["stack_stopped"] == "yes"
     else:
-        assert "stack down" not in did and "stack_stopped" not in night.report
+        assert "stack down" not in did
+        assert "stack_stopped" not in night.report
 
 
 def measured(defects=(0, 0, 0), collected=MODEL_TESTS, failed=0, at_the_end=(), skipped=None):
@@ -719,7 +755,8 @@ def test_a_task_whose_change_did_not_land_is_reported_and_does_not_fail_the_run(
     landed = rows()
     landed[1]["task_passed"] = False
     night = Night(tmp_path, driver_rows=landed).run()
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
+    assert night.done.returncode == 0
+    assert night.report["result"] == "passed"
     assert [task["passed"] for task in night.report["tasks"]] == [True, False, True]
 
 
@@ -732,7 +769,8 @@ def test_at_the_time_limit_the_run_ends_and_the_stack_is_stopped(tmp_path, slow,
     assert time.monotonic() - start < 25, "the run did not end at its limit: the slow step went on"
     assert night.done.returncode == 1
     assert night.report["result"] == f"failed: the time limit of 0.05 minutes was reached, in the step: {step}"
-    assert night.did()[-1] == "stack down" and night.report["stack_stopped"] == "yes"
+    assert night.did()[-1] == "stack down"
+    assert night.report["stack_stopped"] == "yes"
 
 
 def test_a_run_that_is_told_to_stop_stops_its_stack_and_says_so(tmp_path):
@@ -752,8 +790,10 @@ def test_a_run_that_is_told_to_stop_while_it_keeps_the_logs_still_stops_its_stac
     night.wait_for("logs")
     process.send_signal(signal.SIGTERM)
     process.communicate(timeout=30)
-    assert night.did()[-1] == "stack down" and night.report["stack_stopped"] == "yes", night.did()
-    assert len(night.report["logs_not_saved"]) == 1 and "the services after it were not asked" in night.report["logs_not_saved"][0]
+    assert night.did()[-1] == "stack down", night.did()
+    assert night.report["stack_stopped"] == "yes", night.did()
+    assert len(night.report["logs_not_saved"]) == 1
+    assert "the services after it were not asked" in night.report["logs_not_saved"][0]
 
 
 def test_a_run_that_is_told_to_stop_before_it_took_the_card_writes_its_report(tmp_path):
@@ -764,7 +804,8 @@ def test_a_run_that_is_told_to_stop_before_it_took_the_card_writes_its_report(tm
     process.communicate(timeout=30)
     assert process.returncode == 1
     assert night.report["result"] == "failed: the run was told to stop, in the step: pull the images"
-    assert "stack up" not in night.did() and "stack down" not in night.did()
+    assert "stack up" not in night.did()
+    assert "stack down" not in night.did()
 
 
 def test_an_error_of_the_run_itself_is_in_the_report_and_the_stack_is_stopped(tmp_path):
@@ -772,7 +813,8 @@ def test_an_error_of_the_run_itself_is_in_the_report_and_the_stack_is_stopped(tm
     night = Night(tmp_path, driver_rows=[{"task": "add_function"}]).run()
     assert night.done.returncode == 1
     assert night.report["result"].startswith("failed: an error of the run itself, in the step: the smoke run: KeyError(")
-    assert night.did()[-1] == "stack down" and night.report["stack_stopped"] == "yes"
+    assert night.did()[-1] == "stack down"
+    assert night.report["stack_stopped"] == "yes"
 
 
 @pytest.mark.parametrize("fail, kept", [
@@ -782,7 +824,8 @@ def test_an_error_of_the_run_itself_is_in_the_report_and_the_stack_is_stopped(tm
 def test_before_the_stack_is_stopped_the_log_of_each_service_is_kept_in_the_report_folder(tmp_path, fail, kept):
     night = Night(tmp_path, fail=fail).run()
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
-    assert night.report["result"] == "passed" and night.report["stack_stopped"] == "yes"
+    assert night.report["result"] == "passed"
+    assert night.report["stack_stopped"] == "yes"
     assert night.did()[-2:] == ["logs", "stack down"]
     asked = [call["args"][call["args"].index("logs"):] for call in night.calls() if "logs" in call["args"]]
     assert asked == [["logs", "--no-color", "--tail", "200", service] for service in nightly.IMAGES]
@@ -809,7 +852,8 @@ def test_without_the_servers_settings_file_the_run_fails_before_it_starts_a_stac
     (night.dir / "nightly.env").unlink()
     night.run()
     assert night.done.returncode == 1
-    assert "nightly.env is not there" in night.report["result"] and "Fix: write it once" in night.report["result"]
+    assert "nightly.env is not there" in night.report["result"]
+    assert "Fix: write it once" in night.report["result"]
     assert "stack up" not in night.did()
 
 
@@ -840,8 +884,10 @@ def test_a_settings_file_with_no_name_of_the_model_stops_the_run_before_the_stac
     (night.dir / "nightly.env").write_text(settings)
     night.run()
     assert night.done.returncode == 1
-    assert "nightly.env has no line `ATLAS_MODEL_NAME=<name>`" in night.report["result"] and "Fix: add the line" in night.report["result"]
-    assert "stack up" not in night.did() and "driver" not in night.did()
+    assert "nightly.env has no line `ATLAS_MODEL_NAME=<name>`" in night.report["result"]
+    assert "Fix: add the line" in night.report["result"]
+    assert "stack up" not in night.did()
+    assert "driver" not in night.did()
 
 
 @pytest.mark.parametrize("line", ["", "ATLAS_LENS_MODELS=./geometric-lens/geometric_lens/models\n", "ATLAS_LENS_MODELS=~/lens\n"],
@@ -855,7 +901,8 @@ def test_a_settings_file_with_no_full_path_of_the_lens_files_fails_the_run_befor
     assert night.report["result"].startswith("failed: the run's settings name no folder of lens files as a full path "
                                              "(ATLAS_LENS_MODELS in "), night.report["result"]
     assert "Fix: add the line with the folder that the usual lens mounts" in night.report["result"]
-    assert "image pull" not in night.did() and "stack up" not in night.did()
+    assert "image pull" not in night.did()
+    assert "stack up" not in night.did()
 
 
 @pytest.mark.parametrize("folder", ["relative/folder", "{root}/not-there"])
@@ -863,7 +910,8 @@ def test_a_folder_that_cannot_be_used_ends_the_run_with_status_2_and_nothing_is_
     night = Night(tmp_path)
     done = subprocess.run([sys.executable, str(SCRIPT), "--dir", folder.replace("{root}", str(tmp_path))], env=night.env(),
                           cwd=tmp_path, capture_output=True, text=True, timeout=60)
-    assert done.returncode == 2 and "is not a full path of a folder that is there" in done.stderr
+    assert done.returncode == 2
+    assert "is not a full path of a folder that is there" in done.stderr
     assert night.calls() == []
 
 
@@ -881,7 +929,8 @@ def test_the_stand_ins_start_where_the_path_of_python_holds_a_space(tmp_path):
     root.mkdir()
     venv.create(root / "a python", with_pip=False, symlinks=True)
     night = Night(root, python=str(root / "a python" / "bin" / "python")).run()
-    assert night.done.returncode == 0 and night.report["result"] == "passed", night.report["result"]
+    assert night.done.returncode == 0, night.report["result"]
+    assert night.report["result"] == "passed", night.report["result"]
 
 
 # --- whether the services are whole -------------------------------------------------------------------------------
@@ -933,13 +982,16 @@ def test_a_service_that_is_not_whole_after_the_start_fails_the_run_and_no_sessio
     assert night.done.returncode == 1
     assert night.report["result"] == "failed: a service was not whole when the stack had started: " + says
     did = night.did()
-    assert did[-4:] == ["stack up", "ask", "logs", "stack down"] and "driver" not in did and "tests" not in did
+    assert did[-4:] == ["stack up", "ask", "logs", "stack down"]
+    assert "driver" not in did
+    assert "tests" not in did
     assert set(night.report["services"]["at the start"]) == set(nightly.QUESTIONS)
 
 
 def test_a_service_that_is_whole_a_moment_after_the_start_is_waited_for(tmp_path):
     night = Night(tmp_path, answers={"proxy/ready": [proxy_says(lens_ready=False), WHOLE["proxy/ready"]]}).run("--settle-seconds", "1")
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
+    assert night.done.returncode == 0
+    assert night.report["result"] == "passed"
     asked = [call for call in night.calls() if "exec" in call["args"] and call["args"][-1].endswith(":8090/ready")]
     assert len(asked) == 3, "twice at the start, once at the end"
 
@@ -956,7 +1008,8 @@ def test_a_service_that_is_not_whole_at_the_end_fails_the_run_and_the_result_nam
 def test_a_lens_with_no_calibration_is_in_the_report_and_does_not_fail_the_run(tmp_path):
     lens = {**WHOLE["lens/health"][1]["subsystems"]["lens"], "cx_calibrated": False}
     night = Night(tmp_path, answers={"lens/health": [200, {"status": "healthy", "subsystems": {"lens": lens}}]}).run()
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
+    assert night.done.returncode == 0
+    assert night.report["result"] == "passed"
     for when in ("at the start", "at the end"):
         assert night.report["services"][when]["the lens's /health"]["answer"]["subsystems"]["lens"] == lens
 
@@ -1090,7 +1143,8 @@ def a_stand_in_for_github(**plan):
                                       "--status-api", "--github"])
 def test_no_argument_points_the_run_at_another_repository_registry_branch_or_address(tmp_path, argument):
     night = Night(tmp_path).run(argument, "another")
-    assert night.done.returncode == 2 and "unrecognized arguments" in night.done.stderr
+    assert night.done.returncode == 2
+    assert "unrecognized arguments" in night.done.stderr
     assert night.calls() == []
     assert night.asked() == []
 
@@ -1099,7 +1153,8 @@ def test_no_argument_points_the_run_at_another_repository_registry_branch_or_add
 
 def test_a_stack_that_an_earlier_run_left_is_stopped_first_and_the_report_says_so(tmp_path):
     night = Night(tmp_path, left=["0a1b2c3d4e5f", "6a7b8c9d0e1f"]).run()
-    assert night.done.returncode == 0 and night.report["result"] == "passed"
+    assert night.done.returncode == 0
+    assert night.report["result"] == "passed"
     assert night.report["left_stack"] == "2 container(s) of an earlier run were stopped first"
     assert night.did() == ["git clone"] + ONE_HEAD + ["look", "stack down"] + IMAGES + WITH_THE_CARD
     look = next(call["args"] for call in night.calls() if call["args"][0] == "ps")
@@ -1110,7 +1165,8 @@ def test_a_left_stack_that_cannot_be_stopped_fails_the_run_before_anything_is_pu
     night = Night(tmp_path, left=["0a1b2c3d4e5f"], fail=["down --volumes"]).run()
     assert night.done.returncode == 1
     assert night.report["result"].startswith("failed: the stop of the stack that an earlier run left: status 1")
-    assert "image pull" not in night.did() and "stack up" not in night.did()
+    assert "image pull" not in night.did()
+    assert "stack up" not in night.did()
 
 
 @pytest.mark.parametrize("settings, step, says, last", [
@@ -1134,7 +1190,8 @@ def test_a_left_stack_is_stopped_before_the_settings_are_read_when_its_stop_can_
 def test_a_left_stack_is_stopped_also_in_a_night_whose_images_are_stale(tmp_path):
     night = Night(tmp_path, left=["0a1b2c3d4e5f"], built_from={"atlas-proxy": OLD}).run()
     assert night.report["result"] == stale("atlas-proxy")
-    assert night.did()[4:6] == ["look", "stack down"] and "stack up" not in night.did()
+    assert night.did()[4:6] == ["look", "stack down"]
+    assert "stack up" not in night.did()
 
 
 # --- a new copy of the script -------------------------------------------------------------------------------------
@@ -1152,7 +1209,8 @@ def test_when_taking_the_head_changes_the_script_or_the_judge_beside_it_the_new_
     night = Night(tmp_path, from_the_tree=True, **change).run()
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
     assert night.did() == ONE_HEAD + ONE_HEAD + THE_REST
-    assert night.report["result"] == "passed" and night.report["script"] == "the new copy: taking the head changed the script"
+    assert night.report["result"] == "passed"
+    assert night.report["script"] == "the new copy: taking the head changed the script"
     assert len(list(night.dir.glob("reports/*"))) == 1, "the new copy writes into the folder of the run that started it"
     for name in (night.lock, night.dir / "run.lock"):
         with open(name, "a") as other:
@@ -1163,7 +1221,8 @@ def test_the_folder_stays_locked_between_the_run_and_the_new_copy_that_it_starts
     # A lock on an open file is dropped when the program is replaced, unless the file stays open across that.
     night = Night(tmp_path, from_the_tree=True, checkout_asks_for_the_lock=True).run()
     assert night.done.returncode == 0, night.done.stdout + night.done.stderr
-    assert night.report["result"] == "passed" and night.report["script"].startswith("the new copy")
+    assert night.report["result"] == "passed"
+    assert night.report["script"].startswith("the new copy")
     assert (tmp_path / "the_lock_when_the_new_copy_starts.txt").read_text() == "held\n"
     with open(night.dir / "run.lock", "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1173,26 +1232,30 @@ def test_the_folder_stays_locked_between_the_run_and_the_new_copy_that_it_starts
 def test_a_start_time_with_a_number_that_is_not_the_kept_lock_file_is_a_run_like_any_other(tmp_path, given):
     # The number names no open file, or a file that is not the lock file: the lock file is opened afresh and taken.
     night = Night(tmp_path).run(ATLAS_NIGHTLY_STARTED_AGAIN=given)
-    assert night.done.returncode == 0 and night.report["result"] == "passed", night.done.stdout + night.done.stderr
+    assert night.done.returncode == 0, night.done.stdout + night.done.stderr
+    assert night.report["result"] == "passed", night.done.stdout + night.done.stderr
     with open(night.dir / "run.lock", "a") as other:
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def test_a_script_that_the_head_did_not_change_is_not_started_again(tmp_path):
     night = Night(tmp_path, from_the_tree=True).run()
-    assert night.did() == ONE_HEAD + THE_REST and night.report["script"] == "as it was started"
+    assert night.did() == ONE_HEAD + THE_REST
+    assert night.report["script"] == "as it was started"
 
 
 def test_a_run_that_was_not_started_from_its_tree_is_never_replaced_by_the_trees_copy(tmp_path):
     night = Night(tmp_path, from_the_tree=True, checkout_adds="\n# one more line\n")
     night.script = SCRIPT
     night.run()
-    assert night.did() == ONE_HEAD + THE_REST and night.report["script"] == "as it was started"
+    assert night.did() == ONE_HEAD + THE_REST
+    assert night.report["script"] == "as it was started"
 
 
 def test_a_new_copy_that_does_not_start_leaves_a_report_that_says_so(tmp_path):
     night = Night(tmp_path, from_the_tree=True, checkout_adds="\nthis is not Python (\n").run()
-    assert night.done.returncode != 0 and "SyntaxError" in night.done.stderr
+    assert night.done.returncode != 0
+    assert "SyntaxError" in night.done.stderr
     assert night.did() == ONE_HEAD
     assert night.report["result"] == ("failed: taking the head changed the script of the run, the run started the new copy in "
                                       "its place, and that copy left no report")
@@ -1203,7 +1266,8 @@ def test_a_new_copy_that_does_not_start_leaves_a_report_that_says_so(tmp_path):
 def test_the_three_tasks_are_tasks_of_the_driver():
     driver = (ROOT / "scripts" / "e2e-reliability.py").read_text(encoding="utf-8")
     known = set(re.findall(r'^    "(\w+)": Task\(', driver, re.M)) | set(re.findall(r'^TASKS\["(\w+)"\] = Task\(', driver, re.M))
-    assert len(nightly.TASKS) == 3 and set(nightly.TASKS) <= known, (nightly.TASKS, sorted(known))
+    assert len(nightly.TASKS) == 3, (nightly.TASKS, sorted(known))
+    assert set(nightly.TASKS) <= known, (nightly.TASKS, sorted(known))
 
 
 def test_the_tests_of_the_run_are_the_group_that_needs_a_real_model_and_the_judge_is_the_one_beside_the_script():
@@ -1215,7 +1279,8 @@ def test_the_tests_of_the_run_are_the_group_that_needs_a_real_model_and_the_judg
 def test_every_port_and_every_image_of_the_compose_file_is_one_the_run_knows():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     published = set(re.findall(r'"127\.0\.0\.1:\$\{(ATLAS_\w+_PORT):-\d+\}:\d+"', compose))
-    assert published and published <= set(nightly.PORTS), (
+    assert published
+    assert published <= set(nightly.PORTS), (
         f"docker-compose.yml publishes {sorted(published - set(nightly.PORTS))}, and the nightly run gives it no port of "
         "its own, so its stack would take the usual port. Fix: add it to PORTS in scripts/nightly_run.py.")
     assert len(set(nightly.PORTS.values())) == len(nightly.PORTS)

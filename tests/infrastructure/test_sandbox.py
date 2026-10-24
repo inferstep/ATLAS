@@ -713,4 +713,5 @@ class TestWorkingDirectoryContract:
             json={"code": "raise ValueError('boom')\n", "language": "python"},
             timeout=60.0).json()
         assert data["success"] is False
-        assert "ValueError" in data["stderr"] and "boom" in data["stderr"]
+        assert "ValueError" in data["stderr"]
+        assert "boom" in data["stderr"]

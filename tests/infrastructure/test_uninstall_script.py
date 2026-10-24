@@ -142,8 +142,10 @@ def test_the_list_names_the_folders_of_the_chosen_options_and_no_other(tmp_path,
         lines = [line for line in lines_before_the_question if line.rstrip().endswith(f": {path}")]
         assert len(lines) == (1 if name in listed else 0), (name, lines_before_the_question)
         assert all(f"{name} folder" in line for line in lines), lines
-    assert done.returncode == 0 and done.stdout.rstrip().endswith("Aborted.")
-    assert install.files() == before and install.called() == []
+    assert done.returncode == 0
+    assert done.stdout.rstrip().endswith("Aborted.")
+    assert install.files() == before
+    assert install.called() == []
 
 
 @pytest.mark.parametrize("option, apart, files_left, stand_ins_called", [
@@ -174,8 +176,10 @@ def test_without_the_answer_yes_nothing_is_removed(tmp_path, answer):
     install = Install(tmp_path)
     before = install.files()
     done = install.run("--all", answer=answer)
-    assert done.returncode == 0 and "Aborted." in done.stdout
-    assert install.files() == before and install.called() == []
+    assert done.returncode == 0
+    assert "Aborted." in done.stdout
+    assert install.files() == before
+    assert install.called() == []
 
 
 @pytest.mark.parametrize("value", ["", None], ids=["empty", "not set"])
@@ -188,17 +192,20 @@ def test_an_empty_setting_stops_the_script_before_its_question_and_nothing_is_re
     before = install.files()
     done = install.run(option, answer="y", **{setting: value})
     assert done.returncode == 1, done.stdout + done.stderr
-    assert f"[ERROR] {setting} is empty" in done.stderr and "Nothing was removed." in done.stderr
+    assert f"[ERROR] {setting} is empty" in done.stderr
+    assert "Nothing was removed." in done.stderr
     assert "Fix: set it in " in done.stderr
     assert "QUESTION" not in done.stdout
-    assert install.files() == before and install.called() == []
+    assert install.files() == before
+    assert install.called() == []
 
 
 def test_two_empty_settings_are_both_named(tmp_path):
     install = Install(tmp_path)
     done = install.run("--all", answer="y", ATLAS_DATA_DIR="", ATLAS_MODELS_DIR="")
     assert done.returncode == 1
-    assert "[ERROR] ATLAS_DATA_DIR is empty" in done.stderr and "[ERROR] ATLAS_MODELS_DIR is empty" in done.stderr
+    assert "[ERROR] ATLAS_DATA_DIR is empty" in done.stderr
+    assert "[ERROR] ATLAS_MODELS_DIR is empty" in done.stderr
     assert "ATLAS_PROJECTS_DIR is empty" not in done.stderr
 
 
@@ -232,7 +239,8 @@ def test_a_folder_that_must_not_be_removed_stops_the_script_before_its_question(
     assert "Nothing was removed." in done.stderr
     assert "Fix: set it in " in done.stderr
     assert "QUESTION" not in done.stdout
-    assert install.files() == before and install.called() == []
+    assert install.files() == before
+    assert install.called() == []
 
 
 @pytest.mark.parametrize("option, setting", OPTION_AND_SETTING)
@@ -257,7 +265,8 @@ def test_an_empty_setting_of_an_option_that_was_not_given_does_not_stop_the_scri
     install = Install(tmp_path)
     done = install.run("--models", answer="y", ATLAS_DATA_DIR="", ATLAS_PROJECTS_DIR=None)
     assert done.returncode == 0, done.stdout + done.stderr
-    assert not (install.models / "a.gguf").exists() and (install.projects / "app" / "main.py").exists()
+    assert not (install.models / "a.gguf").exists()
+    assert (install.projects / "app" / "main.py").exists()
     assert install.run(answer="n", ATLAS_DATA_DIR="", ATLAS_PROJECTS_DIR="", ATLAS_MODELS_DIR="").returncode == 0
 
 
@@ -265,15 +274,19 @@ def test_the_help_text_says_for_data_and_for_all_that_the_projects_folder_is_rem
     install = Install(tmp_path)
     before = install.files()
     done = install.run("--help")
-    assert done.returncode == 0 and "QUESTION" not in done.stdout
+    assert done.returncode == 0
+    assert "QUESTION" not in done.stdout
     options = dict(re.findall(r"^  (--?[a-z0-9-]+(?:, --[a-z-]+)?) +(.*(?:\n {10,}.*)*)", done.stdout, re.M))
     for option in ("--data", "--all"):
         text = " ".join(options[option].split())
-        assert "data folder" in text and "projects folder" in text, (option, text)
-    assert "projects folder" not in options["--models"] and "projects folder" not in options["--k3s"]
+        assert "data folder" in text, (option, text)
+        assert "projects folder" in text, (option, text)
+    assert "projects folder" not in options["--models"]
+    assert "projects folder" not in options["--k3s"]
     for name, path in (("Models", install.models), ("Data", install.data), ("Projects", install.projects)):
         assert re.search(rf"^  {name} folder: +{re.escape(str(path))}$", done.stdout, re.M), done.stdout
-    assert install.files() == before and install.called() == []
+    assert install.files() == before
+    assert install.called() == []
 
 
 def removals():
