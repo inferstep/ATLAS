@@ -325,7 +325,8 @@ func sessionOwnedRepairStub(t *testing.T, replacement, v3Mode string, v3Calls *i
 	t.Helper()
 	calls := 0
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v3/generate") {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/generate"):
 			*v3Calls++
 			if v3Mode == "working" {
 				resp, _ := json.Marshal(V3GenerateResponse{
@@ -338,12 +339,10 @@ func sessionOwnedRepairStub(t *testing.T, replacement, v3Mode string, v3Calls *i
 			}
 			http.Error(w, "v3 unavailable", http.StatusServiceUnavailable)
 			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/internal/") {
+		case strings.HasPrefix(r.URL.Path, "/internal/"):
 			http.Error(w, "not stubbed", http.StatusServiceUnavailable)
 			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/syntax-check") {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			var in struct{ Code string }
 			json.NewDecoder(r.Body).Decode(&in)
 			valid := !strings.Contains(in.Code, "def alpha(n:") &&
@@ -354,8 +353,7 @@ func sessionOwnedRepairStub(t *testing.T, replacement, v3Mode string, v3Calls *i
 			}
 			json.NewEncoder(w).Encode(out)
 			return
-		}
-		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
 			http.NotFound(w, r)
 			return
 		}

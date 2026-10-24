@@ -72,22 +72,19 @@ func permServer(t *testing.T, got *map[string]string) *httptest.Server {
 	}))
 }
 
-// Each decision key closes the modal and posts its answer for this turn and
-// call. Only 'a' adds the tool to the session allowlist. Deny ('n' or esc)
-// adds no local row: the proxy's permission_denied event renders it.
+// Each decision key posts its answer for this turn and call: 'y' allows once,
+// 'a' allows for the session, 'n' and esc deny.
 func TestPermissionModalKeyDecisions(t *testing.T) {
 	cases := []struct {
-		name           string
-		key            tea.KeyMsg
-		wantDecision   string
-		wantScope      string
-		wantAllowlist  bool
-		wantBodyPrefix string // "" = no local transcript row expected
+		name         string
+		key          tea.KeyMsg
+		wantDecision string
+		wantScope    string
 	}{
-		{"y", keyMsg("y"), "allow", "once", false, "allowed"},
-		{"a", keyMsg("a"), "allow", "session", true, "allowed"},
-		{"n", keyMsg("n"), "deny", "once", false, ""},
-		{"esc", tea.KeyMsg(tea.Key{Type: tea.KeyEsc}), "deny", "once", false, ""},
+		{"y", keyMsg("y"), "allow", "once"},
+		{"a", keyMsg("a"), "allow", "session"},
+		{"n", keyMsg("n"), "deny", "once"},
+		{"esc", tea.KeyMsg(tea.Key{Type: tea.KeyEsc}), "deny", "once"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,22 +98,7 @@ func TestPermissionModalKeyDecisions(t *testing.T) {
 				toolName: "run_command", message: "Run command: npm install",
 				toolCallID: "call_3", sessionID: "turn-abc",
 			}
-			updated, cmd := m.Update(tc.key)
-			mu := updated.(tuiModel)
-			if mu.pendingPerm != nil {
-				t.Fatal("pendingPerm should be cleared after a decision")
-			}
-			if mu.sessionAllowedTools["run_command"] != tc.wantAllowlist {
-				t.Errorf("run_command on the session allowlist = %v, want %v",
-					mu.sessionAllowedTools["run_command"], tc.wantAllowlist)
-			}
-			if tc.wantBodyPrefix == "" {
-				if len(mu.chat) != 0 {
-					t.Errorf("expected no local row, got %+v", mu.chat)
-				}
-			} else if len(mu.chat) == 0 || !strings.HasPrefix(mu.chat[len(mu.chat)-1].Body, tc.wantBodyPrefix) {
-				t.Errorf("chat tail = %+v, want a %q record", mu.chat, tc.wantBodyPrefix)
-			}
+			_, cmd := m.Update(tc.key)
 			if cmd == nil {
 				t.Fatal("decision must return a post-back Cmd")
 			}
@@ -129,6 +111,74 @@ func TestPermissionModalKeyDecisions(t *testing.T) {
 			}
 			if got["session_id"] != "turn-abc" || got["tool_call_id"] != "call_3" {
 				t.Errorf("correlation = %+v, want session turn-abc / call_3", got)
+			}
+		})
+	}
+}
+
+// An allow key closes the modal and leaves an "allowed" record in the
+// transcript. Only 'a' adds the tool to the session allowlist.
+func TestAnAllowKeyClosesTheModalWithAnAllowedRecord(t *testing.T) {
+	cases := []struct {
+		name          string
+		key           tea.KeyMsg
+		wantAllowlist bool
+	}{
+		{"y", keyMsg("y"), false},
+		{"a", keyMsg("a"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(80, 30)
+			m.pendingPerm = &permPrompt{
+				toolName: "run_command", message: "Run command: npm install",
+				toolCallID: "call_3", sessionID: "turn-abc",
+			}
+			updated, _ := m.Update(tc.key)
+			mu := updated.(tuiModel)
+			if mu.pendingPerm != nil {
+				t.Fatal("pendingPerm should be cleared after a decision")
+			}
+			if mu.sessionAllowedTools["run_command"] != tc.wantAllowlist {
+				t.Errorf("run_command on the session allowlist = %v, want %v",
+					mu.sessionAllowedTools["run_command"], tc.wantAllowlist)
+			}
+			if len(mu.chat) == 0 || !strings.HasPrefix(mu.chat[len(mu.chat)-1].Body, "allowed") {
+				t.Errorf("chat tail = %+v, want a %q record", mu.chat, "allowed")
+			}
+		})
+	}
+}
+
+// A deny key ('n' or esc) closes the modal and adds no local row: the proxy's
+// permission_denied event renders it. A deny adds nothing to the session
+// allowlist.
+func TestADenyKeyClosesTheModalWithoutALocalRow(t *testing.T) {
+	cases := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"n", keyMsg("n")},
+		{"esc", tea.KeyMsg(tea.Key{Type: tea.KeyEsc})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sized(80, 30)
+			m.pendingPerm = &permPrompt{
+				toolName: "run_command", message: "Run command: npm install",
+				toolCallID: "call_3", sessionID: "turn-abc",
+			}
+			updated, _ := m.Update(tc.key)
+			mu := updated.(tuiModel)
+			if mu.pendingPerm != nil {
+				t.Fatal("pendingPerm should be cleared after a decision")
+			}
+			if mu.sessionAllowedTools["run_command"] {
+				t.Errorf("run_command on the session allowlist = %v, want false",
+					mu.sessionAllowedTools["run_command"])
+			}
+			if len(mu.chat) != 0 {
+				t.Errorf("expected no local row, got %+v", mu.chat)
 			}
 		})
 	}

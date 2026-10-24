@@ -213,23 +213,63 @@ func TestExecutionAttemptDischarge(t *testing.T) {
 // and the model would spend the session rewriting a valid file. The two
 // mid-loop readers ask for the value.
 
-// warnedRunFixture drives the real loop with a genuine Python syntax check and
-// reports every exit gate the session emitted over a warned file:
-// run_first_gate, or repair_gate, which owns a warned file that still does not
-// parse. With sandbox set, commands run in the sandbox stub, which answers the
-// background-job endpoints: the only route a server script may run through.
-// Otherwise they run on the host.
-func warnedRunFixture(t *testing.T, plan func(i int) map[string]interface{}, sandbox bool) (
+// warnedRunFixture drives the real loop against warnedRunStub, whose model
+// plays steps and then answers done with summary, and reports every exit gate
+// the session emitted over a warned file: run_first_gate, or repair_gate, which
+// owns a warned file that still does not parse. With sandbox set, commands run
+// in the sandbox stub, which answers the background-job endpoints: the only
+// route a server script may run through. Otherwise they run on the host.
+func warnedRunFixture(t *testing.T, steps []map[string]interface{}, summary string, sandbox bool) (
 	*AgentContext, string, map[string]int, map[string]string, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	turns := 0
 	census := map[string]int{}
 	terminal := map[string]string{}
 	var gates []string
 	var mu sync.Mutex
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := warnedRunStub(t, dir, steps, summary)
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = !sandbox
+	ctx.MaxTurns = 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		census[et]++
+		if et == "gate" {
+			var g struct{ Gate, Reason string }
+			if json.Unmarshal(b, &g) == nil && (g.Gate == "run_first_gate" || g.Gate == "repair_gate") {
+				gates = append(gates, g.Reason)
+			}
+		}
+		if et == "done" {
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		}
+	}
+	runAgentLoop(ctx, "Write solve.py so it prints 7.")
+	return ctx, dir, census, terminal, gates
+}
+
+// warnedRunStub serves warnedRunFixture's model and services. The model plays
+// steps, one tool call per turn, then answers done with summary on every later
+// turn, up to a ceiling of 30 turns. The syntax check is a genuine Python parse
+// (warnedRunSyntax). The sandbox answers the background-job endpoints and the
+// workspace mount probe in dir. V3 and the internal endpoints are unavailable.
+func warnedRunStub(t *testing.T, dir string, steps []map[string]interface{}, summary string) *httptest.Server {
+	t.Helper()
+	turns := 0
+	var mu sync.Mutex
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -281,41 +321,16 @@ func warnedRunFixture(t *testing.T, plan func(i int) map[string]interface{}, san
 			http.Error(w, "turn ceiling exceeded", http.StatusInsufficientStorage)
 			return
 		}
-		call, _ := json.Marshal(plan(i))
+		next := map[string]interface{}{"type": "done", "summary": summary}
+		if i < len(steps) {
+			next = steps[i]
+		}
+		call, _ := json.Marshal(next)
 		d, _ := json.Marshal(map[string]interface{}{
 			"choices": []map[string]interface{}{
 				{"delta": map[string]string{"content": string(call)}}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
-	t.Cleanup(srv.Close)
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.VerifyOnHost = !sandbox
-	ctx.MaxTurns = 0
-	ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		mu.Lock()
-		defer mu.Unlock()
-		census[et]++
-		if et == "gate" {
-			var g struct{ Gate, Reason string }
-			if json.Unmarshal(b, &g) == nil && (g.Gate == "run_first_gate" || g.Gate == "repair_gate") {
-				gates = append(gates, g.Reason)
-			}
-		}
-		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
-		}
-	}
-	runAgentLoop(ctx, "Write solve.py so it prints 7.")
-	return ctx, dir, census, terminal, gates
 }
 
 func warnedRunSyntax(code string) string {
@@ -339,55 +354,33 @@ func writeCall(path, content string) map[string]interface{} {
 		"args": map[string]string{"path": path, "content": content}}
 }
 
-// What the mark says after each landing sequence.
+// After these landing sequences no warning is active: the session emits no
+// warned-file exit gate, and solve.py holds the clean bytes.
 func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 	for _, c := range []struct {
-		name      string
-		sandbox   bool
-		plan      func(i int) map[string]interface{}
-		wantGates bool
-		wantDisk  string
+		name    string
+		sandbox bool
+		steps   []map[string]interface{} // the model's tool calls, one per turn
+		summary string                   // the done answer after the last step
 	}{
 		{
 			// A clean landing is not a warning.
-			name: "clean landing",
-			plan: func(i int) map[string]interface{} {
-				if i == 0 {
-					return writeCall("solve.py", warnedRunValid)
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
-			},
-			wantGates: false, wantDisk: warnedRunValid,
-		},
-		{
-			// A genuine warning still gates.
-			name: "warned landing",
-			plan: func(i int) map[string]interface{} {
-				if i == 0 {
-					return writeCall("solve.py", warnedRunBroken)
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
-			},
-			wantGates: true, wantDisk: warnedRunBroken,
+			name:    "clean landing",
+			steps:   []map[string]interface{}{writeCall("solve.py", warnedRunValid)},
+			summary: "wrote solve.py",
 		},
 		{
 			// Running it discharges the mark, and the clean rewrite that
 			// follows must not re-arm it. (A rewrite BEFORE the run is bounced
 			// on purpose: the warned version has to be executed first.)
 			name: "warned, run, then clean rewrite",
-			plan: func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return writeCall("solve.py", warnedRunBroken)
-				case 1:
-					return map[string]interface{}{"type": "tool_call", "name": "run_command",
-						"args": map[string]string{"command": "python3 solve.py"}}
-				case 2:
-					return writeCall("solve.py", warnedRunValid)
-				}
-				return map[string]interface{}{"type": "done", "summary": "fixed solve.py"}
+			steps: []map[string]interface{}{
+				writeCall("solve.py", warnedRunBroken),
+				{"type": "tool_call", "name": "run_command",
+					"args": map[string]string{"command": "python3 solve.py"}},
+				writeCall("solve.py", warnedRunValid),
 			},
-			wantGates: false, wantDisk: warnedRunValid,
+			summary: "fixed solve.py",
 		},
 		{
 			// A background run is a run. The foreground-server gate sends
@@ -395,46 +388,23 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			// returns the same traceback run_command would.
 			name:    "warned, background run, then clean rewrite",
 			sandbox: true,
-			plan: func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return writeCall("solve.py", warnedRunBroken)
-				case 1:
-					return map[string]interface{}{"type": "tool_call", "name": "run_background",
-						"args": map[string]string{"command": "python3 solve.py"}}
-				case 2:
-					return writeCall("solve.py", warnedRunValid)
-				}
-				return map[string]interface{}{"type": "done", "summary": "fixed solve.py"}
+			steps: []map[string]interface{}{
+				writeCall("solve.py", warnedRunBroken),
+				{"type": "tool_call", "name": "run_background",
+					"args": map[string]string{"command": "python3 solve.py"}},
+				writeCall("solve.py", warnedRunValid),
 			},
-			wantGates: false, wantDisk: warnedRunValid,
-		},
-		{
-			// A clean landing on one path must not mask a genuine warning
-			// that arrives after it. (A warned rewrite of the SAME path cannot
-			// happen: over valid bytes the healthy-baseline gate refuses
-			// invalid content outright.)
-			name: "clean landing then a warned landing elsewhere",
-			plan: func(i int) map[string]interface{} {
-				switch i {
-				case 0:
-					return writeCall("solve.py", warnedRunValid)
-				case 1:
-					return writeCall("helper.py", warnedRunBroken)
-				}
-				return map[string]interface{}{"type": "done", "summary": "wrote both"}
-			},
-			wantGates: true, wantDisk: warnedRunValid,
+			summary: "fixed solve.py",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			ctx, dir, census, terminal, gates := warnedRunFixture(t, c.plan, c.sandbox)
-			if (len(gates) > 0) != c.wantGates {
-				t.Errorf("%d warned-file exit gate events %q, want any=%v (terminal %q/%q)",
-					len(gates), gates, c.wantGates, terminal["status"], terminal["reason"])
+			ctx, dir, census, terminal, gates := warnedRunFixture(t, c.steps, c.summary, c.sandbox)
+			if len(gates) > 0 {
+				t.Errorf("%d warned-file exit gate events %q, want none (terminal %q/%q)",
+					len(gates), gates, terminal["status"], terminal["reason"])
 			}
 			got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
-			if string(got) != c.wantDisk {
+			if string(got) != warnedRunValid {
 				t.Errorf("solve.py on disk is not what the sequence wrote: %q", got)
 			}
 			if census["done"] != 1 {
@@ -442,14 +412,57 @@ func TestPendingWarnedRunIsASetOfActiveWarnings(t *testing.T) {
 			}
 			// The gate never invents a warning about bytes the ledger says
 			// are fine.
-			if !c.wantGates {
-				d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-				if d == nil {
-					t.Fatal("solve.py is not in the ledger")
-				}
-				if _, status := d.CurrentValidation(); status != ValidationPassed {
-					t.Errorf("solve.py should be exact-hash passed, got %s", status)
-				}
+			if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d == nil {
+				t.Fatal("solve.py is not in the ledger")
+			} else if _, status := d.CurrentValidation(); status != ValidationPassed {
+				t.Errorf("solve.py should be exact-hash passed, got %s", status)
+			}
+		})
+	}
+}
+
+// After these landing sequences a warning is active: the session emits a
+// warned-file exit gate.
+func TestAWarnedLandingStillGates(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		steps    []map[string]interface{} // the model's tool calls, one per turn
+		summary  string                   // the done answer after the last step
+		wantDisk string                   // solve.py's bytes at the end
+	}{
+		{
+			// A genuine warning still gates.
+			name:     "warned landing",
+			steps:    []map[string]interface{}{writeCall("solve.py", warnedRunBroken)},
+			summary:  "wrote solve.py",
+			wantDisk: warnedRunBroken,
+		},
+		{
+			// A clean landing on one path must not mask a genuine warning
+			// that arrives after it. (A warned rewrite of the SAME path cannot
+			// happen: over valid bytes the healthy-baseline gate refuses
+			// invalid content outright.)
+			name: "clean landing then a warned landing elsewhere",
+			steps: []map[string]interface{}{
+				writeCall("solve.py", warnedRunValid),
+				writeCall("helper.py", warnedRunBroken),
+			},
+			summary:  "wrote both",
+			wantDisk: warnedRunValid,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, dir, census, terminal, gates := warnedRunFixture(t, c.steps, c.summary, false)
+			if len(gates) == 0 {
+				t.Errorf("no warned-file exit gate event, want at least one (terminal %q/%q)",
+					terminal["status"], terminal["reason"])
+			}
+			got, _ := os.ReadFile(filepath.Join(dir, "solve.py"))
+			if string(got) != c.wantDisk {
+				t.Errorf("solve.py on disk is not what the sequence wrote: %q", got)
+			}
+			if census["done"] != 1 {
+				t.Errorf("%d terminal events", census["done"])
 			}
 		})
 	}

@@ -43,7 +43,15 @@ type auditCheck struct {
 	hash string
 }
 
+// auditStub plays V3 and the checkers for one auditCase: it answers with the
+// verdicts the case scripts and records every check request.
 type auditStub struct {
+	c        auditCase
+	evidence map[string]interface{} // the verified envelope V3 sends; nil when the case did not pass
+	cancel   context.CancelFunc     // cancels the write's request context
+
+	syntaxCalls, embeddedCalls int // requests so far: syntaxBadFor and embeddedBadFor receive the ordinal
+
 	mu     sync.Mutex
 	checks []auditCheck
 	v3Hits int
@@ -53,6 +61,104 @@ func (s *auditStub) add(kind, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checks = append(s.checks, auditCheck{kind, shortHash(body)})
+}
+
+func (s *auditStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.URL.Path == "/v3/generate":
+		s.generate(w)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+	case r.URL.Path == "/internal/structural_check":
+		s.structuralCheck(w, r)
+	case r.URL.Path == "/internal/embedded_script_check":
+		s.embeddedScriptCheck(w, r)
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		s.syntaxCheck(w, r)
+	default:
+		http.Error(w, "unexpected endpoint "+r.URL.Path, http.StatusTeapot)
+	}
+}
+
+// generate streams V3's result: the case's candidate and passed flag, and the
+// verified envelope when there is one.
+func (s *auditStub) generate(w http.ResponseWriter) {
+	s.mu.Lock()
+	s.v3Hits++
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "text/event-stream")
+	fl, _ := w.(http.Flusher)
+	body := map[string]interface{}{
+		"code": s.c.candidate, "passed": s.c.passed,
+		"phase_solved": "phase1", "candidates_tested": 3,
+		"winning_score": 0.87,
+		"verification_evidence": []map[string]interface{}{
+			{"verifier": "sandbox", "status": "passed"},
+		},
+	}
+	if s.evidence != nil {
+		body["evidence"] = s.evidence
+	}
+	payload, _ := json.Marshal(body)
+	for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
+		fmt.Fprint(w, line+"\n")
+		if fl != nil {
+			fl.Flush()
+		}
+	}
+}
+
+// structuralCheck answers with the names unresolvedFor finds in the source,
+// and cancels the write's request first when the case asks for that.
+func (s *auditStub) structuralCheck(w http.ResponseWriter, r *http.Request) {
+	var body map[string]interface{}
+	json.NewDecoder(r.Body).Decode(&body)
+	src, _ := body["source"].(string)
+	s.add("structural", src)
+	if s.c.cancelOnStructural {
+		s.cancel()
+	}
+	out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+	if s.c.unresolvedFor != nil {
+		if names := s.c.unresolvedFor(src); len(names) > 0 {
+			out["unresolved"] = names
+		}
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
+// embeddedScriptCheck answers with one javascript finding when embeddedBadFor
+// condemns the source, and with none otherwise.
+func (s *auditStub) embeddedScriptCheck(w http.ResponseWriter, r *http.Request) {
+	var body map[string]interface{}
+	json.NewDecoder(r.Body).Decode(&body)
+	src, _ := body["source"].(string)
+	prev, _ := body["previous"].(string)
+	s.add("embedded", src)
+	s.embeddedCalls++
+	out := map[string]interface{}{"ok": true, "findings": []interface{}{}}
+	if s.c.embeddedBadFor != nil && s.c.embeddedBadFor(src, prev, s.embeddedCalls) {
+		out["findings"] = []map[string]interface{}{{
+			"line": 4, "column": 1, "kind": "javascript",
+			"where": "the <script> block", "message": "unexpected `)`",
+			"text": "bad();)", "hint": "remove it",
+		}}
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
+// syntaxCheck answers valid unless syntaxBadFor condemns the code.
+func (s *auditStub) syntaxCheck(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Code string }
+	json.NewDecoder(r.Body).Decode(&in)
+	s.add("syntax", in.Code)
+	s.syntaxCalls++
+	bad := s.c.syntaxBadFor != nil && s.c.syntaxBadFor(in.Code, s.syntaxCalls)
+	out := map[string]interface{}{"valid": !bad}
+	if bad {
+		out["errors"] = []string{"SyntaxError: invalid syntax (line 2)"}
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 // verifiedEnvelopeFor re-stamps the golden verified-winner envelope onto other
@@ -112,88 +218,16 @@ type auditResult struct {
 func runAudit(t *testing.T, c auditCase) auditResult {
 	t.Helper()
 	dir := t.TempDir()
-	st := &auditStub{}
 	reqCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var syntaxCalls, embeddedCalls int
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v3/generate":
-			st.mu.Lock()
-			st.v3Hits++
-			st.mu.Unlock()
-			w.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := w.(http.Flusher)
-			body := map[string]interface{}{
-				"code": c.candidate, "passed": c.passed,
-				"phase_solved": "phase1", "candidates_tested": 3,
-				"winning_score": 0.87,
-				"verification_evidence": []map[string]interface{}{
-					{"verifier": "sandbox", "status": "passed"},
-				},
-			}
-			// A service that verified this candidate says so in the envelope.
-			// Without one nothing is authorized, which several cases below
-			// exercise deliberately.
-			if c.passed {
-				body["evidence"] = verifiedEnvelopeFor(t, c.candidate)
-			}
-			payload, _ := json.Marshal(body)
-			for _, line := range []string{"event: result", "data: " + string(payload), "", "data: [DONE]", ""} {
-				fmt.Fprint(w, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			st.add("structural", src)
-			if c.cancelOnStructural {
-				cancel()
-			}
-			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
-			if c.unresolvedFor != nil {
-				if names := c.unresolvedFor(src); len(names) > 0 {
-					out["unresolved"] = names
-				}
-			}
-			json.NewEncoder(w).Encode(out)
-		case r.URL.Path == "/internal/embedded_script_check":
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			prev, _ := body["previous"].(string)
-			st.add("embedded", src)
-			embeddedCalls++
-			out := map[string]interface{}{"ok": true, "findings": []interface{}{}}
-			if c.embeddedBadFor != nil && c.embeddedBadFor(src, prev, embeddedCalls) {
-				out["findings"] = []map[string]interface{}{{
-					"line": 4, "column": 1, "kind": "javascript",
-					"where": "the <script> block", "message": "unexpected `)`",
-					"text": "bad();)", "hint": "remove it",
-				}}
-			}
-			json.NewEncoder(w).Encode(out)
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			st.add("syntax", in.Code)
-			syntaxCalls++
-			bad := c.syntaxBadFor != nil && c.syntaxBadFor(in.Code, syntaxCalls)
-			out := map[string]interface{}{"valid": !bad}
-			if bad {
-				out["errors"] = []string{"SyntaxError: invalid syntax (line 2)"}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			http.Error(w, "unexpected endpoint "+r.URL.Path, http.StatusTeapot)
-		}
-	}))
+	st := &auditStub{c: c, cancel: cancel}
+	// A service that verified this candidate says so in the envelope. Without
+	// one nothing is authorized, which several cases below exercise
+	// deliberately.
+	if c.passed {
+		st.evidence = verifiedEnvelopeFor(t, c.candidate)
+	}
+	srv := httptest.NewServer(st)
 	defer srv.Close()
 
 	target := filepath.Join(dir, c.rel)

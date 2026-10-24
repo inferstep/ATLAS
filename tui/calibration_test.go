@@ -49,6 +49,16 @@ func TestRenderCalibrationBadge(t *testing.T) {
 	}
 }
 
+// With both subsystems ready there is nothing to do, so there is no hint.
+func TestNoBadgeActionHintWhenBothAreSupported(t *testing.T) {
+	s := &calibrationStatus{}
+	s.Lens.Verdict = "supported"
+	s.ASA.Verdict = "supported"
+	if got := badgeActionHint(s); got != "" {
+		t.Errorf("hint %q, want none", got)
+	}
+}
+
 // The hint says what to do: build what is missing, check what is unverified,
 // or run atlas doctor when the lens is down (its artifacts may be fine, so a
 // build would mislead). While the lens cannot score, requests are refused and
@@ -56,10 +66,9 @@ func TestRenderCalibrationBadge(t *testing.T) {
 func TestBadgeActionHint(t *testing.T) {
 	cases := []struct {
 		name, lens, asa string
-		want            []string // texts the hint contains; none means no hint at all
+		want            []string // texts the hint contains
 		notWant         []string
 	}{
-		{"both supported", "supported", "supported", nil, nil},
 		{"ASA unverified", "supported", "unverified", []string{"atlas asa check"}, nil},
 		{"ASA missing", "supported", "missing", []string{"atlas asa build"}, []string{"atlas lens build"}},
 		{"lens without artifacts", "no-artifacts", "supported",
@@ -79,9 +88,6 @@ func TestBadgeActionHint(t *testing.T) {
 			s.Lens.Verdict = c.lens
 			s.ASA.Verdict = c.asa
 			got := badgeActionHint(s)
-			if len(c.want) == 0 && got != "" {
-				t.Errorf("hint %q, want none", got)
-			}
 			for _, want := range c.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("hint %q, want it to contain %q", got, want)

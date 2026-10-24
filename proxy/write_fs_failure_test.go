@@ -9,88 +9,91 @@ import (
 	"testing"
 )
 
-// Two filesystem failures through the real write_file dispatch.
+// Two filesystem failures through the real write_file dispatch, one test each.
 // writeFileDirect writes `path + ".atlas.tmp"`, then renames it over `path`,
 // and returns (nil, err) on either failure. The error carries the
 // classification, because only writeFileDirect knows which operation failed;
 // executeToolCall's error branch builds the result from it.
-func TestWriteFileFilesystemFailures(t *testing.T) {
-	t.Run("temp-write-fails", func(t *testing.T) {
-		dir := t.TempDir()
-		sub := filepath.Join(dir, "ro")
-		os.Mkdir(sub, 0o755)
-		target := filepath.Join(sub, "f.py")
-		prior := "A = 1\n"
-		os.WriteFile(target, []byte(prior), 0o644)
-		os.Chmod(sub, 0o555) // read-only dir: temp create must fail
-		defer os.Chmod(sub, 0o755)
 
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.PermissionMode = PermissionYolo
-		ctx.StreamFn = func(string, interface{}) {}
-		ctx.SessionWrites["ro/f.py"] = true
-		args, _ := json.Marshal(map[string]string{"path": "ro/f.py", "content": "B = 2\n"})
-		res := executeToolCall("write_file", args, ctx)
+// The temp write fails in a read-only directory: the prior bytes stay and no
+// temporary file is left.
+func TestWriteFileTempWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "ro")
+	os.Mkdir(sub, 0o755)
+	target := filepath.Join(sub, "f.py")
+	prior := "A = 1\n"
+	os.WriteFile(target, []byte(prior), 0o644)
+	os.Chmod(sub, 0o555) // read-only dir: temp create must fail
+	defer os.Chmod(sub, 0o755)
 
-		after, _ := os.ReadFile(target)
-		ents, _ := os.ReadDir(sub)
-		var names []string
-		for _, e := range ents {
-			names = append(names, e.Name())
-		}
-		if res.Success {
-			t.Fatal("a failed temp write must not report success")
-		}
-		if !strings.Contains(res.Error, "cannot write") {
-			t.Fatalf("failure did not occur at the temp write: %q", res.Error)
-		}
-		if string(after) != prior {
-			t.Fatalf("prior destination bytes changed: %q", string(after))
-		}
-		for _, n := range names {
-			if strings.Contains(n, ".atlas.tmp") {
-				t.Errorf("temporary artifact survived: %s", n)
-			}
-		}
-		assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
-	})
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+	ctx.SessionWrites["ro/f.py"] = true
+	args, _ := json.Marshal(map[string]string{"path": "ro/f.py", "content": "B = 2\n"})
+	res := executeToolCall("write_file", args, ctx)
 
-	t.Run("rename-fails", func(t *testing.T) {
-		dir := t.TempDir()
-		// Destination is a NON-EMPTY DIRECTORY: temp write succeeds, rename fails.
-		target := filepath.Join(dir, "f.py")
-		os.Mkdir(target, 0o755)
-		os.WriteFile(filepath.Join(target, "keep.txt"), []byte("x"), 0o644)
+	after, _ := os.ReadFile(target)
+	ents, _ := os.ReadDir(sub)
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	if res.Success {
+		t.Fatal("a failed temp write must not report success")
+	}
+	if !strings.Contains(res.Error, "cannot write") {
+		t.Fatalf("failure did not occur at the temp write: %q", res.Error)
+	}
+	if string(after) != prior {
+		t.Fatalf("prior destination bytes changed: %q", string(after))
+	}
+	for _, n := range names {
+		if strings.Contains(n, ".atlas.tmp") {
+			t.Errorf("temporary artifact survived: %s", n)
+		}
+	}
+	assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
+}
 
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.PermissionMode = PermissionYolo
-		ctx.StreamFn = func(string, interface{}) {}
-		ctx.SessionWrites["f.py"] = true
-		args, _ := json.Marshal(map[string]string{"path": "f.py", "content": "B = 2\n"})
-		res := executeToolCall("write_file", args, ctx)
+// The rename fails when the destination is a non-empty directory: the
+// directory keeps its contents and no temporary file is left.
+func TestWriteFileRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	// Destination is a NON-EMPTY DIRECTORY: temp write succeeds, rename fails.
+	target := filepath.Join(dir, "f.py")
+	os.Mkdir(target, 0o755)
+	os.WriteFile(filepath.Join(target, "keep.txt"), []byte("x"), 0o644)
 
-		ents, _ := os.ReadDir(dir)
-		var names []string
-		for _, e := range ents {
-			names = append(names, e.Name())
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	ctx.StreamFn = func(string, interface{}) {}
+	ctx.SessionWrites["f.py"] = true
+	args, _ := json.Marshal(map[string]string{"path": "f.py", "content": "B = 2\n"})
+	res := executeToolCall("write_file", args, ctx)
+
+	ents, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	_, keepErr := os.Stat(filepath.Join(target, "keep.txt"))
+	if res.Success {
+		t.Fatal("a failed rename must not report success")
+	}
+	if !strings.Contains(res.Error, "cannot rename") {
+		t.Fatalf("failure did not occur at the rename: %q", res.Error)
+	}
+	if keepErr != nil {
+		t.Error("prior destination contents were destroyed")
+	}
+	for _, n := range names {
+		if strings.Contains(n, ".atlas.tmp") {
+			t.Errorf("temporary artifact survived a failed rename: %s", n)
 		}
-		_, keepErr := os.Stat(filepath.Join(target, "keep.txt"))
-		if res.Success {
-			t.Fatal("a failed rename must not report success")
-		}
-		if !strings.Contains(res.Error, "cannot rename") {
-			t.Fatalf("failure did not occur at the rename: %q", res.Error)
-		}
-		if keepErr != nil {
-			t.Error("prior destination contents were destroyed")
-		}
-		for _, n := range names {
-			if strings.Contains(n, ".atlas.tmp") {
-				t.Errorf("temporary artifact survived a failed rename: %s", n)
-			}
-		}
-		assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
-	})
+	}
+	assertFailedMutation(t, res, ValidationKindSyntax, ValidationNotRun)
 }
 
 func assertFailedMutation(t *testing.T, res *ToolResult, kind ValidationKind, status ValidationStatus) {
