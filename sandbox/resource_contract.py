@@ -485,11 +485,13 @@ class _Feed(threading.Thread):
         try:
             self.stream.write(self.data)
         except (OSError, ValueError):
+            # The command ended or was killed before it read all its input.
             pass
         finally:
             try:
                 self.stream.close()
             except (OSError, ValueError):
+                # The pipe is already closed.
                 pass
 
 
