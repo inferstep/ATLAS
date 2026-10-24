@@ -261,9 +261,12 @@ func TestCaptureOnlyIsOperatorOwnedAndFailsClosed(t *testing.T) {
 			t.Errorf("%q did not enable the control", raw)
 		}
 	}
+}
 
-	// A task contract cannot carry it: the field does not exist, so a caller
-	// that sends one has it dropped rather than obeyed.
+// A task contract cannot carry the control: the field does not exist, so a
+// caller that sends one has it dropped rather than obeyed. And the model
+// never sees it.
+func TestNoTaskContractOrToolResultCarriesTheCaptureControl(t *testing.T) {
 	var in TaskContract
 	if err := json.Unmarshal([]byte(
 		`{"task_mode":"work","candidate_capture_only":true}`), &in); err != nil {
@@ -281,7 +284,18 @@ func TestCaptureOnlyIsOperatorOwnedAndFailsClosed(t *testing.T) {
 		t.Error("the stored contract carries an acquisition control")
 	}
 
-	// Source-level: the reader touches the environment and nothing else.
+	r := &ToolResult{Success: true}
+	facing, err := json.Marshal(r.ModelFacing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(facing), "capture") {
+		t.Error("the model sees the acquisition control")
+	}
+}
+
+// The control's reader touches the operator's environment and nothing else.
+func TestTheCaptureControlReaderReadsOnlyTheEnvironment(t *testing.T) {
 	src, err := os.ReadFile("candidate_capture_only.go")
 	if err != nil {
 		t.Fatal(err)
@@ -297,15 +311,6 @@ func TestCaptureOnlyIsOperatorOwnedAndFailsClosed(t *testing.T) {
 		if strings.Contains(reader, banned) {
 			t.Errorf("the control reader reaches %q", banned)
 		}
-	}
-	// And it is not model-facing.
-	r := &ToolResult{Success: true}
-	facing, err := json.Marshal(r.ModelFacing())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(facing), "capture") {
-		t.Error("the model sees the acquisition control")
 	}
 }
 
