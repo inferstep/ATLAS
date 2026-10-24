@@ -82,8 +82,9 @@ BUDGET = dict(wall_seconds=10, memory_bytes=256 * MiB, max_processes=8, output_b
 ])
 def test_a_budget_that_cannot_be_enforced_fails_closed(field, value):
     rc.ResourceContract(**BUDGET).validate()
+    unenforceable = rc.ResourceContract(**{**BUDGET, field: value})
     with pytest.raises(rc.ResourceContractError):
-        rc.ResourceContract(**{**BUDGET, field: value}).validate()
+        unenforceable.validate()
 
 
 @pytest.mark.parametrize("multiple", [0, 2.0], ids=["off", "twice the memory ceiling"])
@@ -223,9 +224,11 @@ def test_the_address_space_ceiling_stops_a_child_above_it():
     contract.validate()
     mapping = "python3 -c \"import mmap; mmap.mmap(-1, {} << 20); print('mapped')\""
     below = run(mapping.format(16), contract)
-    assert below.returncode == 0 and "mapped" in below.stdout, below.stderr
+    assert below.returncode == 0, below.stderr
+    assert "mapped" in below.stdout, below.stderr
     above = run(mapping.format(128), contract)
-    assert above.returncode != 0 and "Cannot allocate memory" in above.stderr, (above.returncode, above.stdout)
+    assert above.returncode != 0, (above.returncode, above.stdout)
+    assert "Cannot allocate memory" in above.stderr, (above.returncode, above.stdout)
 
 
 # --- time, output, processes -------------------------------------------------
@@ -343,7 +346,8 @@ def test_repeated_memory_failures_stay_bounded(small):
 
 
 def test_the_executor_runs_everything_through_the_owner():
-    src = open(os.path.join(SANDBOX, "executor_server.py")).read()
+    with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
+        src = fh.read()
     assert "EXEC_CONTRACT = contract_from_env()" in src
     assert "run_bounded(cmd, EXEC_CONTRACT.for_request(timeout)" in src
     # No execution site may spawn around the owner.
@@ -360,8 +364,8 @@ def test_the_executor_runs_everything_through_the_owner():
         assert banned not in body, f"the executor reaches {banned}"
 
 
-def test_the_executor_result_carries_the_outcome():
-    sys.path.insert(0, SANDBOX)
+def test_the_executor_result_carries_the_outcome(monkeypatch):
+    monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
     got = ex._run_cmd(["bash", "-c", "echo ok"], timeout=5)
     assert got["outcome"] == rc.OUTCOME_COMPLETED
@@ -371,7 +375,7 @@ def test_the_executor_result_carries_the_outcome():
 
 @needs_proc
 def test_the_executor_result_names_a_command_that_took_too_much_memory(monkeypatch, small):
-    sys.path.insert(0, SANDBOX)
+    monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
     # The small contract of this file, not the product's own ceiling: the
     # command's own limit is a multiple of the ceiling it runs under.

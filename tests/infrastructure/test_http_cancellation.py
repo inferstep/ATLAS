@@ -283,7 +283,8 @@ def test_shutdown_drains_within_the_bound(executor):
 
 def test_the_handler_uses_supported_lifecycle_apis():
     """No socket poking, no interpreter-specific hack."""
-    body = open(os.path.join(SANDBOX, "executor_server.py")).read()
+    with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
+        body = fh.read()
     assert "await http.is_disconnected()" in body, (
         "the handler does not ask the framework whether the caller is gone")
     assert "asyncio.to_thread" in body
