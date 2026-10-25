@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -303,26 +301,6 @@ func TestFindFuzzyLineMatch(t *testing.T) {
 		}
 	})
 
-	t.Run("ambiguous match fails safe", func(t *testing.T) {
-		// `x := 1` appears in both functions — editing either would be a
-		// guess, and a wrong guess is a silent wrong edit.
-		if got, ok := findFuzzyLineMatch(file, "x := 1"); ok {
-			t.Errorf("ambiguous single line matched %q, want failure", got)
-		}
-	})
-
-	t.Run("no match returns false", func(t *testing.T) {
-		if _, ok := findFuzzyLineMatch(file, "y := 2"); ok {
-			t.Error("nonexistent line reported a match")
-		}
-	})
-
-	t.Run("all-whitespace target is refused", func(t *testing.T) {
-		if _, ok := findFuzzyLineMatch(file, "   \n\t"); ok {
-			t.Error("all-whitespace old_str matched — would edit an arbitrary blank region")
-		}
-	})
-
 	t.Run("trailing newline in old_str is tolerated", func(t *testing.T) {
 		got, ok := findFuzzyLineMatch(file, "\tfmt.Println(x)\n}\n")
 		if !ok {
@@ -333,11 +311,22 @@ func TestFindFuzzyLineMatch(t *testing.T) {
 		}
 	})
 
-	t.Run("empty old_str is refused", func(t *testing.T) {
-		if _, ok := findFuzzyLineMatch(file, ""); ok {
-			t.Error("empty old_str matched")
-		}
-	})
+	// Each of these must find no match at all.
+	for _, tc := range []struct{ name, oldStr, failure string }{
+		// `x := 1` appears in both functions — editing either would be a
+		// guess, and a wrong guess is a silent wrong edit.
+		{"ambiguous match fails safe", "x := 1", "ambiguous single line matched, want failure"},
+		{"no match returns false", "y := 2", "nonexistent line reported a match"},
+		{"all-whitespace target is refused", "   \n\t",
+			"all-whitespace old_str matched — would edit an arbitrary blank region"},
+		{"empty old_str is refused", "", "empty old_str matched"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := findFuzzyLineMatch(file, tc.oldStr); ok {
+				t.Errorf("%s (matched %q)", tc.failure, got)
+			}
+		})
+	}
 }
 
 func TestFindActualString(t *testing.T) {
@@ -883,7 +872,7 @@ func TestDenyReadPathReason(t *testing.T) {
 		"gcp-credentials.json",
 	}
 	for _, p := range blocked {
-		if reason := denyReadPathReason(p); reason == "" {
+		if denyReadPathReason(p) == "" {
 			t.Errorf("read of %q should be blocked", p)
 		}
 	}
@@ -949,6 +938,112 @@ func containsStr(s, sub string) bool {
 // A live session anchored edit_file's old_str on "## Call graph (within this
 // file)\n- mean calls: ..." and the edit could never match — that text is not
 // on disk. The footer has to say where the file ends.
+// search_files stops at its match cap: the file that fills it yields no more
+// lines, and the walk reads no further file.
+func TestSearchFilesStopsAtTheMatchCap(t *testing.T) {
+	dir := t.TempDir()
+	// 250 matching lines in the first file the walk reaches, one in the next.
+	writeTree(t, dir, map[string]string{"a.txt": strings.Repeat("hit\n", 250), "b.txt": "hit\n"})
+	ctx := NewAgentContext(dir, Tier1Simple)
+
+	res, err := getTool("search_files").Execute(json.RawMessage(`{"pattern":"hit"}`), ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out SearchFilesOutput
+	if err := json.Unmarshal(res.Data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.TotalCount != 200 {
+		t.Errorf("total_count = %d, want the cap of 200", out.TotalCount)
+	}
+	if !out.Truncated {
+		t.Error("a capped search is not marked truncated")
+	}
+	for _, m := range out.Matches {
+		if m.File != "a.txt" {
+			t.Errorf("the walk went on past the cap and read %s", m.File)
+		}
+	}
+}
+
+// A file the search cannot read is passed over, and the walk goes on to the
+// next one.
+func TestSearchFilesPassesOverAFileItCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{"a-locked.txt": "hit\n", "b.txt": "hit\n"})
+	locked := filepath.Join(dir, "a-locked.txt")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(locked); err == nil {
+		t.Skip("this user reads a file that has no read permission")
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+
+	res, err := getTool("search_files").Execute(json.RawMessage(`{"pattern":"hit"}`), ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out SearchFilesOutput
+	if err := json.Unmarshal(res.Data, &out); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range out.Matches {
+		got = append(got, m.File)
+	}
+	if strings.Join(got, ",") != "b.txt" {
+		t.Errorf("matches in %v, want only in b.txt", got)
+	}
+}
+
+// search_files leaves out what it does not read: a file the glob filter does
+// not match, the dependency and version-control folders, a file over its size
+// limit, and a path that cannot be walked at all.
+func TestSearchFilesSkipsWhatItDoesNotRead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		args  string
+		want  string // the files that matched, in walk order
+	}{
+		{"the glob filter", map[string]string{"a.py": "hit\n", "b.txt": "hit\n"},
+			`{"pattern":"hit","glob":"*.py"}`, "a.py"},
+		{"dependency and version-control folders", map[string]string{"app.py": "hit\n",
+			".git/x": "hit\n", "node_modules/y.js": "hit\n", "__pycache__/z.py": "hit\n",
+			".next/n.js": "hit\n", "target/t.rs": "hit\n"},
+			`{"pattern":"hit"}`, "app.py"},
+		{"a file over the size limit", map[string]string{"big.txt": "hit\n" + strings.Repeat("x", 1<<20),
+			"small.txt": "hit\n"},
+			`{"pattern":"hit"}`, "small.txt"},
+		{"a path that does not exist", map[string]string{"app.py": "hit\n"},
+			`{"pattern":"hit","path":"missing"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTree(t, dir, tc.files)
+			ctx := NewAgentContext(dir, Tier1Simple)
+
+			res, err := getTool("search_files").Execute(json.RawMessage(tc.args), ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out SearchFilesOutput
+			if err := json.Unmarshal(res.Data, &out); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, m := range out.Matches {
+				got = append(got, m.File)
+			}
+			if strings.Join(got, ",") != tc.want {
+				t.Errorf("matches in %v, want only in %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCallGraphFooterMarksItselfAsNotFileContent(t *testing.T) {
 	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"supported":true,"symbols":[
@@ -1576,7 +1671,7 @@ func TestAllLinesLineNumbered(t *testing.T) {
 func TestStrippedOldStrOnlyCountsWhenItMatchesTheFile(t *testing.T) {
 	file := "func main() {\n\tx := 1\n}\n"
 
-	if got := findActualString(file, stripLineNumberPrefixes("2\t\tx := 1")); got == "" {
+	if findActualString(file, stripLineNumberPrefixes("2\t\tx := 1")) == "" {
 		t.Error("a prefixed copy of a real line should match once stripped")
 	}
 	if got := findActualString(file, stripLineNumberPrefixes("2\t\ty := 2")); got != "" {
@@ -1652,24 +1747,47 @@ func TestRelocateStaleRange(t *testing.T) {
 	})
 }
 
+// Through the tool: a range that went stale because its block moved is applied
+// where the block is now, and the result names the lines it really replaced.
+func TestReplaceLinesAppliesAMovedRangeWhereTheBlockIsNow(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.py")
+	src := "# one\n# two\ndef f():\n    x = 1\n    return x\n"
+	if err := os.WriteFile(file, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(file, src)
+
+	// The numbers say 1-3; the lines they assert are 3-5.
+	res, err := findTool(t, "replace_lines").Execute(json.RawMessage(`{"path":"a.py","start_line":1,"end_line":3,
+		"expected_first_line":"def f():","expected_last_line":"    return x","content":"def f():\n    return 2"}`), ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success, got: %s", res.Error)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "# one\n# two\ndef f():\n    return 2\n" {
+		t.Errorf("wrong result:\n%q", got)
+	}
+	var out EditFileOutput
+	if err := json.Unmarshal(res.Data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.DiffPreview != "lines 3-5 replaced (3 -> 2 lines)" {
+		t.Errorf("diff preview %q, want the lines the block occupies now", out.DiffPreview)
+	}
+}
+
 // A background job's outcome is invisible unless the model calls
 // tail_background, so a server that died on startup reads the same as one
 // serving happily: the run continues, the next probe fails for a reason
 // nothing explains, and a session can finish claiming work it never
 // verified. The foreground-server redirect pushes more work down this path.
 func TestFinishedBackgroundNote(t *testing.T) {
-	newCtx := func(jobs map[string]string, body string) (*AgentContext, *int) {
-		hits := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hits++
-			w.Write([]byte(body))
-		}))
-		t.Cleanup(srv.Close)
-		return &AgentContext{SandboxURL: srv.URL, BackgroundJobs: jobs}, &hits
-	}
-
 	t.Run("an exited job is reported once and then forgotten", func(t *testing.T) {
-		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+		ctx, _ := backgroundListingCtx(t, map[string]string{"job-1": "python app.py"},
 			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":false}]}`)
 		got := finishedBackgroundNote(ctx)
 		if !strings.Contains(got, "job-1") || !strings.Contains(got, "tail_background") {
@@ -1684,7 +1802,7 @@ func TestFinishedBackgroundNote(t *testing.T) {
 	})
 
 	t.Run("a running job is not reported", func(t *testing.T) {
-		ctx, _ := newCtx(map[string]string{"job-1": "python app.py"},
+		ctx, _ := backgroundListingCtx(t, map[string]string{"job-1": "python app.py"},
 			`{"jobs":[{"job_id":"job-1","command":"python app.py","running":true}]}`)
 		if got := finishedBackgroundNote(ctx); got != "" {
 			t.Errorf("a live job was reported as finished:\n%s", got)
@@ -1693,10 +1811,14 @@ func TestFinishedBackgroundNote(t *testing.T) {
 			t.Error("a live job must stay tracked")
 		}
 	})
+}
 
+// The note stays empty when there is nothing of this run's to report, and it
+// asks the sandbox only when there is something to ask about.
+func TestFinishedBackgroundNoteIsSilentWithoutNews(t *testing.T) {
 	t.Run("another session's jobs are not this run's news", func(t *testing.T) {
 		// The sandbox registry is process-wide and outlives sessions.
-		ctx, _ := newCtx(map[string]string{},
+		ctx, _ := backgroundListingCtx(t, map[string]string{},
 			`{"jobs":[{"job_id":"other","command":"npm start","running":false}]}`)
 		if got := finishedBackgroundNote(ctx); got != "" {
 			t.Errorf("reported a job this run never started:\n%s", got)
@@ -1704,7 +1826,7 @@ func TestFinishedBackgroundNote(t *testing.T) {
 	})
 
 	t.Run("no tracked jobs means no request at all", func(t *testing.T) {
-		ctx, hits := newCtx(map[string]string{}, `{"jobs":[]}`)
+		ctx, hits := backgroundListingCtx(t, map[string]string{}, `{"jobs":[]}`)
 		finishedBackgroundNote(ctx)
 		if *hits != 0 {
 			t.Errorf("polled the sandbox with nothing to ask about (%d calls)", *hits)
@@ -1718,6 +1840,18 @@ func TestFinishedBackgroundNote(t *testing.T) {
 			t.Errorf("a failed listing must not interrupt the loop:\n%s", got)
 		}
 	})
+}
+
+// backgroundListingCtx is a session tracking jobs, whose sandbox answers every
+// job listing with body. The count is how many listings it was asked for.
+func backgroundListingCtx(t *testing.T, jobs map[string]string, body string) (*AgentContext, *int) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return &AgentContext{SandboxURL: srv.URL, BackgroundJobs: jobs}, &hits
 }
 
 // A refusal the model cannot act on is a loop. It copies old_str into
@@ -1769,10 +1903,12 @@ func TestIdenticalEditRefusalNamesAWayOut(t *testing.T) {
 // observation is what these pin -- through the real handlers, with the request
 // counts that prove the evaluation happened once per side.
 
-// editGateStub answers the checker for the three edit tools and counts what it
-// was asked. `badFor` names the content it calls unparseable.
+// editGateStub answers the checker for the three edit tools as its case says,
+// and counts what it was asked. The case's `badFor` names the content it calls
+// unparseable.
 type editGateStub struct {
 	mu         sync.Mutex
+	c          editGateCase
 	syntax     []string
 	structural int
 	embedded   int
@@ -1852,65 +1988,71 @@ func egArgs(tool string) []byte {
 	return b
 }
 
+// ServeHTTP answers the V3 service's checker endpoints and the sandbox's
+// syntax check as the stub's case asks, and records anything else as
+// unexpected.
+func (st *editGateStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c := st.c
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v3/"):
+		st.mu.Lock()
+		st.unexpected = append(st.unexpected, r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "V3 generation must not run on this route", http.StatusTeapot)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		// Below the bar that would route this edit through V3: this table
+		// is about the local gate, not the pipeline.
+		_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
+	case r.URL.Path == "/internal/structural_check":
+		st.mu.Lock()
+		st.structural++
+		st.mu.Unlock()
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		src, _ := body["source"].(string)
+		out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+		if c.introduces != "" && strings.Contains(src, c.introduces+"(") {
+			out["unresolved"] = []string{c.introduces}
+		}
+		json.NewEncoder(w).Encode(out)
+	case r.URL.Path == "/internal/embedded_script_check":
+		st.mu.Lock()
+		st.embedded++
+		st.mu.Unlock()
+		_, _ = w.Write([]byte(`{"ok":true,"findings":[]}`))
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		var in struct{ Code string }
+		json.NewDecoder(r.Body).Decode(&in)
+		st.mu.Lock()
+		st.syntax = append(st.syntax, in.Code)
+		st.mu.Unlock()
+		st.mu.Lock()
+		nth := len(st.syntax)
+		st.mu.Unlock()
+		if (c.unavailableFor != "" && strings.Contains(in.Code, c.unavailableFor)) ||
+			(c.unavailableCall != 0 && nth == c.unavailableCall) {
+			http.Error(w, "checker unavailable", http.StatusInternalServerError)
+			return
+		}
+		bad := c.badFor != nil && c.badFor(in.Code)
+		out := map[string]interface{}{"valid": !bad}
+		if bad {
+			out["errors"] = []string{"SyntaxError: invalid syntax (line 6)"}
+		}
+		json.NewEncoder(w).Encode(out)
+	default:
+		st.mu.Lock()
+		st.unexpected = append(st.unexpected, r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "unexpected endpoint", http.StatusTeapot)
+	}
+}
+
 func runEditGate(t *testing.T, tool string, c editGateCase) (*ToolResult, string, *editGateStub, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	st := &editGateStub{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/v3/"):
-			st.mu.Lock()
-			st.unexpected = append(st.unexpected, r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "V3 generation must not run on this route", http.StatusTeapot)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			// Below the bar that would route this edit through V3: this table
-			// is about the local gate, not the pipeline.
-			_, _ = w.Write([]byte(`{"ok":true,"cyclomatic_complexity":1}`))
-		case r.URL.Path == "/internal/structural_check":
-			st.mu.Lock()
-			st.structural++
-			st.mu.Unlock()
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
-			if c.introduces != "" && strings.Contains(src, c.introduces+"(") {
-				out["unresolved"] = []string{c.introduces}
-			}
-			json.NewEncoder(w).Encode(out)
-		case r.URL.Path == "/internal/embedded_script_check":
-			st.mu.Lock()
-			st.embedded++
-			st.mu.Unlock()
-			_, _ = w.Write([]byte(`{"ok":true,"findings":[]}`))
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			st.mu.Lock()
-			st.syntax = append(st.syntax, in.Code)
-			st.mu.Unlock()
-			st.mu.Lock()
-			nth := len(st.syntax)
-			st.mu.Unlock()
-			if (c.unavailableFor != "" && strings.Contains(in.Code, c.unavailableFor)) ||
-				(c.unavailableCall != 0 && nth == c.unavailableCall) {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			bad := c.badFor != nil && c.badFor(in.Code)
-			out := map[string]interface{}{"valid": !bad}
-			if bad {
-				out["errors"] = []string{"SyntaxError: invalid syntax (line 6)"}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpected = append(st.unexpected, r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
+	st := &editGateStub{c: c}
+	srv := httptest.NewServer(st)
 	defer srv.Close()
 
 	rel := c.relPath
@@ -2304,6 +2446,47 @@ func TestEditToolsClassifyANotApplicableArtifact(t *testing.T) {
 	}
 }
 
+// The edit route's V3 call hands each progress event on to the client by its
+// kind: a token as v3_token, a stage the client knows as that stage's own event
+// with the stage's data, and any other stage as a v3_progress line naming it.
+func TestImproveContentForwardsEachV3Stage(t *testing.T) {
+	const baseline = "def area(r):\n    return r * r\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, _ := json.Marshal(map[string]interface{}{"code": baseline})
+		for _, line := range []string{
+			`data: {"stage":"token","detail":"tok"}`,
+			`data: {"stage":"plansearch","detail":"three plans","data":{"plans":3}}`,
+			`data: {"stage":"no_such_stage","detail":"odd"}`,
+			"event: result", "data: " + string(result), "data: [DONE]",
+		} {
+			fmt.Fprint(w, line+"\n")
+		}
+	}))
+	defer srv.Close()
+	ctx := writeGateCtx(t, srv.URL, "", t.TempDir())
+	var got []string
+	ctx.StreamFn = func(event string, payload interface{}) {
+		got = append(got, event+" "+fmt.Sprint(payload))
+	}
+
+	if _, _, err := improveContentWithV3(filepath.Join(ctx.WorkingDir, "app.py"), baseline, ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"v3_token map[text:tok]",
+		"v3_plansearch map[detail:three plans plans:3 stage:plansearch]",
+		"v3_progress map[message:  │ [no_such_stage] odd]",
+	}
+	if len(got) < len(want) {
+		t.Fatalf("%d events forwarded, want at least %d: %q", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("event %d = %q, want %q", i, got[i], w)
+		}
+	}
+}
+
 // --- Deterministic model-facing bytes ----------------------------------------
 //
 // Three parts of every upstream request are built by ranging toolRegistry, a Go
@@ -2366,29 +2549,7 @@ func TestPromptBytesChild(t *testing.T) {
 // would go to llama-server.
 func TestModelFacingBytesAreProcessStable(t *testing.T) {
 	const runs = 8
-	var seen []map[string]string
-	for i := 0; i < runs; i++ {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestPromptBytesChild$", "-test.v=false")
-		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("child %d: %v\n%s", i, err, out)
-		}
-		var payload string
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.HasPrefix(line, "ARTIFACTS ") {
-				payload = strings.TrimPrefix(line, "ARTIFACTS ")
-			}
-		}
-		if payload == "" {
-			t.Fatalf("child %d printed no artefacts:\n%s", i, out)
-		}
-		var m map[string]string
-		if err := json.Unmarshal([]byte(payload), &m); err != nil {
-			t.Fatalf("child %d payload: %v", i, err)
-		}
-		seen = append(seen, m)
-	}
+	seen := freshProcessPayloads(t, "TestPromptBytesChild", "ARTIFACTS ", "artefacts", runs)
 
 	keys := make([]string, 0, len(seen[0]))
 	for k := range seen[0] {
@@ -2408,29 +2569,66 @@ func TestModelFacingBytesAreProcessStable(t *testing.T) {
 				forms = append(forms, v)
 			}
 			sort.Strings(forms)
-			a, b := forms[0], forms[1]
-			i := 0
-			for i < len(a) && i < len(b) && a[i] == b[i] {
-				i++
-			}
-			lo := i - 60
-			if lo < 0 {
-				lo = 0
-			}
-			clip := func(s string) string {
-				hi := i + 90
-				if hi > len(s) {
-					hi = len(s)
-				}
-				return s[lo:hi]
-			}
+			i, a, b := firstDifference(forms[0], forms[1])
 			t.Errorf("%s differs across %d fresh processes (%d distinct forms), "+
 				"first at byte %d:\n  A: %s\n  B: %s",
-				k, runs, len(variants), i, clip(a), clip(b))
+				k, runs, len(variants), i, a, b)
 			continue
 		}
 		t.Logf("%s: identical across %d processes (%d bytes)", k, runs, len(seen[0][k]))
 	}
+}
+
+// freshProcessPayloads runs the child test `child` in `runs` fresh processes of
+// this test binary and returns, decoded, what each printed on its line that
+// starts with `marker`. `what` names that payload in a failure.
+func freshProcessPayloads(t *testing.T, child, marker, what string, runs int) []map[string]string {
+	t.Helper()
+	var seen []map[string]string
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+child+"$", "-test.v=false")
+		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("child %d: %v\n%s", i, err, out)
+		}
+		var payload string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, marker) {
+				payload = strings.TrimPrefix(line, marker)
+			}
+		}
+		if payload == "" {
+			t.Fatalf("child %d printed no %s:\n%s", i, what, out)
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(payload), &m); err != nil {
+			t.Fatalf("child %d payload: %v", i, err)
+		}
+		seen = append(seen, m)
+	}
+	return seen
+}
+
+// firstDifference is the byte at which two texts first differ, and a window of
+// each around it for a failure message.
+func firstDifference(a, b string) (int, string, string) {
+	i := 0
+	for i < len(a) && i < len(b) && a[i] == b[i] {
+		i++
+	}
+	lo := i - 60
+	if lo < 0 {
+		lo = 0
+	}
+	clip := func(s string) string {
+		hi := i + 90
+		if hi > len(s) {
+			hi = len(s)
+		}
+		return s[lo:hi]
+	}
+	return i, clip(a), clip(b)
 }
 
 // The inventory behind those bytes is identical across processes: same tools,
@@ -2441,29 +2639,7 @@ func TestModelFacingBytesAreProcessStable(t *testing.T) {
 // the evidence that ordering is the ONLY thing that changed.
 func TestToolInventoryIsIdenticalAcrossProcesses(t *testing.T) {
 	const runs = 6
-	var seen []map[string]string
-	for i := 0; i < runs; i++ {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestToolInventoryChild$", "-test.v=false")
-		cmd.Env = append(os.Environ(), promptBytesChildEnv+"=1")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("child %d: %v\n%s", i, err, out)
-		}
-		var payload string
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.HasPrefix(line, "INVENTORY ") {
-				payload = strings.TrimPrefix(line, "INVENTORY ")
-			}
-		}
-		if payload == "" {
-			t.Fatalf("child %d printed no inventory:\n%s", i, out)
-		}
-		var m map[string]string
-		if err := json.Unmarshal([]byte(payload), &m); err != nil {
-			t.Fatal(err)
-		}
-		seen = append(seen, m)
-	}
+	seen := freshProcessPayloads(t, "TestToolInventoryChild", "INVENTORY ", "inventory", runs)
 	for _, m := range seen[1:] {
 		if len(m) != len(seen[0]) {
 			t.Fatalf("inventory size differs: %d vs %d", len(m), len(seen[0]))
@@ -2534,30 +2710,7 @@ func TestToolInventoryChild(t *testing.T) {
 	if err := json.Unmarshal(b, &round); err != nil {
 		t.Fatal(err)
 	}
-	var enums []string
-	var walk func(v interface{})
-	walk = func(v interface{}) {
-		switch n := v.(type) {
-		case map[string]interface{}:
-			for k, e := range n {
-				if k == "enum" {
-					if arr, ok := e.([]interface{}); ok {
-						for _, x := range arr {
-							if s, ok := x.(string); ok {
-								enums = append(enums, s)
-							}
-						}
-					}
-				}
-				walk(e)
-			}
-		case []interface{}:
-			for _, e := range n {
-				walk(e)
-			}
-		}
-	}
-	walk(round)
+	enums := schemaEnums(round)
 	sort.Strings(enums)
 	facts["schema_enums"] = strings.Join(enums, ",")
 
@@ -2566,6 +2719,39 @@ func TestToolInventoryChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Println("INVENTORY " + string(out))
+}
+
+// schemaEnums is every string of every "enum" array in a decoded JSON schema,
+// wherever in the schema it sits.
+func schemaEnums(v interface{}) []string {
+	var enums []string
+	switch n := v.(type) {
+	case map[string]interface{}:
+		for k, e := range n {
+			if k == "enum" {
+				enums = append(enums, enumStrings(e)...)
+			}
+			enums = append(enums, schemaEnums(e)...)
+		}
+	case []interface{}:
+		for _, e := range n {
+			enums = append(enums, schemaEnums(e)...)
+		}
+	}
+	return enums
+}
+
+// enumStrings is the strings of one "enum" value; anything else in it is
+// skipped.
+func enumStrings(e interface{}) []string {
+	arr, _ := e.([]interface{})
+	var out []string
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // One ordering authority, enforced structurally.
@@ -2578,45 +2764,27 @@ func TestToolInventoryChild(t *testing.T) {
 // range is what fails here, not the symptom.
 func TestOnlyAllToolsRangesTheRegistry(t *testing.T) {
 	const authority = "allTools"
-	fset := token.NewFileSet()
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	found := 0
-	for _, name := range names {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				rng, ok := n.(*ast.RangeStmt)
-				if !ok {
-					return true
-				}
-				id, ok := rng.X.(*ast.Ident)
-				if !ok || id.Name != "toolRegistry" {
-					return true
-				}
-				found++
-				if fd.Name.Name != authority {
-					t.Errorf("%s:%d: %s ranges toolRegistry directly. Map iteration "+
-						"order is randomised per range, and anything derived from it "+
-						"that reaches the model changes bytes between identical "+
-						"requests. Read the order from %s() instead.",
-						name, fset.Position(rng.Pos()).Line, fd.Name.Name, authority)
-				}
+	for _, f := range funcsWithBodies(proxyFiles(t)) {
+		ast.Inspect(f.decl.Body, func(n ast.Node) bool {
+			rng, ok := n.(*ast.RangeStmt)
+			if !ok {
 				return true
-			})
-		}
+			}
+			id, ok := rng.X.(*ast.Ident)
+			if !ok || id.Name != "toolRegistry" {
+				return true
+			}
+			found++
+			if f.decl.Name.Name != authority {
+				t.Errorf("%s: %s ranges toolRegistry directly. Map iteration "+
+					"order is randomised per range, and anything derived from it "+
+					"that reaches the model changes bytes between identical "+
+					"requests. Read the order from %s() instead.",
+					f.file, f.decl.Name.Name, authority)
+			}
+			return true
+		})
 	}
 	if found == 0 {
 		t.Fatal("no range over toolRegistry found at all — this guard is no longer wired to anything")
