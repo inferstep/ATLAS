@@ -1130,123 +1130,144 @@ func writeFileTool() *ToolDef {
 				}
 				return res, err
 			}
-			if iterating {
-				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
-				// The file already exists this session; read its on-disk
-				// content once and run both gates against it with the
-				// healthy->broken rule edit_file uses — block only a NEWLY
-				// introduced defect, allow a repair-in-progress on
-				// already-broken content. Without the healthy->broken guard
-				// the syntax gate would hard-block content the strict checker
-				// rejects both before AND after (a multi-doc YAML or JSONC
-				// config being iterated), which is exactly why the T0/T1
-				// direct path below carries no syntax gate.
-				original, origOK := readOriginalForGate(path)
-				// The proposal was already evaluated above whenever the
-				// destination exists, which is the normal state of this route:
-				// it fires on a file the session wrote and just watched fail.
-				// Evaluate here only for the residual case where it was not --
-				// the file has been deleted since that write.
-				if proposalCheck.Status == ValidationUnknown {
-					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				}
-				if proposalCheck.Status == ValidationFailed {
-					// Reaching here with a demonstrably failing proposal means
-					// the gate above did not decide: either the baseline
-					// demonstrably failed (repair-in-progress), or there was
-					// no baseline to read -- the file is gone or unreadable.
-					// That second case is why this gate stays.
-					// readOriginalForGate yields "" for it, which the checker
-					// finds healthy, so the regression is still refused rather
-					// than landing unexamined.
-					if baselineCheck.Status == ValidationUnknown {
-						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
-					}
-					if !baselineAllowsRepair(baselineCheck) {
-						synErr := proposalCheck.Detail
-						// The check examined input.Content, the exact bytes
-						// that would have been written, and nothing has
-						// reached disk at this point.
-						return &ToolResult{
-							Success:          false,
-							Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindSyntax,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: synErr,
-						}, nil
-					}
-					log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
-				}
-				// #147 review finding #1: the fast-path skips V3 (and its
-				// structural veto), so it needs the same structural gate
-				// edit_file/structural_edit have — otherwise a fast-path rewrite that
-				// introduces render_template lands as verified and 500s. A new
-				// unresolved call vs the on-disk state blocks; an unreadable
-				// original skips the gate (fail open).
-				if origOK {
-					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-						log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						// Syntax ran first and PASSED on these exact bytes; the
-						// structural check is what refused them, so structural
-						// is the decisive outcome.
-						return &ToolResult{Success: false,
-							Error:            structuralWriteRejection(input.Path, introduced),
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindStructural,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: structuralWriteRejection(input.Path, introduced),
-						}, nil
-					}
-				}
-			}
-
-			// #147: the T0/T1 direct path skipped the structural gate — a
-			// sub-10-line .py calling an unimported name landed as verified,
-			// the same NameError class the edit path blocks. Structural gate
-			// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
-			// here would hard-block legitimate non-parsing T1 content that
-			// this branch exists to handle (JSONC, multi-doc and templated
-			// YAML, scaffold .py templates). An unreadable existing original
-			// skips the gate (fail open) — treating it as empty would count
-			// every pre-existing call as introduced.
-			if !iterating {
-				if original, ok := readOriginalForGate(path); ok {
-					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						// Structural validation failed before any mutation.
-						// Syntax does NOT run on this route (see the comment
-						// above), so no syntax verdict is implied in either
-						// direction -- the decisive demonstrated fact is the
-						// structural failure.
-						//
-						// editIntroducesUnresolved -> checkStructuralUnresolved
-						// posts to /internal/structural_check (NOT
-						// /internal/symbol_index, a different path in
-						// context.go) and returns
-						// {"ok": bool, "unresolved": []string}. It FAILS OPEN
-						// when ok is absent or false, on transport error,
-						// non-200, parse error or missing tree-sitter, and
-						// needs BOTH the edited- and original-side calls to
-						// succeed before it can refuse. Observing an HTTP
-						// request therefore does not prove the gate ran; only
-						// the refusal does.
-						rejection := structuralWriteRejection(input.Path, introduced)
-						return &ToolResult{
-							Success:          false,
-							Error:            rejection,
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindStructural,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: rejection,
-						}, nil
-					}
-				}
-			}
-
-			return landDirectWrite(ctx, input, path, proposalCheck)
+			return writeFileDirectRoute(ctx, input, path, iterating, proposalCheck, baselineCheck)
 		},
 	}
+}
+
+// writeFileDirectRoute is the route of a write the pipeline does not see: the
+// gates of the active-debug fast path, or the structural gate of the direct
+// write, and then the landing.
+func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, iterating bool,
+	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+	if iterating {
+		var refusal *ToolResult
+		proposalCheck, refusal = writeFastPathGates(ctx, input, path, proposalCheck, baselineCheck)
+		if refusal != nil {
+			return refusal, nil
+		}
+	}
+
+	// #147: the T0/T1 direct path skipped the structural gate — a
+	// sub-10-line .py calling an unimported name landed as verified,
+	// the same NameError class the edit path blocks. Structural gate
+	// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
+	// here would hard-block legitimate non-parsing T1 content that
+	// this branch exists to handle (JSONC, multi-doc and templated
+	// YAML, scaffold .py templates). An unreadable existing original
+	// skips the gate (fail open) — treating it as empty would count
+	// every pre-existing call as introduced.
+	if !iterating {
+		if original, ok := readOriginalForGate(path); ok {
+			if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+				log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+				// Structural validation failed before any mutation.
+				// Syntax does NOT run on this route (see the comment
+				// above), so no syntax verdict is implied in either
+				// direction -- the decisive demonstrated fact is the
+				// structural failure.
+				//
+				// editIntroducesUnresolved -> checkStructuralUnresolved
+				// posts to /internal/structural_check (NOT
+				// /internal/symbol_index, a different path in
+				// context.go) and returns
+				// {"ok": bool, "unresolved": []string}. It FAILS OPEN
+				// when ok is absent or false, on transport error,
+				// non-200, parse error or missing tree-sitter, and
+				// needs BOTH the edited- and original-side calls to
+				// succeed before it can refuse. Observing an HTTP
+				// request therefore does not prove the gate ran; only
+				// the refusal does.
+				rejection := structuralWriteRejection(input.Path, introduced)
+				return &ToolResult{
+					Success:          false,
+					Error:            rejection,
+					MutationStatus:   MutationRefused,
+					ValidationKind:   ValidationKindStructural,
+					ValidationStatus: ValidationFailed,
+					ValidationDetail: rejection,
+				}, nil
+			}
+		}
+	}
+
+	return landDirectWrite(ctx, input, path, proposalCheck)
+}
+
+// writeFastPathGates are the gates of the active-debug fast path, which skips
+// the pipeline. It returns the observation of the proposal, made here when
+// nothing had made it yet, and the refusal when a gate refused.
+func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
+	proposalCheck, baselineCheck checkOutcome) (checkOutcome, *ToolResult) {
+	log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
+	// The file already exists this session; read its on-disk
+	// content once and run both gates against it with the
+	// healthy->broken rule edit_file uses — block only a NEWLY
+	// introduced defect, allow a repair-in-progress on
+	// already-broken content. Without the healthy->broken guard
+	// the syntax gate would hard-block content the strict checker
+	// rejects both before AND after (a multi-doc YAML or JSONC
+	// config being iterated), which is exactly why the T0/T1
+	// direct path below carries no syntax gate.
+	original, origOK := readOriginalForGate(path)
+	// The proposal was already evaluated above whenever the
+	// destination exists, which is the normal state of this route:
+	// it fires on a file the session wrote and just watched fail.
+	// Evaluate here only for the residual case where it was not --
+	// the file has been deleted since that write.
+	if proposalCheck.Status == ValidationUnknown {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+	}
+	if proposalCheck.Status == ValidationFailed {
+		// Reaching here with a demonstrably failing proposal means
+		// the gate above did not decide: either the baseline
+		// demonstrably failed (repair-in-progress), or there was
+		// no baseline to read -- the file is gone or unreadable.
+		// That second case is why this gate stays.
+		// readOriginalForGate yields "" for it, which the checker
+		// finds healthy, so the regression is still refused rather
+		// than landing unexamined.
+		if baselineCheck.Status == ValidationUnknown {
+			baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
+		}
+		if !baselineAllowsRepair(baselineCheck) {
+			synErr := proposalCheck.Detail
+			// The check examined input.Content, the exact bytes
+			// that would have been written, and nothing has
+			// reached disk at this point.
+			return proposalCheck, &ToolResult{
+				Success:          false,
+				Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: synErr,
+			}
+		}
+		log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
+	}
+	// #147 review finding #1: the fast-path skips V3 (and its
+	// structural veto), so it needs the same structural gate
+	// edit_file/structural_edit have — otherwise a fast-path rewrite that
+	// introduces render_template lands as verified and 500s. A new
+	// unresolved call vs the on-disk state blocks; an unreadable
+	// original skips the gate (fail open).
+	if origOK {
+		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+			log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+			// Syntax ran first and PASSED on these exact bytes; the
+			// structural check is what refused them, so structural
+			// is the decisive outcome.
+			return proposalCheck, &ToolResult{Success: false,
+				Error:            structuralWriteRejection(input.Path, introduced),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: structuralWriteRejection(input.Path, introduced),
+			}
+		}
+	}
+	return proposalCheck, nil
 }
 
 // landDirectWrite lands the bytes of a write that does not go through the
