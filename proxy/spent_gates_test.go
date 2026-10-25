@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +119,46 @@ func TestASpentRedirectGateCompletesWithACaveat(t *testing.T) {
 	// The /events broker's done envelope reads the same field.
 	if ctx.TerminalUnresolved != "contract_gate" {
 		t.Fatalf("TerminalUnresolved = %q, want contract_gate", ctx.TerminalUnresolved)
+	}
+}
+
+// Code the run added that nothing calls holds the exit while the orphan gate
+// has bounces. Spent, the gate lets the run finish, and the summary names
+// the code nothing calls.
+func TestASpentOrphanGateCompletesWithACaveat(t *testing.T) {
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/orphaned_symbols" {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"orphans": [{"name": "helper", "line": 3}]}`))
+	}))
+	defer v3.Close()
+	ctx, dir := sepCtx(t, nil)
+	ctx.V3URL = v3.URL
+	ctx.RecordFileRead(resolveAgentPath(ctx, "app.py"), "print('ok')\n")
+	sepWrite(t, ctx, dir, "app.py", "print('ok')\n\ndef helper():\n    return 1\n")
+	withSyntaxSandbox(t, ctx)
+	st := &runState{madeProductiveChange: true, productiveChanges: 1, toolsRun: 2}
+	prompt := "Add a helper to app.py."
+	for i := 0; i < maxGateBounces; i++ {
+		gate, msg := st.exitGates(ctx, prompt, "Finished.")
+		if gate != "orphan_gate" {
+			t.Fatalf("exit %d: gate %q, want orphan_gate", i+1, gate)
+		}
+		if !strings.Contains(msg, "app.py:3  helper") {
+			t.Fatalf("exit %d: the gate does not name the uncalled code: %s", i+1, msg)
+		}
+	}
+	if gate, _ := st.exitGates(ctx, prompt, "Finished."); gate != "" {
+		t.Fatalf("exit %d: gate %q after orphan_gate was spent", maxGateBounces+1, gate)
+	}
+	status, reason := finalizeCompletion(ctx, st, prompt, "")
+	if status != TerminalCompleted {
+		t.Fatalf("terminal = %s/%s, want completed with a caveat", status, reason)
+	}
+	if s := honestTerminalSummary(ctx, st, status, reason, "Finished."); !strings.Contains(s, "code this run added is never called: ") {
+		t.Fatalf("summary does not carry the orphan caveat: %q", s)
 	}
 }
 
