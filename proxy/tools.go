@@ -3710,36 +3710,7 @@ func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
 // would later bound a licence to -- WHERE, never whether.
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
-	req := V3GenerateRequest{
-		FilePath:     path,
-		BaselineCode: content,
-		Tier:         int(ctx.Tier),
-		WorkingDir:   ctx.WorkingDir,
-		UserMessage:  latestUserMessage(ctx),
-	}
-	// Exclude the target's own pre-edit snapshot from project context —
-	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
-	cleanTarget := filepath.Clean(path)
-	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
-		req.ProjectContext = make(map[string]string)
-		for p, c := range filesRead {
-			if filepath.Clean(p) == cleanTarget {
-				continue
-			}
-			rel, _ := filepath.Rel(ctx.WorkingDir, p)
-			if rel == "" {
-				rel = p
-			}
-			if len(c) > 4000 {
-				c = c[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[rel] = c
-		}
-	}
-	if ctx.Project != nil {
-		req.Framework = ctx.Project.Framework
-		req.BuildCommand = ctx.Project.BuildCommand
-	}
+	req := v3EditRequest(path, content, ctx)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming
@@ -3750,52 +3721,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		if ctx.StreamFn == nil {
-			return
-		}
-		if stage == "token" {
-			ctx.StreamFn("v3_token", map[string]string{"text": detail})
-			return
-		}
-		// Reasoning deltas from V3's LLM calls (see write_file path's
-		// matching branch). Same purpose: visible thinking stream
-		// during long PlanSearch / repair phases. v3_reasoning_token,
-		// not reasoning_token, so it targets the V3 row not the agent row.
-		if stage == "reasoning_token" {
-			ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
-			return
-		}
-		if stage == "llm_start" {
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			ctx.StreamFn("v3_llm_start", payload)
-			return
-		}
-		if stage == "llm_end" {
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			ctx.StreamFn("v3_llm_end", payload)
-			return
-		}
-		eventName := v3StageToEvent(stage)
-		if eventName == "v3_progress" {
-			ctx.StreamFn("v3_progress", map[string]string{
-				"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
-			})
-			return
-		}
-		payload := map[string]interface{}{
-			"stage":  stage,
-			"detail": detail,
-		}
-		for k, v := range data {
-			payload[k] = v
-		}
-		ctx.StreamFn(eventName, payload)
+		forwardV3EditStage(ctx, stage, detail, data)
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
@@ -3853,6 +3779,93 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		VerificationEvidence: v3Result.VerificationEvidence,
 		Envelope:             envelopeOf(v3Result),
 	}, nil
+}
+
+// v3EditRequest is the V3 request for an edit: the caller's content as the
+// baseline, and the other files this session read as its context.
+func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
+	req := V3GenerateRequest{
+		FilePath:     path,
+		BaselineCode: content,
+		Tier:         int(ctx.Tier),
+		WorkingDir:   ctx.WorkingDir,
+		UserMessage:  latestUserMessage(ctx),
+	}
+	// Exclude the target's own pre-edit snapshot from project context —
+	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	cleanTarget := filepath.Clean(path)
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
+		req.ProjectContext = make(map[string]string)
+		for p, c := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
+			rel, _ := filepath.Rel(ctx.WorkingDir, p)
+			if rel == "" {
+				rel = p
+			}
+			if len(c) > 4000 {
+				c = c[:4000] + "\n... (truncated)"
+			}
+			req.ProjectContext[rel] = c
+		}
+	}
+	if ctx.Project != nil {
+		req.Framework = ctx.Project.Framework
+		req.BuildCommand = ctx.Project.BuildCommand
+	}
+	return req
+}
+
+// forwardV3EditStage hands one V3 progress event of an edit to the client, as
+// the event the client renders it with.
+func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
+	if ctx.StreamFn == nil {
+		return
+	}
+	if stage == "token" {
+		ctx.StreamFn("v3_token", map[string]string{"text": detail})
+		return
+	}
+	// Reasoning deltas from V3's LLM calls (see write_file path's
+	// matching branch). Same purpose: visible thinking stream
+	// during long PlanSearch / repair phases. v3_reasoning_token,
+	// not reasoning_token, so it targets the V3 row not the agent row.
+	if stage == "reasoning_token" {
+		ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
+		return
+	}
+	if stage == "llm_start" {
+		payload := map[string]interface{}{"detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.StreamFn("v3_llm_start", payload)
+		return
+	}
+	if stage == "llm_end" {
+		payload := map[string]interface{}{"detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.StreamFn("v3_llm_end", payload)
+		return
+	}
+	eventName := v3StageToEvent(stage)
+	if eventName == "v3_progress" {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
+		})
+		return
+	}
+	payload := map[string]interface{}{
+		"stage":  stage,
+		"detail": detail,
+	}
+	for k, v := range data {
+		payload[k] = v
+	}
+	ctx.StreamFn(eventName, payload)
 }
 
 // findActualString searches for oldStr in content, handling quote normalization.
@@ -4877,24 +4890,6 @@ func runCommandTool() *ToolDef {
 				cwd = resolveAgentPath(ctx, input.Cwd)
 			}
 
-			// Route shell execution through the sandbox container.
-			// The proxy is a slim Go binary with no python/pip/node, so
-			// running locally meant every "verify" command failed with
-			// "command not found". The sandbox has the language matrix
-			// pre-installed AND has /workspace bind-mounted at the same
-			// path the proxy sees, so paths the agent learned via
-			// read_file / list_directory still work. validateShellCommand
-			// upstream is the gate; this is the executor.
-			//
-			// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host with
-			// ATLAS_TRUST_MODE=fully-trusted), we BYPASS the sandbox and execute
-			// on the host directly. This is the right call for working
-			// codebases that depend on host-side state — the user's
-			// installed venv binaries, system tools, env vars,
-			// running databases, etc. — that the sandbox can't see.
-			// The shell-op safety gate (validateShellCommand) still
-			// fired upstream regardless of target. cwd is translated
-			// to the host path so the command lands in the right dir.
 			// The declared envelope, checked before anything runs. A
 			// deployment whose configured maxima exceed the host is one where
 			// every process can be inside its own limit at the moment the
@@ -4912,66 +4907,10 @@ func runCommandTool() *ToolDef {
 				}, nil
 			}
 
-			var out RunCommandOutput
-			var err error
-			// Host execution requires fully-trusted; otherwise a
-			// host request is downgraded to sandbox so the trust
-			// level can't be silently escalated by ATLAS_VERIFY_IN.
-			useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
-			if useHost {
-				hostCwd := cwd
-				if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
-					hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
-				}
-				out = runLocally(input.Command, hostCwd, time.Duration(timeoutSec)*time.Second)
-			} else {
-				out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
-				if err != nil {
-					log.Printf("[run_command] sandbox unavailable: %v", err)
-					out = RunCommandOutput{
-						Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
-						ExitCode: 1,
-					}
-				}
-			}
+			out := runCommandOutput(ctx, input, cwd, timeoutSec)
 
 			outBytes, _ := json.Marshal(out)
-			var errMsg string
-			if out.TimedOut && out.ExitCode == 0 {
-				// A kill that left a zero status behind. Saying nothing here
-				// would hand the model a silent failure.
-				errMsg = "the command was killed on its timeout"
-			}
-			// A command stopped at a resource ceiling is told apart from one
-			// that failed, in the words the model reads. Left as an exit code
-			// and a MemoryError on stderr, "your test suite is broken" and
-			// "your test suite never finished" are the same message, and only
-			// one of them is actionable.
-			if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
-				executionStoppedByResource(out.Outcome) {
-				errMsg = resourceMsg
-			} else if out.ExitCode != 0 {
-				errMsg = strings.TrimSpace(out.Stderr)
-				if errMsg == "" {
-					if s := strings.TrimSpace(out.Stdout); s != "" {
-						lines := strings.Split(s, "\n")
-						errMsg = lines[len(lines)-1]
-					}
-				}
-				if errMsg == "" {
-					errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
-				}
-				errMsg = truncateStr(errMsg, 400)
-				errMsg += ownBackgroundJobHint(ctx, errMsg)
-				errMsg += shellQuotingHint(input.Command, errMsg)
-			}
-			if errMsg == "" && !executionCompleted(out.Outcome) {
-				// Exit zero from a command that did not reach its own end.
-				// Silence here would read as success.
-				if m := executionOutcomeMessage(out.Outcome); m != "" {
-					errMsg = m
-				}
-			}
+			errMsg := runCommandErrorMessage(ctx, input, out)
 			return &ToolResult{
 				Success: runCommandVerifiable(out),
 				Data:    outBytes,
@@ -4979,6 +4918,103 @@ func runCommandTool() *ToolDef {
 			}, nil
 		},
 	}
+}
+
+// runCommandOutput runs the command where the session may run it: on the host
+// when it is fully trusted and asked for that, and otherwise in the sandbox,
+// whose absence is reported as the command's own failure.
+func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, timeoutSec int) RunCommandOutput {
+	// Route shell execution through the sandbox container.
+	// The proxy is a slim Go binary with no python/pip/node, so
+	// running locally meant every "verify" command failed with
+	// "command not found". The sandbox has the language matrix
+	// pre-installed AND has /workspace bind-mounted at the same
+	// path the proxy sees, so paths the agent learned via
+	// read_file / list_directory still work. validateShellCommand
+	// upstream is the gate; this is the executor.
+	//
+	// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host with
+	// ATLAS_TRUST_MODE=fully-trusted), we BYPASS the sandbox and execute
+	// on the host directly. This is the right call for working
+	// codebases that depend on host-side state — the user's
+	// installed venv binaries, system tools, env vars,
+	// running databases, etc. — that the sandbox can't see.
+	// The shell-op safety gate (validateShellCommand) still
+	// fired upstream regardless of target. cwd is translated
+	// to the host path so the command lands in the right dir.
+	var out RunCommandOutput
+	var err error
+	// Host execution requires fully-trusted; otherwise a
+	// host request is downgraded to sandbox so the trust
+	// level can't be silently escalated by ATLAS_VERIFY_IN.
+	useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
+	if useHost {
+		hostCwd := cwd
+		if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
+			hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
+		}
+		out = runLocally(input.Command, hostCwd, time.Duration(timeoutSec)*time.Second)
+	} else {
+		out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
+		if err != nil {
+			log.Printf("[run_command] sandbox unavailable: %v", err)
+			out = RunCommandOutput{
+				Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
+				ExitCode: 1,
+			}
+		}
+	}
+	return out
+}
+
+// runCommandErrorMessage is what the model is told went wrong with a command:
+// a kill on the timeout, a stop at a resource ceiling, a failure with its last
+// words, or an end the command did not reach. "" when nothing did.
+func runCommandErrorMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+	var errMsg string
+	if out.TimedOut && out.ExitCode == 0 {
+		// A kill that left a zero status behind. Saying nothing here
+		// would hand the model a silent failure.
+		errMsg = "the command was killed on its timeout"
+	}
+	// A command stopped at a resource ceiling is told apart from one
+	// that failed, in the words the model reads. Left as an exit code
+	// and a MemoryError on stderr, "your test suite is broken" and
+	// "your test suite never finished" are the same message, and only
+	// one of them is actionable.
+	if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
+		executionStoppedByResource(out.Outcome) {
+		errMsg = resourceMsg
+	} else if out.ExitCode != 0 {
+		errMsg = nonZeroExitMessage(ctx, input, out)
+	}
+	if errMsg == "" && !executionCompleted(out.Outcome) {
+		// Exit zero from a command that did not reach its own end.
+		// Silence here would read as success.
+		if m := executionOutcomeMessage(out.Outcome); m != "" {
+			errMsg = m
+		}
+	}
+	return errMsg
+}
+
+// nonZeroExitMessage is a failed command's last words: its stderr, else the
+// last line of its stdout, else its exit code, with the hints that apply.
+func nonZeroExitMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+	errMsg := strings.TrimSpace(out.Stderr)
+	if errMsg == "" {
+		if s := strings.TrimSpace(out.Stdout); s != "" {
+			lines := strings.Split(s, "\n")
+			errMsg = lines[len(lines)-1]
+		}
+	}
+	if errMsg == "" {
+		errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
+	}
+	errMsg = truncateStr(errMsg, 400)
+	errMsg += ownBackgroundJobHint(ctx, errMsg)
+	errMsg += shellQuotingHint(input.Command, errMsg)
+	return errMsg
 }
 
 // runViaSandbox POSTs the command to the sandbox /shell endpoint.
