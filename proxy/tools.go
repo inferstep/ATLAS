@@ -1244,110 +1244,125 @@ func writeFileTool() *ToolDef {
 				}
 			}
 
-			// A NEW file that does not parse is unambiguously wrong, so the
-			// direct path gates it. The healthy->broken rule the gate uses
-			// elsewhere needs an "before" state; a file being created has
-			// none, which is exactly why this case is decidable.
-			//
-			// This path was ungated because the sandbox's YAML checker
-			// rejected multi-document files — valid YAML, and the shape every
-			// Kubernetes and Compose manifest uses. That checker is fixed
-			// (safe_load_all), so the one reason to skip the gate here is
-			// gone. Observed: a 4-line test_discount.py with an unterminated
-			// string reached disk through this path.
-			// os.Stat, not readOriginalForGate: that helper returns ("", true)
-			// for a MISSING file — its bool means "usable as a baseline", not
-			// "exists" — so testing it here silently skipped the gate.
-			// Destination absence is determined ONCE, and when the file is
-			// new the structured checker is evaluated ONCE. This route owns a
-			// real observation, so it overlays it onto the result afterwards
-			// rather than leaving writeFileDirect's conservative default.
-			_, statErr := os.Stat(path)
-			isNew := os.IsNotExist(statErr)
-			newFileCheck := checkOutcome{Status: ValidationUnknown}
-			if isNew {
-				newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				if newFileCheck.Status == ValidationFailed {
-					log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
-						logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
-					return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
-				}
-			}
-
-			// The destination exists and these exact bytes were already
-			// observed not to parse. A healthy baseline was refused outright
-			// above, so reaching here means what is on disk is itself broken
-			// or unreadable — the same case the non-bypassed route lands with
-			// a warning. Land it the same way, and say so.
-			//
-			// Only the SAYING is new. The observation was already overlaid
-			// onto the result below, so the ledger and the completion gate
-			// knew; the model did not. It was handed {"bytes_written":1243}
-			// and nothing else, which reads as a clean write. Measured on
-			// multifile_cli rep2: the model rewrote test_store.py containing
-			// `store.add("Buy milk"")`, was told the write succeeded, ran
-			// pytest, could not reconcile the failure with a write it had
-			// been told was fine, and resent content until the repetition
-			// breaker closed the path — leaving the file unparseable at the
-			// end of the session. The sandbox had answered `valid:false` for
-			// those bytes the whole time.
-			if proposalCheck.Status == ValidationFailed {
-				log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
-					logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
-				return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-			}
-
-			// The two comparative gates the V3 route applies to the bytes it
-			// writes (writeFileWithV3). They are checks on the write, not part
-			// of candidate generation, so a write that does not generate --
-			// small, mid-iteration, or with nothing deliverable -- must not skip
-			// them. Healthy->broken and fail-soft, as there.
-			if original, ok := readOriginalForGate(path); ok {
-				if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
-					log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
-					return &ToolResult{Success: false, Error: msg,
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindStructural,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: msg}, nil
-				}
-				if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
-					log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-					return &ToolResult{Success: false, Error: msg,
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindStructural,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: msg}, nil
-				}
-			}
-
-			logMandatoryChecks(ctx, "write_file", input.Path, "direct")
-			// T1: Direct write — config, data, boilerplate
-			res, err := writeFileRecorded(path, input.Content, ctx)
-			if err == nil && res != nil && res.Success {
-				ctx.SessionWrites[input.Path] = true
-			}
-			// Mutation facts stay as the writer reported them; only the
-			// validation observation is overlaid, and only by a route that
-			// actually made one. Unknown is preserved.
-			switch {
-			case isNew:
-				res, err = applyRouteObservation(res, err, newFileCheck)
-			case proposalCheck.Status != ValidationUnknown:
-				// Every remaining route through this write -- the active-debug
-				// fast path and the ordinary direct write over an existing
-				// file -- already holds an observation of these exact bytes.
-				// The shared regression gate makes it whenever the destination
-				// exists, and the active-debug branch fills it in for the one
-				// case where the destination is gone, so non-Unknown IS the
-				// ownership test. Restating it with a second checker call
-				// would spend a round trip to risk a different answer about
-				// bytes that have not changed since.
-				res, err = applyRouteObservation(res, err, proposalCheck)
-			}
-			return res, err
+			return landDirectWrite(ctx, input, path, proposalCheck)
 		},
 	}
+}
+
+// landDirectWrite lands the bytes of a write that does not go through the
+// pipeline: with a warning when a new file, or a file already broken, does not
+// parse, and refused when they break an embedded script or repeat the entry
+// point.
+func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, proposalCheck checkOutcome) (*ToolResult, error) {
+	// A NEW file that does not parse is unambiguously wrong, so the
+	// direct path gates it. The healthy->broken rule the gate uses
+	// elsewhere needs an "before" state; a file being created has
+	// none, which is exactly why this case is decidable.
+	//
+	// This path was ungated because the sandbox's YAML checker
+	// rejected multi-document files — valid YAML, and the shape every
+	// Kubernetes and Compose manifest uses. That checker is fixed
+	// (safe_load_all), so the one reason to skip the gate here is
+	// gone. Observed: a 4-line test_discount.py with an unterminated
+	// string reached disk through this path.
+	// os.Stat, not readOriginalForGate: that helper returns ("", true)
+	// for a MISSING file — its bool means "usable as a baseline", not
+	// "exists" — so testing it here silently skipped the gate.
+	// Destination absence is determined ONCE, and when the file is
+	// new the structured checker is evaluated ONCE. This route owns a
+	// real observation, so it overlays it onto the result afterwards
+	// rather than leaving writeFileDirect's conservative default.
+	_, statErr := os.Stat(path)
+	isNew := os.IsNotExist(statErr)
+	newFileCheck := checkOutcome{Status: ValidationUnknown}
+	if isNew {
+		newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+		if newFileCheck.Status == ValidationFailed {
+			log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
+				logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
+			return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
+		}
+	}
+
+	// The destination exists and these exact bytes were already
+	// observed not to parse. A healthy baseline was refused outright
+	// above, so reaching here means what is on disk is itself broken
+	// or unreadable — the same case the non-bypassed route lands with
+	// a warning. Land it the same way, and say so.
+	//
+	// Only the SAYING is new. The observation was already overlaid
+	// onto the result below, so the ledger and the completion gate
+	// knew; the model did not. It was handed {"bytes_written":1243}
+	// and nothing else, which reads as a clean write. Measured on
+	// multifile_cli rep2: the model rewrote test_store.py containing
+	// `store.add("Buy milk"")`, was told the write succeeded, ran
+	// pytest, could not reconcile the failure with a write it had
+	// been told was fine, and resent content until the repetition
+	// breaker closed the path — leaving the file unparseable at the
+	// end of the session. The sandbox had answered `valid:false` for
+	// those bytes the whole time.
+	if proposalCheck.Status == ValidationFailed {
+		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
+			logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
+		return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+	}
+
+	// The two comparative gates the V3 route applies to the bytes it
+	// writes (writeFileWithV3). They are checks on the write, not part
+	// of candidate generation, so a write that does not generate --
+	// small, mid-iteration, or with nothing deliverable -- must not skip
+	// them. Healthy->broken and fail-soft, as there.
+	if original, ok := readOriginalForGate(path); ok {
+		if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
+			log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
+			return &ToolResult{Success: false, Error: msg,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: msg}, nil
+		}
+		if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
+			log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
+			return &ToolResult{Success: false, Error: msg,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: msg}, nil
+		}
+	}
+
+	return writeDirectAndObserve(ctx, input, path, isNew, newFileCheck, proposalCheck)
+}
+
+// writeDirectAndObserve writes the bytes of a direct write and attaches the
+// observation its route already holds of exactly those bytes.
+func writeDirectAndObserve(ctx *AgentContext, input WriteFileInput, path string, isNew bool,
+	newFileCheck, proposalCheck checkOutcome) (*ToolResult, error) {
+	logMandatoryChecks(ctx, "write_file", input.Path, "direct")
+	// T1: Direct write — config, data, boilerplate
+	res, err := writeFileRecorded(path, input.Content, ctx)
+	if err == nil && res != nil && res.Success {
+		ctx.SessionWrites[input.Path] = true
+	}
+	// Mutation facts stay as the writer reported them; only the
+	// validation observation is overlaid, and only by a route that
+	// actually made one. Unknown is preserved.
+	switch {
+	case isNew:
+		res, err = applyRouteObservation(res, err, newFileCheck)
+	case proposalCheck.Status != ValidationUnknown:
+		// Every remaining route through this write -- the active-debug
+		// fast path and the ordinary direct write over an existing
+		// file -- already holds an observation of these exact bytes.
+		// The shared regression gate makes it whenever the destination
+		// exists, and the active-debug branch fills it in for the one
+		// case where the destination is gone, so non-Unknown IS the
+		// ownership test. Restating it with a second checker call
+		// would spend a round trip to risk a different answer about
+		// bytes that have not changed since.
+		res, err = applyRouteObservation(res, err, proposalCheck)
+	}
+	return res, err
 }
 
 // isActiveDebugIteration reports whether the model is in a tight edit-
