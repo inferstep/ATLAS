@@ -364,18 +364,24 @@ func detectProjectInfo(projectDir string) *ProjectInfo {
 // Language-specific detectors
 // ---------------------------------------------------------------------------
 
+// The manifest names that a detector reads in more than one place.
+const (
+	packageJSONFile     = "package.json"
+	requirementsTxtFile = "requirements.txt"
+)
+
 func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
-	if !files["package.json"] {
+	if !files[packageJSONFile] {
 		return nil
 	}
 
 	info := &ProjectInfo{
 		Language:    "nodejs",
-		ConfigFiles: []string{"package.json"},
+		ConfigFiles: []string{packageJSONFile},
 	}
 
 	// Parse package.json for framework detection
-	data, err := readConfined(projectDir, "package.json")
+	data, err := readConfined(projectDir, packageJSONFile)
 	if err != nil {
 		return info
 	}
@@ -410,18 +416,7 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Detect framework
-	if _, ok := allDeps["next"]; ok {
-		info.Framework = "nextjs"
-		if info.BuildCommand == "" {
-			info.BuildCommand = "npx next build"
-		}
-	} else if _, ok := allDeps["react"]; ok {
-		info.Framework = "react"
-	} else if _, ok := allDeps["vue"]; ok {
-		info.Framework = "vue"
-	} else if _, ok := allDeps["express"]; ok {
-		info.Framework = "express"
-	}
+	detectNodeFramework(info, allDeps)
 
 	// Add detected config files
 	for _, f := range []string{"tsconfig.json", "tailwind.config.ts", "tailwind.config.js",
@@ -436,6 +431,24 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	return info
+}
+
+// detectNodeFramework sets info.Framework from the first of next, react, vue
+// and express that the dependencies hold. A Next.js project with no build
+// script of its own builds with "npx next build".
+func detectNodeFramework(info *ProjectInfo, allDeps map[string]string) {
+	if _, ok := allDeps["next"]; ok {
+		info.Framework = "nextjs"
+		if info.BuildCommand == "" {
+			info.BuildCommand = "npx next build"
+		}
+	} else if _, ok := allDeps["react"]; ok {
+		info.Framework = "react"
+	} else if _, ok := allDeps["vue"]; ok {
+		info.Framework = "vue"
+	} else if _, ok := allDeps["express"]; ok {
+		info.Framework = "express"
+	}
 }
 
 func detectNodePackageManager(files map[string]bool, packageManager string) string {
@@ -486,7 +499,7 @@ func nodeScriptCommand(pm, script string) string {
 }
 
 func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
-	hasPython := files["pyproject.toml"] || files["setup.py"] || files["requirements.txt"] || files["Pipfile"]
+	hasPython := files["pyproject.toml"] || files["setup.py"] || files[requirementsTxtFile] || files["Pipfile"]
 	if !hasPython {
 		// Check for .py files
 		entries, _ := filepath.Glob(filepath.Join(projectDir, "*.py"))
@@ -500,14 +513,14 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 		ConfigFiles: []string{},
 	}
 
-	for _, f := range []string{"pyproject.toml", "setup.py", "requirements.txt", "Pipfile"} {
+	for _, f := range []string{"pyproject.toml", "setup.py", requirementsTxtFile, "Pipfile"} {
 		if files[f] {
 			info.ConfigFiles = append(info.ConfigFiles, f)
 		}
 	}
 
 	// Detect framework from requirements or pyproject
-	if data, err := readConfined(projectDir, "requirements.txt"); err == nil {
+	if data, err := readConfined(projectDir, requirementsTxtFile); err == nil {
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "flask") {
 			info.Framework = "flask"
