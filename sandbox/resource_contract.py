@@ -535,7 +535,6 @@ def _sample_until_it_ends(proc, pgid: int, token: str, contract: ResourceContrac
     Returns (outcome, wait status, child peak, peak memory, peak processes).
     """
     peak_mem, peak_procs = 0, 0
-    outcome = OUTCOME_UNCLASSIFIED
     status = None
     child_peak = 0
 
