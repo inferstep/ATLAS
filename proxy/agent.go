@@ -6150,73 +6150,14 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 
 // handleAgent is the HTTP handler for the new agent endpoint.
 func handleAgent(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+	req, ok := readAgentRequest(w, r)
+	if !ok {
 		return
 	}
 
-	type historyMsg struct {
-		Role    string `json:"role"` // "user" or "assistant"
-		Content string `json:"content"`
-	}
-	var req struct {
-		Message    string       `json:"message"`
-		WorkingDir string       `json:"working_dir"`
-		Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
-		SessionID  string       `json:"session_id"` // optional — required for /cancel
-		History    []historyMsg `json:"history,omitempty"`
-		// Tools the client has approved for the whole session so the proxy
-		// skips the interactive prompt for them (see /v1/permission).
-		SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
-		// /demo split-pane flags — tags match tui/chat.go's agentRequest.
-		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
-		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
-		// Removed switches, read only to refuse them. V3 runs on every
-		// request and feasibility is recorded, never enforced; a request that
-		// asks for V3 off, planner-only or enforce would otherwise be measured
-		// under a system it did not ask for.
-		RemovedBypassV3        *bool  `json:"bypass_v3,omitempty"`
-		RemovedV3Mode          string `json:"v3_mode,omitempty"`
-		RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
-		// What the client declares about the request. Optional, and absent
-		// stays distinguishable from present-and-empty. Nothing reads it yet.
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
+	workingDir, hostDir, ok := agentWorkingDirs(w, req)
+	if !ok {
 		return
-	}
-
-	if req.Message == "" {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
-		return
-	}
-
-	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
-	// as working_dir, but the proxy runs in a container where that path
-	// doesn't exist — only /workspace (the bind-mount target) does. The
-	// startup wrapper (atlas/runtime.py:_align_workspace) already aligns
-	// the bind mount to the user's cwd, so /workspace IS the user's cwd
-	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
-	// docker-compose.yml) as the canonical write target. The original
-	// host path is kept on HostWorkingDir for path translation (below).
-	hostDir := req.WorkingDir
-	if hostDir == "" {
-		hostDir = "."
-	}
-	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
-
-	// /demo: each pane works inside its own workspace subdir. A non-empty
-	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
-	if sub := req.SandboxSubdir; sub != "" {
-		if !validSandboxSubdir(sub) {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
-			return
-		}
-		workingDir = filepath.Join(workingDir, sub)
-		if hostDir != "" && hostDir != "." {
-			hostDir = filepath.Join(hostDir, sub)
-		}
 	}
 
 	// Classify tier from message
@@ -6228,53 +6169,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, ErrInvalidInput, msg)
 		return
 	}
-	ctx.DisableFreshSlot = req.DisableFreshSlot
-	// Stash the host path so resolveAgentPath can translate absolute
-	// host paths the model receives in user prompts (e.g. "fix
-	// /home/isaac/snake/app.py") into the container path. Without this
-	// the model copies the user's host path verbatim into read_file
-	// and the open() fails because that path doesn't exist inside the
-	// proxy container — only /workspace does.
-	if hostDir != "" && hostDir != "." {
-		ctx.HostWorkingDir = filepath.Clean(hostDir)
-	}
-	ctx.InferenceURL = inferenceURL
-	ctx.SandboxURL = sandboxURL
-	ctx.LensURL = lensURL
-	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+	configureAgentContext(ctx, req, workingDir, hostDir)
+	seedPriorHistory(ctx, req)
 
-	// Host execution for run_command only when the operator chooses it;
-	// the workspace's settings file may only choose the sandbox. See
-	// resolveVerifyTarget. Default stays sandbox.
-	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
-	ctx.TrustMode = resolveTrustMode()
-
-	// Seed prior-turn transcript from the request body. The TUI ships
-	// user/assistant text rows from its local chat history so the agent
-	// can answer follow-ups; without it, every /v1/agent call starts
-	// fresh. Cap defensively at 40 messages here too — the proxy's own
-	// trim logic in runAgentLoop handles further overflow.
-	if n := len(req.History); n > 0 {
-		if n > 40 {
-			req.History = req.History[n-40:]
-		}
-		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
-		for _, h := range req.History {
-			// Only accept the two roles that make sense as conversation
-			// history; anything else is skipped silently rather than
-			// passed through to the LLM as an unknown role.
-			if h.Role != "user" && h.Role != "assistant" {
-				continue
-			}
-			if h.Content == "" {
-				continue
-			}
-			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
-				Role:    h.Role,
-				Content: h.Content,
-			})
-		}
-	}
 	// Carry the upstream cancellation through so disconnects abort the loop
 	// and llama-server's in-flight generation.
 	//
@@ -6305,6 +6202,182 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		defer activeSessions.CompareAndDelete(req.SessionID, entry)
 	}
 
+	applyPermissionMode(ctx, req)
+
+	// Detect project (implemented in context.go)
+	// The client's declaration, checked against the workspace this request
+	// resolved to. A bad contract is a bad request: it is refused outright
+	// rather than dropped, because a client that declared obligations and had
+	// them silently discarded would be told its run finished having proved
+	// none of them. Nothing reads the stored value yet.
+	if !applyTaskContract(w, ctx, req, workingDir) {
+		return
+	}
+	// The lens is required (lens_required.go): a request is not started
+	// while it cannot score. After every 400, and before any work or any
+	// streamed byte, so the answer is an ordinary HTTP error the client
+	// shows as such.
+	if ok, why := lensReady(lensURL); !ok {
+		writeError(w, http.StatusServiceUnavailable, ErrDependencyDown,
+			"ATLAS needs the geometric lens for every request, and "+why+
+				". Run `atlas doctor`.")
+		return
+	}
+
+	ctx.Project = detectProjectInfo(workingDir)
+
+	flusher, ok := openEventStream(w, ctx)
+	if !ok {
+		return
+	}
+	streamAgentRun(w, flusher, ctx, req)
+}
+
+// historyMsg is one row of the transcript a client sends with a request.
+type historyMsg struct {
+	Role    string `json:"role"` // "user" or "assistant"
+	Content string `json:"content"`
+}
+
+// agentRequest is the body of a /v1/agent request.
+type agentRequest struct {
+	Message    string       `json:"message"`
+	WorkingDir string       `json:"working_dir"`
+	Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
+	SessionID  string       `json:"session_id"` // optional — required for /cancel
+	History    []historyMsg `json:"history,omitempty"`
+	// Tools the client has approved for the whole session so the proxy
+	// skips the interactive prompt for them (see /v1/permission).
+	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
+	// /demo split-pane flags — tags match tui/chat.go's agentRequest.
+	DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
+	SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
+	// Removed switches, read only to refuse them. V3 runs on every
+	// request and feasibility is recorded, never enforced; a request that
+	// asks for V3 off, planner-only or enforce would otherwise be measured
+	// under a system it did not ask for.
+	RemovedBypassV3        *bool  `json:"bypass_v3,omitempty"`
+	RemovedV3Mode          string `json:"v3_mode,omitempty"`
+	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
+	// What the client declares about the request. Optional, and absent
+	// stays distinguishable from present-and-empty. Nothing reads it yet.
+	TaskContract *TaskContract `json:"task_contract,omitempty"`
+}
+
+// readAgentRequest decodes a /v1/agent request, or answers it with the HTTP
+// error that refuses it: a method other than POST, a body that does not
+// decode, or no message.
+func readAgentRequest(w http.ResponseWriter, r *http.Request) (*agentRequest, bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+		return nil, false
+	}
+	var req agentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
+		return nil, false
+	}
+
+	if req.Message == "" {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
+		return nil, false
+	}
+	return &req, true
+}
+
+// agentWorkingDirs resolves where a request works: the workspace the proxy
+// writes to and the client's own path for it, both inside the pane's subdir
+// for a /demo pane. It answers a subdir that is not allowed with HTTP 400.
+func agentWorkingDirs(w http.ResponseWriter, req *agentRequest) (string, string, bool) {
+	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
+	// as working_dir, but the proxy runs in a container where that path
+	// doesn't exist — only /workspace (the bind-mount target) does. The
+	// startup wrapper (atlas/runtime.py:_align_workspace) already aligns
+	// the bind mount to the user's cwd, so /workspace IS the user's cwd
+	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
+	// docker-compose.yml) as the canonical write target. The original
+	// host path is kept on HostWorkingDir for path translation (below).
+	hostDir := req.WorkingDir
+	if hostDir == "" {
+		hostDir = "."
+	}
+	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
+
+	// /demo: each pane works inside its own workspace subdir. A non-empty
+	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
+	if sub := req.SandboxSubdir; sub != "" {
+		if !validSandboxSubdir(sub) {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
+			return "", "", false
+		}
+		workingDir = filepath.Join(workingDir, sub)
+		if hostDir != "" && hostDir != "." {
+			hostDir = filepath.Join(hostDir, sub)
+		}
+	}
+	return workingDir, hostDir, true
+}
+
+// configureAgentContext gives a request's context what the run needs from
+// the request and the proxy: the client's host path, the services' URLs,
+// and where run_command executes.
+func configureAgentContext(ctx *AgentContext, req *agentRequest, workingDir, hostDir string) {
+	ctx.DisableFreshSlot = req.DisableFreshSlot
+	// Stash the host path so resolveAgentPath can translate absolute
+	// host paths the model receives in user prompts (e.g. "fix
+	// /home/isaac/snake/app.py") into the container path. Without this
+	// the model copies the user's host path verbatim into read_file
+	// and the open() fails because that path doesn't exist inside the
+	// proxy container — only /workspace does.
+	if hostDir != "" && hostDir != "." {
+		ctx.HostWorkingDir = filepath.Clean(hostDir)
+	}
+	ctx.InferenceURL = inferenceURL
+	ctx.SandboxURL = sandboxURL
+	ctx.LensURL = lensURL
+	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+
+	// Host execution for run_command only when the operator chooses it;
+	// the workspace's settings file may only choose the sandbox. See
+	// resolveVerifyTarget. Default stays sandbox.
+	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
+	ctx.TrustMode = resolveTrustMode()
+}
+
+// seedPriorHistory gives the run the transcript the client sent: its last 40
+// rows, each a user or an assistant turn with content.
+func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
+	// Seed prior-turn transcript from the request body. The TUI ships
+	// user/assistant text rows from its local chat history so the agent
+	// can answer follow-ups; without it, every /v1/agent call starts
+	// fresh. Cap defensively at 40 messages here too — the proxy's own
+	// trim logic in runAgentLoop handles further overflow.
+	if n := len(req.History); n > 0 {
+		if n > 40 {
+			req.History = req.History[n-40:]
+		}
+		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
+		for _, h := range req.History {
+			// Only accept the two roles that make sense as conversation
+			// history; anything else is skipped silently rather than
+			// passed through to the LLM as an unknown role.
+			if h.Role != "user" && h.Role != "assistant" {
+				continue
+			}
+			if h.Content == "" {
+				continue
+			}
+			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
+				Role:    h.Role,
+				Content: h.Content,
+			})
+		}
+	}
+}
+
+// applyPermissionMode sets what the run may do without asking: the client's
+// permission mode, and the tools the client approved for the whole session.
+func applyPermissionMode(ctx *AgentContext, req *agentRequest) {
 	// Set permission mode
 	switch req.Mode {
 	case "accept-edits":
@@ -6324,40 +6397,32 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 			ctx.AllowedTools[t] = true
 		}
 	}
+}
 
-	// Detect project (implemented in context.go)
-	// The client's declaration, checked against the workspace this request
-	// resolved to. A bad contract is a bad request: it is refused outright
-	// rather than dropped, because a client that declared obligations and had
-	// them silently discarded would be told its run finished having proved
-	// none of them. Nothing reads the stored value yet.
+// applyTaskContract validates the client's task contract against the request's
+// workspace and keeps it, with the tier it declares. It answers a contract that
+// does not validate with HTTP 400 and reports false.
+func applyTaskContract(w http.ResponseWriter, ctx *AgentContext, req *agentRequest, workingDir string) bool {
 	validatedContract, contractErr := validateTaskContract(req.TaskContract, workingDir)
 	if contractErr != nil {
 		writeError(w, http.StatusBadRequest, ErrInvalidInput, contractErr.Error())
-		return
+		return false
 	}
 	ctx.TaskContract = validatedContract
 	if t := declaredTier(validatedContract, ctx.Tier); t != ctx.Tier {
 		ctx.Tier, ctx.MaxTurns = t, TierMaxTurns(t)
 	}
-	// The lens is required (lens_required.go): a request is not started
-	// while it cannot score. After every 400, and before any work or any
-	// streamed byte, so the answer is an ordinary HTTP error the client
-	// shows as such.
-	if ok, why := lensReady(lensURL); !ok {
-		writeError(w, http.StatusServiceUnavailable, ErrDependencyDown,
-			"ATLAS needs the geometric lens for every request, and "+why+
-				". Run `atlas doctor`.")
-		return
-	}
+	return true
+}
 
-	ctx.Project = detectProjectInfo(workingDir)
-
+// openEventStream starts the event stream the run reports on, or answers
+// HTTP 500 when the connection cannot stream.
+func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bool) {
 	// Set up SSE streaming
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
-		return
+		return nil, false
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -6397,7 +6462,12 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: %s\n\n", eventJSON)
 		flusher.Flush()
 	}
+	return flusher, true
+}
 
+// streamAgentRun runs the request on its open event stream, approving every
+// call in yolo mode, and ends the stream with [DONE].
+func streamAgentRun(w http.ResponseWriter, flusher http.Flusher, ctx *AgentContext, req *agentRequest) {
 	// For yolo mode, auto-approve all permissions
 	if ctx.YoloMode {
 		ctx.PermissionFn = func(string, json.RawMessage) bool { return true }
