@@ -475,12 +475,15 @@ def check_containers(services: List[Dict], start_hint: str = "docker compose up 
     return results
 
 
+_LENS_HEALTH_CHECK = "health/lens"
+
+
 def _check_lens_ready(url: str) -> CheckResult:
     """The lens's strict address: /ready answers 200 only when scoring works,
     and 503 with the reason when it does not."""
     try:
         with urllib.request.urlopen(url, timeout=5):
-            return CheckResult("health/lens", "pass", "ready")
+            return CheckResult(_LENS_HEALTH_CHECK, "pass", "ready")
     except urllib.error.HTTPError as e:
         try:
             said = json.loads(e.read()).get("detail") or {}
@@ -488,9 +491,9 @@ def _check_lens_ready(url: str) -> CheckResult:
             said = {}
         reason = said.get("reason") or ("llama-server not reachable from the lens"
                                         if said.get("llama_server") is False else f"HTTP {e.code}")
-        return CheckResult("health/lens", "warn", "not ready", str(reason)[:200])
+        return CheckResult(_LENS_HEALTH_CHECK, "warn", "not ready", str(reason)[:200])
     except Exception as e:
-        return CheckResult("health/lens", "fail", "endpoint unreachable", str(e)[:200])
+        return CheckResult(_LENS_HEALTH_CHECK, "fail", "endpoint unreachable", str(e)[:200])
 
 
 def check_health_endpoints() -> List[CheckResult]:
@@ -550,13 +553,33 @@ def _services_cannot_read(path: str) -> Optional[str]:
     for key in ("ATLAS_PROXY_UID", "ATLAS_SANDBOX_UID"):
         uid = int(os.environ.get(key) or _ENV.get(key) or 1000)
         gid = int(os.environ.get(key.replace("UID", "GID")) or _ENV.get(key.replace("UID", "GID")) or 1000)
-        for place, need in ((os.path.dirname(path), 0o1), (path, 0o4)):
-            st = os.stat(place)
-            shift = 6 if st.st_uid == uid else 3 if st.st_gid == gid else 0
-            if uid != 0 and not (st.st_mode >> shift) & need:
-                return (f"the services run as user {uid} ({key}), but {place} belongs to user {st.st_uid} "
-                        f"with mode {oct(st.st_mode & 0o777)}: they cannot read the token, and each stops")
+        why = _user_cannot_read(path, key, uid, gid)
+        if why:
+            return why
     return None
+
+
+def _user_cannot_read(path: str, key: str, uid: int, gid: int) -> Optional[str]:
+    """Why the user (uid, gid) that `key` names cannot read the token file at
+    path, or None when it can: it needs search on the folder, then read on the
+    file, in the mode bits that apply to it."""
+    for place, need in ((os.path.dirname(path), 0o1), (path, 0o4)):
+        st = os.stat(place)
+        shift = _permission_shift(st, uid, gid)
+        if uid != 0 and not (st.st_mode >> shift) & need:
+            return (f"the services run as user {uid} ({key}), but {place} belongs to user {st.st_uid} "
+                    f"with mode {oct(st.st_mode & 0o777)}: they cannot read the token, and each stops")
+    return None
+
+
+def _permission_shift(st: os.stat_result, uid: int, gid: int) -> int:
+    """Where the mode bits that apply to uid and gid sit: the owner's, the
+    group's, or everyone else's."""
+    if st.st_uid == uid:
+        return 6
+    if st.st_gid == gid:
+        return 3
+    return 0
 
 
 def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], tok: str) -> CheckResult:
