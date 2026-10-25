@@ -733,6 +733,40 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	if ctx != nil && ctx.ShellEffectsUnobserved {
 		s.gateUnresolved("shell_observation", "the workspace was too large to observe every file the shell commands changed")
 	}
+	if gate, msg := s.repairGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.intentGates(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.handoffGate(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.evidenceGates(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.scopeGate(ctx, userMessage, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.runFirstGateAtExit(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.routeContractGate(ctx); gate != "" {
+		return gate, msg
+	}
+	contractDemand := decideVerificationDemand(ctx, ctx.TaskContract, s.expectedOutputs)
+	contractOwed := contractDemand.Required && !contractDemand.Met
+	if gate, msg := s.backgroundGate(ctx, contractOwed); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.verificationGates(ctx, contractDemand, contractOwed); gate != "" {
+		return gate, msg
+	}
+	return s.completionGates(ctx, userMessage, claimText)
+}
+
+// repairGate holds the exit while a file this session wrote does not parse.
+func (s *runState) repairGate(ctx *AgentContext) (string, string) {
 	// A file this session left unparseable is an open repair, and the work is
 	// not finished while one is open (repair.go). First, because it is the
 	// most concrete fact there is about the work. Bounded like every exit
@@ -748,6 +782,13 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("repair_gate", repairNames(open)+" does not parse")
 	}
+	return "", ""
+}
+
+// intentGates hold a reply that is not an answer yet: one that promises the
+// content, announces a tool call it never made, or closes by deferring the
+// work. A reply that says it cannot do the work is marked, not sent back.
+func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, string) {
 	if promisesMoreContent(claimText) {
 		if s.continuationFits(ctx) && s.chargeBounce("intent_gate") {
 			log.Printf("[agent] intent gate: bouncing a reply that promised content it did not deliver (bounce %d/%d)",
@@ -785,6 +826,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.replyOutstanding = true
 	}
+	return "", ""
+}
+
+// handoffGate sends a reply that asks the user back once, to look first at a
+// workspace the run never opened.
+func (s *runState) handoffGate(ctx *AgentContext, claimText string) (string, string) {
 	// A reply that ends by asking the user. A question is a legitimate
 	// outcome, and not a completed one: the user owes an answer. Whether it
 	// was avoidable is decided from evidence, not wording -- if the workspace
@@ -804,6 +851,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.replyHandedBack = true
 		}
 	}
+	return "", ""
+}
+
+// evidenceGates hold a reply that cites a file the run never read, or code
+// that no read showed.
+func (s *runState) evidenceGates(ctx *AgentContext, claimText string) (string, string) {
 	// A claim about a file the run never opened. This is the conversational
 	// half of an invariant the write path already enforces — edit_file,
 	// structural_edit, insert_after and replace_lines all refuse a path that
@@ -830,6 +883,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("evidence_gate", "the reply describes "+symbolNames(gaps)+", whose code this run never showed")
 	}
+	return "", ""
+}
+
+// scopeGate holds a read-only investigation whose reply accounts for fewer
+// of the files it read than the request named.
+func (s *runState) scopeGate(ctx *AgentContext, userMessage, claimText string) (string, string) {
 	// An investigation that answers for less than it opened. Only for a
 	// read-only run whose request named several files (investigationScopeUnmet),
 	// and only after the reply has been judged by the gates above, so a
@@ -846,6 +905,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.replyScopeUnmet = true
 		}
 	}
+	return "", ""
+}
+
+// runFirstGateAtExit holds the exit while a file on disk carries a parse
+// warning and has never been run.
+func (s *runState) runFirstGateAtExit(ctx *AgentContext) (string, string) {
 	// A warned, never-executed artifact is not a deliverable. Without this a
 	// session whose prompt carried no verification wording could end with a
 	// file that never parsed and was never run, reported as success (audit
@@ -866,6 +931,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("run_first_gate", p+" has a parse warning and was never run")
 		break
 	}
+	return "", ""
+}
+
+// routeContractGate holds the exit while a page this run wrote submits to a
+// route the server does not define.
+func (s *runState) routeContractGate(ctx *AgentContext) (string, string) {
 	// A page this run wrote submits to a route the server never defines. The
 	// lint found it and said so at write time; marked advisory, it was
 	// ignored, and the delivered form 404ed (acceptance run, 2026-09-15).
@@ -888,6 +959,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 				"%d form or request target(s) in the pages this run wrote name a route the server does not define", len(broken)))
 		}
 	}
+	return "", ""
+}
+
+// backgroundGate asks the run to stop a job of its own that is still
+// running, unless a verification or a planned run still needs the job.
+func (s *runState) backgroundGate(ctx *AgentContext, contractOwed bool) (string, string) {
 	// A job this run started is still running. Completion is refused while a
 	// process of the run's own may still be writing (finalizeCompletion:
 	// background_work_unresolved), and that refusal replaces the model's
@@ -917,8 +994,6 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// pass. The run ended "stopped" with working code on disk. The yield lasts
 	// only while the plan gate has bounces left, so a spent plan gate cannot
 	// hold the job open.
-	contractDemand := decideVerificationDemand(ctx, ctx.TaskContract, s.expectedOutputs)
-	contractOwed := contractDemand.Required && !contractDemand.Met
 	verificationOwed := ((s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop) || contractOwed
 	planRunOwed := planOwesRun(ctx) && s.gateBounces["plan_gate"] < maxGateBounces
 	if live := settleBackgroundHazard(ctx); len(live) > 0 && !verificationOwed && !planRunOwed && s.chargeBounce("background_gate") {
@@ -926,6 +1001,32 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			len(live), s.gateBounces["background_gate"], maxGateBounces)
 		return "background_gate", backgroundStopMessage(ctx, live)
 	}
+	return "", ""
+}
+
+// verificationGates hold an exit whose verification is missing, out of date
+// or partial, in this order: a run only ever fed through stdin, bytes that
+// changed after the run that verified them, no verifying run at all, a probe
+// of older code, and a work contract that nothing current shows working.
+func (s *runState) verificationGates(ctx *AgentContext, contractDemand verificationDemand, contractOwed bool) (string, string) {
+	if gate, msg := s.redirectGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.artifactGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.verificationGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.staleProbeGate(ctx); gate != "" {
+		return gate, msg
+	}
+	return s.contractVerificationGate(ctx, contractDemand, contractOwed)
+}
+
+// redirectGate holds a run that was verified only with input piped into its
+// stdin.
+func (s *runState) redirectGate(ctx *AgentContext) (string, string) {
 	// Verified only through a stdin redirect: the program was never run the
 	// way its caller will run it. See stdinRedirectSource for the measurement.
 	if s.verifiedByRedirect != "" && !s.verifiedStandalone {
@@ -937,6 +1038,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("contract_gate", "the program was only ever run with "+s.verifiedByRedirect+
 			" piped into its stdin, never the way a caller that does not pipe input would run it")
 	}
+	return "", ""
+}
+
+// artifactGate holds a run whose bytes changed after the run that verified
+// them.
+func (s *runState) artifactGate(ctx *AgentContext) (string, string) {
 	// Verification is of bytes, not of a moment. If any file this session
 	// wrote no longer matches the hash snapshotted when the verifying run
 	// succeeded, the final artifact is unverified whatever the booleans say.
@@ -958,6 +1065,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("artifact_gate", relativeToWorkspace(ctx, changed)+
 			" changed after the run that verified it and was not run again")
 	}
+	return "", ""
+}
+
+// verificationGate holds a run that was asked to verify its work, or saw a
+// verification fail, and has no successful verification since.
+func (s *runState) verificationGate(ctx *AgentContext) (string, string) {
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
@@ -969,6 +1082,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx), s.redRunStreak,
 			s.headOnlyProbe, staleJob, staleFile) + s.uncountedCheck
 	}
+	return "", ""
+}
+
+// staleProbeGate holds a run verified by a probe of a job that started before
+// the last change to the code the job serves.
+func (s *runState) staleProbeGate(ctx *AgentContext) (string, string) {
 	// Verified, but the work contract says the deliverable itself is not
 	// covered — and a job that predates the last change to it explains why.
 	// finalizeCompletion would refuse this exit with
@@ -990,6 +1109,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 				staleJob, relativeToWorkspace(ctx, staleFile)))
 		}
 	}
+	return "", ""
+}
+
+// contractVerificationGate holds a run whose work contract owes evidence
+// that nothing current shows.
+func (s *runState) contractVerificationGate(ctx *AgentContext, contractDemand verificationDemand, contractOwed bool) (string, string) {
 	// The work contract owes evidence that what this run wrote works, and
 	// nothing current shows it. finalizeCompletion refuses the exit either
 	// way; this says so while the run can still act on it, out of the
@@ -999,9 +1124,31 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			contractDemand.Missing, s.gateBounces["verification_gate"], maxGateBounces)
 		return "verification_gate", contractDemandMessage(ctx, contractDemand) + s.uncountedCheck
 	}
-	// Steps the plan named and no tool call ever satisfied. Same shape as the
-	// verification gate: a fact the run already holds, used at the exit
-	// instead of only being shown mid-run.
+	return "", ""
+}
+
+// completionGates hold an exit that leaves the work unfinished, in this
+// order: code nothing calls, plan steps never carried out, no change where
+// the request asked for one, a named deliverable not on disk, and a claim of
+// completeness the files do not bear out.
+func (s *runState) completionGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
+	if gate, msg := s.orphanGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.planGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.actionGate(ctx, userMessage); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.outputGate(ctx); gate != "" {
+		return gate, msg
+	}
+	return s.claimCheckGate(ctx, userMessage, claimText)
+}
+
+// orphanGate holds the exit while code this run added is never called.
+func (s *runState) orphanGate(ctx *AgentContext) (string, string) {
 	// Code the run added that nothing calls. Checked at the exit rather than
 	// at the write, because wiring it up on a later turn is normal — only
 	// finishing with it unwired is the defect.
@@ -1013,6 +1160,14 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("orphan_gate", "code this run added is never called: "+orphanNames(ctx, orphans))
 	}
+	return "", ""
+}
+
+// planGate holds the exit while steps of the plan were never carried out.
+func (s *runState) planGate(ctx *AgentContext) (string, string) {
+	// Steps the plan named and no tool call ever satisfied. Same shape as the
+	// verification gate: a fact the run already holds, used at the exit
+	// instead of only being shown mid-run.
 	if msg := planIncompleteMessage(ctx); msg != "" {
 		if s.chargeBounce("plan_gate") {
 			log.Printf("[agent] plan gate: bouncing exit at turn %d — %d/%d steps satisfied (bounce %d/%d)",
@@ -1023,6 +1178,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("plan_gate", fmt.Sprintf("%d of %d plan steps were never carried out",
 			len(ctx.Plan.Steps)-countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps)))
 	}
+	return "", ""
+}
+
+// actionGate holds an exit that changed nothing on disk when the request
+// asked for a change.
+func (s *runState) actionGate(ctx *AgentContext, userMessage string) (string, string) {
 	if observeActionDemand(ctx, s, shadowGateActionGate,
 		decideActionDemand(ctx.TaskContract, userMessage, ctx.Tier, s.inspectedWorkspace)) &&
 		!s.madeProductiveChange && s.chargeBounce("action_gate") {
@@ -1030,12 +1191,24 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.turn, truncateStr(userMessage, 60), s.gateBounces["action_gate"], maxGateBounces)
 		return "action_gate", actionWithoutProductiveChangeMessage(userMessage)
 	}
+	return "", ""
+}
+
+// outputGate holds the exit, once, while a deliverable the request named is
+// not on disk.
+func (s *runState) outputGate(ctx *AgentContext) (string, string) {
 	if missing := missingExpectedOutputs(ctx, s.expectedOutputs); len(missing) > 0 && !s.outputGateUsed && s.chargeBounce("output_gate") {
 		s.outputGateUsed = true // fire once — see field doc
 		log.Printf("[agent] expected-output gate: bouncing exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
 			s.turn, logPaths(missing), s.gateBounces["output_gate"], maxGateBounces)
 		return "output_gate", expectedOutputMissingMessage(missing)
 	}
+	return "", ""
+}
+
+// claimCheckGate holds an exit whose claim of completeness the files on disk
+// do not bear out.
+func (s *runState) claimCheckGate(ctx *AgentContext, userMessage, claimText string) (string, string) {
 	if claimsUniversal(claimText) || promptIsMultiIssue(userMessage) {
 		if gap := verifyCompletionClaims(ctx.WorkingDir); gap != "" {
 			if s.chargeBounce("claim_check") {
