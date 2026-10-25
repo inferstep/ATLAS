@@ -347,76 +347,10 @@ func readFileTool() *ToolDef {
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
 
-			start := 0
-			if input.Offset != nil {
-				start = *input.Offset
-				if start < 0 {
-					start = 0
-				}
-				if start > totalLines {
-					start = totalLines
-				}
-			}
+			start, end := readFileWindow(input, totalLines)
 
-			end := totalLines
-			if input.Limit != nil {
-				end = start + *input.Limit
-				if end > totalLines {
-					end = totalLines
-				}
-			}
-
-			// Build numbered output (matches Claude Code's cat -n format).
-			//
-			// The "N<tab>" prefix is presentation, and nothing in the payload
-			// said so, so a model reasonably concluded the file itself is
-			// tab-delimited. Observed live: an otherwise correct solution to a
-			// grid puzzle parsed every line as `line.split('\t')[1]`, found no
-			// tabs in the real file, built an empty grid and printed 0. Say it
-			// once, up front, for any read a program might be written against.
-			var sb strings.Builder
-			sb.WriteString("(Line numbers and the tab after them are added by " +
-				"read_file for reference. They are NOT in the file — code that " +
-				"reads this file must not parse them.)\n")
-			for i := start; i < end; i++ {
-				fmt.Fprintf(&sb, "%d\t%s\n", i+1, lines[i])
-			}
-
-			content := sb.String()
-			// Cap the returned BYTES so one huge read can't blow the
-			// model's context window. A model that gunzips a data file
-			// and read_files it (observed 2026-07-19, gcode-to-text: a
-			// decompressed G-code file read with limit:100000 -> 2.26M tokens
-			// -> hard 400 exceed_context_size, which the force-trim retry
-			// can't fix because the single message alone overflows). The cap
-			// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
-			// lines of G-code is enormous), so capping only unbounded reads
-			// left the hole open. Truncate at a line boundary and tell the
-			// model to narrow the range or process the file with a command.
-			truncated := false
-			shownEnd := end // 1-past the last line actually returned
-			if len(content) > maxReadFileBytes {
-				cut := maxReadFileBytes
-				if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
-					cut = nl + 1
-				}
-				// content opens with the one-line "line numbers are added"
-				// header, so its newline count is one MORE than the number of
-				// numbered rows actually returned. Counting the header made
-				// the window label overshoot by a line and made shownEnd
-				// record a line the model never saw.
-				shown := strings.Count(content[:cut], "\n") - 1
-				if shown < 0 {
-					shown = 0
-				}
-				content = content[:cut] + readFileTruncationNotice(
-					start, shown, totalLines, len(data), fileIsSourceCode(input.Path))
-				truncated = true
-				shownEnd = start + shown
-				if shownEnd > totalLines {
-					shownEnd = totalLines
-				}
-			}
+			content := numberedReadFileLines(lines, start, end)
+			content, truncated, shownEnd := capReadFileBytes(content, input, data, start, end, totalLines)
 			// #147 review finding #10: on a truncated read the model only
 			// saw the head, so record ONLY that — otherwise the redundant-read
 			// dedup later asserts the whole file is in context and short-
@@ -428,20 +362,7 @@ func readFileTool() *ToolDef {
 			ctx.RecordFileRead(path, recorded)
 			ctx.RecordBodyRead(path, start+1, shownEnd, totalLines)
 
-			// Call-graph footer (issue #39). The model reads a
-			// file far more often than it outlines one, so attach the
-			// intra-file call edges to a .py read where the localization
-			// decision happens. Fire on any read that starts at the top of
-			// the file (start == 0) — that covers both a whole-file read and
-			// the model's common "offset:0, limit:N" first look; it computes
-			// the graph from the full file on disk regardless of the page
-			// shown, and skips mid-file pages so a model scrolling a big file
-			// doesn't get the footer repeated.
-			if start == 0 && strings.HasSuffix(input.Path, ".py") {
-				if footer := callGraphFooter(ctx, input.Path, string(data)); footer != "" {
-					content += footer
-				}
-			}
+			content = withCallGraphFooter(ctx, input, data, start, content)
 
 			out := ReadFileOutput{
 				Content:    content,
@@ -453,6 +374,112 @@ func readFileTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// readFileWindow is the range of lines a read returns: from the offset, for at
+// most the limit, within the file.
+func readFileWindow(input ReadFileInput, totalLines int) (int, int) {
+	start := 0
+	if input.Offset != nil {
+		start = *input.Offset
+		if start < 0 {
+			start = 0
+		}
+		if start > totalLines {
+			start = totalLines
+		}
+	}
+
+	end := totalLines
+	if input.Limit != nil {
+		end = start + *input.Limit
+		if end > totalLines {
+			end = totalLines
+		}
+	}
+	return start, end
+}
+
+// numberedReadFileLines renders lines start to end in cat -n form, under a
+// header saying the numbers are not in the file.
+func numberedReadFileLines(lines []string, start, end int) string {
+	// Build numbered output (matches Claude Code's cat -n format).
+	//
+	// The "N<tab>" prefix is presentation, and nothing in the payload
+	// said so, so a model reasonably concluded the file itself is
+	// tab-delimited. Observed live: an otherwise correct solution to a
+	// grid puzzle parsed every line as `line.split('\t')[1]`, found no
+	// tabs in the real file, built an empty grid and printed 0. Say it
+	// once, up front, for any read a program might be written against.
+	var sb strings.Builder
+	sb.WriteString("(Line numbers and the tab after them are added by " +
+		"read_file for reference. They are NOT in the file — code that " +
+		"reads this file must not parse them.)\n")
+	for i := start; i < end; i++ {
+		fmt.Fprintf(&sb, "%d\t%s\n", i+1, lines[i])
+	}
+	return sb.String()
+}
+
+// capReadFileBytes cuts a read's text at a line boundary within the byte cap
+// and appends the notice that says so. It returns the text, whether it was
+// cut, and the line after the last one it still shows.
+func capReadFileBytes(content string, input ReadFileInput, data []byte, start, end, totalLines int) (string, bool, int) {
+	// Cap the returned BYTES so one huge read can't blow the
+	// model's context window. A model that gunzips a data file
+	// and read_files it (observed 2026-07-19, gcode-to-text: a
+	// decompressed G-code file read with limit:100000 -> 2.26M tokens
+	// -> hard 400 exceed_context_size, which the force-trim retry
+	// can't fix because the single message alone overflows). The cap
+	// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
+	// lines of G-code is enormous), so capping only unbounded reads
+	// left the hole open. Truncate at a line boundary and tell the
+	// model to narrow the range or process the file with a command.
+	truncated := false
+	shownEnd := end // 1-past the last line actually returned
+	if len(content) > maxReadFileBytes {
+		cut := maxReadFileBytes
+		if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
+			cut = nl + 1
+		}
+		// content opens with the one-line "line numbers are added"
+		// header, so its newline count is one MORE than the number of
+		// numbered rows actually returned. Counting the header made
+		// the window label overshoot by a line and made shownEnd
+		// record a line the model never saw.
+		shown := strings.Count(content[:cut], "\n") - 1
+		if shown < 0 {
+			shown = 0
+		}
+		content = content[:cut] + readFileTruncationNotice(
+			start, shown, totalLines, len(data), fileIsSourceCode(input.Path))
+		truncated = true
+		shownEnd = start + shown
+		if shownEnd > totalLines {
+			shownEnd = totalLines
+		}
+	}
+	return content, truncated, shownEnd
+}
+
+// withCallGraphFooter appends the file's call graph to a .py read that starts
+// at the top of the file.
+func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, start int, content string) string {
+	// Call-graph footer (issue #39). The model reads a
+	// file far more often than it outlines one, so attach the
+	// intra-file call edges to a .py read where the localization
+	// decision happens. Fire on any read that starts at the top of
+	// the file (start == 0) — that covers both a whole-file read and
+	// the model's common "offset:0, limit:N" first look; it computes
+	// the graph from the full file on disk regardless of the page
+	// shown, and skips mid-file pages so a model scrolling a big file
+	// doesn't get the footer repeated.
+	if start == 0 && strings.HasSuffix(input.Path, ".py") {
+		if footer := callGraphFooter(ctx, input.Path, string(data)); footer != "" {
+			content += footer
+		}
+	}
+	return content
 }
 
 // ---------------------------------------------------------------------------
@@ -715,79 +742,8 @@ func searchFilesTool() *ToolDef {
 				return nil, fmt.Errorf("invalid regex: %w", err)
 			}
 
-			var matches []SearchMatch
 			maxMatches := 200
-			skippedCredentials := 0
-
-			err = filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return nil // skip unreadable dirs
-				}
-				if d.IsDir() {
-					base := d.Name()
-					if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				// A symlink can point outside the workspace. read_file refuses
-				// to follow one, and so does search.
-				if d.Type()&fs.ModeSymlink != 0 {
-					return nil
-				}
-
-				// Apply glob filter
-				if input.Glob != "" {
-					matched, _ := filepath.Match(input.Glob, d.Name())
-					if !matched {
-						return nil
-					}
-				}
-
-				// Skip binary/large files
-				info, err := d.Info()
-				if err != nil || info.Size() > 1<<20 { // 1MB max
-					return nil
-				}
-
-				relPath, _ := filepath.Rel(ctx.WorkingDir, path)
-				if relPath == "" {
-					relPath = path
-				}
-				// Credential files stay out of model context whichever tool
-				// asks. search_files read them while read_file refused.
-				if denyReadPathReason(relPath) != "" {
-					skippedCredentials++
-					return nil
-				}
-
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return nil
-				}
-
-				scanner := bufio.NewScanner(strings.NewReader(string(data)))
-				lineNum := 0
-				for scanner.Scan() {
-					lineNum++
-					line := scanner.Text()
-					if re.MatchString(line) {
-						matches = append(matches, SearchMatch{
-							File:    relPath,
-							Line:    lineNum,
-							Content: truncateStr(line, 200),
-						})
-						if len(matches) >= maxMatches {
-							break
-						}
-					}
-				}
-
-				if len(matches) >= maxMatches {
-					return filepath.SkipAll
-				}
-				return nil
-			})
+			matches, skippedCredentials, err := searchFileContents(ctx, input, searchPath, re, maxMatches)
 
 			if err != nil && len(matches) == 0 {
 				return nil, fmt.Errorf("search error: %w", err)
@@ -803,6 +759,106 @@ func searchFilesTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// searchFileContents walks searchPath and collects the lines that match re, up
+// to maxMatches, from every file the search may read. It also returns how many
+// credential files it left out.
+func searchFileContents(ctx *AgentContext, input SearchFilesInput, searchPath string,
+	re *regexp.Regexp, maxMatches int) ([]SearchMatch, int, error) {
+	var matches []SearchMatch
+	skippedCredentials := 0
+
+	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
+		read, skipDir := searchReadsEntry(input, d, walkErr)
+		if skipDir {
+			return filepath.SkipDir
+		}
+		if !read {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(ctx.WorkingDir, path)
+		if relPath == "" {
+			relPath = path
+		}
+		// Credential files stay out of model context whichever tool
+		// asks. search_files read them while read_file refused.
+		if denyReadPathReason(relPath) != "" {
+			skippedCredentials++
+			return nil
+		}
+
+		matches = appendFileMatches(matches, re, relPath, path, maxMatches)
+
+		if len(matches) >= maxMatches {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return matches, skippedCredentials, err
+}
+
+// searchReadsEntry says whether the search reads an entry of its walk, and
+// whether it passes over the entry's whole folder instead.
+func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (read, skipDir bool) {
+	if walkErr != nil {
+		return false, false // skip unreadable dirs
+	}
+	if d.IsDir() {
+		base := d.Name()
+		if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
+			return false, true
+		}
+		return false, false
+	}
+	// A symlink can point outside the workspace. read_file refuses
+	// to follow one, and so does search.
+	if d.Type()&fs.ModeSymlink != 0 {
+		return false, false
+	}
+
+	// Apply glob filter
+	if input.Glob != "" {
+		matched, _ := filepath.Match(input.Glob, d.Name())
+		if !matched {
+			return false, false
+		}
+	}
+
+	// Skip binary/large files
+	info, err := d.Info()
+	if err != nil || info.Size() > 1<<20 { // 1MB max
+		return false, false
+	}
+	return true, false
+}
+
+// appendFileMatches adds the lines of one file that match re, and stops once
+// there are maxMatches in all. A file it cannot read adds none.
+func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path string, maxMatches int) []SearchMatch {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return matches
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		if re.MatchString(line) {
+			matches = append(matches, SearchMatch{
+				File:    relPath,
+				Line:    lineNum,
+				Content: truncateStr(line, 200),
+			})
+			if len(matches) >= maxMatches {
+				break
+			}
+		}
+	}
+	return matches
 }
 
 // ---------------------------------------------------------------------------
