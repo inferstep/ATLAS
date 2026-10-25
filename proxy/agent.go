@@ -2240,21 +2240,10 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 	return callLLMOnceRestating(ctx, messages, temperature, grammar, "")
 }
 
-// callLLMOnceRestating is callLLMOnceWithGrammar with restateOnly: the caller
-// names the file this request is about, and no other file's contents are
-// appended to it (see appendLastReadRestatementFor).
-func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperature float64,
-	grammar, restateOnly string) (string, int, error) {
-	// Stale from the previous turn otherwise, which would blame a clean
-	// parse failure on a cut that happened earlier.
-	ctx.LastStreamCut = ""
-	ctx.LastOldStrCut = nil
-	ctx.LastFencedStream = fencedStreamStats{}
-	wireMessages := toWireMessages(messages)
-	wireMessages = appendLastReadRestatementFor(ctx, wireMessages, restateOnly)
-
-	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
-
+// llmRequestBody is the chat-completions request of one call: the sampling the
+// agent uses, and the grammar or the JSON response format that constrains
+// the reply.
+func llmRequestBody(wireMessages []map[string]string, temperature float64, grammar string) []byte {
 	// Per-turn hard ceiling (agentMaxTokens, default 8192). 32768 let a
 	// rambling content blob run the full window (~18 min at the GPU's capped
 	// decode rate) — the runaway nothing else caught, since the reasoning
@@ -2314,6 +2303,25 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 		reqBody["response_format"] = buildResponseFormat()
 	}
 	body, _ := json.Marshal(reqBody)
+	return body
+}
+
+// callLLMOnceRestating is callLLMOnceWithGrammar with restateOnly: the caller
+// names the file this request is about, and no other file's contents are
+// appended to it (see appendLastReadRestatementFor).
+func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperature float64,
+	grammar, restateOnly string) (string, int, error) {
+	// Stale from the previous turn otherwise, which would blame a clean
+	// parse failure on a cut that happened earlier.
+	ctx.LastStreamCut = ""
+	ctx.LastOldStrCut = nil
+	ctx.LastFencedStream = fencedStreamStats{}
+	wireMessages := toWireMessages(messages)
+	wireMessages = appendLastReadRestatementFor(ctx, wireMessages, restateOnly)
+
+	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
+
+	body := llmRequestBody(wireMessages, temperature, grammar)
 	endpoint := llamaURL + "/v1/chat/completions"
 
 	// Carry the agent's request context into the HTTP request so client
@@ -2342,28 +2350,9 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 		var cancel context.CancelFunc
 		reqCtx, cancel = context.WithCancel(reqCtx)
 		defer cancel()
-		idle := fencedIdleTimeout()
-		stalled := fencedStalledTimeout()
-		var mu sync.Mutex
-		timer := time.AfterFunc(fencedFirstContentTimeout(), cancel)
+		var timer *time.Timer
+		timer, progress, armStalled = fencedWatchdog(cancel)
 		defer timer.Stop()
-		progress = func() {
-			mu.Lock()
-			defer mu.Unlock()
-			timer.Reset(idle)
-		}
-		// Once the server has sent ANY frame, generation has started, and
-		// on a healthy stream the first content frame follows in the same
-		// millisecond -- measured at 0.00s across every direct reproduction
-		// at small and large context. So a stream that has opened and then
-		// says nothing is dead, and waiting the full first-content budget
-		// for it only burns the session. Shorten the deadline instead of
-		// spending 60s twice per file on a stream that will never speak.
-		armStalled = func() {
-			mu.Lock()
-			defer mu.Unlock()
-			timer.Reset(stalled)
-		}
 	}
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -2383,13 +2372,6 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 
 	sentAt := time.Now()
 
-	// Estimate total prompt tokens (chars/4 — works for English + code
-	// within ~10–20%) so the prompt-progress poller has a baseline even
-	// when /slots doesn't expose n_prompt_tokens directly.
-	promptTokenEst := 0
-	for _, m := range messages {
-		promptTokenEst += len(m.Content) / 4
-	}
 	// pollPromptProgress runs as a sibling goroutine while the LLM call is
 	// in flight; it streams elapsed_ms ticks back to the TUI. We MUST
 	// guarantee it has fully exited before callLLMOnce returns — otherwise
@@ -2398,16 +2380,8 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// a SIGSEGV inside bufio.(*Writer).Flush. The defers run LIFO: stop
 	// the channel first, then wait on the WaitGroup until the goroutine
 	// exits.
-	stopProgress := make(chan struct{})
-	var stopOnce sync.Once
-	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
-	var pollWG sync.WaitGroup
-	pollWG.Add(1)
-	go func() {
-		defer pollWG.Done()
-		pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
-	}()
-	defer pollWG.Wait()
+	stopProgressFn, waitForPoller := startPromptProgress(ctx, llamaURL, messages)
+	defer waitForPoller()
 	defer stopProgressFn()
 
 	resp, err := llmStreamClient.Do(httpReq)
@@ -2427,29 +2401,109 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 			resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	var (
-		contentBuf strings.Builder
-		// PC-?: capture reasoning_content separately so we can fall
-		// back to it when contentBuf is empty. Some models occasionally
-		// engages thinking mode despite enable_thinking=false (most
-		// reproducibly on retries with bumped temperature) — when it
-		// does, ALL output streams into delta.reasoning_content. The
-		// previous version threw it away and returned an empty string,
-		// which fired the empty-response retry uselessly. Now we
-		// surface the reasoning as content (with <think> tags stripped)
-		// so the agent loop has SOMETHING to parse.
-		reasoningBuf   strings.Builder
-		totalTokens    int
-		firstTokenSent bool
-		reasoningCut   bool
-		contentLoopCut bool
-		noFenceCut     bool
-		lastLoopCheck  int
-		oldStrCut      bool
-	)
+	stream := &llmStream{ctx: ctx, grammar: grammar, fencedSubCall: fencedSubCall, sentAt: sentAt,
+		progress: progress, armStalled: armStalled, stopProgressFn: stopProgressFn}
+	return stream.read(resp, reqCtx)
+}
+
+// fencedWatchdog arms the fenced sub-call's progress watchdog on cancel, with
+// the first-content deadline. progress re-arms it with the idle deadline, and
+// armStalled with the shorter one for a stream that has opened.
+func fencedWatchdog(cancel context.CancelFunc) (*time.Timer, func(), func()) {
+	idle := fencedIdleTimeout()
+	stalled := fencedStalledTimeout()
+	var mu sync.Mutex
+	timer := time.AfterFunc(fencedFirstContentTimeout(), cancel)
+	progress := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		timer.Reset(idle)
+	}
+	// Once the server has sent ANY frame, generation has started, and
+	// on a healthy stream the first content frame follows in the same
+	// millisecond -- measured at 0.00s across every direct reproduction
+	// at small and large context. So a stream that has opened and then
+	// says nothing is dead, and waiting the full first-content budget
+	// for it only burns the session. Shorten the deadline instead of
+	// spending 60s twice per file on a stream that will never speak.
+	armStalled := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		timer.Reset(stalled)
+	}
+	return timer, progress, armStalled
+}
+
+// startPromptProgress starts the poller that streams the prompt's progress to
+// the client while the model reads it, and returns the function that stops
+// the poller and the one that waits until it has exited.
+func startPromptProgress(ctx *AgentContext, llamaURL string, messages []AgentMessage) (func(), func()) {
+	// Estimate total prompt tokens (chars/4 — works for English + code
+	// within ~10–20%) so the prompt-progress poller has a baseline even
+	// when /slots doesn't expose n_prompt_tokens directly.
+	promptTokenEst := 0
+	for _, m := range messages {
+		promptTokenEst += len(m.Content) / 4
+	}
+	stopProgress := make(chan struct{})
+	var stopOnce sync.Once
+	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
+	var pollWG sync.WaitGroup
+	pollWG.Add(1)
+	go func() {
+		defer pollWG.Done()
+		pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
+	}()
+	return stopProgressFn, pollWG.Wait
+}
+
+// llmStream is the read of one streamed reply: what has arrived on each
+// channel, the token count, the cuts that end the read early, and, on a
+// fenced sub-call, what the wire showed.
+type llmStream struct {
+	ctx            *AgentContext
+	grammar        string
+	fencedSubCall  bool
+	sentAt         time.Time
+	progress       func()
+	armStalled     func()
+	stopProgressFn func()
+
+	contentBuf strings.Builder
+	// PC-?: capture reasoning_content separately so we can fall
+	// back to it when contentBuf is empty. Some models occasionally
+	// engages thinking mode despite enable_thinking=false (most
+	// reproducibly on retries with bumped temperature) — when it
+	// does, ALL output streams into delta.reasoning_content. The
+	// previous version threw it away and returned an empty string,
+	// which fired the empty-response retry uselessly. Now we
+	// surface the reasoning as content (with <think> tags stripped)
+	// so the agent loop has SOMETHING to parse.
+	reasoningBuf   strings.Builder
+	totalTokens    int
+	firstTokenSent bool
+	reasoningCut   bool
+	contentLoopCut bool
+	noFenceCut     bool
+	lastLoopCheck  int
+	oldStrCut      bool
+	oldStrW        *oldStrWatch
+
+	reasoningBudgetChars int
+
+	rawLines    int
+	firstLine   string
+	firstFrame  time.Duration
+	watchdogCut string
+}
+
+// read reads the reply to its end or to a cut, and returns it: the content,
+// or what the reasoning holds when the content is empty.
+func (rd *llmStream) read(resp *http.Response, reqCtx context.Context) (string, int, error) {
+	ctx := rd.ctx
 	// An edit_file old_str is checked against its file while it streams
 	// (old_str_watch.go). Not in a fenced sub-call, which carries a body.
-	oldStrW := newOldStrWatch(ctx)
+	rd.oldStrW = newOldStrWatch(ctx)
 
 	// Per-turn reasoning budget. A reasoning-heavy model can spiral for
 	// tens of thousands of tokens inside ONE generation (observed: a
@@ -2462,10 +2516,10 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// the caller's standard re-prompt ("emit your tool call now") fires.
 	// Token-estimate at 4 chars/token; ATLAS_REASONING_BUDGET (tokens)
 	// overrides, 0 disables. Keyed off stream state, not model identity.
-	reasoningBudgetChars := 6144 * 4
+	rd.reasoningBudgetChars = 6144 * 4
 	if v := envOr("ATLAS_REASONING_BUDGET", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			reasoningBudgetChars = n * 4
+			rd.reasoningBudgetChars = n * 4
 		}
 	}
 
@@ -2479,210 +2533,26 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// and every direct reproduction of the same request streams in ~0.25s.
 	// Recording what actually came back over the wire is what distinguishes
 	// "nothing was sent" from "something was sent and not parsed".
-	rawLines, firstLine := 0, ""
-	var firstFrame time.Duration
-	watchdogCut := ""
-	if fencedSubCall {
+	if rd.fencedSubCall {
 		log.Printf("[agent] fenced sub-call response: status=%s content-type=%q transfer-encoding=%v content-length=%d",
 			resp.Status, resp.Header.Get("Content-Type"),
 			resp.TransferEncoding, resp.ContentLength)
 		// What the wire showed, for the caller's fenced_fetch event (#254).
 		defer func() {
 			ctx.LastFencedStream = fencedStreamStats{
-				FirstFrame: firstFrame, WireLines: rawLines, FirstLine: truncateStr(firstLine, 160),
-				ReasoningChars: reasoningBuf.Len(), ContentChars: contentBuf.Len(), Cut: watchdogCut,
+				FirstFrame: rd.firstFrame, WireLines: rd.rawLines, FirstLine: truncateStr(rd.firstLine, 160),
+				ReasoningChars: rd.reasoningBuf.Len(), ContentChars: rd.contentBuf.Len(), Cut: rd.watchdogCut,
 			}
 		}()
 	}
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if fencedSubCall {
-			rawLines++
-			if firstLine == "" && strings.TrimSpace(line) != "" {
-				firstLine = line
-				firstFrame = time.Since(sentAt)
-				// The stream is open and generating; content is due now.
-				armStalled()
-				log.Printf("[agent] fenced sub-call first wire line after %s: %s",
-					time.Since(sentAt).Round(time.Millisecond), truncateStr(line, 160))
-			}
-		}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		payload := strings.TrimPrefix(line, "data: ")
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Usage *struct {
-				TotalTokens      int `json:"total_tokens"`
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue
-		}
-		for _, c := range chunk.Choices {
-			if c.Delta.ReasoningContent != "" {
-				// First output of ANY kind means prompt eval is done — for
-				// reasoning models (some stream their whole chain as
-				// reasoning_content, often with no content tokens until the
-				// final JSON) the first delta is reasoning, not content.
-				// Stop the prompt-eval poller and fire llm_first_token here
-				// too; otherwise the poller keeps emitting prompt_progress
-				// for the entire generation, the TUI keeps painting
-				// "encoding", and it fights the streaming reasoning for the
-				// row — the encode timer never stops and the screen flickers.
-				if !firstTokenSent {
-					stopProgressFn()
-					ctx.Stream("llm_first_token", map[string]interface{}{
-						"prompt_ms": time.Since(sentAt).Milliseconds(),
-					})
-					firstTokenSent = true
-				}
-				// Accumulate for the empty-content fallback below AND
-				// stream to the TUI as a separate `reasoning_token` event
-				// so users can see the model's thought process. The TUI
-				// subscribes to reasoning_token distinctly from llm_token
-				// so it can render thinking dimmed without mixing it into
-				// the content stream destined for parse.
-				reasoningBuf.WriteString(c.Delta.ReasoningContent)
-				ctx.Stream("reasoning_token", map[string]interface{}{
-					"text": c.Delta.ReasoningContent,
-				})
-				if reasoningBudgetChars > 0 && reasoningBuf.Len() > reasoningBudgetChars && contentBuf.Len() == 0 {
-					reasoningCut = true
-				}
-			}
-			if c.Delta.Content == "" {
-				continue
-			}
-			// Useful progress, and the only kind: bytes of the file itself.
-			// Reasoning deltas above deliberately do not reach here.
-			progress()
-			if !firstTokenSent {
-				stopProgressFn() // prompt eval done — kill the poller
-				ctx.Stream("llm_first_token", map[string]interface{}{
-					"prompt_ms": time.Since(sentAt).Milliseconds(),
-				})
-				firstTokenSent = true
-			}
-			contentBuf.WriteString(c.Delta.Content)
-			ctx.Stream("llm_token", map[string]interface{}{
-				"text": c.Delta.Content,
-			})
-			// Content-loop cut. Some models state the right answer then
-			// spirals on self-doubt in the CONTENT stream ("...the first line
-			// is X. Wait, I can't see the output. I'll just say X. Wait, I
-			// can't..." repeating) — the reasoning budget doesn't catch it
-			// (that's content, not reasoning_content), so it ran to max_tokens.
-			// Detect a repeating tail and cut (streamLooping). Checked
-			// periodically to keep it O(n) overall.
-			// Raw-emission sub-call: we asked for exactly one fenced block
-			// and nothing else, so a reply with no fence opener after a few
-			// hundred characters is prose that will run to max_tokens. At
-			// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
-			// makes two attempts, so a failed @fenced resolution cost a
-			// user's session 10 minutes of silence before bouncing.
-			// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
-			// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
-			if grammar == rawEmissionSentinel && !noFenceCut &&
-				contentBuf.Len() > rawFenceGraceChars &&
-				!strings.Contains(contentBuf.String(), "```") {
-				noFenceCut = true
-			}
-			if !contentLoopCut && !oldStrCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
-				lastLoopCheck = contentBuf.Len()
-				contentLoopCut = streamLooping(contentBuf.String())
-				if !contentLoopCut && !fencedSubCall {
-					oldStrCut = oldStrW.runaway(contentBuf.String())
-				}
-			}
-		}
-		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
-			totalTokens = chunk.Usage.TotalTokens
-		}
-		if reasoningCut {
-			log.Printf("[agent] reasoning budget exceeded (%d chars, ~%d tokens) with no content emitted — cutting the stream and re-prompting",
-				reasoningBuf.Len(), reasoningBuf.Len()/4)
-			ctx.Stream("reasoning_budget_cut", map[string]interface{}{
-				"reasoning_chars": reasoningBuf.Len(),
-			})
-			ctx.LastStreamCut = "reasoning_budget"
-			break
-		}
-		if noFenceCut {
-			log.Printf("[agent] raw sub-call produced %d chars with no fenced block — cutting rather than running to max_tokens",
-				contentBuf.Len())
-			ctx.LastStreamCut = "no_fence"
-			break
-		}
-		if contentLoopCut {
-			log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", contentBuf.Len())
-			ctx.Stream("content_loop_cut", map[string]interface{}{"chars": contentBuf.Len()})
-			ctx.LastStreamCut = "content_loop"
-			break
-		}
-		if oldStrCut {
-			log.Printf("[agent] edit_file old_str on %s stopped matching the file after %d line(s) and ran on (%d bytes) — cutting the stream",
-				logPath(oldStrW.Path), oldStrW.MatchedLines, oldStrW.Chars)
-			ctx.Stream("old_str_cut", map[string]interface{}{
-				"path": oldStrW.Path, "chars": contentBuf.Len(),
-				"old_str_chars": oldStrW.Chars, "matched_lines": oldStrW.MatchedLines,
-			})
-			ctx.LastStreamCut = "old_str_unmatched"
-			ctx.LastOldStrCut = oldStrW
+		if rd.readLine(scanner.Text()) {
 			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// Our fenced watchdog cancels the request when no CONTENT token
-		// arrives in time. A model that streamed the file into
-		// reasoning_content instead has the answer sitting in reasoningBuf,
-		// and returning the error here discards it — the reasoning salvage
-		// below never runs because this left early. Try that same salvage
-		// first, but only for a benign watchdog cut: the session context is
-		// still alive (a real user cancel or transport failure is not
-		// salvaged). Observed 2026-09-14: fenced sub-calls for a second file
-		// on a large context were cut at the watchdog with the file already
-		// in reasoning_content, and the run died with only the first file.
-		if fencedSubCall && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
-			// Which watchdog fired follows from what had arrived: none arms
-			// only once a frame has come, and content re-arms the idle one.
-			if reqCtx.Err() != nil {
-				switch {
-				case firstLine == "":
-					watchdogCut = "first_content"
-				case contentBuf.Len() == 0:
-					watchdogCut = "stalled"
-				default:
-					watchdogCut = "idle"
-				}
-			}
-			log.Printf("[agent] fenced sub-call stream cut (%v) after %s; wire lines=%d first=%q; reasoning_content held %d chars, content %d",
-				err, time.Since(sentAt).Round(time.Millisecond), rawLines,
-				truncateStr(firstLine, 120), reasoningBuf.Len(), contentBuf.Len())
-			if reasoningBuf.Len() > 0 {
-				if body := extractFencedContent(reasoningBuf.String()); body != "" &&
-					strings.TrimSpace(body) != rawEmissionSentinel {
-					log.Printf("[agent] recovered the fenced block from reasoning_content after a stream cut (%d chars)",
-						reasoningBuf.Len())
-					return reasoningBuf.String(), totalTokens, nil
-				}
-			}
-		}
-		return contentBuf.String(), totalTokens,
-			fmt.Errorf("read LLM stream: %w", err)
+		return rd.endOnReadError(err, reqCtx)
 	}
 
 	// Stash the reasoning content on ctx so the agent loop's per-turn
@@ -2691,65 +2561,291 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// model may emit BOTH content (the JSON tool call) AND reasoning
 	// (the prose narration), and we want to detect rehashed reasoning
 	// even when a tool call was successfully emitted.
-	ctx.LastTurnReasoning = reasoningBuf.String()
+	ctx.LastTurnReasoning = rd.reasoningBuf.String()
 
-	if contentBuf.Len() == 0 {
-		// Raw-emission sub-call: the recovery below only salvages a JSON
-		// tool_call envelope, which is the right rule for the agent loop and
-		// the wrong one here — this call asked for a fenced block, so a
-		// block sitting in reasoning_content is exactly the answer and was
-		// being thrown away. Observed: sub-call attempts returning 0 content
-		// characters after minutes of generation, with no stream cut, which
-		// is tokens going somewhere that is not `content`.
-		if grammar == rawEmissionSentinel && reasoningBuf.Len() > 0 {
-			if body := extractFencedContent(reasoningBuf.String()); body != "" &&
-				strings.TrimSpace(body) != rawEmissionSentinel {
-				log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
-					reasoningBuf.Len())
-				return reasoningBuf.String(), totalTokens, nil
-			}
-		}
-		// No content deltas — check reasoning_content. Two distinct cases:
-		//
-		//   (a) Model dumped its actual response into the thinking
-		//       stream despite template-level reasoning being disabled).
-		//       reasoning_content contains a JSON
-		//       tool_call; we recover it and parse normally.
-		//
-		//   (b) Model emitted ONLY thinking ("Now I need to read...")
-		//       and terminated without producing a response. The
-		//       reasoning_content is pure prose narration — there's no
-		//       tool call to recover. Earlier we returned this prose
-		//       as the "response" and it parse-errored every time,
-		//       wasting a turn. Pre-May-8 behavior had the agent
-		//       loop's classifyParseFailure scolding the model with
-		//       "respond in JSON only" — but the corrective is
-		//       useless when the response was truly empty (model
-		//       wasn't disobeying the format, it just stopped mid-flow).
-		//
-		// New behavior: only return recovered reasoning when it
-		// CONTAINS a tool_call envelope. For pure prose, return empty
-		// + log so the caller's retry path can re-prompt with a
-		// "you produced thinking but no response — emit your tool
-		// call now" message instead of treating prose as a failed
-		// response.
-		if reasoningBuf.Len() > 0 {
-			if recovered, ok := recoverStructuredReasoning(reasoningBuf.String()); ok {
-				log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
-					reasoningBuf.Len())
-				return recovered, totalTokens, nil
-			}
-			// Pure prose narration in reasoning_content with no tool
-			// call. Don't return it — let the caller retry. Logged so
-			// the failure mode stays visible.
-			log.Printf("[agent] %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
-				reasoningBuf.Len())
-		}
-		// Truly nothing (or only narration). Caller's empty-response
-		// retry path (callLLMConstrained) will handle.
-		return "", totalTokens, nil
+	if rd.contentBuf.Len() == 0 {
+		return rd.recoverEmptyContent()
 	}
-	return contentBuf.String(), totalTokens, nil
+	return rd.contentBuf.String(), rd.totalTokens, nil
+}
+
+// readLine reads one line of the stream: on a fenced sub-call what the wire
+// showed, then a frame's reasoning, its content and its token count. It reports
+// whether the read stops here, at the stream's end or at a cut.
+func (rd *llmStream) readLine(line string) bool {
+	if rd.fencedSubCall {
+		rd.rawLines++
+		if rd.firstLine == "" && strings.TrimSpace(line) != "" {
+			rd.firstLine = line
+			rd.firstFrame = time.Since(rd.sentAt)
+			// The stream is open and generating; content is due now.
+			rd.armStalled()
+			log.Printf("[agent] fenced sub-call first wire line after %s: %s",
+				time.Since(rd.sentAt).Round(time.Millisecond), truncateStr(line, 160))
+		}
+	}
+	if !strings.HasPrefix(line, "data: ") {
+		return false
+	}
+	payload := strings.TrimPrefix(line, "data: ")
+	if payload == "[DONE]" {
+		return true
+	}
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *struct {
+			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return false
+	}
+	for _, c := range chunk.Choices {
+		if c.Delta.ReasoningContent != "" {
+			rd.readReasoning(c.Delta.ReasoningContent)
+		}
+		if c.Delta.Content == "" {
+			continue
+		}
+		rd.readContent(c.Delta.Content)
+	}
+	if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+		rd.totalTokens = chunk.Usage.TotalTokens
+	}
+	return rd.cut()
+}
+
+// readReasoning takes one reasoning delta: the first token's event, the
+// reasoning so far, and the reasoning budget's cut.
+func (rd *llmStream) readReasoning(reasoning string) {
+	ctx := rd.ctx
+	// First output of ANY kind means prompt eval is done — for
+	// reasoning models (some stream their whole chain as
+	// reasoning_content, often with no content tokens until the
+	// final JSON) the first delta is reasoning, not content.
+	// Stop the prompt-eval poller and fire llm_first_token here
+	// too; otherwise the poller keeps emitting prompt_progress
+	// for the entire generation, the TUI keeps painting
+	// "encoding", and it fights the streaming reasoning for the
+	// row — the encode timer never stops and the screen flickers.
+	if !rd.firstTokenSent {
+		rd.stopProgressFn()
+		ctx.Stream("llm_first_token", map[string]interface{}{
+			"prompt_ms": time.Since(rd.sentAt).Milliseconds(),
+		})
+		rd.firstTokenSent = true
+	}
+	// Accumulate for the empty-content fallback below AND
+	// stream to the TUI as a separate `reasoning_token` event
+	// so users can see the model's thought process. The TUI
+	// subscribes to reasoning_token distinctly from llm_token
+	// so it can render thinking dimmed without mixing it into
+	// the content stream destined for parse.
+	rd.reasoningBuf.WriteString(reasoning)
+	ctx.Stream("reasoning_token", map[string]interface{}{
+		"text": reasoning,
+	})
+	if rd.reasoningBudgetChars > 0 && rd.reasoningBuf.Len() > rd.reasoningBudgetChars && rd.contentBuf.Len() == 0 {
+		rd.reasoningCut = true
+	}
+}
+
+// readContent takes one content delta: progress for the watchdog, the first
+// token's event, the content so far, and the checks that cut a reply that will
+// not end well.
+func (rd *llmStream) readContent(content string) {
+	ctx := rd.ctx
+	// Useful progress, and the only kind: bytes of the file itself.
+	// Reasoning deltas above deliberately do not reach here.
+	rd.progress()
+	if !rd.firstTokenSent {
+		rd.stopProgressFn() // prompt eval done — kill the poller
+		ctx.Stream("llm_first_token", map[string]interface{}{
+			"prompt_ms": time.Since(rd.sentAt).Milliseconds(),
+		})
+		rd.firstTokenSent = true
+	}
+	rd.contentBuf.WriteString(content)
+	ctx.Stream("llm_token", map[string]interface{}{
+		"text": content,
+	})
+	// Content-loop cut. Some models state the right answer then
+	// spirals on self-doubt in the CONTENT stream ("...the first line
+	// is X. Wait, I can't see the output. I'll just say X. Wait, I
+	// can't..." repeating) — the reasoning budget doesn't catch it
+	// (that's content, not reasoning_content), so it ran to max_tokens.
+	// Detect a repeating tail and cut (streamLooping). Checked
+	// periodically to keep it O(n) overall.
+	// Raw-emission sub-call: we asked for exactly one fenced block
+	// and nothing else, so a reply with no fence opener after a few
+	// hundred characters is prose that will run to max_tokens. At
+	// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
+	// makes two attempts, so a failed @fenced resolution cost a
+	// user's session 10 minutes of silence before bouncing.
+	// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
+	// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
+	if rd.grammar == rawEmissionSentinel && !rd.noFenceCut &&
+		rd.contentBuf.Len() > rawFenceGraceChars &&
+		!strings.Contains(rd.contentBuf.String(), "```") {
+		rd.noFenceCut = true
+	}
+	if !rd.contentLoopCut && !rd.oldStrCut && rd.contentBuf.Len() > 600 && rd.contentBuf.Len()-rd.lastLoopCheck > 200 {
+		rd.lastLoopCheck = rd.contentBuf.Len()
+		rd.contentLoopCut = streamLooping(rd.contentBuf.String())
+		if !rd.contentLoopCut && !rd.fencedSubCall {
+			rd.oldStrCut = rd.oldStrW.runaway(rd.contentBuf.String())
+		}
+	}
+}
+
+// cut ends the read at the first cut the frames so far call for, and says why
+// on the stream and on the context. It reports whether the read stops.
+func (rd *llmStream) cut() bool {
+	ctx := rd.ctx
+	if rd.reasoningCut {
+		log.Printf("[agent] reasoning budget exceeded (%d chars, ~%d tokens) with no content emitted — cutting the stream and re-prompting",
+			rd.reasoningBuf.Len(), rd.reasoningBuf.Len()/4)
+		ctx.Stream("reasoning_budget_cut", map[string]interface{}{
+			"reasoning_chars": rd.reasoningBuf.Len(),
+		})
+		ctx.LastStreamCut = "reasoning_budget"
+		return true
+	}
+	if rd.noFenceCut {
+		log.Printf("[agent] raw sub-call produced %d chars with no fenced block — cutting rather than running to max_tokens",
+			rd.contentBuf.Len())
+		ctx.LastStreamCut = "no_fence"
+		return true
+	}
+	if rd.contentLoopCut {
+		log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", rd.contentBuf.Len())
+		ctx.Stream("content_loop_cut", map[string]interface{}{"chars": rd.contentBuf.Len()})
+		ctx.LastStreamCut = "content_loop"
+		return true
+	}
+	if rd.oldStrCut {
+		log.Printf("[agent] edit_file old_str on %s stopped matching the file after %d line(s) and ran on (%d bytes) — cutting the stream",
+			logPath(rd.oldStrW.Path), rd.oldStrW.MatchedLines, rd.oldStrW.Chars)
+		ctx.Stream("old_str_cut", map[string]interface{}{
+			"path": rd.oldStrW.Path, "chars": rd.contentBuf.Len(),
+			"old_str_chars": rd.oldStrW.Chars, "matched_lines": rd.oldStrW.MatchedLines,
+		})
+		ctx.LastStreamCut = "old_str_unmatched"
+		ctx.LastOldStrCut = rd.oldStrW
+		return true
+	}
+	return false
+}
+
+// endOnReadError answers a stream that broke off: a fenced block already in the
+// reasoning is still salvaged after a watchdog cut, and otherwise the error
+// goes back with the content so far.
+func (rd *llmStream) endOnReadError(err error, reqCtx context.Context) (string, int, error) {
+	ctx := rd.ctx
+	// Our fenced watchdog cancels the request when no CONTENT token
+	// arrives in time. A model that streamed the file into
+	// reasoning_content instead has the answer sitting in reasoningBuf,
+	// and returning the error here discards it — the reasoning salvage
+	// below never runs because this left early. Try that same salvage
+	// first, but only for a benign watchdog cut: the session context is
+	// still alive (a real user cancel or transport failure is not
+	// salvaged). Observed 2026-09-14: fenced sub-calls for a second file
+	// on a large context were cut at the watchdog with the file already
+	// in reasoning_content, and the run died with only the first file.
+	if rd.fencedSubCall && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
+		// Which watchdog fired follows from what had arrived: none arms
+		// only once a frame has come, and content re-arms the idle one.
+		if reqCtx.Err() != nil {
+			switch {
+			case rd.firstLine == "":
+				rd.watchdogCut = "first_content"
+			case rd.contentBuf.Len() == 0:
+				rd.watchdogCut = "stalled"
+			default:
+				rd.watchdogCut = "idle"
+			}
+		}
+		log.Printf("[agent] fenced sub-call stream cut (%v) after %s; wire lines=%d first=%q; reasoning_content held %d chars, content %d",
+			err, time.Since(rd.sentAt).Round(time.Millisecond), rd.rawLines,
+			truncateStr(rd.firstLine, 120), rd.reasoningBuf.Len(), rd.contentBuf.Len())
+		if rd.reasoningBuf.Len() > 0 {
+			if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+				strings.TrimSpace(body) != rawEmissionSentinel {
+				log.Printf("[agent] recovered the fenced block from reasoning_content after a stream cut (%d chars)",
+					rd.reasoningBuf.Len())
+				return rd.reasoningBuf.String(), rd.totalTokens, nil
+			}
+		}
+	}
+	return rd.contentBuf.String(), rd.totalTokens,
+		fmt.Errorf("read LLM stream: %w", err)
+}
+
+// recoverEmptyContent answers a reply with no content: a fenced block or an
+// agent response found in the reasoning is the reply, and otherwise it is empty.
+func (rd *llmStream) recoverEmptyContent() (string, int, error) {
+	// Raw-emission sub-call: the recovery below only salvages a JSON
+	// tool_call envelope, which is the right rule for the agent loop and
+	// the wrong one here — this call asked for a fenced block, so a
+	// block sitting in reasoning_content is exactly the answer and was
+	// being thrown away. Observed: sub-call attempts returning 0 content
+	// characters after minutes of generation, with no stream cut, which
+	// is tokens going somewhere that is not `content`.
+	if rd.grammar == rawEmissionSentinel && rd.reasoningBuf.Len() > 0 {
+		if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+			strings.TrimSpace(body) != rawEmissionSentinel {
+			log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
+				rd.reasoningBuf.Len())
+			return rd.reasoningBuf.String(), rd.totalTokens, nil
+		}
+	}
+	// No content deltas — check reasoning_content. Two distinct cases:
+	//
+	//   (a) Model dumped its actual response into the thinking
+	//       stream despite template-level reasoning being disabled).
+	//       reasoning_content contains a JSON
+	//       tool_call; we recover it and parse normally.
+	//
+	//   (b) Model emitted ONLY thinking ("Now I need to read...")
+	//       and terminated without producing a response. The
+	//       reasoning_content is pure prose narration — there's no
+	//       tool call to recover. Earlier we returned this prose
+	//       as the "response" and it parse-errored every time,
+	//       wasting a turn. Pre-May-8 behavior had the agent
+	//       loop's classifyParseFailure scolding the model with
+	//       "respond in JSON only" — but the corrective is
+	//       useless when the response was truly empty (model
+	//       wasn't disobeying the format, it just stopped mid-flow).
+	//
+	// New behavior: only return recovered reasoning when it
+	// CONTAINS a tool_call envelope. For pure prose, return empty
+	// + log so the caller's retry path can re-prompt with a
+	// "you produced thinking but no response — emit your tool
+	// call now" message instead of treating prose as a failed
+	// response.
+	if rd.reasoningBuf.Len() > 0 {
+		if recovered, ok := recoverStructuredReasoning(rd.reasoningBuf.String()); ok {
+			log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
+				rd.reasoningBuf.Len())
+			return recovered, rd.totalTokens, nil
+		}
+		// Pure prose narration in reasoning_content with no tool
+		// call. Don't return it — let the caller retry. Logged so
+		// the failure mode stays visible.
+		log.Printf("[agent] %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
+			rd.reasoningBuf.Len())
+	}
+	// Truly nothing (or only narration). Caller's empty-response
+	// retry path (callLLMConstrained) will handle.
+	return "", rd.totalTokens, nil
 }
 
 // --- runAgentLoop's steps -----------------------------------------------------
