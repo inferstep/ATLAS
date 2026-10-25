@@ -7630,38 +7630,12 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 	// pinned interpreter when one exists.
 	pyManifests := pickExisting(workingDir, "pyproject.toml", "requirements.txt", "setup.py", "Pipfile", "poetry.lock")
 	if len(pyManifests) > 0 || detectProjectVenvPython(workingDir) != "" {
-		runner := detectProjectVenvPython(workingDir)
-		if runner == "" {
-			runner = "python"
-		}
-		install := "pip install -r requirements.txt"
-		if hasFile(workingDir, "poetry.lock") {
-			install = "poetry install"
-		} else if hasFile(workingDir, "Pipfile.lock") {
-			install = "pipenv install"
-		} else if hasFile(workingDir, "pyproject.toml") && !hasFile(workingDir, "requirements.txt") {
-			install = "pip install -e ."
-		}
-		out = append(out, Toolchain{
-			Name: "python", Manifests: pyManifests,
-			Runner: runner, InstallCommand: install,
-			TestCommand: "pytest",
-		})
+		out = append(out, pythonToolchain(workingDir, pyManifests))
 	}
 
 	// Node / TypeScript — pkg manager picked from lockfile.
 	if hasFile(workingDir, "package.json") {
-		pm, install := "npm", "npm install"
-		switch {
-		case hasFile(workingDir, "pnpm-lock.yaml"):
-			pm, install = "pnpm", "pnpm install --frozen-lockfile"
-		case hasFile(workingDir, "yarn.lock"):
-			pm, install = "yarn", "yarn install --frozen-lockfile"
-		case hasFile(workingDir, "bun.lockb"):
-			pm, install = "bun", "bun install --frozen-lockfile"
-		case hasFile(workingDir, "package-lock.json"):
-			pm, install = "npm", "npm ci"
-		}
+		pm, install := nodePackageManager(workingDir)
 		runner := "node"
 		if hasFile(workingDir, "tsconfig.json") {
 			runner = "tsx" // ts/jsx-aware launcher; falls back to node for plain .js
@@ -7711,14 +7685,7 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 
 	// Java/Kotlin — Gradle (prefer wrapper if present)
 	if hasFile(workingDir, "build.gradle") || hasFile(workingDir, "build.gradle.kts") {
-		runner := "gradle run"
-		install := "gradle build -x test"
-		test := "gradle test"
-		if hasFile(workingDir, "gradlew") {
-			runner = "./gradlew run"
-			install = "./gradlew build -x test"
-			test = "./gradlew test"
-		}
+		runner, install, test := gradleCommands(workingDir)
 		out = append(out, Toolchain{
 			Name: "java-gradle", Manifests: pickExisting(workingDir, "build.gradle", "build.gradle.kts", "settings.gradle", "gradlew"),
 			Runner: runner, InstallCommand: install, TestCommand: test,
@@ -7745,18 +7712,77 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 
 	// Dart / Flutter
 	if hasFile(workingDir, "pubspec.yaml") {
-		runner, install := "dart run", "dart pub get"
-		if hasFile(workingDir, ".flutter-plugins") || hasFile(workingDir, "flutter.yaml") {
-			runner, install = "flutter run", "flutter pub get"
-		}
-		out = append(out, Toolchain{
-			Name: "dart", Manifests: pickExisting(workingDir, "pubspec.yaml", "pubspec.lock"),
-			Runner: runner, InstallCommand: install,
-			TestCommand: "dart test",
-		})
+		out = append(out, dartToolchain(workingDir))
 	}
 
 	return out
+}
+
+// pythonToolchain is the Python entry: the project's own venv interpreter when
+// it has one, and the install command its lockfile or manifest calls for.
+func pythonToolchain(workingDir string, pyManifests []string) Toolchain {
+	runner := detectProjectVenvPython(workingDir)
+	if runner == "" {
+		runner = "python"
+	}
+	install := "pip install -r requirements.txt"
+	if hasFile(workingDir, "poetry.lock") {
+		install = "poetry install"
+	} else if hasFile(workingDir, "Pipfile.lock") {
+		install = "pipenv install"
+	} else if hasFile(workingDir, "pyproject.toml") && !hasFile(workingDir, "requirements.txt") {
+		install = "pip install -e ."
+	}
+	return Toolchain{
+		Name: "python", Manifests: pyManifests,
+		Runner: runner, InstallCommand: install,
+		TestCommand: "pytest",
+	}
+}
+
+// nodePackageManager picks Node's package manager, and the command that
+// installs with it, from the lockfile the project has.
+func nodePackageManager(workingDir string) (string, string) {
+	pm, install := "npm", "npm install"
+	switch {
+	case hasFile(workingDir, "pnpm-lock.yaml"):
+		pm, install = "pnpm", "pnpm install --frozen-lockfile"
+	case hasFile(workingDir, "yarn.lock"):
+		pm, install = "yarn", "yarn install --frozen-lockfile"
+	case hasFile(workingDir, "bun.lockb"):
+		pm, install = "bun", "bun install --frozen-lockfile"
+	case hasFile(workingDir, "package-lock.json"):
+		pm, install = "npm", "npm ci"
+	}
+	return pm, install
+}
+
+// gradleCommands picks Gradle's run, install and test commands, through the
+// project's own wrapper when it has one.
+func gradleCommands(workingDir string) (string, string, string) {
+	runner := "gradle run"
+	install := "gradle build -x test"
+	test := "gradle test"
+	if hasFile(workingDir, "gradlew") {
+		runner = "./gradlew run"
+		install = "./gradlew build -x test"
+		test = "./gradlew test"
+	}
+	return runner, install, test
+}
+
+// dartToolchain is the Dart entry, run through Flutter when the project is a
+// Flutter app.
+func dartToolchain(workingDir string) Toolchain {
+	runner, install := "dart run", "dart pub get"
+	if hasFile(workingDir, ".flutter-plugins") || hasFile(workingDir, "flutter.yaml") {
+		runner, install = "flutter run", "flutter pub get"
+	}
+	return Toolchain{
+		Name: "dart", Manifests: pickExisting(workingDir, "pubspec.yaml", "pubspec.lock"),
+		Runner: runner, InstallCommand: install,
+		TestCommand: "dart test",
+	}
 }
 
 // probeToolchainReady returns a short status string for a Toolchain
