@@ -973,166 +973,192 @@ func writeFileTool() *ToolDef {
 			// file (the baseline generation where it adds value).
 			iterating := isActiveDebugIteration(ctx, input.Path)
 
-			// Regression protection for existing code, independent of tier
-			// and of whether V3 is configured. The healthy->broken rule
-			// exists to protect WORKING code, but it used to live only
-			// inside branches gated on `fileTier >= Tier2Medium &&
-			// ctx.V3URL != ""` or on an active debug iteration. A small
-			// file, or any file in a session without V3, reached neither and
-			// had valid bytes replaced by invalid ones with no check at all.
-			// Measured black-box through the agent loop: a T1 overwrite
-			// destroyed good bytes whether or not V3 was configured, while
-			// the T2+V3 cell refused the same rewrite.
-			//
-			// Scope is deliberately narrow, so the three intended policies
-			// survive: a NEW file still lands with a warning (nothing on
-			// disk to protect), an already-broken file still accepts a
-			// repair attempt (the baseline demonstrably fails), and a
-			// non-gated language is unaffected (the checker reports
-			// not_applicable off syntaxGateLanguages).
-			//
-			// The observations are KEPT rather than collapsed to a boolean.
-			// The active-debug branch below asks the same question of the same
-			// bytes, and re-asking the checker there costs the fast path a
-			// second sandbox round trip and loses the distinction between
-			// passed, not_run and not_applicable that a route needs in order to
-			// classify its own result. Each side is evaluated at most once per
-			// dispatch; ValidationUnknown means "not evaluated here".
-			proposalCheck := checkOutcome{Status: ValidationUnknown}
-			baselineCheck := checkOutcome{Status: ValidationUnknown}
-			if _, statErr := os.Stat(path); statErr == nil {
-				proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				if proposalCheck.Status == ValidationFailed {
-					synErr := proposalCheck.Detail
-					if prior, priorOK := readOriginalForGate(path); priorOK {
-						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
-						if !baselineAllowsRepair(baselineCheck) {
-							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
-								logPath(input.Path), safeDiagnosticSummary(synErr))
-							// The check examined input.Content, which is exactly
-							// the content that would have been written, and the
-							// refusal happens before any byte reaches disk.
-							return &ToolResult{
-								Success:          false,
-								Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-								MutationStatus:   MutationRefused,
-								ValidationKind:   ValidationKindSyntax,
-								ValidationStatus: ValidationFailed,
-								ValidationDetail: synErr,
-							}, nil
-						}
-					}
-				}
-			}
-			// Content that does not parse gets the error now, not after the
-			// V3 timeout. V3 improves a working candidate; it does not exist
-			// to guess what a malformed one meant, and the post-V3 fallback
-			// rejects an unparseable baseline anyway — so spending the budget
-			// first only delays the same answer. The fast-path above cannot
-			// cover this: it keys off a SUCCESSFUL write of the file, and a
-			// model failing the syntax gate never records one, so it paid the
-			// full timeout on every attempt. Observed live: a degenerating
-			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
-			// four times, each costing 180s before it was told anything.
-			// One owner for whether the producer is consulted, and for why
-			// it was not. Identical to the condition it replaces; what is new
-			// is that the skip says which threshold turned it away.
-			// The typed predicate, named at the site that reaches the
-			// producer. The owner below decides WHICH reason applies and in
-			// what order; this is the dependency being visible where the
-			// dispatch happens, so a reader looking at the call that reaches
-			// generation can see that disabling generation reaches it.
-			writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
-			recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
-				fileTier, strings.Count(input.Content, "\n")+1)
-			logBudgetBypass("write_file", input.Path, writeBypass)
-			if writeBypass == bypassNone {
-				// The regression gate above evaluated these exact bytes
-				// whenever the destination exists, so the evaluation here is
-				// for the case it skipped: a file that does not exist yet,
-				// which is this gate's main case.
-				if proposalCheck.Status == ValidationUnknown {
-					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				}
-				if proposalCheck.Status == ValidationFailed {
-					synErr := proposalCheck.Detail
-					// Feeding V3 broken content wastes its whole budget, so
-					// V3 is skipped either way. What happens to the bytes
-					// depends on what is at the path: clobbering an existing
-					// file with garbage is still refused, but a NEW file
-					// lands with a warning so the model can run it and read
-					// the real traceback. See writeNewFileWithWarning.
-					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
-							logPath(input.Path), safeDiagnosticSummary(synErr))
-						recordCandidateGenerationBypass(ctx, "write_file",
-							bypassProposalFailedSyntaxGuard, fileTier,
-							strings.Count(input.Content, "\n")+1)
-						return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-					}
-					// The strictness on existing files protects WORKING code.
-					// When what is on disk is itself unparseable, there is
-					// nothing to protect, and rejecting an imperfect fix
-					// guarantees the broken version survives. Same
-					// healthy->broken rule the fast-path below already uses.
-					// Measured twice on the novel benchmark: a broken first
-					// draft landed, the corrective write carried a new syntax
-					// slip, the rejection fed the model a line it could not
-					// act on, and it re-sent byte-identical content until the
-					// repetition breaker ended the session with the ORIGINAL
-					// broken file still on disk.
-					if prior, priorOK := readOriginalForGate(path); priorOK {
-						if baselineCheck.Status == ValidationUnknown {
-							baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
-						}
-						if baselineAllowsRepair(baselineCheck) {
-							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
-								logPath(input.Path), safeDiagnosticSummary(synErr))
-							recordCandidateGenerationBypass(ctx, "write_file",
-								bypassProposalFailedSyntaxGuard, fileTier,
-								strings.Count(input.Content, "\n")+1)
-							return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-						}
-					}
-					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
+			return writeFileByRoute(ctx, input, path, fileTier, iterating)
+		},
+	}
+}
+
+// writeFileByRoute applies the regression gate every write meets, then sends
+// the write to the V3 pipeline or down the direct route, as the activation
+// owner decides.
+func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier, iterating bool) (*ToolResult, error) {
+	proposalCheck, baselineCheck, refusal := writeRegressionGate(ctx, input, path)
+	if refusal != nil {
+		return refusal, nil
+	}
+	// Content that does not parse gets the error now, not after the
+	// V3 timeout. V3 improves a working candidate; it does not exist
+	// to guess what a malformed one meant, and the post-V3 fallback
+	// rejects an unparseable baseline anyway — so spending the budget
+	// first only delays the same answer. The fast-path above cannot
+	// cover this: it keys off a SUCCESSFUL write of the file, and a
+	// model failing the syntax gate never records one, so it paid the
+	// full timeout on every attempt. Observed live: a degenerating
+	// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
+	// four times, each costing 180s before it was told anything.
+	// One owner for whether the producer is consulted, and for why
+	// it was not. Identical to the condition it replaces; what is new
+	// is that the skip says which threshold turned it away.
+	// The typed predicate, named at the site that reaches the
+	// producer. The owner below decides WHICH reason applies and in
+	// what order; this is the dependency being visible where the
+	// dispatch happens, so a reader looking at the call that reaches
+	// generation can see that disabling generation reaches it.
+	writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
+	recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
+		fileTier, strings.Count(input.Content, "\n")+1)
+	logBudgetBypass("write_file", input.Path, writeBypass)
+	if writeBypass == bypassNone {
+		return writeFileThroughV3(ctx, input, path, fileTier, proposalCheck, baselineCheck)
+	}
+	return writeFileDirectRoute(ctx, input, path, iterating, proposalCheck, baselineCheck)
+}
+
+// writeRegressionGate refuses to replace bytes on disk that parse with bytes
+// that do not. It returns what it observed of the proposal and of the bytes on
+// disk, Unknown for a side it did not evaluate, and the refusal if it refused.
+func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (checkOutcome, checkOutcome, *ToolResult) {
+	// Regression protection for existing code, independent of tier
+	// and of whether V3 is configured. The healthy->broken rule
+	// exists to protect WORKING code, but it used to live only
+	// inside branches gated on `fileTier >= Tier2Medium &&
+	// ctx.V3URL != ""` or on an active debug iteration. A small
+	// file, or any file in a session without V3, reached neither and
+	// had valid bytes replaced by invalid ones with no check at all.
+	// Measured black-box through the agent loop: a T1 overwrite
+	// destroyed good bytes whether or not V3 was configured, while
+	// the T2+V3 cell refused the same rewrite.
+	//
+	// Scope is deliberately narrow, so the three intended policies
+	// survive: a NEW file still lands with a warning (nothing on
+	// disk to protect), an already-broken file still accepts a
+	// repair attempt (the baseline demonstrably fails), and a
+	// non-gated language is unaffected (the checker reports
+	// not_applicable off syntaxGateLanguages).
+	//
+	// The observations are KEPT rather than collapsed to a boolean.
+	// The active-debug branch below asks the same question of the same
+	// bytes, and re-asking the checker there costs the fast path a
+	// second sandbox round trip and loses the distinction between
+	// passed, not_run and not_applicable that a route needs in order to
+	// classify its own result. Each side is evaluated at most once per
+	// dispatch; ValidationUnknown means "not evaluated here".
+	proposalCheck := checkOutcome{Status: ValidationUnknown}
+	baselineCheck := checkOutcome{Status: ValidationUnknown}
+	if _, statErr := os.Stat(path); statErr == nil {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+		if proposalCheck.Status == ValidationFailed {
+			synErr := proposalCheck.Detail
+			if prior, priorOK := readOriginalForGate(path); priorOK {
+				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
+				if !baselineAllowsRepair(baselineCheck) {
+					log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
 						logPath(input.Path), safeDiagnosticSummary(synErr))
-					recordCandidateGenerationBypass(ctx, "write_file",
-						bypassProposalFailedSyntaxGuard, fileTier,
-						strings.Count(input.Content, "\n")+1)
-					// Refused before any byte reached disk, on exactly the
-					// content that would have been written. An unreadable
-					// baseline arrives here too: without a baseline there is
-					// no healthy->broken comparison to make, and the
-					// conservative answer is the refusal.
-					return &ToolResult{
+					// The check examined input.Content, which is exactly
+					// the content that would have been written, and the
+					// refusal happens before any byte reaches disk.
+					return proposalCheck, baselineCheck, &ToolResult{
 						Success:          false,
 						Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
 						MutationStatus:   MutationRefused,
 						ValidationKind:   ValidationKindSyntax,
 						ValidationStatus: ValidationFailed,
 						ValidationDetail: synErr,
-					}, nil
+					}
 				}
-
-				// proposalCheck now describes input.Content: the BASELINE
-				// handed to the pipeline, not the bytes it may come back with.
-				// A winning candidate is different content and needs its own
-				// observation, and the fallback write inside writeFileWithV3
-				// re-checks the baseline itself. Threading this observation in
-				// there is a separate change: it would start a partial
-				// migration of that function's own state machine, so the
-				// handoff is left explicitly pending rather than stored on the
-				// context or in a package-level value.
-				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
-				res, err := writeFileWithV3(path, input.Content, ctx)
-				if err == nil && res != nil && res.Success {
-					ctx.SessionWrites[input.Path] = true
-				}
-				return res, err
 			}
-			return writeFileDirectRoute(ctx, input, path, iterating, proposalCheck, baselineCheck)
-		},
+		}
 	}
+	return proposalCheck, baselineCheck, nil
+}
+
+// writeFileThroughV3 is the route of a write the pipeline sees. Bytes that do
+// not parse never reach the pipeline: they land with a warning as a new file
+// or as a repair of a file already broken, and are refused otherwise.
+func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier,
+	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+	// The regression gate above evaluated these exact bytes
+	// whenever the destination exists, so the evaluation here is
+	// for the case it skipped: a file that does not exist yet,
+	// which is this gate's main case.
+	if proposalCheck.Status == ValidationUnknown {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+	}
+	if proposalCheck.Status == ValidationFailed {
+		synErr := proposalCheck.Detail
+		// Feeding V3 broken content wastes its whole budget, so
+		// V3 is skipped either way. What happens to the bytes
+		// depends on what is at the path: clobbering an existing
+		// file with garbage is still refused, but a NEW file
+		// lands with a warning so the model can run it and read
+		// the real traceback. See writeNewFileWithWarning.
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
+				logPath(input.Path), safeDiagnosticSummary(synErr))
+			recordCandidateGenerationBypass(ctx, "write_file",
+				bypassProposalFailedSyntaxGuard, fileTier,
+				strings.Count(input.Content, "\n")+1)
+			return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+		}
+		// The strictness on existing files protects WORKING code.
+		// When what is on disk is itself unparseable, there is
+		// nothing to protect, and rejecting an imperfect fix
+		// guarantees the broken version survives. Same
+		// healthy->broken rule the fast-path below already uses.
+		// Measured twice on the novel benchmark: a broken first
+		// draft landed, the corrective write carried a new syntax
+		// slip, the rejection fed the model a line it could not
+		// act on, and it re-sent byte-identical content until the
+		// repetition breaker ended the session with the ORIGINAL
+		// broken file still on disk.
+		if prior, priorOK := readOriginalForGate(path); priorOK {
+			if baselineCheck.Status == ValidationUnknown {
+				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
+			}
+			if baselineAllowsRepair(baselineCheck) {
+				log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
+					logPath(input.Path), safeDiagnosticSummary(synErr))
+				recordCandidateGenerationBypass(ctx, "write_file",
+					bypassProposalFailedSyntaxGuard, fileTier,
+					strings.Count(input.Content, "\n")+1)
+				return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+			}
+		}
+		log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
+			logPath(input.Path), safeDiagnosticSummary(synErr))
+		recordCandidateGenerationBypass(ctx, "write_file",
+			bypassProposalFailedSyntaxGuard, fileTier,
+			strings.Count(input.Content, "\n")+1)
+		// Refused before any byte reached disk, on exactly the
+		// content that would have been written. An unreadable
+		// baseline arrives here too: without a baseline there is
+		// no healthy->broken comparison to make, and the
+		// conservative answer is the refusal.
+		return &ToolResult{
+			Success:          false,
+			Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+			MutationStatus:   MutationRefused,
+			ValidationKind:   ValidationKindSyntax,
+			ValidationStatus: ValidationFailed,
+			ValidationDetail: synErr,
+		}, nil
+	}
+
+	// proposalCheck now describes input.Content: the BASELINE
+	// handed to the pipeline, not the bytes it may come back with.
+	// A winning candidate is different content and needs its own
+	// observation, and the fallback write inside writeFileWithV3
+	// re-checks the baseline itself. Threading this observation in
+	// there is a separate change: it would start a partial
+	// migration of that function's own state machine, so the
+	// handoff is left explicitly pending rather than stored on the
+	// context or in a package-level value.
+	log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
+	res, err := writeFileWithV3(path, input.Content, ctx)
+	if err == nil && res != nil && res.Success {
+		ctx.SessionWrites[input.Path] = true
+	}
+	return res, err
 }
 
 // writeFileDirectRoute is the route of a write the pipeline does not see: the
