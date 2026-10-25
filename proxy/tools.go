@@ -4112,89 +4112,103 @@ func insertAfterTool() *ToolDef {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
-			lines := strings.Split(original, "\n")
-			// A trailing newline yields a final empty element; inserting after
-			// it would append past the end, so treat it as the boundary.
-			limit := len(lines)
-			if limit > 0 && lines[limit-1] == "" {
-				limit--
-			}
-			if in.Line < 0 || in.Line > limit {
-				return noMutation(fmt.Sprintf(
-					"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
-					in.Line, in.Path, limit)), nil
-			}
-			insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-			// Before any pipeline work: an insertion that moves existing
-			// statements into another block is refused outright, however well
-			// the result parses. See insertionReparentsPython.
-			if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
-				return structuralRefusal(msg), nil
-			}
-			merged := append([]string{}, lines[:in.Line]...)
-			merged = append(merged, insert...)
-			merged = append(merged, lines[in.Line:]...)
-			updated := strings.Join(merged, "\n")
-
-			// Healthy->broken only: a file already failing the checker stays
-			// editable, which is what makes repair-in-progress possible.
-			// Every content edit goes through the pipeline — these two were
-			// producing one greedy sample with no candidate generation and no
-			// lens scoring, which is exactly what the tier system exists to
-			// prevent.
-			route := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			updated = route.Content
-
-			observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
-				original, updated, func(detail string) string {
-					return fallbackSyntaxRejection(in.Path, updated, detail)
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-			}
-			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "insert_after", in.Path, "")
-
-			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
-			}
-			ctx.SessionWrites[in.Path] = true
-			ctx.RecordFileRead(path, updated)
-			ctx.RecordBodySeen(path)
-			log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
-			out, _ := json.Marshal(EditFileOutput{
-				OK:          true,
-				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
-			})
-			result := &ToolResult{Success: true, Data: out,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact, attached by attachV3.
-			overlayValidation(result, observed)
-			return attachV3(result, v3Out), nil
+			return insertLinesAfter(ctx, in, path, original)
 		},
 	}
+}
+
+// insertLinesAfter splices the new lines in after in.Line and sends the result
+// through the edit pipeline. A line out of range, and an insertion that moves
+// statements into another block, are refused.
+func insertLinesAfter(ctx *AgentContext, in InsertAfterInput, path, original string) (*ToolResult, error) {
+	lines := strings.Split(original, "\n")
+	// A trailing newline yields a final empty element; inserting after
+	// it would append past the end, so treat it as the boundary.
+	limit := len(lines)
+	if limit > 0 && lines[limit-1] == "" {
+		limit--
+	}
+	if in.Line < 0 || in.Line > limit {
+		return noMutation(fmt.Sprintf(
+			"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
+			in.Line, in.Path, limit)), nil
+	}
+	insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	// Before any pipeline work: an insertion that moves existing
+	// statements into another block is refused outright, however well
+	// the result parses. See insertionReparentsPython.
+	if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
+		return structuralRefusal(msg), nil
+	}
+	merged := append([]string{}, lines[:in.Line]...)
+	merged = append(merged, insert...)
+	merged = append(merged, lines[in.Line:]...)
+	updated := strings.Join(merged, "\n")
+
+	// Healthy->broken only: a file already failing the checker stays
+	// editable, which is what makes repair-in-progress possible.
+	// Every content edit goes through the pipeline — these two were
+	// producing one greedy sample with no candidate generation and no
+	// lens scoring, which is exactly what the tier system exists to
+	// prevent.
+	route := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	v3Out := route.Meta
+	updated = route.Content
+
+	return writeInsertion(ctx, in, path, original, updated, insert, v3Out)
+}
+
+// writeInsertion runs the gates every content edit shares over the bytes about
+// to land, writes them, and reports the insertion.
+func writeInsertion(ctx *AgentContext, in InsertAfterInput, path, original, updated string,
+	insert []string, v3Out V3EditMetadata) (*ToolResult, error) {
+	observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
+		original, updated, func(detail string) string {
+			return fallbackSyntaxRejection(in.Path, updated, detail)
+		})
+	if refusal != nil {
+		return refusal, nil
+	}
+	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
+	}
+	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	if msg := duplicateMainGuard(path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	logMandatoryChecks(ctx, "insert_after", in.Path, "")
+
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		return nil, editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
+	}
+	ctx.SessionWrites[in.Path] = true
+	ctx.RecordFileRead(path, updated)
+	ctx.RecordBodySeen(path)
+	log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
+	out, _ := json.Marshal(EditFileOutput{
+		OK:          true,
+		DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
+	})
+	result := &ToolResult{Success: true, Data: out,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written --
+	// the tool's own edit, an authorized V3 candidate, or a baseline
+	// restored after revocation, whichever runEditPipeline returned.
+	// Provenance is a separate fact, attached by attachV3.
+	overlayValidation(result, observed)
+	return attachV3(result, v3Out), nil
 }
 
 // replaceLinesMaxSpan bounds a single replace_lines call. Above this the model
@@ -4403,121 +4417,136 @@ func replaceLinesTool() *ToolDef {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
-			fileLines := strings.Split(original, "\n")
-			limit := len(fileLines)
-			if limit > 0 && fileLines[limit-1] == "" {
-				limit--
-			}
-			if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
-				return noMutation(fmt.Sprintf(
-					"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
-						"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
-					in.StartLine, in.EndLine, in.Path, limit)), nil
-			}
-			if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
-				// A size policy declining a replacement it never formed.
-				return noMutation(fmt.Sprintf(
-					"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
-						"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
-						"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
-						"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
-						"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
-						"host grammar and no selector reaches into it, so there the split is the way.",
-					span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))), nil
-			}
-			// A stale range that simply moved is relocated rather than
-			// refused: the numbers go stale as soon as an earlier edit
-			// changes the file's length, and the model cannot see that.
-			if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
-				strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
-				span := in.EndLine - in.StartLine + 1
-				if moved := relocateStaleRange(fileLines, limit,
-					in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
-					log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
-						in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
-					in.StartLine, in.EndLine = moved, moved+span-1
-				}
-			}
-			// The anchors did not match, so no replacement was ever formed.
-			history := lineNumberHistory(ctx, path, in.Path, original)
-			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
-				return noMutation(msg), nil
-			}
-			if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
-				return noMutation(msg), nil
-			}
-
-			replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-			merged := append([]string{}, fileLines[:in.StartLine-1]...)
-			merged = append(merged, replacement...)
-			merged = append(merged, fileLines[in.EndLine:]...)
-			updated := strings.Join(merged, "\n")
-
-			if updated == original {
-				return noMutation("replace_lines: the replacement is identical to what is already on " +
-					"those lines — nothing changed and the bug is still there."), nil
-			}
-
-			// Same gate chain as insert_after and edit_file, healthy->broken
-			// only so a file mid-repair stays editable.
-			// Every content edit goes through the pipeline — these two were
-			// producing one greedy sample with no candidate generation and no
-			// lens scoring, which is exactly what the tier system exists to
-			// prevent.
-			route := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			updated = route.Content
-
-			observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
-				original, updated, func(detail string) string {
-					return fallbackSyntaxRejection(in.Path, updated, detail)
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-			}
-			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "replace_lines", in.Path, "")
-
-			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
-			}
-			ctx.SessionWrites[in.Path] = true
-			ctx.RecordFileRead(path, updated)
-			ctx.RecordBodySeen(path)
-			replaced := in.EndLine - in.StartLine + 1
-			log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
-			out, _ := json.Marshal(EditFileOutput{
-				OK:          true,
-				DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
-			})
-			result := &ToolResult{Success: true, Data: out,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact, attached by attachV3.
-			overlayValidation(result, observed)
-			return attachV3(result, v3Out), nil
+			return replaceLineRange(ctx, in, path, original)
 		},
 	}
+}
+
+// replaceLineRange replaces in.StartLine to in.EndLine with the new lines and
+// sends the result through the edit pipeline. A range that moved is applied
+// where its lines are now; a range out of bounds, too long, or whose first or
+// last line is not what the call says, is refused.
+func replaceLineRange(ctx *AgentContext, in ReplaceLinesInput, path, original string) (*ToolResult, error) {
+	fileLines := strings.Split(original, "\n")
+	limit := len(fileLines)
+	if limit > 0 && fileLines[limit-1] == "" {
+		limit--
+	}
+	if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
+		return noMutation(fmt.Sprintf(
+			"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
+				"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
+			in.StartLine, in.EndLine, in.Path, limit)), nil
+	}
+	if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
+		// A size policy declining a replacement it never formed.
+		return noMutation(fmt.Sprintf(
+			"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
+				"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
+				"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
+				"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
+				"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
+				"host grammar and no selector reaches into it, so there the split is the way.",
+			span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))), nil
+	}
+	// A stale range that simply moved is relocated rather than
+	// refused: the numbers go stale as soon as an earlier edit
+	// changes the file's length, and the model cannot see that.
+	if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
+		strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
+		span := in.EndLine - in.StartLine + 1
+		if moved := relocateStaleRange(fileLines, limit,
+			in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
+			log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
+				in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
+			in.StartLine, in.EndLine = moved, moved+span-1
+		}
+	}
+	// The anchors did not match, so no replacement was ever formed.
+	history := lineNumberHistory(ctx, path, in.Path, original)
+	if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
+		return noMutation(msg), nil
+	}
+	if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
+		return noMutation(msg), nil
+	}
+
+	replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	merged := append([]string{}, fileLines[:in.StartLine-1]...)
+	merged = append(merged, replacement...)
+	merged = append(merged, fileLines[in.EndLine:]...)
+	updated := strings.Join(merged, "\n")
+
+	if updated == original {
+		return noMutation("replace_lines: the replacement is identical to what is already on " +
+			"those lines — nothing changed and the bug is still there."), nil
+	}
+
+	// Same gate chain as insert_after and edit_file, healthy->broken
+	// only so a file mid-repair stays editable.
+	// Every content edit goes through the pipeline — these two were
+	// producing one greedy sample with no candidate generation and no
+	// lens scoring, which is exactly what the tier system exists to
+	// prevent.
+	route := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	v3Out := route.Meta
+	updated = route.Content
+
+	return writeLineReplacement(ctx, in, path, original, updated, replacement, v3Out)
+}
+
+// writeLineReplacement runs the gates every content edit shares over the bytes
+// about to land, writes them, and reports the lines it replaced.
+func writeLineReplacement(ctx *AgentContext, in ReplaceLinesInput, path, original, updated string,
+	replacement []string, v3Out V3EditMetadata) (*ToolResult, error) {
+	observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
+		original, updated, func(detail string) string {
+			return fallbackSyntaxRejection(in.Path, updated, detail)
+		})
+	if refusal != nil {
+		return refusal, nil
+	}
+	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
+	}
+	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	if msg := duplicateMainGuard(path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	logMandatoryChecks(ctx, "replace_lines", in.Path, "")
+
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		return nil, editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
+	}
+	ctx.SessionWrites[in.Path] = true
+	ctx.RecordFileRead(path, updated)
+	ctx.RecordBodySeen(path)
+	replaced := in.EndLine - in.StartLine + 1
+	log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
+	out, _ := json.Marshal(EditFileOutput{
+		OK:          true,
+		DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
+	})
+	result := &ToolResult{Success: true, Data: out,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written --
+	// the tool's own edit, an authorized V3 candidate, or a baseline
+	// restored after revocation, whichever runEditPipeline returned.
+	// Provenance is a separate fact, attached by attachV3.
+	overlayValidation(result, observed)
+	return attachV3(result, v3Out), nil
 }
 
 func deleteFileTool() *ToolDef {
@@ -4699,65 +4728,72 @@ func moveFileTool() *ToolDef {
 				return refusedNoCheck(fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest)), nil
 			}
 
-			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-				// The source is untouched, but MkdirAll can leave part of the
-				// tree behind, so this is an attempted mutation that errored.
-				return nil, errFailedMutation(
-					fmt.Errorf("move_file: cannot create destination dir: %w", err),
-					ValidationKindNone, ValidationNotApplicable)
-			}
-
-			// os.Rename is atomic on the same filesystem; fall back to
-			// copy+remove across devices (bind mounts can straddle filesystems).
-			if err := os.Rename(src, dst); err != nil {
-				// Rename is all-or-nothing: a failure leaves the source where
-				// it was and the destination absent.
-				if srcInfo.IsDir() {
-					return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
-				}
-				data, rerr := os.ReadFile(src)
-				if rerr != nil {
-					return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
-				}
-				if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
-					// The destination may hold a partial copy.
-					return nil, errFailedMutation(
-						fmt.Errorf("move_file: cannot write destination: %w", werr),
-						ValidationKindNone, ValidationNotApplicable)
-				}
-				// A failure here leaves BOTH copies on disk. The move still
-				// happened, so it is applied; the ledger sees the surviving
-				// source and declines to tombstone it.
-				os.Remove(src)
-			}
-			log.Printf("[move_file] %s → %s", input.Source, relDest)
-
-			// Keep agent bookkeeping consistent: the file the model just read
-			// now lives at the new path. Re-point the recorded read and the
-			// session-write set so a follow-up edit isn't bounced as blind and
-			// dedup logic tracks the right path.
-			if content, ok := ctx.GetFileRead(src); ok {
-				ctx.RecordFileRead(dst, content)
-				ctx.ForgetFileRead(src)
-			}
-			if ctx.SessionWrites != nil {
-				if ctx.SessionWrites[input.Source] {
-					delete(ctx.SessionWrites, input.Source)
-				}
-				ctx.SessionWrites[relDest] = true
-			}
-
-			out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
-			outBytes, _ := json.Marshal(out)
-			// Relocation demonstrated. A move preserves content exactly, so
-			// this tool checks nothing: any verdict the bytes had was earned
-			// under the old name and does not travel with them.
-			return &ToolResult{Success: true, Data: outBytes,
-				MutationStatus:   MutationApplied,
-				ValidationKind:   ValidationKindNone,
-				ValidationStatus: ValidationNotApplicable}, nil
+			return relocateFile(ctx, input, src, dst, relDest, srcInfo)
 		},
 	}
+}
+
+// relocateFile moves src to dst, by a rename or, across filesystems, by a copy
+// and a removal. It then re-points what the session recorded about the file
+// and reports the move.
+func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest string, srcInfo os.FileInfo) (*ToolResult, error) {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		// The source is untouched, but MkdirAll can leave part of the
+		// tree behind, so this is an attempted mutation that errored.
+		return nil, errFailedMutation(
+			fmt.Errorf("move_file: cannot create destination dir: %w", err),
+			ValidationKindNone, ValidationNotApplicable)
+	}
+
+	// os.Rename is atomic on the same filesystem; fall back to
+	// copy+remove across devices (bind mounts can straddle filesystems).
+	if err := os.Rename(src, dst); err != nil {
+		// Rename is all-or-nothing: a failure leaves the source where
+		// it was and the destination absent.
+		if srcInfo.IsDir() {
+			return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
+		}
+		data, rerr := os.ReadFile(src)
+		if rerr != nil {
+			return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
+		}
+		if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
+			// The destination may hold a partial copy.
+			return nil, errFailedMutation(
+				fmt.Errorf("move_file: cannot write destination: %w", werr),
+				ValidationKindNone, ValidationNotApplicable)
+		}
+		// A failure here leaves BOTH copies on disk. The move still
+		// happened, so it is applied; the ledger sees the surviving
+		// source and declines to tombstone it.
+		_ = os.Remove(src)
+	}
+	log.Printf("[move_file] %s → %s", input.Source, relDest)
+
+	// Keep agent bookkeeping consistent: the file the model just read
+	// now lives at the new path. Re-point the recorded read and the
+	// session-write set so a follow-up edit isn't bounced as blind and
+	// dedup logic tracks the right path.
+	if content, ok := ctx.GetFileRead(src); ok {
+		ctx.RecordFileRead(dst, content)
+		ctx.ForgetFileRead(src)
+	}
+	if ctx.SessionWrites != nil {
+		if ctx.SessionWrites[input.Source] {
+			delete(ctx.SessionWrites, input.Source)
+		}
+		ctx.SessionWrites[relDest] = true
+	}
+
+	out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
+	outBytes, _ := json.Marshal(out)
+	// Relocation demonstrated. A move preserves content exactly, so
+	// this tool checks nothing: any verdict the bytes had was earned
+	// under the old name and does not travel with them.
+	return &ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   MutationApplied,
+		ValidationKind:   ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable}, nil
 }
 
 // ---------------------------------------------------------------------------
