@@ -903,30 +903,8 @@ func writeFileTool() *ToolDef {
 				defer func() { noteContentChange(res, wholeFileWrapperNote) }()
 			}
 
-			// Pattern-matching reflex. When the model creates a
-			// NEW file in a non-empty directory of similar files (HTML
-			// alongside HTML, route handler alongside route handlers),
-			// nudge it to read a sibling first instead of generating
-			// content from scratch. Only fires for genuinely-new files
-			// to avoid breaking edits-via-write_file. Soft hint via
-			// tool result, not a hard reject — the model can ignore it
-			// if the content is clearly intentional.
-			if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
-				return refusedNoCheck(hint), nil
-			}
-
-			// Echoed write: the content is the file that is already there.
-			// Reproducing data the session already has is never the task,
-			// and it is where the worst measured failure starts — the model
-			// retyping a 2000-line fixture from memory, degenerating into
-			// repetition, and getting its stream cut mid-JSON.
-			if existing, err := os.ReadFile(path); err == nil {
-				if echoesExistingFile(string(existing), input.Content) ||
-					(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
-					log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
-						logPath(input.Path), len(existing), len(input.Content))
-					return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path])), nil
-				}
+			if refusal := writeFileEarlyRefusal(ctx, input, path); refusal != nil {
+				return refusal, nil
 			}
 
 			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
@@ -942,19 +920,7 @@ func writeFileTool() *ToolDef {
 				}
 			}
 
-			// Per-file tier classification — determines V3 pipeline activation
-			fileTier := classifyFileTier(input.Path, input.Content)
-			// GH #39 point 2: real cyclomatic complexity from tree-sitter
-			// can escalate the regex classifier's verdict. Never downgrades.
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, input.Content); ok {
-				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
-					log.Printf("[write_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
-					fileTier = refined
-				} else {
-					log.Printf("[write_file] %s cc=%d (tier %s unchanged)", input.Path, cc, fileTier)
-				}
-			}
-			log.Printf("[write_file] %s → %s (%d lines)", input.Path, fileTier, strings.Count(input.Content, "\n")+1)
+			fileTier := writeFileTier(ctx, input)
 
 			// V3 pipeline fires on T2+ files when V3 service is available.
 			// V3 takes the model's content as baseline candidate, generates diverse
@@ -976,6 +942,57 @@ func writeFileTool() *ToolDef {
 			return writeFileByRoute(ctx, input, path, fileTier, iterating)
 		},
 	}
+}
+
+// writeFileEarlyRefusal is the refusal a write meets before it is classified:
+// a new file that should start from its siblings, or bytes that echo the file
+// already there. nil when neither applies.
+func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string) *ToolResult {
+	// Pattern-matching reflex. When the model creates a
+	// NEW file in a non-empty directory of similar files (HTML
+	// alongside HTML, route handler alongside route handlers),
+	// nudge it to read a sibling first instead of generating
+	// content from scratch. Only fires for genuinely-new files
+	// to avoid breaking edits-via-write_file. Soft hint via
+	// tool result, not a hard reject — the model can ignore it
+	// if the content is clearly intentional.
+	if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
+		return refusedNoCheck(hint)
+	}
+
+	// Echoed write: the content is the file that is already there.
+	// Reproducing data the session already has is never the task,
+	// and it is where the worst measured failure starts — the model
+	// retyping a 2000-line fixture from memory, degenerating into
+	// repetition, and getting its stream cut mid-JSON.
+	if existing, err := os.ReadFile(path); err == nil {
+		if echoesExistingFile(string(existing), input.Content) ||
+			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
+			log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
+				logPath(input.Path), len(existing), len(input.Content))
+			return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path]))
+		}
+	}
+	return nil
+}
+
+// writeFileTier is the tier of the file a write lands in, which the real
+// cyclomatic complexity may raise but never lower.
+func writeFileTier(ctx *AgentContext, input WriteFileInput) Tier {
+	// Per-file tier classification — determines V3 pipeline activation
+	fileTier := classifyFileTier(input.Path, input.Content)
+	// GH #39 point 2: real cyclomatic complexity from tree-sitter
+	// can escalate the regex classifier's verdict. Never downgrades.
+	if cc, ok := cyclomaticComplexity(ctx, input.Path, input.Content); ok {
+		if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
+			log.Printf("[write_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
+			fileTier = refined
+		} else {
+			log.Printf("[write_file] %s cc=%d (tier %s unchanged)", input.Path, cc, fileTier)
+		}
+	}
+	log.Printf("[write_file] %s → %s (%d lines)", input.Path, fileTier, strings.Count(input.Content, "\n")+1)
+	return fileTier
 }
 
 // writeFileByRoute applies the regression gate every write meets, then sends
