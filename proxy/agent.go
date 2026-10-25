@@ -6846,20 +6846,8 @@ func fencedFitsRemainingBudget(ctx *AgentContext) bool {
 }
 
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
-	if fencedChannelDisabledForSession(ctx) {
-		// The channel already stalled this session; a sub-call would only
-		// stall again. Fail without making it, so no watchdog time is spent.
-		return "", fmt.Errorf("the fenced channel stalled earlier this session "+
-			"and is off for the rest of the run; send %s inline or edit it instead", path)
-	}
-	if fencedBudgetExhausted(ctx, path) {
-		return "", fmt.Errorf("fenced resolution for %s has already failed %d times "+
-			"this session; send the file inline or edit it instead", path,
-			ctx.FencedFailures[fencedKey(ctx, path)])
-	}
-	if !fencedFitsRemainingBudget(ctx) {
-		return "", fmt.Errorf("not enough session budget left to resolve %s "+
-			"and still validate the result", path)
+	if err := fencedFetchRefusal(ctx, path); err != nil {
+		return "", err
 	}
 	tag := fenceTagForPath(path)
 	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
@@ -6869,10 +6857,10 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 			"commentary, no partial file.", path, tag)}
 	msgs := append(append([]AgentMessage{}, ctx.Messages...),
 		AgentMessage{Role: "assistant", Content: rawCall}, note)
+	fetch := &fencedFetch{ctx: ctx, path: path, tag: tag, msgs: msgs}
 	// Attempts remaining are what the SESSION still allows for this path, not
 	// a fresh two. Requirement: a new write_file call must not restore the
 	// allowance a previous turn spent.
-	var lastErr error
 	remaining := maxFencedFailuresPerPath - ctx.FencedFailures[fencedKey(ctx, path)]
 	for attempt := 0; attempt < remaining; attempt++ {
 		if attempt > 0 && !fencedFitsRemainingBudget(ctx) {
@@ -6898,123 +6886,190 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		if attempt > 0 || !fencedGrammarFits(string(current)) {
 			grammar = rawEmissionSentinel
 		}
-		reply, tokens, err := callLLMOnceRestating(ctx, msgs, 0.2, grammar, path)
-		elapsed := time.Since(attemptStart)
-		// Every attempt is a real generation and is accounted whether or
-		// not it yielded a usable block — an unaccounted sub-call made the
-		// run totals lie by one generation per written file.
-		ctx.TotalTokens += tokens
-		ctx.FencedCalls++
-		ctx.FencedTokens += tokens
-		// Under the fence grammar a code file may end on three backticks
-		// (fenceBlockGrammar); that line is the closer the grammar accepted.
-		if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
-			reply = closeShortFence(reply)
+		answer := fetch.ask(grammar, attempt, attemptStart)
+		if content, done, err := fetch.settle(answer, attempt); done {
+			return content, err
 		}
-		// The same framing decision the inline path makes, so a reply the
-		// parent would refuse inline cannot be accepted here instead.
-		framing, content := classifyFencedPayload(reply)
-		// The model sometimes wraps the SENTINEL in the fence instead of the
-		// file — measured: "```python\n@fenced\n```". That extracts as
-		// non-empty and would land a file whose entire contents are the word
-		// @fenced, so it counts as no block and the attempt is retried.
-		if strings.TrimSpace(content) == rawEmissionSentinel ||
-			strings.TrimSpace(content) == "@fenced" {
-			log.Printf("[agent] fenced reply for %s contained only the sentinel — treating as no block", path)
-			content = ""
-		}
-		got := content != ""
-		contentBytes := len(content)
-		Emit(Envelope{
-			EventID:    NewEventID(),
-			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-			Type:       EvtStageEnd,
-			Stage:      "fenced_fetch",
-			DurationMS: elapsed.Milliseconds(),
-			Payload: map[string]interface{}{
-				"success":          err == nil && got,
-				"path":             path,
-				"attempt":          attempt + 1,
-				"generated_tokens": tokens,
-				"content_bytes":    contentBytes,
-				"total_tokens":     ctx.TotalTokens,
-			},
-		})
-		// A cut that came after the model had written content is not a stall:
-		// the channel works, and the block was not closed (under the fence
-		// grammar the model's three-backtick closer is a body line, so the
-		// attempt runs until the watchdog cuts it). It is answered like any
-		// reply without a usable block, below, and the retry without the
-		// grammar follows. Counting it as a stall turned the channel off for
-		// the session and skipped that retry.
-		cutWithContent := err != nil && strings.TrimSpace(reply) != "" &&
-			(ctx.Ctx == nil || ctx.Ctx.Err() == nil)
-		outcome := "unusable"
-		switch {
-		case err != nil && !cutWithContent && ctx.Ctx != nil && ctx.Ctx.Err() != nil:
-			outcome = "cancelled"
-		case err != nil && !cutWithContent:
-			outcome = "stalled"
-		case got:
-			outcome = "used"
-		}
-		emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
-		if err != nil && !cutWithContent {
-			// Every way this attempt can end WITHOUT a fenced block charges
-			// the session: watchdog cancellation, transport error, HTTP
-			// failure. Not charging here is how the black-box loop issued one
-			// unbounded fetch per turn — the allowance was only ever spent by
-			// a clean empty reply.
-			charge(ctx, path)
-			// The SESSION being cancelled ends everything; the watchdog
-			// cancelling its own child is a recoverable zero-byte failure and
-			// the one permitted retry may still follow, bounded by the
-			// allowance the loop already counted.
-			if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-				return "", err
-			}
-			// A watchdog-cut zero-content fetch. Counted session-wide (not just
-			// per-path) because the next file's fetch will stall the same way;
-			// once this reaches the limit the channel is off for the run.
-			ctx.FencedStalls++
-			lastErr = err
-			continue
-		}
-		if cutWithContent {
-			lastErr = err // a closed block is still used below; an open one is retried
-		}
-		if got {
-			// A successful resolution clears the consecutive-failure state:
-			// the path is healthy again and a later stall gets its own budget.
-			if ctx.FencedFailures != nil {
-				delete(ctx.FencedFailures, fencedKey(ctx, path))
-			}
-			return content, nil
-		}
-		// Charge the session, not the local loop, so the allowance survives
-		// into the next write_file call for this path.
-		charge(ctx, path)
-		// What the model sent instead is the whole diagnosis, and without it
-		// "no fenced block after 2 attempts" says only that something went
-		// wrong. Measured a 56% failure rate on this fetch with no way to see
-		// why: the same request reproduced in a short context returns a clean
-		// block every time, so the cause lives in the session context and
-		// cannot be found without the reply.
-		log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
-			attempt+1, path, framing, len(reply), ctx.LastStreamCut,
-			ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
-			safeTextSummary(reply))
-		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
-			AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
 	}
-	if lastErr != nil {
+	if fetch.lastErr != nil {
 		return "", fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
 			"this session (%v); send the file inline or edit it instead",
-			path, ctx.FencedFailures[fencedKey(ctx, path)], lastErr)
+			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr)
 	}
 	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
 		"send the file inline or edit it instead",
 		ctx.FencedFailures[fencedKey(ctx, path)], path)
+}
+
+// fencedFetchRefusal is the reason the session makes no fenced fetch for path
+// at all, or nil: the channel is off for the session, the path has spent its
+// allowance, or too little of the session is left to fetch a file and check it.
+func fencedFetchRefusal(ctx *AgentContext, path string) error {
+	if fencedChannelDisabledForSession(ctx) {
+		// The channel already stalled this session; a sub-call would only
+		// stall again. Fail without making it, so no watchdog time is spent.
+		return fmt.Errorf("the fenced channel stalled earlier this session "+
+			"and is off for the rest of the run; send %s inline or edit it instead", path)
+	}
+	if fencedBudgetExhausted(ctx, path) {
+		return fmt.Errorf("fenced resolution for %s has already failed %d times "+
+			"this session; send the file inline or edit it instead", path,
+			ctx.FencedFailures[fencedKey(ctx, path)])
+	}
+	if !fencedFitsRemainingBudget(ctx) {
+		return fmt.Errorf("not enough session budget left to resolve %s "+
+			"and still validate the result", path)
+	}
+	return nil
+}
+
+// fencedFetch is one fenced fetch across its attempts: the conversation the
+// sub-call is sent, which grows by each unusable reply and the note that asks
+// again, and the error of the last attempt that was cut.
+type fencedFetch struct {
+	ctx     *AgentContext
+	path    string
+	tag     string
+	msgs    []AgentMessage
+	lastErr error
+}
+
+// fencedAnswer is what one fenced attempt brought back, read the way the
+// inline path reads a body.
+type fencedAnswer struct {
+	reply          string
+	framing        fenceFraming
+	content        string
+	err            error
+	got            bool
+	cutWithContent bool
+}
+
+// ask makes one fenced attempt: the sub-call, its accounting, the reading of
+// its reply, and the two events that record the attempt.
+func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) fencedAnswer {
+	ctx, path, tag, msgs := f.ctx, f.path, f.tag, f.msgs
+	reply, tokens, err := callLLMOnceRestating(ctx, msgs, 0.2, grammar, path)
+	elapsed := time.Since(attemptStart)
+	// Every attempt is a real generation and is accounted whether or
+	// not it yielded a usable block — an unaccounted sub-call made the
+	// run totals lie by one generation per written file.
+	ctx.TotalTokens += tokens
+	ctx.FencedCalls++
+	ctx.FencedTokens += tokens
+	// Under the fence grammar a code file may end on three backticks
+	// (fenceBlockGrammar); that line is the closer the grammar accepted.
+	if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
+		reply = closeShortFence(reply)
+	}
+	// The same framing decision the inline path makes, so a reply the
+	// parent would refuse inline cannot be accepted here instead.
+	framing, content := classifyFencedPayload(reply)
+	// The model sometimes wraps the SENTINEL in the fence instead of the
+	// file — measured: "```python\n@fenced\n```". That extracts as
+	// non-empty and would land a file whose entire contents are the word
+	// @fenced, so it counts as no block and the attempt is retried.
+	if strings.TrimSpace(content) == rawEmissionSentinel ||
+		strings.TrimSpace(content) == "@fenced" {
+		log.Printf("[agent] fenced reply for %s contained only the sentinel — treating as no block", path)
+		content = ""
+	}
+	got := content != ""
+	contentBytes := len(content)
+	Emit(Envelope{
+		EventID:    NewEventID(),
+		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+		Type:       EvtStageEnd,
+		Stage:      "fenced_fetch",
+		DurationMS: elapsed.Milliseconds(),
+		Payload: map[string]interface{}{
+			"success":          err == nil && got,
+			"path":             path,
+			"attempt":          attempt + 1,
+			"generated_tokens": tokens,
+			"content_bytes":    contentBytes,
+			"total_tokens":     ctx.TotalTokens,
+		},
+	})
+	// A cut that came after the model had written content is not a stall:
+	// the channel works, and the block was not closed (under the fence
+	// grammar the model's three-backtick closer is a body line, so the
+	// attempt runs until the watchdog cuts it). It is answered like any
+	// reply without a usable block, below, and the retry without the
+	// grammar follows. Counting it as a stall turned the channel off for
+	// the session and skipped that retry.
+	cutWithContent := err != nil && strings.TrimSpace(reply) != "" &&
+		(ctx.Ctx == nil || ctx.Ctx.Err() == nil)
+	outcome := "unusable"
+	switch {
+	case err != nil && !cutWithContent && ctx.Ctx != nil && ctx.Ctx.Err() != nil:
+		outcome = "cancelled"
+	case err != nil && !cutWithContent:
+		outcome = "stalled"
+	case got:
+		outcome = "used"
+	}
+	emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
+	return fencedAnswer{reply: reply, framing: framing, content: content, err: err, got: got,
+		cutWithContent: cutWithContent}
+}
+
+// settle answers one attempt. A stall is charged, and ends the fetch when the
+// session itself stopped; a usable block ends it and clears the path's
+// failures; any other reply is charged, logged and asked for again. It
+// returns the block, whether the fetch ends here, and the fetch's error.
+func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) {
+	ctx, path, tag := f.ctx, f.path, f.tag
+	reply, framing, content, err := a.reply, a.framing, a.content, a.err
+	got, cutWithContent := a.got, a.cutWithContent
+	if err != nil && !cutWithContent {
+		// Every way this attempt can end WITHOUT a fenced block charges
+		// the session: watchdog cancellation, transport error, HTTP
+		// failure. Not charging here is how the black-box loop issued one
+		// unbounded fetch per turn — the allowance was only ever spent by
+		// a clean empty reply.
+		charge(ctx, path)
+		// The SESSION being cancelled ends everything; the watchdog
+		// cancelling its own child is a recoverable zero-byte failure and
+		// the one permitted retry may still follow, bounded by the
+		// allowance the loop already counted.
+		if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+			return "", true, err
+		}
+		// A watchdog-cut zero-content fetch. Counted session-wide (not just
+		// per-path) because the next file's fetch will stall the same way;
+		// once this reaches the limit the channel is off for the run.
+		ctx.FencedStalls++
+		f.lastErr = err
+		return "", false, nil
+	}
+	if cutWithContent {
+		f.lastErr = err // a closed block is still used below; an open one is retried
+	}
+	if got {
+		// A successful resolution clears the consecutive-failure state:
+		// the path is healthy again and a later stall gets its own budget.
+		if ctx.FencedFailures != nil {
+			delete(ctx.FencedFailures, fencedKey(ctx, path))
+		}
+		return content, true, nil
+	}
+	// Charge the session, not the local loop, so the allowance survives
+	// into the next write_file call for this path.
+	charge(ctx, path)
+	// What the model sent instead is the whole diagnosis, and without it
+	// "no fenced block after 2 attempts" says only that something went
+	// wrong. Measured a 56% failure rate on this fetch with no way to see
+	// why: the same request reproduced in a short context returns a clean
+	// block every time, so the cause lives in the session context and
+	// cannot be found without the reply.
+	log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
+		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
+		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
+		safeTextSummary(reply))
+	f.msgs = append(f.msgs, AgentMessage{Role: "assistant", Content: reply},
+		AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
+	return "", false, nil
 }
 
 // emitFencedFetch records one fenced attempt (#254): what the wire showed
