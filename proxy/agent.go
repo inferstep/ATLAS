@@ -5214,10 +5214,32 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 				TaskModeQuestion)
 		}
 	}
-	probe := &AgentContext{WorkingDir: workingDir}
-	seen := map[string]bool{}
 	out := &TaskContract{TaskMode: in.TaskMode,
 		OutputKnowledge: outKnow, VerificationKnowledge: verKnow}
+	paths, err := distinctOutputPaths(in, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	cmds, err := distinctVerificationCommands(in)
+	if err != nil {
+		return nil, err
+	}
+	// Stable order, so two equivalent requests never disagree downstream.
+	sort.Strings(paths)
+	sort.Strings(cmds)
+	// Presence is STORED, not re-derived. A declared-empty list must survive
+	// as a present, empty list; rebuilding by append is exactly how the old
+	// validator turned it back into "absent".
+	storeExpectedOutputs(out, outKnow, paths)
+	storeVerification(out, in, verKnow, cmds, typedReqs)
+	return out, nil
+}
+
+// distinctOutputPaths checks each declared output path against the workspace
+// and keeps one spelling of each file, in the order declared.
+func distinctOutputPaths(in *TaskContract, workingDir string) ([]string, error) {
+	probe := &AgentContext{WorkingDir: workingDir}
+	seen := map[string]bool{}
 	var paths []string
 	for _, p := range in.OutputPaths() {
 		if strings.TrimSpace(p) == "" {
@@ -5233,6 +5255,12 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		seen[canon] = true
 		paths = append(paths, p)
 	}
+	return paths, nil
+}
+
+// distinctVerificationCommands checks each declared verification command and
+// keeps one of each, by its exact text, in the order declared.
+func distinctVerificationCommands(in *TaskContract) ([]string, error) {
 	vseen := map[string]bool{}
 	var cmds []string
 	for _, v := range in.VerificationCommands() {
@@ -5245,18 +5273,24 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		vseen[v] = true
 		cmds = append(cmds, v)
 	}
-	// Stable order, so two equivalent requests never disagree downstream.
-	sort.Strings(paths)
-	sort.Strings(cmds)
-	// Presence is STORED, not re-derived. A declared-empty list must survive
-	// as a present, empty list; rebuilding by append is exactly how the old
-	// validator turned it back into "absent".
+	return cmds, nil
+}
+
+// storeExpectedOutputs stores the declared output paths on out: a declared
+// list, even an empty one, is present.
+func storeExpectedOutputs(out *TaskContract, outKnow ObligationKnowledge, paths []string) {
 	if outKnow == KnowledgeDeclared {
 		if paths == nil {
 			paths = []string{}
 		}
 		out.ExpectedOutputs = &paths
 	}
+}
+
+// storeVerification stores the declared verification commands on out, present
+// even when empty, with the typed requirements that came with them.
+func storeVerification(out, in *TaskContract, verKnow ObligationKnowledge, cmds []string,
+	typedReqs []VerificationRequirement) {
 	if verKnow == KnowledgeDeclared {
 		if cmds == nil {
 			cmds = []string{}
@@ -5267,7 +5301,6 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 			out.VerificationRequirementsVersion = in.VerificationRequirementsVersion
 		}
 	}
-	return out, nil
 }
 
 // normalizeKnowledge turns what the caller sent into a stated knowledge value,
