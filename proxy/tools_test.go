@@ -2316,7 +2316,7 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 		rest := body[i:]
 		j := strings.Index(rest, to)
 		if j < 0 {
-			return rest
+			t.Fatalf("tools.go has no %q after %q, so the span would run to the end of the file", to, from)
 		}
 		return rest[:j]
 	}
