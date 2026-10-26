@@ -1083,6 +1083,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	for _, fn := range []string{"wantsStateChange", "isActionIntentMessage", "isReadOnlyRequest"} {
 		i := strings.Index(gs, "func "+fn)
 		if i < 0 {
+			t.Errorf("guardrails.go holds no func %s, so its check reads nothing; name the file that holds it", fn)
 			continue
 		}
 		end := strings.Index(gs[i+1:], "\nfunc ")
