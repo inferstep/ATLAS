@@ -160,7 +160,7 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 	if mints != 1 {
 		t.Fatalf("mintRouteEntry declared %d times", mints)
 	}
-	for _, file := range []string{"types.go", "agent.go", "tools.go"} {
+	for _, file := range []string{"types.go", "tool_io.go", "agent.go", "tools.go"} {
 		body, err := os.ReadFile(file)
 		if err != nil {
 			continue

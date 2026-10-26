@@ -751,6 +751,6 @@ def test_no_new_field_reaches_any_public_surface():
     for module in ("contract.py", "adapters.py"):
         text = (v3dir / module).read_text()
         assert "incumbent" not in text, module
-    go = (PROJECT_ROOT / "proxy" / "types.go").read_text()
+    go = "".join((PROJECT_ROOT / "proxy" / name).read_text() for name in ("types.go", "tool_io.go"))
     for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
         assert leaked not in go, leaked

@@ -1519,12 +1519,13 @@ func TestFulfilledDeletionsArePromotedInOnePlace(t *testing.T) {
 	}
 }
 
-// The record is internal: no wire type carries it.
+// The record is internal: no wire type carries it. The wire types are in
+// types.go and, for the tools' inputs and outputs, in tool_io.go.
 func TestTheDeletionRecordNeverReachesTheWire(t *testing.T) {
-	types, _ := os.ReadFile("types.go")
+	wire := readSourceForTest(t, "types.go") + readSourceForTest(t, "tool_io.go")
 	for _, leak := range []string{"`json:\"fulfilled", "`json:\"approved_delete",
 		"`json:\"deletion_attempt"} {
-		if strings.Contains(string(types), leak) {
+		if strings.Contains(wire, leak) {
 			t.Errorf("the internal deletion record reached the wire: %s", leak)
 		}
 	}

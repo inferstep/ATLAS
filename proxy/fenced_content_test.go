@@ -387,10 +387,10 @@ func TestNoPersistentStateOrWireFieldWasAdded(t *testing.T) {
 	if !strings.Contains(string(types), "FencedFailures map[string]int") {
 		t.Fatal("the allowance is not session state")
 	}
-	for _, f := range []string{"types.go", "agent.go"} {
-		b, _ := os.ReadFile(f)
+	for _, f := range []string{"types.go", "tool_io.go", "agent.go"} {
+		src := readSourceForTest(t, f)
 		for _, leak := range []string{`json:"fenced_failures`, "os.WriteFile(fencedState"} {
-			if strings.Contains(string(b), leak) {
+			if strings.Contains(src, leak) {
 				t.Errorf("%s: %q suggests a wire field or persistent state", f, leak)
 			}
 		}
