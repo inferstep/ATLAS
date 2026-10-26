@@ -1049,19 +1049,26 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		t.Errorf("finalizeCompletion reads the contract %d times; exactly two are "+
 			"allowed: the delegation and the text-exit scope", n)
 	}
-	for _, fn := range []string{"classifyAgentTier", "terminalCompletionAllowed",
-		"blockingTombstone", "needsPermission", "honestTerminalSummary",
-		"buildSystemPrompt", "buildToolDescriptionsExcluding"} {
-		i := strings.Index(string(body), "func "+fn)
+	// Each function is read from the file that holds it. A name that is not
+	// there is an error: its check would otherwise pass without reading it.
+	for _, c := range []struct{ file, fn string }{
+		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
+		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
+		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
+		{"tools.go", "buildToolDescriptionsExcluding"},
+	} {
+		text := readSourceForTest(t, c.file)
+		i := strings.Index(text, "func "+c.fn)
 		if i < 0 {
+			t.Errorf("%s holds no func %s, so its check reads nothing; name the file that holds it", c.file, c.fn)
 			continue
 		}
-		end := strings.Index(string(body)[i+1:], "\nfunc ")
+		end := strings.Index(text[i+1:], "\nfunc ")
 		if end < 0 {
-			end = len(body) - i - 1
+			end = len(text) - i - 1
 		}
-		if strings.Contains(string(body)[i:i+1+end], "TaskContract") {
-			t.Errorf("%s consults the task contract; only the action-demand policy owner may", fn)
+		if strings.Contains(text[i:i+1+end], "TaskContract") {
+			t.Errorf("%s consults the task contract; only the action-demand policy owner may", c.fn)
 		}
 	}
 	// guardrails.go owns the decision, and only through the one helper.
