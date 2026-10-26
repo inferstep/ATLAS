@@ -49,7 +49,7 @@ from atlas.commands import model_registry
 # Moved beside this module, by subject, and imported back under their names.
 from atlas.commands.lens_publish import (
     _open_registry_pr, _print_pr_body_for_paste, _print_pr_body_without_gh,
-    _render_model_card_md, _render_registry_pr_body, _upload_to_hf,
+    _render_registry_pr_body, _upload_to_hf,
 )
 from atlas.commands.lens_samples import (
     _load_results_samples, _load_telemetry_embeddings, _load_training_samples,

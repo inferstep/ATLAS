@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from atlas import publishing
-from atlas.commands import lens, lens_card
+from atlas.commands import lens, lens_card, lens_publish
 
 
 # ---------------------------------------------------------------------------
@@ -1203,7 +1203,7 @@ def test_model_card_provenance_names_the_loss_the_bundle_was_trained_with(tmp_pa
 
 
 def test_model_card_embeds_the_provenance_paragraph():
-    card = lens._render_model_card_md(
+    card = lens_publish._render_model_card_md(
         "test-model", "test-model", 4096, "0" * 64, 1024, "apache-2.0",
         ["cost_field.pt"], provenance="PROVENANCE PARAGRAPH")
     assert "## Provenance\n\nPROVENANCE PARAGRAPH\n\n## License" in card
