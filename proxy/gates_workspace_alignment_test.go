@@ -39,13 +39,19 @@ func TestWorkspaceAlignmentProbeIsFunctionalNotConfigural(t *testing.T) {
 	}
 
 	// A sandbox on the same disk: it runs the probe's
-	// print(open("<path>").read()) by reading the file at that path.
+	// print(open("<path>").read()). Only the path the proxy wrote holds the
+	// file; a probe that asks for any other path reads nothing.
+	probePath := filepath.Join(sub, mountProbeName)
 	sameDisk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Code string }
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		path, _ := strconv.Unquote(strings.TrimSuffix(strings.TrimPrefix(req.Code, "print(open("), ").read())"))
-		data, _ := os.ReadFile(path)
-		_ = json.NewEncoder(w).Encode(map[string]string{"stdout": string(data)})
+		stdout := ""
+		if path == probePath {
+			data, _ := os.ReadFile(probePath)
+			stdout = string(data)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"stdout": stdout})
 	}))
 	defer sameDisk.Close()
 	// The verdict is cached for the whole package. The unreachable row runs
