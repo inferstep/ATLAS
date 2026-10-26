@@ -30,6 +30,11 @@ def _truth() -> str:
     pytest.param("docs/lang/ja/README.md", "version-V{}-", id="ja-readme-badge"),
     pytest.param("docs/lang/ko/README.md", "version-V{}-", id="ko-readme-badge"),
     pytest.param("docs/ARCHITECTURE.md", "ATLAS V{}", id="architecture-header"),
+    # The latest-release line of each README links its release page.
+    pytest.param("README.md", "releases/tag/v{})", id="readme-latest-release"),
+    pytest.param("docs/lang/zh-CN/README.md", "releases/tag/v{})", id="zh-CN-readme-latest-release"),
+    pytest.param("docs/lang/ja/README.md", "releases/tag/v{})", id="ja-readme-latest-release"),
+    pytest.param("docs/lang/ko/README.md", "releases/tag/v{})", id="ko-readme-latest-release"),
 ])
 def test_doc_states_the_version(path, expected):
     version = _truth()

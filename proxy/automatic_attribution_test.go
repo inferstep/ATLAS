@@ -631,14 +631,19 @@ func TestAttributionMethodsReturnNothingToTheRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	methods := 0
 	for _, d := range tree.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil {
 			continue
 		}
+		methods++
 		if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
 			t.Errorf("%s returns a value to its caller", fn.Name.Name)
 		}
+	}
+	if methods == 0 {
+		t.Fatal("automatic_attribution.go holds no methods, so the check reads nothing; name the file that holds them")
 	}
 }
 
@@ -667,7 +672,13 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 		"verification_evidence.go", "staged_command_evidence.go", "evidence_wiring.go",
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
-		"advisory_policy.go", "agent.go", "gates.go", "guardrails.go"} {
+		"advisory_policy.go", "agent.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"} {
 		used := identifiersIn(t, f)
 		for name := range attributionIdentifiers(t) {
 			if used[name] {

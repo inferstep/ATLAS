@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import main
-import symbols
+import embedded_script
 
 pytestmark = pytest.mark.skipif(
     not getattr(main, "_STRUCTURAL_EDIT_AVAILABLE", False),
@@ -202,7 +202,7 @@ def test_large_node_failure_steers_to_edit_file():
                  id="an-unterminated-comment-does-not-reach-the-next-line"),
 ])
 def test_jinja_comments_are_blanked(block, masked):
-    assert symbols._blank_jinja_comments(block) == masked
+    assert embedded_script._blank_jinja_comments(block) == masked
 
 
 def test_many_openers_without_a_terminator_stay_linear():
@@ -211,7 +211,7 @@ def test_many_openers_without_a_terminator_stay_linear():
     fails loudly if a regex ever comes back."""
     src = b"{#" * 100_000 + b"a" * 100_000
     t0 = time.perf_counter()
-    out = symbols._blank_jinja_comments(src)
+    out = embedded_script._blank_jinja_comments(src)
     elapsed = time.perf_counter() - t0
     assert out == src, "no terminator anywhere means nothing is masked"
     assert elapsed < 5.0, f"masking went superlinear: {elapsed:.1f}s"

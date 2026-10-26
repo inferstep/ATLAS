@@ -211,9 +211,9 @@ def _with_workers(gates: dict[str, Gate], workers: int) -> dict[str, Gate]:
     return {**gates, "python-tests": replace(gate, command=gate.command + ("-n", str(workers)))}
 
 
-def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
-    python = sys.executable
-    go_env = {"GOCACHE": os.environ.get("GOCACHE", "")}  # empty: Go's own folder for this user
+def _tree_gates(python: str) -> dict[str, Gate]:
+    """The checks of the whole tree: the tests' integrity, that the Python compiles here and on the
+    oldest supported version, and that each Dockerfile COPY has its source."""
     return {
         "test-integrity": Gate(
             "test-integrity",
@@ -238,6 +238,13 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             "dockerfile-sources",
             (python, "scripts/check_dockerfile_sources.py"),
         ),
+    }
+
+
+def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[str, str]) -> dict[str, Gate]:
+    """The Python test gates: the suites, the lens suite in its own process, and candidate staging
+    against a real executor."""
+    return {
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),
@@ -271,6 +278,12 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
                                "(pip install -r sandbox/requirements.txt)",
             env=go_env,
         ),
+    }
+
+
+def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
+    """The tests and the go vet of the proxy and the TUI."""
+    return {
         "go-proxy-test": Gate(
             "go-proxy-test",
             # An explicit budget, because Go's implicit 10m default is not one
@@ -313,6 +326,13 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             unavailable_reason="Go is not installed",
             env=go_env,
         ),
+    }
+
+
+def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
+    """The static checks: staticcheck of both Go modules, mypy on the typed files, ruff and
+    shellcheck."""
+    return {
         "go-proxy-staticcheck": Gate(
             "go-proxy-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
@@ -372,6 +392,17 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             available=lambda: _command_available("shellcheck"),
             unavailable_reason="shellcheck is not installed",
         ),
+    }
+
+
+def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
+    python = sys.executable
+    go_env = {"GOCACHE": os.environ.get("GOCACHE", "")}  # empty: Go's own folder for this user
+    return {
+        **_tree_gates(python),
+        **_python_test_gates(python, pytest_paths, go_env),
+        **_go_gates(go_env),
+        **_static_check_gates(python, go_env),
         **_compose_gates(),
         "workflow-yaml": Gate(
             "workflow-yaml",

@@ -232,6 +232,7 @@ func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
 		"type WriteFileOutput struct", "type modelFacingResult struct"} {
 		start := strings.Index(body, typeName)
 		if start < 0 {
+			t.Errorf("types.go holds no %q, so its check reads nothing; name the file that holds it", typeName)
 			continue
 		}
 		decl := body[start : start+strings.Index(body[start:], "\n}")]

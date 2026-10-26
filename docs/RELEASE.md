@@ -37,13 +37,10 @@ marks *audience* rather than maturity and composes with a level:
 | Browser or visual verification | Roadmap | None until implemented |
 
 **Release-blocked:** V3 candidate generation and selection. Its automated
-check, the `tests/e2e` V3-selection assertions, failed at `c3a881d` ("V3 never
-selected", 2026-09 audit), and the cause is not established. At that commit,
-under the default candidate policy (`strict`, no declared outputs), write and
-edit tools did not run V3 generation at all. Since 2026-09-26 there is one
-delivery rule and V3 runs for every work request whose file clears the cost
-rules ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)); the check has not been
-re-run since. No release is qualified against this row until the check passes.
+check is the V3-selection assertions of `tests/e2e`, and no release is
+qualified against this row until that check passes. V3 runs for every work
+request whose file clears the cost rules
+([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md#when-the-producer-is-not-consulted-at-all)).
 
 ## Service contracts
 
@@ -215,9 +212,10 @@ it is done, so that the pull request's head stays the commit that was
 checked. Every use is on record under **Settings → Rules** (the ruleset
 history and the rule insights).
 
-**Status:** the step has merged `main` back into `dev` on this repository.
-A fast-forward of `main` by the step was run on a test repository with the
-same rulesets, and not yet on this one.
+**Status:** on this repository the step has fast-forwarded `main` to the
+release commit of 3.1.7 ([#615](https://github.com/inferstep/ATLAS/pull/615)),
+and merged `main` back into `dev`
+([#626](https://github.com/inferstep/ATLAS/pull/626)).
 
 ## Release process
 
@@ -332,7 +330,6 @@ cosign verify-blob --bundle atlas-3.2.0-images.txt.sigstore.json \
   atlas-3.2.0-images.txt
 ```
 
-**Status:** the signing key, git config, release script, CI verification
-and allowed-signers file are in place, and the key is registered on the
-maintainer's GitHub account, so GitHub shows release tags as **Verified**
-(v3.1.4 onward).
+Release tags from [`v3.1.3`](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)
+on are signed with the key in `.github/allowed_signers`, so `git verify-tag`
+passes on them and GitHub shows them as **Verified**.

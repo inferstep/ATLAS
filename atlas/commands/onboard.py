@@ -246,40 +246,15 @@ def _print_rebuild_required(arch: Optional[str], excerpt: str, color: bool,
 
 
 # --- main -------------------------------------------------------------------
-def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
-    parser = argparse.ArgumentParser(
-        prog="atlas onboard",
-        description="Guided drop-in for a new model: arch check, rebuild gate, "
-                    "lens-retrain guidance.")
-    parser.add_argument("model", nargs="?", default=None,
-        help="optional: a GGUF download URL to fetch first (shorthand for "
-             "--url). Omit to onboard the model already configured in .env.")
-    parser.add_argument("--url", default=None,
-        help="download an unregistered model from this URL first "
-             "(delegates to `atlas model install --url`)")
-    parser.add_argument("--file", default=None,
-        help="on-disk filename for --url (default: basename of the URL)")
-    parser.add_argument("--apply", action="store_true",
-        help="with --url: write ATLAS_MODEL_FILE + ATLAS_MODEL_NAME into "
-             ".env after the download without prompting")
-    parser.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
-    parser.add_argument("--no-start", action="store_true",
-        help="don't (re)start llama-server; only inspect current state")
-    parser.add_argument("--no-color", action="store_true")
-    args = parser.parse_args(argv)
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parse_args(argv)
 
     # `atlas onboard <url>` is shorthand for `atlas onboard --url <url>`. A bare
     # positional that isn't a URL is rejected — registry models install via
     # `atlas model install <name>` (onboard then reads it from .env).
-    if args.model and not args.url:
-        if args.model.startswith(("http://", "https://")):
-            args.url = args.model
-        else:
-            print(f"  onboard takes a download URL (or nothing). For a registry "
-                  f"model run `atlas model install {args.model}` then `atlas "
-                  f"onboard`.")
-            return 1
+    rc = _url_from_positional(args)
+    if rc is not None:
+        return rc
 
     color = sys.stdout.isatty() and not args.no_color
     atlas_root = _find_atlas_root()
@@ -291,45 +266,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
 
     # Step 1 — optionally fetch an unregistered model first.
     if args.url:
-        _safe_print("[1/5] Fetching unregistered model via `atlas model install "
-                    "--url`…")
-        from atlas.commands import model as model_cmd
-        inst_args = ["install", "--url", args.url]
-        if args.file:
-            inst_args += ["--file", args.file]
-        if args.models_dir:
-            inst_args += ["--models-dir", args.models_dir]
-        rc = model_cmd.main(inst_args)
-        if rc != 0:
-            _safe_print(_c(f"{NO} download failed — see above.", RED, color))
-            return rc
-        # Offer to wire .env to the downloaded file (the install path has
-        # already validated the .gguf filename).
-        from urllib.parse import urlparse, unquote
-        fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
-        apply_env = args.apply
-        if not apply_env and sys.stdin.isatty() and sys.stdout.isatty():
-            try:
-                ans = input("  Update .env now? [Y/n] ").strip().lower()
-            except EOFError:
-                ans = "n"
-            apply_env = ans in ("", "y", "yes")
-        if apply_env:
-            from atlas.commands import fit as fit_module
-            env_path = fit_module._write_env({
-                "ATLAS_MODEL_FILE": fname,
-                "ATLAS_MODEL_NAME": fname.rsplit(".", 1)[0],
-            })
-            _safe_print(_c(f"  {OK} wrote ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
-                           f"to {env_path}.", GREEN, color))
-            _safe_print("  Re-run `atlas onboard` to continue with the arch "
-                        "and lens checks.")
-            return 0
-        _safe_print(_c("  Now set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in .env to "
-                       "this file, then re-run `atlas onboard`.", YELL, color))
-        _safe_print("  (onboard reads the model from .env; pass --apply to "
-                    "write it automatically.)")
-        return 0
+        return _fetch_unregistered_model(args, color)
 
     # Step 1 — resolve the configured model from .env.
     model_file = (os.environ.get("ATLAS_MODEL_FILE")
@@ -362,6 +299,127 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
     # Runtime sizing (PC-208) — advisory; the engine runs with --fit off,
     # so a configuration that doesn't fit refuses to start rather than
     # spilling layers to CPU.
+    _print_runtime_fit(model_path, env, color)
+
+    # Step 2/3 — preflight + arch gate.
+    _safe_print("[2/5] Checking the inference engine can load it…")
+    loaded, excerpt = _arch_supported(atlas_root, env, model_file,
+                                      start=not args.no_start, color=color)
+    if not loaded:
+        if compose_config.resolve_backend(atlas_root, values=env) == "metal":
+            _safe_print()
+            _safe_print(_c(f"{NO} Native Metal inference is not ready.",
+                           RED, color))
+            _safe_print(excerpt)
+            _safe_print("  Re-run `atlas onboard` after the native server is "
+                        "healthy.")
+        else:
+            _print_rebuild_required(arch, excerpt, color, atlas_root, env)
+        return 2  # action required: operator must rebuild
+    _safe_print(f"  {OK} llama-server is serving the model (arch supported).")
+
+    # Step 4 — lens check.
+    _safe_print("[3/5] Geometric Lens dimension check…")
+    _run_lens_check(args, color)
+
+    # Step 5 — remaining operator-driven steps (concrete for THIS model).
+    _print_remaining_steps(atlas_root, model_file, color)
+
+    _safe_print("[5/5] Baseline: run `atlas doctor` to confirm health "
+                "(lens dim-mismatch is expected until you retrain).")
+    _safe_print()
+    _safe_print(_c(f"{OK} Engine ready for {model_file}. Lens retrain is the "
+                   f"last mile.", GREEN, color))
+    return 0
+
+
+def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
+    """The `atlas onboard` command line."""
+    parser = argparse.ArgumentParser(
+        prog="atlas onboard",
+        description="Guided drop-in for a new model: arch check, rebuild gate, "
+                    "lens-retrain guidance.")
+    parser.add_argument("model", nargs="?", default=None,
+        help="optional: a GGUF download URL to fetch first (shorthand for "
+             "--url). Omit to onboard the model already configured in .env.")
+    parser.add_argument("--url", default=None,
+        help="download an unregistered model from this URL first "
+             "(delegates to `atlas model install --url`)")
+    parser.add_argument("--file", default=None,
+        help="on-disk filename for --url (default: basename of the URL)")
+    parser.add_argument("--apply", action="store_true",
+        help="with --url: write ATLAS_MODEL_FILE + ATLAS_MODEL_NAME into "
+             ".env after the download without prompting")
+    parser.add_argument("--models-dir", default=None,
+        help="override ATLAS_MODELS_DIR")
+    parser.add_argument("--no-start", action="store_true",
+        help="don't (re)start llama-server; only inspect current state")
+    parser.add_argument("--no-color", action="store_true")
+    args = parser.parse_args(argv)
+    return args
+
+
+def _url_from_positional(args: argparse.Namespace) -> Optional[int]:
+    """Take a positional URL as --url. Returns 1 when the positional is not
+    a URL, else None."""
+    if args.model and not args.url:
+        if args.model.startswith(("http://", "https://")):
+            args.url = args.model
+        else:
+            print(f"  onboard takes a download URL (or nothing). For a registry "
+                  f"model run `atlas model install {args.model}` then `atlas "
+                  f"onboard`.")
+            return 1
+    return None
+
+
+def _fetch_unregistered_model(args: argparse.Namespace, color: bool) -> int:
+    """Download the model at --url through `atlas model install --url`, then
+    write it into .env (--apply or a yes at the prompt) or say how to."""
+    _safe_print("[1/5] Fetching unregistered model via `atlas model install "
+                "--url`…")
+    from atlas.commands import model as model_cmd
+    inst_args = ["install", "--url", args.url]
+    if args.file:
+        inst_args += ["--file", args.file]
+    if args.models_dir:
+        inst_args += ["--models-dir", args.models_dir]
+    rc = model_cmd.main(inst_args)
+    if rc != 0:
+        _safe_print(_c(f"{NO} download failed — see above.", RED, color))
+        return rc
+    # Offer to wire .env to the downloaded file (the install path has
+    # already validated the .gguf filename).
+    from urllib.parse import urlparse, unquote
+    fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
+    apply_env = args.apply
+    if not apply_env and sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            ans = input("  Update .env now? [Y/n] ").strip().lower()
+        except EOFError:
+            ans = "n"
+        apply_env = ans in ("", "y", "yes")
+    if apply_env:
+        from atlas.commands import fit as fit_module
+        env_path = fit_module._write_env({
+            "ATLAS_MODEL_FILE": fname,
+            "ATLAS_MODEL_NAME": fname.rsplit(".", 1)[0],
+        })
+        _safe_print(_c(f"  {OK} wrote ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
+                       f"to {env_path}.", GREEN, color))
+        _safe_print("  Re-run `atlas onboard` to continue with the arch "
+                    "and lens checks.")
+        return 0
+    _safe_print(_c("  Now set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME in .env to "
+                   "this file, then re-run `atlas onboard`.", YELL, color))
+    _safe_print("  (onboard reads the model from .env; pass --apply to "
+                "write it automatically.)")
+    return 0
+
+
+def _print_runtime_fit(model_path: str, env: Dict[str, str], color: bool) -> None:
+    """Print whether the model fits on this GPU at the slot count .env is
+    sized for, and whether .env's context size differs from the fit."""
     try:
         from atlas.commands import fit as fit_mod
         from atlas.commands.tier import detect_gpu, primary_gpu
@@ -369,13 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
         if gpu is not None:
             meta = fit_mod.read_gguf_meta(model_path)
             # Compare like-for-like: fit at the slot count .env is sized for.
-            try:
-                slots = int(os.environ.get("ATLAS_PARALLEL_SLOTS")
-                            or env.get("ATLAS_PARALLEL_SLOTS")
-                            or os.environ.get("PARALLEL_SLOTS")
-                            or env.get("PARALLEL_SLOTS") or 4)
-            except ValueError:
-                slots = 4
+            slots = _env_slots(env)
             res = fit_mod.fit_runtime_knobs(meta, gpu.vram_gb,
                                             slots=max(1, slots))
             if res.fits:
@@ -399,25 +451,22 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
     except Exception as e:
         _safe_print(_c(f"  (runtime fit unavailable: {e})", DIM, color))
 
-    # Step 2/3 — preflight + arch gate.
-    _safe_print("[2/5] Checking the inference engine can load it…")
-    loaded, excerpt = _arch_supported(atlas_root, env, model_file,
-                                      start=not args.no_start, color=color)
-    if not loaded:
-        if compose_config.resolve_backend(atlas_root, values=env) == "metal":
-            _safe_print()
-            _safe_print(_c(f"{NO} Native Metal inference is not ready.",
-                           RED, color))
-            _safe_print(excerpt)
-            _safe_print("  Re-run `atlas onboard` after the native server is "
-                        "healthy.")
-        else:
-            _print_rebuild_required(arch, excerpt, color, atlas_root, env)
-        return 2  # action required: operator must rebuild
-    _safe_print(f"  {OK} llama-server is serving the model (arch supported).")
 
-    # Step 4 — lens check.
-    _safe_print("[3/5] Geometric Lens dimension check…")
+def _env_slots(env: Dict[str, str]) -> int:
+    """The parallel slot count the environment or .env sets; 4 when unset
+    or not a number."""
+    try:
+        slots = int(os.environ.get("ATLAS_PARALLEL_SLOTS")
+                    or env.get("ATLAS_PARALLEL_SLOTS")
+                    or os.environ.get("PARALLEL_SLOTS")
+                    or env.get("PARALLEL_SLOTS") or 4)
+    except ValueError:
+        slots = 4
+    return slots
+
+
+def _run_lens_check(args: argparse.Namespace, color: bool) -> None:
+    """Run `atlas lens check`, which prints its own verdict."""
     try:
         from atlas.commands import lens as lens_cmd
         lens_cmd.main(["check"] + (["--no-color"] if args.no_color else []))
@@ -428,7 +477,10 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
     except Exception as e:
         _safe_print(_c(f"  (lens check unavailable: {e})", DIM, color))
 
-    # Step 5 — remaining operator-driven steps (concrete for THIS model).
+
+def _print_remaining_steps(atlas_root: str, model_file: str, color: bool) -> None:
+    """Print the operator-driven steps left for this model: candidates, lens
+    retrain, ASA vector."""
     run_id = os.path.splitext(os.path.basename(model_file))[0] + "_lens"
     _safe_print("[4/5] Remaining steps (operator-driven — candidate gen is hours "
                 "on a large model):")
@@ -446,13 +498,6 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901
     _safe_print(_c("     atlas asa build --layer N", BOLD, color))
     _safe_print("  Do not reuse another model's solutions — C(x) must learn THIS "
                 "model's geometry.")
-
-    _safe_print("[5/5] Baseline: run `atlas doctor` to confirm health "
-                "(lens dim-mismatch is expected until you retrain).")
-    _safe_print()
-    _safe_print(_c(f"{OK} Engine ready for {model_file}. Lens retrain is the "
-                   f"last mile.", GREEN, color))
-    return 0
 
 
 if __name__ == "__main__":

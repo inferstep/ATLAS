@@ -1049,19 +1049,26 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		t.Errorf("finalizeCompletion reads the contract %d times; exactly two are "+
 			"allowed: the delegation and the text-exit scope", n)
 	}
-	for _, fn := range []string{"classifyAgentTier", "terminalCompletionAllowed",
-		"blockingTombstone", "needsPermission", "honestTerminalSummary",
-		"buildSystemPrompt", "buildToolDescriptionsExcluding"} {
-		i := strings.Index(string(body), "func "+fn)
+	// Each function is read from the file that holds it. A name that is not
+	// there is an error: its check would otherwise pass without reading it.
+	for _, c := range []struct{ file, fn string }{
+		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
+		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
+		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
+		{"tools.go", "buildToolDescriptionsExcluding"},
+	} {
+		text := readSourceForTest(t, c.file)
+		i := strings.Index(text, "func "+c.fn)
 		if i < 0 {
+			t.Errorf("%s holds no func %s, so its check reads nothing; name the file that holds it", c.file, c.fn)
 			continue
 		}
-		end := strings.Index(string(body)[i+1:], "\nfunc ")
+		end := strings.Index(text[i+1:], "\nfunc ")
 		if end < 0 {
-			end = len(body) - i - 1
+			end = len(text) - i - 1
 		}
-		if strings.Contains(string(body)[i:i+1+end], "TaskContract") {
-			t.Errorf("%s consults the task contract; only the action-demand policy owner may", fn)
+		if strings.Contains(text[i:i+1+end], "TaskContract") {
+			t.Errorf("%s consults the task contract; only the action-demand policy owner may", c.fn)
 		}
 	}
 	// guardrails.go owns the decision, and only through the one helper.
@@ -1076,6 +1083,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	for _, fn := range []string{"wantsStateChange", "isActionIntentMessage", "isReadOnlyRequest"} {
 		i := strings.Index(gs, "func "+fn)
 		if i < 0 {
+			t.Errorf("guardrails.go holds no func %s, so its check reads nothing; name the file that holds it", fn)
 			continue
 		}
 		end := strings.Index(gs[i+1:], "\nfunc ")
@@ -3849,13 +3857,17 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 	// The prompt never sees them.
 	prompt, _ := os.ReadFile("agent.go")
 	i := strings.Index(string(prompt), "func buildSystemPrompt")
-	if i >= 0 {
-		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
-		body := string(prompt)[i : i+1+end]
-		for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
-			if strings.Contains(body, f) {
-				t.Errorf("buildSystemPrompt reads %q", f)
-			}
+	if i < 0 {
+		t.Fatal("agent.go holds no func buildSystemPrompt, so the prompt check reads nothing; name the file that holds it")
+	}
+	end := strings.Index(string(prompt)[i+1:], "\nfunc ")
+	if end < 0 {
+		end = len(prompt) - i - 1
+	}
+	body := string(prompt)[i : i+1+end]
+	for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
+		if strings.Contains(body, f) {
+			t.Errorf("buildSystemPrompt reads %q", f)
 		}
 	}
 }

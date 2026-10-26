@@ -94,8 +94,9 @@ def test_successful_upgrade_finalizes_on_target(tmp_path):
 def test_failed_pull_restores_previous_release(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(fail_on="pull")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stamp2")
+        eng.run_upgrade(root, "v2.0.0", steps, "stamp2")
     assert "Automatically restored" in str(ei.value)
     # .env is back on the previous tag
     assert eng.read_env_tag(root) == "v1.0.0"
@@ -104,8 +105,9 @@ def test_failed_pull_restores_previous_release(tmp_path):
 def test_failed_readiness_restores(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(ready=False)
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError):
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stamp3")
+        eng.run_upgrade(root, "v2.0.0", steps, "stamp3")
     assert eng.read_env_tag(root) == "v1.0.0"
     # the last up() during restore ran on the previous tag
     up_tags = [tag for (call, tag) in fake.calls if call == "up"]
@@ -115,8 +117,9 @@ def test_failed_readiness_restores(tmp_path):
 def test_failed_smoke_restores(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(smoke=False)
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stamp4")
+        eng.run_upgrade(root, "v2.0.0", steps, "stamp4")
     assert "smoke" in str(ei.value)
     assert eng.read_env_tag(root) == "v1.0.0"
 
@@ -124,8 +127,9 @@ def test_failed_smoke_restores(tmp_path):
 def test_env_backup_preserves_other_keys(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(fail_on="up")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError):
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stamp5")
+        eng.run_upgrade(root, "v2.0.0", steps, "stamp5")
     # restore brought back the full .env, not just the tag
     env = (tmp_path / ".env").read_text()
     assert "OTHER=keep" in env
@@ -217,16 +221,18 @@ def test_a_failed_signature_check_refuses_with_words_that_fit_it(tmp_path, monke
 def test_rollback_without_point_errors(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps()
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_rollback(root, fake.as_steps(root))
+        eng.run_rollback(root, steps)
     assert "no restore point" in str(ei.value)
 
 
 def test_bad_signature_aborts_and_restores(tmp_path):
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(fail_on="verify")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampV")
+        eng.run_upgrade(root, "v2.0.0", steps, "stampV")
     assert "Automatically restored" in str(ei.value)
     # never advanced past verify: no pull/up of the target
     up_target = [t for (c, t) in fake.calls if c == "up" and t == "v2.0.0"]
@@ -264,8 +270,9 @@ def test_restore_never_pulls_the_previous_tag(tmp_path):
     # the locally cached images, not re-pull.
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(ready=False)
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError):
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampP")
+        eng.run_upgrade(root, "v2.0.0", steps, "stampP")
     pulls = [t for (c, t) in fake.calls if c == "pull"]
     assert pulls == ["v2.0.0"]  # target staged once; no pull during restore
     assert eng.read_env_tag(root) == "v1.0.0"
@@ -277,8 +284,9 @@ def test_failed_restore_reports_both_failures(tmp_path):
     # not swallow either.
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(fail_on="up")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_upgrade(root, "v2.0.0", fake.as_steps(root), "stampF")
+        eng.run_upgrade(root, "v2.0.0", steps, "stampF")
     msg = str(ei.value)
     assert "up failed (simulated)" in msg
     assert "ALSO failed" in msg
@@ -289,8 +297,9 @@ def test_rollback_to_missing_tag_restores_env(tmp_path):
     # at it (every later compose up would fail).
     root = _root(tmp_path, "v1.0.0")
     fake = FakeSteps(fail_on="pull")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_rollback(root, fake.as_steps(root), target_tag="v9.9.9")
+        eng.run_rollback(root, steps, target_tag="v9.9.9")
     assert eng.read_env_tag(root) == "v1.0.0"
     assert "restored to the previous tag" in str(ei.value)
 

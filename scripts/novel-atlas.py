@@ -27,6 +27,10 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from novel_tasks import build_tasks
 
+# The files of a task's workspace: the program the agent writes, and the input it reads.
+SOLUTION_FILE = "solve.py"
+INPUT_FILE = "input.txt"
+
 
 # Scoring is EXACT MATCH by decision. The output-separator ambiguity that
 # once made "42, 242" a defensible reading is fixed at the source: every
@@ -191,7 +195,8 @@ def _load_e2e():
     return mod
 
 
-def main() -> int:  # noqa: C901
+def _parse_args() -> argparse.Namespace:
+    """The command line of a run."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=50)
     ap.add_argument("--seed", type=int, default=20260806)
@@ -211,15 +216,12 @@ def main() -> int:  # noqa: C901
                     help="directory the delivered artifact of each task is "
                          "copied into (it is otherwise wiped by the next task)")
     args = ap.parse_args()
+    return args
 
-    import os
-    e2e = _load_e2e()
-    url = args.url or os.environ.get("ATLAS_PROXY_URL", "http://localhost:8090")
 
-    tasks = build_tasks(args.count, args.seed)[args.start:]
-    workspace = Path(args.workspace).expanduser()
-
-    # Provenance: what was measured, by what, against which system.
+def _read_provenance(args: argparse.Namespace, url: str, e2e) -> dict:
+    """The commit, the hashes of the scripts, and what the proxy and the
+    containers say they run."""
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(REPO),
                           capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=str(REPO),
@@ -243,107 +245,98 @@ def main() -> int:  # noqa: C901
             ["docker", "inspect", "--format", "{{.Image}} {{.State.StartedAt}}", name],
             capture_output=True, text=True).stdout.strip()
         provenance["images"][name] = ident
+    return provenance
 
-    evdir = Path(args.save_events) if args.save_events else None
+
+def make_check(nt):
+    """The check of one task: solve.py gives the expected answer on the
+    task's input and on its holdout input."""
+    def check(ws: Path, s=None):
+        prog = ws / SOLUTION_FILE
+        if not prog.exists():
+            return False, "solve.py was never created"
+        import subprocess
+        def run(data: str):
+            (ws / INPUT_FILE).write_text(data)
+            try:
+                p = subprocess.run([sys.executable, SOLUTION_FILE],
+                                   cwd=str(ws), capture_output=True,
+                                   text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                return False, "timeout"
+            if p.returncode != 0:
+                return False, f"failed: {p.stderr.strip()[:120]}"
+            return True, p.stdout.strip()
+        ok, got = run(nt.input_text)
+        if not ok:
+            return False, got
+        if got != nt.expected:
+            return False, f"got {got!r}, want {nt.expected!r}"
+        ok2, got2 = run(nt.holdout_text)
+        (ws / INPUT_FILE).write_text(nt.input_text)
+        if not ok2 or got2 != nt.holdout_expected:
+            return False, (f"holdout mismatch: got {got2!r}, want "
+                           f"{nt.holdout_expected!r}")
+        return True, f"{got} correct, and correct on the holdout"
+    return check
+
+
+def _run_task(e2e, task, nt, url: str, workspace: Path, args: argparse.Namespace,
+              evdir, artdir, results: list) -> None:
+    """Run one task's session and score the solve.py it delivered: append the
+    task's row to results, and print how it went."""
+    t0 = time.time()
+    telemetry_sink = (evdir / f"{nt.name}.telemetry.jsonl") if evdir else None
+    subscriber = TelemetrySubscriber(url, telemetry_sink)
+    subscriber.start()
+    raw_path = (evdir / f"{nt.name}.raw.sse") if evdir else None
+    raw_fh = open(raw_path, "w") if raw_path else None
+    try:
+        session = e2e.run_session(task, 1, url, workspace, args.subdir,
+                                  args.timeout, raw_sink=raw_fh)
+    finally:
+        if raw_fh:
+            raw_fh.close()
+    telemetry_lines = subscriber.stop()
     if evdir:
-        evdir.mkdir(parents=True, exist_ok=True)
-    artdir = Path(args.artifacts) if args.artifacts else None
-    if artdir:
-        artdir.mkdir(parents=True, exist_ok=True)
+        with open(evdir / f"{nt.name}.jsonl", "w") as fh:
+            for ev in getattr(session, "events", []):
+                fh.write(json.dumps(ev) + "\n")
 
-    results = []
-    for i, nt in enumerate(tasks):
-        def make_check(nt):
-            def check(ws: Path, s=None):
-                prog = ws / "solve.py"
-                if not prog.exists():
-                    return False, "solve.py was never created"
-                import subprocess
-                def run(data: str):
-                    (ws / "input.txt").write_text(data)
-                    try:
-                        p = subprocess.run([sys.executable, "solve.py"],
-                                           cwd=str(ws), capture_output=True,
-                                           text=True, timeout=60)
-                    except subprocess.TimeoutExpired:
-                        return False, "timeout"
-                    if p.returncode != 0:
-                        return False, f"failed: {p.stderr.strip()[:120]}"
-                    return True, p.stdout.strip()
-                ok, got = run(nt.input_text)
-                if not ok:
-                    return False, got
-                if got != nt.expected:
-                    return False, f"got {got!r}, want {nt.expected!r}"
-                ok2, got2 = run(nt.holdout_text)
-                (ws / "input.txt").write_text(nt.input_text)
-                if not ok2 or got2 != nt.holdout_expected:
-                    return False, (f"holdout mismatch: got {got2!r}, want "
-                                   f"{nt.holdout_expected!r}")
-                return True, f"{got} correct, and correct on the holdout"
-            return check
+    # The delivered artifact, kept and hashed before the next task wipes
+    # the workspace. This is what is scored -- never an internal candidate.
+    delivered = workspace / SOLUTION_FILE
+    delivered_hash = _file_hash(delivered)
+    if artdir and delivered.exists():
+        (artdir / f"{nt.name}.solve.py").write_bytes(delivered.read_bytes())
 
-        task = e2e.Task(
-            name=nt.name,
-            prompt=nt.prompt,
-            files={"input.txt": nt.input_text},
-            check=make_check(nt),
-            must_exist=("input.txt",),
-            immutable=(),  # solve.py may legitimately rewrite nothing else
-        )
-        print(f"[{args.start + i + 1}/{args.start + len(tasks)}] {nt.name} ...",
-              flush=True)
-        t0 = time.time()
-        telemetry_sink = (evdir / f"{nt.name}.telemetry.jsonl") if evdir else None
-        subscriber = TelemetrySubscriber(url, telemetry_sink)
-        subscriber.start()
-        raw_path = (evdir / f"{nt.name}.raw.sse") if evdir else None
-        raw_fh = open(raw_path, "w") if raw_path else None
-        try:
-            session = e2e.run_session(task, 1, url, workspace, args.subdir,
-                                      args.timeout, raw_sink=raw_fh)
-        finally:
-            if raw_fh:
-                raw_fh.close()
-        telemetry_lines = subscriber.stop()
-        if evdir:
-            with open(evdir / f"{nt.name}.jsonl", "w") as fh:
-                for ev in getattr(session, "events", []):
-                    fh.write(json.dumps(ev) + "\n")
+    ok, detail = task.check(workspace)
+    row = {
+        "task": nt.name, "family": nt.family, "passed": ok,
+        "detail": detail, "turns": getattr(session, "turns", 0),
+        "wall_s": round(time.time() - t0, 1),
+        "delivered_sha256": delivered_hash,
+        "delivered_bytes": delivered.stat().st_size if delivered.exists() else 0,
+        "stream_ok": getattr(session, "stream_ok", None),
+        "quality": getattr(session, "quality", {}),
+        "defects": getattr(session, "defects", []),
+        "raw_sse_sha256": _file_hash(raw_path) if raw_path else "",
+    }
+    row.update(summarize_events(getattr(session, "events", [])))
+    # What V3 did in this session: generations and delivered candidates.
+    row["v3"] = session.v3 if hasattr(session, "v3") else {}
+    row["telemetry"] = summarize_telemetry(telemetry_lines, 0)
+    row["telemetry"]["source_file"] = (
+        str(telemetry_sink) if telemetry_sink else "")
+    results.append(row)
+    print(f"      {'PASS' if ok else 'fail'} turns="
+          f"{getattr(session, 'turns', '?')} "
+          f"{results[-1]['wall_s']}s — {detail[:80]}", flush=True)
 
-        # The delivered artifact, kept and hashed before the next task wipes
-        # the workspace. This is what is scored -- never an internal candidate.
-        delivered = workspace / "solve.py"
-        delivered_hash = _file_hash(delivered)
-        if artdir and delivered.exists():
-            (artdir / f"{nt.name}.solve.py").write_bytes(delivered.read_bytes())
 
-        ok, detail = task.check(workspace)
-        row = {
-            "task": nt.name, "family": nt.family, "passed": ok,
-            "detail": detail, "turns": getattr(session, "turns", 0),
-            "wall_s": round(time.time() - t0, 1),
-            "delivered_sha256": delivered_hash,
-            "delivered_bytes": delivered.stat().st_size if delivered.exists() else 0,
-            "stream_ok": getattr(session, "stream_ok", None),
-            "quality": getattr(session, "quality", {}),
-            "defects": getattr(session, "defects", []),
-            "raw_sse_sha256": _file_hash(raw_path) if raw_path else "",
-        }
-        row.update(summarize_events(getattr(session, "events", [])))
-        # What V3 did in this session: generations and delivered candidates.
-        row["v3"] = session.v3 if hasattr(session, "v3") else {}
-        row["telemetry"] = summarize_telemetry(telemetry_lines, 0)
-        row["telemetry"]["source_file"] = (
-            str(telemetry_sink) if telemetry_sink else "")
-        results.append(row)
-        print(f"      {'PASS' if ok else 'fail'} turns="
-              f"{getattr(session, 'turns', '?')} "
-              f"{results[-1]['wall_s']}s — {detail[:80]}", flush=True)
-        if args.json_out:
-            Path(args.json_out).write_text(json.dumps(
-                {"provenance": provenance, "results": results}, indent=1))
-
+def _print_totals(results: list, provenance: dict) -> None:
+    """Print the passes in all, what V3 did, the stack, and the passes of
+    each family."""
     p = sum(1 for r in results if r["passed"])
     print(f"\nATLAS TOTAL {p}/{len(results)} ({100.0 * p / len(results):.0f}%)")
     writes = sum((r.get("v3") or {}).get("write_calls", 0) for r in results)
@@ -362,6 +355,46 @@ def main() -> int:  # noqa: C901
     for fam in sorted(byfam):
         got, tot = byfam[fam]
         print(f"   {fam:10} {got}/{tot}")
+
+
+def main() -> int:
+    args = _parse_args()
+
+    import os
+    e2e = _load_e2e()
+    url = args.url or os.environ.get("ATLAS_PROXY_URL", "http://localhost:8090")
+
+    tasks = build_tasks(args.count, args.seed)[args.start:]
+    workspace = Path(args.workspace).expanduser()
+
+    # Provenance: what was measured, by what, against which system.
+    provenance = _read_provenance(args, url, e2e)
+
+    evdir = Path(args.save_events) if args.save_events else None
+    if evdir:
+        evdir.mkdir(parents=True, exist_ok=True)
+    artdir = Path(args.artifacts) if args.artifacts else None
+    if artdir:
+        artdir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for i, nt in enumerate(tasks):
+        task = e2e.Task(
+            name=nt.name,
+            prompt=nt.prompt,
+            files={INPUT_FILE: nt.input_text},
+            check=make_check(nt),
+            must_exist=(INPUT_FILE,),
+            immutable=(),  # solve.py may legitimately rewrite nothing else
+        )
+        print(f"[{args.start + i + 1}/{args.start + len(tasks)}] {nt.name} ...",
+              flush=True)
+        _run_task(e2e, task, nt, url, workspace, args, evdir, artdir, results)
+        if args.json_out:
+            Path(args.json_out).write_text(json.dumps(
+                {"provenance": provenance, "results": results}, indent=1))
+
+    _print_totals(results, provenance)
     return 0
 
 

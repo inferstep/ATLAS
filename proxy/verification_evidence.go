@@ -59,22 +59,7 @@ type verificationEvidenceRequest struct {
 // required, and this reports whether that exact thing ran and passed against
 // these exact bytes.
 func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvidenceRequest) (proxyEvidence, bool) {
-	if ctx == nil {
-		return proxyEvidence{}, false
-	}
-	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-		return proxyEvidence{}, false
-	}
-	if req.Obligation.Kind != ObligationDeclaredCommand {
-		return proxyEvidence{}, false
-	}
-	// The floor may be any strength a client can declare. What it may not be
-	// is a strength no declaration produces: an obligation carrying oracle, or
-	// carrying nothing, was not built from a verification requirement.
-	if !verificationKinds[req.Obligation.RequiredStrength] {
-		return proxyEvidence{}, false
-	}
-	if !stagingCommandOutcomes[req.Result.Outcome] {
+	if !verificationRunAdmissible(ctx, req) {
 		return proxyEvidence{}, false
 	}
 
@@ -122,6 +107,49 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 		return proxyEvidence{}, false
 	}
 
+	p := declaredVerificationProvenance(ctx, req, requestID, requirement)
+	outcome := ValidationFailed
+	// Passing means the exact command exited zero having changed neither the
+	// candidate it was testing nor anything else it could see. A command that
+	// rewrote its own subject proved something about bytes that no longer
+	// exist.
+	if req.Result.Outcome == stagingExitedZero &&
+		!req.Result.MutatedTarget && !req.Result.MutatedWorkspace {
+		outcome = ValidationPassed
+	}
+	return proxyEvidence{Provenance: p, Outcome: outcome}, true
+}
+
+// verificationRunAdmissible reports whether this producer may judge the
+// request at all: a live context, a declared-command obligation whose floor a
+// client can declare, and a staged outcome from the closed set.
+func verificationRunAdmissible(ctx *AgentContext, req verificationEvidenceRequest) bool {
+	if ctx == nil {
+		return false
+	}
+	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+		return false
+	}
+	if req.Obligation.Kind != ObligationDeclaredCommand {
+		return false
+	}
+	// The floor may be any strength a client can declare. What it may not be
+	// is a strength no declaration produces: an obligation carrying oracle, or
+	// carrying nothing, was not built from a verification requirement.
+	if !verificationKinds[req.Obligation.RequiredStrength] {
+		return false
+	}
+	if !stagingCommandOutcomes[req.Result.Outcome] {
+		return false
+	}
+	return true
+}
+
+// declaredVerificationProvenance is the binding for one staged run of a
+// declared command: the identity the run was bound to, the command by hash,
+// and the strength the run may be said to have shown.
+func declaredVerificationProvenance(ctx *AgentContext, req verificationEvidenceRequest,
+	requestID string, requirement VerificationRequirement) V3EvidenceProvenance {
 	p := V3EvidenceProvenance{
 		Source:              ProvenanceClientDeclaredVerification,
 		RequestID:           requestID,
@@ -148,16 +176,7 @@ func produceDeclaredVerificationEvidence(ctx *AgentContext, req verificationEvid
 		// only that it agrees with itself.
 		ObservedStrength: verificationObservedStrength(ctx, requirement),
 	}
-	outcome := ValidationFailed
-	// Passing means the exact command exited zero having changed neither the
-	// candidate it was testing nor anything else it could see. A command that
-	// rewrote its own subject proved something about bytes that no longer
-	// exist.
-	if req.Result.Outcome == stagingExitedZero &&
-		!req.Result.MutatedTarget && !req.Result.MutatedWorkspace {
-		outcome = ValidationPassed
-	}
-	return proxyEvidence{Provenance: p, Outcome: outcome}, true
+	return p
 }
 
 // requestDeclaredCommand reports whether the validated request named this

@@ -484,38 +484,8 @@ class V3Pipeline:
             telemetry_dir=telemetry_dir,
         )
 
-    def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:  # noqa: C901
-        """Run a single task through the full V3 pipeline.
-
-        Returns a dict with:
-          - passed: bool
-          - code: str (winning code)
-          - phase_solved: str ("phase1", "pr_cot", "refinement", "none")
-          - candidates_generated: int
-          - total_tokens: int
-          - total_time_ms: float
-          - telemetry: dict (per-phase details)
-        """
-        start_time = time.time()
-        task_id = task_id or task.task_id
-        llm = LLMAdapter(self.llama_url)
-        sandbox = SandboxAdapter(task)
-        embed = EmbedAdapter(self.llama_url)
-
-        result = {
-            "task_id": task_id,
-            "passed": False,
-            "code": "",
-            "phase_solved": "none",
-            "candidates_generated": 0,
-            "total_tokens": 0,
-            "total_time_ms": 0.0,
-            "telemetry": {},
-        }
-
-        # Per-phase latency tracking
-        latency = {}
-
+    def _generate_probe(self, task, llm, result, latency):
+        """The probe: one candidate scored by the lens; returns (probe_candidate, probe_scores)."""
         # ===== PROBE: quick candidate for a data-driven early exit =====
         # Generate a single candidate; its lens scores feed candidate
         # sorting, selection, and the CxGx allocation gate below. Uses
@@ -570,7 +540,10 @@ class V3Pipeline:
             except Exception as e:
                 result["telemetry"]["probe_error"] = str(e)
             latency["probe_ms"] = (time.time() - probe_start) * 1000
+        return probe_candidate, probe_scores
 
+    def _test_probe(self, task, task_id, probe_candidate, embed, result):
+        """Sandbox-test the probe and bank its embedding. True when it passed."""
         # ===== Sandbox-test probe for data-driven early exit =====
         # Instead of predicting difficulty from energy (unreliable on 9B),
         # test the probe directly: if it passes, skip PlanSearch/DivSampling.
@@ -598,7 +571,10 @@ class V3Pipeline:
                 # best-effort: swallow on failure (caller continues)
                 pass
             result["telemetry"]["probe_sandbox_passed"] = probe_passed_sandbox
+        return probe_passed_sandbox
 
+    def _allocate_k(self, probe_passed_sandbox, probe_scores, result, latency):
+        """Phase 2: returns (k, bf_tier), the number of candidates and their tier."""
         # ===== Phase 2: CxGx K + Budget Tier allocation =====
         phase2_start = time.time()
         if probe_passed_sandbox:
@@ -639,7 +615,106 @@ class V3Pipeline:
         latency["phase2_alloc_ms"] = (time.time() - phase2_start) * 1000
         result["telemetry"]["adaptive_k"] = k
         result["telemetry"]["budget_tier"] = budget_tier
+        return k, bf_tier
 
+    def _add_plansearch_candidates(self, task, task_id, remaining_k, candidates, constraints,
+                                   result):
+        """Add PlanSearch's candidates to candidates and their constraints to constraints."""
+        try:
+            # PlanSearch does multiple sequential LLM calls (constraint
+            # extraction + plan construction + code gen). Use a longer
+            # timeout to handle long competition prompts at 9B speed.
+            ps_llm = LLMAdapter(self.llama_url, timeout=300)
+            ps_result = self.plan_search.generate(
+                problem=task.prompt, task_id=task_id,
+                llm_call=ps_llm, num_plans=remaining_k,
+            )
+            result["total_tokens"] += ps_llm.total_tokens
+            for cs in ps_result.constraint_sets:
+                constraints.extend(cs.constraints)
+            # Log constraint sets for qualitative analysis (V3.1 Section 5.3)
+            result["telemetry"]["plansearch_constraints"] = [
+                {"plan_index": i, "constraints": cs.constraints}
+                for i, cs in enumerate(ps_result.constraint_sets)
+            ]
+            for i, code in enumerate(ps_result.candidates):
+                if not code:
+                    continue
+                try:
+                    energy_raw, energy_norm = score_candidate(
+                        code, LENS_URL,
+                    )
+                except Exception:
+                    energy_raw, energy_norm = None, None
+                candidates.append({
+                    "index": len(candidates),
+                    "code": code,
+                    "response": "",
+                    "tokens": 0,
+                    "time_ms": 0.0,
+                    "energy": energy_raw,
+                    "energy_norm": energy_norm,
+                    "passed": None,
+                })
+            result["telemetry"]["plansearch_tokens"] = ps_llm.total_tokens
+        except Exception as e:
+            result["telemetry"]["plansearch_error"] = str(e)
+
+    def _fill_with_div_sampling(self, task, task_id, k, bf_tier, candidates, result):
+        """Add DivSampling + Budget Forcing candidates, made in parallel, up to k."""
+        def _generate_div_candidate(extra_idx):
+            """Generate a single DivSampling candidate (thread-safe)."""
+            try:
+                perturbed = self.div_sampling.apply(
+                    task.prompt, candidate_index=extra_idx,
+                    task_id=task_id,
+                )
+                chatml = self.budget_forcing.format_chatml(
+                    perturbed, bf_tier,
+                )
+                max_tok = self.budget_forcing.get_max_tokens(bf_tier)
+                # Each thread creates its own LLMAdapter for thread safety
+                thread_llm = LLMAdapter(self.llama_url)
+                response, tokens, t_ms = thread_llm(
+                    chatml, DIVERSITY_TEMPERATURE, max_tok,
+                    42 + extra_idx,
+                )
+                code = extract_code(response)
+                if not code:
+                    return None
+                try:
+                    energy_raw, energy_norm = score_candidate(
+                        code, LENS_URL,
+                    )
+                except Exception:
+                    energy_raw, energy_norm = None, None
+                return {
+                    "code": code,
+                    "response": response,
+                    "tokens": tokens,
+                    "time_ms": t_ms,
+                    "energy": energy_raw,
+                    "energy_norm": energy_norm,
+                    "passed": None,
+                }
+            except Exception:
+                return None
+
+        fill_indices = list(range(len(candidates), k))
+        with ThreadPoolExecutor(max_workers=min(len(fill_indices), 3)) as pool:
+            futures = {pool.submit(_generate_div_candidate, idx): idx
+                       for idx in fill_indices}
+            for future in as_completed(futures):
+                cand = future.result()
+                if cand:
+                    cand["index"] = len(candidates)
+                    candidates.append(cand)
+                    result["total_tokens"] += cand["tokens"]
+
+    def _build_candidate_pool(self, task, task_id, k, bf_tier, llm, probe_candidate, result,
+                              latency):
+        """Phase 1: the probe, PlanSearch and DivSampling candidates up to k, and a
+        direct generation when there is none. Returns (candidates, constraints)."""
         # ===== Phase 1: Build candidate pool =====
         phase1_start = time.time()
         candidates = []
@@ -652,96 +727,12 @@ class V3Pipeline:
         # Generate constraint-diverse candidates via PlanSearch
         remaining_k = max(0, k - len(candidates))
         if self.enable_phase1 and remaining_k > 0:
-            try:
-                # PlanSearch does multiple sequential LLM calls (constraint
-                # extraction + plan construction + code gen). Use a longer
-                # timeout to handle long competition prompts at 9B speed.
-                ps_llm = LLMAdapter(self.llama_url, timeout=300)
-                ps_result = self.plan_search.generate(
-                    problem=task.prompt, task_id=task_id,
-                    llm_call=ps_llm, num_plans=remaining_k,
-                )
-                result["total_tokens"] += ps_llm.total_tokens
-                for cs in ps_result.constraint_sets:
-                    constraints.extend(cs.constraints)
-                # Log constraint sets for qualitative analysis (V3.1 Section 5.3)
-                result["telemetry"]["plansearch_constraints"] = [
-                    {"plan_index": i, "constraints": cs.constraints}
-                    for i, cs in enumerate(ps_result.constraint_sets)
-                ]
-                for i, code in enumerate(ps_result.candidates):
-                    if not code:
-                        continue
-                    try:
-                        energy_raw, energy_norm = score_candidate(
-                            code, LENS_URL,
-                        )
-                    except Exception:
-                        energy_raw, energy_norm = None, None
-                    candidates.append({
-                        "index": len(candidates),
-                        "code": code,
-                        "response": "",
-                        "tokens": 0,
-                        "time_ms": 0.0,
-                        "energy": energy_raw,
-                        "energy_norm": energy_norm,
-                        "passed": None,
-                    })
-                result["telemetry"]["plansearch_tokens"] = ps_llm.total_tokens
-            except Exception as e:
-                result["telemetry"]["plansearch_error"] = str(e)
+            self._add_plansearch_candidates(task, task_id, remaining_k, candidates,
+                                            constraints, result)
 
         # Fill remaining slots with DivSampling + Budget Forcing (parallel)
         if self.enable_phase1 and len(candidates) < k:
-            def _generate_div_candidate(extra_idx):
-                """Generate a single DivSampling candidate (thread-safe)."""
-                try:
-                    perturbed = self.div_sampling.apply(
-                        task.prompt, candidate_index=extra_idx,
-                        task_id=task_id,
-                    )
-                    chatml = self.budget_forcing.format_chatml(
-                        perturbed, bf_tier,
-                    )
-                    max_tok = self.budget_forcing.get_max_tokens(bf_tier)
-                    # Each thread creates its own LLMAdapter for thread safety
-                    thread_llm = LLMAdapter(self.llama_url)
-                    response, tokens, t_ms = thread_llm(
-                        chatml, DIVERSITY_TEMPERATURE, max_tok,
-                        42 + extra_idx,
-                    )
-                    code = extract_code(response)
-                    if not code:
-                        return None
-                    try:
-                        energy_raw, energy_norm = score_candidate(
-                            code, LENS_URL,
-                        )
-                    except Exception:
-                        energy_raw, energy_norm = None, None
-                    return {
-                        "code": code,
-                        "response": response,
-                        "tokens": tokens,
-                        "time_ms": t_ms,
-                        "energy": energy_raw,
-                        "energy_norm": energy_norm,
-                        "passed": None,
-                    }
-                except Exception:
-                    return None
-
-            fill_indices = list(range(len(candidates), k))
-            with ThreadPoolExecutor(max_workers=min(len(fill_indices), 3)) as pool:
-                futures = {pool.submit(_generate_div_candidate, idx): idx
-                           for idx in fill_indices}
-                for future in as_completed(futures):
-                    cand = future.result()
-                    if cand:
-                        cand["index"] = len(candidates)
-                        candidates.append(cand)
-                        result["total_tokens"] += cand["tokens"]
+            self._fill_with_div_sampling(task, task_id, k, bf_tier, candidates, result)
 
         # Fallback: if no candidates at all, direct generation
         # Use BudgetForcing "standard" tier — allows thinking (up to 2048
@@ -775,14 +766,16 @@ class V3Pipeline:
 
         latency["phase1_gen_ms"] = (time.time() - phase1_start) * 1000
         result["candidates_generated"] = len(candidates)
+        return candidates, constraints
 
+    def _test_candidates(self, task, task_id, candidates, embed, latency):
+        """Sandbox-test each candidate and bank its embedding; returns the passing ones."""
         # ===== Test ALL candidates in sandbox (pipelined, V3.1 4.2) =====
         # Sandbox tests + embedding storage run in parallel threads.
         # Candidates sorted by energy (low=easy first) for early-exit potential;
         # a candidate the Lens did not score has no energy and goes last.
         sandbox_start = time.time()
         candidates.sort(key=energy_rank_key)
-        passing_candidates = []
 
         def _test_and_embed(cand):
             """Sandbox test + embedding storage for one candidate."""
@@ -812,6 +805,15 @@ class V3Pipeline:
                 pass
             return cand
 
+        passing_candidates = self._run_candidate_tests(candidates, _test_and_embed)
+
+        latency["sandbox_ms"] = (time.time() - sandbox_start) * 1000
+        return passing_candidates
+
+    @staticmethod
+    def _run_candidate_tests(candidates, _test_and_embed):
+        """Run _test_and_embed on each candidate (in threads when several); returns the passers."""
+        passing_candidates = []
         n_workers = min(len(candidates), 3) if len(candidates) > 1 else 1
         if n_workers > 1:
             with ThreadPoolExecutor(max_workers=n_workers) as pool:
@@ -829,9 +831,10 @@ class V3Pipeline:
                 cand = _test_and_embed(cand)
                 if cand.get("passed"):
                     passing_candidates.append(cand)
+        return passing_candidates
 
-        latency["sandbox_ms"] = (time.time() - sandbox_start) * 1000
-
+    def _record_candidates(self, candidates, passing_candidates, result):
+        """Log every candidate for analysis; keep the best code when none passed."""
         # Log per-candidate energies, pass/fail, AND code for analysis.
         # Storing all candidate codes enables ablation replay: run once with
         # full pipeline, then derive other conditions by replaying selection
@@ -857,39 +860,125 @@ class V3Pipeline:
         if candidates and not passing_candidates:
             result["code"] = candidates[0]["code"]  # Best by energy (sorted)
 
-        # ===== Select best passing candidate =====
-        # Selection-strategy pick (lens = min C(x) energy by default). S*
-        # tiebreaking used to run first for 2+ passers; across 118 H200
-        # tiebreaks with the fixed stdin adapter every pair scored 0-0 and
-        # 110/110 winners equaled the lens min-energy pick — zero signal.
-        if passing_candidates:
-            result["passed"] = True
-            result["phase_solved"] = "phase1"
+    def _finish_with_passing_candidate(self, task_id, candidates, passing_candidates, llm,
+                                       result, latency, start_time):
+        """Phase 1 solved the task: select among the passing candidates, log, return."""
+        result["passed"] = True
+        result["phase_solved"] = "phase1"
 
-            # Build CandidateInfo objects for strategy-based selection
-            candidate_infos = [
-                CandidateInfo(
-                    index=c["index"], code=c["code"],
-                    energy=c["energy"], passed=True,
-                    logprobs=llm.last_logprobs if c["index"] == candidates[-1]["index"] else None,
-                )
-                for c in passing_candidates
-            ]
-
-            selected = select_candidate(
-                candidate_infos, strategy=self.selection_strategy,
-                seed=42,
+        # Build CandidateInfo objects for strategy-based selection
+        candidate_infos = [
+            CandidateInfo(
+                index=c["index"], code=c["code"],
+                energy=c["energy"], passed=True,
+                logprobs=llm.last_logprobs if c["index"] == candidates[-1]["index"] else None,
             )
-            result["code"] = selected.code if selected else passing_candidates[0]["code"]
+            for c in passing_candidates
+        ]
 
-            result["telemetry"]["selection_strategy"] = self.selection_strategy
+        selected = select_candidate(
+            candidate_infos, strategy=self.selection_strategy,
+            seed=42,
+        )
+        result["code"] = selected.code if selected else passing_candidates[0]["code"]
 
-            result["telemetry"]["latency"] = latency
-            result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
-            result["total_time_ms"] = (time.time() - start_time) * 1000
-            self._log_v3_event(task_id, result)
-            return result
+        result["telemetry"]["selection_strategy"] = self.selection_strategy
 
+        result["telemetry"]["latency"] = latency
+        result["total_tokens"] = max(result["total_tokens"], llm.total_tokens)
+        result["total_time_ms"] = (time.time() - start_time) * 1000
+        self._log_v3_event(task_id, result)
+        return result
+
+    def _try_pr_cot_repair(self, task, task_id, failing, sandbox, result,
+                           phase3_strategies_tried):
+        """Strategy 1, PR-CoT repair of the best failing candidate. Returns its tokens."""
+        phase3_extra_tokens = 0
+        phase3_strategies_tried.append("pr_cot")
+        pr_llm = LLMAdapter(self.llama_url, timeout=300)
+        try:
+            best_failing = failing[0]
+            error_msg = best_failing.error_output or "All test cases failed"
+
+            repair_result = self.pr_cot.repair(
+                problem=task.prompt,
+                code=best_failing.code,
+                error=error_msg,
+                llm_call=pr_llm,
+                task_id=task_id,
+            )
+            phase3_extra_tokens += pr_llm.total_tokens
+            for repair_code in repair_result.repairs:
+                if not repair_code:
+                    continue
+                try:
+                    # Test repairs directly against real sandbox.
+                    # Self-test gating was filtering valid repairs on 9B
+                    # (0/15 success rate). Direct sandbox testing is more
+                    # reliable — costs a few extra sandbox calls but
+                    # eliminates false-negative self-test rejections.
+                    real_passed, _, _ = sandbox(repair_code, "")
+                    if real_passed:
+                        result["passed"] = True
+                        result["code"] = repair_code
+                        result["phase_solved"] = "pr_cot"
+                        break
+                except Exception:  # noqa: S112
+                    continue
+        except Exception as e:
+            result["telemetry"]["pr_cot_error"] = str(e)
+        return phase3_extra_tokens
+
+    def _try_refinement_loop(self, task, task_id, failing, constraints, llm, sandbox,
+                             self_verify_sandbox, embed, result, phase3_strategies_tried):
+        """Strategy 2, the refinement loop if one iteration fits its budget; returns its tokens."""
+        phase3_extra_tokens = 0
+        # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
+        # Entered only when one iteration (~3 sequential LLM calls at the
+        # per-call latency observed on this task) fits inside the loop's
+        # own max_time_ms budget — the binding constraint in bench, which
+        # has no outer wall-clock cap. H200 join: 453/487 refinement
+        # entries exhausted the budget with ZERO completed iterations
+        # while burning ~6 minutes each.
+        run_refinement = bool(not result["passed"] and failing)
+        if run_refinement:
+            est_ms = estimate_iteration_ms(llm.avg_call_ms)
+            budget_ms = self.refinement_loop.config.max_time_ms
+            if not can_afford_iteration(budget_ms, est_ms):
+                run_refinement = False
+                result["telemetry"]["refinement_skipped"] = {
+                    "estimated_iteration_ms": round(est_ms),
+                    "budget_ms": round(budget_ms),
+                }
+        if run_refinement:
+            phase3_strategies_tried.append("refinement")
+            ref_llm = LLMAdapter(self.llama_url, timeout=300)
+            try:
+                ref_result = self.refinement_loop.run(
+                    problem=task.prompt,
+                    failing_candidates=failing,
+                    original_constraints=constraints,
+                    llm_call=ref_llm,
+                    sandbox_run=self_verify_sandbox,
+                    embed_call=embed,
+                    task_id=task_id,
+                )
+                phase3_extra_tokens += ref_llm.total_tokens
+                if ref_result.solved:
+                    real_passed, _, _ = sandbox(ref_result.winning_code, "")
+                    if real_passed:
+                        result["passed"] = True
+                        result["code"] = ref_result.winning_code
+                        result["phase_solved"] = "refinement"
+                        result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
+            except Exception as e:
+                result["telemetry"]["refinement_error"] = str(e)
+        return phase3_extra_tokens
+
+    def _run_phase3(self, task, task_id, candidates, constraints, llm, sandbox, embed, result,
+                    latency, start_time):
+        """Phase 3, when no candidate passed: self-tests, then PR-CoT and the
+        refinement loop repair the failing candidates; logs and returns the result."""
         # ===== Phase 3: Refinement cascade =====
         phase3_start = time.time()
         if not self.enable_phase3:
@@ -937,80 +1026,12 @@ class V3Pipeline:
 
         # --- Strategy 1: PR-CoT quick repair (2-6 LLM calls) ---
         if failing:
-            phase3_strategies_tried.append("pr_cot")
-            pr_llm = LLMAdapter(self.llama_url, timeout=300)
-            try:
-                best_failing = failing[0]
-                error_msg = best_failing.error_output or "All test cases failed"
+            phase3_extra_tokens += self._try_pr_cot_repair(
+                task, task_id, failing, sandbox, result, phase3_strategies_tried)
 
-                repair_result = self.pr_cot.repair(
-                    problem=task.prompt,
-                    code=best_failing.code,
-                    error=error_msg,
-                    llm_call=pr_llm,
-                    task_id=task_id,
-                )
-                phase3_extra_tokens += pr_llm.total_tokens
-                for repair_code in repair_result.repairs:
-                    if not repair_code:
-                        continue
-                    try:
-                        # Test repairs directly against real sandbox.
-                        # Self-test gating was filtering valid repairs on 9B
-                        # (0/15 success rate). Direct sandbox testing is more
-                        # reliable — costs a few extra sandbox calls but
-                        # eliminates false-negative self-test rejections.
-                        real_passed, _, _ = sandbox(repair_code, "")
-                        if real_passed:
-                            result["passed"] = True
-                            result["code"] = repair_code
-                            result["phase_solved"] = "pr_cot"
-                            break
-                    except Exception:  # noqa: S112
-                        continue
-            except Exception as e:
-                result["telemetry"]["pr_cot_error"] = str(e)
-
-        # --- Strategy 2: Refinement Loop (3-15 LLM calls) ---
-        # Entered only when one iteration (~3 sequential LLM calls at the
-        # per-call latency observed on this task) fits inside the loop's
-        # own max_time_ms budget — the binding constraint in bench, which
-        # has no outer wall-clock cap. H200 join: 453/487 refinement
-        # entries exhausted the budget with ZERO completed iterations
-        # while burning ~6 minutes each.
-        run_refinement = bool(not result["passed"] and failing)
-        if run_refinement:
-            est_ms = estimate_iteration_ms(llm.avg_call_ms)
-            budget_ms = self.refinement_loop.config.max_time_ms
-            if not can_afford_iteration(budget_ms, est_ms):
-                run_refinement = False
-                result["telemetry"]["refinement_skipped"] = {
-                    "estimated_iteration_ms": round(est_ms),
-                    "budget_ms": round(budget_ms),
-                }
-        if run_refinement:
-            phase3_strategies_tried.append("refinement")
-            ref_llm = LLMAdapter(self.llama_url, timeout=300)
-            try:
-                ref_result = self.refinement_loop.run(
-                    problem=task.prompt,
-                    failing_candidates=failing,
-                    original_constraints=constraints,
-                    llm_call=ref_llm,
-                    sandbox_run=self_verify_sandbox,
-                    embed_call=embed,
-                    task_id=task_id,
-                )
-                phase3_extra_tokens += ref_llm.total_tokens
-                if ref_result.solved:
-                    real_passed, _, _ = sandbox(ref_result.winning_code, "")
-                    if real_passed:
-                        result["passed"] = True
-                        result["code"] = ref_result.winning_code
-                        result["phase_solved"] = "refinement"
-                        result["telemetry"]["refinement_iterations"] = ref_result.total_iterations
-            except Exception as e:
-                result["telemetry"]["refinement_error"] = str(e)
+        phase3_extra_tokens += self._try_refinement_loop(
+            task, task_id, failing, constraints, llm, sandbox, self_verify_sandbox, embed,
+            result, phase3_strategies_tried)
 
         result["telemetry"]["phase3_strategies_tried"] = phase3_strategies_tried
         result["total_tokens"] += phase3_extra_tokens
@@ -1020,6 +1041,58 @@ class V3Pipeline:
         result["total_time_ms"] = (time.time() - start_time) * 1000
         self._log_v3_event(task_id, result)
         return result
+
+    def run_task(self, task: BenchmarkTask, task_id: str = "") -> Dict[str, Any]:
+        """Run a single task through the full V3 pipeline.
+
+        Returns a dict with:
+          - passed: bool
+          - code: str (winning code)
+          - phase_solved: str ("phase1", "pr_cot", "refinement", "none")
+          - candidates_generated: int
+          - total_tokens: int
+          - total_time_ms: float
+          - telemetry: dict (per-phase details)
+        """
+        start_time = time.time()
+        task_id = task_id or task.task_id
+        llm = LLMAdapter(self.llama_url)
+        sandbox = SandboxAdapter(task)
+        embed = EmbedAdapter(self.llama_url)
+
+        result = {
+            "task_id": task_id,
+            "passed": False,
+            "code": "",
+            "phase_solved": "none",
+            "candidates_generated": 0,
+            "total_tokens": 0,
+            "total_time_ms": 0.0,
+            "telemetry": {},
+        }
+
+        # Per-phase latency tracking
+        latency = {}
+
+        probe_candidate, probe_scores = self._generate_probe(task, llm, result, latency)
+        probe_passed_sandbox = self._test_probe(task, task_id, probe_candidate, embed, result)
+        k, bf_tier = self._allocate_k(probe_passed_sandbox, probe_scores, result, latency)
+        candidates, constraints = self._build_candidate_pool(
+            task, task_id, k, bf_tier, llm, probe_candidate, result, latency)
+        passing_candidates = self._test_candidates(task, task_id, candidates, embed, latency)
+        self._record_candidates(candidates, passing_candidates, result)
+
+        # ===== Select best passing candidate =====
+        # Selection-strategy pick (lens = min C(x) energy by default). S*
+        # tiebreaking used to run first for 2+ passers; across 118 H200
+        # tiebreaks with the fixed stdin adapter every pair scored 0-0 and
+        # 110/110 winners equaled the lens min-energy pick — zero signal.
+        if passing_candidates:
+            return self._finish_with_passing_candidate(
+                task_id, candidates, passing_candidates, llm, result, latency, start_time)
+
+        return self._run_phase3(task, task_id, candidates, constraints, llm, sandbox, embed,
+                                result, latency, start_time)
 
     def _log_v3_event(self, task_id: str, result: Dict) -> None:
         """Log a unified V3 pipeline event to JSONL.
@@ -1230,37 +1303,8 @@ def load_lcb_tasks():
     return ds.tasks
 
 
-def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
-                     enable_phase1=True,
-                     enable_phase3=True, selection_strategy="lens"):
-    """Run V3 benchmark on LiveCodeBench."""
-    if run_id is None:
-        run_id = f"v3_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    run_dir = config.results_dir / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save run metadata
-    meta = {
-        "run_id": run_id,
-        "start_time": datetime.now(timezone.utc).isoformat(),
-        "version": "v3",
-        "enable_phase1": enable_phase1,
-        "enable_phase3": enable_phase3,
-        "selection_strategy": selection_strategy,
-        "smoke_only": smoke_only,
-        "max_tasks": max_tasks,
-    }
-    atomic_write_json(run_dir / "run_meta.json", meta)
-
-    print("=" * 60)
-    print("  ATLAS V3 Benchmark")
-    print(f"  Run ID: {run_id}")
-    print(f"  Results: {run_dir}")
-    print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}")
-    print(f"  Phase 3: {'ON' if enable_phase3 else 'OFF'}")
-    print("=" * 60)
-
+def _preflight_checks():
+    """llama-server must answer or the run stops (exit 1); the lens and its model are reported."""
     # Pre-flight checks
     print("\nPre-flight checks...")
     try:
@@ -1306,6 +1350,9 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     if not lens_ok:
         print("  Lens model: UNAVAILABLE — CxGx gate falls back to k=3")
 
+
+def _load_tasks(smoke_only, max_tasks):
+    """The run's tasks: all, the first 10 (smoke), or the first max_tasks."""
     # Load dataset
     print("\nLoading LiveCodeBench...", end=" ", flush=True)
     tasks = load_lcb_tasks()
@@ -1317,19 +1364,11 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
     elif max_tasks:
         tasks = tasks[:max_tasks]
         print(f"  LIMITED MODE: running {len(tasks)} tasks")
+    return tasks
 
-    # Run benchmark
-    print(f"\nRunning V3 pipeline on {len(tasks)} tasks...")
-    print("-" * 60)
 
-    runner = V3BenchmarkRunner(
-        run_dir,
-        enable_phase1=enable_phase1,
-        enable_phase3=enable_phase3,
-        selection_strategy=selection_strategy,
-    )
-    results = runner.run_lcb(tasks)
-
+def _print_run_summary(results, run_dir):
+    """Print the pass rate and phase breakdown; returns (passed, total, rate, breakdown)."""
     # Summary
     passed = sum(1 for r in results.values() if r.get("passed"))
     total = len(results)
@@ -1349,6 +1388,57 @@ def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
         print(f"    {phase}: {count}")
     print(f"  Results: {run_dir}")
     print("=" * 60)
+    return passed, total, rate, breakdown
+
+
+def run_v3_benchmark(run_id=None, smoke_only=False, max_tasks=None,
+                     enable_phase1=True,
+                     enable_phase3=True, selection_strategy="lens"):
+    """Run V3 benchmark on LiveCodeBench."""
+    if run_id is None:
+        run_id = f"v3_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    run_dir = config.results_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save run metadata
+    meta = {
+        "run_id": run_id,
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "version": "v3",
+        "enable_phase1": enable_phase1,
+        "enable_phase3": enable_phase3,
+        "selection_strategy": selection_strategy,
+        "smoke_only": smoke_only,
+        "max_tasks": max_tasks,
+    }
+    atomic_write_json(run_dir / "run_meta.json", meta)
+
+    print("=" * 60)
+    print("  ATLAS V3 Benchmark")
+    print(f"  Run ID: {run_id}")
+    print(f"  Results: {run_dir}")
+    print(f"  Phase 1: {'ON' if enable_phase1 else 'OFF'}")
+    print(f"  Phase 3: {'ON' if enable_phase3 else 'OFF'}")
+    print("=" * 60)
+
+    _preflight_checks()
+
+    tasks = _load_tasks(smoke_only, max_tasks)
+
+    # Run benchmark
+    print(f"\nRunning V3 pipeline on {len(tasks)} tasks...")
+    print("-" * 60)
+
+    runner = V3BenchmarkRunner(
+        run_dir,
+        enable_phase1=enable_phase1,
+        enable_phase3=enable_phase3,
+        selection_strategy=selection_strategy,
+    )
+    results = runner.run_lcb(tasks)
+
+    passed, total, rate, breakdown = _print_run_summary(results, run_dir)
 
     # Update metadata
     meta["end_time"] = datetime.now(timezone.utc).isoformat()

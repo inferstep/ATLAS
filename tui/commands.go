@@ -178,6 +178,9 @@ Keys
 //	consumed = false → not a slash command; pass to /v1/agent as usual
 //	cmd              → optional tea.Cmd to run async work (shell out)
 //	quit             → true if the model should tea.Quit immediately
+//
+// A command whose case is more than one return statement has its own slash method below,
+// which returns the same three values.
 func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit bool) {
 	if !strings.HasPrefix(input, "/") {
 		return false, nil, false
@@ -193,32 +196,13 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 
 	switch cmdName {
 	case "/help", "/?":
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "help", Body: slashCommandHelp,
-		})
-		return true, nil, false
+		return m.slashHelp()
 
 	case "/quit", "/exit":
 		return true, tea.Quit, true
 
 	case "/demo":
-		// Quit the main TUI and hand off to the split-pane recording demo
-		// (base agent vs V3, same proxy/model). Length filters the prompt bank.
-		length := "medium"
-		if len(args) > 0 {
-			switch args[0] {
-			case "short", "medium", "long":
-				length = args[0]
-			default:
-				m.chat = append(m.chat, chatMessage{
-					Role: roleSystem, Meta: "error",
-					Body: "usage: /demo [short|medium|long]",
-				})
-				return true, nil, false
-			}
-		}
-		m.launchDemoLength = length
-		return true, tea.Quit, true
+		return m.slashDemo(args)
 
 	case "/add":
 		return true, m.cmdAddContext(args), false
@@ -234,183 +218,41 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 			append([]string{"git", "diff", "--color=never"}, args...)), false
 
 	case "/commit":
-		msg := strings.Join(args, " ")
-		if msg == "" {
-			msg = "atlas-tui: checkpoint"
-		}
-		return true, runShellCmd(m.workingDir, "/commit",
-			[]string{"git", "commit", "-am", msg}), false
+		return m.slashCommit(args)
 
 	case "/undo":
 		return true, runShellCmd(m.workingDir, "/undo",
 			[]string{"git", "reset", "--soft", "HEAD~1"}), false
 
 	case "/run":
-		if len(args) == 0 {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
-				Body: "/run requires a command (e.g. /run pytest -k snake)",
-			})
-			return true, nil, false
-		}
-		// Pass the rest as a single shell string so quoting/pipes work.
-		return true, runShellCmd(m.workingDir, "/run",
-			[]string{"bash", "-lc", strings.Join(args, " ")}), false
+		return m.slashRun(args)
 
 	case "/review":
-		// List the files the last pass wrote, with any per-file verdicts.
-		if len(m.lastPassFiles) == 0 {
-			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review",
-				Body: "No files written in the last pass to review."})
-			return true, nil, false
-		}
-		var b strings.Builder
-		b.WriteString("Files written in the last pass (regenerate one with /redo <path> [reason]):\n")
-		for _, f := range m.lastPassFiles {
-			fmt.Fprintf(&b, "  · %s\n", f)
-		}
-		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review", Body: strings.TrimRight(b.String(), "\n")})
-		return true, nil, false
+		return m.slashReview()
 
 	case "/redo":
-		// Ask the agent to regenerate a file from the last pass.
-		if len(args) == 0 {
-			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
-				Body: "usage: /redo <path> [reason]"})
-			return true, nil, false
-		}
-		if m.turnActive {
-			m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
-				Body: "A turn is in progress — wait for it to finish before /redo."})
-			return true, nil, false
-		}
-		path := args[0]
-		reason := strings.Join(args[1:], " ")
-		redo := fmt.Sprintf("Redo the file %s — the previous version was rejected.", path)
-		if reason != "" {
-			redo += " Reason: " + reason
-		}
-		m.chat = append(m.chat, chatMessage{Role: roleUser, Body: redo})
-		return true, m.sendChatCmd(redo + m.contextSuffix()), false
+		return m.slashRedo(args)
 
 	case "/clear":
-		m.chat = nil
-		m.chatScroll = 0
-		// Start a fresh persistence session so the cleared transcript
-		// doesn't overwrite the saved one on disk.
-		m.startNewSession()
-		return true, nil, false
+		return m.slashClear()
 
 	case "/ask":
-		// One request answered as a question rather than as work. The mode is
-		// a control the user operates; nothing here reads what they typed, so
-		// the same sentence can be sent either way. The command word itself is
-		// stripped -- the model sees only the message.
-		if len(args) == 0 {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
-				Body: "/ask requires a message (e.g. /ask what does solve.py do?)",
-			})
-			return true, nil, false
-		}
-		question := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "/ask"))
-		m.pendingTaskMode = taskModeQuestion
-		m.chat = append(m.chat, chatMessage{Role: roleUser, Body: question})
-		m.lastUserMsg = question
-		return true, m.sendChatCmd(question + m.contextSuffix()), false
+		return m.slashAsk(input, args)
 
 	case "/compact":
-		// Ask the agent to compact via a synthetic user message. The
-		// proxy's history-trimming kicks in at 12 messages; this lets
-		// the user trigger an explicit summarization.
-		compactMsg := "Summarize the conversation so far in 3-4 sentences and respond with only that summary, no tool calls."
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "compact",
-			Body: "Asking agent to compact conversation…",
-		})
-		return true, m.sendChatCmd(compactMsg), false
+		return m.slashCompact()
 
 	case "/hide":
-		if len(args) == 0 {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
-				Body: "/hide files | pipeline | events | all",
-			})
-			return true, nil, false
-		}
-		m.applyPaneVisibility(args[0], true)
-		return true, nil, false
+		return m.slashHide(args)
 
 	case "/show":
-		if len(args) == 0 {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
-				Body: "/show files | pipeline | events | all",
-			})
-			return true, nil, false
-		}
-		m.applyPaneVisibility(args[0], false)
-		return true, nil, false
+		return m.slashShow(args)
 
 	case "/mouse":
-		// Toggle mouse capture. With no arg, flips current state.
-		// /mouse off → wheel-scroll stops working but the user can
-		// drag-highlight text and copy it via the terminal's own
-		// hotkey (Ctrl+Shift+C / Cmd+C / right-click).
-		want := ""
-		if len(args) > 0 {
-			want = strings.ToLower(args[0])
-		}
-		if want == "" {
-			// No arg → toggle. Track desired state so the next no-arg
-			// toggle flips back. We don't have a model field for this
-			// right now, so just default to "off" — the more useful
-			// of the two states (users typically /mouse to enable copy).
-			want = "off"
-		}
-		if want != "on" && want != "off" {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "error",
-				Body: "/mouse on | off  (no arg = off)",
-			})
-			return true, nil, false
-		}
-		if want == "off" {
-			m.chat = append(m.chat, chatMessage{
-				Role: roleSystem, Meta: "mouse",
-				Body: "mouse capture OFF — drag-highlight to select, then your terminal's own hotkey copies (Ctrl+Shift+C on Linux, Cmd+C on Mac, right-click → Copy elsewhere). Wheel scroll won't work until /mouse on. Tip: launch with ATLAS_TUI_MOUSE=off atlas tui to default to this.",
-			})
-			return true, tea.DisableMouse, false
-		}
-		m.chat = append(m.chat, chatMessage{
-			Role: roleSystem, Meta: "mouse",
-			Body: "mouse capture ON — wheel scrolls chat. Hold Shift/Option while dragging to override capture for one selection.",
-		})
-		return true, tea.EnableMouseCellMotion, false
+		return m.slashMouse(args)
 
 	case "/copy", "/yank":
-		// Copy the most recent assistant message body to the system
-		// clipboard via xclip / wl-copy / pbcopy. Bypasses the whole
-		// mouse-capture mess for users who just want to paste the
-		// last reply elsewhere. With an arg /copy N copies the last N
-		// messages (assistant + user) joined.
-		n := 1
-		if len(args) > 0 {
-			if v, err := strconv.Atoi(args[0]); err == nil && v > 0 {
-				n = v
-			}
-		}
-		text := collectLastMessages(m.chat, n)
-		if text == "" {
-			m.showToast("/copy: no messages to copy yet")
-			return true, nil, false
-		}
-		if err := copyToClipboard(text); err != nil {
-			m.showToast(fmt.Sprintf("/copy failed: %v", err))
-			return true, nil, false
-		}
-		m.showToast(fmt.Sprintf("✓ copied %d chars", len(text)))
-		return true, nil, false
+		return m.slashCopy(args)
 	}
 
 	// Unknown slash command — show help instead of sending to the
@@ -419,6 +261,236 @@ func (m *tuiModel) handleSlash(input string) (consumed bool, cmd tea.Cmd, quit b
 		Role: roleSystem, Meta: "unknown",
 		Body: fmt.Sprintf("unknown command %q. Type /help for the list.", cmdName),
 	})
+	return true, nil, false
+}
+
+// slashHelp shows the list of slash commands (/help or /?).
+func (m *tuiModel) slashHelp() (consumed bool, cmd tea.Cmd, quit bool) {
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "help", Body: slashCommandHelp,
+	})
+	return true, nil, false
+}
+
+// slashDemo quits the TUI so that the split-pane demo can start
+// (/demo [short|medium|long]).
+func (m *tuiModel) slashDemo(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	// Quit the main TUI and hand off to the split-pane recording demo
+	// (base agent vs V3, same proxy/model). Length filters the prompt bank.
+	length := "medium"
+	if len(args) > 0 {
+		switch args[0] {
+		case "short", "medium", "long":
+			length = args[0]
+		default:
+			m.chat = append(m.chat, chatMessage{
+				Role: roleSystem, Meta: "error",
+				Body: "usage: /demo [short|medium|long]",
+			})
+			return true, nil, false
+		}
+	}
+	m.launchDemoLength = length
+	return true, tea.Quit, true
+}
+
+// slashCommit commits all changes in the working dir (/commit [msg]), with a
+// default message when none is given.
+func (m *tuiModel) slashCommit(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	msg := strings.Join(args, " ")
+	if msg == "" {
+		msg = "atlas-tui: checkpoint"
+	}
+	return true, runShellCmd(m.workingDir, "/commit",
+		[]string{"git", "commit", "-am", msg}), false
+}
+
+// slashRun runs a shell command in the working dir (/run <cmd>).
+func (m *tuiModel) slashRun(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	if len(args) == 0 {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: "/run requires a command (e.g. /run pytest -k snake)",
+		})
+		return true, nil, false
+	}
+	// Pass the rest as a single shell string so quoting/pipes work.
+	return true, runShellCmd(m.workingDir, "/run",
+		[]string{"bash", "-lc", strings.Join(args, " ")}), false
+}
+
+// slashReview shows the files the last pass wrote (/review).
+func (m *tuiModel) slashReview() (consumed bool, cmd tea.Cmd, quit bool) {
+	// List the files the last pass wrote, with any per-file verdicts.
+	if len(m.lastPassFiles) == 0 {
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review",
+			Body: "No files written in the last pass to review."})
+		return true, nil, false
+	}
+	var b strings.Builder
+	b.WriteString("Files written in the last pass (regenerate one with /redo <path> [reason]):\n")
+	for _, f := range m.lastPassFiles {
+		fmt.Fprintf(&b, "  · %s\n", f)
+	}
+	m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "review", Body: strings.TrimRight(b.String(), "\n")})
+	return true, nil, false
+}
+
+// slashRedo sends the agent a request to write one file again
+// (/redo <path> [reason]).
+func (m *tuiModel) slashRedo(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	// Ask the agent to regenerate a file from the last pass.
+	if len(args) == 0 {
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+			Body: "usage: /redo <path> [reason]"})
+		return true, nil, false
+	}
+	if m.turnActive {
+		m.chat = append(m.chat, chatMessage{Role: roleSystem, Meta: "error",
+			Body: "A turn is in progress — wait for it to finish before /redo."})
+		return true, nil, false
+	}
+	path := args[0]
+	reason := strings.Join(args[1:], " ")
+	redo := fmt.Sprintf("Redo the file %s — the previous version was rejected.", path)
+	if reason != "" {
+		redo += " Reason: " + reason
+	}
+	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: redo})
+	return true, m.sendChatCmd(redo + m.contextSuffix()), false
+}
+
+// slashClear empties the chat and starts a new saved session (/clear).
+func (m *tuiModel) slashClear() (consumed bool, cmd tea.Cmd, quit bool) {
+	m.chat = nil
+	m.chatScroll = 0
+	// Start a fresh persistence session so the cleared transcript
+	// doesn't overwrite the saved one on disk.
+	m.startNewSession()
+	return true, nil, false
+}
+
+// slashAsk sends one message as a question, not a work request
+// (/ask <message>).
+func (m *tuiModel) slashAsk(input string, args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	// One request answered as a question rather than as work. The mode is
+	// a control the user operates; nothing here reads what they typed, so
+	// the same sentence can be sent either way. The command word itself is
+	// stripped -- the model sees only the message.
+	if len(args) == 0 {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: "/ask requires a message (e.g. /ask what does solve.py do?)",
+		})
+		return true, nil, false
+	}
+	question := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(input), "/ask"))
+	m.pendingTaskMode = taskModeQuestion
+	m.chat = append(m.chat, chatMessage{Role: roleUser, Body: question})
+	m.lastUserMsg = question
+	return true, m.sendChatCmd(question + m.contextSuffix()), false
+}
+
+// slashCompact asks the agent to summarize the conversation (/compact).
+func (m *tuiModel) slashCompact() (consumed bool, cmd tea.Cmd, quit bool) {
+	// Ask the agent to compact via a synthetic user message. The
+	// proxy's history-trimming kicks in at 12 messages; this lets
+	// the user trigger an explicit summarization.
+	compactMsg := "Summarize the conversation so far in 3-4 sentences and respond with only that summary, no tool calls."
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "compact",
+		Body: "Asking agent to compact conversation…",
+	})
+	return true, m.sendChatCmd(compactMsg), false
+}
+
+// slashHide hides one pane, or all of them (/hide <pane>).
+func (m *tuiModel) slashHide(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	if len(args) == 0 {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: "/hide files | pipeline | events | all",
+		})
+		return true, nil, false
+	}
+	m.applyPaneVisibility(args[0], true)
+	return true, nil, false
+}
+
+// slashShow shows one pane, or all of them (/show <pane>).
+func (m *tuiModel) slashShow(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	if len(args) == 0 {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: "/show files | pipeline | events | all",
+		})
+		return true, nil, false
+	}
+	m.applyPaneVisibility(args[0], false)
+	return true, nil, false
+}
+
+// slashMouse turns mouse capture on or off (/mouse [on|off]).
+func (m *tuiModel) slashMouse(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	// With no arg, mouse capture turns off.
+	// /mouse off → wheel-scroll stops working but the user can
+	// drag-highlight text and copy it via the terminal's own
+	// hotkey (Ctrl+Shift+C / Cmd+C / right-click).
+	want := ""
+	if len(args) > 0 {
+		want = strings.ToLower(args[0])
+	}
+	if want == "" {
+		// No arg → "off", the more useful of the two states (users
+		// typically /mouse to enable copy). A toggle would need the
+		// current state, which the model does not keep.
+		want = "off"
+	}
+	if want != "on" && want != "off" {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "error",
+			Body: "/mouse on | off  (no arg = off)",
+		})
+		return true, nil, false
+	}
+	if want == "off" {
+		m.chat = append(m.chat, chatMessage{
+			Role: roleSystem, Meta: "mouse",
+			Body: "mouse capture OFF — drag-highlight to select, then your terminal's own hotkey copies (Ctrl+Shift+C on Linux, Cmd+C on Mac, right-click → Copy elsewhere). Wheel scroll won't work until /mouse on. Tip: launch with ATLAS_TUI_MOUSE=off atlas tui to default to this.",
+		})
+		return true, tea.DisableMouse, false
+	}
+	m.chat = append(m.chat, chatMessage{
+		Role: roleSystem, Meta: "mouse",
+		Body: "mouse capture ON — wheel scrolls chat. Hold Shift/Option while dragging to override capture for one selection.",
+	})
+	return true, tea.EnableMouseCellMotion, false
+}
+
+// slashCopy copies the last chat messages to the system clipboard
+// (/copy [N] or /yank [N]).
+func (m *tuiModel) slashCopy(args []string) (consumed bool, cmd tea.Cmd, quit bool) {
+	// Copy the most recent assistant message body to the system
+	// clipboard via xclip / wl-copy / pbcopy. Bypasses the whole
+	// mouse-capture mess for users who just want to paste the
+	// last reply elsewhere. With an arg /copy N copies the last N
+	// messages (assistant + user) joined.
+	n := 1
+	if len(args) > 0 {
+		if v, err := strconv.Atoi(args[0]); err == nil && v > 0 {
+			n = v
+		}
+	}
+	text := collectLastMessages(m.chat, n)
+	if text == "" {
+		m.showToast("/copy: no messages to copy yet")
+		return true, nil, false
+	}
+	if err := copyToClipboard(text); err != nil {
+		m.showToast(fmt.Sprintf("/copy failed: %v", err))
+		return true, nil, false
+	}
+	m.showToast(fmt.Sprintf("✓ copied %d chars", len(text)))
 	return true, nil, false
 }
 

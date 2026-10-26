@@ -212,7 +212,7 @@ func TestHashesAreNotOfferedToTheModel(t *testing.T) {
 
 // Operator log call sites may not hand a body-bearing expression straight to
 // the logger; a new one must go through safeArgsSummary, safeTextSummary or
-// safeDiagnosticSummary. The test reads five source files and fails when one
+// safeDiagnosticSummary. The test reads the files it lists and fails when one
 // of the forbidden expressions is on a log.Printf or logEvent line, or up to
 // five lines below one. Walking back stops at a return, a "Warning:" text or
 // a NewEnvelope call: those build text the MODEL reads back (it authored the
@@ -228,7 +228,14 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 		"truncateStr(input.Content",
 	}
 	// Lines that are logger calls, or continuations of one.
-	for _, file := range []string{"agent.go", "tools.go", "gates.go", "guardrails.go", "main.go"} {
+	for _, file := range []string{"agent.go", "tools.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go",
+		"main.go"} {
 		src := readSourceForTest(t, file)
 		lines := strings.Split(src, "\n")
 		for i, line := range lines {

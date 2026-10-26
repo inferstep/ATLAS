@@ -148,7 +148,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo systemctl restart docker
    ```
 
-2. **RHEL 9 — CUDA リポジトリの追加 + open-dkms モジュールのインストール**（RTX 5060 Ti を搭載した RHEL 9.7 で動作確認済み）:
+2. **RHEL 9 — CUDA リポジトリの追加 + open-dkms モジュールのインストール**:
    ```bash
    # Add NVIDIA's CUDA repo
    sudo dnf config-manager --add-repo \
@@ -292,8 +292,6 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 ```
 
 **重要: gfx1200/gfx1201 では `ATLAS_HSA_OVERRIDE_GFX_VERSION` を設定しないでください。** ROCm 7.0+ はこれらのターゲットをネイティブにサポートします。Docker 内で GFX バージョンをオーバーライドすると、コンパイル済みカーネルとランタイムターゲットの不一致が生じ、クラッシュにつながります。`ATLAS_HSA_OVERRIDE_GFX_VERSION` は未設定（デフォルト）のままにしてください。
-
-> AMD Radeon AI PRO R9700 (gfx1201)、ROCm 7.2、`ATLAS_ROCM_TAG=7.2.3-complete` でテスト済み。hidden-states パッチは固定された llama.cpp SHA にクリーンに適用されます。テキスト生成と埋め込み生成の両方で、追加フラグなしに推論が正しく動作します。
 
 ### ROCm コンテナが `rocm/rocm-terminal` を取得できない
 
@@ -492,7 +490,7 @@ curl -s localhost:8080/health                  # {"status":"ok"}
 
 ### モデルが GPU ではなく CPU で読み込まれている
 
-**症状:** 約 50 tok/s ではなく約 2 tok/s で生成される。`nvidia-smi` で llama-server が GPU を使用していない。
+**症状:** 約 2 tok/s で生成される。`nvidia-smi` で llama-server が GPU を使用していない。
 
 **修正:** `-ngl 99`（`--n-gpu-layers`）が設定されていることを確認してください（全レイヤーを GPU にオフロード）。Docker Compose ではエントリーポイントがデフォルトで設定します。ベアメタルの場合、コマンドを確認してください:
 ```bash
@@ -767,7 +765,7 @@ except curses.error:
 
 ### リクエスト拒否: レンズがスコアリングできない
 
-**症状:** リクエストが HTTP 503 `dependency_down` で即座に失敗します: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." または実行が `lens_unavailable` で停止します: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。プロキシの `/ready` は `"lens_ready": false` と `lens_reason` を表示し、`atlas doctor` の `status_dimensions` は `direct_agent: blocked` で失敗します。
+**症状:** リクエストが HTTP 503 `dependency_unavailable` で即座に失敗します: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." または実行が `lens_unavailable` で停止します: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。プロキシの `/ready` は `"lens_ready": false` と `lens_reason` を表示し、`atlas doctor` の `status_dimensions` は `direct_agent: blocked` で失敗します。
 
 **影響:** レンズがスコアリングできるようになるまで、リクエストは何も実行されません。これは意図的なものです — レンズは必須です（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。停止した実行は、停止前にファイルを変更したかどうかを報告します。
 
@@ -916,7 +914,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 2. `-ngl 99`（`--n-gpu-layers`）— すべてのレイヤーがオフロードされているか?
 3. NVIDIA Container Toolkit — コンテナランタイムが GPU アクセス用に設定されているか?
 
-**想定パフォーマンス:** 現在の基準値はありません。スループットはモデル、量子化、文法モードによって変わります。以前の約 51 tok/s という値は、現存しない構成で得られたものです。
+**想定パフォーマンス:** スループットはモデル、量子化、文法モードによって変わります。
 
 ### V3 パイプラインに数分かかる
 

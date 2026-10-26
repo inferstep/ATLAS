@@ -419,18 +419,8 @@ func splitTopLevelShell(cmd string) (segs, ops, bodies []string) {
 		cur.WriteByte(c)
 	}
 	segs = append(segs, cur.String())
-	// Drop empty trailing segments ("pytest;" or "cmd &") but keep the
-	// operator that preceded them: a trailing `&` still backgrounds the
-	// command before it.
-	for len(segs) > 0 && strings.TrimSpace(segs[len(segs)-1]) == "" && len(segs) > len(ops) {
-		segs = segs[:len(segs)-1]
-	}
-	bodies = make([]string, len(segs))
-	for idx, b := range bodyAt {
-		if idx < len(bodies) {
-			bodies[idx] = b.String()
-		}
-	}
+	segs = dropEmptyTrailingSegments(segs, ops)
+	bodies = hereDocBodiesBySegment(segs, bodyAt)
 	return segs, ops, bodies
 }
 
@@ -505,6 +495,29 @@ func readHereDocBodies(cmd string, p int, docs []hereDoc, bodyAt map[int]*string
 		}
 	}
 	return p - 1
+}
+
+// dropEmptyTrailingSegments removes the empty segments at the end of a split.
+func dropEmptyTrailingSegments(segs, ops []string) []string {
+	// Drop empty trailing segments ("pytest;" or "cmd &") but keep the
+	// operator that preceded them: a trailing `&` still backgrounds the
+	// command before it.
+	for len(segs) > 0 && strings.TrimSpace(segs[len(segs)-1]) == "" && len(segs) > len(ops) {
+		segs = segs[:len(segs)-1]
+	}
+	return segs
+}
+
+// hereDocBodiesBySegment lists the here-document bodies by segment: one
+// entry for each segment, empty for a segment that reads none.
+func hereDocBodiesBySegment(segs []string, bodyAt map[int]*strings.Builder) (bodies []string) {
+	bodies = make([]string, len(segs))
+	for idx, b := range bodyAt {
+		if idx < len(bodies) {
+			bodies[idx] = b.String()
+		}
+	}
+	return bodies
 }
 
 // shellFields splits one segment into words, honouring quotes and dropping
@@ -753,20 +766,7 @@ func segmentEvidenceKind(seg string) commandEvidenceKind {
 	case prog == "npm" || prog == "pnpm" || prog == "yarn":
 		return packageScriptKind(prog, args)
 	case prog == "npx" || prog == "pnpx" || prog == "bunx":
-		for len(args) > 0 && strings.HasPrefix(args[0], "-") {
-			args = args[1:] // npx --yes jest
-		}
-		if len(args) == 0 {
-			return evidenceNone
-		}
-		tool := filepath.Base(args[0])
-		switch {
-		case staticTools[tool]:
-			return evidenceStatic
-		case testRunners[tool]:
-			return testRunnerKind(args[1:])
-		}
-		return evidenceExecution
+		return npxToolKind(args)
 	case prog == "make" || prog == "gmake" || prog == "just" || prog == "task":
 		return makeTargetKind(args)
 	}
@@ -1042,6 +1042,26 @@ func packageScriptKind(prog string, args []string) commandEvidenceKind {
 		return evidenceExecution
 	}
 	return evidenceNone
+}
+
+// npxToolKind classifies `npx TOOL`, `pnpx TOOL` and `bunx TOOL` by the tool
+// they run: a static tool checks, a test runner runs tests, any other tool
+// runs.
+func npxToolKind(args []string) commandEvidenceKind {
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		args = args[1:] // npx --yes jest
+	}
+	if len(args) == 0 {
+		return evidenceNone
+	}
+	tool := filepath.Base(args[0])
+	switch {
+	case staticTools[tool]:
+		return evidenceStatic
+	case testRunners[tool]:
+		return testRunnerKind(args[1:])
+	}
+	return evidenceExecution
 }
 
 // makeTargetKind classifies `make TARGET` by the target's name. Lint and

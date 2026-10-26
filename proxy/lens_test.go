@@ -183,12 +183,14 @@ func TestProbeLensStatusNamesALensThatCannotScore(t *testing.T) {
 	for _, c := range []struct {
 		name, verdict string
 		mutate        func(lens map[string]any, top map[string]any)
+		// The model server as the lens reports it: down only when llama-server is.
+		modelRuntime string
 	}{
-		{"drifted", "drifted", func(l, _ map[string]any) { l["fingerprint_ok"] = false }},
-		{"self-test failed", "self-test-failed", func(l, _ map[string]any) { l["self_test_pass"] = false }},
+		{"drifted", "drifted", func(l, _ map[string]any) { l["fingerprint_ok"] = false }, "supported"},
+		{"self-test failed", "self-test-failed", func(l, _ map[string]any) { l["self_test_pass"] = false }, "supported"},
 		{"llama down", "model-server-unreachable", func(_, top map[string]any) {
 			top["llama_server"] = map[string]any{"reachable": false}
-		}},
+		}, "unreachable"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			lens := compatibleLensHealth()
@@ -207,10 +209,8 @@ func TestProbeLensStatusNamesALensThatCannotScore(t *testing.T) {
 			if d := dimByName(dims, "direct_agent"); d.Status != "blocked" {
 				t.Errorf("direct_agent %q", d.Status)
 			}
-			if c.verdict == "model-server-unreachable" {
-				if d := dimByName(dims, "model_runtime"); d.Status != "unreachable" {
-					t.Errorf("model_runtime %q while the lens reports llama-server down", d.Status)
-				}
+			if d := dimByName(dims, "model_runtime"); d.Status != c.modelRuntime {
+				t.Errorf("model_runtime %q, want %q", d.Status, c.modelRuntime)
 			}
 		})
 	}

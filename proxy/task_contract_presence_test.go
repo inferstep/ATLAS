@@ -303,7 +303,13 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 // meant -- and two places deciding is how the contract list and the prose
 // heuristic became a union the first time.
 func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
-	for _, file := range []string{"guardrails.go", "tools.go", "gates.go", "agent.go"} {
+	for _, file := range []string{"guardrails.go", "tools.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go",
+		"agent.go"} {
 		src := readSourceForTest(t, file)
 		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge"} {
 			// validateTaskContract owns normalisation and lives in agent.go.

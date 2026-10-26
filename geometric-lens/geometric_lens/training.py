@@ -80,19 +80,8 @@ def train_cost_field(
     random.shuffle(pass_idx)
     random.shuffle(fail_idx)
 
-    n_pass_test = max(1, int(len(pass_idx) * test_fraction))
-    n_fail_test = max(1, int(len(fail_idx) * test_fraction))
-
-    test_idx = set(pass_idx[:n_pass_test] + fail_idx[:n_fail_test])
-    train_idx = [i for i in range(len(embeddings)) if i not in test_idx]
-
-    train_embs = [embeddings[i] for i in train_idx]
-    train_labels = [labels[i] for i in train_idx]
-    test_embs = [embeddings[i] for i in test_idx]
-    test_labels = [labels[i] for i in test_idx]
-
-    print(f"Train: {len(train_embs)} (PASS={sum(train_labels)}, FAIL={len(train_labels)-sum(train_labels)})")
-    print(f"Test:  {len(test_embs)} (PASS={sum(test_labels)}, FAIL={len(test_labels)-sum(test_labels)})")
+    train_embs, train_labels, test_embs, test_labels = _split_train_test(
+        embeddings, labels, pass_idx, fail_idx, test_fraction)
 
     # Build contrastive pairs
     train_pairs = build_pairs(train_embs, train_labels)
@@ -113,30 +102,7 @@ def train_cost_field(
     for epoch in range(epochs):
         model.train()
         random.shuffle(train_pairs)
-        total_loss = 0.0
-        n_batches = 0
-
-        # Mini-batch training (batch_size=32 pairs)
-        batch_size = min(32, len(train_pairs))
-        for batch_start in range(0, len(train_pairs), batch_size):
-            batch = train_pairs[batch_start:batch_start + batch_size]
-            pass_batch = torch.tensor([p[0] for p in batch], dtype=torch.float32, device=device)
-            fail_batch = torch.tensor([p[1] for p in batch], dtype=torch.float32, device=device)
-
-            c_pass = model(pass_batch)
-            c_fail = model(fail_batch)
-
-            # Ranking loss: want C(fail) > C(pass) + margin
-            loss = torch.relu(c_pass - c_fail + margin).mean()
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.item()
-            n_batches += 1
-
-        avg_loss = total_loss / n_batches
+        avg_loss = _train_one_epoch(model, optimizer, train_pairs, margin, device)
         loss_history.append(avg_loss)
 
         # Evaluate every epoch: with small sample sets the test-AUC peak
@@ -171,6 +137,64 @@ def train_cost_field(
               f"(test AUC {best_test_auc:.4f})")
 
     # Final assessment
+    return _final_assessment(model, embeddings, labels, train_embs, train_labels,
+                             test_embs, test_labels, best_test_auc, loss_history, device)
+
+
+def _split_train_test(embeddings, labels, pass_idx, fail_idx, test_fraction):
+    """Split the embeddings into train and test sets, each with its share of
+    the shuffled PASS and FAIL indexes; returns (train_embs, train_labels,
+    test_embs, test_labels)."""
+    n_pass_test = max(1, int(len(pass_idx) * test_fraction))
+    n_fail_test = max(1, int(len(fail_idx) * test_fraction))
+
+    test_idx = set(pass_idx[:n_pass_test] + fail_idx[:n_fail_test])
+    train_idx = [i for i in range(len(embeddings)) if i not in test_idx]
+
+    train_embs = [embeddings[i] for i in train_idx]
+    train_labels = [labels[i] for i in train_idx]
+    test_embs = [embeddings[i] for i in test_idx]
+    test_labels = [labels[i] for i in test_idx]
+
+    print(f"Train: {len(train_embs)} (PASS={sum(train_labels)}, FAIL={len(train_labels)-sum(train_labels)})")
+    print(f"Test:  {len(test_embs)} (PASS={sum(test_labels)}, FAIL={len(test_labels)-sum(test_labels)})")
+    return train_embs, train_labels, test_embs, test_labels
+
+
+def _train_one_epoch(model, optimizer, train_pairs, margin, device):
+    """One pass over the shuffled training pairs in mini-batches of the
+    ranking loss; returns the epoch's mean loss."""
+    total_loss = 0.0
+    n_batches = 0
+
+    # Mini-batch training (batch_size=32 pairs)
+    batch_size = min(32, len(train_pairs))
+    for batch_start in range(0, len(train_pairs), batch_size):
+        batch = train_pairs[batch_start:batch_start + batch_size]
+        pass_batch = torch.tensor([p[0] for p in batch], dtype=torch.float32, device=device)
+        fail_batch = torch.tensor([p[1] for p in batch], dtype=torch.float32, device=device)
+
+        c_pass = model(pass_batch)
+        c_fail = model(fail_batch)
+
+        # Ranking loss: want C(fail) > C(pass) + margin
+        loss = torch.relu(c_pass - c_fail + margin).mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        n_batches += 1
+
+    avg_loss = total_loss / n_batches
+    return avg_loss
+
+
+def _final_assessment(model, embeddings, labels, train_embs, train_labels,
+                      test_embs, test_labels, best_test_auc, loss_history, device):
+    """Score the kept model on the train and test sets and on every embedding,
+    print the final results, and return train_cost_field's result dict."""
     model.eval()  # Note: model.eval() is the PyTorch eval mode toggle, not code evaluation
     with torch.no_grad():
         final_train_auc = compute_energy_auc(model, train_embs, train_labels, device)

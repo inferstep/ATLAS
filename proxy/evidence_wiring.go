@@ -200,54 +200,18 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		return nil, nil, false
 	}
 	resolved := resolveAgentPath(ctx, path)
-	if !targetIsAuthorized(obs, resolved) {
-		if outputKnowledgeDeclared(ctx) {
-			return nil, nil, false
-		}
-		if grounded, _ := structuredMutationTargetGrounds(ctx, scope, resolved); !grounded {
-			return nil, nil, false
-		}
+	if !verificationTargetGrounded(ctx, obs, resolved, scope) {
+		return nil, nil, false
 	}
 
 	// The declared commands, from the proxy's own derivation of the validated
 	// request. This list is the authority; nothing downstream may add to it.
-	var declared []taskObligation
-	for _, o := range authorizationPrerequisites(obs) {
-		if o.Kind == ObligationDeclaredCommand && o.Required {
-			declared = append(declared, o)
-		}
-	}
+	declared := requiredDeclaredCommands(obs)
 	if len(declared) == 0 {
 		return nil, nil, false
 	}
 
-	hash := contentSHA256(code)
-	generation, stateHash := workspaceIdentity(ctx)
-	req := stagingRequest{
-		WireVersion:    stagingWireVersion,
-		CandidateBytes: code,
-		Budget:         defaultStagingBudget(),
-		Identity: stagingIdentity{
-			RequestID:           requestIDOf(ctx),
-			RouteEntryID:        id.InvocationID,
-			InvocationID:        id.InvocationID,
-			CandidateInstanceID: id.CandidateInstanceID,
-			CandidateHash:       hash,
-			TargetPath:          resolved,
-			BaselineIdentity:    baselineIdentityFor(ctx, resolved),
-			WorkspaceGeneration: generation,
-			WorkspaceStateHash:  stateHash,
-		},
-	}
-	for i, o := range declared {
-		req.Commands = append(req.Commands, stagingCommand{
-			Text:         o.Subject,
-			Identity:     contentSHA256(o.Subject),
-			ObligationID: o.ID,
-			Index:        i,
-			Count:        len(declared),
-		})
-	}
+	req := stagingRequestFor(ctx, resolved, code, id, declared)
 	if ok, _ := req.validate(); !ok {
 		// A declared set the staging budget cannot hold whole. Nothing runs:
 		// a partial set is not a smaller obligation.
@@ -304,6 +268,69 @@ func observeCandidateVerification(ctx *AgentContext, path, code string,
 		out = append(out, ev)
 	}
 	return out, unmet, mutated
+}
+
+// verificationTargetGrounded reports whether the target is grounded the way a
+// grant needs it: a declared output or, where the request declared no outputs,
+// the target the model's own structured call named.
+func verificationTargetGrounded(ctx *AgentContext, obs []taskObligation, resolved string,
+	scope mutationScope) bool {
+	if !targetIsAuthorized(obs, resolved) {
+		if outputKnowledgeDeclared(ctx) {
+			return false
+		}
+		if grounded, _ := structuredMutationTargetGrounds(ctx, scope, resolved); !grounded {
+			return false
+		}
+	}
+	return true
+}
+
+// requiredDeclaredCommands is every required declared-command obligation among
+// the request's authorization prerequisites, in their order.
+func requiredDeclaredCommands(obs []taskObligation) []taskObligation {
+	var declared []taskObligation
+	for _, o := range authorizationPrerequisites(obs) {
+		if o.Kind == ObligationDeclaredCommand && o.Required {
+			declared = append(declared, o)
+		}
+	}
+	return declared
+}
+
+// stagingRequestFor builds the staging request the proxy itself sends: the
+// exact candidate bytes, the identity the proxy bound them to, and each
+// declared command in order.
+func stagingRequestFor(ctx *AgentContext, resolved, code string,
+	id candidateEvidenceIdentity, declared []taskObligation) stagingRequest {
+	hash := contentSHA256(code)
+	generation, stateHash := workspaceIdentity(ctx)
+	req := stagingRequest{
+		WireVersion:    stagingWireVersion,
+		CandidateBytes: code,
+		Budget:         defaultStagingBudget(),
+		Identity: stagingIdentity{
+			RequestID:           requestIDOf(ctx),
+			RouteEntryID:        id.InvocationID,
+			InvocationID:        id.InvocationID,
+			CandidateInstanceID: id.CandidateInstanceID,
+			CandidateHash:       hash,
+			TargetPath:          resolved,
+			BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+			WorkspaceGeneration: generation,
+			WorkspaceStateHash:  stateHash,
+		},
+	}
+	for i, o := range declared {
+		req.Commands = append(req.Commands, stagingCommand{
+			Text:         o.Subject,
+			Identity:     contentSHA256(o.Subject),
+			ObligationID: o.ID,
+			Index:        i,
+			Count:        len(declared),
+		})
+	}
+	return req
 }
 
 // stagingUnmetReason turns one staged outcome into the truthful reason its

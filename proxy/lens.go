@@ -393,7 +393,32 @@ type StatusDimension struct {
 // uncalibrated lens never steers using another model's cutoffs.
 func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	reachable := lens.Verdict != "unreachable"
+	modelRuntime, modelDetail := modelRuntimeDimension(lens, reachable)
 
+	// The agent runs only while the lens can score (lens_required.go).
+	canScore := lensVerdictCanScore(lens.Verdict)
+	directAgent, directDetail := directAgentDimension(lens, canScore)
+
+	identity, identityDetail := lensIdentityDimension(lens, reachable)
+	scoring, scoringDetail := lensScoringDimension(lens, reachable, canScore)
+	scoring, scoringDetail = scoringWithinEmbedCapacity(lens, scoring, scoringDetail)
+	calibration, calDetail := lensCalibrationDimension(lens, reachable, canScore)
+	intervention, intDetail := lensInterventionDimension(calibration, scoring)
+
+	return []StatusDimension{
+		{"model_runtime", modelRuntime, modelDetail},
+		{"direct_agent", directAgent, directDetail},
+		{"lens_identity", identity, identityDetail},
+		{"lens_scoring", scoring, scoringDetail},
+		{"lens_calibration", calibration, calDetail},
+		{"lens_intervention", intervention, intDetail},
+		{"asa", asa.Verdict, asa.Hint},
+	}
+}
+
+// modelRuntimeDimension is the model_runtime row: whether the model server
+// is up.
+func modelRuntimeDimension(lens LensStatus, reachable bool) (status, detail string) {
 	// The model server as the lens sees it. Reaching the lens is not
 	// reaching llama-server: this row said "model served and reachable"
 	// while the lens reported llama-server down.
@@ -405,9 +430,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	case lens.ModelServerReachable != nil && !*lens.ModelServerReachable:
 		modelRuntime, modelDetail = "unreachable", "llama-server is not reachable from the lens"
 	}
+	return modelRuntime, modelDetail
+}
 
-	// The agent runs only while the lens can score (lens_required.go).
-	canScore := lensVerdictCanScore(lens.Verdict)
+// directAgentDimension is the direct_agent row: whether the agent takes
+// requests.
+func directAgentDimension(lens LensStatus, canScore bool) (status, detail string) {
 	directAgent, directDetail := "supported", "tools, permissions and sandbox verify; the lens can score"
 	if !canScore {
 		directAgent = "blocked"
@@ -416,7 +444,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 			directDetail += " — " + lens.Hint
 		}
 	}
+	return directAgent, directDetail
+}
 
+// lensIdentityDimension is the lens_identity row: whether the loaded cost
+// field belongs to the served model.
+func lensIdentityDimension(lens LensStatus, reachable bool) (status, detail string) {
 	// Identity/dimension contract.
 	identity := "supported"
 	identityDetail := "cost field matches the served model's dimension"
@@ -431,7 +464,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 			fmt.Sprintf("cost field is %d-dim, model emits %d-dim",
 				lens.CostFieldDim, lens.EmbedDim)
 	}
+	return identity, identityDetail
+}
 
+// lensScoringDimension is the lens_scoring row before the embed capacity is
+// taken into account: which scores the loaded artifacts allow.
+func lensScoringDimension(lens LensStatus, reachable, canScore bool) (status, detail string) {
 	// Raw scoring availability.
 	scoring := "disabled"
 	scoringDetail := "cost field / G(x) not loaded"
@@ -442,6 +480,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 	} else if reachable && lens.CostFieldLoaded && !lens.GxLoaded {
 		scoring, scoringDetail = "partial", "C(x) loaded; G(x) missing"
 	}
+	return scoring, scoringDetail
+}
+
+// scoringWithinEmbedCapacity lowers the lens_scoring row to partial when the
+// longest writes are too long for one embedding request.
+func scoringWithinEmbedCapacity(lens LensStatus, scoring, scoringDetail string) (status, detail string) {
 	// Capacity. One score is one embedding request, and llama-server refuses
 	// any input longer than its physical batch (ATLAS_UBATCH). When the lens
 	// knows that capacity and it is below the per-turn generation ceiling,
@@ -463,7 +507,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 				scoringDetail, lens.EmbedCapacityTokens, source, ceiling)
 		}
 	}
+	return scoring, scoringDetail
+}
 
+// lensCalibrationDimension is the lens_calibration row: whether this model's
+// calibration files are loaded.
+func lensCalibrationDimension(lens LensStatus, reachable, canScore bool) (status, detail string) {
 	// Calibration.
 	calibration := "disabled"
 	calDetail := "artifacts not loaded"
@@ -478,7 +527,12 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 				"loaded without this model's calibration files"
 		}
 	}
+	return calibration, calDetail
+}
 
+// lensInterventionDimension is the lens_intervention row, read from the
+// calibration and scoring rows.
+func lensInterventionDimension(calibration, scoring string) (status, detail string) {
 	// Intervention behavior — neutral/disabled unless calibrated.
 	intervention := "disabled"
 	intDetail := "no scoring; no intervention"
@@ -489,16 +543,7 @@ func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {
 		intervention, intDetail = "neutral",
 			"raw telemetry only; no automatic intervention"
 	}
-
-	return []StatusDimension{
-		{"model_runtime", modelRuntime, modelDetail},
-		{"direct_agent", directAgent, directDetail},
-		{"lens_identity", identity, identityDetail},
-		{"lens_scoring", scoring, scoringDetail},
-		{"lens_calibration", calibration, calDetail},
-		{"lens_intervention", intervention, intDetail},
-		{"asa", asa.Verdict, asa.Hint},
-	}
+	return intervention, intDetail
 }
 
 type LensStatus struct {

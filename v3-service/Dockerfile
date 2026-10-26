@@ -23,6 +23,9 @@ COPY v3-service/main.py /app/main.py
 COPY v3-service/adapters.py /app/adapters.py
 COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
+COPY v3-service/grammars.py /app/grammars.py
+COPY v3-service/edit_checks.py /app/edit_checks.py
+COPY v3-service/embedded_script.py /app/embedded_script.py
 COPY v3-service/node_splice.py /app/node_splice.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py

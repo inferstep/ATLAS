@@ -119,60 +119,64 @@ def host_parser_label() -> str:
     return f"host python {sys.version_info.major}.{sys.version_info.minor}"
 
 
-def analyze(root: Path, baseline: set[str] | None = None,  # noqa: C901
-            target_parse=None, target_label: str = "") -> QualityReport:
-    """`target_parse(src) -> (ok, message)` asks the interpreter the code will
-    run under; ok is None when it cannot be reached. Without it, or when it is
-    unreachable, the verdict is this script's own interpreter and says so.
-
-    Evaluator v2 (2026-09-17). v1 parsed with the host interpreter only, which
-    is Python 3.9 on the dev server while the sandbox runs 3.13: PEP 701
-    f-strings such as f"{d["k"]}" were counted unparseable although they run.
-    """
-    rep = QualityReport()
-    rep.parser = target_label if target_parse else host_parser_label()
-    skip = baseline or set()
-    files = _iter_python(root, skip)
-    rep.files = len(files)
-
-    for path in files:
-        try:
-            src = path.read_text()
-        except (OSError, UnicodeDecodeError):
+def _measure_functions(rep: QualityReport, path: Path, tree: ast.AST) -> None:
+    """Note each function of a parsed file whose complexity or length is the
+    largest so far."""
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        lines = src.count("\n") + 1
-        rep.total_lines += lines
-        if lines > rep.max_file_lines:
-            rep.max_file_lines, rep.max_file_where = lines, path.name
-        verdict = None
-        if target_parse is not None:
-            verdict, why = target_parse(src)
-            if verdict is False:
-                rep.syntax_errors.append(f"{path.name}: {why}")
-                continue
-            if verdict is None:
-                rep.parser = f"{host_parser_label()} (target unreachable)"
-        try:
-            tree = ast.parse(src)
-        except SyntaxError as e:
-            if verdict is True:
-                rep.unmeasured_files.append(path.name)
-            else:
-                rep.syntax_errors.append(f"{path.name}: {e.msg} (line {e.lineno})")
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            cx = cyclomatic_complexity(node)
-            if cx > rep.max_complexity:
-                rep.max_complexity = cx
-                rep.max_complexity_where = f"{path.name}:{node.name}"
-            end = getattr(node, "end_lineno", node.lineno) or node.lineno
-            length = end - node.lineno + 1
-            if length > rep.max_function_lines:
-                rep.max_function_lines = length
-                rep.max_function_where = f"{path.name}:{node.name}"
+        cx = cyclomatic_complexity(node)
+        if cx > rep.max_complexity:
+            rep.max_complexity = cx
+            rep.max_complexity_where = f"{path.name}:{node.name}"
+        end = getattr(node, "end_lineno", node.lineno) or node.lineno
+        length = end - node.lineno + 1
+        if length > rep.max_function_lines:
+            rep.max_function_lines = length
+            rep.max_function_where = f"{path.name}:{node.name}"
 
+
+def _measure_file(rep: QualityReport, path: Path, target_parse) -> None:
+    """Add one file to the report: its lines, whether it parses, and its functions."""
+    try:
+        src = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return
+    lines = src.count("\n") + 1
+    rep.total_lines += lines
+    if lines > rep.max_file_lines:
+        rep.max_file_lines, rep.max_file_where = lines, path.name
+    verdict = None
+    if target_parse is not None:
+        verdict, why = target_parse(src)
+        if verdict is False:
+            rep.syntax_errors.append(f"{path.name}: {why}")
+            return
+        if verdict is None:
+            rep.parser = f"{host_parser_label()} (target unreachable)"
+    try:
+        tree = ast.parse(src)
+    except SyntaxError as e:
+        if verdict is True:
+            rep.unmeasured_files.append(path.name)
+        else:
+            rep.syntax_errors.append(f"{path.name}: {e.msg} (line {e.lineno})")
+        return
+    _measure_functions(rep, path, tree)
+
+
+def _ruff_issues(proc: subprocess.CompletedProcess) -> list:
+    """The issues in ruff's JSON output; none when the output is not JSON."""
+    try:
+        issues = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        issues = []
+    return issues
+
+
+def _count_lint(rep: QualityReport, files: list[Path]) -> None:
+    """Run ruff on the files when it is installed, and count what it finds:
+    real defects apart from style nits."""
     ruff = shutil.which("ruff")
     if ruff and files:
         rep.lint_available = True
@@ -180,10 +184,7 @@ def analyze(root: Path, baseline: set[str] | None = None,  # noqa: C901
             [ruff, "check", "--output-format", "json", "--isolated",
              "--select", "E,F,W", *[str(p) for p in files]],
             capture_output=True, text=True, timeout=120)
-        try:
-            issues = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            issues = []
+        issues = _ruff_issues(proc)
         # Split real defects from cosmetics. An earlier version reported one
         # number, and on a sample run 31 of 34 "violations" were trailing
         # whitespace while the single genuine finding — an undefined name —
@@ -201,6 +202,10 @@ def analyze(root: Path, baseline: set[str] | None = None,  # noqa: C901
         rep.unused_imports = sum(1 for i in issues
                                  if str(i.get("code", "")).startswith("F401"))
 
+
+def _add_findings(rep: QualityReport) -> None:
+    """A finding for each file that does not parse, each measure over its
+    threshold, and the unused imports and real lint defects."""
     if rep.syntax_errors:
         rep.findings.append(f"{len(rep.syntax_errors)} file(s) do not parse")
     if rep.max_complexity > MAX_COMPLEXITY:
@@ -221,6 +226,29 @@ def analyze(root: Path, baseline: set[str] | None = None,  # noqa: C901
         rep.findings.append(
             f"{rep.lint_defects} real lint defect(s) "
             f"[{', '.join(sorted(rep.defect_codes))}]")
+
+
+def analyze(root: Path, baseline: set[str] | None = None,
+            target_parse=None, target_label: str = "") -> QualityReport:
+    """`target_parse(src) -> (ok, message)` asks the interpreter the code will
+    run under; ok is None when it cannot be reached. Without it, or when it is
+    unreachable, the verdict is this script's own interpreter and says so.
+
+    Evaluator v2 (2026-09-17). v1 parsed with the host interpreter only, which
+    is Python 3.9 on the dev server while the sandbox runs 3.13: PEP 701
+    f-strings such as f"{d["k"]}" were counted unparseable although they run.
+    """
+    rep = QualityReport()
+    rep.parser = target_label if target_parse else host_parser_label()
+    skip = baseline or set()
+    files = _iter_python(root, skip)
+    rep.files = len(files)
+
+    for path in files:
+        _measure_file(rep, path, target_parse)
+
+    _count_lint(rep, files)
+    _add_findings(rep)
     # Style nits are reported but are NOT a finding: trailing whitespace says
     # nothing about whether the code is any good.
     return rep

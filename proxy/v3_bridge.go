@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// sseDataPrefix starts the data line of a server-sent event.
+const sseDataPrefix = "data: "
+
 // v3CallTimeout is the interactive wall-clock cap for a single V3 pipeline
 // call. It bounds the long-tail repair stall that left a user waiting 11 min.
 // Set ATLAS_V3_TIMEOUT to a second count to override, or 0 to disable the cap
@@ -78,53 +81,15 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 	// the limit they hit.
 	var effectiveCap time.Duration
 	if d := v3CallTimeout(); d > 0 {
-		// The cap is a per-call ceiling, not a claim on the whole run. A
-		// pipeline that spends its full 300s on the FIRST of five files
-		// leaves the session unable to write the rest: measured 2026-09-14,
-		// V3 burned 295s of a 570s work budget repairing file one and the
-		// run ended with one file and no verification, while the same prompt
-		// with a cheap first file delivered five files in 248s.
-		//
-		// Take at most half of what is left, so whatever V3 spends on this
-		// file, the run keeps as much again for the work still to do. When
-		// the pipeline is cut short the caller falls back to the model's own
-		// content, which is already syntax-gated, so a smaller window
-		// degrades instead of failing.
-		if deadline, ok := reqCtx.Deadline(); ok {
-			if half := time.Until(deadline) / 2; half > 0 && half < d {
-				log.Printf("[v3] capping this call at %s — half of the %s left in the session (configured %s)",
-					half.Round(time.Second), time.Until(deadline).Round(time.Second), d)
-				d = half
-			}
-		}
+		d = capAtHalfTheSessionLeft(reqCtx, d)
 		effectiveCap = d
 		var cancel context.CancelFunc
 		reqCtx, cancel = context.WithTimeout(reqCtx, d)
 		defer cancel()
 	}
-	// The service plans against the cap this call actually has, not the
-	// configured ceiling: told nothing, it planned a 300s run inside a call
-	// the line above may have cut to a fraction of that.
-	req.BudgetMs = 0
-	if effectiveCap > 0 {
-		req.BudgetMs = effectiveCap.Milliseconds()
-	}
-	body, err := json.Marshal(req)
+	httpReq, err := newV3GenerateRequest(reqCtx, endpoint, req, effectiveCap)
 	if err != nil {
-		return nil, fmt.Errorf("marshal V3 request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create V3 request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	// Trace identity, forwarded so a candidate pool can be joined back to the
-	// request that caused it. It is a JOIN KEY only: it may be absent, it may
-	// repeat outside a controlled harness, and nothing downstream may treat it
-	// as unique or as cancellation authority. It never reaches the model.
-	if id := requestIDFromContext(reqCtx); id != "" {
-		httpReq.Header.Set(requestIDHeader, id)
+		return nil, err
 	}
 
 	// Abort is user-driven via the bound request context, plus the
@@ -143,51 +108,7 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 	// Read SSE stream: progress events + final result
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20) // 1MB buffer
-
-	var result *V3GenerateResponse
-	var resultErr error
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Final result event
-		if strings.HasPrefix(line, "event: result") {
-			// Next line has the data
-			if scanner.Scan() {
-				dataLine := scanner.Text()
-				if strings.HasPrefix(dataLine, "data: ") {
-					data := strings.TrimPrefix(dataLine, "data: ")
-					var r V3GenerateResponse
-					if err := json.Unmarshal([]byte(data), &r); err != nil {
-						resultErr = fmt.Errorf("V3 sent a result this proxy could not decode "+
-							"(%d bytes): %w", len(data), err)
-					} else {
-						result = &r
-						resultErr = nil
-					}
-				}
-			}
-			continue
-		}
-
-		// Done marker
-		if line == "data: [DONE]" {
-			break
-		}
-
-		// Progress event
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
-			var event struct {
-				Stage  string                 `json:"stage"`
-				Detail string                 `json:"detail"`
-				Data   map[string]interface{} `json:"data"`
-			}
-			if json.Unmarshal([]byte(data), &event) == nil && onProgress != nil {
-				onProgress(event.Stage, event.Detail, event.Data)
-			}
-		}
-	}
+	result, resultErr := readV3GenerateStream(scanner, onProgress)
 
 	if result == nil {
 		// "completed without result" was the message for every one of
@@ -224,6 +145,125 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 	}
 
 	return result, nil
+}
+
+// capAtHalfTheSessionLeft returns the call cap d, or half the time the
+// session has left when that is shorter.
+func capAtHalfTheSessionLeft(reqCtx context.Context, d time.Duration) time.Duration {
+	// The cap is a per-call ceiling, not a claim on the whole run. A
+	// pipeline that spends its full 300s on the FIRST of five files
+	// leaves the session unable to write the rest: measured 2026-09-14,
+	// V3 burned 295s of a 570s work budget repairing file one and the
+	// run ended with one file and no verification, while the same prompt
+	// with a cheap first file delivered five files in 248s.
+	//
+	// Take at most half of what is left, so whatever V3 spends on this
+	// file, the run keeps as much again for the work still to do. When
+	// the pipeline is cut short the caller falls back to the model's own
+	// content, which is already syntax-gated, so a smaller window
+	// degrades instead of failing.
+	if deadline, ok := reqCtx.Deadline(); ok {
+		if half := time.Until(deadline) / 2; half > 0 && half < d {
+			log.Printf("[v3] capping this call at %s — half of the %s left in the session (configured %s)",
+				half.Round(time.Second), time.Until(deadline).Round(time.Second), d)
+			d = half
+		}
+	}
+	return d
+}
+
+// newV3GenerateRequest builds the POST of req to the V3 service, with the
+// budget set to the cap this call has.
+func newV3GenerateRequest(reqCtx context.Context, endpoint string, req V3GenerateRequest, effectiveCap time.Duration) (*http.Request, error) {
+	// The service plans against the cap this call actually has, not the
+	// configured ceiling: told nothing, it planned a 300s run inside a call
+	// capAtHalfTheSessionLeft may have cut to a fraction of that.
+	req.BudgetMs = 0
+	if effectiveCap > 0 {
+		req.BudgetMs = effectiveCap.Milliseconds()
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal V3 request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create V3 request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	// Trace identity, forwarded so a candidate pool can be joined back to the
+	// request that caused it. It is a JOIN KEY only: it may be absent, it may
+	// repeat outside a controlled harness, and nothing downstream may treat it
+	// as unique or as cancellation authority. It never reaches the model.
+	if id := requestIDFromContext(reqCtx); id != "" {
+		httpReq.Header.Set(requestIDHeader, id)
+	}
+	return httpReq, nil
+}
+
+// readV3GenerateStream reads the V3 event stream to its end: it passes each
+// progress event to onProgress and returns the result event, or why the
+// result could not be decoded.
+func readV3GenerateStream(scanner *bufio.Scanner, onProgress V3ProgressFn) (*V3GenerateResponse, error) {
+	var result *V3GenerateResponse
+	var resultErr error
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Final result event
+		if strings.HasPrefix(line, "event: result") {
+			// Next line has the data
+			if scanner.Scan() {
+				dataLine := scanner.Text()
+				result, resultErr = decodeV3Result(dataLine, result, resultErr)
+			}
+			continue
+		}
+
+		// Done marker
+		if line == "data: [DONE]" {
+			break
+		}
+
+		// Progress event
+		reportV3Progress(line, onProgress)
+	}
+	return result, resultErr
+}
+
+// decodeV3Result decodes the data line of a result event. A line that is no
+// data line leaves the result and its error as they were.
+func decodeV3Result(dataLine string, result *V3GenerateResponse, resultErr error) (*V3GenerateResponse, error) {
+	if strings.HasPrefix(dataLine, sseDataPrefix) {
+		data := strings.TrimPrefix(dataLine, sseDataPrefix)
+		var r V3GenerateResponse
+		if err := json.Unmarshal([]byte(data), &r); err != nil {
+			resultErr = fmt.Errorf("V3 sent a result this proxy could not decode "+
+				"(%d bytes): %w", len(data), err)
+		} else {
+			result = &r
+			resultErr = nil
+		}
+	}
+	return result, resultErr
+}
+
+// reportV3Progress passes a progress event line to onProgress. A line that
+// does not decode as one is skipped.
+func reportV3Progress(line string, onProgress V3ProgressFn) {
+	if strings.HasPrefix(line, sseDataPrefix) {
+		data := strings.TrimPrefix(line, sseDataPrefix)
+		var event struct {
+			Stage  string                 `json:"stage"`
+			Detail string                 `json:"detail"`
+			Data   map[string]interface{} `json:"data"`
+		}
+		if json.Unmarshal([]byte(data), &event) == nil && onProgress != nil {
+			onProgress(event.Stage, event.Detail, event.Data)
+		}
+	}
 }
 
 // callV3PlanStreaming sends a plan-generation request to the V3 Python
@@ -285,8 +325,8 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 		if strings.HasPrefix(line, "event: result") {
 			if scanner.Scan() {
 				dataLine := scanner.Text()
-				if strings.HasPrefix(dataLine, "data: ") {
-					data := strings.TrimPrefix(dataLine, "data: ")
+				if strings.HasPrefix(dataLine, sseDataPrefix) {
+					data := strings.TrimPrefix(dataLine, sseDataPrefix)
 					var p Plan
 					if json.Unmarshal([]byte(data), &p) == nil {
 						plan = &p
@@ -300,8 +340,8 @@ func callV3PlanStreaming(reqCtx context.Context, v3URL string, req V3PlanRequest
 			break
 		}
 
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		if strings.HasPrefix(line, sseDataPrefix) {
+			data := strings.TrimPrefix(line, sseDataPrefix)
 			var event struct {
 				Stage  string                 `json:"stage"`
 				Detail string                 `json:"detail"`
