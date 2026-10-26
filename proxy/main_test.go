@@ -3857,13 +3857,17 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 	// The prompt never sees them.
 	prompt, _ := os.ReadFile("agent.go")
 	i := strings.Index(string(prompt), "func buildSystemPrompt")
-	if i >= 0 {
-		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
-		body := string(prompt)[i : i+1+end]
-		for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
-			if strings.Contains(body, f) {
-				t.Errorf("buildSystemPrompt reads %q", f)
-			}
+	if i < 0 {
+		t.Fatal("agent.go holds no func buildSystemPrompt, so the prompt check reads nothing; name the file that holds it")
+	}
+	end := strings.Index(string(prompt)[i+1:], "\nfunc ")
+	if end < 0 {
+		end = len(prompt) - i - 1
+	}
+	body := string(prompt)[i : i+1+end]
+	for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
+		if strings.Contains(body, f) {
+			t.Errorf("buildSystemPrompt reads %q", f)
 		}
 	}
 }
