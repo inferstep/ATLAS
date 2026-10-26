@@ -24,7 +24,7 @@ Each user message drives an agent loop that runs until the model emits
 1. **Pre-flight plan** (PC-179 / PC-206) — `v3-service` `/v3/plan` is
    called to seed an explicit step list. 3 candidates sampled, scored
    heuristically, best plan pinned. The active step is injected into
-   the system prompt every turn (`gates.go`).
+   the system prompt every turn (`gates_plan.go`).
 2. **Grammar-constrained generation** — `llama-server` is strongly steered
    toward a JSON envelope: `tool_call`, `text`, or `done`. GBNF +
    `response_format: json_object` constrains decoding, while the proxy recovers
@@ -42,9 +42,9 @@ Each user message drives an agent loop that runs until the model emits
    write is offloaded to `v3-service` and the bridge re-emits each
    pipeline stage onto `/events` as a `v3:<stage>` envelope.
 5. **Adherence + stuck-pattern gates** — every turn is scored against
-   the active plan step (`gates.go`) and three stuck-pattern
+   the active plan step (`gates_plan.go`) and three stuck-pattern
    detectors (tool/reasoning repetition in `detectors.go`, claim
-   checking in `gates.go`). Auto-revise the plan after a configurable
+   checking in `gates_completion.go`). Auto-revise the plan after a configurable
    threshold; bail if the loop is genuinely stuck.
 
 ## Tier Classification

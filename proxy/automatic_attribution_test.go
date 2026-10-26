@@ -667,7 +667,11 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 		"verification_evidence.go", "staged_command_evidence.go", "evidence_wiring.go",
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
-		"advisory_policy.go", "agent.go", "gates.go", "guardrails.go"} {
+		"advisory_policy.go", "agent.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails.go"} {
 		used := identifiersIn(t, f)
 		for name := range attributionIdentifiers(t) {
 			if used[name] {
