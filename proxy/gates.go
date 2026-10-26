@@ -1193,6 +1193,31 @@ func readLedgerBytes(key string) ([]byte, bool) {
 	return b, true
 }
 
+// observePathFromDisk records what is ACTUALLY on disk after an effect, rather
+// than what the tool said it wrote. The two differ exactly when it matters --
+// a partial write, a refused edit, a command that rewrote the file afterwards
+// -- and the ledger's only claim is about the bytes that are there now.
+//
+// A path that cannot be read gets an entry only if it already had one, and
+// that entry's current hash is cleared so CurrentValidation fails closed.
+func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
+	status ValidationStatus, detail string) {
+	key := ledgerKey(ctx, path)
+	b, ok := readLedgerBytes(key)
+	if !ok {
+		ctx.LedgerMu.Lock()
+		if d := ctx.Ledger[key]; d != nil {
+			d.CurrentHash = ""
+			d.ValidatedHash = ""
+			d.ValidationStatus = ValidationUnknown
+			d.ValidationKind = ValidationKindUnknown
+		}
+		ctx.LedgerMu.Unlock()
+		return
+	}
+	observeDeliverable(ctx, path, b, kind, status, detail)
+}
+
 // recordLedgerEffect records each resolved tool call's effect in the ledger,
 // called at the shared tool boundary once a call has fully resolved.
 // applyShellChanges (workspace_observation.go) adds what a shell command changed.

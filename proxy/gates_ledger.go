@@ -3,8 +3,9 @@
 // version back. recordLedgerEffect in gates.go records each resolved tool
 // call here; applyShellChanges (workspace_observation.go) adds what a shell
 // command changed. Also in gates.go: invalidateTrackedValidation, which
-// re-proves every tracked verdict after a shell effect, and readLedgerBytes,
-// which reads the bytes the ledger hashes.
+// re-proves every tracked verdict after a shell effect; readLedgerBytes,
+// which reads the bytes the ledger hashes; and observePathFromDisk, which
+// records what is on disk after an effect.
 
 package main
 
@@ -197,31 +198,6 @@ func workspaceHazardous(ctx *AgentContext) bool {
 	ctx.LedgerMu.Lock()
 	defer ctx.LedgerMu.Unlock()
 	return len(ctx.WorkspaceHazards) > 0
-}
-
-// observePathFromDisk records what is ACTUALLY on disk after an effect, rather
-// than what the tool said it wrote. The two differ exactly when it matters --
-// a partial write, a refused edit, a command that rewrote the file afterwards
-// -- and the ledger's only claim is about the bytes that are there now.
-//
-// A path that cannot be read gets an entry only if it already had one, and
-// that entry's current hash is cleared so CurrentValidation fails closed.
-func observePathFromDisk(ctx *AgentContext, path string, kind ValidationKind,
-	status ValidationStatus, detail string) {
-	key := ledgerKey(ctx, path)
-	b, ok := readLedgerBytes(key)
-	if !ok {
-		ctx.LedgerMu.Lock()
-		if d := ctx.Ledger[key]; d != nil {
-			d.CurrentHash = ""
-			d.ValidatedHash = ""
-			d.ValidationStatus = ValidationUnknown
-			d.ValidationKind = ValidationKindUnknown
-		}
-		ctx.LedgerMu.Unlock()
-		return
-	}
-	observeDeliverable(ctx, path, b, kind, status, detail)
 }
 
 // ledgerTracks reports whether the session has already observed a path.
