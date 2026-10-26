@@ -454,7 +454,8 @@ def test_the_stack_of_the_run_has_no_service_token(tmp_path):
     assert night.report["result"] == "passed"
     assert list((night.dir / "secrets").iterdir()) == []
     assert [call for call in night.calls() if "ATLAS_SERVICE_TOKEN_FILE" in call["env"]] == []
-    driver = (ROOT / "scripts" / "e2e-reliability.py").read_text(encoding="utf-8")
+    driver = "".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in (
+        "e2e-reliability.py", "reliability_detectors.py", "reliability_records.py", "reliability_sandbox.py"))
     assert "Authorization" not in driver, (
         "the driver now sends a token. Then the stack of the nightly run can have one: see check_settings in "
         "scripts/nightly_run.py, which refuses a token file today.")

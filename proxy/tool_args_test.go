@@ -617,3 +617,31 @@ func TestHandlerDispatchHasOneGuardedCallSite(t *testing.T) {
 		}
 	}
 }
+
+// TestEnforceWorkspacePathsReplacesTheCallWithTheJudgedReading pins that the
+// agent loop works from the reading the check judged, not the bytes the model
+// sent: on an accepted call enforceWorkspacePaths replaces parsed.Args with the
+// canonical form. If the check judged a copy and left parsed.Args as the
+// original, a later step would act on a value the check did not judge -- which no
+// other test notices -- and this fails.
+func TestEnforceWorkspacePathsReplacesTheCallWithTheJudgedReading(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	// Keys out of canonical order, so the judged (canonical) form differs byte
+	// for byte from what the model sent; that is how the test can tell whether
+	// parsed.Args became the judged reading or stayed the original.
+	original := json.RawMessage(`{"path":"a.txt","content":"x"}`)
+	judged, rejection := canonicalToolArgs("write_file", append(json.RawMessage(nil), original...), ctx)
+	if rejection != "" {
+		t.Fatalf("a well-formed call was refused: %s", rejection)
+	}
+	if bytes.Equal(judged, original) {
+		t.Fatal("test setup: the judged form must differ from the original for this test to tell them apart")
+	}
+	parsed := &ModelResponse{Name: "write_file", Args: append(json.RawMessage(nil), original...)}
+	if rejection := enforceWorkspacePaths(parsed, ctx); rejection != "" {
+		t.Fatalf("a well-formed call was refused: %s", rejection)
+	}
+	if !bytes.Equal(parsed.Args, judged) {
+		t.Errorf("after the check the call carries %s; a later step would use bytes the check did not judge (want the judged reading %s)", parsed.Args, judged)
+	}
+}

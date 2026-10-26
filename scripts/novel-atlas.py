@@ -235,6 +235,9 @@ def _read_provenance(args: argparse.Namespace, url: str, e2e) -> dict:
         "runner_sha256": _file_hash(Path(__file__)),
         "tasks_sha256": _file_hash(REPO / "scripts" / "novel_tasks.py"),
         "e2e_sha256": _file_hash(REPO / "scripts" / "e2e-reliability.py"),
+        # The runner's records, sandbox and detector code are in these files.
+        "e2e_modules_sha256": {name: _file_hash(REPO / "scripts" / name) for name in (
+            "reliability_records.py", "reliability_sandbox.py", "reliability_detectors.py")},
         # What the proxy says it runs: grammar mode, lens and steering state.
         "stack": e2e.stack_identity(url),
         "images": {},

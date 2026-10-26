@@ -64,8 +64,8 @@ def write_summary(path: Path | None, sessions: list, known: set[str],
 def report(sessions: list, known: set[str], guards_of: Callable[[Any], list[str]]) -> None:
     """Print the run summary: rates, defects by class, per task, code quality.
 
-    `guards_of` is e2e-reliability.py's model_output_guards, passed in so this
-    module does not import the runner."""
+    `guards_of` is reliability_detectors.py's model_output_guards, which
+    e2e-reliability.py passes in, so this module does not import the runner."""
     total = len(sessions)
     clean = sum(1 for s in sessions if not s.defects)
     passed = sum(1 for s in sessions if s.task_passed)
