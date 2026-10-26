@@ -631,14 +631,19 @@ func TestAttributionMethodsReturnNothingToTheRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	methods := 0
 	for _, d := range tree.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil {
 			continue
 		}
+		methods++
 		if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
 			t.Errorf("%s returns a value to its caller", fn.Name.Name)
 		}
+	}
+	if methods == 0 {
+		t.Fatal("automatic_attribution.go holds no methods, so the check reads nothing; name the file that holds them")
 	}
 }
 
