@@ -94,6 +94,18 @@ def _ws_path(ws: Path) -> str:
     return _SANDBOX_WORKDIR or str(ws)
 
 
+# What the sandbox's Python runs on the text it reads from stdin: it prints "OK",
+# or "ERR" and the syntax error.
+_PARSE_PROGRAM = (
+    "import ast,sys\n"
+    "try:\n"
+    "    ast.parse(sys.stdin.read())\n"
+    "    print('OK')\n"
+    "except SyntaxError as e:\n"
+    "    print('ERR', e)\n"
+)
+
+
 def _sandbox_python_parses(text: str) -> tuple[Optional[bool], str]:
     """Parse `text` with the sandbox's Python, the one that will run it.
 
@@ -105,13 +117,7 @@ def _sandbox_python_parses(text: str) -> tuple[Optional[bool], str]:
         return None, ""
     try:
         proc = subprocess.run(
-            ["docker", "exec", "-i", container, "python3", "-c",
-             "import ast,sys\n"
-             "try:\n"
-             "    ast.parse(sys.stdin.read())\n"
-             "    print('OK')\n"
-             "except SyntaxError as e:\n"
-             "    print('ERR', e)\n"],
+            ["docker", "exec", "-i", container, "python3", "-c", _PARSE_PROGRAM],
             input=text, capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
         return None, ""
@@ -150,6 +156,8 @@ def evaluator_identity() -> dict:
                 target = (f"sandbox {_SANDBOX_CONTAINER} python {proc.stdout.strip()} "
                           f"image {image.stdout.strip()[:19]}")
         except (OSError, subprocess.SubprocessError):
+            # Docker did not answer: the target stays "unavailable", and the
+            # record still names the host Python as the fallback.
             pass
     return {"version": EVALUATOR_VERSION, "python_parser": target,
             "fallback": f"host python {sys.version_info.major}.{sys.version_info.minor}"}
@@ -175,13 +183,19 @@ def _function_names(src: str) -> tuple[set, str]:
     return {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}, ""
 
 
+# What the sandbox's Python runs on the source it reads from stdin: it prints the
+# names of the functions the source defines, as a sorted JSON list.
+_FUNCTION_NAMES_PROGRAM = (
+    "import ast,json,sys\n"
+    "t=ast.parse(sys.stdin.read())\n"
+    "print(json.dumps(sorted({n.name for n in ast.walk(t) if isinstance(n, ast.FunctionDef)})))\n"
+)
+
+
 def _sandbox_function_names(src: str) -> tuple[set, str]:
     try:
         proc = subprocess.run(
-            ["docker", "exec", "-i", _SANDBOX_CONTAINER, "python3", "-c",
-             "import ast,json,sys\n"
-             "t=ast.parse(sys.stdin.read())\n"
-             "print(json.dumps(sorted({n.name for n in ast.walk(t) if isinstance(n, ast.FunctionDef)})))\n"],
+            ["docker", "exec", "-i", _SANDBOX_CONTAINER, "python3", "-c", _FUNCTION_NAMES_PROGRAM],
             input=src, capture_output=True, text=True, timeout=20)
         return set(json.loads(proc.stdout)), ""
     except (OSError, subprocess.SubprocessError, ValueError) as e:
