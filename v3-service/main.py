@@ -52,7 +52,8 @@ from symbols import (structural_edit, structural_score, build_project_symbols,
 # The handler does not call these; tests exercise them through `import main`.
 # __all__ below states that so linters stop reading them as dead imports —
 # deleting any of them breaks the suite, which is the failure this guards.
-from pipeline import _candidate_by_index, _make_self_test
+from candidate_records import _candidate_by_index
+from pipeline import _make_self_test
 from planning import _score_plan, _known_files
 from scoring import (verify_build_command, smoke_compile_check,
                      score_candidate_per_step, _project_relative_path)

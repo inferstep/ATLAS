@@ -17,6 +17,7 @@ import time
 import pytest
 
 import pipeline
+import stage_telemetry
 
 
 @pytest.fixture(autouse=True)
@@ -109,8 +110,8 @@ def test_the_run_plans_against_the_callers_cap(monkeypatch):
 def test_new_stages_are_registered_for_the_summary():
     """A stage missing from _STAGE_PHASE contributes no phase row, so the
     run summary silently loses the reason it stopped."""
-    assert pipeline._STAGE_PHASE["budget_exhausted"] == "fallback"
-    assert pipeline._STAGE_PHASE["divsampling_stop"] == "generation"
+    assert stage_telemetry._STAGE_PHASE["budget_exhausted"] == "fallback"
+    assert stage_telemetry._STAGE_PHASE["divsampling_stop"] == "generation"
 
 
 def test_reserve_covers_one_more_generation(monkeypatch):
@@ -170,7 +171,7 @@ def test_an_unverified_candidate_is_not_returned():
     cap used to discard everything, so this fallback rarely reached disk;
     returning V3's work exposed it.
     """
-    assert pipeline._STAGE_PHASE["budget_no_verified_candidate"] == "fallback"
+    assert stage_telemetry._STAGE_PHASE["budget_no_verified_candidate"] == "fallback"
 
 
 # --- generations are sized to the clock ------------------------------------

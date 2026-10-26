@@ -42,12 +42,11 @@ import contract
 import scoring
 import symbols
 from runtime_verification import PythonImportComparison
-from stage_telemetry import (_SUMMARY_LOCK, _STAGE_PHASE, _VETO_STAGES, _progress_emitter,
-                             _resolve_telemetry_dir, _summarize_phases)
-from candidate_records import (INCUMBENT_INDEX, _announce_selection, _candidate_by_index,
-                               _candidate_lens_payload, _ensure_delivered_evidence, _lens_view,
-                               _note_lens, _record_closes, _select_by_contract, _task_identity,
-                               _without_retypings)
+from stage_telemetry import (_SUMMARY_LOCK, _VETO_STAGES, _progress_emitter, _resolve_telemetry_dir,
+                             _summarize_phases)
+from candidate_records import (INCUMBENT_INDEX, _announce_selection, _candidate_lens_payload,
+                               _ensure_delivered_evidence, _lens_view, _note_lens, _record_closes,
+                               _select_by_contract, _task_identity, _without_retypings)
 from vetoes import _call_graph_veto, _lens_veto, _structural_veto
 
 BASE_TEMPERATURE = 0.6

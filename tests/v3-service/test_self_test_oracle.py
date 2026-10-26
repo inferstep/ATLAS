@@ -21,12 +21,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import pipeline
+import stage_telemetry
 
 
 def test_the_untrusted_stage_is_registered():
     """An unregistered stage contributes no phase row, so the run summary
     loses the record that a score was observed and given no authority."""
-    assert pipeline._STAGE_PHASE["self_test_untrusted"] == "self_test"
+    assert stage_telemetry._STAGE_PHASE["self_test_untrusted"] == "self_test"
 
 
 # --- a suite is trusted by provenance, never by its score ------------------
