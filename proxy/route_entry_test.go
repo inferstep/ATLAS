@@ -161,12 +161,9 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 		t.Fatalf("mintRouteEntry declared %d times", mints)
 	}
 	for _, file := range []string{"types.go", "tool_io.go", "agent.go", "tools.go"} {
-		body, err := os.ReadFile(file)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(body), `json:"route_entry_id"`) ||
-			strings.Contains(string(body), `json:"route_entry"`) {
+		body := readSourceForTest(t, file)
+		if strings.Contains(body, `json:"route_entry_id"`) ||
+			strings.Contains(body, `json:"route_entry"`) {
 			t.Errorf("%s decodes a route entry from input", file)
 		}
 	}
