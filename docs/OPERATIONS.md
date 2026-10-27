@@ -62,12 +62,13 @@ Containment and startup rules:
 
 One JSON object per line. Two record kinds carry the contract observation — a
 request snapshot and one record per live gate evaluation — plus the
-observe-only candidate records (`shadow_invocation_feasibility`,
+candidate records (`shadow_invocation_feasibility`,
 `shadow_route_disposition`, `candidate_policy_decision`,
 `candidate_authorization_decision`, `authorization_grant_event`,
 `shadow_delivery_disposition`, `candidate_mutation_scope`,
-`candidate_generation_bypass`, `automatic_delivery_attribution`), and a footer
-written at shutdown.
+`candidate_generation_bypass`, `automatic_delivery_attribution`,
+`candidate_evidence_observation`, `candidate_capture_only_suppression`,
+`candidate_capture_only_disposition`), and a footer written at shutdown.
 
 An acquisition is **clean** only when all of these hold:
 
@@ -109,9 +110,10 @@ analysed. In particular:
   to the model server, so an embedding request can be joined to the exact
   request and invocation it served; an acquisition relay may require that
   pair on embedding traffic and refuse calls without it.
-- **Hashes are identities, not secrets.** Paths and verification commands are
-  stored as unsalted SHA-256, truncated to 16 hex characters; the user message
-  is stored as a full unsalted SHA-256. They exist so two records naming the
+- **Hashes are identities, not secrets.** In the request snapshot, paths and
+  verification commands are stored as unsalted SHA-256, truncated to 16 hex
+  characters; the user message and the `candidate_mutation_scope` target path
+  are stored as a full unsalted SHA-256. They exist so two records naming the
   same thing collide and two naming different things do not. Over a small
   guessable domain — `app.py` and the like — the original is recoverable by
   enumeration. Treat a capture as revealing which paths and commands were
@@ -136,7 +138,7 @@ analysed. In particular:
 | Model load failure | llama logs name the reason (VRAM, arch, quant); `atlas tier fit --write` re-sizes; `atlas model verify` checks file integrity against the pinned hash |
 | Lens degraded (`self_test_error`) | `atlas lens check` prints the exact missing artifact + fix command (`atlas lens build`); identity mismatch means the bundle belongs to another model |
 | ASA inactive | llama startup log prints why (missing vector / marker mismatch); `atlas asa check`, then `atlas asa build` |
-| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show as 137/timeout in tool results |
+| Sandbox failures | `docker compose logs sandbox`; egress-cut mode (`ATLAS_SANDBOX_NET_INTERNAL=true`) intentionally breaks dependency installs; resource kills show in tool results as their outcome (`memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `timed_out`); see § Truthful results |
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
 | Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
@@ -168,8 +170,8 @@ ceiling is reported as stopped, never as failed — see "Truthful results" below
 
 | Variable | Default | What it bounds |
 | --- | --- | --- |
-| `MAX_EXECUTION_TIME` | 300 (compose) / 60 (executor) | wall clock per command |
-| `ATLAS_EXEC_MEMORY_BYTES` | 1 GiB | resident memory of the command and its descendants |
+| `MAX_EXECUTION_TIME` (in `.env`: `ATLAS_SANDBOX_MAX_EXECUTION_TIME`) | 300 (compose) / 60 (executor) | wall clock per command |
+| `ATLAS_EXEC_MEMORY_BYTES` | 1 GiB (compose) / 2 GiB (executor) | resident memory of the command and its descendants |
 | `ATLAS_EXEC_MAX_PROCESSES` | 256 | processes in the command's tree |
 | `ATLAS_EXEC_OUTPUT_BYTES` | 32 MiB | stdout + stderr the executor will buffer |
 
@@ -207,18 +209,19 @@ unbounded there is no inference maximum to add, so an 11 GiB sandbox plus the
 small services plus the reserve fits a 15 GiB host — which is exactly how every
 process came to be inside its own limit at the moment the kernel went looking
 for a victim. What catches it is the **remainder**: what the enforced budgets
-leave over for the one component nothing holds. Today that is 9.86 GiB against
-an expectation of 11 GiB, and the proxy reports the shortfall at startup. Under
+leave over for the one component nothing holds. With the compose defaults that is
+9.86 GiB against an expectation of 11 GiB. Under
 the old 11 GiB sandbox it was 0.33 GiB against 11 GiB.
 
-An overrun is reported, not refused. The refusal is for enforced maxima that
-over-commit — a number an operator can edit. An unbounded component that
+An overrun of the remainder is neither reported nor refused. The refusal is for
+enforced maxima that over-commit — a number an operator can edit. An unbounded component that
 outgrows the remainder needs a different fix (a validated limit, or a smaller
 model), and disabling execution would not make the machine safer.
 
 Set `ATLAS_HOST_MEMORY_BYTES` to your machine's RAM to turn that arithmetic
-into a check. When it is declared and the sum does not fit, the proxy **refuses
-to run commands** and says by how much it is over; reading files and answering
+into a check. When it is declared and the sum does not fit, the `run_command`
+tool **refuses to run commands** and the proxy log says by how much the sum is
+over (`run_background` and staged verification commands are not checked); reading files and answering
 questions still work, because the diagnosis has to be readable. Left unset,
 nothing is declared and nothing is checked — the per-command contract still
 applies, and it carries the safety on its own.
@@ -226,10 +229,10 @@ applies, and it carries the safety on its own.
 Raising `ATLAS_EXEC_CONCURRENCY` is checked the same way: two commands at the
 per-command ceiling must still fit inside the sandbox's own budget.
 
-`ATLAS_SANDBOX_MEM` is what `atlas init` sizes from host RAM. A value chosen as
-a fraction of RAM without subtracting the model is exactly the shape that
-caused the kill — on a 16 GiB host with a 12B model resident, the sandbox's
-share is about 1.5 GiB, not 11.
+`ATLAS_SANDBOX_MEM` is what `atlas init` sizes from host RAM: 75% of it (2 GiB
+floor), without subtracting the model, which is about 11 GiB on a 16 GiB host.
+With a 12B model resident on such a host, set it to about 1.5 GiB (the compose
+default).
 
 Swap is disabled for the sandbox (`memswap_limit` tracks `mem_limit`): a
 swapping test is a hung one, and swap hides an over-commit rather than
@@ -253,7 +256,9 @@ request is per-request, so a reused file descriptor cannot cancel a later one.
 
 ## Building for verification without claiming the deployable tag
 
-`docker compose build atlas-proxy` writes `ghcr.io/inferstep/atlas-proxy:dev` —
+`docker compose build atlas-proxy` writes
+`ghcr.io/inferstep/atlas-proxy:<ATLAS_IMAGE_TAG>` (`:latest` unless `.env` sets
+another tag) —
 the same tag the running stack was started from. Nothing restarts, so the
 running container keeps its image; but the deployable **name** now points at
 the new build, and the previous image becomes untagged. If it is later pruned,
@@ -265,7 +270,7 @@ For a build you only want to test, use a throwaway tag and leave the deployable
 name alone:
 
 ```bash
-docker build -t atlas-proxy:my-slice-check ./proxy      # never :dev
+docker build -t ghcr.io/inferstep/atlas-proxy:my-slice-check ./proxy   # never :dev
 ATLAS_IMAGE_TAG=my-slice-check docker compose config    # check it resolves
 ```
 
@@ -325,14 +330,13 @@ This required the executor's middlewares to be pure ASGI rather than
 returns False forever: measured directly, the same probe reports "disconnected
 at 1.0s" without a middleware and "never disconnected" with one.
 
-Graceful shutdown **drains** rather than cutting in-flight work off, so the
-bound it completes within is the running command's own deadline
-(`MAX_EXECUTION_TIME`, or a shorter per-request one). Nothing survives it.
+Under compose the sandbox sets no `stop_grace_period`, so a shutdown is bounded
+by Docker's default stop timeout, not by `MAX_EXECUTION_TIME`. Nothing survives
+it.
 
 ## Truthful results
 
-A command stopped at a ceiling exits non-zero exactly like a failing test — a
-Python process that runs out of memory raises `MemoryError` and exits 1. Read as an exit code alone, a verification that never completed becomes a
+A command stopped at a ceiling exits non-zero exactly like a failing test. Read as an exit code alone, a verification that never completed becomes a
 behavioural failure of the code under test.
 
 So the executor reports **how** the command ended, from a closed set:
@@ -375,7 +379,9 @@ signed; `sha-*` tags never move.
 
 ## What an upgrade can and cannot touch
 
-- **Config:** `.env` is never rewritten by an upgrade. New keys are
+- **Config:** an upgrade changes only `ATLAS_IMAGE_TAG` in `.env` (and
+  `atlas upgrade` moves a legacy `ATLAS_GHCR_OWNER=itigges22` to `inferstep`).
+  New keys are
   additive with safe defaults; removed keys are ignored (see
   CONFIGURATION.md § removed variables). Re-run `atlas init` only if
   you want re-detected hardware sizing.
@@ -421,7 +427,8 @@ up to `ATLAS_UPGRADE_PULL_TIMEOUT` (default 3600 s) to finish.
 
 The manual sequence above remains valid and is what `atlas upgrade`
 automates. To undo a *successful* upgrade later, `atlas rollback`
-(§ Rolling back) returns to the recorded restore point.
+(§ Rolling back) returns to the restore point's previous tag (it pulls that
+tag again and does not restore the `.env` backup).
 
 `atlas upgrade` verifies each target image's keyless cosign signature
 before applying (best-effort: if cosign isn't installed it logs and
@@ -457,13 +464,15 @@ and the fallback when no restore point exists.
 ## Images
 
 Every push publishes immutable `sha-<commit>` tags and releases publish
-semver tags; none are ever repointed. To roll back:
+`X.Y.Z` tags, which the build never moves. The moving tags are `:latest` (each
+push to main), `:dev` (each push to dev) and `:X.Y` (each stable release); the
+maintainer-approved alias job can also point a tag at other images. To roll back:
 
 ```bash
 # 1. Find the last-good tag (release tag, or a sha-* from
 #    `docker compose images` / the GHCR package page)
 # 2. Pin it:
-sed -i 's/^ATLAS_IMAGE_TAG=.*/ATLAS_IMAGE_TAG=3.1.2/' .env   # or sha-abc1234 — registry semver tags carry no leading v
+sed -i 's/^ATLAS_IMAGE_TAG=.*/ATLAS_IMAGE_TAG=3.1.2/' .env   # or sha-abc1234 — a release publishes both 3.1.2 and v3.1.2
 docker compose pull
 docker compose up -d
 atlas doctor
@@ -507,13 +516,18 @@ What actually holds state, where it lives, and what losing it costs.
 | Models | `ATLAS_MODELS_DIR` (default `./models`) | Re-download (hash-verified) | optional — large, re-fetchable |
 | Lens/ASA bundles | `geometric-lens/geometric_lens/models/` + `models/*.gguf(.model)` | Published bundles re-download; **locally-trained calibration does not** | copy the dir after any `atlas lens build` |
 | Lens training data | `benchmark/results/` | Lose the ability to rebuild calibration from your own bench runs | copy before pruning |
-| TUI sessions | `~/.cache/atlas-tui/sessions/` | Lose `--resume` history | copy the dir |
+| TUI sessions | `<user cache dir>/atlas-tui/sessions/` (`~/.cache/atlas-tui/sessions/` on Linux, `~/Library/Caches/atlas-tui/sessions/` on macOS) | Lose `--resume` history | copy the dir |
+| Secrets | `secrets/` (`service-token`, `api-keys.json`) | Clients need new API keys | copy the dir (`atlas init` makes new ones) |
+| V3 telemetry | the `v3-telemetry` volume | Lose the pipeline's stage records | copy the volume's contents |
+| Upgrade restore points | `.atlas-upgrade/` | Lose `atlas rollback`'s target and the `.env` backups | copy the dir |
+| Diagnostic captures | `diagnostics/` (`ATLAS_DIAGNOSTIC_HOST_DIR`) | Lose captures taken with `ATLAS_SHADOW_CAPTURE` | copy the dir |
 | Project files | your repo | — | your VCS |
 
 ## Restore
 
 Config/models/bundles/bench results: copy back into place, `docker compose up
--d`, `atlas doctor` (it re-verifies artifact identity + hashes).
+-d`, `atlas doctor` (it re-checks artifact presence and identity; `atlas model verify`
+and `atlas artifact verify` check hashes).
 
 ## Honest gaps
 
