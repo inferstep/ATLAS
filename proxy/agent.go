@@ -733,6 +733,40 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	if ctx != nil && ctx.ShellEffectsUnobserved {
 		s.gateUnresolved("shell_observation", "the workspace was too large to observe every file the shell commands changed")
 	}
+	if gate, msg := s.repairGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.intentGates(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.handoffGate(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.evidenceGates(ctx, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.scopeGate(ctx, userMessage, claimText); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.runFirstGateAtExit(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.routeContractGate(ctx); gate != "" {
+		return gate, msg
+	}
+	contractDemand := decideVerificationDemand(ctx, ctx.TaskContract, s.expectedOutputs)
+	contractOwed := contractDemand.Required && !contractDemand.Met
+	if gate, msg := s.backgroundGate(ctx, contractOwed); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.verificationGates(ctx, contractDemand, contractOwed); gate != "" {
+		return gate, msg
+	}
+	return s.completionGates(ctx, userMessage, claimText)
+}
+
+// repairGate holds the exit while a file this session wrote does not parse.
+func (s *runState) repairGate(ctx *AgentContext) (string, string) {
 	// A file this session left unparseable is an open repair, and the work is
 	// not finished while one is open (repair.go). First, because it is the
 	// most concrete fact there is about the work. Bounded like every exit
@@ -748,6 +782,13 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("repair_gate", repairNames(open)+" does not parse")
 	}
+	return "", ""
+}
+
+// intentGates hold a reply that is not an answer yet: one that promises the
+// content, announces a tool call it never made, or closes by deferring the
+// work. A reply that says it cannot do the work is marked, not sent back.
+func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, string) {
 	if promisesMoreContent(claimText) {
 		if s.continuationFits(ctx) && s.chargeBounce("intent_gate") {
 			log.Printf("[agent] intent gate: bouncing a reply that promised content it did not deliver (bounce %d/%d)",
@@ -785,6 +826,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.replyOutstanding = true
 	}
+	return "", ""
+}
+
+// handoffGate sends a reply that asks the user back once, to look first at a
+// workspace the run never opened.
+func (s *runState) handoffGate(ctx *AgentContext, claimText string) (string, string) {
 	// A reply that ends by asking the user. A question is a legitimate
 	// outcome, and not a completed one: the user owes an answer. Whether it
 	// was avoidable is decided from evidence, not wording -- if the workspace
@@ -804,6 +851,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.replyHandedBack = true
 		}
 	}
+	return "", ""
+}
+
+// evidenceGates hold a reply that cites a file the run never read, or code
+// that no read showed.
+func (s *runState) evidenceGates(ctx *AgentContext, claimText string) (string, string) {
 	// A claim about a file the run never opened. This is the conversational
 	// half of an invariant the write path already enforces — edit_file,
 	// structural_edit, insert_after and replace_lines all refuse a path that
@@ -830,6 +883,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("evidence_gate", "the reply describes "+symbolNames(gaps)+", whose code this run never showed")
 	}
+	return "", ""
+}
+
+// scopeGate holds a read-only investigation whose reply accounts for fewer
+// of the files it read than the request named.
+func (s *runState) scopeGate(ctx *AgentContext, userMessage, claimText string) (string, string) {
 	// An investigation that answers for less than it opened. Only for a
 	// read-only run whose request named several files (investigationScopeUnmet),
 	// and only after the reply has been judged by the gates above, so a
@@ -846,6 +905,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.replyScopeUnmet = true
 		}
 	}
+	return "", ""
+}
+
+// runFirstGateAtExit holds the exit while a file on disk carries a parse
+// warning and has never been run.
+func (s *runState) runFirstGateAtExit(ctx *AgentContext) (string, string) {
 	// A warned, never-executed artifact is not a deliverable. Without this a
 	// session whose prompt carried no verification wording could end with a
 	// file that never parsed and was never run, reported as success (audit
@@ -866,6 +931,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("run_first_gate", p+" has a parse warning and was never run")
 		break
 	}
+	return "", ""
+}
+
+// routeContractGate holds the exit while a page this run wrote submits to a
+// route the server does not define.
+func (s *runState) routeContractGate(ctx *AgentContext) (string, string) {
 	// A page this run wrote submits to a route the server never defines. The
 	// lint found it and said so at write time; marked advisory, it was
 	// ignored, and the delivered form 404ed (acceptance run, 2026-09-15).
@@ -888,6 +959,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 				"%d form or request target(s) in the pages this run wrote name a route the server does not define", len(broken)))
 		}
 	}
+	return "", ""
+}
+
+// backgroundGate asks the run to stop a job of its own that is still
+// running, unless a verification or a planned run still needs the job.
+func (s *runState) backgroundGate(ctx *AgentContext, contractOwed bool) (string, string) {
 	// A job this run started is still running. Completion is refused while a
 	// process of the run's own may still be writing (finalizeCompletion:
 	// background_work_unresolved), and that refusal replaces the model's
@@ -917,8 +994,6 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// pass. The run ended "stopped" with working code on disk. The yield lasts
 	// only while the plan gate has bounces left, so a spent plan gate cannot
 	// hold the job open.
-	contractDemand := decideVerificationDemand(ctx, ctx.TaskContract, s.expectedOutputs)
-	contractOwed := contractDemand.Required && !contractDemand.Met
 	verificationOwed := ((s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop) || contractOwed
 	planRunOwed := planOwesRun(ctx) && s.gateBounces["plan_gate"] < maxGateBounces
 	if live := settleBackgroundHazard(ctx); len(live) > 0 && !verificationOwed && !planRunOwed && s.chargeBounce("background_gate") {
@@ -926,6 +1001,32 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			len(live), s.gateBounces["background_gate"], maxGateBounces)
 		return "background_gate", backgroundStopMessage(ctx, live)
 	}
+	return "", ""
+}
+
+// verificationGates hold an exit whose verification is missing, out of date
+// or partial, in this order: a run only ever fed through stdin, bytes that
+// changed after the run that verified them, no verifying run at all, a probe
+// of older code, and a work contract that nothing current shows working.
+func (s *runState) verificationGates(ctx *AgentContext, contractDemand verificationDemand, contractOwed bool) (string, string) {
+	if gate, msg := s.redirectGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.artifactGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.verificationGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.staleProbeGate(ctx); gate != "" {
+		return gate, msg
+	}
+	return s.contractVerificationGate(ctx, contractDemand, contractOwed)
+}
+
+// redirectGate holds a run that was verified only with input piped into its
+// stdin.
+func (s *runState) redirectGate(ctx *AgentContext) (string, string) {
 	// Verified only through a stdin redirect: the program was never run the
 	// way its caller will run it. See stdinRedirectSource for the measurement.
 	if s.verifiedByRedirect != "" && !s.verifiedStandalone {
@@ -937,6 +1038,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("contract_gate", "the program was only ever run with "+s.verifiedByRedirect+
 			" piped into its stdin, never the way a caller that does not pipe input would run it")
 	}
+	return "", ""
+}
+
+// artifactGate holds a run whose bytes changed after the run that verified
+// them.
+func (s *runState) artifactGate(ctx *AgentContext) (string, string) {
 	// Verification is of bytes, not of a moment. If any file this session
 	// wrote no longer matches the hash snapshotted when the verifying run
 	// succeeded, the final artifact is unverified whatever the booleans say.
@@ -958,6 +1065,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("artifact_gate", relativeToWorkspace(ctx, changed)+
 			" changed after the run that verified it and was not run again")
 	}
+	return "", ""
+}
+
+// verificationGate holds a run that was asked to verify its work, or saw a
+// verification fail, and has no successful verification since.
+func (s *runState) verificationGate(ctx *AgentContext) (string, string) {
 	if (s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop && s.chargeBounce("verification_gate") {
 		log.Printf("[agent] verification gate: bouncing exit at turn %d (trigger=%s, no successful verification command this loop, bounce %d/%d)",
 			s.turn, gateTrigger(s.userWantsVerification, s.sawFailedVerification), s.gateBounces["verification_gate"], maxGateBounces)
@@ -969,6 +1082,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.sawFailedVerification, s.serverStartBlocked, anyBackgroundJobID(ctx), s.redRunStreak,
 			s.headOnlyProbe, staleJob, staleFile) + s.uncountedCheck
 	}
+	return "", ""
+}
+
+// staleProbeGate holds a run verified by a probe of a job that started before
+// the last change to the code the job serves.
+func (s *runState) staleProbeGate(ctx *AgentContext) (string, string) {
 	// Verified, but the work contract says the deliverable itself is not
 	// covered — and a job that predates the last change to it explains why.
 	// finalizeCompletion would refuse this exit with
@@ -990,6 +1109,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 				staleJob, relativeToWorkspace(ctx, staleFile)))
 		}
 	}
+	return "", ""
+}
+
+// contractVerificationGate holds a run whose work contract owes evidence
+// that nothing current shows.
+func (s *runState) contractVerificationGate(ctx *AgentContext, contractDemand verificationDemand, contractOwed bool) (string, string) {
 	// The work contract owes evidence that what this run wrote works, and
 	// nothing current shows it. finalizeCompletion refuses the exit either
 	// way; this says so while the run can still act on it, out of the
@@ -999,9 +1124,31 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			contractDemand.Missing, s.gateBounces["verification_gate"], maxGateBounces)
 		return "verification_gate", contractDemandMessage(ctx, contractDemand) + s.uncountedCheck
 	}
-	// Steps the plan named and no tool call ever satisfied. Same shape as the
-	// verification gate: a fact the run already holds, used at the exit
-	// instead of only being shown mid-run.
+	return "", ""
+}
+
+// completionGates hold an exit that leaves the work unfinished, in this
+// order: code nothing calls, plan steps never carried out, no change where
+// the request asked for one, a named deliverable not on disk, and a claim of
+// completeness the files do not bear out.
+func (s *runState) completionGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
+	if gate, msg := s.orphanGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.planGate(ctx); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.actionGate(ctx, userMessage); gate != "" {
+		return gate, msg
+	}
+	if gate, msg := s.outputGate(ctx); gate != "" {
+		return gate, msg
+	}
+	return s.claimCheckGate(ctx, userMessage, claimText)
+}
+
+// orphanGate holds the exit while code this run added is never called.
+func (s *runState) orphanGate(ctx *AgentContext) (string, string) {
 	// Code the run added that nothing calls. Checked at the exit rather than
 	// at the write, because wiring it up on a later turn is normal — only
 	// finishing with it unwired is the defect.
@@ -1013,6 +1160,14 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		}
 		s.gateUnresolved("orphan_gate", "code this run added is never called: "+orphanNames(ctx, orphans))
 	}
+	return "", ""
+}
+
+// planGate holds the exit while steps of the plan were never carried out.
+func (s *runState) planGate(ctx *AgentContext) (string, string) {
+	// Steps the plan named and no tool call ever satisfied. Same shape as the
+	// verification gate: a fact the run already holds, used at the exit
+	// instead of only being shown mid-run.
 	if msg := planIncompleteMessage(ctx); msg != "" {
 		if s.chargeBounce("plan_gate") {
 			log.Printf("[agent] plan gate: bouncing exit at turn %d — %d/%d steps satisfied (bounce %d/%d)",
@@ -1023,6 +1178,12 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 		s.gateUnresolved("plan_gate", fmt.Sprintf("%d of %d plan steps were never carried out",
 			len(ctx.Plan.Steps)-countTrue(ctx.PlanStepsSatisfied), len(ctx.Plan.Steps)))
 	}
+	return "", ""
+}
+
+// actionGate holds an exit that changed nothing on disk when the request
+// asked for a change.
+func (s *runState) actionGate(ctx *AgentContext, userMessage string) (string, string) {
 	if observeActionDemand(ctx, s, shadowGateActionGate,
 		decideActionDemand(ctx.TaskContract, userMessage, ctx.Tier, s.inspectedWorkspace)) &&
 		!s.madeProductiveChange && s.chargeBounce("action_gate") {
@@ -1030,12 +1191,24 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 			s.turn, truncateStr(userMessage, 60), s.gateBounces["action_gate"], maxGateBounces)
 		return "action_gate", actionWithoutProductiveChangeMessage(userMessage)
 	}
+	return "", ""
+}
+
+// outputGate holds the exit, once, while a deliverable the request named is
+// not on disk.
+func (s *runState) outputGate(ctx *AgentContext) (string, string) {
 	if missing := missingExpectedOutputs(ctx, s.expectedOutputs); len(missing) > 0 && !s.outputGateUsed && s.chargeBounce("output_gate") {
 		s.outputGateUsed = true // fire once — see field doc
 		log.Printf("[agent] expected-output gate: bouncing exit at turn %d — named deliverable(s) %v not on disk (bounce %d/%d)",
 			s.turn, logPaths(missing), s.gateBounces["output_gate"], maxGateBounces)
 		return "output_gate", expectedOutputMissingMessage(missing)
 	}
+	return "", ""
+}
+
+// claimCheckGate holds an exit whose claim of completeness the files on disk
+// do not bear out.
+func (s *runState) claimCheckGate(ctx *AgentContext, userMessage, claimText string) (string, string) {
 	if claimsUniversal(claimText) || promptIsMultiIssue(userMessage) {
 		if gap := verifyCompletionClaims(ctx.WorkingDir); gap != "" {
 			if s.chargeBounce("claim_check") {
@@ -2067,21 +2240,10 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 	return callLLMOnceRestating(ctx, messages, temperature, grammar, "")
 }
 
-// callLLMOnceRestating is callLLMOnceWithGrammar with restateOnly: the caller
-// names the file this request is about, and no other file's contents are
-// appended to it (see appendLastReadRestatementFor).
-func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperature float64,
-	grammar, restateOnly string) (string, int, error) {
-	// Stale from the previous turn otherwise, which would blame a clean
-	// parse failure on a cut that happened earlier.
-	ctx.LastStreamCut = ""
-	ctx.LastOldStrCut = nil
-	ctx.LastFencedStream = fencedStreamStats{}
-	wireMessages := toWireMessages(messages)
-	wireMessages = appendLastReadRestatementFor(ctx, wireMessages, restateOnly)
-
-	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
-
+// llmRequestBody is the chat-completions request of one call: the sampling the
+// agent uses, and the grammar or the JSON response format that constrains
+// the reply.
+func llmRequestBody(wireMessages []map[string]string, temperature float64, grammar string) []byte {
 	// Per-turn hard ceiling (agentMaxTokens, default 8192). 32768 let a
 	// rambling content blob run the full window (~18 min at the GPU's capped
 	// decode rate) — the runaway nothing else caught, since the reasoning
@@ -2141,6 +2303,25 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 		reqBody["response_format"] = buildResponseFormat()
 	}
 	body, _ := json.Marshal(reqBody)
+	return body
+}
+
+// callLLMOnceRestating is callLLMOnceWithGrammar with restateOnly: the caller
+// names the file this request is about, and no other file's contents are
+// appended to it (see appendLastReadRestatementFor).
+func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperature float64,
+	grammar, restateOnly string) (string, int, error) {
+	// Stale from the previous turn otherwise, which would blame a clean
+	// parse failure on a cut that happened earlier.
+	ctx.LastStreamCut = ""
+	ctx.LastOldStrCut = nil
+	ctx.LastFencedStream = fencedStreamStats{}
+	wireMessages := toWireMessages(messages)
+	wireMessages = appendLastReadRestatementFor(ctx, wireMessages, restateOnly)
+
+	llamaURL := envOr("ATLAS_LLAMA_URL", ctx.InferenceURL)
+
+	body := llmRequestBody(wireMessages, temperature, grammar)
 	endpoint := llamaURL + "/v1/chat/completions"
 
 	// Carry the agent's request context into the HTTP request so client
@@ -2169,28 +2350,9 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 		var cancel context.CancelFunc
 		reqCtx, cancel = context.WithCancel(reqCtx)
 		defer cancel()
-		idle := fencedIdleTimeout()
-		stalled := fencedStalledTimeout()
-		var mu sync.Mutex
-		timer := time.AfterFunc(fencedFirstContentTimeout(), cancel)
+		var timer *time.Timer
+		timer, progress, armStalled = fencedWatchdog(cancel)
 		defer timer.Stop()
-		progress = func() {
-			mu.Lock()
-			defer mu.Unlock()
-			timer.Reset(idle)
-		}
-		// Once the server has sent ANY frame, generation has started, and
-		// on a healthy stream the first content frame follows in the same
-		// millisecond -- measured at 0.00s across every direct reproduction
-		// at small and large context. So a stream that has opened and then
-		// says nothing is dead, and waiting the full first-content budget
-		// for it only burns the session. Shorten the deadline instead of
-		// spending 60s twice per file on a stream that will never speak.
-		armStalled = func() {
-			mu.Lock()
-			defer mu.Unlock()
-			timer.Reset(stalled)
-		}
 	}
 	httpReq, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -2210,13 +2372,6 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 
 	sentAt := time.Now()
 
-	// Estimate total prompt tokens (chars/4 — works for English + code
-	// within ~10–20%) so the prompt-progress poller has a baseline even
-	// when /slots doesn't expose n_prompt_tokens directly.
-	promptTokenEst := 0
-	for _, m := range messages {
-		promptTokenEst += len(m.Content) / 4
-	}
 	// pollPromptProgress runs as a sibling goroutine while the LLM call is
 	// in flight; it streams elapsed_ms ticks back to the TUI. We MUST
 	// guarantee it has fully exited before callLLMOnce returns — otherwise
@@ -2225,16 +2380,8 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// a SIGSEGV inside bufio.(*Writer).Flush. The defers run LIFO: stop
 	// the channel first, then wait on the WaitGroup until the goroutine
 	// exits.
-	stopProgress := make(chan struct{})
-	var stopOnce sync.Once
-	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
-	var pollWG sync.WaitGroup
-	pollWG.Add(1)
-	go func() {
-		defer pollWG.Done()
-		pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
-	}()
-	defer pollWG.Wait()
+	stopProgressFn, waitForPoller := startPromptProgress(ctx, llamaURL, messages)
+	defer waitForPoller()
 	defer stopProgressFn()
 
 	resp, err := llmStreamClient.Do(httpReq)
@@ -2254,29 +2401,109 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 			resp.StatusCode, truncateStr(string(respBody), 500))
 	}
 
-	var (
-		contentBuf strings.Builder
-		// PC-?: capture reasoning_content separately so we can fall
-		// back to it when contentBuf is empty. Some models occasionally
-		// engages thinking mode despite enable_thinking=false (most
-		// reproducibly on retries with bumped temperature) — when it
-		// does, ALL output streams into delta.reasoning_content. The
-		// previous version threw it away and returned an empty string,
-		// which fired the empty-response retry uselessly. Now we
-		// surface the reasoning as content (with <think> tags stripped)
-		// so the agent loop has SOMETHING to parse.
-		reasoningBuf   strings.Builder
-		totalTokens    int
-		firstTokenSent bool
-		reasoningCut   bool
-		contentLoopCut bool
-		noFenceCut     bool
-		lastLoopCheck  int
-		oldStrCut      bool
-	)
+	stream := &llmStream{ctx: ctx, grammar: grammar, fencedSubCall: fencedSubCall, sentAt: sentAt,
+		progress: progress, armStalled: armStalled, stopProgressFn: stopProgressFn}
+	return stream.read(resp, reqCtx)
+}
+
+// fencedWatchdog arms the fenced sub-call's progress watchdog on cancel, with
+// the first-content deadline. progress re-arms it with the idle deadline, and
+// armStalled with the shorter one for a stream that has opened.
+func fencedWatchdog(cancel context.CancelFunc) (*time.Timer, func(), func()) {
+	idle := fencedIdleTimeout()
+	stalled := fencedStalledTimeout()
+	var mu sync.Mutex
+	timer := time.AfterFunc(fencedFirstContentTimeout(), cancel)
+	progress := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		timer.Reset(idle)
+	}
+	// Once the server has sent ANY frame, generation has started, and
+	// on a healthy stream the first content frame follows in the same
+	// millisecond -- measured at 0.00s across every direct reproduction
+	// at small and large context. So a stream that has opened and then
+	// says nothing is dead, and waiting the full first-content budget
+	// for it only burns the session. Shorten the deadline instead of
+	// spending 60s twice per file on a stream that will never speak.
+	armStalled := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		timer.Reset(stalled)
+	}
+	return timer, progress, armStalled
+}
+
+// startPromptProgress starts the poller that streams the prompt's progress to
+// the client while the model reads it, and returns the function that stops
+// the poller and the one that waits until it has exited.
+func startPromptProgress(ctx *AgentContext, llamaURL string, messages []AgentMessage) (func(), func()) {
+	// Estimate total prompt tokens (chars/4 — works for English + code
+	// within ~10–20%) so the prompt-progress poller has a baseline even
+	// when /slots doesn't expose n_prompt_tokens directly.
+	promptTokenEst := 0
+	for _, m := range messages {
+		promptTokenEst += len(m.Content) / 4
+	}
+	stopProgress := make(chan struct{})
+	var stopOnce sync.Once
+	stopProgressFn := func() { stopOnce.Do(func() { close(stopProgress) }) }
+	var pollWG sync.WaitGroup
+	pollWG.Add(1)
+	go func() {
+		defer pollWG.Done()
+		pollPromptProgress(ctx, llamaURL, stopProgress, promptTokenEst)
+	}()
+	return stopProgressFn, pollWG.Wait
+}
+
+// llmStream is the read of one streamed reply: what has arrived on each
+// channel, the token count, the cuts that end the read early, and, on a
+// fenced sub-call, what the wire showed.
+type llmStream struct {
+	ctx            *AgentContext
+	grammar        string
+	fencedSubCall  bool
+	sentAt         time.Time
+	progress       func()
+	armStalled     func()
+	stopProgressFn func()
+
+	contentBuf strings.Builder
+	// PC-?: capture reasoning_content separately so we can fall
+	// back to it when contentBuf is empty. Some models occasionally
+	// engages thinking mode despite enable_thinking=false (most
+	// reproducibly on retries with bumped temperature) — when it
+	// does, ALL output streams into delta.reasoning_content. The
+	// previous version threw it away and returned an empty string,
+	// which fired the empty-response retry uselessly. Now we
+	// surface the reasoning as content (with <think> tags stripped)
+	// so the agent loop has SOMETHING to parse.
+	reasoningBuf   strings.Builder
+	totalTokens    int
+	firstTokenSent bool
+	reasoningCut   bool
+	contentLoopCut bool
+	noFenceCut     bool
+	lastLoopCheck  int
+	oldStrCut      bool
+	oldStrW        *oldStrWatch
+
+	reasoningBudgetChars int
+
+	rawLines    int
+	firstLine   string
+	firstFrame  time.Duration
+	watchdogCut string
+}
+
+// read reads the reply to its end or to a cut, and returns it: the content,
+// or what the reasoning holds when the content is empty.
+func (rd *llmStream) read(resp *http.Response, reqCtx context.Context) (string, int, error) {
+	ctx := rd.ctx
 	// An edit_file old_str is checked against its file while it streams
 	// (old_str_watch.go). Not in a fenced sub-call, which carries a body.
-	oldStrW := newOldStrWatch(ctx)
+	rd.oldStrW = newOldStrWatch(ctx)
 
 	// Per-turn reasoning budget. A reasoning-heavy model can spiral for
 	// tens of thousands of tokens inside ONE generation (observed: a
@@ -2289,10 +2516,10 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// the caller's standard re-prompt ("emit your tool call now") fires.
 	// Token-estimate at 4 chars/token; ATLAS_REASONING_BUDGET (tokens)
 	// overrides, 0 disables. Keyed off stream state, not model identity.
-	reasoningBudgetChars := 6144 * 4
+	rd.reasoningBudgetChars = 6144 * 4
 	if v := envOr("ATLAS_REASONING_BUDGET", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			reasoningBudgetChars = n * 4
+			rd.reasoningBudgetChars = n * 4
 		}
 	}
 
@@ -2306,210 +2533,26 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// and every direct reproduction of the same request streams in ~0.25s.
 	// Recording what actually came back over the wire is what distinguishes
 	// "nothing was sent" from "something was sent and not parsed".
-	rawLines, firstLine := 0, ""
-	var firstFrame time.Duration
-	watchdogCut := ""
-	if fencedSubCall {
+	if rd.fencedSubCall {
 		log.Printf("[agent] fenced sub-call response: status=%s content-type=%q transfer-encoding=%v content-length=%d",
 			resp.Status, resp.Header.Get("Content-Type"),
 			resp.TransferEncoding, resp.ContentLength)
 		// What the wire showed, for the caller's fenced_fetch event (#254).
 		defer func() {
 			ctx.LastFencedStream = fencedStreamStats{
-				FirstFrame: firstFrame, WireLines: rawLines, FirstLine: truncateStr(firstLine, 160),
-				ReasoningChars: reasoningBuf.Len(), ContentChars: contentBuf.Len(), Cut: watchdogCut,
+				FirstFrame: rd.firstFrame, WireLines: rd.rawLines, FirstLine: truncateStr(rd.firstLine, 160),
+				ReasoningChars: rd.reasoningBuf.Len(), ContentChars: rd.contentBuf.Len(), Cut: rd.watchdogCut,
 			}
 		}()
 	}
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		if fencedSubCall {
-			rawLines++
-			if firstLine == "" && strings.TrimSpace(line) != "" {
-				firstLine = line
-				firstFrame = time.Since(sentAt)
-				// The stream is open and generating; content is due now.
-				armStalled()
-				log.Printf("[agent] fenced sub-call first wire line after %s: %s",
-					time.Since(sentAt).Round(time.Millisecond), truncateStr(line, 160))
-			}
-		}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		payload := strings.TrimPrefix(line, "data: ")
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Usage *struct {
-				TotalTokens      int `json:"total_tokens"`
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue
-		}
-		for _, c := range chunk.Choices {
-			if c.Delta.ReasoningContent != "" {
-				// First output of ANY kind means prompt eval is done — for
-				// reasoning models (some stream their whole chain as
-				// reasoning_content, often with no content tokens until the
-				// final JSON) the first delta is reasoning, not content.
-				// Stop the prompt-eval poller and fire llm_first_token here
-				// too; otherwise the poller keeps emitting prompt_progress
-				// for the entire generation, the TUI keeps painting
-				// "encoding", and it fights the streaming reasoning for the
-				// row — the encode timer never stops and the screen flickers.
-				if !firstTokenSent {
-					stopProgressFn()
-					ctx.Stream("llm_first_token", map[string]interface{}{
-						"prompt_ms": time.Since(sentAt).Milliseconds(),
-					})
-					firstTokenSent = true
-				}
-				// Accumulate for the empty-content fallback below AND
-				// stream to the TUI as a separate `reasoning_token` event
-				// so users can see the model's thought process. The TUI
-				// subscribes to reasoning_token distinctly from llm_token
-				// so it can render thinking dimmed without mixing it into
-				// the content stream destined for parse.
-				reasoningBuf.WriteString(c.Delta.ReasoningContent)
-				ctx.Stream("reasoning_token", map[string]interface{}{
-					"text": c.Delta.ReasoningContent,
-				})
-				if reasoningBudgetChars > 0 && reasoningBuf.Len() > reasoningBudgetChars && contentBuf.Len() == 0 {
-					reasoningCut = true
-				}
-			}
-			if c.Delta.Content == "" {
-				continue
-			}
-			// Useful progress, and the only kind: bytes of the file itself.
-			// Reasoning deltas above deliberately do not reach here.
-			progress()
-			if !firstTokenSent {
-				stopProgressFn() // prompt eval done — kill the poller
-				ctx.Stream("llm_first_token", map[string]interface{}{
-					"prompt_ms": time.Since(sentAt).Milliseconds(),
-				})
-				firstTokenSent = true
-			}
-			contentBuf.WriteString(c.Delta.Content)
-			ctx.Stream("llm_token", map[string]interface{}{
-				"text": c.Delta.Content,
-			})
-			// Content-loop cut. Some models state the right answer then
-			// spirals on self-doubt in the CONTENT stream ("...the first line
-			// is X. Wait, I can't see the output. I'll just say X. Wait, I
-			// can't..." repeating) — the reasoning budget doesn't catch it
-			// (that's content, not reasoning_content), so it ran to max_tokens.
-			// Detect a repeating tail and cut (streamLooping). Checked
-			// periodically to keep it O(n) overall.
-			// Raw-emission sub-call: we asked for exactly one fenced block
-			// and nothing else, so a reply with no fence opener after a few
-			// hundred characters is prose that will run to max_tokens. At
-			// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
-			// makes two attempts, so a failed @fenced resolution cost a
-			// user's session 10 minutes of silence before bouncing.
-			// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
-			// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
-			if grammar == rawEmissionSentinel && !noFenceCut &&
-				contentBuf.Len() > rawFenceGraceChars &&
-				!strings.Contains(contentBuf.String(), "```") {
-				noFenceCut = true
-			}
-			if !contentLoopCut && !oldStrCut && contentBuf.Len() > 600 && contentBuf.Len()-lastLoopCheck > 200 {
-				lastLoopCheck = contentBuf.Len()
-				contentLoopCut = streamLooping(contentBuf.String())
-				if !contentLoopCut && !fencedSubCall {
-					oldStrCut = oldStrW.runaway(contentBuf.String())
-				}
-			}
-		}
-		if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
-			totalTokens = chunk.Usage.TotalTokens
-		}
-		if reasoningCut {
-			log.Printf("[agent] reasoning budget exceeded (%d chars, ~%d tokens) with no content emitted — cutting the stream and re-prompting",
-				reasoningBuf.Len(), reasoningBuf.Len()/4)
-			ctx.Stream("reasoning_budget_cut", map[string]interface{}{
-				"reasoning_chars": reasoningBuf.Len(),
-			})
-			ctx.LastStreamCut = "reasoning_budget"
-			break
-		}
-		if noFenceCut {
-			log.Printf("[agent] raw sub-call produced %d chars with no fenced block — cutting rather than running to max_tokens",
-				contentBuf.Len())
-			ctx.LastStreamCut = "no_fence"
-			break
-		}
-		if contentLoopCut {
-			log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", contentBuf.Len())
-			ctx.Stream("content_loop_cut", map[string]interface{}{"chars": contentBuf.Len()})
-			ctx.LastStreamCut = "content_loop"
-			break
-		}
-		if oldStrCut {
-			log.Printf("[agent] edit_file old_str on %s stopped matching the file after %d line(s) and ran on (%d bytes) — cutting the stream",
-				logPath(oldStrW.Path), oldStrW.MatchedLines, oldStrW.Chars)
-			ctx.Stream("old_str_cut", map[string]interface{}{
-				"path": oldStrW.Path, "chars": contentBuf.Len(),
-				"old_str_chars": oldStrW.Chars, "matched_lines": oldStrW.MatchedLines,
-			})
-			ctx.LastStreamCut = "old_str_unmatched"
-			ctx.LastOldStrCut = oldStrW
+		if rd.readLine(scanner.Text()) {
 			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		// Our fenced watchdog cancels the request when no CONTENT token
-		// arrives in time. A model that streamed the file into
-		// reasoning_content instead has the answer sitting in reasoningBuf,
-		// and returning the error here discards it — the reasoning salvage
-		// below never runs because this left early. Try that same salvage
-		// first, but only for a benign watchdog cut: the session context is
-		// still alive (a real user cancel or transport failure is not
-		// salvaged). Observed 2026-09-14: fenced sub-calls for a second file
-		// on a large context were cut at the watchdog with the file already
-		// in reasoning_content, and the run died with only the first file.
-		if fencedSubCall && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
-			// Which watchdog fired follows from what had arrived: none arms
-			// only once a frame has come, and content re-arms the idle one.
-			if reqCtx.Err() != nil {
-				switch {
-				case firstLine == "":
-					watchdogCut = "first_content"
-				case contentBuf.Len() == 0:
-					watchdogCut = "stalled"
-				default:
-					watchdogCut = "idle"
-				}
-			}
-			log.Printf("[agent] fenced sub-call stream cut (%v) after %s; wire lines=%d first=%q; reasoning_content held %d chars, content %d",
-				err, time.Since(sentAt).Round(time.Millisecond), rawLines,
-				truncateStr(firstLine, 120), reasoningBuf.Len(), contentBuf.Len())
-			if reasoningBuf.Len() > 0 {
-				if body := extractFencedContent(reasoningBuf.String()); body != "" &&
-					strings.TrimSpace(body) != rawEmissionSentinel {
-					log.Printf("[agent] recovered the fenced block from reasoning_content after a stream cut (%d chars)",
-						reasoningBuf.Len())
-					return reasoningBuf.String(), totalTokens, nil
-				}
-			}
-		}
-		return contentBuf.String(), totalTokens,
-			fmt.Errorf("read LLM stream: %w", err)
+		return rd.endOnReadError(err, reqCtx)
 	}
 
 	// Stash the reasoning content on ctx so the agent loop's per-turn
@@ -2518,65 +2561,291 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// model may emit BOTH content (the JSON tool call) AND reasoning
 	// (the prose narration), and we want to detect rehashed reasoning
 	// even when a tool call was successfully emitted.
-	ctx.LastTurnReasoning = reasoningBuf.String()
+	ctx.LastTurnReasoning = rd.reasoningBuf.String()
 
-	if contentBuf.Len() == 0 {
-		// Raw-emission sub-call: the recovery below only salvages a JSON
-		// tool_call envelope, which is the right rule for the agent loop and
-		// the wrong one here — this call asked for a fenced block, so a
-		// block sitting in reasoning_content is exactly the answer and was
-		// being thrown away. Observed: sub-call attempts returning 0 content
-		// characters after minutes of generation, with no stream cut, which
-		// is tokens going somewhere that is not `content`.
-		if grammar == rawEmissionSentinel && reasoningBuf.Len() > 0 {
-			if body := extractFencedContent(reasoningBuf.String()); body != "" &&
-				strings.TrimSpace(body) != rawEmissionSentinel {
-				log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
-					reasoningBuf.Len())
-				return reasoningBuf.String(), totalTokens, nil
-			}
-		}
-		// No content deltas — check reasoning_content. Two distinct cases:
-		//
-		//   (a) Model dumped its actual response into the thinking
-		//       stream despite template-level reasoning being disabled).
-		//       reasoning_content contains a JSON
-		//       tool_call; we recover it and parse normally.
-		//
-		//   (b) Model emitted ONLY thinking ("Now I need to read...")
-		//       and terminated without producing a response. The
-		//       reasoning_content is pure prose narration — there's no
-		//       tool call to recover. Earlier we returned this prose
-		//       as the "response" and it parse-errored every time,
-		//       wasting a turn. Pre-May-8 behavior had the agent
-		//       loop's classifyParseFailure scolding the model with
-		//       "respond in JSON only" — but the corrective is
-		//       useless when the response was truly empty (model
-		//       wasn't disobeying the format, it just stopped mid-flow).
-		//
-		// New behavior: only return recovered reasoning when it
-		// CONTAINS a tool_call envelope. For pure prose, return empty
-		// + log so the caller's retry path can re-prompt with a
-		// "you produced thinking but no response — emit your tool
-		// call now" message instead of treating prose as a failed
-		// response.
-		if reasoningBuf.Len() > 0 {
-			if recovered, ok := recoverStructuredReasoning(reasoningBuf.String()); ok {
-				log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
-					reasoningBuf.Len())
-				return recovered, totalTokens, nil
-			}
-			// Pure prose narration in reasoning_content with no tool
-			// call. Don't return it — let the caller retry. Logged so
-			// the failure mode stays visible.
-			log.Printf("[agent] %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
-				reasoningBuf.Len())
-		}
-		// Truly nothing (or only narration). Caller's empty-response
-		// retry path (callLLMConstrained) will handle.
-		return "", totalTokens, nil
+	if rd.contentBuf.Len() == 0 {
+		return rd.recoverEmptyContent()
 	}
-	return contentBuf.String(), totalTokens, nil
+	return rd.contentBuf.String(), rd.totalTokens, nil
+}
+
+// readLine reads one line of the stream: on a fenced sub-call what the wire
+// showed, then a frame's reasoning, its content and its token count. It reports
+// whether the read stops here, at the stream's end or at a cut.
+func (rd *llmStream) readLine(line string) bool {
+	if rd.fencedSubCall {
+		rd.rawLines++
+		if rd.firstLine == "" && strings.TrimSpace(line) != "" {
+			rd.firstLine = line
+			rd.firstFrame = time.Since(rd.sentAt)
+			// The stream is open and generating; content is due now.
+			rd.armStalled()
+			log.Printf("[agent] fenced sub-call first wire line after %s: %s",
+				time.Since(rd.sentAt).Round(time.Millisecond), truncateStr(line, 160))
+		}
+	}
+	if !strings.HasPrefix(line, "data: ") {
+		return false
+	}
+	payload := strings.TrimPrefix(line, "data: ")
+	if payload == "[DONE]" {
+		return true
+	}
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *struct {
+			TotalTokens      int `json:"total_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return false
+	}
+	for _, c := range chunk.Choices {
+		if c.Delta.ReasoningContent != "" {
+			rd.readReasoning(c.Delta.ReasoningContent)
+		}
+		if c.Delta.Content == "" {
+			continue
+		}
+		rd.readContent(c.Delta.Content)
+	}
+	if chunk.Usage != nil && chunk.Usage.TotalTokens > 0 {
+		rd.totalTokens = chunk.Usage.TotalTokens
+	}
+	return rd.cut()
+}
+
+// readReasoning takes one reasoning delta: the first token's event, the
+// reasoning so far, and the reasoning budget's cut.
+func (rd *llmStream) readReasoning(reasoning string) {
+	ctx := rd.ctx
+	// First output of ANY kind means prompt eval is done — for
+	// reasoning models (some stream their whole chain as
+	// reasoning_content, often with no content tokens until the
+	// final JSON) the first delta is reasoning, not content.
+	// Stop the prompt-eval poller and fire llm_first_token here
+	// too; otherwise the poller keeps emitting prompt_progress
+	// for the entire generation, the TUI keeps painting
+	// "encoding", and it fights the streaming reasoning for the
+	// row — the encode timer never stops and the screen flickers.
+	if !rd.firstTokenSent {
+		rd.stopProgressFn()
+		ctx.Stream("llm_first_token", map[string]interface{}{
+			"prompt_ms": time.Since(rd.sentAt).Milliseconds(),
+		})
+		rd.firstTokenSent = true
+	}
+	// Accumulate for the empty-content fallback below AND
+	// stream to the TUI as a separate `reasoning_token` event
+	// so users can see the model's thought process. The TUI
+	// subscribes to reasoning_token distinctly from llm_token
+	// so it can render thinking dimmed without mixing it into
+	// the content stream destined for parse.
+	rd.reasoningBuf.WriteString(reasoning)
+	ctx.Stream("reasoning_token", map[string]interface{}{
+		"text": reasoning,
+	})
+	if rd.reasoningBudgetChars > 0 && rd.reasoningBuf.Len() > rd.reasoningBudgetChars && rd.contentBuf.Len() == 0 {
+		rd.reasoningCut = true
+	}
+}
+
+// readContent takes one content delta: progress for the watchdog, the first
+// token's event, the content so far, and the checks that cut a reply that will
+// not end well.
+func (rd *llmStream) readContent(content string) {
+	ctx := rd.ctx
+	// Useful progress, and the only kind: bytes of the file itself.
+	// Reasoning deltas above deliberately do not reach here.
+	rd.progress()
+	if !rd.firstTokenSent {
+		rd.stopProgressFn() // prompt eval done — kill the poller
+		ctx.Stream("llm_first_token", map[string]interface{}{
+			"prompt_ms": time.Since(rd.sentAt).Milliseconds(),
+		})
+		rd.firstTokenSent = true
+	}
+	rd.contentBuf.WriteString(content)
+	ctx.Stream("llm_token", map[string]interface{}{
+		"text": content,
+	})
+	// Content-loop cut. Some models state the right answer then
+	// spirals on self-doubt in the CONTENT stream ("...the first line
+	// is X. Wait, I can't see the output. I'll just say X. Wait, I
+	// can't..." repeating) — the reasoning budget doesn't catch it
+	// (that's content, not reasoning_content), so it ran to max_tokens.
+	// Detect a repeating tail and cut (streamLooping). Checked
+	// periodically to keep it O(n) overall.
+	// Raw-emission sub-call: we asked for exactly one fenced block
+	// and nothing else, so a reply with no fence opener after a few
+	// hundred characters is prose that will run to max_tokens. At
+	// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
+	// makes two attempts, so a failed @fenced resolution cost a
+	// user's session 10 minutes of silence before bouncing.
+	// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
+	// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
+	if rd.grammar == rawEmissionSentinel && !rd.noFenceCut &&
+		rd.contentBuf.Len() > rawFenceGraceChars &&
+		!strings.Contains(rd.contentBuf.String(), "```") {
+		rd.noFenceCut = true
+	}
+	if !rd.contentLoopCut && !rd.oldStrCut && rd.contentBuf.Len() > 600 && rd.contentBuf.Len()-rd.lastLoopCheck > 200 {
+		rd.lastLoopCheck = rd.contentBuf.Len()
+		rd.contentLoopCut = streamLooping(rd.contentBuf.String())
+		if !rd.contentLoopCut && !rd.fencedSubCall {
+			rd.oldStrCut = rd.oldStrW.runaway(rd.contentBuf.String())
+		}
+	}
+}
+
+// cut ends the read at the first cut the frames so far call for, and says why
+// on the stream and on the context. It reports whether the read stops.
+func (rd *llmStream) cut() bool {
+	ctx := rd.ctx
+	if rd.reasoningCut {
+		log.Printf("[agent] reasoning budget exceeded (%d chars, ~%d tokens) with no content emitted — cutting the stream and re-prompting",
+			rd.reasoningBuf.Len(), rd.reasoningBuf.Len()/4)
+		ctx.Stream("reasoning_budget_cut", map[string]interface{}{
+			"reasoning_chars": rd.reasoningBuf.Len(),
+		})
+		ctx.LastStreamCut = "reasoning_budget"
+		return true
+	}
+	if rd.noFenceCut {
+		log.Printf("[agent] raw sub-call produced %d chars with no fenced block — cutting rather than running to max_tokens",
+			rd.contentBuf.Len())
+		ctx.LastStreamCut = "no_fence"
+		return true
+	}
+	if rd.contentLoopCut {
+		log.Printf("[agent] content loop detected (%d chars) — model repeating itself; cutting the stream", rd.contentBuf.Len())
+		ctx.Stream("content_loop_cut", map[string]interface{}{"chars": rd.contentBuf.Len()})
+		ctx.LastStreamCut = "content_loop"
+		return true
+	}
+	if rd.oldStrCut {
+		log.Printf("[agent] edit_file old_str on %s stopped matching the file after %d line(s) and ran on (%d bytes) — cutting the stream",
+			logPath(rd.oldStrW.Path), rd.oldStrW.MatchedLines, rd.oldStrW.Chars)
+		ctx.Stream("old_str_cut", map[string]interface{}{
+			"path": rd.oldStrW.Path, "chars": rd.contentBuf.Len(),
+			"old_str_chars": rd.oldStrW.Chars, "matched_lines": rd.oldStrW.MatchedLines,
+		})
+		ctx.LastStreamCut = "old_str_unmatched"
+		ctx.LastOldStrCut = rd.oldStrW
+		return true
+	}
+	return false
+}
+
+// endOnReadError answers a stream that broke off: a fenced block already in the
+// reasoning is still salvaged after a watchdog cut, and otherwise the error
+// goes back with the content so far.
+func (rd *llmStream) endOnReadError(err error, reqCtx context.Context) (string, int, error) {
+	ctx := rd.ctx
+	// Our fenced watchdog cancels the request when no CONTENT token
+	// arrives in time. A model that streamed the file into
+	// reasoning_content instead has the answer sitting in reasoningBuf,
+	// and returning the error here discards it — the reasoning salvage
+	// below never runs because this left early. Try that same salvage
+	// first, but only for a benign watchdog cut: the session context is
+	// still alive (a real user cancel or transport failure is not
+	// salvaged). Observed 2026-09-14: fenced sub-calls for a second file
+	// on a large context were cut at the watchdog with the file already
+	// in reasoning_content, and the run died with only the first file.
+	if rd.fencedSubCall && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
+		// Which watchdog fired follows from what had arrived: none arms
+		// only once a frame has come, and content re-arms the idle one.
+		if reqCtx.Err() != nil {
+			switch {
+			case rd.firstLine == "":
+				rd.watchdogCut = "first_content"
+			case rd.contentBuf.Len() == 0:
+				rd.watchdogCut = "stalled"
+			default:
+				rd.watchdogCut = "idle"
+			}
+		}
+		log.Printf("[agent] fenced sub-call stream cut (%v) after %s; wire lines=%d first=%q; reasoning_content held %d chars, content %d",
+			err, time.Since(rd.sentAt).Round(time.Millisecond), rd.rawLines,
+			truncateStr(rd.firstLine, 120), rd.reasoningBuf.Len(), rd.contentBuf.Len())
+		if rd.reasoningBuf.Len() > 0 {
+			if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+				strings.TrimSpace(body) != rawEmissionSentinel {
+				log.Printf("[agent] recovered the fenced block from reasoning_content after a stream cut (%d chars)",
+					rd.reasoningBuf.Len())
+				return rd.reasoningBuf.String(), rd.totalTokens, nil
+			}
+		}
+	}
+	return rd.contentBuf.String(), rd.totalTokens,
+		fmt.Errorf("read LLM stream: %w", err)
+}
+
+// recoverEmptyContent answers a reply with no content: a fenced block or an
+// agent response found in the reasoning is the reply, and otherwise it is empty.
+func (rd *llmStream) recoverEmptyContent() (string, int, error) {
+	// Raw-emission sub-call: the recovery below only salvages a JSON
+	// tool_call envelope, which is the right rule for the agent loop and
+	// the wrong one here — this call asked for a fenced block, so a
+	// block sitting in reasoning_content is exactly the answer and was
+	// being thrown away. Observed: sub-call attempts returning 0 content
+	// characters after minutes of generation, with no stream cut, which
+	// is tokens going somewhere that is not `content`.
+	if rd.grammar == rawEmissionSentinel && rd.reasoningBuf.Len() > 0 {
+		if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
+			strings.TrimSpace(body) != rawEmissionSentinel {
+			log.Printf("[agent] raw sub-call emitted its fenced block into reasoning_content (%d chars) — salvaging",
+				rd.reasoningBuf.Len())
+			return rd.reasoningBuf.String(), rd.totalTokens, nil
+		}
+	}
+	// No content deltas — check reasoning_content. Two distinct cases:
+	//
+	//   (a) Model dumped its actual response into the thinking
+	//       stream despite template-level reasoning being disabled).
+	//       reasoning_content contains a JSON
+	//       tool_call; we recover it and parse normally.
+	//
+	//   (b) Model emitted ONLY thinking ("Now I need to read...")
+	//       and terminated without producing a response. The
+	//       reasoning_content is pure prose narration — there's no
+	//       tool call to recover. Earlier we returned this prose
+	//       as the "response" and it parse-errored every time,
+	//       wasting a turn. Pre-May-8 behavior had the agent
+	//       loop's classifyParseFailure scolding the model with
+	//       "respond in JSON only" — but the corrective is
+	//       useless when the response was truly empty (model
+	//       wasn't disobeying the format, it just stopped mid-flow).
+	//
+	// New behavior: only return recovered reasoning when it
+	// CONTAINS a tool_call envelope. For pure prose, return empty
+	// + log so the caller's retry path can re-prompt with a
+	// "you produced thinking but no response — emit your tool
+	// call now" message instead of treating prose as a failed
+	// response.
+	if rd.reasoningBuf.Len() > 0 {
+		if recovered, ok := recoverStructuredReasoning(rd.reasoningBuf.String()); ok {
+			log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
+				rd.reasoningBuf.Len())
+			return recovered, rd.totalTokens, nil
+		}
+		// Pure prose narration in reasoning_content with no tool
+		// call. Don't return it — let the caller retry. Logged so
+		// the failure mode stays visible.
+		log.Printf("[agent] %d chars of reasoning_content had no valid agent envelope — discarding so caller can re-prompt",
+			rd.reasoningBuf.Len())
+	}
+	// Truly nothing (or only narration). Caller's empty-response
+	// retry path (callLLMConstrained) will handle.
+	return "", rd.totalTokens, nil
 }
 
 // --- runAgentLoop's steps -----------------------------------------------------
@@ -5214,10 +5483,32 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 				TaskModeQuestion)
 		}
 	}
-	probe := &AgentContext{WorkingDir: workingDir}
-	seen := map[string]bool{}
 	out := &TaskContract{TaskMode: in.TaskMode,
 		OutputKnowledge: outKnow, VerificationKnowledge: verKnow}
+	paths, err := distinctOutputPaths(in, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	cmds, err := distinctVerificationCommands(in)
+	if err != nil {
+		return nil, err
+	}
+	// Stable order, so two equivalent requests never disagree downstream.
+	sort.Strings(paths)
+	sort.Strings(cmds)
+	// Presence is STORED, not re-derived. A declared-empty list must survive
+	// as a present, empty list; rebuilding by append is exactly how the old
+	// validator turned it back into "absent".
+	storeExpectedOutputs(out, outKnow, paths)
+	storeVerification(out, in, verKnow, cmds, typedReqs)
+	return out, nil
+}
+
+// distinctOutputPaths checks each declared output path against the workspace
+// and keeps one spelling of each file, in the order declared.
+func distinctOutputPaths(in *TaskContract, workingDir string) ([]string, error) {
+	probe := &AgentContext{WorkingDir: workingDir}
+	seen := map[string]bool{}
 	var paths []string
 	for _, p := range in.OutputPaths() {
 		if strings.TrimSpace(p) == "" {
@@ -5233,6 +5524,12 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		seen[canon] = true
 		paths = append(paths, p)
 	}
+	return paths, nil
+}
+
+// distinctVerificationCommands checks each declared verification command and
+// keeps one of each, by its exact text, in the order declared.
+func distinctVerificationCommands(in *TaskContract) ([]string, error) {
 	vseen := map[string]bool{}
 	var cmds []string
 	for _, v := range in.VerificationCommands() {
@@ -5245,18 +5542,24 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 		vseen[v] = true
 		cmds = append(cmds, v)
 	}
-	// Stable order, so two equivalent requests never disagree downstream.
-	sort.Strings(paths)
-	sort.Strings(cmds)
-	// Presence is STORED, not re-derived. A declared-empty list must survive
-	// as a present, empty list; rebuilding by append is exactly how the old
-	// validator turned it back into "absent".
+	return cmds, nil
+}
+
+// storeExpectedOutputs stores the declared output paths on out: a declared
+// list, even an empty one, is present.
+func storeExpectedOutputs(out *TaskContract, outKnow ObligationKnowledge, paths []string) {
 	if outKnow == KnowledgeDeclared {
 		if paths == nil {
 			paths = []string{}
 		}
 		out.ExpectedOutputs = &paths
 	}
+}
+
+// storeVerification stores the declared verification commands on out, present
+// even when empty, with the typed requirements that came with them.
+func storeVerification(out, in *TaskContract, verKnow ObligationKnowledge, cmds []string,
+	typedReqs []VerificationRequirement) {
 	if verKnow == KnowledgeDeclared {
 		if cmds == nil {
 			cmds = []string{}
@@ -5267,7 +5570,6 @@ func validateTaskContract(in *TaskContract, workingDir string) (*TaskContract, e
 			out.VerificationRequirementsVersion = in.VerificationRequirementsVersion
 		}
 	}
-	return out, nil
 }
 
 // normalizeKnowledge turns what the caller sent into a stated knowledge value,
@@ -6117,73 +6419,14 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 
 // handleAgent is the HTTP handler for the new agent endpoint.
 func handleAgent(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+	req, ok := readAgentRequest(w, r)
+	if !ok {
 		return
 	}
 
-	type historyMsg struct {
-		Role    string `json:"role"` // "user" or "assistant"
-		Content string `json:"content"`
-	}
-	var req struct {
-		Message    string       `json:"message"`
-		WorkingDir string       `json:"working_dir"`
-		Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
-		SessionID  string       `json:"session_id"` // optional — required for /cancel
-		History    []historyMsg `json:"history,omitempty"`
-		// Tools the client has approved for the whole session so the proxy
-		// skips the interactive prompt for them (see /v1/permission).
-		SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
-		// /demo split-pane flags — tags match tui/chat.go's agentRequest.
-		DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
-		SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
-		// Removed switches, read only to refuse them. V3 runs on every
-		// request and feasibility is recorded, never enforced; a request that
-		// asks for V3 off, planner-only or enforce would otherwise be measured
-		// under a system it did not ask for.
-		RemovedBypassV3        *bool  `json:"bypass_v3,omitempty"`
-		RemovedV3Mode          string `json:"v3_mode,omitempty"`
-		RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
-		// What the client declares about the request. Optional, and absent
-		// stays distinguishable from present-and-empty. Nothing reads it yet.
-		TaskContract *TaskContract `json:"task_contract,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
+	workingDir, hostDir, ok := agentWorkingDirs(w, req)
+	if !ok {
 		return
-	}
-
-	if req.Message == "" {
-		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
-		return
-	}
-
-	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
-	// as working_dir, but the proxy runs in a container where that path
-	// doesn't exist — only /workspace (the bind-mount target) does. The
-	// startup wrapper (atlas/runtime.py:_align_workspace) already aligns
-	// the bind mount to the user's cwd, so /workspace IS the user's cwd
-	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
-	// docker-compose.yml) as the canonical write target. The original
-	// host path is kept on HostWorkingDir for path translation (below).
-	hostDir := req.WorkingDir
-	if hostDir == "" {
-		hostDir = "."
-	}
-	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
-
-	// /demo: each pane works inside its own workspace subdir. A non-empty
-	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
-	if sub := req.SandboxSubdir; sub != "" {
-		if !validSandboxSubdir(sub) {
-			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
-			return
-		}
-		workingDir = filepath.Join(workingDir, sub)
-		if hostDir != "" && hostDir != "." {
-			hostDir = filepath.Join(hostDir, sub)
-		}
 	}
 
 	// Classify tier from message
@@ -6195,53 +6438,9 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, ErrInvalidInput, msg)
 		return
 	}
-	ctx.DisableFreshSlot = req.DisableFreshSlot
-	// Stash the host path so resolveAgentPath can translate absolute
-	// host paths the model receives in user prompts (e.g. "fix
-	// /home/isaac/snake/app.py") into the container path. Without this
-	// the model copies the user's host path verbatim into read_file
-	// and the open() fails because that path doesn't exist inside the
-	// proxy container — only /workspace does.
-	if hostDir != "" && hostDir != "." {
-		ctx.HostWorkingDir = filepath.Clean(hostDir)
-	}
-	ctx.InferenceURL = inferenceURL
-	ctx.SandboxURL = sandboxURL
-	ctx.LensURL = lensURL
-	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+	configureAgentContext(ctx, req, workingDir, hostDir)
+	seedPriorHistory(ctx, req)
 
-	// Host execution for run_command only when the operator chooses it;
-	// the workspace's settings file may only choose the sandbox. See
-	// resolveVerifyTarget. Default stays sandbox.
-	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
-	ctx.TrustMode = resolveTrustMode()
-
-	// Seed prior-turn transcript from the request body. The TUI ships
-	// user/assistant text rows from its local chat history so the agent
-	// can answer follow-ups; without it, every /v1/agent call starts
-	// fresh. Cap defensively at 40 messages here too — the proxy's own
-	// trim logic in runAgentLoop handles further overflow.
-	if n := len(req.History); n > 0 {
-		if n > 40 {
-			req.History = req.History[n-40:]
-		}
-		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
-		for _, h := range req.History {
-			// Only accept the two roles that make sense as conversation
-			// history; anything else is skipped silently rather than
-			// passed through to the LLM as an unknown role.
-			if h.Role != "user" && h.Role != "assistant" {
-				continue
-			}
-			if h.Content == "" {
-				continue
-			}
-			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
-				Role:    h.Role,
-				Content: h.Content,
-			})
-		}
-	}
 	// Carry the upstream cancellation through so disconnects abort the loop
 	// and llama-server's in-flight generation.
 	//
@@ -6272,6 +6471,182 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		defer activeSessions.CompareAndDelete(req.SessionID, entry)
 	}
 
+	applyPermissionMode(ctx, req)
+
+	// Detect project (implemented in context.go)
+	// The client's declaration, checked against the workspace this request
+	// resolved to. A bad contract is a bad request: it is refused outright
+	// rather than dropped, because a client that declared obligations and had
+	// them silently discarded would be told its run finished having proved
+	// none of them. Nothing reads the stored value yet.
+	if !applyTaskContract(w, ctx, req, workingDir) {
+		return
+	}
+	// The lens is required (lens_required.go): a request is not started
+	// while it cannot score. After every 400, and before any work or any
+	// streamed byte, so the answer is an ordinary HTTP error the client
+	// shows as such.
+	if ok, why := lensReady(lensURL); !ok {
+		writeError(w, http.StatusServiceUnavailable, ErrDependencyDown,
+			"ATLAS needs the geometric lens for every request, and "+why+
+				". Run `atlas doctor`.")
+		return
+	}
+
+	ctx.Project = detectProjectInfo(workingDir)
+
+	flusher, ok := openEventStream(w, ctx)
+	if !ok {
+		return
+	}
+	streamAgentRun(w, flusher, ctx, req)
+}
+
+// historyMsg is one row of the transcript a client sends with a request.
+type historyMsg struct {
+	Role    string `json:"role"` // "user" or "assistant"
+	Content string `json:"content"`
+}
+
+// agentRequest is the body of a /v1/agent request.
+type agentRequest struct {
+	Message    string       `json:"message"`
+	WorkingDir string       `json:"working_dir"`
+	Mode       string       `json:"mode"`       // "default", "accept-edits", "yolo"
+	SessionID  string       `json:"session_id"` // optional — required for /cancel
+	History    []historyMsg `json:"history,omitempty"`
+	// Tools the client has approved for the whole session so the proxy
+	// skips the interactive prompt for them (see /v1/permission).
+	SessionAllowedTools []string `json:"session_allowed_tools,omitempty"`
+	// /demo split-pane flags — tags match tui/chat.go's agentRequest.
+	DisableFreshSlot bool   `json:"disable_fresh_slot,omitempty"` // keep the pre-warmed KV prefix
+	SandboxSubdir    string `json:"sandbox_subdir,omitempty"`     // confine writes to this workspace subdir
+	// Removed switches, read only to refuse them. V3 runs on every
+	// request and feasibility is recorded, never enforced; a request that
+	// asks for V3 off, planner-only or enforce would otherwise be measured
+	// under a system it did not ask for.
+	RemovedBypassV3        *bool  `json:"bypass_v3,omitempty"`
+	RemovedV3Mode          string `json:"v3_mode,omitempty"`
+	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
+	// What the client declares about the request. Optional, and absent
+	// stays distinguishable from present-and-empty. Nothing reads it yet.
+	TaskContract *TaskContract `json:"task_contract,omitempty"`
+}
+
+// readAgentRequest decodes a /v1/agent request, or answers it with the HTTP
+// error that refuses it: a method other than POST, a body that does not
+// decode, or no message.
+func readAgentRequest(w http.ResponseWriter, r *http.Request) (*agentRequest, bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, ErrUnsupported, "method not allowed")
+		return nil, false
+	}
+	var req agentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "invalid request body")
+		return nil, false
+	}
+
+	if req.Message == "" {
+		writeError(w, http.StatusBadRequest, ErrInvalidInput, "message is required")
+		return nil, false
+	}
+	return &req, true
+}
+
+// agentWorkingDirs resolves where a request works: the workspace the proxy
+// writes to and the client's own path for it, both inside the pane's subdir
+// for a /demo pane. It answers a subdir that is not allowed with HTTP 400.
+func agentWorkingDirs(w http.ResponseWriter, req *agentRequest) (string, string, bool) {
+	// Path translation: the TUI sends its host cwd (e.g. /home/isaac/snake)
+	// as working_dir, but the proxy runs in a container where that path
+	// doesn't exist — only /workspace (the bind-mount target) does. The
+	// startup wrapper (atlas/runtime.py:_align_workspace) already aligns
+	// the bind mount to the user's cwd, so /workspace IS the user's cwd
+	// from the proxy's perspective. Use ATLAS_WORKSPACE_DIR (set in
+	// docker-compose.yml) as the canonical write target. The original
+	// host path is kept on HostWorkingDir for path translation (below).
+	hostDir := req.WorkingDir
+	if hostDir == "" {
+		hostDir = "."
+	}
+	workingDir := envOr("ATLAS_WORKSPACE_DIR", hostDir)
+
+	// /demo: each pane works inside its own workspace subdir. A non-empty
+	// sandbox_subdir must be one allowed bare name, else HTTP 400 and no turn.
+	if sub := req.SandboxSubdir; sub != "" {
+		if !validSandboxSubdir(sub) {
+			writeError(w, http.StatusBadRequest, ErrInvalidInput, sandboxSubdirDetail)
+			return "", "", false
+		}
+		workingDir = filepath.Join(workingDir, sub)
+		if hostDir != "" && hostDir != "." {
+			hostDir = filepath.Join(hostDir, sub)
+		}
+	}
+	return workingDir, hostDir, true
+}
+
+// configureAgentContext gives a request's context what the run needs from
+// the request and the proxy: the client's host path, the services' URLs,
+// and where run_command executes.
+func configureAgentContext(ctx *AgentContext, req *agentRequest, workingDir, hostDir string) {
+	ctx.DisableFreshSlot = req.DisableFreshSlot
+	// Stash the host path so resolveAgentPath can translate absolute
+	// host paths the model receives in user prompts (e.g. "fix
+	// /home/isaac/snake/app.py") into the container path. Without this
+	// the model copies the user's host path verbatim into read_file
+	// and the open() fails because that path doesn't exist inside the
+	// proxy container — only /workspace does.
+	if hostDir != "" && hostDir != "." {
+		ctx.HostWorkingDir = filepath.Clean(hostDir)
+	}
+	ctx.InferenceURL = inferenceURL
+	ctx.SandboxURL = sandboxURL
+	ctx.LensURL = lensURL
+	ctx.V3URL = envOr("ATLAS_V3_URL", "http://localhost:8070")
+
+	// Host execution for run_command only when the operator chooses it;
+	// the workspace's settings file may only choose the sandbox. See
+	// resolveVerifyTarget. Default stays sandbox.
+	ctx.VerifyOnHost = resolveVerifyTarget(workingDir) == "host"
+	ctx.TrustMode = resolveTrustMode()
+}
+
+// seedPriorHistory gives the run the transcript the client sent: its last 40
+// rows, each a user or an assistant turn with content.
+func seedPriorHistory(ctx *AgentContext, req *agentRequest) {
+	// Seed prior-turn transcript from the request body. The TUI ships
+	// user/assistant text rows from its local chat history so the agent
+	// can answer follow-ups; without it, every /v1/agent call starts
+	// fresh. Cap defensively at 40 messages here too — the proxy's own
+	// trim logic in runAgentLoop handles further overflow.
+	if n := len(req.History); n > 0 {
+		if n > 40 {
+			req.History = req.History[n-40:]
+		}
+		ctx.PriorHistory = make([]AgentMessage, 0, len(req.History))
+		for _, h := range req.History {
+			// Only accept the two roles that make sense as conversation
+			// history; anything else is skipped silently rather than
+			// passed through to the LLM as an unknown role.
+			if h.Role != "user" && h.Role != "assistant" {
+				continue
+			}
+			if h.Content == "" {
+				continue
+			}
+			ctx.PriorHistory = append(ctx.PriorHistory, AgentMessage{
+				Role:    h.Role,
+				Content: h.Content,
+			})
+		}
+	}
+}
+
+// applyPermissionMode sets what the run may do without asking: the client's
+// permission mode, and the tools the client approved for the whole session.
+func applyPermissionMode(ctx *AgentContext, req *agentRequest) {
 	// Set permission mode
 	switch req.Mode {
 	case "accept-edits":
@@ -6291,40 +6666,32 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 			ctx.AllowedTools[t] = true
 		}
 	}
+}
 
-	// Detect project (implemented in context.go)
-	// The client's declaration, checked against the workspace this request
-	// resolved to. A bad contract is a bad request: it is refused outright
-	// rather than dropped, because a client that declared obligations and had
-	// them silently discarded would be told its run finished having proved
-	// none of them. Nothing reads the stored value yet.
+// applyTaskContract validates the client's task contract against the request's
+// workspace and keeps it, with the tier it declares. It answers a contract that
+// does not validate with HTTP 400 and reports false.
+func applyTaskContract(w http.ResponseWriter, ctx *AgentContext, req *agentRequest, workingDir string) bool {
 	validatedContract, contractErr := validateTaskContract(req.TaskContract, workingDir)
 	if contractErr != nil {
 		writeError(w, http.StatusBadRequest, ErrInvalidInput, contractErr.Error())
-		return
+		return false
 	}
 	ctx.TaskContract = validatedContract
 	if t := declaredTier(validatedContract, ctx.Tier); t != ctx.Tier {
 		ctx.Tier, ctx.MaxTurns = t, TierMaxTurns(t)
 	}
-	// The lens is required (lens_required.go): a request is not started
-	// while it cannot score. After every 400, and before any work or any
-	// streamed byte, so the answer is an ordinary HTTP error the client
-	// shows as such.
-	if ok, why := lensReady(lensURL); !ok {
-		writeError(w, http.StatusServiceUnavailable, ErrDependencyDown,
-			"ATLAS needs the geometric lens for every request, and "+why+
-				". Run `atlas doctor`.")
-		return
-	}
+	return true
+}
 
-	ctx.Project = detectProjectInfo(workingDir)
-
+// openEventStream starts the event stream the run reports on, or answers
+// HTTP 500 when the connection cannot stream.
+func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bool) {
 	// Set up SSE streaming
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, ErrInternal, "streaming not supported")
-		return
+		return nil, false
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -6364,7 +6731,12 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: %s\n\n", eventJSON)
 		flusher.Flush()
 	}
+	return flusher, true
+}
 
+// streamAgentRun runs the request on its open event stream, approving every
+// call in yolo mode, and ends the stream with [DONE].
+func streamAgentRun(w http.ResponseWriter, flusher http.Flusher, ctx *AgentContext, req *agentRequest) {
 	// For yolo mode, auto-approve all permissions
 	if ctx.YoloMode {
 		ctx.PermissionFn = func(string, json.RawMessage) bool { return true }
@@ -6813,20 +7185,8 @@ func fencedFitsRemainingBudget(ctx *AgentContext) bool {
 }
 
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
-	if fencedChannelDisabledForSession(ctx) {
-		// The channel already stalled this session; a sub-call would only
-		// stall again. Fail without making it, so no watchdog time is spent.
-		return "", fmt.Errorf("the fenced channel stalled earlier this session "+
-			"and is off for the rest of the run; send %s inline or edit it instead", path)
-	}
-	if fencedBudgetExhausted(ctx, path) {
-		return "", fmt.Errorf("fenced resolution for %s has already failed %d times "+
-			"this session; send the file inline or edit it instead", path,
-			ctx.FencedFailures[fencedKey(ctx, path)])
-	}
-	if !fencedFitsRemainingBudget(ctx) {
-		return "", fmt.Errorf("not enough session budget left to resolve %s "+
-			"and still validate the result", path)
+	if err := fencedFetchRefusal(ctx, path); err != nil {
+		return "", err
 	}
 	tag := fenceTagForPath(path)
 	note := AgentMessage{Role: "user", Content: fmt.Sprintf(
@@ -6836,10 +7196,10 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 			"commentary, no partial file.", path, tag)}
 	msgs := append(append([]AgentMessage{}, ctx.Messages...),
 		AgentMessage{Role: "assistant", Content: rawCall}, note)
+	fetch := &fencedFetch{ctx: ctx, path: path, tag: tag, msgs: msgs}
 	// Attempts remaining are what the SESSION still allows for this path, not
 	// a fresh two. Requirement: a new write_file call must not restore the
 	// allowance a previous turn spent.
-	var lastErr error
 	remaining := maxFencedFailuresPerPath - ctx.FencedFailures[fencedKey(ctx, path)]
 	for attempt := 0; attempt < remaining; attempt++ {
 		if attempt > 0 && !fencedFitsRemainingBudget(ctx) {
@@ -6865,123 +7225,190 @@ func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error)
 		if attempt > 0 || !fencedGrammarFits(string(current)) {
 			grammar = rawEmissionSentinel
 		}
-		reply, tokens, err := callLLMOnceRestating(ctx, msgs, 0.2, grammar, path)
-		elapsed := time.Since(attemptStart)
-		// Every attempt is a real generation and is accounted whether or
-		// not it yielded a usable block — an unaccounted sub-call made the
-		// run totals lie by one generation per written file.
-		ctx.TotalTokens += tokens
-		ctx.FencedCalls++
-		ctx.FencedTokens += tokens
-		// Under the fence grammar a code file may end on three backticks
-		// (fenceBlockGrammar); that line is the closer the grammar accepted.
-		if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
-			reply = closeShortFence(reply)
+		answer := fetch.ask(grammar, attempt, attemptStart)
+		if content, done, err := fetch.settle(answer, attempt); done {
+			return content, err
 		}
-		// The same framing decision the inline path makes, so a reply the
-		// parent would refuse inline cannot be accepted here instead.
-		framing, content := classifyFencedPayload(reply)
-		// The model sometimes wraps the SENTINEL in the fence instead of the
-		// file — measured: "```python\n@fenced\n```". That extracts as
-		// non-empty and would land a file whose entire contents are the word
-		// @fenced, so it counts as no block and the attempt is retried.
-		if strings.TrimSpace(content) == rawEmissionSentinel ||
-			strings.TrimSpace(content) == "@fenced" {
-			log.Printf("[agent] fenced reply for %s contained only the sentinel — treating as no block", path)
-			content = ""
-		}
-		got := content != ""
-		contentBytes := len(content)
-		Emit(Envelope{
-			EventID:    NewEventID(),
-			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
-			Type:       EvtStageEnd,
-			Stage:      "fenced_fetch",
-			DurationMS: elapsed.Milliseconds(),
-			Payload: map[string]interface{}{
-				"success":          err == nil && got,
-				"path":             path,
-				"attempt":          attempt + 1,
-				"generated_tokens": tokens,
-				"content_bytes":    contentBytes,
-				"total_tokens":     ctx.TotalTokens,
-			},
-		})
-		// A cut that came after the model had written content is not a stall:
-		// the channel works, and the block was not closed (under the fence
-		// grammar the model's three-backtick closer is a body line, so the
-		// attempt runs until the watchdog cuts it). It is answered like any
-		// reply without a usable block, below, and the retry without the
-		// grammar follows. Counting it as a stall turned the channel off for
-		// the session and skipped that retry.
-		cutWithContent := err != nil && strings.TrimSpace(reply) != "" &&
-			(ctx.Ctx == nil || ctx.Ctx.Err() == nil)
-		outcome := "unusable"
-		switch {
-		case err != nil && !cutWithContent && ctx.Ctx != nil && ctx.Ctx.Err() != nil:
-			outcome = "cancelled"
-		case err != nil && !cutWithContent:
-			outcome = "stalled"
-		case got:
-			outcome = "used"
-		}
-		emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
-		if err != nil && !cutWithContent {
-			// Every way this attempt can end WITHOUT a fenced block charges
-			// the session: watchdog cancellation, transport error, HTTP
-			// failure. Not charging here is how the black-box loop issued one
-			// unbounded fetch per turn — the allowance was only ever spent by
-			// a clean empty reply.
-			charge(ctx, path)
-			// The SESSION being cancelled ends everything; the watchdog
-			// cancelling its own child is a recoverable zero-byte failure and
-			// the one permitted retry may still follow, bounded by the
-			// allowance the loop already counted.
-			if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-				return "", err
-			}
-			// A watchdog-cut zero-content fetch. Counted session-wide (not just
-			// per-path) because the next file's fetch will stall the same way;
-			// once this reaches the limit the channel is off for the run.
-			ctx.FencedStalls++
-			lastErr = err
-			continue
-		}
-		if cutWithContent {
-			lastErr = err // a closed block is still used below; an open one is retried
-		}
-		if got {
-			// A successful resolution clears the consecutive-failure state:
-			// the path is healthy again and a later stall gets its own budget.
-			if ctx.FencedFailures != nil {
-				delete(ctx.FencedFailures, fencedKey(ctx, path))
-			}
-			return content, nil
-		}
-		// Charge the session, not the local loop, so the allowance survives
-		// into the next write_file call for this path.
-		charge(ctx, path)
-		// What the model sent instead is the whole diagnosis, and without it
-		// "no fenced block after 2 attempts" says only that something went
-		// wrong. Measured a 56% failure rate on this fetch with no way to see
-		// why: the same request reproduced in a short context returns a clean
-		// block every time, so the cause lives in the session context and
-		// cannot be found without the reply.
-		log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
-			attempt+1, path, framing, len(reply), ctx.LastStreamCut,
-			ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
-			safeTextSummary(reply))
-		msgs = append(msgs, AgentMessage{Role: "assistant", Content: reply},
-			AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
 	}
-	if lastErr != nil {
+	if fetch.lastErr != nil {
 		return "", fmt.Errorf("fenced resolution for %s was cut after %d attempt(s) "+
 			"this session (%v); send the file inline or edit it instead",
-			path, ctx.FencedFailures[fencedKey(ctx, path)], lastErr)
+			path, ctx.FencedFailures[fencedKey(ctx, path)], fetch.lastErr)
 	}
 	return "", fmt.Errorf("no fenced block after %d attempt(s) for %s this session; "+
 		"send the file inline or edit it instead",
 		ctx.FencedFailures[fencedKey(ctx, path)], path)
+}
+
+// fencedFetchRefusal is the reason the session makes no fenced fetch for path
+// at all, or nil: the channel is off for the session, the path has spent its
+// allowance, or too little of the session is left to fetch a file and check it.
+func fencedFetchRefusal(ctx *AgentContext, path string) error {
+	if fencedChannelDisabledForSession(ctx) {
+		// The channel already stalled this session; a sub-call would only
+		// stall again. Fail without making it, so no watchdog time is spent.
+		return fmt.Errorf("the fenced channel stalled earlier this session "+
+			"and is off for the rest of the run; send %s inline or edit it instead", path)
+	}
+	if fencedBudgetExhausted(ctx, path) {
+		return fmt.Errorf("fenced resolution for %s has already failed %d times "+
+			"this session; send the file inline or edit it instead", path,
+			ctx.FencedFailures[fencedKey(ctx, path)])
+	}
+	if !fencedFitsRemainingBudget(ctx) {
+		return fmt.Errorf("not enough session budget left to resolve %s "+
+			"and still validate the result", path)
+	}
+	return nil
+}
+
+// fencedFetch is one fenced fetch across its attempts: the conversation the
+// sub-call is sent, which grows by each unusable reply and the note that asks
+// again, and the error of the last attempt that was cut.
+type fencedFetch struct {
+	ctx     *AgentContext
+	path    string
+	tag     string
+	msgs    []AgentMessage
+	lastErr error
+}
+
+// fencedAnswer is what one fenced attempt brought back, read the way the
+// inline path reads a body.
+type fencedAnswer struct {
+	reply          string
+	framing        fenceFraming
+	content        string
+	err            error
+	got            bool
+	cutWithContent bool
+}
+
+// ask makes one fenced attempt: the sub-call, its accounting, the reading of
+// its reply, and the two events that record the attempt.
+func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) fencedAnswer {
+	ctx, path, tag, msgs := f.ctx, f.path, f.tag, f.msgs
+	reply, tokens, err := callLLMOnceRestating(ctx, msgs, 0.2, grammar, path)
+	elapsed := time.Since(attemptStart)
+	// Every attempt is a real generation and is accounted whether or
+	// not it yielded a usable block — an unaccounted sub-call made the
+	// run totals lie by one generation per written file.
+	ctx.TotalTokens += tokens
+	ctx.FencedCalls++
+	ctx.FencedTokens += tokens
+	// Under the fence grammar a code file may end on three backticks
+	// (fenceBlockGrammar); that line is the closer the grammar accepted.
+	if isFenceBlockGrammar(grammar) && fenceShortCloserAllowed(tag) {
+		reply = closeShortFence(reply)
+	}
+	// The same framing decision the inline path makes, so a reply the
+	// parent would refuse inline cannot be accepted here instead.
+	framing, content := classifyFencedPayload(reply)
+	// The model sometimes wraps the SENTINEL in the fence instead of the
+	// file — measured: "```python\n@fenced\n```". That extracts as
+	// non-empty and would land a file whose entire contents are the word
+	// @fenced, so it counts as no block and the attempt is retried.
+	if strings.TrimSpace(content) == rawEmissionSentinel ||
+		strings.TrimSpace(content) == "@fenced" {
+		log.Printf("[agent] fenced reply for %s contained only the sentinel — treating as no block", path)
+		content = ""
+	}
+	got := content != ""
+	contentBytes := len(content)
+	Emit(Envelope{
+		EventID:    NewEventID(),
+		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+		Type:       EvtStageEnd,
+		Stage:      "fenced_fetch",
+		DurationMS: elapsed.Milliseconds(),
+		Payload: map[string]interface{}{
+			"success":          err == nil && got,
+			"path":             path,
+			"attempt":          attempt + 1,
+			"generated_tokens": tokens,
+			"content_bytes":    contentBytes,
+			"total_tokens":     ctx.TotalTokens,
+		},
+	})
+	// A cut that came after the model had written content is not a stall:
+	// the channel works, and the block was not closed (under the fence
+	// grammar the model's three-backtick closer is a body line, so the
+	// attempt runs until the watchdog cuts it). It is answered like any
+	// reply without a usable block, below, and the retry without the
+	// grammar follows. Counting it as a stall turned the channel off for
+	// the session and skipped that retry.
+	cutWithContent := err != nil && strings.TrimSpace(reply) != "" &&
+		(ctx.Ctx == nil || ctx.Ctx.Err() == nil)
+	outcome := "unusable"
+	switch {
+	case err != nil && !cutWithContent && ctx.Ctx != nil && ctx.Ctx.Err() != nil:
+		outcome = "cancelled"
+	case err != nil && !cutWithContent:
+		outcome = "stalled"
+	case got:
+		outcome = "used"
+	}
+	emitFencedFetch(ctx, path, attempt, grammar, elapsed, tokens, outcome)
+	return fencedAnswer{reply: reply, framing: framing, content: content, err: err, got: got,
+		cutWithContent: cutWithContent}
+}
+
+// settle answers one attempt. A stall is charged, and ends the fetch when the
+// session itself stopped; a usable block ends it and clears the path's
+// failures; any other reply is charged, logged and asked for again. It
+// returns the block, whether the fetch ends here, and the fetch's error.
+func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) {
+	ctx, path, tag := f.ctx, f.path, f.tag
+	reply, framing, content, err := a.reply, a.framing, a.content, a.err
+	got, cutWithContent := a.got, a.cutWithContent
+	if err != nil && !cutWithContent {
+		// Every way this attempt can end WITHOUT a fenced block charges
+		// the session: watchdog cancellation, transport error, HTTP
+		// failure. Not charging here is how the black-box loop issued one
+		// unbounded fetch per turn — the allowance was only ever spent by
+		// a clean empty reply.
+		charge(ctx, path)
+		// The SESSION being cancelled ends everything; the watchdog
+		// cancelling its own child is a recoverable zero-byte failure and
+		// the one permitted retry may still follow, bounded by the
+		// allowance the loop already counted.
+		if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
+			return "", true, err
+		}
+		// A watchdog-cut zero-content fetch. Counted session-wide (not just
+		// per-path) because the next file's fetch will stall the same way;
+		// once this reaches the limit the channel is off for the run.
+		ctx.FencedStalls++
+		f.lastErr = err
+		return "", false, nil
+	}
+	if cutWithContent {
+		f.lastErr = err // a closed block is still used below; an open one is retried
+	}
+	if got {
+		// A successful resolution clears the consecutive-failure state:
+		// the path is healthy again and a later stall gets its own budget.
+		if ctx.FencedFailures != nil {
+			delete(ctx.FencedFailures, fencedKey(ctx, path))
+		}
+		return content, true, nil
+	}
+	// Charge the session, not the local loop, so the allowance survives
+	// into the next write_file call for this path.
+	charge(ctx, path)
+	// What the model sent instead is the whole diagnosis, and without it
+	// "no fenced block after 2 attempts" says only that something went
+	// wrong. Measured a 56% failure rate on this fetch with no way to see
+	// why: the same request reproduced in a short context returns a clean
+	// block every time, so the cause lives in the session context and
+	// cannot be found without the reply.
+	log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
+		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
+		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
+		safeTextSummary(reply))
+	f.msgs = append(f.msgs, AgentMessage{Role: "assistant", Content: reply},
+		AgentMessage{Role: "user", Content: fencedRetryNote(framing, tag)})
+	return "", false, nil
 }
 
 // emitFencedFetch records one fenced attempt (#254): what the wire showed
@@ -7597,38 +8024,12 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 	// pinned interpreter when one exists.
 	pyManifests := pickExisting(workingDir, "pyproject.toml", "requirements.txt", "setup.py", "Pipfile", "poetry.lock")
 	if len(pyManifests) > 0 || detectProjectVenvPython(workingDir) != "" {
-		runner := detectProjectVenvPython(workingDir)
-		if runner == "" {
-			runner = "python"
-		}
-		install := "pip install -r requirements.txt"
-		if hasFile(workingDir, "poetry.lock") {
-			install = "poetry install"
-		} else if hasFile(workingDir, "Pipfile.lock") {
-			install = "pipenv install"
-		} else if hasFile(workingDir, "pyproject.toml") && !hasFile(workingDir, "requirements.txt") {
-			install = "pip install -e ."
-		}
-		out = append(out, Toolchain{
-			Name: "python", Manifests: pyManifests,
-			Runner: runner, InstallCommand: install,
-			TestCommand: "pytest",
-		})
+		out = append(out, pythonToolchain(workingDir, pyManifests))
 	}
 
 	// Node / TypeScript — pkg manager picked from lockfile.
 	if hasFile(workingDir, "package.json") {
-		pm, install := "npm", "npm install"
-		switch {
-		case hasFile(workingDir, "pnpm-lock.yaml"):
-			pm, install = "pnpm", "pnpm install --frozen-lockfile"
-		case hasFile(workingDir, "yarn.lock"):
-			pm, install = "yarn", "yarn install --frozen-lockfile"
-		case hasFile(workingDir, "bun.lockb"):
-			pm, install = "bun", "bun install --frozen-lockfile"
-		case hasFile(workingDir, "package-lock.json"):
-			pm, install = "npm", "npm ci"
-		}
+		pm, install := nodePackageManager(workingDir)
 		runner := "node"
 		if hasFile(workingDir, "tsconfig.json") {
 			runner = "tsx" // ts/jsx-aware launcher; falls back to node for plain .js
@@ -7678,14 +8079,7 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 
 	// Java/Kotlin — Gradle (prefer wrapper if present)
 	if hasFile(workingDir, "build.gradle") || hasFile(workingDir, "build.gradle.kts") {
-		runner := "gradle run"
-		install := "gradle build -x test"
-		test := "gradle test"
-		if hasFile(workingDir, "gradlew") {
-			runner = "./gradlew run"
-			install = "./gradlew build -x test"
-			test = "./gradlew test"
-		}
+		runner, install, test := gradleCommands(workingDir)
 		out = append(out, Toolchain{
 			Name: "java-gradle", Manifests: pickExisting(workingDir, "build.gradle", "build.gradle.kts", "settings.gradle", "gradlew"),
 			Runner: runner, InstallCommand: install, TestCommand: test,
@@ -7712,18 +8106,77 @@ func detectProjectToolchains(workingDir string) []Toolchain {
 
 	// Dart / Flutter
 	if hasFile(workingDir, "pubspec.yaml") {
-		runner, install := "dart run", "dart pub get"
-		if hasFile(workingDir, ".flutter-plugins") || hasFile(workingDir, "flutter.yaml") {
-			runner, install = "flutter run", "flutter pub get"
-		}
-		out = append(out, Toolchain{
-			Name: "dart", Manifests: pickExisting(workingDir, "pubspec.yaml", "pubspec.lock"),
-			Runner: runner, InstallCommand: install,
-			TestCommand: "dart test",
-		})
+		out = append(out, dartToolchain(workingDir))
 	}
 
 	return out
+}
+
+// pythonToolchain is the Python entry: the project's own venv interpreter when
+// it has one, and the install command its lockfile or manifest calls for.
+func pythonToolchain(workingDir string, pyManifests []string) Toolchain {
+	runner := detectProjectVenvPython(workingDir)
+	if runner == "" {
+		runner = "python"
+	}
+	install := "pip install -r requirements.txt"
+	if hasFile(workingDir, "poetry.lock") {
+		install = "poetry install"
+	} else if hasFile(workingDir, "Pipfile.lock") {
+		install = "pipenv install"
+	} else if hasFile(workingDir, "pyproject.toml") && !hasFile(workingDir, "requirements.txt") {
+		install = "pip install -e ."
+	}
+	return Toolchain{
+		Name: "python", Manifests: pyManifests,
+		Runner: runner, InstallCommand: install,
+		TestCommand: "pytest",
+	}
+}
+
+// nodePackageManager picks Node's package manager, and the command that
+// installs with it, from the lockfile the project has.
+func nodePackageManager(workingDir string) (string, string) {
+	pm, install := "npm", "npm install"
+	switch {
+	case hasFile(workingDir, "pnpm-lock.yaml"):
+		pm, install = "pnpm", "pnpm install --frozen-lockfile"
+	case hasFile(workingDir, "yarn.lock"):
+		pm, install = "yarn", "yarn install --frozen-lockfile"
+	case hasFile(workingDir, "bun.lockb"):
+		pm, install = "bun", "bun install --frozen-lockfile"
+	case hasFile(workingDir, "package-lock.json"):
+		pm, install = "npm", "npm ci"
+	}
+	return pm, install
+}
+
+// gradleCommands picks Gradle's run, install and test commands, through the
+// project's own wrapper when it has one.
+func gradleCommands(workingDir string) (string, string, string) {
+	runner := "gradle run"
+	install := "gradle build -x test"
+	test := "gradle test"
+	if hasFile(workingDir, "gradlew") {
+		runner = "./gradlew run"
+		install = "./gradlew build -x test"
+		test = "./gradlew test"
+	}
+	return runner, install, test
+}
+
+// dartToolchain is the Dart entry, run through Flutter when the project is a
+// Flutter app.
+func dartToolchain(workingDir string) Toolchain {
+	runner, install := "dart run", "dart pub get"
+	if hasFile(workingDir, ".flutter-plugins") || hasFile(workingDir, "flutter.yaml") {
+		runner, install = "flutter run", "flutter pub get"
+	}
+	return Toolchain{
+		Name: "dart", Manifests: pickExisting(workingDir, "pubspec.yaml", "pubspec.lock"),
+		Runner: runner, InstallCommand: install,
+		TestCommand: "dart test",
+	}
 }
 
 // probeToolchainReady returns a short status string for a Toolchain

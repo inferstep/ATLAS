@@ -533,6 +533,110 @@ func TestSandboxSubdirRejectsPath(t *testing.T) {
 	}
 }
 
+// An accepted request runs on an event stream: the connected line first, the
+// run's events, and [DONE] last. The history it carries reaches the model,
+// without the rows that are not a user or an assistant turn.
+func TestAnAcceptedAgentRequestStreamsItsRun(t *testing.T) {
+	prev := lensReadiness
+	lensReadiness = func(string) (bool, string) { return true, "" }
+	t.Cleanup(func() { lensReadiness = prev })
+	lensReadyCache.Lock()
+	lensReadyCache.url = ""
+	lensReadyCache.Unlock()
+	dir := t.TempDir()
+	t.Setenv("ATLAS_WORKSPACE_DIR", dir)
+	var mu sync.Mutex
+	var prompts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveLoopServices(w, r, dir) {
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		prompts = append(prompts, string(raw))
+		mu.Unlock()
+		serveReply(w, `{"type":"text","content":"Hello."}`)
+	}))
+	defer srv.Close()
+	t.Setenv("ATLAS_V3_URL", srv.URL)
+	prevInference, prevSandbox, prevLens := inferenceURL, sandboxURL, lensURL
+	inferenceURL, sandboxURL, lensURL = srv.URL, srv.URL, srv.URL
+	t.Cleanup(func() { inferenceURL, sandboxURL, lensURL = prevInference, prevSandbox, prevLens })
+
+	body := `{"message":"hi","history":[` +
+		`{"role":"user","content":"an earlier question"},` +
+		`{"role":"assistant","content":"an earlier answer"},` +
+		`{"role":"system","content":"a row that is not a turn"},` +
+		`{"role":"user","content":""}]}`
+	rec := httptest.NewRecorder()
+	handleAgent(rec, httptest.NewRequest(http.MethodPost, "/v1/agent", strings.NewReader(body)))
+
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", got)
+	}
+	stream := rec.Body.String()
+	if !strings.HasPrefix(stream, ": connected\n\n") {
+		t.Errorf("the stream does not open with the connected line: %.80q", stream)
+	}
+	if !strings.Contains(stream, `"type":"done"`) {
+		t.Errorf("the stream carries no done event: %.300q", stream)
+	}
+	if !strings.HasSuffix(stream, "data: [DONE]\n\n") {
+		t.Errorf("the stream does not end with [DONE]: ...%q", stream[max(0, len(stream)-80):])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(prompts) == 0 {
+		t.Fatal("the model was never asked")
+	}
+	for _, want := range []string{"an earlier question", "an earlier answer"} {
+		if !strings.Contains(prompts[0], want) {
+			t.Errorf("the model's first prompt does not carry %q", want)
+		}
+	}
+	if strings.Contains(prompts[0], "a row that is not a turn") {
+		t.Error("a history row that is not a turn reached the model")
+	}
+}
+
+// A request refused after its context is built still gets an ordinary HTTP
+// error and no event stream: a task contract that does not validate, and a
+// connection that cannot stream.
+func TestALateRefusalOfAnAgentRequestIsAnHTTPError(t *testing.T) {
+	prev := lensReadiness
+	lensReadiness = func(string) (bool, string) { return true, "" }
+	t.Cleanup(func() { lensReadiness = prev })
+	lensReadyCache.Lock()
+	lensReadyCache.url = ""
+	lensReadyCache.Unlock()
+	t.Setenv("ATLAS_WORKSPACE_DIR", t.TempDir())
+	for _, tc := range []struct {
+		name     string
+		body     string
+		noFlush  bool // the connection cannot stream
+		wantCode int
+	}{
+		{"a task contract that does not validate", `{"message":"fix app.py","task_contract":{"task_mode":"later"}}`,
+			false, http.StatusBadRequest},
+		{"a connection that cannot stream", `{"message":"fix app.py"}`, true, http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			var w http.ResponseWriter = rec
+			if tc.noFlush {
+				w = struct{ http.ResponseWriter }{rec} // the recorder without its Flush
+			}
+			handleAgent(w, httptest.NewRequest(http.MethodPost, "/v1/agent", strings.NewReader(tc.body)))
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status %d, want %d; body %s", rec.Code, tc.wantCode, rec.Body.String())
+			}
+			if strings.Contains(rec.Header().Get("Content-Type"), "event-stream") {
+				t.Error("the refusal was streamed: the client could not read it as an HTTP error")
+			}
+		})
+	}
+}
+
 // Reproduces the May 8 categorizer miss: a response starting with
 // `{"type":"tool_call"` and containing &lt;/&gt; entities was being
 // categorized as `malformed_tool` even though the html_entities
@@ -1193,6 +1297,40 @@ func TestDetectProjectToolchainsNodePkgManager(t *testing.T) {
 				t.Fatalf("got pkgManager %q, want %q", tcs[0].PackageManager, tc.wantPM)
 			}
 		})
+	}
+}
+
+// A project that ships its own launcher is run through it: the Gradle wrapper,
+// and Flutter for a Dart project that is a Flutter app.
+func TestDetectProjectToolchainsUsesTheProjectsLauncher(t *testing.T) {
+	cases := []struct {
+		files                        []string
+		name, runner, install, tests string
+	}{
+		{[]string{"build.gradle", "gradlew"}, "java-gradle", "./gradlew run", "./gradlew build -x test", "./gradlew test"},
+		{[]string{"pubspec.yaml", "flutter.yaml"}, "dart", "flutter run", "flutter pub get", "dart test"},
+	}
+	for _, tc := range cases {
+		dir := t.TempDir()
+		for _, f := range tc.files {
+			os.WriteFile(filepath.Join(dir, f), []byte(""), 0o644)
+		}
+		tcs := detectProjectToolchains(dir)
+		if len(tcs) != 1 {
+			t.Fatalf("%v: got %+v, want one toolchain", tc.files, tcs)
+		}
+		if tcs[0].Name != tc.name {
+			t.Errorf("%v: toolchain %q, want %q", tc.files, tcs[0].Name, tc.name)
+		}
+		if tcs[0].Runner != tc.runner {
+			t.Errorf("%s: runner = %q, want %q", tc.name, tcs[0].Runner, tc.runner)
+		}
+		if tcs[0].InstallCommand != tc.install {
+			t.Errorf("%s: install = %q, want %q", tc.name, tcs[0].InstallCommand, tc.install)
+		}
+		if tcs[0].TestCommand != tc.tests {
+			t.Errorf("%s: tests = %q, want %q", tc.name, tcs[0].TestCommand, tc.tests)
+		}
 	}
 }
 

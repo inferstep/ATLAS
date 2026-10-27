@@ -6,14 +6,8 @@
  "functions": {
   "geometric-lens/geometric_lens/training.py:train_gx": 132,
   "proxy/agent.go:buildSystemPrompt": 140,
-  "proxy/agent.go:callLLMOnceRestating": 508,
-  "proxy/agent.go:detectProjectToolchains": 138,
-  "proxy/agent.go:fetchFencedContent": 171,
   "proxy/agent.go:finalizeCompletion": 108,
-  "proxy/agent.go:handleAgent": 267,
   "proxy/agent.go:runAgentLoop": 152,
-  "proxy/agent.go:runState.exitGates": 338,
-  "proxy/agent.go:validateTaskContract": 107,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/gates.go:assetLintFindingsFor": 118,
   "proxy/tools.go:deleteFileTool": 118,
@@ -23,7 +17,7 @@
   "sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "proxy/agent.go": 10518,
+  "proxy/agent.go": 10971,
   "proxy/tools.go": 6913,
   "sandbox/executor_server.py": 2059,
   "v3-service/pipeline.py": 2764

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -345,6 +346,56 @@ func TestAFencedFetchThatDoesNotFitTheWorkDeadlineIsRefused(t *testing.T) {
 			}
 			if calls != 0 || !strings.Contains(err.Error(), "session budget") {
 				t.Errorf("a refused fetch spent %d generations or did not name the budget: %v", calls, err)
+			}
+		})
+	}
+}
+
+// A fetch the session refuses reads nothing from disk: the file's current
+// bytes are read only for an attempt that is made. The target is a named pipe
+// with no writer, so a read of it would wait there and the fetch would not
+// return.
+func TestARefusedFencedFetchReadsNoFile(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stalls   int           // the session's fenced stalls so far
+		failures int           // the attempts the path has spent
+		left     time.Duration // time to the work deadline
+	}{
+		{"the channel is off for the session", fencedSessionStallLimit, 0, 10 * time.Minute},
+		{"the path's allowance is spent", 0, maxFencedFailuresPerPath, 10 * time.Minute},
+		{"the session has no time for a fetch", 0, 0, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := fencedFailStub(t, &calls, -1)
+			defer srv.Close()
+			ctx := fencedCtx(t, srv.URL)
+			pipe := filepath.Join(ctx.WorkingDir, "pipe.py")
+			if err := syscall.Mkfifo(pipe, 0o600); err != nil {
+				t.Fatalf("make the named pipe: %v", err)
+			}
+			ctx.FencedStalls = tc.stalls
+			ctx.FencedFailures = map[string]int{fencedKey(ctx, "pipe.py"): tc.failures}
+			session, cancel := context.WithTimeout(context.Background(), tc.left)
+			defer cancel()
+			ctx.Ctx = session
+
+			refused := make(chan error, 1)
+			go func() {
+				_, err := fetchFencedContent(ctx, "raw", "pipe.py")
+				refused <- err
+			}()
+			select {
+			case err := <-refused:
+				if err == nil {
+					t.Fatal("the fetch was not refused")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the fetch read the file before it was refused")
+			}
+			if calls != 0 {
+				t.Errorf("a refused fetch started %d generations", calls)
 			}
 		})
 	}

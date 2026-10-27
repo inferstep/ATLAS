@@ -151,6 +151,49 @@ func TestOrdinaryTurnsAreNotBoundedByTheFencedWatchdog(t *testing.T) {
 	}
 }
 
+// The raw sub-call asked for one fenced block. A reply that runs past the
+// grace with no fence opener is prose, and the read is cut there instead of
+// running on to the token ceiling: what the stream sends after it is not read.
+func TestARawSubCallWithNoFenceOpenerIsCut(t *testing.T) {
+	prose := "Before I write the file I want to explain my plan in detail. First I will read the " +
+		"requirements again and list every function the program needs. Then I will think about the " +
+		"input format, the edge cases with empty lines, and how the output should be printed. After " +
+		"that I will decide which standard library modules are useful here, probably sys for reading " +
+		"input and collections for counting. I also want to check whether the values can be negative, " +
+		"because that changes the parsing. Finally I will consider performance: the input may be " +
+		"large, so reading everything at once is better than reading line by line. Once all of this " +
+		"is settled I can send the complete program in a single block, exactly as requested, without " +
+		"any commentary around it, and with names that stay readable for whoever maintains it."
+	if len(prose) <= rawFenceGraceChars {
+		t.Fatalf("the prose (%d chars) does not run past the grace (%d)", len(prose), rawFenceGraceChars)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, piece := range []string{prose, "```python\nprint(1)\n```\n"} {
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": piece}}},
+			})
+			fmt.Fprintf(w, "data: %s\n\n", d)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.InferenceURL = srv.URL
+	reply, _, err := callLLMOnceRestating(ctx, []AgentMessage{{Role: "user", Content: "Send the file."}},
+		0.2, rawEmissionSentinel, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.LastStreamCut != "no_fence" {
+		t.Errorf("LastStreamCut = %q, want no_fence", ctx.LastStreamCut)
+	}
+	if reply != prose {
+		t.Errorf("the read went on past the cut: ...%q", reply[max(0, len(reply)-60):])
+	}
+}
+
 // Session cancellation still wins, and leaves nothing running.
 func TestSessionCancellationAbortsTheFencedFetch(t *testing.T) {
 	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "60")
