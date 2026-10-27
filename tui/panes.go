@@ -787,6 +787,25 @@ type selectionState struct {
 	startX, endX int
 }
 
+// headerH and statsH are the rows of the header line at the top and of the
+// stats line above the input box. Neither has a border.
+const (
+	headerH = 1
+	statsH  = 1
+)
+
+// fullScreenLayout is how layoutFullScreen shares out the screen before any
+// pane renders: the terminal's size, the panes that are hidden, the width of
+// the files sidebar (0 when it is not shown) and of the text inside a
+// right-column box, and the rows of each right-column box, its borders
+// included. permMax is the most rows the permission modal may take.
+type fullScreenLayout struct {
+	width, height                              int
+	hidePipeline, hideEvents                   bool
+	sidebarW, innerW                           int
+	inputH, eventsH, pipelineH, permMax, chatH int
+}
+
 func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	inputView, inputValue, inputMode string,
 	renderer *glamour.TermRenderer, header string,
@@ -804,32 +823,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		return "", 0
 	}
 
-	const (
-		headerH = 1
-		statsH  = 1
-	)
-	// Sidebar gets a fixed 26 cols when there's enough room. Dropped
-	// on truly narrow terminals (<90 cols) so the chat/events panes
-	// don't get squeezed unreadably small. The previous 110-col
-	// threshold meant the safe-default render (width=100, used before
-	// the first WindowSizeMsg) hid the sidebar entirely — making it
-	// look like the feature was broken at startup.
-	sidebarW := 0
-	if width >= 90 && !hideFiles {
-		sidebarW = 26
-	}
-	rightW := width - sidebarW
-	if rightW < 20 {
-		// Pathological narrow case — a 10-col terminal still has to
-		// produce *some* output. Force a minimum so lipgloss doesn't
-		// see negative widths.
-		rightW = 20
-		sidebarW = 0
-	}
-	innerW := rightW - 2 // border consumes 2 cols on each box
-	if innerW < 10 {
-		innerW = 10
-	}
+	sidebarW, innerW := layoutColumnWidths(width, hideFiles)
 
 	// Input box: 6 rows by default (title + 3 textarea rows + 2 border).
 	// bash/slash mode adds a one-row hint banner above, so reserve one
@@ -853,6 +847,76 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			inputH = cap
 		}
 	}
+	eventsH, pipelineH, permMax, chatH := layoutPaneHeights(p, perm, hidePipeline, hideEvents,
+		innerW, inputH, height)
+	layout := fullScreenLayout{width: width, height: height,
+		hidePipeline: hidePipeline, hideEvents: hideEvents, sidebarW: sidebarW, innerW: innerW,
+		inputH: inputH, eventsH: eventsH, pipelineH: pipelineH, permMax: permMax, chatH: chatH}
+
+	// Reset pane snapshots — populated by each pane's render below.
+	paneSnaps = paneSnaps[:0]
+
+	pipelineBox, pipelineAll, pipelineViewStart := renderPipelineBox(layout, p, pipelineScroll, sel,
+		calibrationBadge)
+	chatBox, chatTopY, chatContentH, totalLines, viewStart, chatAll := renderChatBox(layout, chat,
+		renderer, chatScroll, turnActive, spinnerFrame, sel)
+	rightLeftX, rightRightX, eventsTopY := snapshotPipelineAndChat(layout, pipelineAll,
+		pipelineViewStart, chatTopY, chatContentH, viewStart, chatAll)
+	eventsBox := renderEventsBox(layout, events, eventsScroll, sel, eventsTopY, rightLeftX, rightRightX)
+
+	statsLine := renderStatsPane(p, width, lastTurnTokens, totalTokens, maxTokens)
+	inputBox := renderInputBox(layout, inputMode, inputValue, inputView)
+	rightCol := joinRightColumn(layout, pipelineBox, chatBox, eventsBox, statsLine, perm, inputBox)
+
+	// No sidebar on narrow terminals — return the right column at full
+	// width with the header on top.
+	if sidebarW == 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, header, rightCol), totalLines
+	}
+
+	filesBox := renderFilesSidebar(layout, files, modified, fileRoot, fileScroll, sel)
+
+	// Sidebar on the right (after rightCol) per user preference —
+	// keeps the chat anchored on the left where the eye starts.
+	body := lipgloss.JoinHorizontal(lipgloss.Top, rightCol, filesBox)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body), totalLines
+}
+
+// layoutColumnWidths splits the terminal's width between the right column
+// and the files sidebar. It returns the sidebar's width (0 when it is not
+// shown) and the width of the text inside a right-column box.
+func layoutColumnWidths(width int, hideFiles bool) (int, int) {
+	// Sidebar gets a fixed 26 cols when there's enough room. Dropped
+	// on truly narrow terminals (<90 cols) so the chat/events panes
+	// don't get squeezed unreadably small. The previous 110-col
+	// threshold meant the safe-default render (width=100, used before
+	// the first WindowSizeMsg) hid the sidebar entirely — making it
+	// look like the feature was broken at startup.
+	sidebarW := 0
+	if width >= 90 && !hideFiles {
+		sidebarW = 26
+	}
+	rightW := width - sidebarW
+	if rightW < 20 {
+		// Pathological narrow case — a 10-col terminal still has to
+		// produce *some* output. Force a minimum so lipgloss doesn't
+		// see negative widths.
+		rightW = 20
+		sidebarW = 0
+	}
+	innerW := rightW - 2 // border consumes 2 cols on each box
+	if innerW < 10 {
+		innerW = 10
+	}
+	return sidebarW, innerW
+}
+
+// layoutPaneHeights shares the terminal's rows out between the right
+// column's boxes. It returns the rows of the events box and of the pipeline
+// box, the most rows the permission modal may take, and the rows of the chat
+// box, which gets what the others leave.
+func layoutPaneHeights(p *pipelineState, perm *permPrompt, hidePipeline, hideEvents bool,
+	innerW, inputH, height int) (int, int, int, int) {
 	eventsH := 5 // title + 2 rows + 2 border
 	if hideEvents {
 		eventsH = 0
@@ -893,10 +957,15 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 			chatH = 4
 		}
 	}
+	return eventsH, pipelineH, permMax, chatH
+}
 
-	// Reset pane snapshots — populated by each pane's render below.
-	paneSnaps = paneSnaps[:0]
-
+// renderPipelineBox renders the pipeline pane in its box, with the
+// calibration badge after the title. It also returns the pane's lines and the
+// first line shown, for the pane's snapshot. A hidden pipeline renders as "".
+func renderPipelineBox(layout fullScreenLayout, p *pipelineState, pipelineScroll int, sel selectionState,
+	calibrationBadge string) (string, []string, int) {
+	hidePipeline, pipelineH, innerW := layout.hidePipeline, layout.pipelineH, layout.innerW
 	pipelineBox := ""
 	var pipelineAll []string
 	pipelineViewStart := 0
@@ -922,7 +991,18 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		pipelineBox = bordStyle.Width(innerW).Render(
 			pipelineTitle + "\n" + pipelinePane)
 	}
+	return pipelineBox, pipelineAll, pipelineViewStart
+}
 
+// renderChatBox renders the chat history in its box, with the "thinking…"
+// row below it while a turn runs and the scroll position in its title. For
+// the chat pane's snapshot it also returns the screen row of the first
+// content row, the number of content rows, the history's line count, the
+// first line shown and every line.
+func renderChatBox(layout fullScreenLayout, chat []chatMessage, renderer *glamour.TermRenderer,
+	chatScroll int, turnActive bool, spinnerFrame int, sel selectionState) (string, int, int, int, int, []string) {
+	chatH, innerW := layout.chatH, layout.innerW
+	hidePipeline, pipelineH := layout.hidePipeline, layout.pipelineH
 	// Chat: render history into the available rows, then append a
 	// "thinking…" footer row below the content (still inside the box)
 	// when a turn is in flight. Footer-anchored so the user's eye
@@ -966,7 +1046,17 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		titleStyle.Render(chatTitle) + "\n" +
 			chatPane +
 			thinkingRow)
+	return chatBox, chatTopY, chatContentH, totalLines, viewStart, chatAll
+}
 
+// snapshotPipelineAndChat records the screen bounds of the pipeline pane,
+// when it is shown, and of the chat pane in paneSnaps. It returns the x range
+// of the text in the right column's panes and the screen row of the events
+// pane's first content row.
+func snapshotPipelineAndChat(layout fullScreenLayout, pipelineAll []string, pipelineViewStart int,
+	chatTopY, chatContentH, viewStart int, chatAll []string) (int, int, int) {
+	innerW, chatH := layout.innerW, layout.chatH
+	hidePipeline, pipelineH := layout.hidePipeline, layout.pipelineH
 	// Compute screen-coord bounds for each pane and snapshot them.
 	// Right column starts at screen X 0, files sidebar (if shown) at X
 	// rightW. Each box has a top border (1 row) + title (1 row) +
@@ -1002,7 +1092,14 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	// (yCursor isn't bumped past chat — same reason as the events block
 	// below: no downstream pane reads it. stats + input are positioned
 	// from the bottom, not yCursor.)
+	return rightLeftX, rightRightX, eventsTopY
+}
 
+// renderEventsBox renders the events pane in its box and records its screen
+// bounds in paneSnaps. A hidden events pane renders as "".
+func renderEventsBox(layout fullScreenLayout, events []Envelope, eventsScroll int, sel selectionState,
+	eventsTopY, rightLeftX, rightRightX int) string {
+	hideEvents, eventsH, innerW := layout.hideEvents, layout.eventsH, layout.innerW
 	eventsBox := ""
 	if !hideEvents {
 		eventsContentH := eventsH - 3
@@ -1027,9 +1124,13 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		// (Don't bump yCursor here — no pane below events references it,
 		// stats + input are statically positioned relative to the bottom.)
 	}
+	return eventsBox
+}
 
-	statsLine := renderStatsPane(p, width, lastTurnTokens, totalTokens, maxTokens)
-
+// renderInputBox renders the input box. Its border color and title follow
+// the input mode, and bash, slash and help mode add a hint above it.
+func renderInputBox(layout fullScreenLayout, inputMode, inputValue, inputView string) string {
+	innerW, inputH := layout.innerW, layout.inputH
 	// Mode-driven input box: red for bash, purple for slash, cyan for
 	// the default chat mode. The title also flips so the user has two
 	// signals (color + label) for the active mode.
@@ -1055,7 +1156,14 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	if hint != "" {
 		inputBox = hint + "\n" + inputBox
 	}
+	return inputBox
+}
 
+// joinRightColumn stacks the right column's boxes that are shown, top to
+// bottom, with the permission modal just above the input box.
+func joinRightColumn(layout fullScreenLayout, pipelineBox, chatBox, eventsBox, statsLine string,
+	perm *permPrompt, inputBox string) string {
+	innerW, permMax := layout.innerW, layout.permMax
 	// Build the right column out of only the panes that are still
 	// enabled — JoinVertical is fine with an empty string but the
 	// concise list reads better and keeps lipgloss off the empty rows.
@@ -1075,13 +1183,14 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 	}
 	rightParts = append(rightParts, inputBox)
 	rightCol := lipgloss.JoinVertical(lipgloss.Left, rightParts...)
+	return rightCol
+}
 
-	// No sidebar on narrow terminals — return the right column at full
-	// width with the header on top.
-	if sidebarW == 0 {
-		return lipgloss.JoinVertical(lipgloss.Left, header, rightCol), totalLines
-	}
-
+// renderFilesSidebar renders the files sidebar in its box, the full height
+// below the header, and records its screen bounds in paneSnaps.
+func renderFilesSidebar(layout fullScreenLayout, files []fileEntry, modified map[string]bool,
+	fileRoot string, fileScroll int, sel selectionState) string {
+	width, height, sidebarW := layout.width, layout.height, layout.sidebarW
 	// Sidebar runs the full body height (everything below the header).
 	// Total box rows = bodyH (matches right column). Inside the box:
 	// 1 title row + filesPane rows + 2 border rows = bodyH, so
@@ -1115,11 +1224,7 @@ func layoutFullScreen(p *pipelineState, events []Envelope, chat []chatMessage,
 		lines:     filesAll,
 		padBottom: true, // renderFilesPane pads below the content
 	})
-
-	// Sidebar on the right (after rightCol) per user preference —
-	// keeps the chat anchored on the left where the eye starts.
-	body := lipgloss.JoinHorizontal(lipgloss.Top, rightCol, filesBox)
-	return lipgloss.JoinVertical(lipgloss.Left, header, body), totalLines
+	return filesBox
 }
 
 // PC-062 follow-up: file-tree sidebar.

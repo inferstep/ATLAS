@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestFormatDemoModelLabel(t *testing.T) {
@@ -336,6 +338,68 @@ func TestDemoPromptStatusUsesRealSlotProgress(t *testing.T) {
 	}
 	if got := streamStatus(child, false, false, nil); got != "processing prompt 25%" {
 		t.Fatalf("status = %q, want current wire-format percentage", got)
+	}
+}
+
+// A new terminal size gives each pane half the width less the borders, and the
+// height less the title rows.
+func TestDemoWindowSizeSizesBothPanes(t *testing.T) {
+	rawChild := newTUIModel("http://unused")
+	v3Child := newTUIModel("http://unused")
+	m := &demoModel{rawChild: &rawChild, v3Child: &v3Child}
+	_, cmd := m.Update(tea.WindowSizeMsg{Width: 124, Height: 40})
+	if m.rawChild.width != 60 {
+		t.Errorf("raw pane width = %d, want 60", m.rawChild.width)
+	}
+	if m.v3Child.height != 36 {
+		t.Errorf("V3 pane height = %d, want 36", m.v3Child.height)
+	}
+	if cmd != nil {
+		t.Error("a new size returned a command")
+	}
+}
+
+// Keys and the wheel act on the focused pane: Tab moves the focus, Up scrolls
+// one row in the output review only, the wheel focuses the side under the
+// cursor and scrolls it, and q quits.
+func TestDemoKeysAndWheelMoveTheFocusedPane(t *testing.T) {
+	cases := []struct {
+		name       string
+		outputMode bool
+		pane       string // the focused pane before the message
+		msg        tea.Msg
+		wantPane   string
+		wantRaw    int // rows the raw pane is scrolled up
+		wantV3     int
+		wantQuit   bool
+	}{
+		{"tab moves the focus", false, "v3", tea.KeyMsg{Type: tea.KeyTab}, "raw", 0, 0, false},
+		{"up outside the review does nothing", false, "v3", tea.KeyMsg{Type: tea.KeyUp}, "v3", 0, 0, false},
+		{"up in the review scrolls a row", true, "raw", tea.KeyMsg{Type: tea.KeyUp}, "raw", 1, 0, false},
+		{"the wheel on the left half scrolls the raw pane", false, "v3",
+			tea.MouseMsg{X: 10, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}, "raw", 3, 0, false},
+		{"q quits", false, "v3", keyMsg("q"), "v3", 0, 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			m := &demoModel{width: 120, outputMode: c.outputMode, activePane: c.pane,
+				rawTotal: 100, v3Total: 100, ctx: ctx, cancel: cancel}
+			_, cmd := m.Update(c.msg)
+			if m.activePane != c.wantPane {
+				t.Errorf("focused pane = %q, want %q", m.activePane, c.wantPane)
+			}
+			if m.rawScroll != c.wantRaw {
+				t.Errorf("raw pane scroll = %d, want %d", m.rawScroll, c.wantRaw)
+			}
+			if m.v3Scroll != c.wantV3 {
+				t.Errorf("V3 pane scroll = %d, want %d", m.v3Scroll, c.wantV3)
+			}
+			if (cmd != nil) != c.wantQuit {
+				t.Errorf("a command came back: %v, want it only for quit (%v)", cmd != nil, c.wantQuit)
+			}
+		})
 	}
 }
 
