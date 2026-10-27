@@ -6,9 +6,9 @@ versions are recorded for reproducible builds.
 
 ## Application accounts
 
-The four service images run as a **named non-root account created inside
-their own image**. No host account, host file, or host permission is
-involved.
+The four service images each create a **named non-root account inside
+their own image** (table below); `docker-compose.yml` runs them with the
+installing user's uid:gid instead (see below).
 
 | Service | Image account | uid:gid | Port (non-privileged) |
 |---|---|---|---|
@@ -25,8 +25,10 @@ involved.
 `atlas init` makes readable for that user only (0600).
 
 The inference image is the exception to the non-root pattern: it runs as
-root inside its container, isolated by the container boundary and the
-localhost-only port publish rather than an unprivileged account.
+root inside its container, isolated by the container boundary and, under
+Docker Compose, the localhost-only port publish (the K3s method publishes
+it as a NodePort on every node address) rather than an unprivileged
+account.
 
 Application files stay root-owned and world-readable (the `COPY`
 default), so the account can read them but not modify the image
@@ -39,42 +41,45 @@ other path (including the application code) is read-only to it.
 
 | Service | Writable at runtime | Why |
 |---|---|---|
-| atlas-proxy | *(none in the container fs)* | Reads config from env/mounts; the workspace and secrets are mounts; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
+| atlas-proxy | *(none in the container fs)*; the `/workspace` mount (file tools) and the `/data/diagnostics` mount (only when `ATLAS_SHADOW_CAPTURE` is set) | Reads config from env/mounts; secrets are a read-only mount; logs go to stdout/stderr. Bytecode caching is irrelevant (Go binary). |
 | v3-service | `/data/telemetry` (the `v3-telemetry` volume, mode 1777 in the image), `$HOME` (`/tmp` under compose) | Stage telemetry JSONL (fail-soft when the path is unwritable, with one line at start that names the repair) plus library caches; everything else the pipeline does is proxied to llama/lens/sandbox. `PYTHONDONTWRITEBYTECODE=1` avoids `.pyc` writes into read-only `/app`. |
 | geometric-lens | `$HOME` (`/tmp` under compose) | Library caches. The models dir, config, and secrets are read-only mounts. `PYTHONDONTWRITEBYTECODE=1` set. |
 | sandbox | `/workspace` (mount), the per-language tmpfs set (`/home/sandbox/*`, `/tmp`) | Executes untrusted build/test commands; the tmpfs set is where toolchains install per the universal-tmpfs pattern (see docker-compose.yml). |
 
 ## Dependency version recording
 
-Production Python dependencies are pinned with exact `==` versions so a
-rebuild resolves the same set:
+Production Python dependencies are pinned with exact `==` versions for
+every package the files list; the packages those depend on are not
+pinned, so a rebuild can resolve newer ones:
 
 | File | Scope |
 |---|---|
 | `geometric-lens/requirements.txt` | Lens runtime (all entries pinned) |
 | `v3-service/requirements.txt` | V3 runtime — tree-sitter grammars only; the file states it carries no torch, since the service parses and orchestrates rather than scoring |
 | `sandbox/requirements-runtime.txt` | Sandbox executor API |
-| `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) |
+| `sandbox/requirements-verify.txt` | In-sandbox verify/lint tools (pytest, ruff, mypy, requests) and the executor's YAML and Jinja checkers (pyyaml, jinja2) |
 
 The proxy's two Alpine packages are pinned in `proxy/Dockerfile`
 (`curl=8.22.0-r0`, `bash=5.3.9-r1`).
 
 `tests/infrastructure/test_dependency_pinning.py` asserts the pinning
 policy: requirements files carry `==` pins on every entry, inline
-`pip install`s in Dockerfiles are pinned, production base images are
+`pip install`s in Dockerfiles are pinned, the four service images' bases are
 digest-pinned (`@sha256:...`), and the proxy's `apk` packages carry
 version pins. OS-level `apt-get` packages on the debian-slim images are
-out of scope — the digest-pinned base fixes that snapshot. It is
+out of scope: they come from the live Debian repository at build time, so
+a rebuild can install newer patched versions. It is
 configuration parsing only — it installs nothing.
 
 ### Dependencies without an exact pin (deliberate)
 
 These are deliberately unpinned, for the reasons recorded here:
 
-- **`curl`** in the three debian-slim images (v3, lens, sandbox) — an
-  OS healthcheck tool on a digest-pinned base. Exact `apt` version pins
-  fight distro security patching and the base digest already fixes the
-  snapshot.
+- **`apt` packages** in the three debian-slim images: `curl` in v3, lens
+  and sandbox, plus the sandbox's toolchain packages (gcc, git,
+  openjdk-21-jdk-headless, ruby, php-cli and others). They come from the
+  live Debian repository at build time; exact `apt` version pins fight
+  distro security patching.
 
 ### Reproducibility caveat (Alpine)
 
