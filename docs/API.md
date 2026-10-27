@@ -8,8 +8,8 @@ API endpoints for each ATLAS service. All services communicate over HTTP/JSON. S
 > |---|---|---|---|
 > | atlas-proxy | `8090` | `ATLAS_PROXY_PORT` (default 8090) | `ATLAS_PROXY_NODEPORT` (default 30080) |
 > | v3-service | `8070` | `ATLAS_V3_PORT` (default 8070) | `ATLAS_V3_NODEPORT` (default 30070) |
-> | geometric-lens | `8099` | `ATLAS_LENS_PORT` (default 8099) | `ATLAS_LENS_NODEPORT` (default 31144) |
-> | sandbox | host `30820` → container `8020` | `ATLAS_SANDBOX_PORT` (default 8020) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
+> | geometric-lens | `8099` | uvicorn `--port` (default 8099) | `ATLAS_LENS_NODEPORT` (default 31144) |
+> | sandbox | host `30820` → container `8020` | fixed `8020` (clients take `ATLAS_SANDBOX_URL`) | `ATLAS_SANDBOX_NODEPORT` (default 30820) |
 > | llama-server | `8080` | `ATLAS_LLAMA_PORT` (default 8080) | `ATLAS_LLAMA_NODEPORT` (default 32735) |
 >
 > The K3s manifests are rendered from `templates/*.yaml.tmpl` into `$K8S_DIR/manifests/` by `scripts/install.sh` at install time. See [SETUP.md Method 3](SETUP.md) for the full K3s deployment.
@@ -77,7 +77,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 | `history` | array | `[]` | Optional. Prior-turn `{role, content}` messages (`"user"` / `"assistant"`) the client wants replayed into the conversation before the new message. Capped at the most recent 40 entries. Omit for a single-turn request. |
 | `session_allowed_tools` | array | `[]` | Optional. Tool names the user has approved for the whole session (e.g. from an "allow for session" choice). The proxy skips the interactive permission prompt for these. The client re-sends the current list on each turn. `delete_file` is never covered: each deletion is its own `permission_request` with `one_time_only: true`, and a client must not answer one on its own or offer a session-wide answer for it. |
 | `task_contract` | object | absent | Optional. What the client knows about the request. `task_mode` (required when the object is sent): `"work"` (the workspace should change) or `"question"` (nothing should change). `expected_outputs`: exact workspace paths the request must produce. `verification`: exact commands that must be run and pass. `candidate_policy`: accepted and ignored, so older clients keep working; one rule decides whether a V3 candidate replaces the model's own write ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)). A contract that does not validate (an unknown mode, a path outside the workspace, a `question` that declares outputs or commands) is refused with HTTP 400 rather than dropped. Without a contract, the proxy decides from the message whether a change is required, and no V3 candidate is generated, because no target is grounded. See [ARCHITECTURE.md § Client task mode](ARCHITECTURE.md#client-task-mode). |
-| `bypass_v3`, `v3_mode`, `feasibility_mode` | — | — | Removed. V3 runs on every request and feasibility is recorded, never enforced. A request that asks for V3 off (`bypass_v3: true`, `v3_mode` other than `full`) or `feasibility_mode: enforce` is refused with 400; `false`, `full` and `observe` are accepted and change nothing. |
+| `bypass_v3`, `v3_mode`, `feasibility_mode` | — | — | Removed. A request cannot switch V3 off, and feasibility is recorded, never enforced. A request that asks for V3 off (`bypass_v3: true`, `v3_mode` other than `full`) or `feasibility_mode: enforce` is refused with 400; `false`, `full` and `observe` are accepted and change nothing. |
 | `disable_fresh_slot` | bool | `false` | Optional. Keeps the pre-warmed KV-cache prefix instead of requesting a fresh slot. Used by `/demo`. |
 | `sandbox_subdir` | string | `""` | Optional. An omitted value uses the whole workspace. A bare directory name of at most 64 characters (ASCII letters, digits, `.`, `_`, and `-`, and neither `.` nor `..`) confines the turn to that subdirectory; `/demo` uses one per pane so concurrent sessions don't clobber each other's files. Any other value is HTTP 400 `invalid_input` with no turn. |
 
@@ -105,14 +105,14 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `v3_progress` | V3 pipeline stage that doesn't have a dedicated typed event yet (fallback) | `message` (string) — humanized stage label |
 | `v3_llm_start` / `v3_llm_end` | V3's internal LLMAdapter started / finished a call (planner, candidate generation, repair, etc.) | `detail` (string), `call` (int), `tokens` (int, on `llm_end`), `elapsed_ms` (int, on `llm_end`), `max_tokens`, `temperature` (on `llm_start`) |
 | `v3_token` | V3's internal LLM streamed a token | `text` (delta string) |
-| `v3_reasoning_token` | V3's internal LLM streamed a `reasoning_content` delta. Separate from `reasoning_token` so it targets the V3 streaming row rather than the agent's LLM row. | `text` (delta string) |
-| `v3_phase` | V3 phase transition (`phase1`, `phase2`, `phase2_allocated`) | `stage`, `detail`, plus the CxGx allocation on `phase2_allocated`: `k` (candidate count, never below 3), `tier`, `base_tier` (the tier C(x) picked before escalation), `gx_escalation` (int, 0/1/2 tiers added by G(x)), `capped_from` (string, the tier before the wall-clock cap lowered it; empty when uncapped), `reason` (`gated`\|`budget_capped`\|`uncalibrated`) |
+| `v3_reasoning_token` | Reserved: forwarded when V3 sends a `reasoning_token` stage, which the current V3 service does not send. Separate from `reasoning_token` so it would target the V3 streaming row rather than the agent's LLM row. | `text` (delta string) |
+| `v3_phase` | V3 phase transition (`phase1`, `phase2`, `phase2_allocated`) | `stage`, `detail`, plus the CxGx allocation on `phase2_allocated`: `k` (candidate count; at least 3 unless the wall-clock cap lowered the tier, then as few as 1), `tier`, `base_tier` (the tier C(x) picked before escalation), `gx_escalation` (int, 0/1/2 tiers added by G(x)), `capped_from` (string, the tier before the wall-clock cap lowered it; empty when uncapped), `reason` (`gated`\|`budget_capped`\|`uncalibrated`\|`unscored`) |
 | `v3_plansearch` | PlanSearch step (`plansearch`, `plansearch_done`, `plansearch_error`) | `stage`, `detail`, `plans` (int), `candidates` (int, on `_done`), `tokens` (int, on `_done`) |
-| `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
+| `v3_divsampling` | DivSampling step (`divsampling`, `divsampling_done`, `divsampling_error`, `divsampling_stop`) | `stage`, `detail`, `slots` (int), `total` (int, on `_done`) |
 | `v3_sandbox` | Per-candidate sandbox test (`sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`) | `stage`, `detail`, `index` (int), `elapsed_ms` (int), `energy` (float, on `_pass`), `stderr` (string, first 120 chars on `_fail`), `passed` / `total` (on `_done`) |
 | `v3_select` | Candidate selection (`selected`) | `stage`, `detail`, `index` (int), `energy` (float) |
 | `v3_lens_per_step` | Per-token lens scoring of a generated candidate. Fires once per candidate. | `stage`, `detail`, `index` (int, candidate index), `source` (`plansearch`\|`divsampling`), `first_off_rails_idx` (int, -1 if none), `gx_score_min` (float), `gx_score_mean` (float), `cx_norm_max` (float), `n_tokens` (int) |
-| `v3_lens_veto` | A sandbox-passing candidate was rejected because its `gx_min` fell below the model's severe-quality threshold. The candidate is marked failed and re-enters the Phase-3 repair pool; the energy fallback never returns it. Absent when the Lens is uncalibrated. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float), `first_off_rails_idx` (int, -1 if none) |
+| `v3_lens_veto` | A sandbox-passing candidate was rejected because its `gx_score_mean` fell below the model's `severe_mean` threshold (artifacts without `severe_mean`: `gx_min` below `severe`). The candidate is marked failed and re-enters the Phase-3 repair pool; the energy fallback never returns it. Absent when the Lens is uncalibrated. | `stage`, `detail`, `index` (int, candidate index), `gx_score_min` (float, the value compared: the mean when `severe_mean` is used), `first_off_rails_idx` (int, -1 if none) |
 | `v3_structural_veto` | A sandbox-passing candidate was rejected because tree-sitter found direct-identifier calls resolving to no local def, import, builtin, or project symbol. The candidate is marked failed and re-enters the Phase-3 repair pool; the energy fallback never returns it. | `stage`, `detail`, `index` (int, candidate index), `n_unresolved` (int), `unresolved_calls` (string[], up to 5), `n_calls_total` (int) |
 | `v3_call_chain_context` | Phase-3 repair injected a call-chain context block for the failing function. Informational. | `stage`, `detail`, `function` (string — the failing function name) |
 | `symbol_index_injected` | Turn-zero auto-injection of function/class snippets for symbols named in the user message. | `matched` (string[] — matched symbol names), `n_files` (int — project files scanned), `skipped` (int — symbols that didn't resolve) |
@@ -124,10 +124,10 @@ Every event has the shape `{"type":"<name>","data":{...}}`. Types in emission or
 | `reasoning_budget_cut` | The `reasoning_content` stream exceeded the reasoning budget with no content emitted — the proxy cuts the stream and re-prompts. | `reasoning_chars` (int — reasoning chars accumulated when cut) |
 | `content_loop_cut` | The proxy detected a verbatim repeating tail in the content stream (the model restating itself in a loop) and cut the stream. | `chars` (int — content chars accumulated when cut) |
 | `old_str_cut` | An `edit_file` old_str had stopped matching its target file and kept arriving, so the proxy cut the stream: the call could not succeed. The model is told the file and the line where old_str left it. | `path` (string), `chars` (int — content chars when cut), `old_str_chars` (int), `matched_lines` (int — old_str lines that still matched) |
-| `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `fallback`, `fallback_all_vetoed`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
+| `v3_repair` | Phase 3 repair strategy (`phase3`, `pr_cot*`, `refinement*`, `fallback_unverified`, `fallback_all_vetoed`, `budget_exhausted`, `budget_no_verified_candidate`) | `stage`, `detail`, `strategy` (string: `pr_cot` / `refinement`), `failing` (int), `iterations` (int, on `refinement_pass`), `tokens` (int, on `_pass`) |
 | `v3_probe` | Probe phase events (`probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `probe_scored`, `probe_sandbox`, `probe_pass`) | `stage`, `detail` |
 | `v3_self_test` | Self-test generation/verify events (`self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip`, `self_test_verify`) | `stage`, `detail` |
-| `v3_plan` | Plan-pipeline progress (`plan_start`, `plan_candidate`, `plan_candidate_scored`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_selected`, `plan_failed`). Per-token `token`/`llm_start`/`llm_end` events are filtered out at the proxy. | `stage`, `detail`, `index` (int, per-candidate), `score` (float, on `_scored`/`_selected`), `revision` (int, set when fired during a revise) |
+| `v3_plan` | Plan-pipeline progress (`plan_start`, `plan_candidate`, `plan_candidate_scored`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_verify_stripped`, `plan_selected`, `plan_failed`). Per-token `token`/`llm_start`/`llm_end` events are filtered out at the proxy. | `stage`, `detail`, `index` (int, per-candidate), `score` (float, on `_scored`/`_selected`), `revision` (int, set when fired during a revise) |
 | `plan_loaded` | A winning plan has been generated. Fires once after initial generation and again after each revision. Carries the full step list. | `steps` (array of `{id, action, target, why}`), `verify_step` (string id), `rationale` (string), `winning_score` (float), `revision` (int — 0 for initial plan, 1+ for revisions) |
 | `plan_adherence` | Emitted after each tool call, indicating whether the call satisfied an outstanding plan step. Off-plan calls (`matched=false`, no `neutral`) accumulate into the off-streak counter that drives auto-revise. | On match: `matched=true`, `step_index`, `step_id`, `step_action`, `satisfied` (steps satisfied so far), `total`. On miss: `matched=false`, `tool`, `off_streak` (consecutive off-plan calls), `satisfied`, `total`. Recon tools (`read_file`, `list_directory`, `find_file`, `search_files`) emit the miss shape plus `neutral=true` — they don't satisfy steps but leave `off_streak` unchanged. |
 | `plan_revise` | The off-streak crossed `planAutoReviseThreshold` (5) — a fresh plan is being generated. The next `plan_loaded` (with `revision>0`) supersedes the prior plan; `Satisfied` flags reset. | `reason` (string), `revision` (int, 1-indexed) |
@@ -317,7 +317,7 @@ The payload also carries a `dimensions` array — the seven status dimensions th
 curl http://localhost:8090/v1/calibration/status | jq .
 ```
 
-**Cache:** none — every call re-probes the lens service. Cost is ~50–200 ms (one HTTP round-trip to `lens/health`). TUI calls once at startup; CI / monitoring should poll no faster than every few seconds.
+**Cache:** none — every call re-probes the lens service. Cost is ~50–200 ms (one HTTP round-trip to `lens/health`). The TUI fetches at startup and then every 30 s; CI / monitoring should poll no faster than every few seconds.
 
 ---
 
@@ -357,15 +357,15 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change; before 2026-09-17 such edits were applied with the prefixes silently stripped from both arguments. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
 | `insert_after` | Insert lines into a file after line `line` (1-based, as printed by `read_file`; `0` inserts at the top). Only the new text is supplied — there is no anchor to reproduce, which is what makes it the right tool for ADDING code rather than changing it. Requires the file to have been read, so the line numbers are current. Same syntax, structural and embedded-script gates as `edit_file`. |
-| `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written. A mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
-| `structural_edit` | Surgical replacement of one whole named block (function, class, or HTML element). Selectors v1: Python `function:NAME` / `class:NAME` (decorator-aware), HTML `<tag>` (top-level; `<style>` inside `<head>` is NOT reachable in v1). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
+| `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written: a block that only moved is applied where its two lines now are, and any other mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
+| `structural_edit` | Surgical replacement of one whole named block (function, class, or HTML element). Selectors: Python `function:NAME` / `class:NAME` (decorator-aware), Go `function:NAME` / `type:NAME`, JavaScript/TypeScript `function:NAME` / `class:NAME`, HTML `<tag>` (any depth, `<script>` and `<style>` included; the selector must match exactly one node). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
 | `delete_file` | Remove a file (or an empty directory) from the workspace |
 | `move_file` | Rename/move a file within the workspace (`source` → `destination`) |
 | `search_files` | Regex search inside file **contents**. Returns matching lines with file paths and line numbers |
 | `find_file` | Regex search by file **name** or relative path. Use to check whether a file exists. |
 | `list_directory` | List files and subdirectories at a given path |
 | `run_command` | Execute a shell command via bash inside the **sandbox container**. Sees `/workspace` (your project, bind-mounted rw, same path as the proxy). Has python3 + pip, node + npm, go, rust, gcc/g++, bash, pytest, tsx pre-installed. When the sandbox is unreachable the tool fails with `sandbox unavailable: ...` (exit code 1) — it never falls back to executing on the proxy host. Host execution happens only when the operator explicitly selects it via `ATLAS_VERIFY_IN=host` **and** `ATLAS_TRUST_MODE=fully-trusted`; a workspace's `.atlas/config.toml` may choose the sandbox, but not the host. The default `trusted` silently downgrades a host request back to the sandbox, and `untrusted` refuses `run_command`/`run_background` outright. The proxy still runs `validateShellCommand` upstream as the destructive-verb gate — this entry just picks the executor. |
-| `run_background` | Start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy detects shell `&` backgrounding through `run_command` and routes it here. |
+| `run_background` | Start a long-running process (e.g. `python app.py`, `npm run dev`) in the sandbox and return immediately with a `job_id`. The proxy refuses a `run_command` that would start a server in the foreground and points the model here; a command that already ends in `&` runs as sent. |
 | `tail_background` | Fetch new stdout/stderr lines from a backgrounded job by `job_id`. |
 | `stop_background` | Terminate a backgrounded job by `job_id`. |
 
@@ -446,7 +446,7 @@ Run the V3 pipeline for a file generation task. Streams progress events as SSE.
 }
 ```
 
-All fields are optional except the task itself. `tier` defaults to 2. `budget_ms` is the wall-clock cap the caller applies to this call; when it is a positive number the pipeline plans every phase against it, and otherwise it reads `ATLAS_V3_TIMEOUT`. The proxy always sends the cap it applies.
+All fields are optional, but a request without `file_path` and `baseline_code` gets HTTP 400. `tier` defaults to 2. `budget_ms` is the wall-clock cap the caller applies to this call; when it is a positive number the pipeline plans every phase against it, and otherwise it reads `ATLAS_V3_TIMEOUT`. The proxy always sends the cap it applies.
 
 **Response (SSE stream):**
 ```
@@ -468,9 +468,9 @@ data: {"code": "...", "passed": true, "phase_solved": "phase1", "candidates_test
 data: [DONE]
 ```
 
-`phase_solved` says how `code` was chosen: `probe`, `phase1`, `pr_cot`, `refinement` or `budget` after a check it passed; `consensus` by agreement alone; `incumbent` when the caller's own `baseline_code` held (`code` is then those exact bytes); `baseline` when nothing was chosen and the caller's bytes are sent back; `none` otherwise.
+`phase_solved` says how `code` was chosen: `probe`, `phase1`, `pr_cot`, `refinement` or `budget` after a check it passed; `consensus` by agreement alone; `incumbent` when the caller's own `baseline_code` held (`code` is then those exact bytes); `baseline` when nothing was chosen and the caller's bytes are sent back; `lens_unavailable` when the lens could not score (`code` is empty and `lens_unavailable` gives the reason); `none` otherwise.
 
-Each progress event has the shape `{"stage": "<name>", "detail": "<human-readable>", "data": {...}}`. The `data` object carries structured fields specific to that stage (counts, indices, timings, strategy labels) — the proxy bridge fans these out into the dedicated `v3_*` events on `/v1/agent`. Older stages without `data` enrichment still emit `stage` + `detail` only and continue to flow through `v3_progress`.
+Each progress event has the shape `{"stage": "<name>", "detail": "<human-readable>", "data": {...}}`. The `data` object carries structured fields specific to that stage (counts, indices, timings, strategy labels) — the proxy bridge fans these out into the dedicated `v3_*` events on `/v1/agent`. Stages the bridge has no dedicated event for flow through `v3_progress` as one `message` line.
 
 The proxy reads this stream in `v3_bridge.go`, and `tools.go` translates the stages into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
 
@@ -482,11 +482,11 @@ The pipeline emits stages as it progresses. Not all stages appear in every run �
 | Phase | Stages |
 |-------|--------|
 | **Setup / classification** | `task_type` (interactive/batch classification of the request) |
-| **Probe (Phase 0)** | `probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip` (interactive task — compile smoke-test instead), `self_test_verify`, `smoke_check`, `interactive_lint`, `probe_scored`, `probe_sandbox`, `probe_pass`, `incumbent` (the caller's `baseline_code` checked as a candidate), `incumbent_holds` (it passed and its record closes, so it is returned unchanged) |
-| **Generation (Phase 1)** | `phase1`, `phase2` (allocation), `phase2_allocated`, `plansearch`, `plansearch_done`, `plansearch_error`, `divsampling`, `divsampling_done`, `divsampling_error` |
-| **Testing / selection (Phase 2)** | `sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`, `role_check` (a candidate dropped a top-level name of the caller's file; it fails), `lens_per_step`, `lens_veto`, `structural_veto`, `call_graph_veto`, `retyping_dropped` (candidates that only re-typed the caller's file leave the pool), `selected` |
-| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `refinement_verify_failed`, `refinement_skip` (remaining `ATLAS_V3_TIMEOUT` budget cannot afford one iteration — straight to fallback), `call_chain_context`, `fallback`, `fallback_all_vetoed` (every candidate was vetoed — no code returned) |
-| **Verification** | `build_verify_unavailable` (build-command verification skipped — runner unreachable or command not allowed by policy) |
+| **Probe (Phase 0)** | `probe`, `probe_light`, `probe_error`, `probe_retry`, `probe_failed`, `self_test_gen`, `self_test_done`, `self_test_error`, `self_test_skip` (interactive task — compile smoke-test instead), `self_test_verify`, `smoke_check`, `interactive_lint`, `probe_scored`, `probe_sandbox`, `probe_pass`, `incumbent` (the caller's `baseline_code` checked as a candidate), `incumbent_holds` (it passed and its record closes, so it is returned unchanged), `probe_evidence` (what the probe's own check showed), `self_test_untrusted` (results against model-generated tests; a diagnostic only) |
+| **Generation (Phase 1)** | `phase1`, `phase2` (allocation), `phase2_allocated`, `plansearch`, `plansearch_done`, `plansearch_error`, `divsampling`, `divsampling_done`, `divsampling_error`, `diagnostic_allocation` (k raised for a measurement), `divsampling_stop` (budget spent) |
+| **Testing / selection (Phase 2)** | `sandbox_test`, `sandbox_pass`, `sandbox_fail`, `sandbox_done`, `role_check` (a candidate dropped a top-level name of the caller's file; it fails), `lens_per_step`, `lens_veto`, `structural_veto`, `call_graph_veto`, `retyping_dropped` (candidates that only re-typed the caller's file leave the pool), `selected`, `lens_unscored` (the lens did not score a candidate), `consensus` (candidates whose outputs agree) |
+| **Repair (Phase 3)** | `phase3`, `pr_cot`, `pr_cot_pass`, `pr_cot_failed`, `pr_cot_error`, `refinement`, `refinement_pass`, `refinement_failed`, `refinement_error`, `refinement_verify_failed`, `refinement_skip` (remaining `ATLAS_V3_TIMEOUT` budget cannot afford one iteration — straight to fallback), `call_chain_context`, `fallback_unverified` (no candidate passed; the caller's baseline is kept), `fallback_all_vetoed` (every candidate was vetoed — no code returned), `budget_exhausted`, `budget_no_verified_candidate`, `repair_skip_baseline_ok` |
+| **Verification** | `build_verify` (build command OK or FAIL), `build_verify_unavailable` (build-command verification skipped — runner unreachable or command not allowed by policy), `runtime_compare` (the candidate's import compared with the caller's Python file) |
 | **LLM streaming** | `llm_start`, `token`, `llm_end` (one bracketed group per internal LLM call — planner, candidate generation, repair, etc.) |
 
 </details>
@@ -513,11 +513,11 @@ Generates a step-by-step plan for a coding task using diverse LLM sampling and h
 | `user_message` | yes | The original user request the planner must address. |
 | `working_dir` | optional | Used in the planner prompt for path-context. Defaults to `""` (empty). |
 | `project_context` | optional | Map of `relative_path → file_content`. Files are truncated to ~200 chars in the planner prompt. |
-| `n_candidates` | optional | How many candidate plans to sample. Defaults to 3. Each is sampled at a different temperature (0.3 / 0.5 / 0.7) for diversity. |
+| `n_candidates` | optional | How many candidate plans to sample, at most 3. Defaults to 3. Each is sampled at a different temperature (0.3 / 0.5 / 0.7) for diversity. |
 
 **Response:** SSE stream of `{stage, detail, data}` events ending with `event: result\ndata: <plan-json>` and `data: [DONE]`.
 
-Plan-pipeline stages: `plan_start`, `plan_candidate`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_candidate_scored`, `plan_selected`, `plan_failed`. Per-candidate token streaming flows under `token` / `llm_start` / `llm_end` (filtered out by the proxy bridge before reaching `/v1/agent`).
+Plan-pipeline stages: `plan_start`, `plan_candidate`, `plan_candidate_unparseable`, `plan_candidate_error`, `plan_candidate_scored`, `plan_verify_stripped`, `plan_selected`, `plan_failed`. Per-candidate token streaming flows under `token` / `llm_start` / `llm_end` (filtered out by the proxy bridge before reaching `/v1/agent`).
 
 The final `event: result` payload has the shape:
 
@@ -553,9 +553,11 @@ Friendly-selector named-node replacement. Stateless transform: caller provides t
 }
 ```
 
-**Selectors v1:**
+**Selectors:**
 - Python: `function:NAME`, `class:NAME` — decorator-aware (replaces the `decorated_definition` wrapper when present so `@app.route(...)` lines get included in the swap)
-- HTML: `<tag>` — top-level tag-name match (e.g. `<body>`, `<head>`, `<h1>`)
+- Go: `function:NAME` (a func or a method), `type:NAME`
+- JavaScript, TypeScript: `function:NAME` (declaration, arrow, expression or method), `class:NAME`
+- HTML: `<tag>` — tag-name match at any depth (e.g. `<body>`, `<head>`, `<h1>`, `<script>`, `<style>`)
 
 **Response (success):**
 ```json
@@ -662,7 +664,7 @@ An `embedded_regions` array is added when the file holds code in another languag
 
 ### POST /internal/structural_check
 
-Resolve every direct-identifier call in a Python source against its local defs, imports, bound names, builtins, and (optionally) supplied project symbols — without executing it. Used by the proxy's structural gate (#147) on the `.py` write paths (`edit_file`, `structural_edit`, and the `write_file` branches; under BypassV3 only the non-iterating T0/T1 direct `write_file` is excepted) to refuse content that introduces a `NameError`: a call to a name the file never binds parses fine but 500s at request time.
+Resolve every direct-identifier call in a Python source against its local defs, imports, bound names, builtins, and (optionally) supplied project symbols — without executing it. Used by the proxy's structural gate (#147) on the `.py` write paths (`edit_file`, `structural_edit`, `insert_after`, `replace_lines`, and the `write_file` branches) to refuse content that introduces a `NameError`: a call to a name the file never binds parses fine but 500s at request time.
 
 **Request:**
 ```json
@@ -728,7 +730,7 @@ curl http://localhost:8070/health
 
 ## Geometric Lens (Port 8099)
 
-Energy-based code scoring using C(x) cost field and G(x) quality prediction. Every route is internal to the stack — the proxy and v3-service are the only callers.
+Energy-based code scoring using C(x) cost field and G(x) quality prediction. Every route is internal to the stack — its callers are the proxy, v3-service, the CLI's benchmark runner and `atlas doctor`.
 
 > **Internal port:** The container binds uvicorn to **8099** (`geometric-lens/Dockerfile`, `EXPOSE 8099`). Docker Compose maps host 8099 → container 8099. Bare-metal launches with the same `--port 8099` default. K3s deployments expose `ATLAS_LENS_NODEPORT` (default 31144) externally.
 
@@ -763,13 +765,13 @@ Score code using combined C(x) + G(x) energy. Single embedding extraction serves
 | `cx_normalized` | float or null | 0–1 normalized energy |
 | `cx_calibrated` | bool | Whether the model's C(x) normalization calibration (`cx_normalization.json`) is loaded |
 | `gx_score` | float or null | 0–1 probability of correctness (G(x) model) |
-| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when the Lens is disabled or the G(x) model isn't loaded; `"unscored"` when no score was computed (payload carries `failure` and `error`) |
+| `verdict` | string | `"likely_correct"`, `"uncertain"`, or `"likely_incorrect"` when thresholds are calibrated; `"uncalibrated"` when the model's `gx_thresholds.json` is missing; `"unavailable"` when no lens model or no G(x) model is loaded; `"unscored"` when no score was computed (payload carries `failure` and `error`) |
 | `gx_available` | bool | Whether the G(x) model was loaded |
-| `enabled` | bool | Whether Geometric Lens is enabled |
+| `enabled` | bool | `false` only when no lens model is loaded |
 | `latency_ms` | float | Execution time in milliseconds |
 | `failure` | object | Present only when `scored` is `false`: `kind` plus its detail (below) |
 
-When Lens is disabled, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`): a configuration state, not a failed score.
+When no lens model is loaded, returns `enabled: false` with neutral defaults (`cx_energy: 0.0`, `gx_score: 0.5`), not a score.
 
 When the Lens could not score the text, the response is not a score: `scored: false`, `verdict: "unscored"`, `null` in every score field, and a `failure` object. `kind` is one of:
 
@@ -817,7 +819,7 @@ These are not part of the public API — every row is consumed by other ATLAS se
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/internal/lens/score-text` | POST | Score text (C(x) only). `scored: false` with `energy`/`normalized` `null` and a `failure` when no score was computed (same kinds as `gx-score`, plus `models_not_loaded`) |
-| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). `scored: false` with an empty `per_step`/`aggregate`, `n_tokens: 0` and a `failure` when no score was computed (same kinds as `gx-score`). |
+| `/internal/lens/score-per-step` | POST | Per-token C(x)+G(x) scoring (one forward pass over the prompt; returns per-step verdicts plus `first_off_rails_idx` and aggregates). Pass `layer: int` to score a specific intermediate residual layer (requires the per-layer hidden-states extension on llama-server). `scored: false` with an empty `per_step`/`aggregate`, `n_tokens: 0` and a `failure` when no score was computed (same kinds as `gx-score`, plus `empty_input`). |
 
 ---
 
@@ -843,7 +845,7 @@ Spawn a background process and return a `job_id` immediately. Used by the proxy'
 {"job_id": "a1b2c3d4e5f6", "pid": 4711, "started_at": 1714617823.4}
 ```
 
-**Errors:** 400 on empty command; 429 when active-job count exceeds `BG_MAX_JOBS`.
+**Errors:** 400 on empty command; 429 when the sandbox already holds `BG_MAX_JOBS` (32) jobs, exited jobs not yet cleared included.
 
 ### GET /jobs
 
@@ -914,7 +916,7 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
 }
 ```
 
-`success` is `exit_code == 0`. `timed_out` states the timeout structurally so a
+`success` is `exit_code == 0` with `outcome` `completed`. `timed_out` states the timeout structurally so a
 caller does not have to recognise it from prose.
 
 **Observation** (present only when `observe_paths` was sent):
@@ -993,7 +995,7 @@ Execute code in an isolated environment.
 | Field | Type | Description |
 |-------|------|-------------|
 | `success` | bool | Overall pass/fail |
-| `compile_success` | bool | Whether compilation succeeded (always true for interpreted languages) |
+| `compile_success` | bool | Whether compilation (for interpreted languages, the syntax check) succeeded |
 | `tests_run` | int | Number of tests executed |
 | `tests_passed` | int | Number of tests that passed |
 | `lint_score` | float? | Pylint score 0–10 (Python only, null for other languages) |
@@ -1167,8 +1169,7 @@ DeltaNet/SSM-based, so all 32 layers of Qwen3.5-9B are accessible.
 
 **Wire format rationale:** base64 over JSON arrays. Empirically a single
 layer of 84 tokens × 4096 dims is 1.4 MiB raw float32, 1.8 MiB as base64,
-or 7 MiB as a JSON array of floats — and lens-as-PRM scoring fires this every N tokens
-during generation. JSON would push 50+ MiB per multi-layer scoring call;
+or 7 MiB as a JSON array of floats. JSON would push 50+ MiB per multi-layer scoring call;
 base64 keeps it manageable.
 
 ### GET /health
@@ -1238,7 +1239,7 @@ open-path exemption list (`/health`, `/ready`, `/version`).
 
 ## Building a non-TUI client
 
-A minimal client needs five things (plus one header):
+A minimal client needs four things (plus one header), and two more are optional:
 
 0. **Send the service token** on every request when the installation
    has one (`secrets/service-token`, generated by `atlas init`):
