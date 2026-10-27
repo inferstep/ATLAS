@@ -436,7 +436,7 @@ atlas doctor -v           # verbose: show detail for each check
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5개 모두 실행 중이고 healthy |
 | Stack | health/llama, lens, v3, sandbox, proxy | 5개 `/health` 엔드포인트 모두 ok 반환 |
 | Stack | internal_auth | 내부 서비스 인증: 토큰 파일이 엄격한 권한과 함께 존재하고, 실제 강제 여부를 양방향으로 탐침(잘못된 토큰 → 401, 유효한 토큰은 수락); 인증이 비활성화된 경우(`secrets/service-token` 없음) 경고 |
-| Stack | status_dimensions | 정보성: 프록시 `/v1/calibration/status`가 보고하는 lens/ASA 상태 7개 차원(TUI 배지가 읽는 것과 동일한 소스); 실행을 실패시키지 않음 |
+| Stack | status_dimensions | 프록시 `/v1/calibration/status`가 보고하는 lens/ASA 상태 7개 차원(TUI 배지가 읽는 것과 동일한 소스) |
 | Stack | image_skew | `atlas-*` 이미지 5개가 모두 같은 태그 |
 | End-to-end | e2e_smoke | llama-server로의 라이브 `/v1/chat/completions` 왕복 (`--quick`으로 건너뜀) |
 
@@ -821,7 +821,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ## Geometric Lens 가중치 (필수)
 
-ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 렌즈에는 서빙 중인 모델에 맞는 C(x)·G(x) 가중치가 필요합니다. 가중치가 없으면 프록시는 각 요청을 HTTP 503 `dependency_down`으로 거부하면서 그 이유를 알려주고, `atlas doctor`는 실패합니다. 가중치는 있지만 아직 보정되지 않은 렌즈는 허용됩니다: 점수는 산출되고, 임계값 개입만 보정 이후로 미뤄집니다.
+ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 렌즈에는 서빙 중인 모델에 맞는 C(x)·G(x) 가중치가 필요합니다. 가중치가 없으면 프록시는 각 요청을 HTTP 503 `dependency_unavailable`으로 거부하면서 그 이유를 알려주고, `atlas doctor`는 실패합니다. 가중치는 있지만 아직 보정되지 않은 렌즈는 허용됩니다: 점수는 산출되고, 임계값 개입만 보정 이후로 미뤄집니다.
 
 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
 

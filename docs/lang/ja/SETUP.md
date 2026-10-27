@@ -429,7 +429,7 @@ atlas doctor -v           # verbose: show detail for each check
 | スタック | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5 つすべてが実行中かつ healthy |
 | スタック | health/llama, lens, v3, sandbox, proxy | 5 つの `/health` エンドポイントすべてが ok を返す |
 | スタック | internal_auth | 内部サービス認証: トークンファイルが厳格なパーミッションで存在し、実際の強制が双方向でプローブされる（誤ったトークン → 401、有効なトークンは受理）。認証が無効（`secrets/service-token` なし）の場合は警告 |
-| スタック | status_dimensions | 情報提供のみ: プロキシの `/v1/calibration/status` から得られる 7 つの lens/ASA ステータスディメンション（TUI のバッジが読むのと同じソース）。この行が実行を失敗させることはない |
+| スタック | status_dimensions | プロキシの `/v1/calibration/status` から得られる 7 つの lens/ASA ステータスディメンション（TUI のバッジが読むのと同じソース） |
 | スタック | image_skew | 5 つの `atlas-*` イメージすべてが同じタグ |
 | エンドツーエンド | e2e_smoke | llama-server への実際の `/v1/chat/completions` ラウンドトリップ（`--quick` でスキップ） |
 
@@ -814,7 +814,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ## Geometric Lens ウェイト (必須)
 
-ATLAS のすべてのリクエストは Geometric Lens を必要とします（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。レンズは提供されるモデルの C(x) / G(x) ウェイトを必要とします。それらがないと、プロキシは HTTP 503 `dependency_down` ですべてのリクエストを拒否し、理由を示します。`atlas doctor` も失敗します。ウェイトはあるがキャリブレーションがまだのレンズは受け入れられます。スコアは返し、しきい値の介入はキャリブレーションを待ちます。
+ATLAS のすべてのリクエストは Geometric Lens を必要とします（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。レンズは提供されるモデルの C(x) / G(x) ウェイトを必要とします。それらがないと、プロキシは HTTP 503 `dependency_unavailable` ですべてのリクエストを拒否し、理由を示します。`atlas doctor` も失敗します。ウェイトはあるがキャリブレーションがまだのレンズは受け入れられます。スコアは返し、しきい値の介入はキャリブレーションを待ちます。
 
 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md) にレンズアーティファクトが載っているモデルは `atlas model install-artifacts` で取得できます。事前トレーニング済みウェイトとトレーニングデータは HuggingFace でも入手できます:
 

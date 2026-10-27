@@ -802,7 +802,7 @@ When you launch `atlas` (the TUI), the Pipeline pane title gets a compact Lens/A
 
 ### Prereqs
 
-Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → the compose deployment's llama service URL resolved from the Docker `.env`). The hidden-states patch (baked into `inference/Dockerfile.v31` and `Dockerfile.rocm`) is required for lens training embeddings (hidden-states extraction) but not for C(x) scoring — `check` reports its presence as informational.
+Both subcommands require a running `llama-server`. `atlas lens check` reuses the same URL resolution as the lens service (`ATLAS_LLAMA_URL` → `LLAMA_EMBED_URL` → `LLAMA_URL` → the compose deployment's llama service URL resolved from the Docker `.env`). The hidden-states patch (baked into `inference/Dockerfile.v31`, `Dockerfile.rocm` and `Dockerfile.vulkan`) is required for lens training embeddings (hidden-states extraction) but not for C(x) scoring — `check` reports its presence as informational.
 
 ---
 

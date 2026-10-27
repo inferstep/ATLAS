@@ -86,7 +86,7 @@ Docker Compose also sets inter-service URLs using Docker networking (e.g., `http
 
 **Restart policy.** Every service in `docker-compose.yml` runs with `restart: unless-stopped`, so the stack comes back up after a host reboot or a container crash without a manual `docker compose up`.
 
-**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config validate` flags them and `atlas config migrate` drops them: `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite, [ADR 0007](adr/0007-sqlite-state-store.md)), `SQLITE_DB_PATH` and `ATLAS_LENS_ONLINE_LEARNING` (the pattern cache and its SQLite store were removed; the lens keeps no state), `ATLAS_LENS_HOST_DIR`, `ATLAS_LENS_DATA_DIR` and `ATLAS_LENS_RETRAIN_MIN` (the proxy no longer collects a lens training corpus from agent use), `ATLAS_ENABLE_TRAINING` (training is always available), `ATLAS_RPG_PLANNING` (RPG planning was removed — [issue #148](https://github.com/inferstep/ATLAS/issues/148) is the record), `ATLAS_CANDIDATE_POLICY` (one rule decides which V3 candidate lands, and nothing selects another — [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)), and `ATLAS_CALL_GRAPH` (the call graph always runs, for Python files). K3s-side removals are listed in § 8.10.
+**Removed variables (`.env`).** These keys from older installs are ignored on read; `atlas config migrate` drops them, and `atlas config validate` flags each except `SQLITE_DB_PATH` (it checks only `ATLAS_` keys): `ATLAS_REGISTRY` (the model registry is in-package), `ATLAS_REDIS_MAXMEMORY` and `ATLAS_REDIS_MEM` (lens state moved from Redis to SQLite, [ADR 0007](adr/0007-sqlite-state-store.md)), `SQLITE_DB_PATH` and `ATLAS_LENS_ONLINE_LEARNING` (the pattern cache and its SQLite store were removed; the lens keeps no state), `ATLAS_LENS_HOST_DIR`, `ATLAS_LENS_DATA_DIR` and `ATLAS_LENS_RETRAIN_MIN` (the proxy no longer collects a lens training corpus from agent use), `ATLAS_ENABLE_TRAINING` (training is always available), `ATLAS_RPG_PLANNING` (RPG planning was removed — [issue #148](https://github.com/inferstep/ATLAS/issues/148) is the record), `ATLAS_CANDIDATE_POLICY` (one rule decides which V3 candidate lands, and nothing selects another — [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)), and `ATLAS_CALL_GRAPH` (the call graph always runs, for Python files). K3s-side removals are listed in § 8.9.
 
 `PARALLEL_SLOTS` and `KV_CACHE_TYPE_K/V` are accepted as fallbacks, but the
 canonical `ATLAS_*` names take precedence and are what `atlas init` and
@@ -283,7 +283,7 @@ The Go proxy that runs the agent loop, routes tool calls, and orchestrates the A
 | Max turns (T0 Conversational) | 5 | Text-only chat — shape constraint, not runaway protection |
 | Max turns (T1 / T2 / T3) | `0` (uncapped) | The 8 stuck-pattern detectors (parse-error, tool-repeat, reasoning-repeat, lens-regression, exploration-budget, path-aware error-loop, action-gate, verification-gate) are the safety net. Operator can re-cap any tier with `ATLAS_MAX_TURNS=<n>`. |
 | Exploration budget warning | 4 consecutive reads | Injects "write your changes now" |
-| Exploration budget skip | 5+ consecutive reads | Skips the read, returns warning |
+| Exploration budget escalation | 5+ consecutive reads | Injects a stronger note; the read still runs |
 | Error loop breaker | 3 consecutive failures on the **same path** | Path-aware — same `(tool, path)` 3× breaks the loop; rotating failure paths do not trip it |
 | T2 trigger (V3 activation) | `lines ≥ 10` AND (`hasLogicIndicators` ≥ 2 family matches OR known code/markup extension) | `classifyFileTier` in `proxy/tools.go`. Config files / data exts / styles / prose / shell scripts always T1; under 10 lines always T1; recognized code/markup extensions auto-T2 even without logic-indicator matches. |
 | write_file rejection | Existing files > 5 lines | Forces `structural_edit` (whole node, .py/.html/.htm) or `edit_file` (surgical). Skipped when the existing file looks corrupted on disk (self-heal). |
@@ -312,7 +312,7 @@ These 8 safety detectors run in place of a per-tier turn cap. Each fires indepen
 | Tool-call repetition | Same `(tool, args)` signature `3×` within the last `8` calls. `write_file` signatures key on the target path alone — a whole-file rewrite of the same path counts as repetition even when each attempt's content differs; `edit_file`/`structural_edit` keep full-args signatures so distinct surgical edits don't trip it. | `proxy/detectors.go` (`toolRepeatThreshold=3`, `toolRepeatWindow=8`) |
 | Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/detectors.go` (`reasoningRepeatThreshold=2`) |
 | Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens.go`, `gx_thresholds.json` |
-| Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → skip | `proxy/agent.go` |
+| Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → stronger nudge; the read always runs | `proxy/exploration_budget.go` |
 | Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/agent.go` (`consecutiveErrors >= 3` + path match) |
 | Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/structural_edit fired this loop | `proxy/agent.go` (action_gate) |
 | Verification gate | Turn emits `done` after a fix-intent prompt, or after a failed run, with no passing verification run since; or a work request's code has no current run showing it works. A parse, lint, build or a run whose exit status the command hides does not count | `proxy/agent.go` (verification_gate), `proxy/command_evidence.go` |
@@ -466,7 +466,7 @@ Python FastAPI service for isolated code execution with compilation, linting, an
 | `/shell` stderr truncation | 2,000 chars | Last N chars kept |
 | `error_message` truncation | 500 chars | First N chars kept on `/execute` failures |
 | Timeout response | `Execution timed out after Ns` | `/execute` timeout returns `success: false`, `timed_out: true`, `outcome: "timed_out"`, `error_type: "Timeout"`, and this message as the first line of `error_message`. `stdout` and `stderr` hold what the program wrote before it was stopped. The memory, process and output limits answer the same way, with their own `outcome`, `error_type` and first line |
-| Supported languages | 12 | python, javascript, typescript, go, rust, c, cpp, bash, html/htm, xml, json, yaml/yml |
+| Supported languages | 12 to run, 4 more to syntax-check | python, javascript, typescript, go, java, kotlin, rust, c, cpp, ruby, php, bash; syntax checks also html/htm, xml, json, yaml/yml |
 
 ### Background process tools
 
@@ -507,7 +507,7 @@ Both Docker Compose and K3s use the same image with the same entrypoint (`infere
 | `UBATCH_SIZE` | `${ATLAS_UBATCH:-1024}` | `1024` (entrypoint default) | Micro-batch size (`-ub`). Drives the compute-buffer VRAM cost (~ubatch × n_embd × 280 bytes). Set by `atlas tier fit --write`. |
 | `BATCH_SIZE` | `${ATLAS_BATCH:-1024}` | `1024` (entrypoint default) | Logical batch size (`-b`). Normalized to `UBATCH_SIZE` when larger because self-embeddings require `n_batch <= n_ubatch`. Set by `atlas tier fit --write`. |
 | `SLOT_SAVE_PATH` | `/tmp/slots` | `/tmp/slots` | Slot-save directory used by `/slots/0?action=save` |
-| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | same | ASA control-vector path (requires matching `.model` marker). Not forwarded from `.env` by compose — the entrypoint default applies on Docker; the three knobs below *are* forwarded. |
+| `ATLAS_CONTROL_VECTOR` | `/models/ast_edit_steering.gguf` | same | ASA control-vector path (requires matching `.model` marker). Compose forwards it from `.env`, like the three knobs below; an empty value keeps the entrypoint default. |
 | `ATLAS_CONTROL_VECTOR_SCALE` | `0.5` | same | Scale applied to the control vector |
 | `ATLAS_CONTROL_VECTOR_LAYER_RANGE` | (unset → all layers) | same | Optional layer restriction — two space-separated integers, e.g. `"24 30"`, passed to `--control-vector-layer-range` |
 | `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED` | `0` | same | Emergency opt-out of the `.model` marker gate. Setting `1` can apply an incompatible vector and is not recommended. |
@@ -585,7 +585,7 @@ For K3s deployment only. Copy `atlas.conf.example` to `atlas.conf` and edit. The
 
 > **Note:** `atlas.conf` is only used by K3s deployment scripts. Docker Compose uses `.env` instead. The two files configure different deployment targets and should not be mixed.
 
-> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark ablation runner (`atlas.bench.v3_runner`). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.10).
+> Every variable below is consumed by at least one of: the install/uninstall scripts, the K3s manifest templates, or the benchmark ablation runner (`atlas.bench.v3_runner`). Vars an older `atlas.conf` sets that aren't listed here are ignored (see § 8.9).
 
 ### 8.1 Cluster & Network
 

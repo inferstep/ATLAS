@@ -79,7 +79,7 @@ services:
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
       # Embedding pooling for the Geometric Lens (`--pooling`). `none`
       # returns per-token vectors, which the per-step C(x)/G(x) path
-      # requires; the whole-text path pools and L2-normalizes them
+      # requires; the whole-text path mean-pools the raw vectors
       # client-side, so it reads the same vector it would under `mean`.
       # `--pooling` is server-global in llama.cpp, so one mode has to
       # serve both consumers and only `none` carries enough information.

@@ -27,7 +27,7 @@ Charm stack — `bubbletea`, `bubbles`, `lipgloss`, `glamour`, `x/*`,
 (lens/sandbox — MIT/BSD/Apache-2.0); `numpy` (BSD-3); `xgboost` /
 `xgboost-cpu` (Apache-2.0); `scikit-learn` (BSD-3); `jinja2` (BSD-3,
 the sandbox's template check); `torch` (BSD-style,
-lens + v3-service images and the `train` extra); `defusedxml` (PSF);
+the lens image and the `train` extra); `defusedxml` (PSF);
 `tree-sitter` + grammar packages (MIT); `python-multipart`
 (Apache-2.0); `gguf` (MIT); `huggingface_hub`
 (Apache-2.0); `psutil` (BSD-3); `pytest`, `ruff`, `mypy`, `requests`

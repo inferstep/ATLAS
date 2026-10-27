@@ -120,9 +120,13 @@ analysed. In particular:
   carry the same `request_id` with a proxy-owned `proxy-lens:` invocation
   derived from it in the same historical header (ARCHITECTURE, attribution
   on model-bound calls); that value is a join key too, never an authority.
-- **No record decides anything.** Every record carries
-  `influences_live_decision: false`, and that is enforced structurally rather
-  than by convention.
+- **`influences_live_decision` says whether a record's answer decided
+  anything.** It is `false` on observation records. It is `true` on the
+  records of an answer that decides or prevents a delivery: the authorization
+  decision when the request declared its output knowledge or the target was
+  grounded in the model's structured call, the delivery policy when it
+  delivers, a mutation scope, and a capture-only suppression
+  ([CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md)).
 
 ## Runbooks
 

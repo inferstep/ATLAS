@@ -227,7 +227,7 @@ Three checks keep a broken file from landing as a clean write. Each names the re
 | `replace_lines` | Replace a line range (`start_line`..`end_line`, as `read_file` prints them) with new content. For CHANGING code without reproducing it: the anchor is two asserted lines (first and last of the range, whitespace-insensitive) rather than the whole span, so the verbatim burden is 2 lines instead of N. Capped at 60 lines per call — a whole JavaScript function inside a template is the unit of work, and it does not fit in less | No |
 | `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
 | `delete_file` | Delete file or empty directory (forces loop exit after) | No |
-| `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. The supported path for "reorganize the files" since shell `mv`/`cp` are refused | No |
+| `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. One call for "reorganize the files"; shell `mv`/`cp` through `run_command` also work | No |
 | `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
 | `search_files` | Regex search across file contents (max 200 matches, skips .git/node_modules) | Yes |
 | `list_directory` | List directory contents with type and size | Yes |

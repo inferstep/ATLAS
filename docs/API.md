@@ -83,7 +83,7 @@ Tool-based agent endpoint. Sends a user message, runs the agent loop (LLM → to
 
 **Response:** `text/event-stream` of `data: {...}\n\n` lines. The proxy flushes a `: connected\n\n` SSE comment on connect so clients see HTTP/200 immediately, then emits typed events for the duration of the turn, terminated by `data: [DONE]\n\n`.
 
-**The lens is required** ([ADR 0011](adr/0011-the-lens-is-required.md)). Before any work, the proxy checks that the Geometric Lens can score (the same check as `/ready`; the answer is cached for 5 s). If it cannot, the request gets a plain HTTP 503 error envelope, not a stream: `error` is `dependency_down`, and `detail` says why and to run `atlas doctor`. If the lens stops scoring during the run, the run ends with `done` `status: "failed"`, `reason: "lens_unavailable"`; the tool call that needed the score is answered with `success: false`, and the summary says whether earlier changes are on disk.
+**The lens is required** ([ADR 0011](adr/0011-the-lens-is-required.md)). Before any work, the proxy checks that the Geometric Lens can score (the same check as `/ready`; the answer is cached for 5 s). If it cannot, the request gets a plain HTTP 503 error envelope, not a stream: `error` is `dependency_unavailable`, and `detail` says why and to run `atlas doctor`. If the lens stops scoring during the run, the run ends with `done` `status: "failed"`, `reason: "lens_unavailable"`; the tool call that needed the score is answered with `success: false`, and the summary says whether earlier changes are on disk.
 
 #### Event types on `/v1/agent`
 
@@ -472,7 +472,7 @@ data: [DONE]
 
 Each progress event has the shape `{"stage": "<name>", "detail": "<human-readable>", "data": {...}}`. The `data` object carries structured fields specific to that stage (counts, indices, timings, strategy labels) — the proxy bridge fans these out into the dedicated `v3_*` events on `/v1/agent`. Older stages without `data` enrichment still emit `stage` + `detail` only and continue to flow through `v3_progress`.
 
-The proxy's `tools.go` bridge translates these into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
+The proxy reads this stream in `v3_bridge.go`, and `tools.go` translates the stages into `v3_progress` / `v3_token` / `v3_llm_start` / `v3_llm_end` events on the `/v1/agent` stream — direct callers see the raw V3 stages.
 
 <details>
 <summary><b>All SSE stage values</b></summary>
@@ -944,7 +944,7 @@ the caller's question; the executor has no way to know.
 The proxy uses this for candidate staging — see
 [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md). Stdout is truncated to its last 4000 chars and stderr to its last 2000 server-side; the proxy's `run_command` bridge applies its own caps (stdout 8000 / stderr 4000) on top. State is **not** persistent between calls — each call is its own subprocess. To preserve state (e.g. an installed pip package) chain commands with `&&` in a single call, or rely on a project venv that survives across calls because it lives on the bind-mounted workspace.
 
-The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps one `bash -c "…"` / `eval "…"` layer so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
+The proxy's destructive-verb gate (`validateShellCommand`) blocks catastrophic commands — fork bombs, `rm -rf /`-class whole-project wipes, `find … -delete` / `-exec rm` from a search root, `dd`/`mkfs`/`wipefs` against block devices — and unwraps `bash -c "…"` / `eval "…"` wrappers, up to 16 layers, and refuses a wrapper it cannot check so the inner command is checked too, *before* the call ever reaches `/shell`. Ordinary `mv`, `cp`, and targeted `rm` of specific files are allowed. This endpoint is the executor, not the gate.
 
 ### POST /execute
 
@@ -1043,17 +1043,23 @@ curl http://localhost:30820/languages
 ```json
 {
   "languages": {
-    "python": "Python 3.11.2",
-    "javascript": "v20.11.0",
-    "typescript": "5.3.3",
-    "go": "go1.22.0",
-    "rust": "rustc 1.77.0",
-    "c": "gcc 13.2.0",
-    "cpp": "g++ 13.2.0",
-    "bash": "GNU bash 5.2.21"
+    "python": "Python 3.13.16",
+    "javascript": "v24.22.0",
+    "typescript": "Version 7.0.2",
+    "go": "go version go1.27.2 linux/amd64",
+    "java": "javac 21.0.13",
+    "kotlin": "",
+    "ruby": "ruby 3.3.8 (2025-04-09 revision b200bad6cd) [x86_64-linux-gnu]",
+    "php": "PHP 8.4.27 (cli) (built: Oct 21 2026 07:53:46) (NTS)",
+    "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "c": "gcc (Debian 14.2.0-19) 14.2.0",
+    "cpp": "g++ (Debian 14.2.0-19) 14.2.0",
+    "bash": "GNU bash, version 5.2.37(1)-release (x86_64-pc-linux-gnu)"
   }
 }
 ```
+
+Each value is the first line the tool's version command prints on stdout within 5 seconds. Kotlin's is empty: `kotlinc -version` printed no such line.
 
 **Supported languages:** `python` (aliases: `py`, `python3`), `javascript` (`js`, `node`), `typescript` (`ts`), `go` (`golang`), `java`, `kotlin` (`kt`, `kts`), `rust` (`rs`), `c`, `cpp` (`c++`), `ruby` (`rb`), `php`, `bash` (`sh`, `shell`)
 

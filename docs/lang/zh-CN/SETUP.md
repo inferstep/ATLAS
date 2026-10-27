@@ -435,7 +435,7 @@ atlas doctor -v           # verbose: show detail for each check
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 全部 5 个都在运行且健康 |
 | Stack | health/llama, lens, v3, sandbox, proxy | 全部 5 个 `/health` 端点返回 ok |
 | Stack | internal_auth | 内部服务认证：token 文件存在且权限收紧，并从两个方向实际探测在线校验（错误 token → 401，有效 token 被接受）；认证被禁用时（没有 `secrets/service-token`）给出警告 |
-| Stack | status_dimensions | 信息性检查：来自代理 `/v1/calibration/status` 的七个 lens/ASA 状态维度（与 TUI 徽标读取的是同一来源）；从不导致运行失败 |
+| Stack | status_dimensions | 来自代理 `/v1/calibration/status` 的七个 lens/ASA 状态维度（与 TUI 徽标读取的是同一来源） |
 | Stack | image_skew | 全部 5 个 `atlas-*` 镜像在同一标签上 |
 | End-to-end | e2e_smoke | 到 llama-server 的一次真实 `/v1/chat/completions` 往返（`--quick` 可跳过） |
 
@@ -820,7 +820,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ## Geometric Lens 权重（必需）
 
-ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。lens 需要所服务模型的 C(x) 与 G(x) 权重。缺少它们时，代理会以 HTTP 503 `dependency_down` 拒绝每个请求并说明原因，`atlas doctor` 也会失败。有权重但尚未校准的 lens 是可接受的：它能打分，其阈值干预会等待校准。
+ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。lens 需要所服务模型的 C(x) 与 G(x) 权重。缺少它们时，代理会以 HTTP 503 `dependency_unavailable` 拒绝每个请求并说明原因，`atlas doctor` 也会失败。有权重但尚未校准的 lens 是可接受的：它能打分，其阈值干预会等待校准。
 
 在 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
 
