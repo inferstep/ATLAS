@@ -1,18 +1,12 @@
 """Stage telemetry of the V3 pipeline: the table of which stage closes which
 phase, the fold of a run's events into the per-task summary rows, the
-telemetry directory, the lock the summary appends share, and the run's
-emit(), which records its progress events and streams them."""
+telemetry directory, and the run's emit(), which records its progress
+events and streams them."""
 
 import os
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-# Serializes pipeline-summary appends across the ThreadingHTTPServer's
-# request threads. Stage JSONL appends need no lock: each event is one
-# small O_APPEND write.
-_SUMMARY_LOCK = threading.Lock()
 
 _TELEMETRY_DISABLE_VALUES = {"0", "off", "none", "disabled", "false"}
 
@@ -45,8 +39,6 @@ for _phase, _stages in {
 }.items():
     for _s in _stages:
         _STAGE_PHASE[_s] = _phase
-
-_VETO_STAGES = frozenset(("lens_veto", "structural_veto", "call_graph_veto"))
 
 
 def _resolve_telemetry_dir() -> Optional[Path]:

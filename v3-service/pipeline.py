@@ -42,16 +42,23 @@ import contract
 import scoring
 import symbols
 from runtime_verification import PythonImportComparison
-from stage_telemetry import (_SUMMARY_LOCK, _VETO_STAGES, _progress_emitter, _resolve_telemetry_dir,
-                             _summarize_phases)
+from stage_telemetry import _progress_emitter, _resolve_telemetry_dir, _summarize_phases
 from candidate_records import (INCUMBENT_INDEX, _announce_selection, _candidate_lens_payload,
                                _ensure_delivered_evidence, _lens_view, _note_lens, _record_closes,
                                _select_by_contract, _task_identity, _without_retypings)
 from vetoes import _call_graph_veto, _lens_veto, _structural_veto
 
+# Serializes pipeline-summary appends across the ThreadingHTTPServer's
+# request threads. Stage JSONL appends need no lock: each event is one
+# small O_APPEND write.
+_SUMMARY_LOCK = threading.Lock()
+
+_VETO_STAGES = frozenset(("lens_veto", "structural_veto", "call_graph_veto"))
+
 BASE_TEMPERATURE = 0.6
 DIVERSITY_TEMPERATURE = 0.8
 MAX_TOKENS = 8192
+DEFAULT_WORKING_DIR = "/workspace"
 
 
 def _remaining_budget_ms(start: float, cap_ms: Optional[float] = None) -> Optional[float]:
@@ -1827,7 +1834,7 @@ def _check_repair(ctx, failing, pr_result, repair_code, verified_sandbox, _task)
         tokens=getattr(pr_result, "total_tokens", 0),
         latency_ms=getattr(pr_result, "total_time_ms", 0.0),
         parent_code=(failing[0].code if failing else None))
-    passed, stdout, stderr, repair_evidence = verified_sandbox(repair_code)
+    passed, _, _, repair_evidence = verified_sandbox(repair_code)
     # Repairs are late-generated candidates.  In evidence
     # mode they need the same observational Lens record as
     # phase-one candidates; otherwise a successful repair
@@ -2019,7 +2026,7 @@ class _CandidateVerifier:
             build_command=build_command,
             file_path=file_path,
             project_files=files,
-            working_dir=working_dir or "/workspace",
+            working_dir=working_dir or DEFAULT_WORKING_DIR,
             emit=emit,
         )
         if evidence:
@@ -2148,7 +2155,7 @@ class V3PipelineService:
     def run(self, problem: str, task_id: str = "cli",
             progress_callback=None, files: Dict[str, str] = None,
             file_path: str = "", build_command: str = "",
-            working_dir: str = "/workspace",
+            working_dir: str = DEFAULT_WORKING_DIR,
             baseline_code: str = "",
             diagnostic_total_candidates=None,
             cancel_scope=None,
@@ -2265,7 +2272,7 @@ class V3PipelineService:
     def _run_impl(self, problem: str, task_id: str = "cli",
                   progress_callback=None, files: Dict[str, str] = None,
                   file_path: str = "", build_command: str = "",
-                  working_dir: str = "/workspace", baseline_code: str = "",
+                  working_dir: str = DEFAULT_WORKING_DIR, baseline_code: str = "",
                   diagnostic_total_candidates: int = 0,
                   _capture: Optional["_PoolCapture"] = None,
                   cancel_scope=None,
@@ -2653,7 +2660,7 @@ class V3PipelineService:
             )
             result["total_tokens"] += ref_result.total_tokens
             if ref_result.solved:
-                passed, stdout, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
+                passed, _, stderr, refinement_evidence = verified_sandbox(ref_result.winning_code)
                 # Refinement winners are late-generated candidates too;
                 # apply the same capture-only Lens observation as the
                 # PR-CoT repair path above.

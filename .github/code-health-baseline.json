@@ -27,6 +27,6 @@
   "proxy/tools.go": 6913,
   "proxy/types.go": 2080,
   "sandbox/executor_server.py": 2059,
-  "v3-service/pipeline.py": 2758
+  "v3-service/pipeline.py": 2764
  }
 }
