@@ -302,7 +302,7 @@ func TestOnlyTheOperatorChoosesTheHostAsTheVerifyTarget(t *testing.T) {
 			if got != c.want {
 				t.Errorf("verify target = %q, want %q", got, c.want)
 			}
-			if hasLine := strings.Contains(logged, `names target = "host"; ignored`); hasLine != c.wantLogLine {
+			if strings.Contains(logged, `names target = "host"; ignored`) != c.wantLogLine {
 				t.Errorf("log = %q; want the line that the file's host is ignored: %v", logged, c.wantLogLine)
 			}
 		})
