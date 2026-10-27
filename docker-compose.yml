@@ -211,7 +211,7 @@ services:
       # an unwritable dir disables telemetry, never generation.
       - ATLAS_V3_TELEMETRY_DIR=${ATLAS_V3_TELEMETRY_DIR:-/data/telemetry}
       # Same wall-clock cap the proxy's V3 bridge enforces (seconds,
-      # default 180, 0 disables). The service reads it for the
+      # default 300, 0 disables). The service reads it for the
       # refinement budget gate, so both sides must see one value.
       - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
@@ -505,7 +505,7 @@ services:
       # ATLAS_TRUST_MODE=fully-trusted too; a workspace's
       # .atlas/config.toml may choose only the sandbox.
       - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
-      # PC-200: turn cap override. Tier defaults: T0=5, T1-T3 uncapped
+      # PC-200: turn cap override. Tier defaults: T0=12, T1-T3 uncapped
       # (the error-loop breaker and done-gates bound runaway turns). Set
       # a positive int to cap every tier. Useful for "fix the entire app"
       # prompts that legitimately need more turns.
