@@ -285,7 +285,7 @@ If this works for you on a previously-unsupported card, please leave a note on [
 ```env
 # Add to your .env
 ATLAS_ROCM_TAG=7.2.3-complete
-ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
+ATLAS_GFX_TARGET=gfx1201   # gfx1201 for RX 9070 / 9070 XT, gfx1200 for RX 9060 XT
 ```
 
 Then rebuild and bring up the stack:

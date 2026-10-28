@@ -141,7 +141,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
-| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |
+| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built after the services come up; skipped automatically when no GPU is available) |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | Open the service ports in firewalld (default: off — services bind loopback) |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
@@ -160,7 +160,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
-When complete, prints a green "ATLAS ready" banner with quick-start commands. Total time on a fresh VM with a fast connection: ~10-30 minutes (model download dominates).
+When complete, prints a green "ATLAS ready" banner with quick-start commands.
 
 If you'd rather do each step manually, use Method 1 below.
 
@@ -221,8 +221,7 @@ This is the most heavily exercised deployment method: CI validates the compose f
 **AMD (ROCm):**
 - **Docker** alone — ROCm doesn't need a separate container runtime; passthrough via `--device=/dev/kfd --device=/dev/dri` is enough
 - Your user must be in the `video` and `render` groups: `sudo usermod -aG video,render $USER` (then re-login)
-- ~22 GB disk space (ROCm image is ~2 GB larger than the CUDA equivalent)
-- 30-60 min for the first `up`: the ROCm llama-server image is compiled on your machine rather than pulled (see [AMD ROCm — what's different](#amd-rocm--whats-different))
+- The first `up` compiles the ROCm llama-server image on your machine rather than pulling it (see [AMD ROCm — what's different](#amd-rocm--whats-different))
 
 ### Setup
 
@@ -286,7 +285,7 @@ The ROCm path is identical to NVIDIA *except* for these four points:
    ```
    The override switches the llama-server image to the ROCm build, swaps the NVIDIA driver request for `/dev/kfd` + `/dev/dri` passthrough, and forces `ATLAS_BACKEND=rocm` so the entrypoint takes the HIP-tuning branch.
 
-2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`: 30-60 min the first time, seconds afterwards from the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
+2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
    ```
@@ -312,7 +311,7 @@ For "I have an unsupported GPU but ROCm sort-of works on it" cases (older Vega, 
 
 When the native vendor backend isn't packaged for your hardware (Intel Arc, Snapdragon Adreno, older AMD without ROCm 6.x), Vulkan is the fallback. One Dockerfile covers AMD (Mesa RADV), Intel (Mesa ANV), NVIDIA (nvidia-container-toolkit), Apple (MoltenVK via macOS Docker), Snapdragon (Adreno), and CPU (Mesa lavapipe).
 
-Tradeoff: typically 20–40% slower than tuned native backends. Use it when CUDA/ROCm isn't an option, or to smoke-test whether ATLAS boots on unusual hardware.
+Use it when CUDA/ROCm isn't an option, or to smoke-test whether ATLAS boots on unusual hardware.
 
 ```bash
 # Option A — let atlas init pick it for you
@@ -384,17 +383,17 @@ For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t
 **Known gaps (#115 tracks these):**
 
 - Only `atlas-llama-vulkan` is published for arm64 (on release tags); the CUDA llama image and the proxy, V3, lens and sandbox images are amd64 only, so arm64 users build those locally with the recipes above.
-- Bootstrap installer (`scripts/atlas-bootstrap.sh`) hasn't been audited for arm64 paths.
-- Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/inferstep/ATLAS/issues/115).
+- The bootstrap installer is not tested on arm64 (its CI test runs on amd64 only).
+- Reports from any of these devices are welcome: drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/inferstep/ATLAS/issues/115).
 
 ### What Happens on First Run
 
 1. Docker pulls 5 prebuilt container images from
-   `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` (~3 min on a
-   fast connection). To build from source instead (the dev path), run
+   `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}`. To build from
+   source instead (the dev path), run
    `docker compose build` before the `up` step — see "Image source"
    below.
-2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
+2. llama-server loads the 7GB model into GPU VRAM
 3. All services start health checks
 4. Once all 5 services (llama-server, geometric-lens, v3-service, sandbox, atlas-proxy) report healthy, `atlas` connects and launches the Bubbletea TUI
 
@@ -443,8 +442,8 @@ The exact number of checks varies with backend, stack state, and flags.
 This is also what `atlas-bootstrap.sh` runs at the end of install.
 
 ```bash
-atlas doctor              # full check (~5–10s)
-atlas doctor --quick      # skip the e2e model inference (~2s)
+atlas doctor              # full check
+atlas doctor --quick      # skip the e2e model inference
 atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON document)
 atlas doctor -v           # verbose: show detail for each check
 ```
@@ -461,7 +460,7 @@ The checks:
 | Host | metal-native | native llama-server binary present and executable — only when `ATLAS_BACKEND=metal` (macOS hybrid) |
 | Host | model_file | The `ATLAS_MODEL_FILE` selected in `.env` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) artifacts present |
-| Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered structural_edit-vs-edit_file bias) |
+| Host | asa_steering | `ast_edit_steering.gguf` present (warn-not-fail; ATLAS works without it, just unsteered structural_edit-vs-edit_file bias) |
 | Host | tier_match | `.env` model selection matches host hardware (warn on overshoot — OOM risk — pass on match or undershoot) |
 | Host | grammar_mode | `ATLAS_GRAMMAR_MODE` matches the registry's profile for the selected model (warns on a mismatch) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
@@ -818,7 +817,7 @@ Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 
 # Compose-native rebuild — only llama-server is rebuilt, the other
-# services keep using the GHCR images (~30-75 min, one time):
+# services keep using the GHCR images:
 docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
@@ -843,7 +842,7 @@ Common values:
 
 #### AMD GPU Targets (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. Each additional target adds ~150 MB to the binary.
+`inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
 
 Override at build time with `--build-arg GFX_TARGET=<value>` (or via `ATLAS_GFX_TARGET` env var, which the compose override forwards):
 
@@ -868,8 +867,8 @@ Common values:
 | `gfx90a` | CDNA2 | MI210, MI250, MI250X |
 | `gfx942` | CDNA3 | MI300X |
 | `gfx900` | Vega | Vega 56/64 (may need HSA override — see TROUBLESHOOTING.md) |
-| `gfx1200` | RDNA4 (Navi 44) | RX 9070 |
-| `gfx1201` | RDNA4 (Navi 48) | RX 9070 XT |
+| `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
+| `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
 > **RDNA4 (gfx1200/gfx1201) users:** set `ATLAS_ROCM_TAG=7.2.3-complete` — the default ROCm 6.2 base image does not include gfx1200/gfx1201 compiler support. ROCm 7.0+ supports these targets natively; do not set `ATLAS_HSA_OVERRIDE_GFX_VERSION`. See [TROUBLESHOOTING.md § RDNA4](TROUBLESHOOTING.md) for details.
 
@@ -965,10 +964,10 @@ Full reference: [CLI.md § atlas lens](CLI.md#atlas-lens).
 
 ## ASA Steering Vector (Auto-Built)
 
-May 2026 BiasBusters #4. A residual-stream steering vector that biases
-the model toward `structural_edit` over `edit_file` for whole-function /
-class / element rewrites, applied **before** the grammar gate has a
-chance to reject anything. Strictly optional — ATLAS continues to work
+A residual-stream steering vector that biases the model toward
+`structural_edit` over `edit_file` for whole-function / class / element
+rewrites, applied **before** the grammar gate has a chance to reject
+anything. Strictly optional — ATLAS continues to work
 without it, just with an unsteered tool-selection bias.
 
 `atlas-bootstrap.sh` builds it automatically after the services come
@@ -991,10 +990,9 @@ up. The pipeline is:
    stays **disabled** (the startup banner reports why) — vectors are
    residual-space artifacts tied to one model.
 
-Total wall time on a 16GB GPU: ~5 minutes. Build runs on the same
-hardware the model lives on; the resulting vector is model-specific
-(do not move an `ast_edit_steering.gguf` built against
-one model's artifacts to a host running a different base model).
+The build runs on the same hardware the model lives on; the resulting
+vector is model-specific (do not move an `ast_edit_steering.gguf` built
+against one model's artifacts to a host running a different base model).
 
 > The `ast_edit_steering` filename is intentional and stable: the registry
 > SHA-pins it and the `.model` marker sits beside it, so it keeps the name
