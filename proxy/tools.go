@@ -195,16 +195,13 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 		}
 	}
 
-	// Distinguish "no args field at all" from "malformed args".
-	// The model occasionally emits {"type":"tool_call","name":"read_file"}
-	// with no "args" key, which lands here as nil/empty bytes. Calling
-	// json.Unmarshal on that returns "unexpected end of JSON input" — the
-	// same string a *truncated* response produces — and the old remap
-	// branch below would then tell the model "your output was truncated,
-	// use smaller edit_file calls" which is not just unhelpful, it
-	// actively steers the model away from the read_file/list_directory
-	// it was trying to make. Catch the empty case here and return a
-	// per-tool hint that tells the model exactly what shape to send.
+	// Distinguish "no args field at all" from "malformed args". The model
+	// sometimes emits a tool_call with no args key, which lands here as
+	// nil or empty bytes, and json.Unmarshal on that returns "unexpected
+	// end of JSON input", the same error a truncated response produces,
+	// which says nothing about the shape the call needs. Catch the empty
+	// case here and return a per-tool hint that tells the model exactly
+	// what shape to send.
 	trimmed := strings.TrimSpace(string(args))
 	if trimmed == "" || trimmed == "null" {
 		return &ToolResult{
@@ -222,14 +219,12 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 			MutationStatus: MutationNone,
 			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
 	}
-	// The user forbade changing anything. Enforced HERE, at the one dispatch
-	// every tool passes through, and keyed on the tool's DECLARED effect --
-	// not on a tool-name list (which has gone stale repeatedly) and not on the
-	// system prompt, which a model can simply not follow. That makes the
-	// guarantee hold for arbitrary shell and background jobs
-	// (ToolEffectCommandUnobserved: `sed -i`, `rm`, a `>` redirect) exactly as
-	// it does for write_file. Measured on the 38eaa0a benchmark: 6 sessions
-	// edited a fixture after the user wrote "do not change any code".
+	// The user forbade changing anything. Enforced here, at the one dispatch
+	// every tool passes through, and keyed on the tool's declared effect, not
+	// on a tool-name list (which goes stale) and not on the system prompt,
+	// which a model can simply not follow. That makes the guarantee hold for
+	// arbitrary shell and background jobs (ToolEffectCommandUnobserved:
+	// `sed -i`, `rm`, a `>` redirect) exactly as it does for write_file.
 	if reason := readOnlyRequestRefusal(tool, ctx); reason != "" {
 		log.Printf("[tools] %s refused: the request forbids changing the workspace", name)
 		return &ToolResult{Success: false, Error: reason,
@@ -330,12 +325,10 @@ func readFileTool() *ToolDef {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
 
-			// Binary-file guard: reading a compiled binary / image /
-			// archive as text returns garbage the model can't use, after
-			// which it gives up or loops (observed 2026-07-19,
-			// extract-elf: read the ELF as text, never reached for the
-			// analysis tools that were installed). Point it at the right
-			// tools instead of handing back the raw bytes.
+			// Binary-file guard: a compiled binary, image or archive
+			// read as text gives the model bytes it cannot use, and it
+			// then gives up or loops. Point it at the inspection tools
+			// instead of returning the raw bytes.
 			if isBinaryContent(data) {
 				return &ToolResult{
 					Success: false,
@@ -425,16 +418,12 @@ func numberedReadFileLines(lines []string, start, end int) string {
 // and appends the notice that says so. It returns the text, whether it was
 // cut, and the line after the last one it still shows.
 func capReadFileBytes(content string, input ReadFileInput, data []byte, start, end, totalLines int) (string, bool, int) {
-	// Cap the returned BYTES so one huge read can't blow the
-	// model's context window. A model that gunzips a data file
-	// and read_files it (observed 2026-07-19, gcode-to-text: a
-	// decompressed G-code file read with limit:100000 -> 2.26M tokens
-	// -> hard 400 exceed_context_size, which the force-trim retry
-	// can't fix because the single message alone overflows). The cap
-	// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
-	// lines of G-code is enormous), so capping only unbounded reads
-	// left the hole open. Truncate at a line boundary and tell the
-	// model to narrow the range or process the file with a command.
+	// Cap the returned bytes so one huge read cannot blow the model's
+	// context window: a single message that alone overflows the window
+	// is something the force-trim retry cannot fix. The cap is
+	// unconditional, because a line `limit` does not bound bytes (100k
+	// lines of G-code is enormous). Truncate at a line boundary and
+	// append the notice from readFileTruncationNotice.
 	truncated := false
 	shownEnd := end // 1-past the last line actually returned
 	if len(content) > maxReadFileBytes {
@@ -978,21 +967,19 @@ func writeFileTool() *ToolDef {
 
 			fileTier := writeFileTier(ctx, input)
 
-			// V3 pipeline fires on T2+ files when V3 service is available.
-			// V3 takes the model's content as baseline candidate, generates diverse
-			// alternatives via PlanSearch/DivSampling, build-verifies each, and
-			// selects the best. This is the intelligence layer.
+			// V3 pipeline fires on T2+ files when the V3 service is available.
+			// V3 takes the model's content as the baseline candidate, generates
+			// diverse alternatives via PlanSearch/DivSampling, build-verifies
+			// each, and selects the best.
 			//
-			// EXCEPT during an active edit-test-fix loop: once the model has
-			// written this file and just saw it fail a run, the next write is
-			// a targeted fix, and V3's full pipeline (minutes per call, and on
-			// a mid-debug file frequently "completes without result" and falls
-			// back anyway) throttles iteration to a handful of cycles.
-			// Observed 2026-07-19: a polyglot task got ~5 writes in 25 min,
-			// ~4 min of V3 stall each, when it needed 10-15 fast cycles.
-			// Fast-path (direct, still syntax-gated below) so the model can
-			// iterate at run speed. V3 still owns the FIRST write of each
-			// file (the baseline generation where it adds value).
+			// Except during an active edit-test-fix loop: once the model has
+			// written this file and just saw it fail a run, the next write is a
+			// targeted fix, and V3's full pipeline (minutes per call, and on a
+			// mid-debug file it often completes without a result and falls back
+			// anyway) throttles iteration to a handful of cycles. Fast-path it
+			// (direct, still syntax-gated below) so the model can iterate at
+			// run speed. V3 still owns the first write of each file, the
+			// baseline generation where it adds value.
 			iterating := isActiveDebugIteration(ctx, input.Path)
 
 			return writeFileByRoute(ctx, input, path, fileTier, iterating)
@@ -1059,24 +1046,21 @@ func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, file
 	if refusal != nil {
 		return refusal, nil
 	}
-	// Content that does not parse gets the error now, not after the
-	// V3 timeout. V3 improves a working candidate; it does not exist
-	// to guess what a malformed one meant, and the post-V3 fallback
-	// rejects an unparseable baseline anyway — so spending the budget
-	// first only delays the same answer. The fast-path above cannot
-	// cover this: it keys off a SUCCESSFUL write of the file, and a
-	// model failing the syntax gate never records one, so it paid the
-	// full timeout on every attempt. Observed live: a degenerating
-	// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
-	// four times, each costing 180s before it was told anything.
-	// One owner for whether the producer is consulted, and for why
-	// it was not. Identical to the condition it replaces; what is new
-	// is that the skip says which threshold turned it away.
-	// The typed predicate, named at the site that reaches the
-	// producer. The owner below decides WHICH reason applies and in
-	// what order; this is the dependency being visible where the
-	// dispatch happens, so a reader looking at the call that reaches
-	// generation can see that disabling generation reaches it.
+	// Content that does not parse skips V3. V3 improves a working candidate; it
+	// does not exist to guess what a malformed one meant, and the post-V3
+	// fallback rejects an unparseable baseline anyway, so spending the budget
+	// first only delays the same answer. The active-debug fast path cannot
+	// cover this: it keys off a successful write of the file, which a model
+	// failing the syntax gate never records.
+	//
+	// One owner decides whether the producer is consulted and records which
+	// threshold turned it away.
+	//
+	// The typed predicate, named at the site that reaches the producer. The
+	// owner below decides which reason applies and in what order; this is the
+	// dependency being visible where the dispatch happens, so a reader looking
+	// at the call that reaches generation can see that disabling generation
+	// reaches it.
 	writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
 	recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
 		fileTier, strings.Count(input.Content, "\n")+1)
@@ -1374,24 +1358,18 @@ func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
 // parse, and refused when they break an embedded script or repeat the entry
 // point.
 func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, proposalCheck checkOutcome) (*ToolResult, error) {
-	// A NEW file that does not parse is unambiguously wrong, so the
-	// direct path gates it. The healthy->broken rule the gate uses
-	// elsewhere needs an "before" state; a file being created has
-	// none, which is exactly why this case is decidable.
-	//
-	// This path was ungated because the sandbox's YAML checker
-	// rejected multi-document files — valid YAML, and the shape every
-	// Kubernetes and Compose manifest uses. That checker is fixed
-	// (safe_load_all), so the one reason to skip the gate here is
-	// gone. Observed: a 4-line test_discount.py with an unterminated
-	// string reached disk through this path.
-	// os.Stat, not readOriginalForGate: that helper returns ("", true)
-	// for a MISSING file — its bool means "usable as a baseline", not
-	// "exists" — so testing it here silently skipped the gate.
-	// Destination absence is determined ONCE, and when the file is
-	// new the structured checker is evaluated ONCE. This route owns a
-	// real observation, so it overlays it onto the result afterwards
-	// rather than leaving writeFileDirect's conservative default.
+	// A new file is checked here: a file being created has no "before"
+	// state for the healthy->broken rule, so whether it parses is
+	// decidable, and a new file that does not parse lands with a
+	// warning (writeNewFileWithWarning) so the model can run it and
+	// read the real traceback. os.Stat, not readOriginalForGate: that
+	// helper returns ("", true) for a missing file (its bool means
+	// "usable as a baseline", not "exists"), so testing it here would
+	// skip the check. Destination absence is determined once, and when
+	// the file is new the structured checker is evaluated once. This
+	// route owns a real observation, so it overlays it onto the result
+	// afterwards rather than leaving writeFileDirect's conservative
+	// default.
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
 	newFileCheck := checkOutcome{Status: ValidationUnknown}
@@ -1547,16 +1525,15 @@ func mentionsFilename(text, base string) bool {
 }
 
 // readFileByteCap returns the byte cap for a single read_file result.
-// Derived from the per-slot context so one read can't overflow it — and
-// sized for the WORST-CASE tokenization of ~1 token/char (dense content:
-// G-code, minified JS, base64), not the chars/4 average. A fixed 120 KB
-// cap was safe for prose but not dense content: a gcode-to-text task read a
-// capped 120 KB G-code page that still tokenized to 120k tokens and 400'd
-// the 32k slot. Half the per-slot context in bytes guarantees even
-// 1-token/char content uses at most half the window, leaving room for the
-// system prompt, tools, and reply; the force-trim retry then handles
-// any residual pressure since no single message is huge. Clamped
-// to [2 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
+// Derived from the per-slot context so one read cannot overflow it, and
+// sized for the worst-case tokenization of ~1 token/char (dense content:
+// G-code, minified JS, base64), not the chars/4 average: a fixed byte cap
+// that is safe for prose can still overflow the slot with dense content.
+// Half the per-slot context in bytes guarantees even 1-token/char content
+// uses at most half the window, leaving room for the system prompt, tools,
+// and reply; the force-trim retry then handles any residual pressure since
+// no single message is huge. The derived value is clamped to [2 KB, 200
+// KB]. ATLAS_MAX_READ_BYTES overrides it, unclamped.
 func readFileByteCap() int {
 	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -1593,8 +1570,10 @@ var maxReadFileBytes = readFileByteCap()
 // (UTF-8/ASCII) never contain NUL, while compiled binaries, images, and
 // archives are full of them. Scans a bounded head so a large file is cheap.
 func isBinaryContent(data []byte) bool {
-	// UTF-16/UTF-32 text legitimately contains NUL bytes; a Unicode BOM
-	// identifies it as text, not binary (#147 review finding #7).
+	// UTF-16 and UTF-32 text legitimately contains NUL bytes; a Unicode
+	// BOM identifies it as text, not binary. Checked: the UTF-16 LE/BE
+	// and UTF-8 BOMs (a UTF-32 LE BOM starts with the UTF-16 LE bytes;
+	// UTF-32 BE is not recognized).
 	if len(data) >= 2 {
 		b0, b1 := data[0], data[1]
 		if (b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) { // UTF-16 LE/BE
@@ -1744,12 +1723,9 @@ func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *
 // writeFileRecorded is writeFileDirect plus the body-seen record.
 //
 // Content the model authored is content it has seen, and that has to hold
-// whichever write path ran. Recording it only on the T1 direct write left
-// every V3-path write unmarked, so the evidence gate fired on files the
-// model had just created: measured on run 18, 11 of 12 gate firings were
-// solve.py or test_stats.py, each written through writeFileWithV3 moments
-// earlier. Wrapping the single function all four call sites funnel through
-// is what keeps a fifth from reintroducing it.
+// whichever write path ran; otherwise the evidence gate fires on files the
+// model has just created. Every write path reaches writeFileDirect through
+// this one function, so a new path cannot skip the record.
 func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, error) {
 	res, err := writeFileDirect(path, content)
 	if err == nil && res != nil && res.Success && ctx != nil {
@@ -1758,12 +1734,6 @@ func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, er
 	return res, err
 }
 
-// writeFileDirect writes content to disk atomically (write tmp + rename).
-// The proxy is the only thing downstream that touches the filesystem —
-// the TUI is read-only at the workspace level — so this is where any
-// write_file tool call ultimately lands. Without this the file would
-// vanish into the void ("agent says it wrote the file but it isn't
-// there" bug).
 // classifiedError carries mutation/validation facts alongside a real error,
 // so the site that OWNS the evidence can state them without changing the
 // (nil, err) contract callers branch on. The V3 route and every other caller
@@ -1853,10 +1823,10 @@ func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolRes
 	return res, nil
 }
 
-// atomicReplaceFile is the write-then-rename the mutating tools have always
-// used, as one primitive. A reader of the target either sees the old bytes or
-// the new ones, never a partial file, and a failed rename leaves the target
-// untouched with the temp file cleaned up.
+// atomicReplaceFile is the write-then-rename of the mutating tools as one
+// primitive (edit_file and structural_edit still inline it). A reader of the
+// target either sees the old bytes or the new ones, never a partial file, and
+// a failed rename leaves the target untouched with the temp file cleaned up.
 func atomicReplaceFile(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("cannot create parent dir for %s: %w", path, err)
@@ -1872,6 +1842,8 @@ func atomicReplaceFile(path string, content []byte) error {
 	return nil
 }
 
+// writeFileDirect writes content to disk atomically (temp file plus rename, see
+// atomicReplaceFile). This is where any write_file tool call ultimately lands.
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := atomicReplaceFile(path, []byte(content)); err != nil {
 		return nil, failedMutation(path, err)
@@ -1973,13 +1945,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
-	// Files this session WROTE are project context too — previously only
-	// files the model had read were included, so written-but-never-read
-	// siblings were invisible to candidate generation (2026-07-18: V3
-	// generated an app.py blind to the session's own templates/index.html
-	// and static/game.js, and the winner inlined its page, orphaning
-	// both). Disk content wins over any stale read snapshot: the on-disk
-	// version is what verification produced.
+	// Files this session wrote are project context too; otherwise
+	// siblings written but never read are invisible to candidate
+	// generation. Disk content wins over any stale read snapshot: the
+	// on-disk version is what verification produced.
 	for rel := range ctx.SessionWrites {
 		if rel == "" {
 			continue
@@ -2008,15 +1977,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
-	// THE production call path for invocation feasibility. It asks, before a
-	// single candidate is generated, whether this task could close at all --
-	// the question the sealed Stage-A run answered 103 times, once per
-	// candidate, after generating each.
+	// The production call path for invocation feasibility: before a single
+	// candidate is generated, record whether this task could close at all. The
+	// answer is recorded only; generation proceeds whatever it concludes.
 	//
-	// It sits ABOVE the "V3 is taking over" message on purpose: under enforce
-	// a skipped invocation must not first tell the user a pipeline is running.
-	// Under observe the answer is recorded and generation proceeds exactly as
-	// it did at e8fefe8, whatever it concludes.
 	// One entry of the candidate-generation route, named before anything is
 	// decided about it. Every record this attempt produces carries it, so a
 	// retry's work can never be mistaken for this one's.
@@ -2241,17 +2205,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// no longer the one to name.
 	ctx.clearV3Unchecked(path)
 
-	// Write the winning candidate (or baseline if V3 didn't improve).
+	// Write the winning candidate, or the baseline if V3 did not improve. The
+	// presence of Code is not authorization: an unverified alternative must
+	// never displace the baseline, and delivery is decided below by the proxy's
+	// policy over evidence it produced about these exact bytes.
 	//
-	// The authorization to replace the caller's content is `Passed`, not the
-	// presence of `Code`. Today Python only fills Code when a candidate
-	// passed, so this held by construction — but that is an invariant on the
-	// far side of a JSON boundary, and the evidence work deliberately
-	// introduces a "best_record" that is the strongest available candidate
-	// while NOT being closure-eligible. Returning its code for diagnostics
-	// would have silently made it the delivered artifact. An unverified
-	// alternative must never displace the baseline.
-	// The structured intent of THIS call: write_file, this canonical target,
+	// The structured intent of this call: write_file, this canonical target,
 	// the caller's own bytes as the proposal. Derived before anything is
 	// decided, from the call rather than from the prose, and consulted only to
 	// narrow what a candidate may touch.
@@ -2306,19 +2265,20 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	checkedFor := code
 
-	// THE production call path for the proxy-owned syntax producer. It sits
+	// The production call path for the proxy-owned syntax producer. It sits
 	// here because this is the one moment the bytes are fixed and the gate has
 	// just reported on exactly those bytes: the verdict is handed over, never
-	// recomputed, so no second sandbox call and no second opinion. What it
-	// produces goes to private telemetry and reaches no decision -- the
-	// authorization immediately below is the same one that ran at e8fefe8.
-	// THE live authorization owner. For a request that declared structured
+	// recomputed, so there is no second sandbox call and no second opinion. Its
+	// evidence goes to private telemetry and into the authorization owner
+	// below.
+	//
+	// The live authorization owner. For a request that declared structured
 	// obligations the typed answer is binding: no candidate lands without a
 	// one-time grant, and a refusal keeps the caller's own content rather than
-	// falling through to a candidate the envelope happened to like. For a
-	// request that declared nothing there is no typed answer to give, so
-	// `authorizedV3` stands exactly as it did.
-	// A RETAINED BASELINE IS NOT A CANDIDATE.
+	// falling through to a candidate the envelope happened to like. A request
+	// that declared nothing has no typed answer to give.
+	//
+	// A retained baseline is not a candidate.
 	//
 	// When nothing materially different came back, `code` is the caller's own
 	// content. Staging it, taking an authorization decision over it and minting
@@ -2326,7 +2286,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// happen: the fallback below writes those same bytes directly and the
 	// licence retires unused.
 	//
-	// What a candidate does NOT have to be is service-certified. The service
+	// What a candidate does not have to be is service-certified. The service
 	// ranks; the evidence this machine produces about these exact bytes is what
 	// authorizes, and it cannot be produced without staging the candidate.
 	candidateProposed := proposed
@@ -3123,9 +3083,6 @@ func editFileTool() *ToolDef {
 					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."), nil
 			}
 
-			// Route through V3 pipeline when the file warrants it. The
-			// gate now mirrors write_file (file-tier only, no request-tier
-			// AND-gate) — having two separate tier checks meant V3 only
 			// Same pipeline entry every content edit uses; see
 			// runEditPipeline for why it is shared rather than inlined.
 			route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
@@ -3339,14 +3296,12 @@ func structuralEditTool() *ToolDef {
 			}
 
 			// HTML <html>-selector quirk. structural_edit replaces only the
-			// <html>...</html> element, NOT the preceding <!DOCTYPE>
-			// declaration that conventionally precedes it. The model
-			// frequently emits a leading <!DOCTYPE html> at the top of
-			// `content` when selector is <html>, which produces a duplicated
-			// doctype on disk (May 8 2026 flask test: dashboard.html
-			// ended up with two consecutive <!DOCTYPE html> lines after
-			// a successful structural_edit). Detect that shape and strip the
-			// leading doctype line so on-disk output matches intent.
+			// <html>...</html> element, not the <!DOCTYPE> declaration that
+			// conventionally precedes it. The model often emits a leading
+			// <!DOCTYPE html> at the top of `content` when the selector is
+			// <html>, which would leave a duplicated doctype on disk. Detect
+			// that shape and strip the leading doctype line so on-disk
+			// output matches intent.
 			ext := strings.ToLower(filepath.Ext(input.Path))
 			isHTML := ext == ".html" || ext == ".htm"
 			if isHTML && strings.EqualFold(strings.TrimSpace(input.Selector), "<html>") {
@@ -3401,43 +3356,32 @@ func structuralEditTool() *ToolDef {
 				return noMutation(astResp.Error + moduleLevelContentNote(ctx, input.Path, input.Content)), nil
 			}
 
-			// Shrinkage guard — catch the May 9 2026 destructive-stub bug
-			// where the model emits only "<!DOCTYPE html>\n" for an entire
-			// <html>-element rewrite. astResp.OldSize is the original
-			// node's bytes; astResp.NewSize is the replacement bytes. If
-			// the replacement is suspiciously small for the original,
-			// reject the write and tell the model to re-emit with the
-			// full body.
+			// Shrinkage guard: catch a destructive stub, such as only
+			// "<!DOCTYPE html>" emitted for a whole <html>-element
+			// rewrite. astResp.OldSize is the original node's bytes;
+			// astResp.NewSize is the replacement bytes. If the replacement
+			// is suspiciously small for the original, reject the write and
+			// tell the model to re-emit with the full body.
 			if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
 				log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
 					input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
 				return refusedNoCheck(rejection), nil
 			}
 
-			// V3 quality-gate routing. History:
-			//   (a) May 10: tier classified on post-edit content only, so a
-			//       destructive structural_edit that shrank a T2+ file into a stub
-			//       classified T1 and skipped V3 — the edits that most need
-			//       checking. Fixed by classifying on max(oldTier, newTier).
-			//   (b) May 10: floor dropped entirely so V3 fired on every
-			//       structural_edit.
-			//   (c) Jun 8: floor restored to Tier2Medium. With (b), every
-			//       one-line structural_edit ran the full PlanSearch pipeline —
-			//       minutes per edit on a reasoning-heavy model, blocking the
-			//       single-threaded v3-service and looking like a hang. But
-			//       structural_edit is ALREADY surgical: the model named the exact
-			//       node and the replacement is its own tree-sitter
-			//       transform. PlanSearch-improving a precise node swap is
-			//       mostly cost. Gate it to T2+ files (same as edit_file /
-			//       write_file): trivial edits apply instantly, V3 still
-			//       engages where the file is genuinely complex. max-tier
-			//       from (a) is preserved, so a destructive edit to a T2+
-			//       original still triggers V3.
+			// V3 routing. The tier is the higher of the pre-edit and post-edit
+			// content, so a destructive edit that shrinks a T2+ file into a
+			// stub still reaches V3: those are the edits that most need
+			// checking. structural_edit is already surgical (the model named
+			// the exact node, and the replacement is its own tree-sitter
+			// transform), so running PlanSearch on every one-line edit is
+			// mostly cost: minutes per edit, which looks like a hang. V3 runs
+			// only when editGenerationBypass allows it: a T2+ file complex
+			// enough for editWarrantsV3, outside an active debug loop.
 			//
-			// Baseline candidate is the structurally edited full file. V3's
-			// alternatives compete against it; if one build-verifies
-			// better, V3 wins; otherwise the structurally edited content passes
-			// through unchanged. Either way the answer is build-verified.
+			// The baseline candidate is the structurally edited full file; a V3
+			// alternative lands only through the protected route below,
+			// otherwise the structurally edited content passes through
+			// unchanged.
 			finalContent := astResp.NewContent
 
 			// No-op guard. A weak model frequently "fixes" a bug by
@@ -3502,12 +3446,12 @@ func structuralEditTool() *ToolDef {
 				v3Out = route.Meta
 			}
 
-			// The healthy->broken rule the other three edit tools share
-			// (#214). The splice service only shows it could re-parse its
-			// own output, and a splice still left a file unparseable
-			// (go_offbyone in the 8b95baa smoke run). A file that already
-			// failed stays editable, which is what makes repair-in-progress
-			// possible, and the check fails open when it cannot run.
+			// The healthy->broken rule the other three edit tools share.
+			// The splice service only shows it could re-parse its own
+			// output, and a splice can still leave a file unparseable. A
+			// file that already failed stays editable, which is what makes
+			// repair-in-progress possible, and the check fails open when it
+			// cannot run.
 			observed, refusal := editSyntaxObservation(ctx, "structural_edit", input.Path, input.Path,
 				source, finalContent, func(detail string) string {
 					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
@@ -3699,15 +3643,12 @@ func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
 }
 
 // There is no service-certification path, and its absence is the point.
-//
-// A contractless request used to deliver on the service's own closure verdict,
-// which is the producer of a candidate certifying that candidate. It read as a
-// compatibility rule and it was a self-certification bypass: no target the
-// client named, no obligation, no floor, and an authority that came from the
-// side being checked. Nothing replaced it, because nothing should. Such a
-// request retains the model's own bytes under strict, and the structured
-// mutation scope its tool call defines is what a calibrated advisory decision
-// would later bound a licence to -- WHERE, never whether.
+// Delivering on the service's own closure verdict would let the producer of a
+// candidate certify that candidate: no target the client named, no obligation,
+// no floor, and an authority that comes from the side being checked. A
+// contractless request keeps the model's own bytes. The structured mutation
+// scope its tool call defines is the most any advisory decision may bound a
+// licence to: WHERE, never whether.
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
 	req := v3EditRequest(path, content, ctx)
@@ -3760,11 +3701,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// was handed. V3 regenerates the whole file, so it can reintroduce a
 	// defect the model had already repaired; the write gates downstream would
 	// then reject the edit and quote a line number from a candidate the model
-	// never saw, sending it to hunt a bug that is not in the file (observed
-	// 2026-07-31: an edit rejected for a stray paren V3 reintroduced, then
-	// three dead turns searching a clean file). Drop the candidate here so the
-	// caller keeps the model's own content and the gates below only ever judge
-	// content the model actually wrote.
+	// never saw, sending it to hunt a bug that is not in the file. Drop the
+	// candidate here so the caller keeps the model's own content and the gates
+	// below only ever judge content the model actually wrote.
 	if chosen != content {
 		if reason := v3CandidateRegression(ctx, path, content, chosen); reason != "" {
 			log.Printf("[v3] discarding candidate for %s — %s; keeping the caller's content", logPath(path), reason)
@@ -4286,10 +4225,8 @@ func relocateStaleRange(fileLines []string, limit int,
 //
 // The error carries a numbered window around the range, and says where the
 // expected text really is. history is what is known about why the numbers are
-// wrong (lineNumberHistory); without it the error claims no cause. It used to
-// say "The numbers you used are stale" every time. Smoke run 2026-09-27
-// (smallrung_toml): the file had not changed since the model read it; the
-// model had used line 169 for text that is only on lines 1418-1548.
+// wrong (lineNumberHistory); without it the error claims no cause, because
+// numbers can be wrong in a file that has not changed since the model read it.
 func lineAssertionMismatch(expected, actual string, lineNum int, path string, fileLines []string, history string) string {
 	if strings.TrimSpace(expected) == strings.TrimSpace(actual) {
 		return ""
@@ -4671,12 +4608,9 @@ func deleteFileTool() *ToolDef {
 // ---------------------------------------------------------------------------
 // move_file — relocate / rename a file within the workspace.
 //
-// Added to close the "reorganize the files" gap (observed: a flask task asked
-// to move index.html into templates/; `mv` is refused, there is no move tool,
-// so the model looped on mkdir until the repetition breaker fired). A pure
-// move is not a content change, so it bypasses the V3 / surgical-edit gate —
-// content is preserved verbatim. Refuses to clobber an existing destination
-// file so a relocation can't silently destroy data.
+// A pure move is not a content change, so it bypasses the V3 / surgical-edit
+// gate — content is preserved verbatim. Refuses to clobber an existing
+// destination file so a relocation can't silently destroy data.
 // ---------------------------------------------------------------------------
 
 func moveFileTool() *ToolDef {
@@ -5708,8 +5642,8 @@ func v3StageToEvent(stage string) string {
 	return "v3_progress"
 }
 
-// truncateStr limits a string to maxLen characters.
-// (truncateStr() already exists in main.go for backward compat)
+// truncateStr limits a string to maxLen bytes and appends "..." when it
+// cuts.
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -6003,10 +5937,9 @@ func buildToolCallSchema() map[string]interface{} {
 	return buildToolCallSchemaForTools(nil)
 }
 
-// buildToolCallSchemaForTools is the same as buildToolCallSchema, but with
-// the named tools removed from the tool-name enum. Used by callLLMConstrained
-// to ban edit_file/write_file for a single decision step after a write_file
-// rejection on .py/.html (BiasBusters #3, May 2026 research synthesis).
+// buildToolCallSchemaForTools is buildToolCallSchema with the named tools
+// removed from the tool-name enum. Its only caller passes none; the per-step
+// tool ban uses the GBNF grammar (buildGBNFGrammarForTools) instead.
 func buildToolCallSchemaForTools(excluded []string) map[string]interface{} {
 	excludeSet := make(map[string]struct{}, len(excluded))
 	for _, name := range excluded {
@@ -6119,13 +6052,13 @@ func buildResponseFormat() interface{} {
 // ---------------------------------------------------------------------------
 
 // buildGBNFGrammarForTools generates a GBNF grammar string constraining
-// output to the tool_call/text/done union, with the listed tools
-// removed from the tool-name production. May 2026 BiasBusters #2: when
-// the next step must NOT use edit_file (e.g. write_file just got rejected
-// on a .py/.html file >5 lines), llama-server enforces the restriction
-// at the token-decode level via the `grammar` parameter — descriptions
-// and system prompt rules can be ignored by the model, but the grammar
-// physically cannot emit the banned tool name.
+// output to the tool_call/text/done union, with the listed tools removed
+// from the tool-name production. When the next step must NOT use a tool
+// (e.g. edit_file and write_file right after a write_file rejection on an
+// existing .py/.html file over 5 lines), llama-server enforces the
+// restriction at the token-decode level via the `grammar` parameter:
+// descriptions and system prompt rules can be ignored by the model, but
+// the grammar physically cannot emit the banned tool name.
 func buildGBNFGrammarForTools(excluded []string) string {
 	excludeSet := make(map[string]struct{}, len(excluded))
 	for _, name := range excluded {
@@ -6251,11 +6184,12 @@ func generateInputExample(toolName string) string {
 		// toward purely cosmetic edits instead of real bug-fix shapes.
 		return `{"path": "src/main.py", "old_str": "if x == 0:\n        return None", "new_str": "if x is None or x == 0:\n        return None", "replace_all": false}`
 	case "structural_edit":
-		// Whole-function rewrite — the case where edit_file would force
+		// Whole-function rewrite: the case where edit_file would force
 		// the model to copy the entire existing function as old_str and
-		// blow through max_tokens. Selector grammar is intentionally
-		// narrow in v1 (function:NAME, class:NAME, <tag>) to avoid the
-		// raw-tree-sitter hallucination problem (GH #39 measurement).
+		// blow through max_tokens. The selector grammar is
+		// intentionally narrow (function:NAME, class:NAME, type:NAME
+		// for Go, <tag> for HTML) to keep the model from hallucinating
+		// raw tree-sitter queries.
 		return `{"path": "src/main.py", "selector": "function:dashboard", "content": "@app.route('/dashboard')\ndef dashboard():\n    return render_template('dashboard.html')"}`
 	case "delete_file":
 		return `{"path": "old_file.py"}`
@@ -6270,14 +6204,14 @@ func generateInputExample(toolName string) string {
 	}
 }
 
-// editSyntaxObservation is the healthy->broken syntax gate the three
-// content-edit tools share, as one structured observation.
+// editSyntaxObservation is the healthy->broken syntax gate the content-edit
+// tools share, as one structured observation.
 //
 // The bytes about to be written are evaluated ONCE, and the original only when
-// those bytes demonstrably fail -- an edit may not INTRODUCE breakage, but a
-// file already failing the checker stays editable, which is what makes
-// repair-in-progress possible. The three tools had three copies of that rule;
-// they now have one, and each supplies only its own model-facing wording.
+// those bytes demonstrably fail: an edit may not INTRODUCE breakage, but a file
+// already failing the checker stays editable, which is what makes
+// repair-in-progress possible. Each tool supplies only its own model-facing
+// wording.
 //
 // Returns the observation for the proposed bytes, and a classified refusal when
 // the rule declines the edit. The observation describes the exact bytes the
