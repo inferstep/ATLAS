@@ -36,8 +36,7 @@ contents at runtime.
 
 ## Writable directories
 
-Each account can write only where the service actually needs to. Every
-other path (including the application code) is read-only to it.
+Each account can write only where the service actually needs to.
 
 | Service | Writable at runtime | Why |
 |---|---|---|
@@ -83,8 +82,8 @@ These are deliberately unpinned, for the reasons recorded here:
 
 ### Reproducibility caveat (Alpine)
 
-The proxy's `apk` version pins target the live Alpine v3.24 repository,
-which garbage-collects superseded `-rN` builds. A pin may need bumping
+The proxy's `apk` version pins target the live Alpine v3.24 repository.
+A pin may need bumping
 when Alpine ships a patch release; the digest-pinned base keeps the rest
 of the toolchain fixed in the meantime. This is inherent to `apk` and is
 noted at the pin site.

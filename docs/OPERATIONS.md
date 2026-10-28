@@ -153,12 +153,9 @@ All knobs in CONFIGURATION.md; the load-bearing ones: `ATLAS_CTX_SIZE`
 
 ## The memory envelope
 
-These numbers are not independent, and getting the sum wrong is not a
-performance problem. A staged verification command once reached 5.9 GB in
-seconds on a 16 GB host where the inference server held 9 GB with no limit of
-its own. Every process was inside its own bounds; the kernel still had to pick
-something to kill, and it picked the largest resident process, which was the
-model. What was missing was not one limit — it was a total that fits the
+These numbers are not independent. Every process can be inside its own bounds
+while their sum exceeds the machine, and the kernel then kills the largest
+resident process, usually the model. The limits need a total that fits the
 machine.
 
 Two layers, and both are needed.
@@ -187,31 +184,25 @@ model:
 | Component | Variable | Default | Basis |
 | --- | --- | --- | --- |
 | inference | `ATLAS_LLAMA_MEM` | **unset** | see below — a limit below its peak is a certain kill |
-| geometric lens | `ATLAS_LENS_MEM` | 1.75 GiB | measured peak 1.56 GiB |
+| geometric lens | `ATLAS_LENS_MEM` | 1.75 GiB | — |
 | sandbox | `ATLAS_SANDBOX_MEM` | 1.5 GiB | one 1 GiB command + the executor and its buffers |
-| v3-service | `ATLAS_V3_MEM` | 0.5 GiB | measured peak 52 MiB |
-| proxy | `ATLAS_PROXY_MEM` | 0.25 GiB | measured peak 33 MiB |
+| v3-service | `ATLAS_V3_MEM` | 0.5 GiB | — |
+| proxy | `ATLAS_PROXY_MEM` | 0.25 GiB | — |
 | host reserve | `ATLAS_HOST_RESERVE_BYTES` | 1.5 GiB | kernel, container daemon, logging, shutdown |
 | **total (enforced)** | | **5.5 GiB** | on a 15.36 GiB host: 9.86 GiB left for the unbounded model |
 
-**Why the inference service has no limit.** Its measured peak resident set is
-10.31 GiB, its anonymous working set is 8.81 GiB once the 2.11 GiB it has
-swapped is counted back, and it has 16 MiB of reclaimable page cache — so a
-hard limit under the peak yields a kill, not reclaim. It ships unset until a
-real-model canary establishes a value with measured headroom, with
-`ATLAS_LLAMA_BUDGET_BYTES` carrying the measured expectation for accounting.
-Setting `ATLAS_LLAMA_MEM` enforces whatever you put in it: do that only with
-canary evidence, and never below the observed peak.
+**Why the inference service has no limit.** A hard limit under its peak
+resident set yields a kill, not reclaim, so `ATLAS_LLAMA_MEM` ships unset and
+`ATLAS_LLAMA_BUDGET_BYTES` (default 11 GiB) carries its expected use for
+accounting. Setting `ATLAS_LLAMA_MEM` enforces whatever you put in it: never set
+it below the observed peak.
 
-This has a consequence worth stating plainly: **the enforced-maxima check alone
-would not have caught the configuration that killed it.** With the model
-unbounded there is no inference maximum to add, so an 11 GiB sandbox plus the
-small services plus the reserve fits a 15 GiB host — which is exactly how every
-process came to be inside its own limit at the moment the kernel went looking
-for a victim. What catches it is the **remainder**: what the enforced budgets
-leave over for the one component nothing holds. With the compose defaults that is
-9.86 GiB against an expectation of 11 GiB. Under
-the old 11 GiB sandbox it was 0.33 GiB against 11 GiB.
+The enforced-maxima check alone does not cover the unbounded model: with no
+inference maximum to add, a large sandbox plus the small services plus the
+reserve can fit the host and still leave the model too little. The number that
+shows it is the **remainder**: what the enforced budgets leave for the one
+component nothing holds. With the compose defaults that is 9.86 GiB against an
+expectation of 11 GiB.
 
 An overrun of the remainder is neither reported nor refused. The refusal is for
 enforced maxima that over-commit — a number an operator can edit. An unbounded component that
@@ -277,11 +268,7 @@ ATLAS_IMAGE_TAG=my-slice-check docker compose config    # check it resolves
 **A tag is not an identity.** The image ID is. A tag can be rewritten under a
 running container, and once the old image is pruned the tag cannot be put back
 — the deployable name then points at something the running container is not,
-and nothing about inspecting the tag reveals it. Acquisition runners refuse to
-launch from `:dev` or `:latest` for that reason, pin the exact `sha256:` image
-ID plus the built binary's hash before the first case, and report a missing
-historical image rather than pulling or rebuilding one: a reconstructed image
-is a different artifact wearing the same name.
+and nothing about inspecting the tag reveals it.
 
 Before any build, record what is actually running, so the tag can be restored:
 
@@ -324,11 +311,9 @@ way a timeout does — and reports `cancelled`, which is a different outcome fro
 `timed_out` and from the resource ones, so a stopped command is never mistaken
 for a finished one.
 
-This required the executor's middlewares to be pure ASGI rather than
-`BaseHTTPMiddleware`. The latter interposes on the receive channel, so
-`http.disconnect` never reaches the endpoint and `Request.is_disconnected()`
-returns False forever: measured directly, the same probe reports "disconnected
-at 1.0s" without a middleware and "never disconnected" with one.
+The executor's middlewares are pure ASGI rather than `BaseHTTPMiddleware`,
+which interposes on the receive channel, so `http.disconnect` would never reach
+the endpoint and `Request.is_disconnected()` would return False forever.
 
 Under compose the sandbox sets no `stop_grace_period`, so a shutdown is bounded
 by Docker's default stop timeout, not by `MAX_EXECUTION_TIME`. Nothing survives
