@@ -866,7 +866,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    nothing. Compare against `pass_energy_mean` in `cx_normalization.json`:
    served energies should span that band, not sit on one value.
 2. Set `ATLAS_EMBED_POOLING=none` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags. `--pooling` is server-global, and only `none` serves both the whole-text and per-step paths; pooling and scale are handled client-side.
-3. After the server serves the correct convention, the boot self-test passes and `/ready` returns 200. A rebuild (`atlas lens build`) stamps the `embedding_contract` into `model_identity.json`. It does not write a drift fingerprint: `geometric_lens.drift.write_fingerprint` exists, but no command calls it yet, so the fingerprint check runs only where a `drift_fingerprint.json` was written by hand.
+3. After the server serves the correct convention, the boot self-test passes and `/ready` returns 200. A rebuild (`atlas lens build`) stamps the `embedding_contract` into `model_identity.json` and writes `drift_fingerprint.json` into the artifact dir, so the boot self-test re-checks the convention. When the reference texts cannot be scored, it skips the fingerprint with a warning, and the drift check then enforces nothing for that bundle.
 
 ### Embedding Extraction Fails
 

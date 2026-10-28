@@ -2,9 +2,9 @@
 
 API endpoints for each ATLAS service. All services communicate over HTTP/JSON. Streaming endpoints use Server-Sent Events (SSE).
 
-> **Ports listed are defaults.** All are configurable via environment variables (see [CONFIGURATION.md](CONFIGURATION.md)). The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
+> **Ports listed are defaults.** Most are configurable through environment variables (see [CONFIGURATION.md](CONFIGURATION.md)); the lens port is set by uvicorn's `--port`, and the sandbox's is fixed at 8020. The HTTP contracts below are deployment-mode-agnostic — only the host:port differs. Quick reference:
 >
-> | Service | Docker Compose (host=container) | Bare metal (env-configured) | K3s NodePort (`atlas.conf.example`) |
+> | Service | Docker Compose (host=container) | Bare metal | K3s NodePort (`atlas.conf.example`) |
 > |---|---|---|---|
 > | atlas-proxy | `8090` | `ATLAS_PROXY_PORT` (default 8090) | `ATLAS_PROXY_NODEPORT` (default 30080) |
 > | v3-service | `8070` | `ATLAS_V3_PORT` (default 8070) | `ATLAS_V3_NODEPORT` (default 30070) |
