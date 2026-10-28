@@ -771,13 +771,11 @@ func main() {
 	log.Printf("  Sandbox: %s", sandboxURL)
 	log.Printf("  Pipeline: agent loop (/v1/agent) + V3 candidate pipeline in v3-service for T2/T3 writes")
 
-	// Probe geometric-lens + ASA calibration so operators see the
-	// same verdict the TUI's header badge will render. The old "ASA
-	// steering: present at X" banner is folded into logCalibrationStatusAtStartup
-	// below (which also adds the corresponding Lens line) so the proxy
-	// surfaces a unified calibration view at startup.
 	installTokenTransport()
 
+	// Probe geometric-lens and ASA calibration so operators see the same
+	// verdict the TUI's header badge will render, as one calibration view (Lens
+	// and ASA lines) at startup.
 	logCalibrationStatusAtStartup()
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
@@ -870,7 +868,8 @@ func keepLlamaWarm() {
 }
 
 // ---------------------------------------------------------------------------
-// Model-based intent classification (Section 1 of production checklist)
+// Request tiers (classified by classifyAgentTier in agent.go and
+// classifyFileTier in tools.go)
 // ---------------------------------------------------------------------------
 
 // Tier represents the complexity classification of a request
@@ -1030,9 +1029,9 @@ func (j jsonLineWriter) Write(p []byte) (int, error) {
 // container at /run/atlas-secrets/service-token, authenticates
 // internal and client requests as `Authorization: Bearer <token>`.
 //
-// Enforcement is enabled iff a token file is configured and readable —
-// an install that never ran `atlas init` keeps today's open-localhost
-// behavior, and `atlas doctor` flags it. /health and /ready stay
+// Enforcement is enabled iff a token file is configured and readable:
+// an install that never ran `atlas init` stays open on localhost, and
+// `atlas doctor` flags it. /health, /ready and /version stay
 // unauthenticated (compose/K8s probes are headerless curl).
 //
 // The token value must never be logged, placed in argv, or echoed in
@@ -1207,7 +1206,7 @@ const (
 
 // AllErrorCodes is the canonical closed set (asserted by the contract
 // test against the documented taxonomy). Every code here is emitted by
-// a live writeError call — aspirational codes were pruned 2026-08-05.
+// a live writeError call.
 var AllErrorCodes = []ErrorCode{
 	ErrUnauthorized, ErrInvalidInput, ErrUnsupported,
 	ErrDependencyDown, ErrResourceLimit, ErrInternal,
