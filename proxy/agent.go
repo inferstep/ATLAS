@@ -111,14 +111,10 @@ type sessionCancel struct {
 // Agent loop — iterative tool-calling loop between model and executors
 // ---------------------------------------------------------------------------
 
-// runAgentLoop runs the agent loop for a single user request.
-// The model emits tool calls (constrained by grammar), the proxy executes them,
-// and returns results. Continues until the model emits "done" or max turns hit.
 // planGateMinScore is the plan-quality floor below which the plan-completion
 // gate does not fire. The planner reports WinningScore per plan; a weak plan
-// blocking a finished task is worse than no gate, and 0.6 keeps the gate on
-// the plans the planner itself rates as sound (observed live plans score
-// 0.80).
+// blocking a finished task is worse than no gate, and 0.6 keeps the gate on the
+// plans the planner itself rates as sound (live plans score about 0.80).
 const planGateMinScore = 0.6
 
 // maxTotalFailures bounds a whole run's failed tool calls, independent of the
@@ -226,11 +222,11 @@ type runState struct {
 	// shadowGate is bounded diagnostic-only sequencing. Nothing but the
 	// shadow emitter reads it.
 	shadowGate shadowGateSeq
-	// Files the prompt explicitly asks the model to produce
-	// ("save your solution in X"). Checked against disk before `done` is
-	// allowed — a model can satisfy the generic action gate with a
-	// PARTIAL artifact or by exploring without ever committing the named
-	// output (observed 2026-07-19). Computed once from the prompt.
+	// Files the prompt explicitly asks the model to produce ("save your
+	// solution in X"). Checked against disk before `done` is allowed — a
+	// model can satisfy the generic action gate with a PARTIAL artifact
+	// or by exploring without ever committing the named output. Computed
+	// once from the prompt.
 	expectedOutputs []string
 	// The decision that named them, carried whole. A later change cannot
 	// merge the contract list with the prose heuristic again: the source and
@@ -369,9 +365,9 @@ type runState struct {
 	// succeeded since. Observed session state, not a guess about the
 	// request: once a test has gone red in this loop, declaring done is
 	// dishonest regardless of how the user phrased the ask. Closes the
-	// case the message-shape check cannot see (2026-07-21 dogfooding:
-	// the model watched pytest fail 5/5 three times, diagnosed the fix
-	// in prose, and exited through a bare text narration).
+	// case the message-shape check cannot see: a model that watches a
+	// test fail, diagnoses the fix in prose, and exits through a bare
+	// text narration.
 	sawFailedVerification bool
 	// failing holds the commands whose latest run failed since a run last
 	// verified, and sawFailedVerification is set exactly while it is not
@@ -938,16 +934,15 @@ func (s *runState) runFirstGateAtExit(ctx *AgentContext) (string, string) {
 // route the server does not define.
 func (s *runState) routeContractGate(ctx *AgentContext) (string, string) {
 	// A page this run wrote submits to a route the server never defines. The
-	// lint found it and said so at write time; marked advisory, it was
-	// ignored, and the delivered form 404ed (acceptance run, 2026-09-15).
-	// Bounded like every other exit gate: a route registered in a way the
-	// check cannot see (a blueprint prefix, a catch-all) is a real false
-	// positive, so the model can say so and finish once the bounces are spent.
-	// Scoped, like the other exit gates, to what THIS run did: it fires only
-	// when the run authored a web file. A question answered about a project
-	// that already had a stale form action is not this run's contract to
-	// keep, and bouncing that answer three times would be a false positive
-	// the user cannot act on.
+	// lint reports it at write time, but an advisory finding can be ignored
+	// and the delivered form then 404s. Bounded like every other exit gate: a
+	// route registered in a way the check cannot see (a blueprint prefix, a
+	// catch-all) is a real false positive, so the model can say so and finish
+	// once the bounces are spent. Scoped, like the other exit gates, to what
+	// THIS run did: it fires only when the run authored a web file. A question
+	// answered about a project that already had a stale form action is not
+	// this run's contract to keep, and bouncing that answer three times would
+	// be a false positive the user cannot act on.
 	if sessionWroteWebFiles(ctx) {
 		if broken := routeContractFindings(ctx.WorkingDir); len(broken) > 0 {
 			if s.chargeBounce("route_contract_gate") {
@@ -971,29 +966,18 @@ func (s *runState) backgroundGate(ctx *AgentContext, contractOwed bool) (string,
 	// summary with a note about the job, so the user gets no account of the
 	// work. The model is the only party that knows whether the process was a
 	// verification server or something the user asked to keep up, so it is
-	// told, and asked to stop it. Observed 2026-09-14: a working web app was
-	// reported as unfinished because the server that verified it was left
-	// running.
-	//
-	// Order matters, and it was wrong. Measured (stabilization cycle 6,
-	// flask_pause rep 2): the run installed the missing dependency, started
-	// the app, and tried to finish; this gate demanded the job be stopped; the
-	// run stopped it; and the verification gate below then demanded a
-	// verification that needed the server, which was now down. It bounced
-	// three times and the run ended verification_demanded_unmet with a working
-	// app on disk. While verification is still owed, the running job is the
-	// thing to verify AGAINST, so this gate yields to the one below. Nothing
-	// is weakened: once verification lands, this gate fires, and
+	// told, and asked to stop it; otherwise working code can be reported
+	// unfinished because the server that verified it was left running. Order
+	// matters. While verification is still owed, the running job is the thing
+	// to verify AGAINST, so this gate yields to the verification gate below;
+	// stopping the server first leaves a verification that can no longer pass.
+	// Nothing is weakened: once verification lands, this gate fires, and
 	// finalizeCompletion still refuses completion while a job of the run's own
 	// is live.
 	//
-	// A planned step that runs a command is owed the same way. Smoke run
-	// 2026-09-27 (flask_pause rep 1): the probe on the app's real port passed
-	// but did not match the planned one, this gate had the run stop the
-	// server, and the plan gate then demanded the probe, which could no longer
-	// pass. The run ended "stopped" with working code on disk. The yield lasts
-	// only while the plan gate has bounces left, so a spent plan gate cannot
-	// hold the job open.
+	// A planned step that runs a command is owed the same way, so the gate
+	// also yields while the plan gate has bounces left; a spent plan gate
+	// cannot hold the job open.
 	verificationOwed := ((s.userWantsVerification || s.sawFailedVerification) && !s.verifiedThisLoop) || contractOwed
 	planRunOwed := planOwesRun(ctx) && s.gateBounces["plan_gate"] < maxGateBounces
 	if live := settleBackgroundHazard(ctx); len(live) > 0 && !verificationOwed && !planRunOwed && s.chargeBounce("background_gate") {
@@ -1088,13 +1072,12 @@ func (s *runState) verificationGate(ctx *AgentContext) (string, string) {
 // staleProbeGate holds a run verified by a probe of a job that started before
 // the last change to the code the job serves.
 func (s *runState) staleProbeGate(ctx *AgentContext) (string, string) {
-	// Verified, but the work contract says the deliverable itself is not
-	// covered — and a job that predates the last change to it explains why.
-	// finalizeCompletion would refuse this exit with
-	// verification_demanded_unmet and no chance to act; the same fact is worth
-	// one bounce, out of the verification gate's own budget, so the run can
-	// restart the process and probe the code it actually wrote. Measured on
-	// flask_pause rep 2 (cycle 6, R3).
+	// Verified by a probe, but the probe reached a job that predates the last
+	// change to the file, so it answered for older code. finalizeCompletion
+	// would refuse this exit with verification_demanded_unmet and no chance to
+	// act; the same fact is worth one bounce, out of the verification gate's
+	// own budget, so the run can restart the process and probe the code it
+	// actually wrote.
 	if s.verifiedThisLoop && s.lastVerifyWasLocalProbe {
 		if staleJob, staleFile := staleServingJob(ctx); staleJob != "" {
 			if s.chargeBounce("verification_gate") {
@@ -1308,13 +1291,9 @@ func orphanNames(ctx *AgentContext, orphans map[string][]orphanedSymbol) string 
 	return strings.Join(names, ", ")
 }
 
-// chargeBounce spends one of gate's bounces and reports whether it had one
-// left. A gate whose budget is gone returns false so exitGates falls through
-// to the next gate rather than returning early: an exhausted gate must stop
-// repeating itself, not mute the gates behind it.
-// replyContinuationFloor is the least session time worth sending an
-// unfinished reply back for: one turn to act on what it deferred and one to
-// answer. Measured median model think-time before a call is ~26 s.
+// replyContinuationFloor is the least session time worth sending an unfinished
+// reply back for: one turn to act on what it deferred and one to answer, at a
+// median model think-time of about 26 s before a call.
 const replyContinuationFloor = 60 * time.Second
 
 // continuationFits reports whether the session can still afford to send an
@@ -1331,6 +1310,10 @@ func (s *runState) continuationFits(ctx *AgentContext) bool {
 	return true
 }
 
+// chargeBounce spends one of gate's bounces and reports whether it had one
+// left. A gate whose budget is gone returns false so exitGates falls through
+// to the next gate rather than returning early: an exhausted gate must stop
+// repeating itself, not mute the gates behind it.
 func (s *runState) chargeBounce(gate string) bool {
 	if s.gateBounces[gate] >= maxGateBounces {
 		return false
@@ -1373,6 +1356,9 @@ func v3DeliveryNudge(ctx *AgentContext, phase string, candidates int, score floa
 		phase, candidates, score, runFirstInstruction(ctx, path)), shown
 }
 
+// runAgentLoop runs the agent loop for a single user request.
+// The model emits tool calls (constrained by grammar), the proxy executes them,
+// and returns results. Continues until the model emits "done" or max turns hit.
 func runAgentLoop(ctx *AgentContext, userMessage string) error {
 	loopStart := beginAgentRun(ctx, userMessage)
 	defer endAgentStage(ctx, loopStart)
@@ -1543,25 +1529,21 @@ func isContextOverflow(err error) bool {
 		strings.Contains(s, "exceeds the available context size")
 }
 
-// callLLMConstrained calls the LLM with json_schema or grammar constraint.
-// Returns the raw response text and token count.
+// callLLMConstrained calls the LLM with json_schema or grammar constraint and
+// returns the raw response text and token count.
 //
-// When the model emits zero tokens (raw_len=0) — usually after a
-// tool result message under a constrained JSON grammar — we retry
-// inline once with a bumped temperature and a transient "continue"
-// nudge appended to the messages. This avoids burning a full agent-loop
-// turn (~30s + tokens) on the parse-error retry path. The nudge is
-// scoped to the retry call only; ctx.Messages is not mutated.
+// When the model emits zero tokens (raw_len=0), usually after a tool result
+// under a constrained JSON grammar, it retries inline once with a bumped
+// temperature and a transient "continue" nudge; this avoids burning a full
+// agent-loop turn (~30s + tokens) on the parse-error retry path.
 //
-// May 2026 BiasBusters #2/#3 — per-step tool restriction. If the previous
-// turn ended in a write_file rejection on a .py/.html file >5 lines, the
-// model is biased toward retrying with edit_file (lexically closer to
-// write_file than structural_edit, despite structural_edit being correct for the case).
-// We respond by (a) dropping edit_file and write_file from the GBNF
-// tool-name production for this single decision and (b) injecting an
-// ephemeral [system note] reminding the model that structural_edit is the only
-// available structural-edit tool for this step. ctx.Messages is not
-// mutated; the nudge and grammar restriction are scoped to this call.
+// Per-step tool restriction: after a write_file rejection on an existing
+// .py/.html file over 5 lines, the model tends to retry with edit_file
+// (lexically closer to write_file) although structural_edit is the right tool.
+// So buildStepRequest (a) drops edit_file and write_file from the GBNF
+// tool-name production for this single decision and (b) adds an ephemeral
+// [system note] pointing to structural_edit. ctx.Messages is not mutated; the
+// nudge and the grammar restriction are scoped to this call.
 func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 	messages, grammar := buildStepRequest(ctx)
 
@@ -1605,20 +1587,19 @@ func callLLMConstrained(ctx *AgentContext) (string, int, error) {
 }
 
 // buildStepRequest assembles the messages and grammar for the next LLM
-// call. In the common case it returns ctx.Messages and "" (no grammar
-// override). When the previous turn ended in a write_file rejection on a
-// .py/.html file, it returns ctx.Messages plus an ephemeral [system note]
-// user message AND a restricted GBNF grammar that excludes edit_file
-// and write_file from the tool-name production. See callLLMConstrained
-// docstring for the BiasBusters context.
+// call. With no plan and no restriction it returns ctx.Messages and an
+// empty grammar. A plan adds the plan-progress reminder at the tail.
+// After a crash with a traceback it bans the run tools
+// (tracebackExclusion); after a write_file rejection on an existing
+// .py/.html file it adds an ephemeral [system note] and a GBNF grammar
+// without edit_file and write_file. See callLLMConstrained for why.
 func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
-	// Plan-progress reminder. Always rendered when ctx.Plan exists;
-	// not persisted to ctx.Messages so it doesn't accumulate. Lands
-	// AT THE TAIL of the messages slice so the model sees it as the
-	// most-recent user-role input right before its next decision.
-	// May 10 2026 follow-up — long multi-file tasks were losing plan
-	// context after trim; per-turn injection makes the progress
-	// surface persistent without bloating history.
+	// Plan-progress reminder. Rendered whenever ctx.Plan has steps; not
+	// persisted to ctx.Messages, so it does not accumulate. Lands AT
+	// THE TAIL of the messages so the model sees it as the most recent
+	// user-role input right before its next decision. Injecting it per
+	// turn keeps plan progress visible after trimming without bloating
+	// history.
 	planReminder := buildPlanReminder(ctx)
 
 	// Traceback step-restriction (issue #39 / option 3): after a crash, ban the
@@ -1769,9 +1750,8 @@ func eraseLlamaSlot(ctx *AgentContext) {
 	for id := 0; id < slots; id++ {
 		// llama-server handles the erase on its main loop, so a slot that
 		// is mid-decode answers only once it frees up. A single 5s attempt
-		// lost one slot in half the sessions of the 2026-08-03 run (13 of
-		// 26 cleared 3 of 4), and the one it lost is precisely the one
-		// still holding the previous session's KV.
+		// can miss that slot, and it is precisely the one still holding
+		// the previous session's KV, so eraseOneSlot retries.
 		if eraseOneSlot(reqCtx, client, llamaURL, id) {
 			erased++
 		} else {
@@ -1985,32 +1965,14 @@ func probeSlot(ctx context.Context, client *http.Client, llamaURL string) (int, 
 }
 
 // llmStreamClient is a long-lived HTTP client for streaming LLM calls.
-// Streaming responses can run for many minutes (a 4k-token write_file
-// generation at ~30 tok/s is ~2min, longer for big content). The old
-// 3-minute total Client.Timeout aborted those mid-decode with
-// "context deadline exceeded while awaiting headers". Streaming mode
-// also makes the total-timeout meaningless: we instead bound only the
-// dial + header phases and rely on ctx.Ctx for user-initiated cancel.
-//
-// ResponseHeaderTimeout note: llama.cpp doesn't flush HTTP response
-// headers until the FIRST decoded token arrives — i.e., header time
-// = prompt eval time. With a long conversation history (e.g. a 767-line
-// HTML file the assistant just wrote, ~8500 tokens) prompt eval can
-// take ~60s on the GPU. A tight ResponseHeaderTimeout would cancel
-// these legitimate calls. Bumped to 10 min: still bounds a truly hung
-// llama-server, but tolerates large prompts. User Ctrl+C still works
-// via the request context for any in-flight call.
-// May 10 2026: ResponseHeaderTimeout removed. V3 pipelines that fire
-// on T2+ edits routinely take 5-15 minutes between when the proxy
-// posts and when llama-server flushes the first response header (it
-// flushes on first decoded token, but prompt eval after a long V3
-// run can take ages on cold KV state). The 10-minute cap fired on
-// turn 5 of a real session and killed an otherwise-working chain.
-// User instruction was to remove the timeout stuff completely.
-// Dial timeout stays — connection refused / DNS failure should still
-// fail fast; that's a different failure mode from "server is working
-// but slow." Request-context cancellation via ctx.Ctx still works,
-// so user-initiated cancels still propagate.
+// Only the dial is bounded, so connection refused or a DNS failure
+// still fails fast. There is no total Client.Timeout and no
+// ResponseHeaderTimeout: a streamed generation can run for minutes, and
+// llama.cpp sends the response headers only with the first decoded
+// token, so header time is prompt-eval time, which can take many
+// minutes on a long history or on cold KV state after a V3 run. The
+// request context (ctx.Ctx) carries cancellation, so user-initiated
+// cancels still propagate.
 var llmStreamClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext:     (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
@@ -2018,41 +1980,28 @@ var llmStreamClient = &http.Client{
 	},
 }
 
-// callLLMOnce is one round-trip to llama-server's /v1/chat/completions.
-// Extracted from callLLMConstrained so the empty-response retry can
-// reuse the same plumbing with a different temperature + message list.
-//
-// Uses SSE streaming so the proxy can forward per-token deltas to the
-// TUI as `llm_token` events. The first delta also fires `llm_first_token`
-// with the prompt-eval duration — that gap (request sent → first token)
-// is llama-server doing prompt processing, which the user couldn't see
-// before. Streaming mode also removes the 3-minute total-request timeout
-// that was killing long generations on a single write_file with
-// substantial content (HTML mockups, code with imports, etc.).
+// callLLMOnce is callLLMOnceWithGrammar with no grammar: one round-trip
+// to llama-server's /v1/chat/completions. The request streams over SSE so
+// the proxy can forward per-token deltas to the TUI as llm_token events;
+// the first delta also fires llm_first_token with the prompt-eval
+// duration (request sent to first token), which the user otherwise cannot
+// see. A streamed call has no total-request timeout, so a long write_file
+// generation is not cut (see llmStreamClient).
 func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64) (string, int, error) {
 	return callLLMOnceWithGrammar(ctx, messages, temperature, "")
 }
 
-// callLLMOnceWithGrammar is callLLMOnce with an optional GBNF grammar
-// override. When grammar != "", llama-server enforces it at the
-// token-decode level (BiasBusters #2 — banning edit_file/write_file from
-// the tool-name production for a single decision). The json_object
-// response_format is dropped in that case because GBNF is the more
-// specific constraint and supersedes it.
 // toWireMessages converts the agent's internal messages to the role/content
 // pairs sent on /v1/chat/completions.
 //
 // Tool results are rendered as a USER turn. Some chat templates have no `tool`
-// role and silently drop role:"tool" messages — the model never sees the
-// result (verified: the prompt carries only the user/assistant turns and the
-// model reasons "the tool output is not visible"), so it re-issues the same
-// tool call forever until the repetition breaker fires. This was the real
-// cause behind every "it can't see what it's reading / it just loops" report.
+// role and silently drop role:"tool" messages, so the model never sees the
+// result and re-issues the same tool call until the repetition breaker fires.
 // Every chat template handles the user role, so converting here is
-// model-agnostic; the `[tool result]` marker
-// tells the model this is tool output, not a fresh user instruction.
-// ctx.Messages keeps the semantic "tool" role so trim-pinning and the
-// step/traceback exclusions that key off ToolName still work.
+// model-agnostic; the `[tool result]` marker tells the model this is tool
+// output, not a fresh user instruction. ctx.Messages keeps the semantic "tool"
+// role so trim-pinning and the step/traceback exclusions that key off ToolName
+// still work.
 func toWireMessages(messages []AgentMessage) []map[string]string {
 	wire := make([]map[string]string, len(messages))
 	for i, msg := range messages {
@@ -2070,50 +2019,43 @@ func toWireMessages(messages []AgentMessage) []map[string]string {
 // applyRepetitionSampling sets the repetition-control sampler fields on an
 // outgoing llama-server request.
 //
-// llama-server ships every repetition control off: querying /props on a
-// running instance reports repeat_penalty=1.0, dry_multiplier=0.0,
-// frequency_penalty=0.0, presence_penalty=0.0. Nothing bounded how long a
-// generation could repeat itself, which is what the stream-level
-// isLoopingTail cut in callLLMOnceWithGrammar exists to catch. That cut is
-// a backstop; it does not stop the model entering the loop.
+// llama-server ships every repetition control off (/props reports
+// repeat_penalty=1.0, dry_multiplier=0.0, frequency_penalty=0.0,
+// presence_penalty=0.0); the stream-level loop cut (streamLooping) is a
+// backstop and does not stop the model entering a loop.
 //
-// DRY rather than repeat_penalty. repeat_penalty scores individual token
-// reoccurrence, which is wrong for code: indentation, `return`, `self.`,
-// and closing braces legitimately repeat many times in one file. DRY scores
-// repeated *sequences*, and llama.cpp treats "\n" as a sequence breaker by
-// default, so per-line repetition across lines is not penalized at all.
-// dry_allowed_length is raised above llama.cpp's default of 2 for the same
-// reason — 3-token runs are ordinary in source.
+// DRY rather than repeat_penalty: repeat_penalty scores single-token
+// reoccurrence, which is wrong for code (indentation, `return`, `self.` and
+// closing braces repeat legitimately); DRY scores repeated sequences, and
+// llama.cpp treats a newline as a sequence breaker by default, so per-line
+// repetition is not penalized. dry_allowed_length is raised above llama.cpp's
+// default of 2 because 3-token runs are ordinary in source.
 //
-// DRY now defaults OFF, because it penalises the one thing an edit tool needs
-// most: copying an anchor out of a file the model just read.
+// DRY defaults OFF because it penalises the one thing an edit tool needs most:
+// copying an anchor out of a file the model just read.
 //
-// The old comment below the multiplier claimed dry_penalty_last_n bounded the
-// scan to the current generation. That is false. llama-server's
-// ServerSlot::init_sampler() calls common_sampler_accept() for every PROMPT
-// token, and in common/sampling.cpp the is_generated flag gates only the
-// grammar and reasoning-budget samplers — llama_sampler_accept(gsmpl->chain,
-// token) is unconditional. So the ring buffer is filled with the tail of the
-// prompt, which is exactly the read_file result the model is copying from.
+// dry_penalty_last_n does not limit the scan to the current generation:
+// llama-server feeds every PROMPT token to the sampler chain
+// (ServerSlot::init_sampler calls common_sampler_accept for each; is_generated
+// gates only the grammar and reasoning-budget samplers), so the ring buffer
+// holds the tail of the prompt, which is the read_file result being copied.
 //
 // The penalty is multiplier * base^(matched - allowed_length), subtracted from
-// the logit: -2.45 at 8 matched tokens, -7.51 at 10, -23.0 at 12, -123 at 15.
-// Copying is by definition "extending a sequence that already occurred in the
-// input", so around token 10-12 of an anchor the correct continuation is pushed
-// below the runner-up, the model takes the branch that BREAKS the match, the
-// match length resets and the penalty collapses. Observed as
-// scoreElement -> scorerElement, food.y -> hood.y, unshift(( .
-//
-// Set ATLAS_DRY_MULTIPLIER=0.8 to restore the old behaviour.
+// the logit; at multiplier 0.8 with the defaults below it is -2.45 at 8 matched
+// tokens, -7.51 at 10, -23.0 at 12, -123 at 15. Around token 10-12 of an anchor
+// the correct continuation drops below the runner-up, the model takes the
+// branch that breaks the match (scoreElement becomes scorerElement), the match
+// length resets and the penalty collapses. Set ATLAS_DRY_MULTIPLIER (for
+// example 0.8) to turn DRY on.
 func applyRepetitionSampling(reqBody map[string]interface{}) {
 	dryMultiplier := envFloatOr("ATLAS_DRY_MULTIPLIER", 0)
 	if dryMultiplier > 0 {
 		reqBody["dry_multiplier"] = dryMultiplier
 		reqBody["dry_base"] = envFloatOr("ATLAS_DRY_BASE", 1.75)
 		reqBody["dry_allowed_length"] = envIntOr("ATLAS_DRY_ALLOWED_LENGTH", 6)
-		// Bound the lookback so DRY scans the current generation rather
-		// than the whole 32k window; -1 (llama.cpp's default) would make
-		// every prior turn's text a repetition source.
+		// Bound the lookback; -1 (llama.cpp's default) would make every prior
+		// turn's text a repetition source. The window holds prompt tokens too
+		// (see above), so it does not limit DRY to the current generation.
 		reqBody["dry_penalty_last_n"] = envIntOr("ATLAS_DRY_PENALTY_LAST_N", 2048)
 	}
 	if rp := envFloatOr("ATLAS_REPEAT_PENALTY", 1.0); rp != 1.0 {
@@ -2152,20 +2094,16 @@ const restatementMaxBytes = 24000
 // the message list, immediately before the generation point.
 //
 // Why this helps: the read_file result the model must copy from sits behind the
-// system prompt, every tool description, and every prior turn — thousands of
-// tokens back. The model's own partially-emitted copy sits at the very end. So
-// the two candidate sources for "what comes next" are not equally reachable,
-// and the near one wins more often as the copy lengthens. That asymmetry is the
-// most plausible account of the corruptions seen in practice
-// (food.y -> hood.y, scoreElement -> scorerElement, unshift(( ).
-//
-// This does not depend on which mechanism is responsible — shortening the
-// distance between the source span and the generation point helps under any
-// account of long-range retrieval degradation, and it is free.
+// system prompt, every tool description and every prior turn, thousands of
+// tokens back, while the model's own partial copy sits at the very end. The two
+// candidate sources for what comes next are not equally reachable, and the near
+// one wins more often as the copy lengthens; that asymmetry is the most
+// plausible account of copy corruptions such as food.y becoming hood.y.
+// Shortening the distance between the source span and the generation point
+// helps under any account of long-range retrieval degradation, and it is free.
 //
 // Skipped when nothing has been read, when the file is large, and when the same
-// content is already the last message (which is the common case immediately
-// after a read_file, where restating would only duplicate it).
+// content is already in the window (the common case right after a read_file).
 // ATLAS_RESTATE_LAST_READ=0 disables.
 func appendLastReadRestatement(ctx *AgentContext, wire []map[string]string) []map[string]string {
 	return appendLastReadRestatementFor(ctx, wire, "")
@@ -2236,6 +2174,11 @@ func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, o
 	return append(wire, map[string]string{"role": "user", "content": sb.String()})
 }
 
+// callLLMOnceWithGrammar is callLLMOnce with an optional GBNF grammar override,
+// which llama-server enforces at token-decode level (for example to ban
+// edit_file and write_file from the tool-name production for a single
+// decision). With a grammar the json_object response_format is dropped, because
+// GBNF is the more specific constraint.
 func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
 	return callLLMOnceRestating(ctx, messages, temperature, grammar, "")
 }
@@ -2244,13 +2187,14 @@ func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperat
 // agent uses, and the grammar or the JSON response format that constrains
 // the reply.
 func llmRequestBody(wireMessages []map[string]string, temperature float64, grammar string) []byte {
-	// Per-turn hard ceiling (agentMaxTokens, default 8192). 32768 let a
-	// rambling content blob run the full window (~18 min at the GPU's capped
-	// decode rate) — the runaway nothing else caught, since the reasoning
-	// budget only fires on reasoning-WITHOUT-content. An agent turn is a tool
-	// call (small) or a whole-file write_file (a few thousand tokens); 8192
-	// covers a ~600-line generation. Truncation recovery backstops the rare
-	// legit overflow. conversationTokenBudget reserves this same value.
+	// Per-turn hard ceiling (agentMaxTokens, default 8192). The full 32768
+	// window would let a rambling content blob run ~18 minutes at the GPU's
+	// capped decode rate, and nothing else catches that runaway: the
+	// reasoning budget only fires on reasoning without content. An agent turn
+	// is a tool call (small) or a whole-file write_file (a few thousand
+	// tokens); 8192 covers a ~600-line generation. A rare legitimate overflow
+	// is answered by the parse-failure path, which tells the model its call
+	// was cut. conversationTokenBudget reserves this same value.
 	reqBody := map[string]interface{}{
 		"model":       modelName,
 		"messages":    wireMessages,
@@ -2332,17 +2276,14 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	}
 	// Progress watchdog for the fenced sub-call. Cancelling reqCtx aborts the
 	// HTTP request, which ends the scanner loop and closes the slot
-	// server-side -- the same path a client disconnect already takes, so no
-	// request or goroutine outlives it. Ordinary turns are untouched.
-	// The fenced sub-call is the one path with a progress watchdog and wire
-	// diagnostics; naming the condition keeps the four places that ask in
-	// agreement.
-	//
-	// Both kinds of fenced attempt: the free-text one and attempt 0, which is
-	// constrained by the fence grammar. Keyed on the sentinel alone, attempt 0
-	// ran with no watchdog at all: the grammar reserves four backticks for the
-	// closer, the model closes with three, and the attempt generated to the
-	// token ceiling (8192 tokens, ~306s) before the retry that then took ~10s.
+	// server-side, the same path a client disconnect takes, so no request or
+	// goroutine outlives it. Ordinary turns are untouched. The fenced sub-call
+	// is the one path with a progress watchdog and wire diagnostics; naming
+	// the condition keeps every place that asks in agreement. It covers both
+	// kinds of fenced attempt, the free-text one and attempt 0, which is
+	// constrained by the fence grammar: the grammar reserves four backticks
+	// for the closer, and a model that closes with three would otherwise
+	// generate to the token ceiling.
 	fencedSubCall := grammar == rawEmissionSentinel || isFenceBlockGrammar(grammar)
 	progress := func() {}
 	armStalled := func() {}
@@ -2470,15 +2411,12 @@ type llmStream struct {
 	stopProgressFn func()
 
 	contentBuf strings.Builder
-	// PC-?: capture reasoning_content separately so we can fall
-	// back to it when contentBuf is empty. Some models occasionally
-	// engages thinking mode despite enable_thinking=false (most
-	// reproducibly on retries with bumped temperature) — when it
-	// does, ALL output streams into delta.reasoning_content. The
-	// previous version threw it away and returned an empty string,
-	// which fired the empty-response retry uselessly. Now we
-	// surface the reasoning as content (with <think> tags stripped)
-	// so the agent loop has SOMETHING to parse.
+	// reasoningBuf captures reasoning_content separately for the
+	// empty-content fallback below. Some models engage thinking mode
+	// despite enable_thinking=false (most reproducibly on retries with
+	// bumped temperature), and then ALL output streams into
+	// delta.reasoning_content; the fallback recovers a tool call from
+	// it instead of returning an empty string.
 	reasoningBuf   strings.Builder
 	totalTokens    int
 	firstTokenSent bool
@@ -2506,15 +2444,14 @@ func (rd *llmStream) read(resp *http.Response, reqCtx context.Context) (string, 
 	rd.oldStrW = newOldStrWatch(ctx)
 
 	// Per-turn reasoning budget. A reasoning-heavy model can spiral for
-	// tens of thousands of tokens inside ONE generation (observed: a
-	// 14-minute, ~17K-token deliberation over a 24-line file that ended
-	// with no tool call) — max_tokens (32768) is the only bound and it
-	// allows ~25 minutes of silence. When accumulated reasoning passes
-	// the budget we stop reading; closing the response body cancels the
-	// slot server-side. The post-loop recovery path then either extracts
-	// a tool_call already present in the reasoning, or returns empty so
-	// the caller's standard re-prompt ("emit your tool call now") fires.
-	// Token-estimate at 4 chars/token; ATLAS_REASONING_BUDGET (tokens)
+	// many thousands of tokens inside ONE generation and end with no
+	// tool call, and max_tokens alone allows minutes of silence. When
+	// accumulated reasoning passes the budget with no content emitted,
+	// we stop reading; closing the response body cancels the slot
+	// server-side. The post-loop recovery then either extracts a
+	// tool_call already present in the reasoning, or returns empty so
+	// the caller's empty-response retry re-prompts. Default 6144 tokens,
+	// estimated at 4 chars/token; ATLAS_REASONING_BUDGET (tokens)
 	// overrides, 0 disables. Keyed off stream state, not model identity.
 	rd.reasoningBudgetChars = 6144 * 4
 	if v := envOr("ATLAS_REASONING_BUDGET", ""); v != "" {
@@ -2753,13 +2690,11 @@ func (rd *llmStream) endOnReadError(err error, reqCtx context.Context) (string, 
 	// Our fenced watchdog cancels the request when no CONTENT token
 	// arrives in time. A model that streamed the file into
 	// reasoning_content instead has the answer sitting in reasoningBuf,
-	// and returning the error here discards it — the reasoning salvage
-	// below never runs because this left early. Try that same salvage
-	// first, but only for a benign watchdog cut: the session context is
-	// still alive (a real user cancel or transport failure is not
-	// salvaged). Observed 2026-09-14: fenced sub-calls for a second file
-	// on a large context were cut at the watchdog with the file already
-	// in reasoning_content, and the run died with only the first file.
+	// and returning the error here would discard it: the reasoning
+	// salvage below never runs because this leaves early. Try that same
+	// salvage first, but only for a benign watchdog cut, where the
+	// session context is still alive (a real user cancel or transport
+	// failure is not salvaged).
 	if rd.fencedSubCall && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
 		// Which watchdog fired follows from what had arrived: none arms
 		// only once a frame has come, and content re-arms the idle one.
@@ -2807,30 +2742,24 @@ func (rd *llmStream) recoverEmptyContent() (string, int, error) {
 			return rd.reasoningBuf.String(), rd.totalTokens, nil
 		}
 	}
-	// No content deltas — check reasoning_content. Two distinct cases:
+	// No content deltas: check reasoning_content. Two cases:
 	//
-	//   (a) Model dumped its actual response into the thinking
-	//       stream despite template-level reasoning being disabled).
-	//       reasoning_content contains a JSON
-	//       tool_call; we recover it and parse normally.
+	//   (a) The model put its actual response into the thinking stream
+	//       although template-level reasoning is disabled;
+	//       reasoning_content holds a JSON tool_call, which is recovered
+	//       and parsed normally.
 	//
-	//   (b) Model emitted ONLY thinking ("Now I need to read...")
-	//       and terminated without producing a response. The
-	//       reasoning_content is pure prose narration — there's no
-	//       tool call to recover. Earlier we returned this prose
-	//       as the "response" and it parse-errored every time,
-	//       wasting a turn. Pre-May-8 behavior had the agent
-	//       loop's classifyParseFailure scolding the model with
-	//       "respond in JSON only" — but the corrective is
-	//       useless when the response was truly empty (model
-	//       wasn't disobeying the format, it just stopped mid-flow).
+	//   (b) The model emitted ONLY thinking ("Now I need to read...")
+	//       and stopped without a response; the reasoning is pure prose
+	//       with no tool call to recover. Returning that prose as the
+	//       response would parse-error and waste a turn, and a "respond
+	//       in JSON only" corrective is useless when the model did not
+	//       disobey the format but stopped mid-flow.
 	//
-	// New behavior: only return recovered reasoning when it
-	// CONTAINS a tool_call envelope. For pure prose, return empty
-	// + log so the caller's retry path can re-prompt with a
-	// "you produced thinking but no response — emit your tool
-	// call now" message instead of treating prose as a failed
-	// response.
+	// So recovered reasoning is returned only when it CONTAINS a tool_call
+	// envelope; pure prose returns empty and is logged, so the caller's
+	// empty-response retry (callLLMConstrained) re-prompts instead of treating
+	// prose as a failed response.
 	if rd.reasoningBuf.Len() > 0 {
 		if recovered, ok := recoverStructuredReasoning(rd.reasoningBuf.String()); ok {
 			log.Printf("[agent] empty content but %d chars of reasoning_content contained a structured agent response — recovering",
@@ -2899,12 +2828,9 @@ func newAgentLoop(ctx *AgentContext, userMessage string, outputObligation obliga
 // endStream ends the run with its terminal event.
 //
 // A tool_call is streamed the moment it parses, before permission and
-// execution, so every early exit between that point and the
-// tool_result leaves the client holding a call that never resolves —
-// a spinner with nothing coming. Observed 2026-08-03 on
-// multiturn_stats: the repetition breaker stopped the session one
-// line after announcing a call, and the stream carried 12 tool_call
-// events against 11 tool_result.
+// execution, so every early exit between that point and the tool_result
+// leaves the client holding a call that never resolves — a spinner with
+// nothing coming.
 //
 // endStream answers the outstanding call before the summary, so the
 // invariant holds at every exit rather than at each one that
@@ -3088,15 +3014,14 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "user", Content: userMessage})
 
-	// Per-session cache scope. llama.cpp's KV slot persists between
-	// requests by default — that's what keepLlamaWarm relies on. But the
-	// slot also persists *across user sessions*, so context from a previous
-	// session's conversation can bias the next session (the
-	// `show_greeting.py` hallucination from the 2026-04-30 snake test was
-	// likely an example). Erase slot 0 at the start of each agent loop call.
-	// llama.cpp re-encodes the system prompt from scratch (~1-2s on a
-	// warm GPU); the per-turn cache benefit within the session is preserved.
-	// Disable with ATLAS_FRESH_SLOT_PER_SESSION=0.
+	// Per-session cache scope. llama.cpp's KV slot persists between requests
+	// by default — that's what keepLlamaWarm relies on. But a slot also
+	// persists across user sessions, so context from a previous session's
+	// conversation can bias the next session. Erase every llama slot at the
+	// start of each agent loop call (eraseLlamaSlot). llama.cpp re-encodes
+	// the system prompt from scratch (~1-2s on a warm GPU); the per-turn
+	// cache benefit within the session is preserved. Disable with
+	// ATLAS_FRESH_SLOT_PER_SESSION=0.
 	if envOr("ATLAS_FRESH_SLOT_PER_SESSION", "1") != "0" && !ctx.DisableFreshSlot {
 		eraseLlamaSlot(ctx)
 	}
@@ -3117,10 +3042,10 @@ func injectSymbolContext(ctx *AgentContext, symbols []string) {
 			body += formatGraphNeighborhood(idx.Graph)
 			if body != "" {
 				// Role MUST be "user" with a "[system note]:" prefix —
-				// Some Jinja chat templates enforce "System message
-				// must be at the beginning" and 500s on any system
-				// role appended mid-conversation. Same convention
-				// the lens-intervention path uses (commit b79b31d).
+				// some Jinja chat templates enforce "System message
+				// must be at the beginning" and 500 on any system role
+				// appended mid-conversation. Same convention the
+				// lens-intervention path uses (drainCorrectives).
 				ctx.Messages = append(ctx.Messages, AgentMessage{
 					Role:    "user",
 					Content: "[system note]: " + body,
@@ -3197,10 +3122,10 @@ func (loop *agentLoop) takeModelTurn(turn int) (string, ModelResponse, turnOutco
 func (loop *agentLoop) startTurn(turn int) {
 	ctx, st := loop.ctx, loop.st
 	st.turn = turn
-	// Budget hint — only relevant when there IS a turn cap.
-	// May 10 2026: T1/T2/T3 default to uncapped (ctx.MaxTurns == 0),
-	// so the hint is mostly dormant unless an operator explicitly
-	// sets ATLAS_MAX_TURNS. T0 still hits a hint at turn 4 if a
+	// Budget hint — only relevant when there IS a turn cap. T1/T2/T3
+	// default to uncapped (ctx.MaxTurns == 0), so the hint is mostly
+	// dormant unless an operator sets ATLAS_MAX_TURNS. It fires at 80%
+	// of the cap, so T0 (capped by TierMaxTurns) still gets one if a
 	// conversational request unexpectedly tries to loop.
 	if !loop.budgetHintFired && ctx.MaxTurns > 0 && turn > 0 && turn*5 >= ctx.MaxTurns*4 {
 		loop.budgetHintFired = true
@@ -3346,30 +3271,25 @@ func (loop *agentLoop) recordModelReply(turn int, response string, tokens int, l
 // the run.
 func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseErr error) turnOutcome {
 	ctx, st := loop.ctx, loop.st
-	// Classify the failure shape once: a category for the log so
-	// docker logs reads "what kind of broken" at a glance, and
-	// targeted feedback for the model — generic "your response
-	// wasn't JSON" led to the May 2026 user-session bug where the
-	// model retried the same 1100-char edit_file with a giant
-	// old_str 5 times in a row. The response was being truncated
-	// at the llama-server token cap; the model couldn't see that
-	// and kept emitting the same too-big payload.
-	// A text answer we cut mid-string is still an answer. Deliver what
-	// was written rather than nothing — the alternative is a user who
-	// asked a question and received silence.
+	// Classify the failure shape once: a category for the log so docker
+	// logs reads "what kind of broken" at a glance, and targeted
+	// feedback for the model. A generic "your response wasn't JSON"
+	// gives the model no way to see that its response was truncated at
+	// the llama-server token cap, so it keeps emitting the same too-big
+	// payload. A text answer we cut mid-string is still an answer.
+	// Deliver what was written rather than nothing — the alternative is
+	// a user who asked a question and received silence.
 	if ctx.LastStreamCut == "content_loop" {
 		// A repetition loop is a model failure, and absorbing model
 		// failure is what this system is for. Ending the run the first
-		// time it happens hands back a half-built project: measured
-		// 2026-09-14, a run with three of five files written was
-		// terminated here with the fourth never attempted, while the
-		// corrective that names this exact failure sat unused in
-		// classifyParseFailure below. Answer the loop and keep going,
-		// bounded, before considering the partial reply an outcome.
-		// Under the unproductive-only accounting, work that landed
-		// since the last charge clears the count: the run is making
-		// progress between cuts, which is not the runaway this bound
-		// exists to stop.
+		// time it happens hands back a half-built project, while the
+		// corrective that names this exact failure
+		// (classifyParseFailure) goes unused. Answer the loop and keep
+		// going, bounded, before considering the partial reply an
+		// outcome. Under the unproductive-only accounting, work that
+		// landed since the last charge clears the count: the run is
+		// making progress between cuts, which is not the runaway this
+		// bound exists to stop.
 		if outcome := loop.answerContentLoop(turn, response); outcome != turnContinues {
 			return outcome
 		}
@@ -3388,8 +3308,8 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 		AgentMessage{Role: "assistant", Content: attemptEcho(response, ctx.LastStreamCut != "")},
 		AgentMessage{Role: "user", Content: feedback})
 	// Cap parse failures the same way we cap tool failures.
-	// Five identical parse errors in a row is a stuck loop;
-	// bailing keeps us from burning 6 more LLM round-trips.
+	// Three parse errors in a row is a stuck loop; bailing
+	// keeps us from burning more LLM round-trips.
 	loop.consecutiveErrors++
 	if loop.consecutiveErrors >= 3 {
 		log.Printf("[agent] breaking parse-error loop at turn %d (%d consecutive)", turn, loop.consecutiveErrors)
@@ -3482,9 +3402,9 @@ func (loop *agentLoop) refuseBrokenContent(turn int, parsed ModelResponse) turnO
 	// A tool_call can parse cleanly and still be mis-segmented: an
 	// unescaped quote inside a file body closes the JSON string early and
 	// the file's remainder is discarded into unknown keys, so a truncated
-	// write reports success (scenario D, 2026-09-15). Catch it here, before
-	// execution, and hand the model the real cause under the same retry cap
-	// parse failures use — never write the truncated content.
+	// write reports success. Catch it here, before execution, and hand the
+	// model the real cause under the same retry cap parse failures use —
+	// never write the truncated content.
 	if parsed.Type == "tool_call" {
 		if feedback, bad := swallowedContentFeedback(parsed.Name, parsed.Args); bad {
 			log.Printf("[agent] turn=%d %s: content string terminated early (unescaped quote) — refusing the truncated write", turn, parsed.Name)
@@ -3725,11 +3645,11 @@ func (loop *agentLoop) refuseOutsideWorkspace(parsed ModelResponse, intentArgs j
 func (loop *agentLoop) screenAfterWorkspaceCheck(turn int, response string, parsed *ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	// The intent is on the record from here: the arguments parse, the
-	// path is inside the workspace, and permission was granted. Every
-	// later refusal -- a gate, a failed fenced resolution, a failed
-	// write -- leaves the debt standing, which is the whole point:
-	// the pre-dispatch failures are exactly the ones that used to
-	// disappear.
+	// path is inside the workspace, and for every tool but delete_file
+	// permission was granted (deletion asks just below). Every later
+	// refusal -- a gate, a failed fenced resolution, a failed write --
+	// leaves the debt standing, so these pre-dispatch failures do not
+	// disappear from the record.
 	noteMutationIntent(ctx, st, parsed.Name, parsed.Args)
 
 	// Deletion asks here, not with the others. By this point the path
@@ -3850,20 +3770,13 @@ func (loop *agentLoop) refuseTruncatedArgs(turn int, parsed ModelResponse) turnO
 // runFirstGateForEdits holds back an edit of a file whose warned version on
 // disk has never been run, within the gate's bounce budget.
 //
-// Surgical-edit gate: reject write_file on existing files
-// outright. write_file is for *creating* files; edits to an
-// existing file must use edit_file with old_str/new_str.
-//
-// The gate originally only blocked near-rewrites
-// (>= 70% line overlap) or >100-line writes. That left a
-// hole: a *complete* rewrite of a 90-line template (low
-// overlap, under the size cap) would slip through and
-// destroy the original. Hardened to reject every write
-// against an existing path. Trivially-small files (<= 5
-// lines, e.g. a single-line config) are still allowed
-// because there's no edit-vs-rewrite distinction at that
-// size — anything below that is faster to overwrite than
-// to surgically edit.
+// Surgical-edit gate (applied below, after fenced resolution):
+// write_file is for creating files; edits to an existing file must use
+// edit_file with old_str/new_str, because a whole-file rewrite, even of
+// a short template, can destroy the original. Files of 5 lines or fewer
+// (e.g. a single-line config) may be overwritten: at that size there is
+// no edit-vs-rewrite distinction. Session-owned and corrupted files are
+// carved out there.
 func (loop *agentLoop) runFirstGateForEdits(parsed ModelResponse) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "edit_file" || parsed.Name == "structural_edit" ||
@@ -4036,11 +3949,10 @@ func (loop *agentLoop) refuseFencedFetch(turn int, parsed ModelResponse, intentA
 	log.Printf("[agent] fenced-content fetch failed for %s: %v", wfInput.Path, ferr)
 	fencedBounce := "You wrote \"content\": \"@fenced\" but no fenced block followed. Either reply with the complete file in one fenced code block when asked, or re-issue write_file with the full content inline."
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-		// The session stopped while the file was being
-		// fetched: its time ran out, or it was cancelled.
-		// The model sent nothing wrong, and "no fenced
-		// block followed" was false (smoke run
-		// 2026-09-27: the block had arrived).
+		// The session stopped while the file was being fetched: its
+		// time ran out, or it was cancelled. The model sent nothing
+		// wrong, and "no fenced block followed" would be false: the
+		// block may already have arrived.
 		why := "the session was cancelled"
 		if errors.Is(ctx.Ctx.Err(), context.DeadlineExceeded) {
 			why = "the session ran out of time"
@@ -4125,23 +4037,17 @@ func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs j
 	}
 	if readErr == nil {
 		existingLines := strings.Count(string(existing), "\n") + 1
-		// Exempt corrupted files. If the existing file
-		// looks like it has prose preamble or stray
-		// markdown fences (sanitizeFileContent would change
-		// it), the only way to clean it up is full
-		// replacement. edit_file can't express "remove
-		// these specific corrupted lines" cleanly; the
-		// model proved this by emitting old_str = new_str
-		// for 53 wall-minutes (May 6 18:30 → 19:23).
-		// Allow write_file in that case and log the
-		// self-heal.
-		// Self-iteration carveout: if this session wrote the file
-		// itself (it's not the user's code, it's the agent's
-		// own draft), allow overwriting. Otherwise the agent
-		// can't correct its own first-pass mistakes — the
-		// May 12 multi-file failure mode where V3 wrote a
-		// stub app.py, realized it needed render-module
-		// wiring, and got blocked from fixing it.
+		// Exempt corrupted files. If the existing file looks like it
+		// has prose preamble or stray markdown fences
+		// (sanitizeFileContent would change it), the only way to clean
+		// it up is full replacement: edit_file can't express "remove
+		// these specific corrupted lines" cleanly, and a model can loop
+		// on old_str = new_str. Allow write_file in that case and log
+		// the self-heal. Self-iteration carveout: if this session wrote
+		// the file itself (it's not the user's code, it's the agent's
+		// own draft), allow overwriting. Otherwise the agent can't
+		// correct its own first-pass mistakes, such as a stub app.py
+		// that turns out to need more wiring.
 		sessionOwned := ctx.SessionWrites[wfInput.Path]
 		corrupted := looksCorruptedOnDisk(existingPath, string(existing))
 		// Existing, never read, not ours: refuse regardless of
@@ -4166,9 +4072,9 @@ func (loop *agentLoop) guardExistingFileWrite(parsed ModelResponse, intentArgs j
 			return loop.refuseWholeFileRewrite(parsed, intentArgs, wfInput, existingPath, existingLines)
 		}
 		if existingLines > 5 {
-			// Name the actual carveout — the corrupted-file
-			// message on a session-owned overwrite sent a
-			// loop diagnosis down the wrong path (2026-07-18).
+			// Name the actual carveout: the corrupted-file message on a
+			// session-owned overwrite sends a loop diagnosis down the
+			// wrong path.
 			if corrupted {
 				log.Printf("[agent] allowing write_file on corrupted %s (%d lines, sanitizer would clean it)", wfInput.Path, existingLines)
 			} else {
@@ -4308,15 +4214,6 @@ func (loop *agentLoop) redirectForegroundServer(parsed ModelResponse, intentArgs
 }
 
 // refuseUnsafeRunCommand refuses a run_command the shell validator rejects.
-//
-// Shell-op guardrail: bounce destructive filesystem verbs in
-// run_command. The native edit_file/write_file/delete_file
-// tools are the supported mutation path — they go through
-// V3, the surgical-edit gate, and audit logging. Shell `mv`,
-// `rm`, `cp`, `find -delete` bypass all of that and led to
-// today's "agent moved templates into venv mid-task" disaster.
-// Yolo mode opts out of this for users who want the model to
-// have free rein.
 func (loop *agentLoop) refuseUnsafeRunCommand(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "run_command" && !ctx.YoloMode {
@@ -4343,15 +4240,12 @@ func (loop *agentLoop) refuseUnsafeRunCommand(parsed ModelResponse, intentArgs j
 // refuseUnsafeRunBackground refuses a run_background the shell validator
 // rejects.
 //
-// Same shell-validation + working-dir gate for run_background.
-// Without this, the May 8 2026 phantom-/workspace drift went
-// unblocked: the surgical-edit gate covered run_command but
-// run_background sailed through, so `run_background "cd
-// /workspace && python app.py"` looped for 3 turns before the
-// repeat detector caught it. validateRunCommand chains both
-// gates so destructive shell verbs and /workspace drift get
-// the same treatment regardless of which run_* tool the model
-// picks.
+// Same shell-validation + working-dir gate for run_background; without
+// it a command such as
+// `run_background "cd /workspace && python app.py"` passes while the
+// same run_command is bounced. validateRunCommand chains both gates so
+// destructive shell verbs and /workspace drift get the same treatment
+// regardless of which run_* tool the model picks.
 func (loop *agentLoop) refuseUnsafeRunBackground(parsed ModelResponse, intentArgs json.RawMessage) turnOutcome {
 	ctx, st := loop.ctx, loop.st
 	if parsed.Name == "run_background" && !ctx.YoloMode {
@@ -4632,20 +4526,14 @@ func (loop *agentLoop) detectRepetition(turn int, parsed ModelResponse, intentAr
 		loop.repeatDetections++
 		// Steer-before-kill ladder. On the FIRST detection, fall
 		// through: pendingRepeatCorrective is injected below and the
-		// loop continues, so the model gets an explicit nudge to
-		// change approach before we ever terminate. Only hard-stop
-		// on the SECOND detection — the model saw the steer and
-		// repeated anyway (genuinely stuck).
-		//
-		// The old code hard-stopped on the FIRST detection whenever
-		// st.madeProductiveChange was set ("work landed, model spinning
-		// on verification"). That mistook legitimate iteration for a
-		// loop: 2026-07-19 showed models one nudge from finishing
-		// — regex-chess repeating a verify command that itself had a
-		// syntax error, polyglot mid-fix — killed with their solution
-		// on disk but unverified. A nudge first is the whole point:
-		// the broken-verify steer (below) can turn exactly these into
-		// completions.
+		// loop continues, so the model gets an explicit nudge to change
+		// approach before we ever terminate. Only hard-stop on the
+		// SECOND detection — the model saw the steer and repeated
+		// anyway (genuinely stuck). The first detection steers even
+		// after work has landed: a model repeating a verify command
+		// (one that may itself be broken) can be one nudge from
+		// finishing, and the broken-verify steer below can turn exactly
+		// these into completions.
 		if loop.repeatDetections >= 2 {
 			// Output-rescue: if the task named a deliverable and it
 			// isn't on disk, the model is looping WITHOUT having
@@ -4677,15 +4565,14 @@ func (loop *agentLoop) detectRepetition(turn int, parsed ModelResponse, intentAr
 // detectReasoningRepetition watches the model's reasoning for the same opening
 // turn after turn, and returns the corrective it queued, or "".
 //
-// Reasoning-repetition detector (BiasBusters #30). The
-// model's reasoning_content stream is captured per-turn in
-// ctx.LastTurnReasoning by callLLMOnce. recordReasoning
-// compares the normalized opening prefix against the prior
-// turn's snippet; ≥2 consecutive identical openings fires
-// the intervention. Sibling to the structural repeat
-// detector (above) and the lens regression detector (below)
-// — three different angles on "model is stuck", catching
-// different shapes of stuck-ness.
+// Reasoning-repetition detector. The model's reasoning_content stream
+// is captured per-turn in ctx.LastTurnReasoning by callLLMOnce.
+// recordReasoning compares the normalized opening prefix against the
+// prior turn's snippet; three consecutive identical openings
+// (reasoningRepeatThreshold repeats) fire the intervention. Sibling to
+// the structural repeat detector (above) and the lens regression
+// detector (below) — three different angles on "model is stuck",
+// catching different shapes of stuck-ness.
 func detectReasoningRepetition(ctx *AgentContext, turn int) string {
 	pendingReasoningCorrective := ""
 	if msg, obs, repeating := recordReasoning(ctx, ctx.LastTurnReasoning); repeating {
@@ -4706,15 +4593,13 @@ func detectReasoningRepetition(ctx *AgentContext, turn int) string {
 // quality crash, or "". A lens that cannot score ends the run, and the error is
 // then what runAgentLoop returns.
 //
-// Score write_file/edit_file content with the geometric lens
-// BEFORE executing. The score reflects what the model produced
-// (independent of whether the tool succeeds). On a quality-crash pattern (N consecutive
-// low scores) we queue a corrective system message that gets
-// appended AFTER the tool result so the next LLM call sees:
-// assistant(tool_call) → tool(result) → system(lens warning).
-// This is the direct fix for the May 6 templates/resources.html
-// stub-loop case where the stub gate kept rejecting but the model
-// kept retrying the same stub.
+// Score write_file/edit_file content with the geometric lens BEFORE executing.
+// The score reflects what the model produced (independent of whether the tool
+// succeeds). On a quality-crash pattern (N consecutive low scores) we queue a
+// corrective that is appended AFTER the tool result, so the next LLM call sees:
+// assistant(tool_call) → tool(result) → user([system note]: lens warning). This
+// catches a model that keeps retrying the same stub while the stub gate keeps
+// rejecting it.
 func (loop *agentLoop) scoreWithLens(turn int, parsed ModelResponse) (string, turnOutcome, error) {
 	ctx, st := loop.ctx, loop.st
 	pendingLensCorrective := ""
@@ -4870,22 +4755,20 @@ func (loop *agentLoop) dischargeWarnedRuns(parsed ModelResponse, result *ToolRes
 	ctx, st := loop.ctx, loop.st
 	if (parsed.Name == "run_command" || parsed.Name == "run_background") && result != nil {
 		// Discharge only the marks this command actually attempted to
-		// EXECUTE. Two prior rules both failed an audit: clearing on
-		// any command let `ls` bless a warned file, and clearing on a
-		// filename substring let `cat solve.py` or `grep main solve.py`
-		// do the same — naming a file is not running it. The mark is
-		// "this version has never been executed"; only an execution
-		// attempt (interpreter invocation or ./file) changes that fact,
-		// and the attempt itself suffices — pass or fail, the model has
-		// now seen the real runtime behavior.
+		// EXECUTE. Clearing on any command would let `ls` bless a
+		// warned file, and clearing on a filename substring would let
+		// `cat solve.py` or `grep main solve.py` do the same — naming a
+		// file is not running it. The mark is "this version has never
+		// been executed"; only an execution attempt (interpreter
+		// invocation or ./file) changes that fact, and the attempt
+		// itself suffices — pass or fail, the model has now seen the
+		// real runtime behavior.
 		//
 		// run_background is an execution attempt too. A server script
 		// is redirected there by the foreground gate, and its settle
 		// window returns the same traceback run_command would; a mark
-		// that only run_command could discharge left the file
-		// permanently "never run" (observed 2026-09-14: the model ran
-		// app.py in the background, read the SyntaxError, and had its
-		// fix refused for not having run the file).
+		// that only run_command could discharge would leave the file
+		// permanently "never run" and refuse the model's fix.
 		var rc struct {
 			Command string `json:"command"`
 		}
@@ -4932,20 +4815,14 @@ func reportLiteralRepair(ctx *AgentContext, result *ToolResult, path, lp, fixed 
 // adherence, which may ask for a revised plan.
 func (loop *agentLoop) recordCallEffects(turn int, parsed ModelResponse, result *ToolResult) {
 	ctx, st, userMessage := loop.ctx, loop.st, loop.userMessage
-	// Track productive state changes — write/edit/delete that landed.
-	// Used below to soften the error-loop exit when work was completed
-	// AND by the done-without-action gate so a feature prompt
-	// ("rewrite X", "add Y") can't declare done without any actual
-	// edit on disk. structural_edit was missing from this list pre-May-10,
-	// which let a structural_edit-only success path slip past the
-	// productive-change tracking too.
-	// insert_after and replace_lines were absent, so a turn whose only
-	// work was a successful insert did not count as productive and the
-	// action gate could bounce it for having "done nothing".
-	// move_file was missing here, so a successful rename counted as no
-	// work at all: the run reported "Nothing was written -- no file was
-	// created or changed" while the destination sat on disk. A
-	// relocation is a state change like any other.
+	// Track productive state changes — write/edit/delete/move that landed. Used
+	// below to soften the error-loop exit when work was completed AND by the
+	// done-without-action gate so a feature prompt ("rewrite X", "add Y") can't
+	// declare done without any actual edit on disk. Every mutating tool belongs
+	// in this list (structural_edit, insert_after, replace_lines and move_file
+	// included), or a run whose only work was that tool counts as having done
+	// nothing. A landed write whose result carries a parse warning is pending
+	// execution; a landed clean write clears its own pending mark.
 	if result.Success && (parsed.Name == "write_file" || parsed.Name == "edit_file" ||
 		parsed.Name == "structural_edit" || parsed.Name == "delete_file" ||
 		parsed.Name == "insert_after" || parsed.Name == "replace_lines" ||
@@ -5068,11 +4945,10 @@ func (loop *agentLoop) countFailure(turn int, parsed ModelResponse, result *Tool
 		}
 		return true
 	}
-	// May 10 2026: path-aware breaker. Track which file each
-	// failure was on; only escalate when 3 consecutive failures
-	// share the same path (= truly stuck on one file). 3 fails
-	// across DIFFERENT files = grinding through multi-file work,
-	// keep going.
+	// Path-aware breaker. Track which file each failure was on; only
+	// escalate when 3 consecutive failures share the same path (= truly
+	// stuck on one file). 3 fails across DIFFERENT files = grinding
+	// through multi-file work, keep going.
 	failPath := extractFailurePath(parsed.Name, parsed.Args)
 	ctx.RecentFailurePaths = append(ctx.RecentFailurePaths, failPath)
 	if len(ctx.RecentFailurePaths) > 3 {
@@ -6246,18 +6122,17 @@ var proseReplyRe = regexp.MustCompile(`^\s*\{\s*"type"\s*:\s*"(text|done)"`)
 // digitRunRe matches one run of digits.
 var digitRunRe = regexp.MustCompile(`[0-9]+`)
 
-// countedLoop reports a prose reply that loops while it counts. Each repeat
-// carries a new number, so no tail repeats verbatim and loopingTailCount never
-// sees it: "29. I'll check planning.py's end. 30. I'll check planning.py's
-// end. ..." ran 328 s to the token cap in the fc8321d smoke run
-// (bugfind_tiebreak rep 1). With each run of digits masked, the repeats are
-// the same text.
+// countedLoop reports a prose reply that loops while it counts ("29. I'll
+// check planning.py's end. 30. I'll check planning.py's end. ..."). Each
+// repeat carries a new number, so no tail repeats verbatim, loopingTailCount
+// never sees it, and the reply runs to the token cap. With each run of digits
+// masked, the repeats are the same text.
 //
-// Only a text or done reply with no code block in it. A file body can count
+// Only a text or done reply with no code block in it: a file body can count
 // legitimately (CSV rows, a numbered test table, a migration list), and it
-// streams in a tool call, a fenced sub-call, or a malformed call whose
-// "type" names the tool, none of which starts as a prose reply. The probe
-// must also hold words, so a numeric table in an answer is not a loop.
+// streams in a tool call, a fenced sub-call, or a malformed call whose type
+// names the tool, none of which starts as a prose reply. The probe must also
+// hold words, so a numeric table in an answer is not a loop.
 func countedLoop(s string) bool {
 	if !proseReplyRe.MatchString(s) || strings.Contains(s, "```") {
 		return false
@@ -6326,15 +6201,14 @@ func pinnedIndices(msgs []AgentMessage) (pinIdx, filePinIdx int) {
 
 // budgetedKeepLast returns how many trailing messages trimMessages should
 // keep so the kept set (system + pinned user + pinned file + tail) fits the
-// token budget. Floored at 8 (never trim more aggressively than the old
-// fixed rule); when the whole conversation fits, returns len(msgs) so
-// nothing is trimmed.
+// token budget. Floored at 8; when the whole conversation fits it returns
+// len(msgs)-1, so nothing is trimmed.
 //
 // The pinned messages MUST be pre-counted here: trimMessages re-injects
 // them even when they fall outside the tail window, so a budget that
-// ignored them under-counted the real prompt by the size of the pinned
-// read_file — observed live as a llama-server 400 exceed_context_size
-// (32844 > 32768 per-slot) hard-killing a bench session.
+// ignored them would under-count the real prompt by the size of the pinned
+// read_file, and the request could exceed the per-slot context (a
+// llama-server 400 exceed_context_size).
 func budgetedKeepLast(msgs []AgentMessage) int {
 	if len(msgs) == 0 {
 		return 0
@@ -6473,12 +6347,11 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 
 	applyPermissionMode(ctx, req)
 
-	// Detect project (implemented in context.go)
 	// The client's declaration, checked against the workspace this request
 	// resolved to. A bad contract is a bad request: it is refused outright
 	// rather than dropped, because a client that declared obligations and had
 	// them silently discarded would be told its run finished having proved
-	// none of them. Nothing reads the stored value yet.
+	// none of them.
 	if !applyTaskContract(w, ctx, req, workingDir) {
 		return
 	}
@@ -6493,6 +6366,7 @@ func handleAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Detect project (implemented in context.go)
 	ctx.Project = detectProjectInfo(workingDir)
 
 	flusher, ok := openEventStream(w, ctx)
@@ -6529,7 +6403,7 @@ type agentRequest struct {
 	RemovedV3Mode          string `json:"v3_mode,omitempty"`
 	RemovedFeasibilityMode string `json:"feasibility_mode,omitempty"`
 	// What the client declares about the request. Optional, and absent
-	// stays distinguishable from present-and-empty. Nothing reads it yet.
+	// stays distinguishable from present-and-empty.
 	TaskContract *TaskContract `json:"task_contract,omitempty"`
 }
 
@@ -6712,16 +6586,13 @@ func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bo
 	// http.ResponseWriter is NOT goroutine-safe. StreamFn fires from at
 	// least two concurrent goroutines during a single agent turn:
 	//   - main agent loop (tool dispatch, LLM SSE forwarding)
-	//   - pollPromptProgress (250ms ticker emitting llm_prompt_progress)
-	// May 10 2026: adding reasoning_token doubled the event rate from
-	// the SSE-decode loop, surfacing a long-latent race where
-	// concurrent Write+Flush calls produced interleaved bytes that
-	// corrupted the chunked-encoding framing — clients then errored
-	// with "chunked line ends with bare LF" and dropped, which the
-	// proxy saw as `context canceled` mid-prompt-eval. Serialize the
-	// writes with a per-handler mutex so chunk framing stays
-	// well-formed regardless of how fast or how concurrently events
-	// fire.
+	//   - pollPromptProgress (100ms ticker emitting llm_prompt_progress)
+	// Concurrent Write+Flush calls interleave bytes and corrupt the
+	// chunked-encoding framing; the client then errors with "chunked line ends
+	// with bare LF" and drops, which the proxy sees as `context canceled`
+	// mid-prompt-eval. Serialize the writes with a per-handler mutex so chunk
+	// framing stays well-formed regardless of how fast or how concurrently
+	// events fire.
 	var streamMu sync.Mutex
 	ctx.StreamFn = func(eventType string, data interface{}) {
 		event := SSEEvent{Type: eventType, Data: data}
@@ -6803,45 +6674,30 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
 }
 
-// classifyParseFailure walks the raw response shape once and returns
-// both a short stable category for the docker log (so `docker logs
-// atlas-proxy` reads "what kind of broken" at a glance) and a targeted
-// feedback message for the model. The model can't see why parsing
-// failed, so a generic "respond in JSON" message lets it loop forever
-// on the same pattern:
-//
-//   - starts with `{"type":"tool_call",...,"name":"<edit_file|write_file>",...}` and looks
-//     truncated → it tried a too-big edit; tell it to shrink old_str/new_str
-//   - non-JSON prose → standard "respond JSON only" reminder
-//   - empty or whitespace → continuation nudge
-//
-// Categories:
-//
-//	empty           — response was whitespace
-//	prose           — response is non-JSON text (model narration leaking)
-//	truncated_tool  — JSON tool_call envelope cut off mid-args (max_tokens)
-//	html_entities   — tool_call contains &lt; / &gt; / &amp; in string args
-//	malformed_tool  — tool_call envelope present but JSON malformed
-//	non_json        — response begins with text other than '{'
-//
-// The bug this addresses: in May 2026 a user fix-intent prompt put the
-// model in a loop emitting the same 1100-char edit_file with all 5
-// flask routes embedded in old_str. Llama-server's response cap cut it
-// mid-string, parse failed, we didn't tell the model why, it retried
-// identically. classifyParseFailure breaks the cycle by naming the
-// failure mode.
-// classifyParseFailure names the shape of an unparseable response and returns
-// the corrective to send back.
+// classifyParseFailure names the shape of an unparseable response and returns a
+// short stable category for the docker log (so `docker logs atlas-proxy` reads
+// "what kind of broken" at a glance) and a targeted corrective for the model.
+// The model can't see why parsing failed, so a generic "respond in JSON"
+// message lets it loop on the same pattern; naming the failure breaks the
+// cycle.
 //
 // `streamCut` is why the PROXY ended the generation, or "" when the model
 // stopped on its own. It comes first because it is the only fact here that is
 // known rather than inferred: everything below reads the wreckage and guesses.
-// Observed across four sessions — the model began reproducing a 2000-line data
-// fixture, degenerated into repeating one line ~50 times, the loop detector
-// cut the stream at 601 chars mid-JSON, and the classifier reported
-// "truncated_tool: your response hit the token cap, make the call smaller".
-// That is the wrong diagnosis and the wrong instruction, so the model retried
-// the same thing until the run died.
+// A loop cut mid-JSON looks truncated, and "you hit the token cap, make the
+// call smaller" is then the wrong diagnosis and the wrong instruction.
+//
+// Categories:
+//
+//	loop_cut        — the proxy cut a response that was repeating itself
+//	old_str_cut     — the proxy cut an old_str that stopped matching the file
+//	reasoning_cut   — the reasoning budget ran out before a tool call
+//	empty           — response was whitespace
+//	html_entities   — tool_call contains &lt; / &gt; / &amp; in string args
+//	prose           — response does not start with '{' (model narration leaking)
+//	non_json        — starts with '{' but is not a tool_call
+//	truncated_tool  — JSON tool_call envelope cut off mid-args (max_tokens)
+//	malformed_tool  — tool_call envelope present but JSON malformed
 func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 	switch streamCut {
 	case "content_loop":
@@ -6869,18 +6725,16 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 	if stripped == "" {
 		return "empty", "Your response was empty. Respond with ONLY a single JSON object — {\"type\":\"tool_call\",...} or {\"type\":\"text\",\"content\":\"...\"} or {\"type\":\"done\",\"summary\":\"...\"}."
 	}
-	// HTML-entity encoding detection — some models encode <, >, &
-	// inside tool-call string args (`&lt;!DOCTYPE...&gt;`) instead of
-	// emitting them literally. JSON parses fine if the whole envelope
-	// arrives, but those entities then appear verbatim in old_str and
-	// don't match the actual file content. Catch and redirect — works
-	// regardless of whether the response has a prose prefix (May 8
-	// dashboard.html session: model emitted "Now I can see..." then a
-	// JSON tool_call with HTML-entity-encoded old_str; the
-	// looksLikeToolCall check below missed it because the response
-	// didn't start with `{`, leaving the targeted corrective unfired).
-	// Checked FIRST — the entity bug is a stronger signal than "this
-	// is narration," so it wins over prose/non_json/malformed.
+	// HTML-entity encoding detection: some models encode <, >, & inside
+	// tool-call string args (`&lt;!DOCTYPE...&gt;`) instead of emitting
+	// them literally. JSON parses fine if the whole envelope arrives,
+	// but those entities then appear verbatim in old_str and do not
+	// match the file. Catch and redirect whether or not the response
+	// has a prose prefix: the looksLikeToolCall check below needs the
+	// response to start with `{`, so a prose prefix would leave the
+	// targeted corrective unfired. Checked FIRST: the entity bug is a
+	// stronger signal than "this is narration", so it wins over
+	// prose/non_json/malformed.
 	htmlEntities := strings.Contains(stripped, "&lt;") ||
 		strings.Contains(stripped, "&gt;") ||
 		strings.Contains(stripped, "&amp;")
@@ -7099,25 +6953,11 @@ func envDurationSec(key string, def int) time.Duration {
 	return time.Duration(def) * time.Second
 }
 
-// fetchFencedContent asks the model for a file's contents in its native
-// channel: one unconstrained call whose reply is a single fenced block.
-//
-// Code emitted INSIDE a JSON string pays escaping pressure on every dense
-// line, and the served model measurably cannot sustain it: the same debounce
-// solution parses 6/6 emitted fenced and 0/6 emitted as a JSON string. The
-// slip catalogue of three benchmark arms — a missing close-paren on an
-// append, a literal \n fusing a statement into a comment, list joins losing
-// their spaces — is this one channel problem. The envelope stays under the
-// JSON constraint; only the file body moves to plain text.
-//
-// The sub-call is ephemeral: nothing is appended to ctx.Messages, so from
-// the main conversation's view the model wrote "@fenced" and the write
-// simply happened.
-// maxFencedFailuresPerPath is the whole-session allowance: one attempt plus
-// one constrained retry. Past that the model must change mutation strategy —
-// inlining the body in write_file, or editing instead of rewriting — because
-// a third resolution has never been observed to succeed where two failed and
-// each one costs a full generation.
+// maxFencedFailuresPerPath is the whole-session allowance: one attempt plus one
+// retry. Past that the model must change mutation strategy — inlining the body
+// in write_file, or editing instead of rewriting — because a third resolution
+// has never been observed to succeed where two failed and each one costs a full
+// generation.
 const maxFencedFailuresPerPath = 2
 
 // fencedBudgetExhausted reports whether this path has already spent its
@@ -7130,9 +6970,8 @@ func fencedBudgetExhausted(ctx *AgentContext, path string) bool {
 // tolerates before the channel is turned off for the rest of the run. One: the
 // stall reflects the session's llama-server state, so the first stall predicts
 // the rest, and every later @fenced would pay another ~25s watchdog cut for
-// nothing. Two acceptance runs (2026-09-15) lost their budget to repeated
-// stalls across files. Inline writes are the fallback and are now defended by
-// the swallowed-content detector.
+// nothing. Inline writes are the fallback, defended by the swallowed-content
+// detector (swallowedContentFeedback).
 const fencedSessionStallLimit = 1
 
 // fencedChannelDisabledForSession reports whether the fenced channel has
@@ -7167,11 +7006,11 @@ func charge(ctx *AgentContext, path string) {
 // honest terminal once a fetch returns.
 const fencedReserve = 20 * time.Second
 
-// fencedFitsRemainingBudget answers requirement (a): honour a deadline when
-// the context carries one, and say so plainly when it does not. Production
-// today builds ctx.Ctx with context.WithCancel and NO deadline, so this
-// returns true and the fetch is bounded by the progress watchdog alone —
-// session-budget reservation is unavailable in that configuration.
+// fencedFitsRemainingBudget reports whether the work deadline leaves room
+// for one first-content wait plus fencedReserve to validate the write and
+// send an honest terminal. A context with no deadline has no budget to
+// reserve from, so it returns true and the fetch is bounded by the progress
+// watchdog alone.
 func fencedFitsRemainingBudget(ctx *AgentContext) bool {
 	if ctx == nil || ctx.Ctx == nil {
 		return true
@@ -7184,6 +7023,19 @@ func fencedFitsRemainingBudget(ctx *AgentContext) bool {
 	return time.Until(deadline) >= need
 }
 
+// fetchFencedContent asks the model for a file's contents in its native
+// channel: a single fenced block (attempt 0 constrained by the fence grammar, a
+// retry as free text).
+//
+// Code emitted INSIDE a JSON string pays escaping pressure on every dense line,
+// and slips such as a missing close-paren, a literal \n fusing a statement into
+// a comment, or list joins losing their spaces are this one channel problem.
+// The envelope stays under the JSON constraint; only the file body moves to
+// plain text.
+//
+// The sub-call is ephemeral: nothing is appended to ctx.Messages, so from the
+// main conversation's view the model wrote "@fenced" and the write simply
+// happened.
 func fetchFencedContent(ctx *AgentContext, rawCall, path string) (string, error) {
 	if err := fencedFetchRefusal(ctx, path); err != nil {
 		return "", err
@@ -7624,31 +7476,25 @@ func knownArgKeys(toolName string) map[string]bool {
 }
 
 // swallowedContentFeedback catches a tool_call that parsed cleanly into the
-// WRONG shape because a file body terminated its JSON string early.
-//
-// The mechanism, observed live on scenario D (2026-09-15): the model wrote a
-// <script> containing `setData("text/plain"")` — a doubled quote. Inside the
-// write_file JSON envelope that bare `"` closed the `content` string, and
-// json.Unmarshal read the entire rest of the file (the remaining ~1900 bytes,
-// through </html>) as a sibling KEY with value "DONE". Decoding into the typed
-// WriteFileInput silently discards that key, so a 3061-byte template landed as
-// 3069 TRUNCATED bytes — no </script>, no </html>, no fetch() — reported as a
-// clean, complete write. The model saw success and never repaired it; V3 then
-// took the truncated bytes as its baseline and shipped them.
+// WRONG shape because a file body terminated its JSON string early. The
+// mechanism: a doubled quote in the file body (for example inside a <script>)
+// closes the content string of the write_file JSON envelope, and
+// json.Unmarshal reads the rest of the file as a sibling KEY. Decoding into
+// the typed WriteFileInput silently discards that key, so a truncated file
+// lands and is reported as a clean, complete write; the model sees success and
+// never repairs it, and V3 can take the truncated bytes as its baseline.
 //
 // extractModelResponse cannot catch this: the envelope is valid JSON, so the
-// direct parse succeeds and the parse-failure path (which only runs on a
-// parse ERROR) never fires. The syntax gates cannot either: html.parser is
-// lenient about an unclosed <script>, and embedded_script_check suppresses
-// findings when <script>/</script> counts disagree — which a truncated file
-// guarantees. Both fail open on exactly this shape.
+// direct parse succeeds and the parse-failure path (which only runs on a parse
+// ERROR) never fires. The syntax gates cannot either: html.parser is lenient
+// about an unclosed <script>, and embedded_script_check suppresses findings
+// when <script>/</script> counts disagree, which a truncated file guarantees.
+// Both fail open on exactly this shape.
 //
 // Detection is the presence of an args key outside the tool's real signature
 // that carries the fingerprint of leaked file content: it is long, or holds
 // code/markup punctuation a genuine argument name never would. Scoped to tools
 // with a long free-text field, since those are the only ones this can strike.
-// Verified against the frozen acceptance corpus: fires on the two D writes and
-// the one B write that were truncated this way, and on nothing else.
 func swallowedContentFeedback(toolName string, args json.RawMessage) (string, bool) {
 	known := knownArgKeys(toolName)
 	if known == nil {
@@ -7686,28 +7532,26 @@ func swallowedContentFeedback(toolName string, args json.RawMessage) (string, bo
 // classifyAgentTier decides whether a request is conversational.
 //
 // The message tier has exactly two behaviours, despite the four-value Tier
-// type. TierMaxTurns caps T0 at 5 turns and leaves T1/T2/T3 uncapped
+// type. TierMaxTurns caps T0 at 12 turns and leaves T1/T2/T3 uncapped
 // alike; shouldGeneratePlan tests only Tier0Conversational; and the tier
 // travels to v3-service where it is read into a log line and never branched
 // on. V3 activation is driven by classifyFileTier, which scores the file
-// being edited — a different function that does use T1/T2/T3 meaningfully.
-// So the only question here is conversational or not, and the returned
-// non-T0 value is Tier2Medium because that is what every consumer treats
-// every non-T0 value as.
+// being edited and does use T1/T2/T3. So the only question here is
+// conversational or not, and the non-T0 value is Tier2Medium because that
+// is what every consumer treats every non-T0 value as.
 //
 // The costs are asymmetric, which sets the direction of the default.
 // Misreading chat as a task wastes one planner call on a message the model
 // answers and closes in a single turn. Misreading a task as chat caps it at
-// 5 turns and skips planning, and a capped task fails: "the snake is still
-// moving way too fast, please slow it down significantly" was classified
-// conversational during 2026-07-21 dogfooding and returned a zero-tool-call
-// non-answer instead of an edit.
+// 12 turns and skips planning, and a capped task fails.
 //
 // So T0 requires positive evidence, and the absence of a recognized task
-// word is not evidence. Describing desired software behaviour is open
-// vocabulary with no closed list to match against, while greetings are
-// short and questions are a closed grammatical class. Both of those are
-// things a message can be shown to BE, rather than shown not to be.
+// word is not evidence: "the snake is still moving way too fast, please
+// slow it down" names no task word and is still a task. Describing desired
+// software behaviour is open vocabulary with no closed list to match
+// against, while greetings are short and questions are a closed grammatical
+// class. Both of those are things a message can be shown to BE, rather than
+// shown not to be.
 func classifyAgentTier(message string) Tier {
 	trimmed := strings.TrimSpace(message)
 
@@ -8420,12 +8264,12 @@ func samplePlanContext(workingDir string, maxFiles, maxBytes int) map[string]str
 		}
 	}
 	// If priority files yielded nothing at the workspace root, the
-	// project may live one level down — common when the user's
-	// `atlas tui` cwd was the parent dir (e.g. /workspace) but the
-	// flask app is at /workspace/snake/. Walk one level looking for
-	// the SAME priority filenames inside subdirectories. Without
-	// this, the May 2026 user-session planner saw zero context and
-	// the agent wasted 3 turns finding `snake/app.py`.
+	// project may live one level down -- common when the user's
+	// `atlas tui` cwd was the parent dir (e.g. /workspace) and the app
+	// is in a subdirectory. Walk one level looking for the SAME
+	// priority filenames inside subdirectories. Without this the
+	// planner sees no project context and the agent spends turns
+	// finding the files.
 	if len(out) == 0 {
 		entries, err := dir.ReadDir()
 		if err != nil {
@@ -8821,13 +8665,12 @@ func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason
 
 // terminalCompletionAllowed decides whether a model-issued `done` may be
 // called completed. It answers from the workspace as it is right now, never
-// from the run's history.
-//
-// The pair-1 defect this exists to prevent: a run deleted the deliverable and
-// the delete's success authorised the completion. Existence is not validity,
-// an earlier successful write is not the current bytes, and a removal is not
-// an achievement unless removal was the task -- which the proxy cannot
-// establish, so it does not pretend to.
+// from the run's history, so a delete's success can never authorise the
+// completion by itself. Existence is not validity, an earlier successful
+// write is not the current bytes, and a removal is not an achievement unless
+// removal was the task. The proxy cannot infer that from the model; only a
+// deletion the user approved through the permission endpoint counts
+// (fulfilledApprovedDeletion).
 func terminalCompletionAllowed(ctx *AgentContext, expected []string) (bool, string) {
 	if blockingTombstone(ctx) {
 		// Something was deleted or moved. Whether that WAS the task is not
@@ -8912,11 +8755,11 @@ func declaredOrOwnedDeliverables(ctx *AgentContext, expected []string) []string 
 }
 
 // blockingTombstone reports whether anything was removed that this run cannot
-// account for.
-//
-// A plain deletion always blocks. Whether removing a file was the task is not
-// knowable from the workspace, and a delete authorising its own completion is
-// the pair-1 defect.
+// account for. A plain deletion blocks unless the user approved it through
+// the permission endpoint and it is still carried out
+// (fulfilledApprovedDeletion): whether removing a file was the task is not
+// knowable from the workspace, and a delete must not authorise its own
+// completion.
 //
 // A move is a different fact and does not need intent inferred. The source is
 // gone AND the bytes are somewhere the ledger can point at -- TombstoneReason
@@ -8930,7 +8773,8 @@ func declaredOrOwnedDeliverables(ctx *AgentContext, expected []string) []string 
 // The contract is reused rather than restated, deliberately: a move must not
 // be an easier way to demonstrate a file than writing one. Restoration stays
 // prohibited on the tombstone either way -- this decides completion, not
-// whether the old path can come back.
+// whether the old path can come back. An approved deletion whose path is back
+// on disk also blocks.
 func blockingTombstone(ctx *AgentContext) bool {
 	if ctx == nil {
 		return false
@@ -9251,17 +9095,16 @@ func finishCancelledRun(ctx *AgentContext, st *runState, turn int) error {
 	return nil
 }
 
-// --- Phase 4A: the summary a non-completed run is allowed to carry ----------
+// --- The summary a non-completed run is allowed to carry ---------------------
 //
-// Four of fifty Stage-1 sessions ended with the model's own prose --
-// "I have successfully implemented the interval priority logic in solve.py" --
-// over an artifact nothing had verified. Three more ended with no summary at
-// all. Phase 2B made `status` honest; a client reading only `summary`, which
-// is every client that predates that field, still read a success.
+// A client that reads only `summary` would otherwise read a success from the
+// model's own prose ("I have successfully implemented ...") over an artifact
+// nothing verified, or get no summary at all.
 //
 // So the server owns the sentence whenever it does not own a completion. A
 // completed status keeps the model's account, because the exact-hash gate has
-// already agreed with it.
+// already agreed with it; when the completion rests only on a parse, a claim
+// that the code ran is labelled (parseOnlySummary).
 
 // completionClaims are the phrases a finished run is allowed to use. Matching
 // is on the claim, not on the word: "no verification command completed
@@ -10346,14 +10189,11 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 
 // finalizeCompletion is the one decision both exits make, in one order.
 //
-// The defect it closes: the status was decided from the deliverable evidence
-// alone, and the predicates that prove an unmet request were consulted twelve
-// lines later, for the summary only. A run could therefore report
-// completed / no_file_obligation while its own summary said "Nothing was
-// written — no file was created or changed in this run." Measured on a
-// four-target run that wrote nothing, and on a deny-listed write that was
-// correctly refused: neither left a ledger entry, so neither had an obligation
-// to fail, and both were called success.
+// The status reads the same evidence the summary does. Decided from the
+// deliverable evidence alone, a run that wrote nothing, or whose only write was
+// correctly refused, has no ledger entry and so no obligation to fail, and
+// would report completed / no_file_obligation while its own summary says
+// nothing was written.
 //
 // Nothing new is inferred. wantsStateChange, the action demand and the
 // verification demand already exist and are already trusted enough to rewrite
@@ -10361,12 +10201,22 @@ func fencedChannelRecovery(ctx *AgentContext, st *runState, relPath string) stri
 // evidence. No prose is parsed, no obligation is invented for a path the
 // session never owned, and no more-specific existing failure is replaced.
 //
-// The order is fixed and shared with the summary composition below it:
+// The order is fixed:
 //
-//  1. a deliverable failure keeps its own, more specific reason;
-//  2. otherwise, work was demanded on disk and none landed;
-//  3. otherwise, verification was demanded and none passed;
-//  4. otherwise the completion stands.
+//  1. a file this session left unparseable (repair_unfinished);
+//  2. a deliverable failure keeps its own, more specific reason;
+//  3. work was demanded on disk and none landed;
+//  4. verification was demanded and none passed, including the work
+//     contract's bound verification;
+//  5. an authorized delivery is not yet settled;
+//  6. a prose reply after work in work mode;
+//  7. a reply that leaves work outstanding, declares itself incomplete,
+//     hands the investigation back, misses the asked scope, or asks the
+//     user;
+//  8. background work still live;
+//  9. unresolved mutation debt;
+//  10. an exit gate spent with its finding still true;
+//  11. otherwise the completion stands.
 //
 // completedReason lets an exit name its own reason for a genuine completion
 // (the text exit says text_reply); empty keeps the deliverable evidence's.
@@ -10728,12 +10578,9 @@ func executionSucceeded(tool string, result *ToolResult) bool {
 // the exact bytes that ran, as its own kind, and without touching the
 // checkpoint: an execution demonstrates the file, it does not author it, and
 // a syntax checkpoint that restoration may still need is left as it was.
-//
-// Observed 2026-09-15: a structural_edit landed through V3 with no parse
-// verdict of its own, the model then started the server and it ran, and the
-// run was still told at completion that the file was never written in a state
-// it could check. The model spent its last turns on that phantom instead of
-// the defect the lint had already named.
+// Without this, a file that landed with no parse verdict of its own (a
+// structural_edit through V3) and then ran clean would still be reported at
+// completion as never written in a checkable state.
 func settleDebtByExecution(ctx *AgentContext, st *runState, command string, succeeded bool) {
 	if !succeeded || st == nil || len(st.mutationDebt) == 0 {
 		return
