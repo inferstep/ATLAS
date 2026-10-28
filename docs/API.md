@@ -1167,8 +1167,8 @@ attention-based or DeltaNet/SSM-based.
 
 **Wire format rationale:** base64 over JSON arrays. A single layer of
 84 tokens × 4096 dims is 1.31 MiB as raw float32 and 1.75 MiB as base64.
-JSON would push 50+ MiB per multi-layer scoring call;
-base64 keeps it manageable.
+A JSON array of the same floats is several times larger; base64 keeps it
+manageable.
 
 ### GET /health
 
