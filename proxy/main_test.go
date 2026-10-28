@@ -779,13 +779,14 @@ func TestClampGenerationBodyPassesNonGenerationPathsThrough(t *testing.T) {
 
 // --- The structured task contract --------------------------------------------
 //
-// ATLAS infers obligations from English today: which verbs the user used
+// Without it, ATLAS infers obligations from English: which verbs the user used
 // decides whether work was demanded, which filenames near a write verb become
-// deliverables, which phrases demand verification. This is the first piece of
-// the replacement -- the client saying, in typed fields, what it already knows.
+// deliverables, which phrases demand verification. The contract is the client
+// saying, in typed fields, what it already knows.
 //
-// It decides nothing yet. This commit adds the shape, validates it, and stores
-// it; a guard proves no production decision reads it.
+// Production decisions read it: the action demand, the verification demand and
+// the obligations. A guard limits which files may read it
+// (TestTaskContractHasNoDecisionConsumer).
 
 func TestTaskContractWireShape(t *testing.T) {
 	dir := t.TempDir()
