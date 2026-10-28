@@ -59,11 +59,11 @@ The top-level `atlas` binary also dispatches to non-TUI subcommands:
 2. **Builds from source** in `tui/` when `go` is on `PATH` and the
    binary is missing or stale (older than the TUI sources). `tui/go.mod`
    requires Go 1.26.10+; older toolchains auto-fetch the required
-   version. (~10 s on first run.)
+   version.
 3. **Ensures atlas-proxy is running** via `atlas.runtime.ensure_proxy()`. If the
    proxy's or the sandbox's `/workspace` bind-mount doesn't already cover
    your current directory, the wrapper force-recreates the proxy and sandbox
-   containers with the correct mount (~5 s) so tool calls can read and write your files.
+   containers with the correct mount so tool calls can read and write your files.
 4. **Execs the TUI** with `--proxy http://localhost:8090` and a debug
    log path under `~/.cache/atlas-tui/debug.log`.
 
@@ -388,7 +388,6 @@ mount has to point at the directory you're working in.
    existing `/workspace` mounts cover `os.getcwd()`.
 2. If not, it force-recreates the `atlas-proxy` and `sandbox` containers with
    `ATLAS_PROJECT_DIR=$(pwd)` so the bind mount points at your cwd.
-   This takes ~5 s.
 3. The proxy itself overrides any `working_dir` field in `/v1/agent`
    requests with the container-internal `/workspace` path, so the
    agent's `read_file`/`write_file` calls always resolve correctly.
@@ -766,14 +765,14 @@ atlas asa build                                  # train w/ generated contrast_p
 atlas asa build --pairs custom.jsonl             # custom pairs (same {label, user, assistant_prefix} schema)
 atlas asa build                                  # layer defaults to 75% of loaded model depth
 atlas asa build --layer <index>                  # explicit extraction-layer override
-atlas asa build --limit 50                       # smoke test (50 pairs, ~1 min)
+atlas asa build --limit 50                       # smoke test (50 pairs)
 atlas asa build --container atlas-geometric-lens-1   # override container name
 atlas asa build --dry-run                        # stage but don't run
 ```
 
 Model depth comes from llama-server's `/props` (`n_layer`); llama-server builds that omit it fall back to `<arch>.block_count` read from the model GGUF's header on the host. `--layer` is only needed when neither source is available (e.g. the model file isn't host-visible).
 
-Full 1000-pair training run takes ~25 min on the canonical RTX 5060 Ti. Smoke-test (`--limit 50`) is the fast path for validating the build pipeline works end-to-end before committing to the full run.
+Smoke-test (`--limit 50`) is the fast path for validating the build pipeline works end-to-end before committing to the full run.
 
 After build:
 1. The `.gguf` lands at `<artifact-dir>/ast_edit_steering.gguf` (default: dirname of `ATLAS_CONTROL_VECTOR`).
@@ -856,7 +855,7 @@ data, prose, and shell files stay direct-write). The tier rule is the
 
 Llama.cpp doesn't flush HTTP response headers until the first decoded
 token, so "header time" = "prompt eval time". Long conversation
-histories (8K+ tokens) can take ~60 s of prompt eval before the first
+histories (8K+ tokens) can take a long time in prompt eval before the first
 token arrives. The proxy sets no `ResponseHeaderTimeout`, so long V3 chains
 complete instead of being killed mid-flight. If "encoding prompt…" sits for
 many minutes, the prompt is genuinely too big — `/compact` to summarize.
