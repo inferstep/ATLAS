@@ -17,20 +17,18 @@ import (
 	"unicode"
 )
 
-// GH #39 point 4: auto-inject reachability slice. When a user message names
-// project symbols (a function, class, method) directly, we want the model
-// to start its first turn already holding those definitions instead of
-// burning agent turns on read_file/list_directory recon. Concrete failure
-// mode this fixes: "fix the dashboard route" → model spends 4 turns finding
-// app.py before it starts editing.
+// Auto-inject reachability slice. When a user message names project symbols (a
+// function, class, method) directly, the model should start its first turn
+// already holding those definitions instead of spending agent turns on
+// read_file/list_directory recon.
 //
 // Pipeline:
 //   1. extractCandidateSymbols  — regex over the user message
 //   2. walkPythonFiles          — list .py under working_dir (caps applied)
 //   3. POST /internal/symbol_index → v3-service tree-sitter walks each file,
 //      returns snippets for symbols defined in the project
-//   4. formatProjectContextMessage — render as a system-role message that
-//      prepends the user message in ctx.Messages
+//   4. formatProjectContextMessage — rendered into a user-role "[system note]:"
+//      message placed before the user message in ctx.Messages
 //
 // All caps are enforced upstream (max 50 files, 500 KB total) so a giant
 // monorepo can't OOM v3-service. Per-snippet trim happens server-side.
@@ -293,8 +291,8 @@ func formatProjectContextMessage(matched []struct {
 }
 
 // formatGraphNeighborhood renders the call-graph neighborhood (callers /
-// callees) of the matched symbols (issue #39 Phase 3). Empty when no graph
-// data was returned (flag off, or no edges). Gives the model the structurally
+// callees) of the matched symbols. Empty when no graph data was returned (no
+// edges, or the service skipped the graph). Gives the model the structurally
 // related code without a read_file loop.
 func formatGraphNeighborhood(graph []symbolGraphNode) string {
 	if len(graph) == 0 {
@@ -737,10 +735,9 @@ var workspacePathFields = map[string][]string{
 	"write_file":      {"path"},
 	"edit_file":       {"path"},
 	"structural_edit": {"path"},
-	// Both were absent, so the workspace-containment pre-check never ran on
-	// them even though their doc comments claim "same gates as every other
-	// write". Mitigated transitively by the read-first requirement, but the
-	// explicit gate belongs here.
+	// insert_after and replace_lines write to a path, so they are listed
+	// here and take the same workspace-containment pre-check as every other
+	// write.
 	"insert_after":   {"path"},
 	"replace_lines":  {"path"},
 	"delete_file":    {"path"},
@@ -772,22 +769,20 @@ func nonCanonicalArgName(fields map[string]json.RawMessage) string {
 	return ""
 }
 
-// Session file manifest. The agent creates multi-file projects one
-// write at a time, and each write is generated as if it were the first
-// file in an empty project — SessionWrites knows what exists, but that
-// knowledge never reached the model or V3's candidate generation.
-// Observed 2026-07-18: the model wrote templates/index.html and
-// static/game.js, then generated an app.py that inlined its own page
-// with render_template_string, orphaning both of its earlier files.
+// Session file manifest. The agent creates multi-file projects one write at a
+// time, and each write is generated as if it were the first file in an empty
+// project unless what SessionWrites knows reaches the model and V3's candidate
+// generation; without it a later file can re-create or inline what an earlier
+// one provides (an app.py that inlines its page instead of rendering the
+// template the session wrote).
 //
 // Two consumers:
 //   - sessionManifestNote: a [system note] appended to the conversation
 //     when the session's file set grows past one file, listing what
 //     exists so later files reference earlier ones.
-//   - mergeSessionWritesIntoContext (tools.go): puts session-written
-//     files into V3GenerateRequest.ProjectContext, which previously
-//     held only files the model had READ — written-but-never-read
-//     files were invisible to candidate generation.
+//   - writeFileWithV3 (tools.go): puts session-written files, read from
+//     disk, into V3GenerateRequest.ProjectContext next to the files the
+//     model has read.
 
 // sessionManifestNote returns a one-shot context note listing the files
 // this session has created, or "" when there is nothing new to say.
