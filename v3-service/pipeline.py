@@ -1382,19 +1382,16 @@ def _allocate(ctx, probe, diagnostic_total_candidates):
     # ===== PHASE 2: CxGx K ALLOCATION =====
     # The probe failed verification, so this task is not trivial: C(x)
     # picks a base tier, G(x) escalates it, and k never drops below the
-    # gate's k=3 floor (what this phase allocated unconditionally
-    # before the gate existed).
+    # gate's k=3 floor.
     #
-    # Live-path difference from the bench the gate was measured on: the
-    # proxy's V3 bridge abandons this call after ATLAS_V3_TIMEOUT
-    # (default 180s), a cap the bench never had. An unbounded escalation
-    # to k=8 here would spend the whole budget on generation and hand
-    # the user a timeout fallback instead of the k=3 answer the clock
-    # could have produced — the failure mode the phase-3 refinement gate
-    # already fixes. So the remaining wall-clock and the per-call
-    # latency observed on THIS task go into the allocation, and the gate
-    # lowers the tier to what the budget can actually generate. The
-    # floor is not budget-dependent: k=3 is what would have run anyway.
+    # On the live path the proxy's V3 bridge abandons this call at its
+    # cap (ATLAS_V3_TIMEOUT, default 300s, and at most half the session's
+    # remaining time). An unbounded escalation to k=8 here would spend the
+    # whole budget on generation and hand the user a timeout fallback
+    # instead of the k=3 answer the clock could have produced. So the
+    # remaining wall-clock and the per-call latency observed on THIS task
+    # go into the allocation, and the gate lowers the tier to what the
+    # budget can actually generate. The floor is not budget-dependent.
     check_client()
     emit("phase2", "Allocating compute budget...")
     alloc = cxgx_gate.allocate(
@@ -1440,19 +1437,13 @@ class _RunPool:
 
 
 def _out_of_budget(ctx, reserve_ms: Optional[float] = None) -> bool:
-    """True when too little of ATLAS_V3_TIMEOUT is left to start more
-    work and still hand back a result.
+    """True when too little of the budget is left to start more work and
+    still hand back a result.
 
-    The reserve defaults to the cost of one more LLM call as observed
-    on this run, plus room to serialize the result. A flat reserve is
-    useless here: measured 2026-08-03, a phase-3 entry check with 20s
-    left passed, PR-CoT then spent 31s on one call and the cap landed
-    mid-way through the next. The unit of work is a generation, so
-    that is what has to fit.
-
-    The refinement loop was the only phase that checked at all, and it
-    checked once. Everything ahead of it — probe, self-tests,
-    PlanSearch, sandbox, PR-CoT — ran unguarded.
+    The reserve defaults to the cost of one more LLM call as observed on
+    this run (x1.2) plus 10s to serialize the result, and never less than
+    20s. A flat reserve does not work: the unit of work is a generation,
+    so that is what has to fit.
     """
     start, budget_ms, llm = ctx.start, ctx.budget_ms, ctx.llm
     left = _remaining_budget_ms(start, budget_ms)
@@ -1467,18 +1458,14 @@ def _out_of_budget(ctx, reserve_ms: Optional[float] = None) -> bool:
 def _finish_with_best(ctx, run_pool, reason: str) -> Dict[str, Any]:
     """Hand back the best candidate found so far.
 
-    V3 is an anytime algorithm — the refinement loop is budget-gated,
-    so it expands to fill the budget rather than converging early.
-    Measured 2026-08-03 on one task: a 180s budget produced 9 LLM
-    calls and 5 sandbox verifications, a 420s budget 21 calls and 10.
-    It is not interrupted mid-something-it-would-finish; the clock is
-    its terminal condition.
+    V3 is an anytime algorithm: the refinement loop is budget-gated, so it
+    expands to fill the budget rather than converging early, and the clock
+    is its terminal condition.
 
     An anytime algorithm whose clock expires has to return its best
-    answer. This one returned nothing: the caller's deadline cancelled
-    the request, every verified candidate was discarded, and the write
-    fell back to the model's own output — 16 of 41 write calls in one
-    28-session run, ~48 of the 56 minutes spent in them.
+    answer; returning nothing lets the caller's deadline cancel the
+    request, discard every verified candidate, and fall back to the
+    model's own output.
 
     Vetoed candidates stay excluded for the same reason the end-of-run
     fallback excludes them: "executes but is wrong" is worse than an
@@ -1865,13 +1852,11 @@ def _refinement_affordable(ctx, failing):
     """Strategy 2's gate: the refinement loop runs only when there is a
     failing candidate and the remaining clock affords one iteration."""
     emit, llm, start, budget_ms = ctx.emit, ctx.llm, ctx.start, ctx.budget_ms
-    # Strategy 2: Refinement Loop — entered only when the remaining
-    # wall-clock can afford one iteration. H200 join: 453/487
-    # refinement entries timed out with ZERO completed iterations
-    # while burning ~6 minutes each; one iteration is ~3 sequential
-    # LLM calls, estimated at the per-call latency observed on THIS
-    # run. The budget is the ATLAS_V3_TIMEOUT cap the proxy's V3
-    # bridge enforces — starting work the bridge will abandon only
+    # Strategy 2: Refinement loop, entered only when the remaining
+    # wall-clock can afford one iteration (~3 sequential LLM calls,
+    # estimated at the per-call latency observed on THIS run). The
+    # budget is the cap the proxy's V3 bridge enforces (budget_ms, else
+    # ATLAS_V3_TIMEOUT): starting work the bridge will abandon only
     # delays the fallback the user ends up with.
     run_refinement = bool(failing)
     if run_refinement:
@@ -1896,27 +1881,15 @@ def _leave_baseline(ctx, run_pool):
     """The end of a run with nothing verified: no code, so the caller keeps
     its own gated baseline. Returns the result."""
     emit, result, start, events = ctx.emit, ctx.result, ctx.start, ctx.events
-    # ===== FALLBACK: Return best candidate even if none passed =====
-    # Vetoed candidates are excluded outright: a veto means "executes
-    # but is wrong" (stub, NameError-in-waiting), which is worse than
-    # an honest sandbox failure — and returning one is exactly the
-    # May 7 dashboard-stub failure mode. If every candidate was
-    # vetoed, return no code; the caller falls back to its baseline.
-    # Nothing verified, so nothing is returned. The caller's
-    # baseline is the model's own write, which is syntax- and
-    # structure-gated; a candidate that failed the sandbox is not
-    # better than that, and ranking failures by energy picks among
+    # ===== FALLBACK: nothing passed, so no code is returned =====
+    # The caller keeps its baseline, the model's own write, which is
+    # syntax- and structure-gated; a candidate that failed the sandbox is
+    # not better than that, and ranking failures by energy picks among
     # them without evidence.
     #
-    # Measured: across one 28-session run, 0 of 44 candidates passed
-    # the sandbox, and this path still handed back a failing one 11
-    # times — the proxy logged each as a V3 write and put it on disk
-    # over the model's own. The run that shipped that behaviour
-    # scored 20/28 to 17/28 against the run that did not.
-    #
-    # Same reasoning the vetoed branch below already used, and the
-    # same as the budget boundary: "executes but is wrong" is worse
-    # than an honest failure.
+    # Vetoed candidates are excluded outright: a veto means "executes but
+    # is wrong" (stub, NameError-in-waiting), which is worse than an
+    # honest sandbox failure. Same reasoning as the budget boundary.
     unverified = [c for c in run_pool.members() if not c.get("vetoed_by")]
     if unverified:
         emit("fallback_unverified",
@@ -2168,15 +2141,15 @@ class V3PipelineService:
             problem: Problem description
             task_id: Task identifier
             progress_callback: SSE progress emitter
-            files: Dict of filename→content from Aider's existing file context
-            file_path: Target file path (used by PC-048 to detect language
-                for the smoke check — `.html` files use HTML parser, not
-                Python compile, etc.)
+            files: Dict of filename→content: the request's existing project files
+            file_path: Target file path (used to detect the language for the
+                smoke check — `.html` files use HTML parser, not Python compile,
+                etc.)
             build_command: Optional project build command to run against an
                 ephemeral candidate overlay after syntax/self-tests pass.
             working_dir: Container workspace root used by the sandbox overlay.
             baseline_code: The incumbent's EXACT bytes, as the request sent
-                them, before prompt construction. A real candidate (#259):
+                them, before prompt construction. A real candidate:
                 it faces the same checks as a generated one, the lens ranks
                 it with them, and every replacement must keep its top-level
                 names. Interactive Python replacements are also compared
@@ -2406,9 +2379,8 @@ class V3PipelineService:
         self-tests (None when there are none)."""
         problem, llm, task_id, emit, result = ctx.problem, ctx.llm, ctx.task_id, ctx.emit, ctx.result
         # Classify task type. Interactive tasks (games, UIs, framework code)
-        # skip synthetic I/O self-tests entirely — those tests would fail by
+        # skip synthetic I/O self-tests entirely: those tests would fail by
         # construction, falsely triggering PR-CoT/refinement on working code.
-        # See ISSUES.md PC-022.
         task_type = scoring.classify_task_type(problem)
         emit("task_type", task_type)
         result["task_type"] = task_type

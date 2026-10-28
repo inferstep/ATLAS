@@ -13,19 +13,15 @@ def _lens_verdict(per_step):
     against)."""
     # Vetoes read the MEAN, not the MIN.
     #
-    # gx_score_min is a minimum over every token, so it falls
-    # with length whatever the content: measured 2026-08-04 on
-    # one function repeated, 0.468 at 20 tokens down to 0.305
-    # at 305. It cannot separate — real code 0.325, a
-    # repetition loop 0.320, stub spam 0.286 all sit together,
-    # which is why severe=0.28 never fired once in 56 sessions.
+    # gx_score_min is a minimum over every token, so it falls with
+    # length whatever the content (one repeated function: 0.468 at 20
+    # tokens, 0.305 at 305), and it cannot separate: real code 0.325, a
+    # repetition loop 0.320 and stub spam 0.286 sit together.
     #
-    # gx_score_mean holds across the same 15x length change
-    # (0.577 to 0.517) and does separate: real code 0.594,
-    # repetition 0.485, stub spam 0.467. Across 188 scores
-    # from live runs it ranged 0.547-0.651, so severe_mean at
-    # 0.52 sits below every clean sample observed and above
-    # both pathologies.
+    # gx_score_mean holds across the same 15x length change (0.577 to
+    # 0.517) and does separate: real code 0.594, repetition 0.485, stub
+    # spam 0.467. Clean live scores range 0.547-0.651, so severe_mean at
+    # 0.52 sits below every clean sample and above both pathologies.
     gx_mean = per_step.get("gx_score_mean")
     gx_min = per_step.get("gx_score_min")
     thresholds = per_step.get("thresholds") or {}
@@ -48,14 +44,13 @@ def _lens_veto(passing, emit):
     reads as collapsed toward a stub is vetoed: marked failing, with the
     reason as its stderr. Returns the candidates it keeps."""
     # ===== LENS VETO =====
-    # PC-207 alignment fix: hard-reject sandbox-passing candidates whose
-    # geometric-lens gx_min sits below THIS model's calibrated severe band.
-    # Sandbox is an ORM (does it execute?), lens is a PRM (is the
-    # generation pattern collapsing into a stub?) — they answer
-    # different questions. The May 7 dashboard.html session shipped
-    # a 10-line `<h1>Dashboard</h1>` stub because sandbox said pass
-    # while lens said gx_min=0.069. Without this filter, V3 returns
-    # passed=True and the proxy's PC-044 nudges the agent to done.
+    # Hard-reject sandbox-passing candidates whose lens score sits below
+    # THIS model's calibrated severe band (the per-step mean when the
+    # artifact declares severe_mean, else the min). Sandbox is an ORM
+    # (does it execute?), lens is a PRM (is the generation pattern
+    # collapsing into a stub?): they answer different questions, and a
+    # stub page can pass the sandbox. Without this filter, V3 returns
+    # passed=True for it and the proxy nudges the agent to done.
     #
     # Language-agnostic by construction: the lens runs on the model's
     # residual stream; gx values don't depend on whether the file
@@ -101,25 +96,23 @@ def _structural_veto(passing, files, smoke_language, emit):
     """GH #39 point 1: for Python, a sandbox-passing candidate with a direct
     call that resolves to nothing is vetoed. Returns the candidates kept."""
     # ===== STRUCTURAL VETO =====
-    # GH #39 point 1: hard-reject candidates whose direct-identifier
-    # calls don't resolve against (local defs, imports, builtins,
-    # project symbols). Sandbox can pass for code where the unresolved
-    # call is in a try/except ImportError fallback or a dead branch
-    # that doesn't execute under the tests; tree-sitter sees the
-    # surface bug regardless. Same architecture as lens veto.
-    #
-    # Language-agnostic fit: v1 supports Python only (matches the
-    # rest of the GH #39 stack), but the resolution-order pattern
-    # generalizes to any language with explicit imports + named
-    # functions (Go, Rust, JS/TS modules). Adding a language adds
-    # implementation surface, not model-facing API surface.
+    # Hard-reject candidates whose direct-identifier calls don't resolve
+    # against (local defs, imports, builtins, project symbols). Sandbox
+    # can pass for code where the unresolved call is in a try/except
+    # ImportError fallback or a dead branch that doesn't execute under
+    # the tests; tree-sitter sees the surface bug regardless. Same
+    # architecture as lens veto.
     #
     # Python only, enforced. structural_score parses with the Python
     # grammar, and tree-sitter parses anything tolerantly: an HTML
-    # template's `<th>Time (mins)</th>` came back as a call to Time,
-    # `rgba(...)` in a stylesheet as a call to rgba, and a template
-    # that had passed its smoke check was vetoed into five minutes of
-    # repair for a NameError no runtime could raise (2026-09-14).
+    # template's `<th>Time (mins)</th>` reads as a call to Time and
+    # `rgba(...)` in a stylesheet as a call to rgba, which would veto a
+    # valid file for a NameError no runtime could raise.
+    #
+    # The resolution-order pattern generalizes to any language with
+    # explicit imports + named functions (Go, Rust, JS/TS modules).
+    # Adding a language adds implementation surface, not model-facing
+    # API surface.
     if passing and smoke_language not in ("python", "py"):
         print(f"  [structural] veto skipped: {smoke_language} is not Python", flush=True)
     elif passing:

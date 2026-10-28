@@ -95,12 +95,9 @@ def _candidate_by_index(candidates: List[Dict[str, Any]], index: int) -> Optiona
 def _ensure_delivered_evidence(result, *, file_path, problem):
     """Every successful exit describes THE BYTES IT RETURNS.
 
-    The pipeline has five ways to return code, and only two of them ran the
-    structured evaluation on the artifact they hand back: the probe's early
-    return and phase-one selection. Repair, refinement and the budget
-    fallback returned code with no record of it at
-    all, or with the record of a different candidate, so the envelope either
-    went missing or described bytes the caller never received.
+    Not every exit runs the structured evaluation on the artifact it hands
+    back: repair, refinement and the budget fallback can return code with no
+    record of it, or with the record of a different candidate.
 
     This evaluates the delivered bytes through the SAME canonical
     adapter->contract path every other candidate goes through. Nothing new
