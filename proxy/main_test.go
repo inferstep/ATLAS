@@ -792,38 +792,27 @@ func TestTaskContractWireShape(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
 
 	for _, c := range []struct {
-		name    string
-		body    string
-		mode    TaskMode
-		outputs []string
-		verify  []string
+		name     string
+		contract string
+		mode     TaskMode
+		outputs  []string
+		verify   []string
 	}{
 		{"work with outputs and verification",
-			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}}`,
+			`{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}`,
 			TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
-		{"question", `{"task_contract":{"task_mode":"question"}}`,
+		{"question", `{"task_mode":"question"}`,
 			TaskModeQuestion, nil, nil},
 		{"aliases deduplicate canonically",
-			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","./app.py"]}}`,
+			`{"task_mode":"work","expected_outputs":["app.py","./app.py"]}`,
 			TaskModeWork, []string{"app.py"}, nil},
 		{"duplicate verification deduplicates",
-			`{"task_contract":{"task_mode":"work","verification":["go test ./...","go test ./..."]}}`,
+			`{"task_mode":"work","verification":["go test ./...","go test ./..."]}`,
 			TaskModeWork, nil, []string{"go test ./..."}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var wire struct {
-				TaskContract *TaskContract `json:"task_contract,omitempty"`
-			}
-			if err := json.Unmarshal([]byte(c.body), &wire); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if wire.TaskContract == nil {
-				t.Fatalf("present=%v want %v", false, true)
-			}
-			got, err := validateTaskContract(wire.TaskContract, dir)
-			if err != nil {
-				t.Fatalf("valid=%v (err=%v) want %v", false, err, true)
-			}
+			// Decoded from the wire body, present, and valid, or the case stops here.
+			got := mustContract(t, dir, c.contract)
 			if got.TaskMode != c.mode {
 				t.Errorf("mode=%q want %q", got.TaskMode, c.mode)
 			}
@@ -1540,6 +1529,18 @@ func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 // cleanup had anywhere to run. A diagnostic sink that must drain and write a
 // footer needs that landing site to exist.
 
+// setShutdownEnv sets the shutdown variables a case names; an empty value leaves
+// that variable as the environment has it.
+func setShutdownEnv(t *testing.T, sessionSec, graceSec string) {
+	t.Helper()
+	if sessionSec != "" {
+		t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", sessionSec)
+	}
+	if graceSec != "" {
+		t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", graceSec)
+	}
+}
+
 func TestShutdownBudgetArithmetic(t *testing.T) {
 	for _, c := range []struct {
 		name       string
@@ -1552,12 +1553,7 @@ func TestShutdownBudgetArithmetic(t *testing.T) {
 		{"grace one second above need", "600", "611"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.sessionSec != "" {
-				t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", c.sessionSec)
-			}
-			if c.graceSec != "" {
-				t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", c.graceSec)
-			}
+			setShutdownEnv(t, c.sessionSec, c.graceSec)
 			budget, err := shutdownBudget()
 			if err != nil {
 				t.Fatalf("err=%v, wantErr=%v", err, false)
@@ -1587,12 +1583,7 @@ func TestShutdownBudgetRefusesAGraceThatCannotCoverTheSession(t *testing.T) {
 		{"negative grace", "", "-5"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.sessionSec != "" {
-				t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", c.sessionSec)
-			}
-			if c.graceSec != "" {
-				t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", c.graceSec)
-			}
+			setShutdownEnv(t, c.sessionSec, c.graceSec)
 			_, err := shutdownBudget()
 			if err == nil {
 				t.Fatalf("err=%v, wantErr=%v", err, true)
