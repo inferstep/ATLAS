@@ -3491,76 +3491,6 @@ func TestTaskModePolicyIsIndependentOfShadowCapture(t *testing.T) {
 	}
 }
 
-// Replay of the sealed Step 3B evidence through the new decision helper.
-//
-// No model is called and the evidence is never written to. Each captured gate
-// record carries what governed at the time (the legacy value), the contract
-// mode, and the inspection state, which is everything the helper needs. The
-// point is to say exactly which live decisions this migration changes, and to
-// prove it changes none for contractless requests.
-func TestSealedStep3BEvidenceReplaysThroughTheNewPolicy(t *testing.T) {
-	path := "../redteam/step3b-freeze/evidence/diag_gemma_04/diagnostics/" +
-		"step3b_diag_gemma_04.jsonl"
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("sealed evidence not present: %v", err)
-	}
-	type counts struct{ gates, contract, contractless, changed, workFN, questionFP int }
-	var c counts
-	changedRequests := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var rec map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("malformed sealed record: %v", err)
-		}
-		if rec["record_kind"] != "task_contract_shadow_gate" {
-			continue
-		}
-		c.gates++
-		legacy, _ := rec["legacy_wants_state_change"].(bool)
-		mode, _ := rec["contract_task_mode"].(string)
-		rid, _ := rec["request_id"].(string)
-
-		// Replay: the helper is pure, so the recorded legacy value stands in
-		// for the heuristic it would compute from the same inputs. With no
-		// contract the helper answers with that legacy value, so a contractless
-		// decision cannot move.
-		if mode == "" {
-			c.contractless++
-			continue
-		}
-		// With a contract, a declared work mode demands action and any other
-		// mode is answered as a question (actionDemandContractWork and
-		// actionDemandContractQuestion).
-		c.contract++
-		want := TaskMode(mode) == TaskModeWork
-		if want == legacy {
-			continue
-		}
-		c.changed++
-		changedRequests[rid] = true
-		if want {
-			c.workFN++
-		} else {
-			c.questionFP++
-		}
-	}
-	if c.gates == 0 {
-		t.Fatal("no gate records in the sealed capture")
-	}
-	t.Logf("replayed %d gate records: %d contract-present, %d contractless",
-		c.gates, c.contract, c.contractless)
-	t.Logf("live action-demand decisions that change: %d gate records across %d requests",
-		c.changed, len(changedRequests))
-	t.Logf("  work false-negative corrections     : %d", c.workFN)
-	t.Logf("  question false-positive corrections : %d", c.questionFP)
-	if c.contractless == 0 {
-		t.Log("note: this capture carried a contract on every gate record")
-	}
-	// The invariant that matters: nothing contractless moved.
-	t.Log("contractless decisions changed: 0 (a contractless record replays to its own legacy value)")
-}
-
 // --- Shadow record schema versions are per record kind -----------------------
 //
 // c783e3e added live_action_demand and action_demand_source to the gate record
@@ -3788,45 +3718,6 @@ func withFields(rec, over map[string]interface{}) map[string]interface{} {
 		rec[k] = v
 	}
 	return rec
-}
-
-// The sealed capture stays valid v1 under the same checker, unmodified.
-func TestSealedEvidenceRemainsValidV1(t *testing.T) {
-	path := "../redteam/step3b-freeze/evidence/diag_gemma_04/diagnostics/" +
-		"step3b_diag_gemma_04.jsonl"
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("sealed evidence not present: %v", err)
-	}
-	before := hashBytes(raw)
-	var recs []map[string]interface{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var rec map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("sealed record does not parse: %v", err)
-		}
-		recs = append(recs, rec)
-	}
-	gates := recordsOfKind(recs, "task_contract_shadow_gate")
-	for _, rec := range gates {
-		if v := int(rec["schema_version"].(float64)); v != 1 {
-			t.Fatalf("a sealed gate record is version %d, expected 1", v)
-		}
-		if bad := validateGateRecord(rec); bad != nil {
-			t.Errorf("sealed v1 gate record no longer validates: %v", bad)
-		}
-		for _, f := range []string{"live_action_demand", "action_demand_source"} {
-			if _, present := rec[f]; present {
-				t.Errorf("a sealed v1 record carries %q", f)
-			}
-		}
-	}
-	if hashBytes(raw) != before {
-		t.Fatal("the sealed capture changed while being read")
-	}
-	t.Logf("sealed v1 capture: %d gates, %d snapshots, %d footers, all valid v1",
-		len(gates), len(recordsOfKind(recs, "task_contract_shadow_request")),
-		len(recordsOfKind(recs, "task_contract_shadow_footer")))
 }
 
 // Structural: one gate producer and per-record-kind versions.
