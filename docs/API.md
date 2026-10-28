@@ -317,7 +317,7 @@ The payload also carries a `dimensions` array — the seven status dimensions th
 curl http://localhost:8090/v1/calibration/status | jq .
 ```
 
-**Cache:** none — every call re-probes the lens service. Cost is ~50–200 ms (one HTTP round-trip to `lens/health`). The TUI fetches at startup and then every 30 s; CI / monitoring should poll no faster than every few seconds.
+**Cache:** none — every call re-probes the lens service. Cost is one HTTP round-trip to `lens/health`. The TUI fetches at startup and then every 30 s; CI / monitoring should poll no faster than every few seconds.
 
 ---
 
@@ -355,7 +355,7 @@ Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_ca
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Orients inside a file too large to read whole; returns no bodies, so it locates code without showing it. |
 | `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
-| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change; before 2026-09-17 such edits were applied with the prefixes silently stripped from both arguments. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
+| `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
 | `insert_after` | Insert lines into a file after line `line` (1-based, as printed by `read_file`; `0` inserts at the top). Only the new text is supplied — there is no anchor to reproduce, which is what makes it the right tool for ADDING code rather than changing it. Requires the file to have been read, so the line numbers are current. Same syntax, structural and embedded-script gates as `edit_file`. |
 | `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written: a block that only moved is applied where its two lines now are, and any other mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
 | `structural_edit` | Surgical replacement of one whole named block (function, class, or HTML element). Selectors: Python `function:NAME` / `class:NAME` (decorator-aware), Go `function:NAME` / `type:NAME`, JavaScript/TypeScript `function:NAME` / `class:NAME`, HTML `<tag>` (any depth, `<script>` and `<style>` included; the selector must match exactly one node). REQUIRED for whole-function / whole-class / whole-element rewrites in existing files. Same structural gate as `edit_file` on the composed post-edit `.py` file. |
@@ -849,7 +849,7 @@ Spawn a background process and return a `job_id` immediately. Used by the proxy'
 
 ### GET /jobs
 
-Every job the sandbox is holding, whoever started it. The registry is process-wide and has no session concept, so a server left running by an earlier session keeps its port while `/jobs/{job_id}` needs an id the new session never saw — the bind failure's own advice ("identify and stop that program") was unfollowable without this. The proxy's port-conflict hint falls back to this list and names the offending job so the model can `stop_background` it.
+Every job the sandbox is holding, whoever started it. The registry is process-wide and has no session concept, so a server left running by an earlier session keeps its port while `/jobs/{job_id}` needs an id the new session never saw. The proxy's port-conflict hint falls back to this list and names the offending job so the model can `stop_background` it.
 
 **Response:**
 ```json
@@ -1107,8 +1107,8 @@ Generate embeddings for input text. Used by Geometric Lens for C(x)/G(x) scoring
 `/embedding` and `/embeddings` (the native paths — *not* `/v1/embeddings`)
 accept an optional `layers` parameter that returns the post-block residual
 stream at the requested transformer layers, in addition to the standard
-final-layer embedding. Used by the Geometric Lens (lens-as-PRM scoring)
-and the Qwen-Scope SAE service.
+final-layer embedding. Available to the Geometric Lens's `score-per-step`
+when a request sets `layer`.
 
 **Request:**
 
@@ -1162,14 +1162,12 @@ hs = {int(k): np.frombuffer(base64.b64decode(v), dtype="<f4").reshape(n, d)
 ```
 
 **Tap point:** post-block residual stream (`l_out-{N}` in llama.cpp's
-ggml graph). Verified against Qwen3.5-9B-Q6_K (architecture `qwen35`)
-and matches the hook point Qwen-Scope SAEs are trained on. Same tensor
-name regardless of whether the block is attention-based or
-DeltaNet/SSM-based, so all 32 layers of Qwen3.5-9B are accessible.
+ggml graph). Same tensor name regardless of whether the block is
+attention-based or DeltaNet/SSM-based.
 
-**Wire format rationale:** base64 over JSON arrays. Empirically a single
-layer of 84 tokens × 4096 dims is 1.4 MiB raw float32, 1.8 MiB as base64,
-or 7 MiB as a JSON array of floats. JSON would push 50+ MiB per multi-layer scoring call;
+**Wire format rationale:** base64 over JSON arrays. A single layer of
+84 tokens × 4096 dims is 1.31 MiB as raw float32 and 1.75 MiB as base64.
+JSON would push 50+ MiB per multi-layer scoring call;
 base64 keeps it manageable.
 
 ### GET /health
