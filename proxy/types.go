@@ -16,21 +16,18 @@ import (
 // ---------------------------------------------------------------------------
 
 // TierMaxTurns returns the maximum agent loop iterations for this tier.
+// Tool-using tiers (T1/T2/T3) are uncapped: the stuck-pattern detectors
+// (parse-error, tool-repeat, reasoning-repeat, lens-regression,
+// exploration-budget, path-aware error-loop, action gate, verification
+// gate) are the safety net, and a numeric turn cap cuts legitimate
+// multi-file long-form work more often than it catches a real runaway.
+// User-initiated cancellation (ctx.Ctx) is the upper bound. T0 keeps a
+// small cap as a SHAPE constraint (conversational input shouldn't loop),
+// not as runaway protection.
 //
-// May 10 2026: cap removed entirely for tool-using tiers (T1/T2/T3). The
-// 8 stuck-pattern detectors (parse-error / tool-repeat / reasoning-repeat
-// / lens-regression / exploration-budget / path-aware error-loop /
-// action gate / verification gate) are the real safety net; a numeric
-// turn cap was insurance against unknown failure modes the detectors
-// might miss, but it bit legitimate multi-file long-form work harder
-// than it ever caught a real runaway. User-initiated cancellation
-// (ctx.Ctx) still works as the upper bound. T0 keeps a small cap as
-// a SHAPE constraint (conversational input shouldn't loop) — not a
-// runaway-protection.
-//
-// MaxTurns == 0 is the agent-loop's "uncapped" sentinel. Override via
-// ATLAS_MAX_TURNS env (any positive int caps; setting unset / 0 →
-// uncapped).
+// MaxTurns == 0 is the agent loop's "uncapped" sentinel. ATLAS_MAX_TURNS
+// overrides it: any positive int caps every tier; unset or 0 keeps the
+// tier defaults.
 
 func TierMaxTurns(t Tier) int {
 	if n := envOverrideMaxTurns(); n > 0 {
@@ -312,9 +309,9 @@ type AgentContext struct {
 	fulfilledDeletions map[string]*fulfilledDeletion
 
 	// TaskContract is what the client declared about this request, validated
-	// at the request boundary. Nil means the client declared nothing, which
-	// stays distinct from declaring an empty contract. Nothing consults it
-	// yet -- see validateTaskContract.
+	// at the request boundary (validateTaskContract). Nil means the client
+	// declared nothing, which stays distinct from declaring an empty
+	// contract.
 	TaskContract *TaskContract
 
 	// AllowedTools names tools the client has pre-approved for this session
@@ -355,14 +352,14 @@ type AgentContext struct {
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens   int
 
-	// VerificationEvidence holds one record per GREEN verification command,
-	// binding the result to what the command actually exercised: the
-	// command line, its stdin contract, and the sha256 of each covered
-	// session-written file at the moment it passed. Lens labels are drawn
-	// from these records, never from a session-wide boolean — a flag can't
-	// answer "verified WHAT, at WHICH bytes", and labeling on it trained
-	// the lens on files the passing command never touched (third-party
-	// audit finding).
+	// VerificationEvidence holds one record per verification run, binding
+	// the result to what the command actually exercised: the command line,
+	// its stdin contract, and the sha256 of each covered session-written
+	// file at that moment. A failed run is recorded too and takes back an
+	// earlier pass over the same bytes. Lens labels are drawn from these
+	// records, never from a session-wide boolean: a flag can't answer
+	// "verified WHAT, at WHICH bytes", and labelling on it would train the
+	// lens on files the passing command never touched.
 	VerificationEvidence []VerificationRecord
 
 	// StagedCommands are declared commands that ran against exact candidate
@@ -448,32 +445,28 @@ type AgentContext struct {
 	// wrong 11/11, planning.py right 1/1.
 	BodySeen map[string]bool
 
-	// BodyShown records WHICH lines a read showed, where BodySeen records
-	// only that some were. A truncated or ranged read shows part of a file,
-	// and a claim about code outside that part is as much a guess as a claim
-	// about a file never opened. Smoke run 2026-09-27 (bugfind_tiebreak): both
-	// reads stopped near line 190, the reply named a function it said lay
-	// "past the provided snippet", and the run ended completed. A file with
-	// no entry, or a whole one, counts as shown.
+	// BodyShown records WHICH lines a read showed, where BodySeen records only
+	// that some were. A truncated or ranged read shows part of a file, and a
+	// claim about code outside that part is as much a guess as a claim about a
+	// file never opened. A file with no entry, or a whole one, counts as
+	// shown.
 	BodyShown map[string]*bodyCoverage
 
-	// SessionWrites tracks files this agent loop wrote during this run.
-	// The write_file guard rejects overwrites of "existing" files >5
-	// lines (BiasBusters #3 — protects the user's code from clobbering).
-	// But a file the agent itself wrote in this session is NOT the
-	// user's code; it's the agent's own working output, and the agent
-	// must be allowed to iterate on it. Without this, the model can
-	// realize mid-loop that app.py was a stub and needs rewriting
-	// (May 12 2026 /demo multi-file flask run — the entire wiring bug
-	// stemmed from the guard refusing the model's self-correction).
+	// SessionWrites tracks files this agent loop wrote during this run. The
+	// write_file guard rejects overwrites of existing files over 5 lines,
+	// to protect the user's code from clobbering. A file the agent itself
+	// wrote in this session is NOT the user's code; it is the agent's own
+	// working output, and the agent must be allowed to iterate on it:
+	// without this, a model that realizes mid-loop that its own app.py was
+	// a stub cannot rewrite it.
 	//
 	// Keyed on the RAW path the model supplied, so "solve.py" and
 	// "./solve.py" are two entries for one file and the overwrite guard can
 	// refuse the agent's own output under a second spelling. Recorded here
-	// rather than changed: every consumer above reads these keys, and
+	// rather than changed: every consumer reads these keys, and
 	// canonicalising them is a behavioural change with its own evidence to
-	// gather. The Phase 3A ledger keys on the resolved path instead, so the
-	// two do not share this defect.
+	// gather. The ledger keys on the resolved path instead, so the two do
+	// not share this defect.
 	SessionWrites map[string]bool
 
 	// FencedFailures counts CONSECUTIVE zero-byte fenced resolutions per
@@ -524,27 +517,27 @@ type AgentContext struct {
 	TerminalUnresolved string
 	terminalOnce       sync.Once
 
-	// Ledger is the observational record of what this session has done to
-	// each declared/session-owned deliverable, keyed by CANONICAL
-	// workspace-relative path. Phase 3A only observes: nothing here changes
-	// what is written, refused, or reported.
+	// Ledger is the record of what this session has done to each declared
+	// or session-owned deliverable, keyed by CANONICAL workspace-relative
+	// path.
 	//
-	// It exists because at a stall the server knows only which paths were
-	// touched -- not whether the current bytes are valid, and not what the
-	// last good version was. ValidationStatus never crosses the event
-	// boundary, so a finaliser had nothing true to say and nothing safe to
-	// leave behind.
+	// It exists because at a stall the server otherwise knows only which
+	// paths were touched, not whether the current bytes are valid or what
+	// the last good version was. ValidationStatus never crosses the event
+	// boundary, so without the ledger a finaliser has nothing true to say
+	// and nothing safe to leave behind. Restoration, the completion check
+	// and delivery grants read it.
 	Ledger   map[string]*DeliverableState
 	LedgerMu sync.Mutex
 
 	// WorkspaceHazards is the set of background work that may still be
-	// writing, keyed by job identity rather than counted by start attempt.
-	// A counter could not be lowered by anything but a reap, so a start that
-	// registered no job raised a hazard nothing could ever clear -- and once
-	// completion consulted it, that session could never finish.
-	// workspace. run_background raises it; stop_background does NOT clear it,
-	// because a signalled process may still be flushing. Only a confirmed
-	// exit clears it, and tracked paths must be rehashed afterwards.
+	// writing, keyed by job identity rather than counted by start attempt, so
+	// a job's confirmed exit clears only its own hazard and a start refused
+	// before dispatch raises none. run_background raises it. A signal alone
+	// does not clear it, because a signalled process may still be flushing:
+	// only a confirmed exit (a reaped exit code) clears it, and tracked paths
+	// must be rehashed afterwards. A dispatch that came back with no job id
+	// raises hazardUnidentifiedJob, which nothing can clear.
 	WorkspaceHazards map[string]bool
 
 	// ManifestAnnounced tracks which SessionWrites paths have been named
@@ -627,24 +620,24 @@ type AgentContext struct {
 	// change".
 	OriginalContent map[string]string
 
-	// Reasoning-repetition detector state (May 10 2026, BiasBusters
-	// follow-up #30). Per-turn snapshot of the model's reasoning_content
-	// stream. When the same opening prose ("Now I need to look at the
-	// file" / similar) appears across consecutive turns, the loop
-	// injects a corrective so the model breaks out of the thought loop.
-	// The streak fields are owned by the detector: recordReasoning
-	// clears them as it fires and hands the count and snippet back in
-	// its repeatObservation. See proxy/detectors.go.
+	// Reasoning-repetition detector state. Per-turn snapshot of the
+	// model's reasoning_content stream. When the same opening prose
+	// ("Now I need to look at the file" or similar) appears across
+	// consecutive turns, the loop injects a corrective so the model
+	// breaks out of the thought loop. The streak fields are owned by the
+	// detector: recordReasoning clears them as it fires and hands the
+	// count and snippet back in its repeatObservation. See
+	// proxy/detectors.go.
 	LastTurnReasoning           string
 	LastReasoningSnippet        string
 	ConsecutiveReasoningRepeats int
 
-	// Path-aware error-loop detector (May 10 2026). Tracks recent
-	// failure paths so the 3-consecutive-failures breaker can
-	// distinguish "stuck on one file" (real loop, stop) from
-	// "grinding through different files, some succeed, some fail"
-	// (progress, keep going). Cleared on any successful tool result.
-	// See proxy/agent.go error-loop break for the use site.
+	// Path-aware error-loop detector. Tracks recent failure paths so
+	// the 3-consecutive-failures breaker can distinguish "stuck on one
+	// file" (real loop, stop) from "grinding through different files,
+	// some succeed, some fail" (progress, keep going). Cleared on any
+	// successful tool result. See the error-loop break in
+	// proxy/agent.go for the use site.
 	RecentFailurePaths []string
 
 	mu sync.Mutex
@@ -1025,10 +1018,9 @@ type V3EvidenceEnvelope struct {
 	Delivery            V3EvidenceDelivery   `json:"delivery"`
 
 	// Provenance says WHO produced the evidence and WHAT it is about.
-	// Additive and omitted when absent: a producer that predates it emits an
-	// envelope byte-identical to the one it always did, and this build reads
-	// that envelope exactly as before. Nothing consults it yet -- see
-	// MayAuthorize.
+	// Additive and omitted when absent: a producer that does not send it
+	// emits the same envelope as before, and this build reads that envelope
+	// the same way.
 	Provenance *V3EvidenceProvenance `json:"provenance,omitempty"`
 }
 
@@ -1124,10 +1116,7 @@ type V3EvidenceProvenance struct {
 
 // MayAuthorize reports whether this evidence COULD close its obligation, on
 // source and strength alone. It says nothing about which candidate the
-// evidence is about -- that is BindsTo, and both must hold.
-//
-// Not called from any delivery path in this build. Wiring it in changes what
-// lands on disk and is a separate change.
+// evidence is about: that is BindsTo, and both must hold.
 func (p *V3EvidenceProvenance) MayAuthorize() (bool, string) {
 	if p == nil {
 		return false, "no provenance"
@@ -1252,17 +1241,14 @@ type SSEEvent struct {
 
 // --- The structured task contract -------------------------------------------
 //
-// ATLAS decides what the user demanded by reading their English: which verbs
-// appeared decides whether work was required, which filenames sat near a write
-// verb become deliverables, which phrases demand verification. Those lists are
-// open vocabularies and they are measurably wrong -- "Write four files."
-// produces no expected outputs at all, and "Run the tests and make sure they
-// pass." sets no verification requirement.
+// Without it, ATLAS decides what the user demanded by reading their English:
+// which verbs appeared decides whether work was required, which filenames sat
+// near a write verb become deliverables, which phrases demand verification.
+// Those lists are open vocabularies and they are measurably wrong -- "Write
+// four files." produces no expected outputs at all, and "Run the tests and make
+// sure they pass." sets no verification requirement.
 //
-// This is the client saying, in typed fields, what it already knows. It is the
-// first piece of the replacement and it decides nothing yet: this commit adds
-// the shape, validates it and stores it, and a guard proves no production
-// decision reads it.
+// The contract is the client saying, in typed fields, what it already knows.
 //
 // Three rules hold for good. The model cannot write this -- it arrives in the
 // HTTP request or not at all. It is a statement of obligation, never of
@@ -1323,13 +1309,14 @@ type TaskContract struct {
 	VerificationKnowledge ObligationKnowledge `json:"verification_knowledge,omitempty"`
 
 	// ExpectedOutputs are exact paths the client knows the request must
-	// produce. Canonicalised and deduplicated through the workspace resolver
-	// the rest of the proxy uses -- there is no second path rule.
+	// produce. Validated and deduplicated through the workspace resolver the
+	// rest of the proxy uses (there is no second path rule), and stored as
+	// the client spelled them.
 	//
 	// A POINTER, so absence survives: nil is "no list arrived", a non-nil
 	// empty slice is "the caller sent []". Read it through OutputPaths and
-	// OutputsPresent rather than testing nilness at each site, because that
-	// is the test the old code got wrong.
+	// OutputsPresent rather than testing nilness at each site, where that
+	// test is easy to get wrong.
 	ExpectedOutputs *[]string `json:"expected_outputs,omitempty"`
 	// Verification are the exact commands the client requires be run. Kept as
 	// the client wrote them: the command/result contract already records

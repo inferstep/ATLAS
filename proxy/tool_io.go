@@ -112,18 +112,21 @@ type EditFileOutput struct {
 	LinesRemoved int    `json:"lines_removed,omitempty"`
 }
 
-// -- structural_edit (GH #39 v1) --
+// -- structural_edit --
 //
-// Friendly-selector structural edits via tree-sitter. Replaces a single named node
-// (function, class, HTML element) with new content. The selector grammar is
-// per-language and intentionally narrow in v1 to avoid the model
-// hallucinating raw tree-sitter s-expressions (42% intended-match measured
-// on the then-reference local model, May 8 — see GH #39 open design questions).
+// Friendly-selector structural edits via tree-sitter. Replaces a single named
+// node (function, class, type, HTML element) with new content. The selector
+// grammar is per-language and intentionally narrow, because a model asked for
+// raw tree-sitter s-expressions gets the intended match wrong more often than
+// right.
 //
-//   Selectors v1:
-//     python: function:NAME, class:NAME (decorator-aware: replaces
-//             decorated_definition wrapper when present)
-//     html:   <tag>             (top-level tag-name match)
+//   Selectors:
+//     python:     function:NAME, class:NAME (decorator-aware: replaces
+//                 the decorated_definition wrapper when present)
+//     html:       <tag> (top-level tag-name match)
+//     go:         function:NAME (func or method), type:NAME
+//     javascript: function:NAME, class:NAME
+//     typescript: function:NAME, class:NAME
 
 type StructuralEditInput struct {
 	Path     string `json:"path"`
@@ -159,8 +162,7 @@ type DeleteFileOutput struct {
 // content change, so it does NOT go through the V3 / surgical-edit gate the way
 // write_file/edit_file do — it exists so "reorganize the files" (e.g. move
 // index.html into templates/) is a single tool call instead of a
-// read→write→delete dance the model can't reliably compose. Shell `mv`/`cp`
-// stay refused; this is the supported relocation path.
+// read→write→delete dance the model can't reliably compose.
 
 type MoveFileInput struct {
 	Source      string `json:"source"`

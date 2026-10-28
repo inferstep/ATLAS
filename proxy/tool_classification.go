@@ -127,12 +127,11 @@ const (
 	ValidationKindStructural ValidationKind = "structural"
 
 	// ValidationKindExecution: the run executed these exact bytes and the
-	// process came up clean -- exited 0, or is still serving after its settle
-	// window. That is stronger evidence than a parse, and it is what settles
-	// a content debt the parse-based routes never got to settle (a
-	// structural_edit that landed through V3, then ran fine, was reported
-	// "never written in a checkable state" at completion, 2026-09-15).
-	// Recorded without a checkpoint: an execution is not a write.
+	// process came up clean (exited 0, or is still serving after its settle
+	// window). That is stronger evidence than a parse, and it settles a
+	// content debt the parse-based routes cannot, such as a structural_edit
+	// that landed through V3 with no parse verdict of its own. Recorded
+	// without a checkpoint: an execution is not a write.
 	ValidationKindExecution ValidationKind = "execution"
 )
 
