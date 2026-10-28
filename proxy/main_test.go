@@ -785,8 +785,8 @@ func TestClampGenerationBodyPassesNonGenerationPathsThrough(t *testing.T) {
 // saying, in typed fields, what it already knows.
 //
 // Production decisions read it, among them the action demand, the verification
-// demand and the obligations. A guard limits which files may read it
-// (TestTaskContractHasNoDecisionConsumer).
+// demand and the obligations. A guard limits which files may take it from the
+// request context (TestTaskContractHasNoDecisionConsumer).
 
 func TestTaskContractWireShape(t *testing.T) {
 	dir := t.TempDir()
@@ -940,8 +940,8 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	}
 }
 
-// One definition, one validator, and only the files listed below may read the
-// contract.
+// One definition, one validator, and only the files listed below may take the
+// contract from the request context (a .TaskContract read).
 func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	defs := astSites(t, func(n ast.Node) bool {
 		v, ok := n.(*ast.TypeSpec)
