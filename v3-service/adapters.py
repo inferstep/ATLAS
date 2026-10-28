@@ -165,7 +165,6 @@ def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
     return headers
 
 
-# --- PC-061 step B: typed event emission ------------------------------------
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
@@ -185,21 +184,14 @@ class LLMAdapter:
     override via the `thinking` keyword for ad-hoc switches.
     """
 
-    # Bounds how many generations this service has in flight at once.
-    #
-    # This was a Lock, added when the service moved to ThreadingHTTPServer so
-    # a long pipeline call could not starve /health and /internal/* — its job
-    # was to keep concurrent REQUESTS from oversubscribing llama.cpp. Being
-    # class-level, it also serialized the calls inside a single pipeline run,
-    # which is where the cost landed: PlanSearch generates its candidates from
-    # independent plans and seeds, and 4 of them ran end to end at ~22s each
-    # while three of llama-server's four slots sat idle. Measured 2026-08-03,
-    # 8 sequential calls totalling 166s against the proxy's 180s cap.
-    #
-    # A semaphore keeps the original guarantee — never more in flight than the
-    # backend has slots — while letting independent generations share them.
-    # llama.cpp batches concurrent slots itself; serializing here did that job
-    # a second time, worse.
+    # Bounds how many generations this service has in flight at once: never
+    # more than the backend has slots, so concurrent requests cannot
+    # oversubscribe llama.cpp, while independent generations share the slots.
+    # A class-level Lock would also serialize the calls inside one pipeline
+    # run, where PlanSearch generates its candidates from independent plans
+    # and seeds, and leave llama-server's other slots idle. llama.cpp batches
+    # concurrent slots itself; serializing here would do that job a second
+    # time, worse.
     _slots = threading.BoundedSemaphore(_max_inflight())
 
     # Counter updates are read-modify-write and now run under concurrency.
@@ -246,12 +238,9 @@ class LLMAdapter:
         """Shrink max_tokens to what the remaining clock can actually decode.
 
         A generation runs until it stops or hits max_tokens, so an 8192-token
-        ceiling at ~25 tok/s is a 327-second call — longer than the whole
-        180s budget. Measured 2026-08-04: every V3 hang-up in a 28-session
-        run was the pipeline cut mid-probe, the first generation, which had
-        the full budget and still did not finish. Refusing the call is not
-        the answer either — that produces nothing at all. Asking for a
-        length the clock can deliver is.
+        ceiling at ~25 tok/s is a 327-second call, longer than the whole
+        default 300s budget. Refusing the call is not the answer either: that
+        produces nothing at all. Asking for a length the clock can deliver is.
 
         Raises BudgetExhausted when even a minimal generation will not fit.
         """
@@ -321,8 +310,8 @@ class LLMAdapter:
             "prompt": prompt,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": True,  # streaming: per-token visibility + no
-                              # 300s urllib read-timeout on long gens.
+            "stream": True,  # streaming: per-token visibility, and
+                              # each read stays far below the 600s timeout.
             "stop": ["\n\n\n\n"],
             "top_k": 20,
             "top_p": 0.95,
@@ -464,9 +453,9 @@ class LLMAdapter:
                         # Streaming path: parse SSE chunks, accumulate
                         # delta content, and forward each delta to the
                         # progress callback as ("token", text). The 600s
-                        # urllib timeout is per-read; with continuous
-                        # token flow each read is sub-second, so long
-                        # generations no longer hit the old 300s ceiling.
+                        # connection timeout is per read; with continuous
+                        # token flow each read is sub-second, so a long
+                        # generation does not hit it.
                         full = []
                         reasoning = []
                         usage = {}
@@ -609,14 +598,12 @@ class LLMAdapter:
 
 
 class BudgetExhausted(Exception):
-    """Not enough of ATLAS_V3_TIMEOUT is left to start another generation.
+    """Not enough of the call's budget is left to start another generation.
 
     Raised from LLMAdapter.__call__ rather than checked at phase boundaries.
     Boundary checks cannot hold: every phase runs its own internal loop —
     PR-CoT alone issues two calls — so a check that reserves one call is
-    already wrong by the second. Measured 2026-08-03: a boundary check with
-    ~50s left correctly allowed PR-CoT against a ~34s reserve, and PR-CoT
-    spent 44s then started a 21s call, overrunning the cap.
+    already wrong by the second.
 
     The pipeline catches this and returns its best candidate so far, which is
     the contract an anytime algorithm owes its caller.
@@ -743,22 +730,18 @@ def _sandbox_safe_filename(filename: str) -> Optional[str]:
     """The relative name the sandbox will accept, or None when none exists.
 
     The sandbox refuses an absolute path, a backslash-rooted one, or one
-    containing ".." -- _safe_overlay_path raises HTTP 400 -- and this boundary
-    used to forward the caller's spelling unchanged. The proxy relativises at
-    its own sandbox boundary for exactly this reason (proxy/gates.go,
-    workspaceRelativeName); this one did not. The proxy sends V3 a RESOLVED
-    absolute file_path, so the filename reaching here was always absolute, and
-    every candidate came back "syntax verification unavailable: HTTP Error 400:
-    Bad Request" -- a verification that never ran, reported as a candidate that
-    failed. Measured live on an exposed task 2026-09-18: 3 of 3 candidates
-    failed that way, the pipeline proposed nothing, and ~4 minutes of the
-    session's budget bought a result that could not have been otherwise.
+    containing ".." (_safe_overlay_path raises HTTP 400), and the proxy sends
+    V3 a RESOLVED absolute file_path. Forwarded unchanged, every candidate
+    would come back "syntax verification unavailable: HTTP Error 400", a
+    verification that never ran reported as a candidate that failed. The
+    proxy relativises at its own sandbox boundary for the same reason
+    (proxy/gates.go, workspaceRelativeName).
 
     Relativised here, at the one boundary that talks to the sandbox, so every
-    caller is fixed at once. When no safe relative form exists the filename is
-    omitted and the check still runs: that only forgoes the path-scoped checks
-    (the Jinja-template scoping, which keys off a "templates/" segment), which
-    is exactly what happens today for a caller that supplies no filename.
+    caller is covered at once. When no safe relative form exists the filename
+    is omitted and the check still runs: that only forgoes the path-scoped
+    checks (the Jinja-template scoping, which keys off a "templates/"
+    segment), as for a caller that supplies no filename.
 
     This never decides anything about the code. It decides whether the sandbox
     is asked at all, and the sandbox still returns the verdict.
@@ -966,16 +949,14 @@ class EmbedAdapter:
 # must not learn either -- it stays generic and derives completeness, coverage
 # and closure from what an adapter reports.
 #
-# Records are built by calling contract.build directly. Nothing here consults
-# the retiring evidence.py: strength is read from the OBSERVATIONS, not from
-# that module's graded string, so this file is a producer of contract records
+# Records are built by calling contract.build directly, and strength is read
+# from the OBSERVATIONS, so this file is a producer of contract records
 # rather than a translator of someone else's grade.
 
 import contract
 
 # Adapter identities. These are the ids the pipeline records carry, declared
-# here because they name THIS layer's verifiers. test_adapters.py pins them
-# against the retiring module's copies for as long as that module exists.
+# here because they name THIS layer's verifiers.
 ADAPTER_JAVASCRIPT_COMPILE = "javascript_compile"
 ADAPTER_CSS_SYNTAX = "css_syntax"
 ADAPTER_PYTHON_COMPILE = "python_compile"
