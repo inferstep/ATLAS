@@ -130,7 +130,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_SKIP_GPU=1` | GPU ランタイムのインストール（NVIDIA toolkit または ROCm セットアップ）をスキップ。 |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | モデル重みをダウンロードしない |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | `docker compose up` を実行しない |
-| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | ASA ステアリングベクトルのビルドをスキップ（デフォルト: サービス起動の約 5 分後にビルド。GPU がない場合は自動的にスキップ） |
+| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | ASA ステアリングベクトルのビルドをスキップ（デフォルト: サービス起動後にビルド。GPU がない場合は自動的にスキップ） |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | firewalld でサービスポートを開放（デフォルト: オフ — サービスはループバックにバインド） |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | sudo を試みる代わりに失敗する |
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | `main` を追跡する代わりに git タグ/SHA にインストールを固定。`vX.Y.Z` 形式の値なら `ATLAS_IMAGE_TAG` も対応するイメージに固定されます |
@@ -145,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
-完了すると、クイックスタートコマンド付きの緑色の「ATLAS ready」バナーが表示されます。高速な回線を持つ新規 VM での合計時間: 約 10〜30 分（モデルダウンロードが支配的）。
+完了すると、クイックスタートコマンド付きの緑色の「ATLAS ready」バナーが表示されます。
 
 各ステップを手動で行いたい場合は、下記の方法 1 を使ってください。
 
@@ -206,7 +206,6 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 **AMD (ROCm):**
 - **Docker** 単体 — ROCm に別個のコンテナランタイムは不要で、`--device=/dev/kfd --device=/dev/dri` によるパススルーで十分です
 - ユーザーが `video` と `render` グループに属している必要があります: `sudo usermod -aG video,render $USER`（その後再ログイン）
-- 約 22 GB のディスク容量（ROCm イメージは CUDA 相当より約 2 GB 大きい）
 
 ### セットアップ
 
@@ -292,7 +291,7 @@ ROCm パスは、次の 3 点を*除いて* NVIDIA と同一です:
 
 ネイティブのベンダーバックエンドがお使いのハードウェア向けにパッケージされていない場合（Intel Arc、Snapdragon Adreno、ROCm 6.x 非対応の古い AMD）、Vulkan がフォールバックです。1 つの Dockerfile で AMD（Mesa RADV）、Intel（Mesa ANV）、NVIDIA（nvidia-container-toolkit）、Apple（macOS Docker 経由の MoltenVK）、Snapdragon（Adreno）、CPU（Mesa lavapipe）をカバーします。
 
-トレードオフ: チューニング済みのネイティブバックエンドより通常 20〜40% 遅くなります。CUDA/ROCm が選択肢にないとき、あるいは珍しいハードウェアで ATLAS が起動するかをスモークテストするときに使ってください。
+CUDA/ROCm が選択肢にないとき、あるいは珍しいハードウェアで ATLAS が起動するかをスモークテストするときに使ってください。
 
 ```bash
 # Option A — let atlas init pick it for you
@@ -369,8 +368,8 @@ Jetson では、両方の build arg を `nvcr.io/nvidia/l4t-jetpack:r36.3.0` に
 
 ### 初回実行時の動作
 
-1. Docker が `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` から 5 つのプレビルドコンテナイメージを取得します（高速な回線で約 3 分）。代わりにソースからビルドする場合（開発パス）は、`up` の前に `docker compose build` を実行してください — 下の「イメージソース」を参照。
-2. llama-server が 7GB のモデルを GPU VRAM にロード（約 1〜2 分）
+1. Docker が `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` から 5 つのプレビルドコンテナイメージを取得します。代わりにソースからビルドする場合（開発パス）は、`up` の前に `docker compose build` を実行してください — 下の「イメージソース」を参照。
+2. llama-server が 7GB のモデルを GPU VRAM にロード
 3. 全サービスがヘルスチェックを開始
 4. 5 つのサービス（llama-server、geometric-lens、v3-service、sandbox、atlas-proxy）すべてが healthy を報告すると、`atlas` が接続して Bubbletea TUI を起動します
 
@@ -405,8 +404,8 @@ ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 最速の方法は **`atlas doctor`** です — ホスト環境（GPU ランタイム、モデルと lens のアーティファクト）、docker スタック（コンテナ、ヘルスエンドポイント、認証、ステート）、そして実際のモデル推論をチェックし、完了ごとに結果を表示し、exit 0（正常）/ 1（失敗）を返します。チェックの正確な数は、バックエンド、スタックの状態、フラグによって変わります。`atlas-bootstrap.sh` がインストールの最後に実行するのもこれです。
 
 ```bash
-atlas doctor              # full check (~5–10s)
-atlas doctor --quick      # skip the e2e model inference (~2s)
+atlas doctor              # full check
+atlas doctor --quick      # skip the e2e model inference
 atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON document)
 atlas doctor -v           # verbose: show detail for each check
 ```
@@ -423,7 +422,7 @@ atlas doctor -v           # verbose: show detail for each check
 | ホスト | metal-native | ネイティブ llama-server バイナリが存在し実行可能 — `ATLAS_BACKEND=metal`（macOS ハイブリッド）のときのみ |
 | ホスト | model_file | `.env` で選択された `ATLAS_MODEL_FILE` が存在し 100 MB 超 |
 | ホスト | lens_weights | `cost_field.pt` + G(x) アーティファクトが存在 |
-| ホスト | asa_steering | `ast_edit_steering.gguf` が存在（BiasBusters #4 — fail ではなく warn。ATLAS はこれなしでも動作しますが、structural_edit と edit_file のバイアスがステアされないままになります） |
+| ホスト | asa_steering | `ast_edit_steering.gguf` が存在（fail ではなく warn。ATLAS はこれなしでも動作しますが、structural_edit と edit_file のバイアスがステアされないままになります） |
 | ホスト | tier_match | `.env` のモデル選択がホストのハードウェアに合致（オーバーシュートは警告 — OOM リスク。一致またはアンダーシュートは pass） |
 | ホスト | tier_constraints | ホストの CPU/RAM/ディスクが推奨ティアの最小値を満たす（「GPU は 16 GB だが RAM は 8 GB」の不一致を捕捉） |
 | スタック | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 5 つすべてが実行中かつ healthy |
@@ -753,7 +752,7 @@ medium ティアが ATLAS の開発ターゲットです — `atlas-bootstrap.sh
 nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 
 # Compose-native rebuild — only llama-server is rebuilt, the other
-# services keep using the GHCR images (~30-75 min, one time):
+# services keep using the GHCR images:
 docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
@@ -778,7 +777,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 #### AMD GPU ターゲット (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` は llama.cpp の HIP バックエンドを 1 つ以上の `gfx` ターゲット向けにコンパイルします。デフォルトは、もっとも一般的なコンシューマ + データセンター AMD GPU をカバーする肥大ビルドです: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。ターゲットを 1 つ追加するごとにバイナリが約 150 MB 増えます。
+`inference/Dockerfile.rocm` は llama.cpp の HIP バックエンドを 1 つ以上の `gfx` ターゲット向けにコンパイルします。デフォルトは、もっとも一般的なコンシューマ + データセンター AMD GPU をカバーする肥大ビルドです: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。
 
 ビルド時に `--build-arg GFX_TARGET=<value>` でオーバーライドしてください（または compose オーバーライドが転送する `ATLAS_GFX_TARGET` 環境変数経由で）:
 
@@ -803,8 +802,8 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 | `gfx90a` | CDNA2 | MI210, MI250, MI250X |
 | `gfx942` | CDNA3 | MI300X |
 | `gfx900` | Vega | Vega 56/64（HSA オーバーライドが必要な場合あり — TROUBLESHOOTING.md を参照） |
-| `gfx1200` | RDNA4 (Navi 44) | RX 9070 |
-| `gfx1201` | RDNA4 (Navi 48) | RX 9070 XT |
+| `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
+| `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
 > **RDNA4 (gfx1200/gfx1201) ユーザーへ:** `ATLAS_ROCM_TAG=7.2.3-complete` を設定してください — デフォルトの ROCm 6.2 ベースイメージには gfx1200/gfx1201 のコンパイラサポートが含まれていません。ROCm 7.0+ はこれらのターゲットをネイティブにサポートします。`ATLAS_HSA_OVERRIDE_GFX_VERSION` は設定しないでください。詳細は [TROUBLESHOOTING.md § RDNA4](./TROUBLESHOOTING.md) を参照。
 
@@ -892,7 +891,7 @@ atlas lens check
 
 ## ASA ステアリングベクトル (自動ビルド)
 
-2026年5月の BiasBusters #4。関数 / クラス / 要素全体の書き換えにおいて、モデルを `edit_file` より `structural_edit` へバイアスする残差ストリームのステアリングベクトルで、文法ゲートが何かを拒否する機会を持つ**前に**適用されます。厳密にオプションです — ATLAS はこれなしでも動作し続けますが、ツール選択バイアスがステアされないままになります。
+関数 / クラス / 要素全体の書き換えにおいて、モデルを `edit_file` より `structural_edit` へバイアスする残差ストリームのステアリングベクトルで、文法ゲートが何かを拒否する機会を持つ**前に**適用されます。厳密にオプションです — ATLAS はこれなしでも動作し続けますが、ツール選択バイアスがステアされないままになります。
 
 `atlas-bootstrap.sh` はサービス起動後に自動的にビルドします。パイプラインは:
 
@@ -900,7 +899,7 @@ atlas lens check
 2. ブートストラップが `llama-server` を短時間停止し、`llama-cvector-generator` を `--method mean -ngl 99` 付きのワンショットコンテナとして実行し、`models/ast_edit_steering.gguf` に加えて、ベクトルがどのモデルに対してビルドされたかを記録する `models/ast_edit_steering.gguf.model` サイドカーマーカーを書き込み、その後 `llama-server` を再起動する。
 3. `inference/entrypoint-v3.1.sh` が次回起動時にファイルを検出し、`.model` サイドカーマーカーが選択中のモデルと一致することを確認して、`llama-server` のコマンドラインに `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` を追加する。マーカーが存在しない、または別のモデルを指しているベクトルは**無効のまま**になります（起動バナーが理由を報告します）— ベクトルは 1 つのモデルに紐づく残差空間のアーティファクトだからです。
 
-16GB GPU での合計実時間: 約 5 分。ビルドはモデルが載っているのと同じハードウェア上で実行され、生成されるベクトルはモデル固有です（あるモデルのアーティファクトに対してビルドされた `ast_edit_steering.gguf` を、別のベースモデルを実行するホストに移動しないでください）。
+ビルドはモデルが載っているのと同じハードウェア上で実行され、生成されるベクトルはモデル固有です（あるモデルのアーティファクトに対してビルドされた `ast_edit_steering.gguf` を、別のベースモデルを実行するホストに移動しないでください）。
 
 **動作のオーバーライド**（調整したい場合に `.env` で設定）:
 

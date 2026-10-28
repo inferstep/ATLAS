@@ -137,7 +137,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_SKIP_GPU=1` | 跳过 GPU 运行时安装（NVIDIA toolkit 或 ROCm）。 |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | 不下载模型权重 |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | 不运行 `docker compose up` |
-| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | 跳过 ASA 操控向量构建（默认：服务启动约 5 分钟后构建；无 GPU 可用时自动跳过） |
+| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | 跳过 ASA 操控向量构建（默认：服务启动后构建；无 GPU 可用时自动跳过） |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | 在 firewalld 中打开服务端口（默认：关闭 —— 服务绑定回环地址） |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | 直接失败而不尝试 sudo |
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | 把安装固定到某个 git 标签/sha 而不是跟踪 `main`；`vX.Y.Z` 形式的值还会把 `ATLAS_IMAGE_TAG` 固定到对应的镜像 |
@@ -152,7 +152,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
-完成后会打印一条绿色的 "ATLAS ready" 横幅和快速上手命令。在网络快的全新虚拟机上总耗时约 10-30 分钟（模型下载占大头）。
+完成后会打印一条绿色的 "ATLAS ready" 横幅和快速上手命令。
 
 如果你更愿意手动完成每一步，请使用下面的方式 1。
 
@@ -213,7 +213,6 @@ atlas tier --json       # machine-readable (used by atlas init wizard)
 **AMD (ROCm)：**
 - 只需 **Docker** —— ROCm 不需要单独的容器运行时；通过 `--device=/dev/kfd --device=/dev/dri` 直通即可
 - 你的用户必须在 `video` 和 `render` 组中：`sudo usermod -aG video,render $USER`（然后重新登录）
-- 约 22 GB 磁盘空间（ROCm 镜像比 CUDA 版大约 2 GB）
 
 ### 安装步骤
 
@@ -299,7 +298,7 @@ ROCm 路径与 NVIDIA 完全一致，*除了*以下三点：
 
 当你的硬件没有打包好的原生厂商后端时（Intel Arc、Snapdragon Adreno、没有 ROCm 6.x 的较老 AMD 卡），Vulkan 是回退方案。一个 Dockerfile 覆盖 AMD（Mesa RADV）、Intel（Mesa ANV）、NVIDIA（nvidia-container-toolkit）、Apple（macOS Docker 里的 MoltenVK）、Snapdragon（Adreno）和 CPU（Mesa lavapipe）。
 
-代价：通常比调优过的原生后端慢 20–40%。当 CUDA/ROCm 不可用时使用它，或者用来冒烟测试 ATLAS 能否在不常见的硬件上启动。
+当 CUDA/ROCm 不可用时使用它，或者用来冒烟测试 ATLAS 能否在不常见的硬件上启动。
 
 ```bash
 # Option A — let atlas init pick it for you
@@ -376,8 +375,8 @@ Jetson 则在两个 build arg 中换成 `nvcr.io/nvidia/l4t-jetpack:r36.3.0`（l
 
 ### 首次运行会发生什么
 
-1. Docker 从 `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` 拉取 5 个预构建容器镜像（网络快时约 3 分钟）。若想改为从源码构建（开发路径），在 `up` 之前运行 `docker compose build` —— 见下方"镜像来源"。
-2. llama-server 把 7GB 模型加载进 GPU 显存（约 1-2 分钟）
+1. Docker 从 `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` 拉取 5 个预构建容器镜像。若想改为从源码构建（开发路径），在 `up` 之前运行 `docker compose build` —— 见下方"镜像来源"。
+2. llama-server 把 7GB 模型加载进 GPU 显存
 3. 所有服务开始健康检查
 4. 当全部 5 个服务（llama-server、geometric-lens、v3-service、sandbox、atlas-proxy）报告健康后，`atlas` 连接并启动 Bubbletea TUI
 
@@ -411,8 +410,8 @@ ATLAS_IMAGE_TAG=dev          # bleeding edge from dev branch
 最快的方式是 **`atlas doctor`** —— 检查主机环境（GPU 运行时、模型与 lens 工件）、docker 栈（容器、健康端点、认证、状态）以及一次真实模型推理，每项结果完成即打印，健康时返回退出码 0，有失败时返回 1。具体检查项数量随后端、栈状态和标志而变化。`atlas-bootstrap.sh` 在安装结束时运行的也是它。
 
 ```bash
-atlas doctor              # full check (~5–10s)
-atlas doctor --quick      # skip the e2e model inference (~2s)
+atlas doctor              # full check
+atlas doctor --quick      # skip the e2e model inference
 atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON document)
 atlas doctor -v           # verbose: show detail for each check
 ```
@@ -429,7 +428,7 @@ atlas doctor -v           # verbose: show detail for each check
 | Host | metal-native | 原生 llama-server 二进制存在且可执行 —— 仅当 `ATLAS_BACKEND=metal`（macOS 混合方案） |
 | Host | model_file | `.env` 中选定的 `ATLAS_MODEL_FILE` 存在且大于 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) 工件存在 |
-| Host | asa_steering | `ast_edit_steering.gguf` 存在（BiasBusters #4 —— 警告而非失败；没有它 ATLAS 也能工作，只是 structural_edit-vs-edit_file 的偏差不受操控） |
+| Host | asa_steering | `ast_edit_steering.gguf` 存在（警告而非失败；没有它 ATLAS 也能工作，只是 structural_edit-vs-edit_file 的偏差不受操控） |
 | Host | tier_match | `.env` 的模型选择与主机硬件匹配（超配时警告 —— 有 OOM 风险 —— 匹配或低配时通过） |
 | Host | tier_constraints | 主机 CPU/RAM/磁盘满足推荐 tier 的最低要求（抓住"16 GB GPU 却只有 8 GB RAM"的错配） |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | 全部 5 个都在运行且健康 |
@@ -759,7 +758,7 @@ medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用�
 nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 
 # Compose-native rebuild — only llama-server is rebuilt, the other
-# services keep using the GHCR images (~30-75 min, one time):
+# services keep using the GHCR images:
 docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
@@ -784,7 +783,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 #### AMD GPU 目标 (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` 针对一个或多个 `gfx` 目标编译 llama.cpp 的 HIP 后端。默认是覆盖最常见消费级 + 数据中心 AMD GPU 的胖构建：`gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。每增加一个目标，二进制约增大 150 MB。
+`inference/Dockerfile.rocm` 针对一个或多个 `gfx` 目标编译 llama.cpp 的 HIP 后端。默认是覆盖最常见消费级 + 数据中心 AMD GPU 的胖构建：`gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。
 
 构建时用 `--build-arg GFX_TARGET=<value>` 覆盖（或通过 `ATLAS_GFX_TARGET` 环境变量，compose override 会转发它）：
 
@@ -809,8 +808,8 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 | `gfx90a` | CDNA2 | MI210、MI250、MI250X |
 | `gfx942` | CDNA3 | MI300X |
 | `gfx900` | Vega | Vega 56/64（可能需要 HSA 覆盖 —— 见 TROUBLESHOOTING.md） |
-| `gfx1200` | RDNA4 (Navi 44) | RX 9070 |
-| `gfx1201` | RDNA4 (Navi 48) | RX 9070 XT |
+| `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
+| `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
 > **RDNA4 (gfx1200/gfx1201) 用户：** 请设置 `ATLAS_ROCM_TAG=7.2.3-complete` —— 默认的 ROCm 6.2 基础镜像不包含 gfx1200/gfx1201 的编译器支持。ROCm 7.0+ 原生支持这些目标；不要设置 `ATLAS_HSA_OVERRIDE_GFX_VERSION`。详情见 [TROUBLESHOOTING.md § RDNA4](../../TROUBLESHOOTING.md)。
 
@@ -898,7 +897,7 @@ atlas lens check
 
 ## ASA 操控向量（自动构建）
 
-2026 年 5 月 BiasBusters #4。一个残差流操控向量，在语法门控有机会拒绝任何东西**之前**，就把模型对整函数/类/元素重写的选择偏向 `structural_edit` 而非 `edit_file`。完全可选 —— 没有它 ATLAS 仍能工作，只是工具选择偏差不受操控。
+一个残差流操控向量，在语法门控有机会拒绝任何东西**之前**，就把模型对整函数/类/元素重写的选择偏向 `structural_edit` 而非 `edit_file`。完全可选 —— 没有它 ATLAS 仍能工作，只是工具选择偏差不受操控。
 
 `atlas-bootstrap.sh` 会在服务启动后自动构建它。流水线是：
 
@@ -906,7 +905,7 @@ atlas lens check
 2. bootstrap 短暂停下 `llama-server`，以 `--method mean -ngl 99` 把 `llama-cvector-generator` 作为一次性容器运行，写出 `models/ast_edit_steering.gguf`，外加一个 `models/ast_edit_steering.gguf.model` 侧车标记，记录该向量是针对哪个模型构建的，然后重启 `llama-server`。
 3. `inference/entrypoint-v3.1.sh` 在下次启动时看到该文件，检查 `.model` 侧车标记与所选模型匹配后，把 `--control-vector-scaled /models/ast_edit_steering.gguf:0.5` 附加到 `llama-server` 的命令行。标记缺失或指向不同模型的向量将保持**禁用**（启动横幅会说明原因）—— 向量是绑定于单个模型的残差空间工件。
 
-在 16GB GPU 上的总墙钟时间：约 5 分钟。构建运行在模型所在的同一硬件上；产出的向量是模型专属的（不要把针对某个模型工件构建的 `ast_edit_steering.gguf` 挪到运行不同基础模型的主机上）。
+构建运行在模型所在的同一硬件上；产出的向量是模型专属的（不要把针对某个模型工件构建的 `ast_edit_steering.gguf` 挪到运行不同基础模型的主机上）。
 
 **覆盖行为**（如需调优，在 `.env` 中设置）：
 
