@@ -1,17 +1,12 @@
-"""atlas lens — Geometric Lens probe + build pipeline (PC-057, PC-058).
+"""atlas lens: Geometric Lens probe, build and publish.
 
-Two subcommands wrap the existing geometric-lens training code into a
-model-path-driven workflow so users can bring their own GGUF and either
-verify it's Lens-compatible (`check`) or actually train fresh artifacts
-for it (`build`).
+Three subcommands wrap the existing geometric-lens training code into a
+model-path-driven workflow so users can bring their own GGUF and verify
+it is Lens-compatible (`check`, a cheap pre-flight), train fresh
+artifacts for it (`build`, wraps training.train_cost_field), or upload
+artifacts and open a registry PR (`publish`).
 
-Layering:
-    PC-057 `atlas lens check`  -> this file, cheap pre-flight
-    PC-058 `atlas lens build`  -> this file, wraps training.train_cost_field
-    PC-059 `atlas lens push`   -> roadmap, publishes to registry
-    PC-060 HF middleman        -> roadmap, automated distribution
-
-Probe contract: both subcommands talk to a *running* llama-server via
+Probe contract: `check` and `build` talk to a *running* llama-server via
 its `/embedding` and `/props` endpoints. ATLAS users typically already
 have one up (`docker compose up -d`); if not, the commands print a
 clear "start the stack first" hint rather than spinning their own
@@ -24,6 +19,7 @@ Invoke:
     atlas lens check <model-name>       # probe a registry entry
     atlas lens check /path/to/model.gguf  # probe an arbitrary file
     atlas lens build <name|path>        # train fresh C(x) artifacts
+    atlas lens publish [<name|path>]    # upload artifacts, open a registry PR
     atlas lens --json                   # machine-readable output for scripts
 
 Exit codes (check):
@@ -984,17 +980,14 @@ def _record_model_identity(args: argparse.Namespace, verdict: CheckVerdict,
                     f"model; refusing to activate these artifacts."
                     f"{RESET if color else ''}")
         return None
-    # Record the convention these artifacts were actually fitted on.
-    # save_model_identity has always accepted it and nothing passed it,
-    # so shipped artifacts declare no contract — which is why a
-    # server-side pooling or normalization change shifts every score
-    # while health checks stay green. Measured 2026-08-03: served
-    # unit-norm vectors against a cost field fitted on |v|~137 returned
-    # 0.76-0.80 for a clean function, a repetition loop and truncated
-    # junk alike, against a calibrated 9.25/11.81 band.
+    # Record the embedding convention these artifacts were fitted on.
+    # Without a declared contract, a server-side pooling or
+    # normalization change (unit-norm vectors served to a cost field
+    # fitted on unnormalized ones) shifts every score while health
+    # checks stay green.
     #
-    # Best-effort: a probe failure must not block activation, and an
-    # absent contract is the behaviour we already have.
+    # Best-effort: a probe failure must not block activation; the
+    # artifacts then declare no contract.
     embedding_contract = None
     try:
         from geometric_lens.embedding_extractor import (
