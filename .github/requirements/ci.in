@@ -10,7 +10,7 @@ pytest-cov
 # uses four.
 pytest-xdist
 pyyaml
-ruff==0.17.1
+ruff==0.17.2
 mypy==2.4.0
 yamllint
 
@@ -19,7 +19,7 @@ yamllint
 # Dependabot moves both in one pull request and makes ci.txt again.
 # From sandbox/requirements-runtime.txt: the sandbox service, which the
 # tests under tests/infrastructure start.
-fastapi==0.149.0
+fastapi==0.162.0
 defusedxml==0.7.1
 pydantic==2.14.1
 uvicorn==0.54.0
