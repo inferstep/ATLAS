@@ -77,7 +77,8 @@ Task-oriented index for everything under `docs/`. The
 - [PLAN_MODE.md](PLAN_MODE.md) — per-turn pre-flight planning.
 - [SOURCES.md](SOURCES.md) — the research papers behind each component.
 - [reports/ablation/README.md](reports/ablation/README.md) — the raw
-  per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks).
+  per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks),
+  whose result is withdrawn.
 - [adr/](adr/README.md) — architecture decision records 0001-0011 (trust
   model, Redis, per-model bundles, fail-soft V3, lens optionality
   (superseded), release strategy, the SQLite store (retired), harness
@@ -106,7 +107,7 @@ Task-oriented index for everything under `docs/`. The
   writable dirs, dependency pinning.
 - [../GOVERNANCE.md](../GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
   [../SECURITY.md](../SECURITY.md),
-  [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md)
+  [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
 - READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
   are not listed one-by-one here: they live in the tree next to what they
   describe (see the [repository map](#repository-map)), and
