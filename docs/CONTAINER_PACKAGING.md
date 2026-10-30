@@ -7,8 +7,8 @@ versions are recorded for reproducible builds.
 ## Application accounts
 
 The five service images each create a **named non-root account inside
-their own image** (table below); `docker-compose.yml` runs four of them
-with the installing user's uid:gid instead (see below).
+their own image** (table below); `docker-compose.yml` runs them with the
+installing user's uid:gid instead (see below).
 
 | Service | Image account | uid:gid | Port (non-privileged) |
 |---|---|---|---|
@@ -18,16 +18,17 @@ with the installing user's uid:gid instead (see below).
 | sandbox | `sandbox` | 1000:1000 (overridable via `ATLAS_SANDBOX_UID/GID`) | 8020 |
 | llama-server (`atlas-llama`, `inference/Dockerfile*`) | `atlas` | 1001:1001 | 8080 (`EXPOSE`) |
 
-`docker-compose.yml` runs the proxy, the V3 service and the lens as
-`ATLAS_PROXY_UID:ATLAS_PROXY_GID`, and the sandbox as
+`docker-compose.yml` runs llama-server, the proxy, the V3 service and the lens
+as `ATLAS_PROXY_UID:ATLAS_PROXY_GID`, and the sandbox as
 `ATLAS_SANDBOX_UID:ATLAS_SANDBOX_GID`: the installing user's ids, which
 `atlas init` writes. So each of them can read the service token, which
 `atlas init` makes readable for that user only (0600).
 
-`docker-compose.yml` sets no user for llama-server, so it runs as the
-image's own account, `atlas` (1001:1001). Each inference Dockerfile adds
-that account to the `video` and `render` groups where the base image has
-them, for the GPU devices.
+llama-server stops with an error when its token folder or token is there and
+cannot be read, so it never starts with internal auth off by accident. The K3s
+template mounts no token and sets no user for it: there it runs as the image's
+account, `atlas` (1001:1001). Each inference Dockerfile adds that account to the
+`video` and `render` groups where the base image has them, for the GPU devices.
 
 Application files stay root-owned and world-readable (the `COPY`
 default), so the account can read them but not modify the image

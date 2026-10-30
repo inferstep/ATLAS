@@ -38,6 +38,8 @@ services:
     # overlay self-contained, no Mac-only image needed in GHCR.
     image: alpine/socat:1.8.1.3@sha256:b991911ea370c3b6409ade77746b81eb97bf715d87f7dde2a45832d6bee34872
     build: !reset null
+    # Only a port forward: it reads no token, so it keeps the image's own user.
+    user: !reset null
     # Drop the GPU resource request from the base file. socat doesn't
     # need a GPU and Docker Desktop on Mac doesn't have one to give
     # anyway — leaving the request in would make compose warn.
