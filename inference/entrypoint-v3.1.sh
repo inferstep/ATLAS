@@ -208,11 +208,11 @@ TOKEN_DIR="$(dirname "$TOKEN_FILE")"
 # A token this account cannot reach stops the server: starting without it would
 # leave internal auth off with no message. A stack with no secrets folder, or no
 # token in it, has auth off, and that stays allowed.
-if [ -d "$TOKEN_DIR" ] && [ ! -x "$TOKEN_DIR" ]; then
+if [[ -d "$TOKEN_DIR" && ! -x "$TOKEN_DIR" ]]; then
   echo "ERROR: uid $(id -u) cannot enter $TOKEN_DIR, so the service token cannot be read. Set ATLAS_PROXY_UID and ATLAS_PROXY_GID in .env to the user who ran atlas init." >&2
   exit 1
 fi
-if [ -e "$TOKEN_FILE" ] && [ ! -r "$TOKEN_FILE" ]; then
+if [[ -e "$TOKEN_FILE" && ! -r "$TOKEN_FILE" ]]; then
   echo "ERROR: uid $(id -u) cannot read $TOKEN_FILE. Set ATLAS_PROXY_UID and ATLAS_PROXY_GID in .env to the user who ran atlas init." >&2
   exit 1
 fi
