@@ -1133,7 +1133,7 @@ persist_backend_selection() {
     #   none + /dev/dri  -> vulkan (compose/docker-compose.vulkan.yml)
     #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
     # An explicit ATLAS_BACKEND already present in .env is respected.
-    local backend
+    local backend newly_recorded=""
     backend=$(env_file_value ATLAS_BACKEND)
     if [[ -n "$backend" ]]; then
         log_ok "Backend already set in .env: ATLAS_BACKEND=$backend"
@@ -1151,11 +1151,15 @@ persist_backend_selection() {
         esac
         set_env_file_value ATLAS_BACKEND "$backend"
         log_ok "Recorded ATLAS_BACKEND=$backend so later lifecycle commands pick the matching compose overlays"
+        newly_recorded=yes
     fi
     if [[ "$backend" == "rocm" || "$backend" == "vulkan" ]]; then
         set_env_file_value ATLAS_VIDEO_GID "$(host_gid video)"
         set_env_file_value ATLAS_RENDER_GID "$(host_gid render)"
-        set_env_file_value ATLAS_LLAMA_USER "$(id -u "$TARGET_USER"):$(id -g "$TARGET_USER")"
+        # An existing install keeps its account until `atlas init --reconfigure`.
+        if [[ -n "$newly_recorded" ]]; then
+            set_env_file_value ATLAS_LLAMA_USER "$(id -u "$TARGET_USER"):$(id -g "$TARGET_USER")"
+        fi
     fi
 }
 

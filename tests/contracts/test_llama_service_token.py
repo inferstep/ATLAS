@@ -92,6 +92,7 @@ def test_a_folder_this_account_cannot_enter_stops_the_server(tmp_path, name):
 
     assert done.returncode == 1
     assert "cannot enter" in done.stderr
+    assert "ATLAS_PROXY_UID" in done.stderr and "ATLAS_LLAMA_USER" in done.stderr
     assert not seen_args.exists()
 
 
@@ -108,4 +109,5 @@ def test_a_token_this_account_cannot_read_stops_the_server(tmp_path, name):
 
     assert done.returncode == 1
     assert "cannot read" in done.stderr
+    assert "ATLAS_PROXY_UID" in done.stderr and "ATLAS_LLAMA_USER" in done.stderr
     assert not seen_args.exists()

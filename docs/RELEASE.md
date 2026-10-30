@@ -140,10 +140,10 @@ hash status, backend, context size, and service image digests.
 - A supported release cannot be qualified while a required release gate is
   failed or unavailable.
 
-### Checks for 3.2.0 on ROCm and Vulkan
+### Checks for 3.2.0 on ROCm, Vulkan and K3s
 
-llama-server runs as the installing user since this cycle, and this has not run
-on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
+llama-server runs as a set account since this cycle, and this has not run on an
+AMD or a Vulkan GPU or on K3s. Before 3.2.0, on a host of each kind:
 
 - `atlas init` writes `ATLAS_VIDEO_GID`, `ATLAS_RENDER_GID` and
   `ATLAS_LLAMA_USER`, and llama-server, as the installing user, reaches the GPU
@@ -153,6 +153,8 @@ on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
   --reconfigure`.
 - On ROCm, the bootstrap's steering build writes its vector to the models
   folder as the installing user.
+- On K3s, llama-server starts as uid 1001 from the template's `securityContext`
+  and reaches the GPU.
 
 ## Branches and versions
 

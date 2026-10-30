@@ -368,8 +368,8 @@ signed; `sha-*` tags never move.
   `atlas upgrade` moves a legacy `ATLAS_GHCR_OWNER=itigges22` to `inferstep`).
   New keys are
   additive with safe defaults; removed keys are ignored (see
-  CONFIGURATION.md § removed variables). Re-run `atlas init` when you want
-  re-detected hardware sizing, and on ROCm or Vulkan after an upgrade from
+  CONFIGURATION.md § removed variables). Run `atlas init --reconfigure` when you
+  want re-detected hardware sizing, and on ROCm or Vulkan after an upgrade from
   3.1.7, so llama-server stops running as root (`ATLAS_LLAMA_USER`).
 - **Compose files and the CLI:** these come from your checkout, so only
   `git pull` changes them. `atlas upgrade` replaces images only: run `git pull`
