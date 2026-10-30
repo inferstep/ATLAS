@@ -38,7 +38,7 @@
 #     Community-tested (SUPPORT_MATRIX.md), CI has no AMD GPU to smoke-test
 #     the result on, and the default fat build covers five gfx targets — a
 #     hosted-runner job would publish an unexercised image (and a multi-GB
-#     registry buildcache) on every push. docker-compose.rocm.yml declares
+#     registry buildcache) on every push. compose/docker-compose.rocm.yml declares
 #     `pull_policy: build` for llama-server, so `docker compose pull` skips
 #     it and `up` builds it from source on the AMD host instead. Publishing
 #     it belongs with a CI runner that has an AMD card attached.
@@ -186,7 +186,7 @@ jobs:
       packages: write
     steps:
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -302,7 +302,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -482,7 +482,7 @@ jobs:
           exit 1
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

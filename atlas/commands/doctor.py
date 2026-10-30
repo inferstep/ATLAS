@@ -542,7 +542,7 @@ def check_health_endpoints() -> List[CheckResult]:
 def _services_cannot_read(path: str) -> Optional[str]:
     """Why the services cannot read the token file, or None when they can.
 
-    docker-compose.yml runs the lens, V3 and the proxy as ATLAS_PROXY_UID and
+    docker-compose.yml runs llama-server, the lens, V3 and the proxy as ATLAS_PROXY_UID and
     the sandbox as ATLAS_SANDBOX_UID; `atlas init` sets both to the installing
     user, whose file (0600, in a 0700 folder) it is. Each service stops when
     it cannot read the file. Linux only: other hosts map file owners into

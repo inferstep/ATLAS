@@ -83,8 +83,8 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 
 1. **부트스트랩은 옵트인하지 않는 한 GPU 없는 호스트를 거부합니다:**
    `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
-   이렇게 하면 부트스트랩이 `docker-compose.vulkan.yml`을 겹치고(`/dev/dri`가
-   없으면 `docker-compose.cpu.yml`도 함께), 모델 선택과
+   이렇게 하면 부트스트랩이 `compose/docker-compose.vulkan.yml`을 겹치고(`/dev/dri`가
+   없으면 `compose/docker-compose.cpu.yml`도 함께), 모델 선택과
    `ATLAS_BACKEND=vulkan|cpu`를 직접 `.env`에 기록하며, ASA 빌드를 건너뜁니다.
 2. **GPU 없는 호스트에서 `atlas init`을 실행하지 마세요** — 마법사는 크기를
    정할 수 없는 `.env`를 쓰는 대신 의도적으로 거부(exit 1)합니다. 모델 선택은
@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 ```bash
 cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
 atlas model install Qwen3.5-9B-Q6_K
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
 
@@ -257,7 +257,7 @@ ${EDITOR:-vi} .env
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 #    `atlas init` writes a marker comment into .env telling you which to use.
 
 # 7. Verify everything is healthy (wait for all services to show "healthy")
@@ -274,7 +274,7 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
 
 1. **두 compose 파일로 기동** (또는 `atlas init`에 맡기세요):
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
    ```
    오버라이드는 llama-server 이미지를 ROCm 빌드로 전환하고, NVIDIA 드라이버 요청을 `/dev/kfd` + `/dev/dri` 패스스루로 교체하며, 엔트리포인트가 HIP 튜닝 분기를 타도록 `ATLAS_BACKEND=rocm`을 강제합니다.
 
@@ -289,7 +289,7 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
 3. **GPU 컴퓨트 타깃.** 기본 `Dockerfile.rocm` 빌드는 RDNA3(7000 시리즈), RDNA2(6000 시리즈), CDNA2(MI200)를 포괄하는 "fat" 이미지입니다 — `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. 특정 GPU만 겨냥한 더 작은 이미지를 원하면 빌드 전에 `ATLAS_GFX_TARGET`을 설정하세요:
    ```bash
    # Example: only build for RX 7900 XT/XTX
-   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
    ```
    본인 카드의 gfx 타깃은 [LLVM AMDGPU 프로세서 표](https://llvm.org/docs/AMDGPUUsage.html)를 참고하세요.
 
@@ -306,10 +306,10 @@ CUDA/ROCm이 선택지가 아니거나, 특이한 하드웨어에서 ATLAS가 �
 # (the wizard offers Vulkan when your GPU vendor's native backend isn't packaged,
 #  or run with --backend vulkan to force it regardless of vendor):
 atlas init --backend vulkan
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 
 # Option B — already-installed deployment, just switch the override file:
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 # (the entrypoint dispatches on ATLAS_BACKEND, which the compose overlay
 #  sets to vulkan; .env's value is ignored when the overlay is in play)
 ```
@@ -742,7 +742,7 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 | NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
 | NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
 | AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
+| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
 | 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Intel Arc | SYCL | 로드맵(Roadmap) — Intel Arc는 현재 Vulkan 사용 | 미정 | Arc A770 16GB (목표) |
 
@@ -790,7 +790,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 ```bash
 # Single target — RX 7900 XT/XTX only (smaller image)
-ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
 docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Changed: the Compose overlays moved to `compose/`
+
+`docker-compose.{cpu,macos,rocm,vulkan}.yml` and
+`docker-compose.override.yml.example` are now in `compose/`. `docker-compose.yml`
+and your own `docker-compose.override.yml` stay at the root. `atlas` and the
+installers find the overlays themselves. If you run `docker compose -f` by hand
+or from a script of your own, add `compose/` to the overlay's path. Relative
+paths in the overlays are unchanged: Compose reads them from the folder of the
+first `-f` file.
+
 ### Changed: ruff catches swallowed exceptions and complex functions, and lints scripts/
 
 ruff ran Pyflakes only, and not on `scripts/`. Its settings are now in
@@ -2393,7 +2403,7 @@ contributor setup, on top of the changes since 3.1.3 listed further down.
   fuller pull request template. [CONTRIBUTING](CONTRIBUTING.md) is
   rewritten as the path from an issue to a release. [GOVERNANCE](GOVERNANCE.md)
   describes the trust ladder and the RFC flow. New
-  [TRIAGE](docs/TRIAGE.md) and [INCIDENT_RESPONSE](docs/INCIDENT_RESPONSE.md)
+  [TRIAGE](GOVERNANCE.md#triage) and [INCIDENT_RESPONSE](docs/INCIDENT_RESPONSE.md)
   guides.
 - The public [Roadmap board](https://github.com/orgs/inferstep/projects/1)
   has a Start Here view. The atlas-bot handles `/claim` and `/unclaim`,

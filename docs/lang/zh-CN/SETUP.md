@@ -82,8 +82,8 @@ bootstrap 会绕过这些坑：EPEL、nouveau 驱动冲突、libnvidia-ml.so.1 �
 
 1. **bootstrap 会拒绝无 GPU 的主机，除非你显式选择加入：**
    `ATLAS_BOOTSTRAP_SKIP_GPU=1 ./scripts/atlas-bootstrap.sh`
-   它会叠加 `docker-compose.vulkan.yml`（当 `/dev/dri` 不存在时再叠加
-   `docker-compose.cpu.yml`），自行把模型选择和
+   它会叠加 `compose/docker-compose.vulkan.yml`（当 `/dev/dri` 不存在时再叠加
+   `compose/docker-compose.cpu.yml`），自行把模型选择和
    `ATLAS_BACKEND=vulkan|cpu` 写入 `.env`，并跳过 ASA 构建。
 2. **不要在无 GPU 的主机上运行 `atlas init`** —— 向导会有意拒绝（退出码 1），
    而不是写出一份它无法定容的 `.env`。模型选择由 bootstrap 处理；之后可通过
@@ -94,7 +94,7 @@ bootstrap 会绕过这些坑：EPEL、nouveau 驱动冲突、libnvidia-ml.so.1 �
 ```bash
 cp .env.example .env    # set ATLAS_MODEL_FILE / ATLAS_MODEL_NAME
 atlas model install Qwen3.5-9B-Q6_K
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
 
@@ -256,7 +256,7 @@ ${EDITOR:-vi} .env
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 #    `atlas init` writes a marker comment into .env telling you which to use.
 
 # 7. Verify everything is healthy (wait for all services to show "healthy")
@@ -273,7 +273,7 @@ ROCm 路径与 NVIDIA 完全一致，*除了*以下三点：
 
 1. **用两个 compose 文件一起拉起**（或者让 `atlas init` 替你完成）：
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
    ```
    该 override 把 llama-server 镜像切换为 ROCm 构建，把 NVIDIA 驱动请求换成 `/dev/kfd` + `/dev/dri` 直通，并强制 `ATLAS_BACKEND=rocm`，使入口点走 HIP 调优分支。
 
@@ -288,7 +288,7 @@ ROCm 路径与 NVIDIA 完全一致，*除了*以下三点：
 3. **GPU 计算目标。** 默认的 `Dockerfile.rocm` 构建是覆盖 RDNA3（7000 系列）、RDNA2（6000 系列）和 CDNA2（MI200）的"胖"镜像 —— `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`。想要针对你特定 GPU 的更小镜像，在构建前设置 `ATLAS_GFX_TARGET`：
    ```bash
    # Example: only build for RX 7900 XT/XTX
-   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+   ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
    ```
    你的显卡对应的 gfx 目标见 [LLVM AMDGPU 处理器表](https://llvm.org/docs/AMDGPUUsage.html)。
 
@@ -305,10 +305,10 @@ ROCm 路径与 NVIDIA 完全一致，*除了*以下三点：
 # (the wizard offers Vulkan when your GPU vendor's native backend isn't packaged,
 #  or run with --backend vulkan to force it regardless of vendor):
 atlas init --backend vulkan
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 
 # Option B — already-installed deployment, just switch the override file:
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 # (the entrypoint dispatches on ATLAS_BACKEND, which the compose overlay
 #  sets to vulkan; .env's value is ignored when the overlay is in play)
 ```
@@ -741,7 +741,7 @@ medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用�
 | NVIDIA（Blackwell —— RTX 50xx、B100、GB10） | CUDA | 支持 (Supported)（已发布镜像） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要开发用） |
 | NVIDIA（前 Blackwell —— RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4） | CUDA | 预览 (Preview) —— 需要一次性[本地重建](#cuda-计算能力-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上游 llama.cpp 支持这些卡；维护者未在 ATLAS 上验证） |
 | AMD | ROCm / HIP | 社区验证 (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
-| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
+| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
 | 任意（跨厂商回退） | Vulkan | 预览 | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）已冒烟测试；尚无真实 GPU 验证 |
 | Intel Arc | SYCL | 路线图 (Roadmap) —— Intel Arc 目前走 Vulkan | 待定 | Arc A770 16GB（目标） |
 
@@ -789,7 +789,7 @@ docker compose build --build-arg CUDA_ARCH="86;89;90" llama-server
 
 ```bash
 # Single target — RX 7900 XT/XTX only (smaller image)
-ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+ATLAS_GFX_TARGET=gfx1100 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
 
 # Two targets for RDNA3 + RDNA2 mixed-fleet
 docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.rocm -t atlas-llama-rocm:custom inference/

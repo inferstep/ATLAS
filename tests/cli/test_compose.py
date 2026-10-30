@@ -10,13 +10,13 @@ from atlas import compose
 @pytest.mark.parametrize(
     ("backend", "expected"),
     [
-        ("metal", ["-f", "docker-compose.yml", "-f", "docker-compose.macos.yml"]),
-        ("rocm", ["-f", "docker-compose.yml", "-f", "docker-compose.rocm.yml"]),
-        ("vulkan", ["-f", "docker-compose.yml", "-f", "docker-compose.vulkan.yml"]),
+        ("metal", ["-f", "docker-compose.yml", "-f", "compose/docker-compose.macos.yml"]),
+        ("rocm", ["-f", "docker-compose.yml", "-f", "compose/docker-compose.rocm.yml"]),
+        ("vulkan", ["-f", "docker-compose.yml", "-f", "compose/docker-compose.vulkan.yml"]),
         # The GPU-less CPU path stacks the Vulkan and CPU overlays, in merge
         # order, matching the bootstrap's compose_files_args.
-        ("cpu", ["-f", "docker-compose.yml", "-f", "docker-compose.vulkan.yml",
-                 "-f", "docker-compose.cpu.yml"]),
+        ("cpu", ["-f", "docker-compose.yml", "-f", "compose/docker-compose.vulkan.yml",
+                 "-f", "compose/docker-compose.cpu.yml"]),
         # cuda and any unknown or absent backend keep Compose's default
         # discovery: no -f flags, so the base file only.
         ("cuda", []),
@@ -27,9 +27,10 @@ from atlas import compose
     ids=["metal", "rocm", "vulkan", "cpu", "cuda", "unknown", "empty", "none"],
 )
 def test_backend_selects_expected_compose_files(tmp_path, backend, expected):
-    for name in ("docker-compose.yml", "docker-compose.macos.yml",
-                 "docker-compose.rocm.yml", "docker-compose.vulkan.yml",
-                 "docker-compose.cpu.yml"):
+    (tmp_path / "compose").mkdir()
+    for name in ("docker-compose.yml", "compose/docker-compose.macos.yml",
+                 "compose/docker-compose.rocm.yml", "compose/docker-compose.vulkan.yml",
+                 "compose/docker-compose.cpu.yml"):
         (tmp_path / name).write_text("services: {}\n")
     assert compose.file_args(str(tmp_path), backend=backend,
                              environ={}) == expected
@@ -38,15 +39,16 @@ def test_backend_selects_expected_compose_files(tmp_path, backend, expected):
 @pytest.mark.parametrize(
     ("backend", "present_files", "missing_file"),
     [
-        ("metal", ["docker-compose.yml"], "docker-compose.macos.yml"),
+        ("metal", ["docker-compose.yml"], "compose/docker-compose.macos.yml"),
         # The CPU stack needs both of its overlays.
-        ("cpu", ["docker-compose.yml", "docker-compose.vulkan.yml"],
-         "docker-compose.cpu.yml"),
+        ("cpu", ["docker-compose.yml", "compose/docker-compose.vulkan.yml"],
+         "compose/docker-compose.cpu.yml"),
     ],
     ids=["metal-overlay-missing", "cpu-second-overlay-missing"],
 )
 def test_missing_overlay_fails_before_docker(tmp_path, backend, present_files,
                                              missing_file):
+    (tmp_path / "compose").mkdir()
     for name in present_files:
         (tmp_path / name).write_text("services: {}\n")
     with pytest.raises(FileNotFoundError, match=missing_file):
@@ -65,12 +67,13 @@ def test_shell_environment_wins_over_dotenv_values(tmp_path):
 
 def test_command_places_overlay_before_operation(tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
+    (tmp_path / "compose").mkdir()
+    (tmp_path / "compose/docker-compose.macos.yml").write_text("services: {}\n")
     cmd = compose.command(str(tmp_path), ["up", "-d", "atlas-proxy"],
                           backend="metal", environ={})
     assert cmd == [
         "docker", "compose", "-f", "docker-compose.yml", "-f",
-        "docker-compose.macos.yml", "up", "-d", "atlas-proxy",
+        "compose/docker-compose.macos.yml", "up", "-d", "atlas-proxy",
     ]
 
 

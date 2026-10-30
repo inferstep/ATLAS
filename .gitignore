@@ -6,7 +6,7 @@
 atlas.conf
 *.local.conf
 *.local
-# Compose dev-mode override (local copy of docker-compose.override.yml.example)
+# Compose dev-mode override (local copy of compose/docker-compose.override.yml.example)
 docker-compose.override.yml
 
 # ----- Development Task Files -----

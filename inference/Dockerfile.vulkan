@@ -13,7 +13,7 @@
 # (Mesa software rasterizer — very slow but means everyone can boot).
 #
 # Bring up via:
-#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 #
 # arm64 (#115): this Dockerfile is multi-arch ready. The ubuntu:22.04
 # base image and all apt packages (libvulkan-dev, mesa-vulkan-drivers,
@@ -164,7 +164,7 @@ COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # No GPU-specific device passthrough or group_add here — the compose
-# overlay (docker-compose.vulkan.yml) handles those because they depend
+# overlay (compose/docker-compose.vulkan.yml) handles those because they depend
 # on which Vulkan ICD the user is targeting (NVIDIA toolkit vs /dev/dri
 # vs neither for CPU lavapipe).
 USER atlas

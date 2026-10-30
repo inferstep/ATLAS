@@ -1,7 +1,7 @@
 # ATLAS docker-compose override for AMD ROCm / HIP backend.
 #
 # Bring up the stack with both files:
-#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 #
 # Only llama-server differs between backends (it's the only GPU-using
 # service). The geometric-lens, v3-service, sandbox, and atlas-proxy
@@ -70,9 +70,11 @@ services:
     # on the host so /dev/kfd and /dev/dri are accessible. Most distros
     # ship these groups by default; if missing, add them with:
     #   sudo groupadd -f render && sudo groupadd -f video
+    # A name here resolves in the image, whose numbers need not match the
+    # host's device nodes, so `atlas init` writes the host's numbers.
     group_add:
-      - video
-      - render
+      - ${ATLAS_VIDEO_GID:-video}
+      - ${ATLAS_RENDER_GID:-render}
     environment:
       # Make sure the entrypoint takes the ROCm branch even when .env
       # is stale (older deployments from before `atlas init` wrote

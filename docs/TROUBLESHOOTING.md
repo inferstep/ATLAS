@@ -26,8 +26,8 @@ inference backend:
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | Run `rocm-smi` and verify `/dev/kfd` exists. |
 | Apple Silicon / Metal | Run `atlas doctor`; if the native server is not listening, start `./scripts/atlas-llama-macos.sh` and inspect its foreground launcher output as described in [SETUP_MACOS.md](SETUP_MACOS.md#troubleshooting). |
-| Vulkan | Verify `/dev/dri` exists, then run `docker compose -f docker-compose.yml -f docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`. |
-| CPU-only | Confirm the `docker-compose.vulkan.yml` and `docker-compose.cpu.yml` overlays are active. `atlas doctor` should warn and exit successfully rather than fail solely because no GPU exists. |
+| Vulkan | Verify `/dev/dri` exists, then run `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`. |
+| CPU-only | Confirm the `compose/docker-compose.vulkan.yml` and `compose/docker-compose.cpu.yml` overlays are active. `atlas doctor` should warn and exit successfully rather than fail solely because no GPU exists. |
 
 For the per-service health-check curls, see [SETUP.md § Verify Installation](SETUP.md#verify-installation). The atlas-proxy health endpoint is the most useful for triage — it reports the status of all upstream services:
 ```json
@@ -269,7 +269,7 @@ Set the var in `.env` so it propagates through the compose override into the con
 
 ```bash
 echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d --force-recreate llama-server
+docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
 If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/inferstep/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
@@ -291,15 +291,15 @@ ATLAS_GFX_TARGET=gfx1201   # gfx1201 for RX 9070 / 9070 XT, gfx1200 for RX 9060 
 Then rebuild and bring up the stack:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
-docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
+docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 ```
 
 **Important: do NOT set `ATLAS_HSA_OVERRIDE_GFX_VERSION` for gfx1200/gfx1201.** ROCm 7.0+ supports these targets natively; overriding the GFX version inside Docker causes a mismatch between the compiled kernels and the runtime target, which results in crashes. Leave `ATLAS_HSA_OVERRIDE_GFX_VERSION` unset (the default).
 
 ### ROCm container can't pull `rocm/rocm-terminal`
 
-**Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f docker-compose.rocm.yml build llama-server` stalls fetching its `rocm/dev-ubuntu-*` base. (`docker compose pull` never touches llama-server on this overlay — it is a local build, `pull_policy: build`.)
+**Symptom:** `atlas doctor` ROCm check times out at the image pull, or `docker compose -f ... -f compose/docker-compose.rocm.yml build llama-server` stalls fetching its `rocm/dev-ubuntu-*` base. (`docker compose pull` never touches llama-server on this overlay — it is a local build, `pull_policy: build`.)
 
 **What it means:** ROCm images are large (~2 GB) and Docker Hub rate-limits anonymous pulls.
 
@@ -313,7 +313,7 @@ docker pull rocm/rocm-terminal:latest
 The doctor's ROCm check always uses `rocm/rocm-terminal:latest`. `ATLAS_ROCM_TAG` pins the *build base* image for the llama-server ROCm build (`rocm/dev-ubuntu-*`), not the doctor's check image:
 
 ```bash
-ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
+ATLAS_ROCM_TAG=6.2-complete docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
 ```
 
 ### First Build Fails (CUDA Not Found)
@@ -508,7 +508,7 @@ curl -s localhost:8080/health                  # {"status":"ok"}
 image (`docker compose images llama-server` — a `docker compose pull` may
 have overwritten it; pin `ATLAS_IMAGE_TAG` or re-run the build). Pascal
 (`60`/`61`) and older are limited by upstream llama.cpp CUDA support — the
-Vulkan image (`docker-compose.vulkan.yml`) is the fallback. Otherwise file
+Vulkan image (`compose/docker-compose.vulkan.yml`) is the fallback. Otherwise file
 an issue with `nvidia-smi` output and the first 50 llama-server log lines.
 
 ### Model Loading on CPU Instead of GPU

@@ -761,7 +761,7 @@ def test_the_compose_plant_is_in_an_overlay_file_that_no_job_starts_a_service_fr
     # The job `sandbox tests (containerized)` builds and starts the sandbox through docker-compose.yml. With the
     # plant in that file the job stops before a test runs, red for another cause than its own plant.
     (plant,) = [entry for entry in manifest["plants"] if entry["id"] == "docker compose config"]
-    assert re.fullmatch(r"docker-compose\.[a-z]+\.yml", plant["path"]), (
+    assert re.fullmatch(r"compose/docker-compose\.[a-z]+\.yml", plant["path"]), (
         f"the plant of `docker compose config` is in {plant['path']}. A job that starts a service through the compose "
         "file is then red for this plant and not for its own. Fix: plant it in an overlay file, which the compose "
         "check validates too.")

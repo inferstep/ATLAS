@@ -25,7 +25,8 @@ def test_metal_onboarding_never_starts_cuda_container(monkeypatch, tmp_path):
 
 def test_nonmetal_log_inspection_uses_backend_overlay(monkeypatch, tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / "docker-compose.rocm.yml").write_text("services: {}\n")
+    (tmp_path / "compose").mkdir()
+    (tmp_path / "compose/docker-compose.rocm.yml").write_text("services: {}\n")
     monkeypatch.setattr(onboard, "_serving_this", lambda url, model: (False, False))
     calls = []
 
@@ -41,7 +42,7 @@ def test_nonmetal_log_inspection_uses_backend_overlay(monkeypatch, tmp_path):
     assert ready is False
     assert calls == [[
         "docker", "compose", "-f", "docker-compose.yml", "-f",
-        "docker-compose.rocm.yml", "logs", "--tail=200", "llama-server",
+        "compose/docker-compose.rocm.yml", "logs", "--tail=200", "llama-server",
     ]]
 
 

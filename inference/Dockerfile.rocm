@@ -4,7 +4,7 @@
 # Parallel to Dockerfile.v31 (NVIDIA CUDA). Same llama.cpp build with the
 # HIP backend instead of CUDA, same PC-202 hidden-states patch, same
 # entrypoint contract. Bring up via:
-#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 #
 # Tested target: AMD Radeon RX 7900 XTX (gfx1100). Smoke-tested by
 # community contributor (issue #26). For full V3.1.1 release, the
@@ -136,7 +136,7 @@ RUN chmod +x /entrypoint.sh
 
 # The HIP runtime needs the calling user in the `render` and `video`
 # groups on the host for /dev/kfd + /dev/dri access. The compose
-# override (docker-compose.rocm.yml) handles the device passthrough +
+# override (compose/docker-compose.rocm.yml) handles the device passthrough +
 # group_add.
 USER atlas
 ENV HOME=/home/atlas

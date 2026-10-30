@@ -115,6 +115,24 @@ def test_request_on_the_wire_is_identical(rec):
         assert new["headers"].get(h.lower()) == old["headers"].get(h.lower()), h
 
 
+def test_the_service_token_goes_out_on_the_inference_call(rec, monkeypatch):
+    monkeypatch.setattr(adapters, "SERVICE_TOKEN", "the-token")
+
+    via_httpclient(PAYLOAD)
+
+    with Recorder.lock:
+        assert Recorder.seen[0]["headers"]["authorization"] == "Bearer the-token"
+
+
+def test_no_service_token_sends_no_authorization(rec, monkeypatch):
+    monkeypatch.setattr(adapters, "SERVICE_TOKEN", "")
+
+    via_httpclient(PAYLOAD)
+
+    with Recorder.lock:
+        assert "authorization" not in Recorder.seen[0]["headers"]
+
+
 def test_successful_response_parses_identically(rec):
     so, bo = via_urlopen(PAYLOAD)
     sn, bn = via_httpclient(PAYLOAD)

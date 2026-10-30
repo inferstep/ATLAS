@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-COMPOSE_FILES = sorted(REPO.glob("docker-compose*.yml"))
+COMPOSE_FILES = sorted([*REPO.glob("docker-compose*.yml"), *REPO.glob("compose/*.yml")])
 TEMPLATE_FILES = sorted((REPO / "templates").glob("*.yaml.tmpl"))
 
 # host-side publish forms docker accepts; we require an explicit
@@ -57,6 +57,7 @@ def _publish_lines(path):
 def test_compose_files_exist():
     assert COMPOSE_FILES, "no compose files found"
     assert any(p.name == "docker-compose.yml" for p in COMPOSE_FILES)
+    assert {f"docker-compose.{name}.yml" for name in ("cpu", "macos", "rocm", "vulkan")} <= {p.name for p in COMPOSE_FILES}
 
 
 def test_all_compose_publishes_bind_loopback():

@@ -60,7 +60,7 @@ def verify():
                  id="a lens change runs the lens suite in its own process"),
     pytest.param(["scripts/install.sh"], False, ["shellcheck"], [], False, id="a shell script picks shellcheck"),
     pytest.param([".github/workflows/test.yml"], False, ["workflow-yaml"], [], False, id="a workflow picks the YAML check"),
-    pytest.param(["docker-compose.rocm.yml"], False,
+    pytest.param(["compose/docker-compose.rocm.yml"], False,
                  ["compose", "compose-rocm", "compose-vulkan", "compose-cpu", "compose-macos"], [], False,
                  id="a compose file picks every compose check"),
 ])

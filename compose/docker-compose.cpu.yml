@@ -2,10 +2,10 @@
 #
 # Layers on top of the Vulkan overlay — the lavapipe software rasterizer
 # in the Vulkan image needs no GPU device nodes at all:
-#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml \
-#     -f docker-compose.cpu.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml \
+#     -f compose/docker-compose.cpu.yml up -d
 #
-# Why a third file: docker-compose.vulkan.yml passes /dev/dri through so
+# Why a third file: compose/docker-compose.vulkan.yml passes /dev/dri through so
 # hardware ICDs (RADV/ANV/Adreno) can reach the GPU. Compose has no
 # "optional device" syntax — on a headless VM without /dev/dri the
 # container fails to create. This overlay strips the device requirement

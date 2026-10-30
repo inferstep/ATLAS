@@ -266,10 +266,10 @@
       "red": [
         "docker compose config"
       ],
-      "what": "a top-level key that Compose does not know, at the end of docker-compose.rocm.yml, an overlay file that this job validates and that no other job starts a service from",
+      "what": "a top-level key that Compose does not know, at the end of compose/docker-compose.rocm.yml, an overlay file that this job validates and that no other job starts a service from",
       "shows": "canary_must_fail",
       "action": "append",
-      "path": "docker-compose.rocm.yml",
+      "path": "compose/docker-compose.rocm.yml",
       "lines": [
         "# Planted by scripts/canary.py for the canary pull request. Never merge it.",
         "canary_must_fail: true"

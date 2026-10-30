@@ -141,7 +141,7 @@ def probe_llama(url: Optional[str] = None,
         probe.error = (f"llama-server not reachable at {url}. "
                        f"Bring the stack up with `docker compose up -d` "
                        f"(or `docker compose -f docker-compose.yml "
-                       f"-f docker-compose.rocm.yml up -d` on AMD), "
+                       f"-f compose/docker-compose.rocm.yml up -d` on AMD), "
                        f"then re-run.")
         return probe
     probe.reachable = True

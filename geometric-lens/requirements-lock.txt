@@ -202,9 +202,9 @@ click==8.5.0 \
     --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360 \
     --hash=sha256:ba0d2089de75ea0310e2dde03160e6ca10009947fb95a182f9b54021bb272e34
     # via uvicorn
-fastapi==0.149.0 \
-    --hash=sha256:aba5779358d0c5233759ddcddd84fe7269d71f775fd754b653b608f770558a41 \
-    --hash=sha256:fc4a5cf7e14f607a48eb1ab98147e9140943e88ccd0c8791d72c0a89b1159a35
+fastapi==0.162.0 \
+    --hash=sha256:3785963de305dd09912426cb81f2d230fce98ab3521cdfe97265c8d14983128c \
+    --hash=sha256:6a22c1e2e6e32e0633ee7e170f00009a29b8228b16feb219ee42f32fd8d88a8f
     # via -r ../../geometric-lens/requirements.txt
 filelock==4.2.4 \
     --hash=sha256:301241438c57936ef93f4243a94f2559022268bfcf9b375a9a72eb0f8db8358e \

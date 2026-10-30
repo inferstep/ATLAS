@@ -166,14 +166,14 @@ def _compose_gates() -> dict[str, Gate]:
     """
     combos: dict[str, tuple[str, ...]] = {
         "compose": ("docker-compose.yml",),
-        "compose-rocm": ("docker-compose.yml", "docker-compose.rocm.yml"),
-        "compose-vulkan": ("docker-compose.yml", "docker-compose.vulkan.yml"),
+        "compose-rocm": ("docker-compose.yml", "compose/docker-compose.rocm.yml"),
+        "compose-vulkan": ("docker-compose.yml", "compose/docker-compose.vulkan.yml"),
         "compose-cpu": (
             "docker-compose.yml",
-            "docker-compose.vulkan.yml",
-            "docker-compose.cpu.yml",
+            "compose/docker-compose.vulkan.yml",
+            "compose/docker-compose.cpu.yml",
         ),
-        "compose-macos": ("docker-compose.yml", "docker-compose.macos.yml"),
+        "compose-macos": ("docker-compose.yml", "compose/docker-compose.macos.yml"),
     }
     gates: dict[str, Gate] = {}
     for name, files in combos.items():

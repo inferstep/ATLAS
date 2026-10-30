@@ -5,7 +5,7 @@ This is the install guide for **Apple Silicon Macs** (M1, M2, M3, M4). Intel Mac
 ATLAS on Mac uses a **hybrid architecture** (#32):
 
 - **llama-server** runs **natively** on macOS with **Metal** GPU acceleration (5-10x faster than running it inside Docker via MoltenVK)
-- **Everything else** (proxy, v3-service, geometric-lens, sandbox) runs in **Docker** via `docker-compose.macos.yml`
+- **Everything else** (proxy, v3-service, geometric-lens, sandbox) runs in **Docker** via `compose/docker-compose.macos.yml`
 
 The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path while letting Mac users get native Metal inference speed.
 
@@ -45,7 +45,7 @@ atlas init
 ./scripts/atlas-llama-macos.sh
 
 # Terminal 2:
-docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d
 
 # Verify everything is healthy
 atlas doctor
@@ -138,7 +138,7 @@ Stop with Ctrl-C. On stop the docker stack's proxy will start serving 502s until
 ### Step 4: Bring up the docker stack
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d
 ```
 
 The macOS overlay swaps the `llama-server` service for a pinned `alpine/socat` container that forwards Docker-internal `llama-server:8080` → `host.docker.internal:${ATLAS_LLAMA_PORT:-8080}` (where the native server you started in Step 3 is listening). Its healthcheck tests that complete connection, so dependent services wait until native inference is accepting connections. The other services come up unchanged from the base compose file.
@@ -196,7 +196,7 @@ Your Mac
      |   forwards every connection to the native server on the host.)
 ```
 
-The 4 Docker services and the base `docker-compose.yml` are unchanged — only the `docker-compose.macos.yml` overlay differs, so `atlas init` / `atlas doctor` / `atlas` behave the same as on Linux. Native Metal (`-DGGML_METAL=ON`) uses Apple's GPU directly. The path is reversible: stop the native server and rerun `atlas init --backend vulkan` to fall back to the docker-only MoltenVK path.
+The 4 Docker services and the base `docker-compose.yml` are unchanged — only the `compose/docker-compose.macos.yml` overlay differs, so `atlas init` / `atlas doctor` / `atlas` behave the same as on Linux. Native Metal (`-DGGML_METAL=ON`) uses Apple's GPU directly. The path is reversible: stop the native server and rerun `atlas init --backend vulkan` to fall back to the docker-only MoltenVK path.
 
 ## Troubleshooting
 
@@ -218,7 +218,7 @@ Docker Desktop on Mac auto-resolves `host.docker.internal` to the host's loopbac
 
 ```bash
 # Inside any container, this should print an IP that points back to your Mac:
-docker compose -f docker-compose.yml -f docker-compose.macos.yml exec atlas-proxy \
+docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml exec atlas-proxy \
   nslookup host.docker.internal
 ```
 
@@ -287,7 +287,7 @@ The Vulkan-via-MoltenVK path still works:
 
 ```bash
 atlas init --backend vulkan
-docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 ```
 
 Inference will be slower but you don't need brew, cmake, or the setup script.

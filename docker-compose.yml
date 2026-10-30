@@ -17,6 +17,9 @@ services:
     build:
       context: ./inference
       dockerfile: Dockerfile.v31
+    # The installing user's ids, as for the other services: `atlas init` makes
+    # secrets/ and the service token readable for that user only.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     deploy:
       resources:
         reservations:
@@ -68,6 +71,7 @@ services:
     networks:
       - atlas
     environment:
+      - HOME=/tmp
       - MODEL_PATH=/models/${ATLAS_MODEL_FILE:?Set ATLAS_MODEL_FILE in .env or run atlas init}
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - PORT=8080
@@ -124,7 +128,7 @@ services:
     mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
       context: ./geometric-lens
-    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    # The installing user's ids, written by `atlas init`; all five services run as that user.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
       - HOME=/tmp
@@ -193,7 +197,7 @@ services:
     build:
       context: .
       dockerfile: v3-service/Dockerfile
-    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    # The installing user's ids, written by `atlas init`; all five services run as that user.
     user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
       - HOME=/tmp
