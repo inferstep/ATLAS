@@ -140,6 +140,18 @@ hash status, backend, context size, and service image digests.
 - A supported release cannot be qualified while a required release gate is
   failed or unavailable.
 
+### Checks for 3.2.0 on ROCm and Vulkan
+
+The inference images run as a non-root account since this cycle, and this
+has not run on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
+
+- `atlas init` writes `ATLAS_VIDEO_GID` and `ATLAS_RENDER_GID`, and
+  llama-server, as the installing user, reaches the GPU through them.
+- An install upgraded from 3.1.7 reaches the GPU after `atlas init
+  --reconfigure`.
+- On ROCm, the bootstrap's steering build writes its vector to the models
+  folder as the installing user.
+
 ## Branches and versions
 
 | Branch | Job | Gets code by | Artifacts |

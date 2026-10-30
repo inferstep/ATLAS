@@ -29,6 +29,9 @@ cannot be read, so it never starts with internal auth off by accident. The K3s
 template mounts no token and sets no user for it: there it runs as the image's
 account, `atlas` (1001:1001). Each inference Dockerfile adds that account to the
 `video` and `render` groups where the base image has them, for the GPU devices.
+On ROCm and Vulkan the compose overlays give llama-server the host's numbers for
+those two groups (`ATLAS_VIDEO_GID`, `ATLAS_RENDER_GID`): a name resolves in the
+image, and the device nodes belong to the host's numbers.
 
 Application files stay root-owned and world-readable (the `COPY`
 default), so the account can read them but not modify the image

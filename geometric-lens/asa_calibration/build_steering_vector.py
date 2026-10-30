@@ -35,7 +35,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 # Imported at module load so a missing gguf package fails in seconds, not
 # after the ~25-minute extraction pass right before the write step.
@@ -44,6 +43,7 @@ import numpy as np
 
 sys.path.insert(0, "/app")
 from geometric_lens.embedding_extractor import extract_per_layer_per_token
+from geometric_lens.model_transport import model_request
 
 
 _SYSTEM_PROMPT = (
@@ -61,20 +61,14 @@ def _llama_url() -> str:
 @functools.lru_cache(maxsize=2048)
 def _render_user_context(user: str) -> str:
     """Render system+user messages with the loaded model's own template."""
-    payload = json.dumps({
+    payload = {
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ],
-    }).encode()
-    req = Request(
-        f"{_llama_url()}/apply-template",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
+    }
     try:
-        with urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
+        result = model_request(f"{_llama_url()}/apply-template", payload, timeout=30)
     except Exception as exc:
         raise RuntimeError(
             "llama-server /apply-template is required for model-agnostic "

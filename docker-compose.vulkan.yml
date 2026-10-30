@@ -68,9 +68,11 @@ services:
     # standard on Linux distros (already required for the ROCm overlay).
     # On hosts where these don't exist, llama-server will fail to enumerate
     # GPU ICDs and Vulkan will silently fall back to lavapipe (CPU).
+    # A name here resolves in the image, whose numbers need not match the
+    # host's device nodes, so `atlas init` writes the host's numbers.
     group_add:
-      - video
-      - render
+      - ${ATLAS_VIDEO_GID:-video}
+      - ${ATLAS_RENDER_GID:-render}
     environment:
       # Take the vulkan entrypoint branch even when .env predates this
       # backend (older `atlas init` runs).

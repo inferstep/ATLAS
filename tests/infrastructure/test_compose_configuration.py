@@ -86,6 +86,14 @@ def test_the_services_that_read_the_token_run_as_the_installing_user(service):
     assert services[service]["user"] == (proxy if service != "sandbox" else proxy.replace("PROXY", "SANDBOX"))
 
 
+@pytest.mark.parametrize("overlay", ["docker-compose.rocm.yml", "docker-compose.vulkan.yml"])
+def test_the_gpu_overlays_take_the_host_group_numbers(overlay):
+    # A name in group_add resolves in the image, and the device nodes belong
+    # to the host's numbers. Read as text: these files use compose's !reset.
+    text = (ROOT / overlay).read_text()
+    assert "- ${ATLAS_VIDEO_GID:-video}\n      - ${ATLAS_RENDER_GID:-render}\n" in text
+
+
 @pytest.mark.parametrize("service", ["geometric-lens", "v3-service"])
 def test_the_lens_and_v3_have_a_home_that_their_user_can_write(service):
     # The images' HOME belongs to their own user (1001); /tmp is 1777.

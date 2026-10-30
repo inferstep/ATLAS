@@ -536,6 +536,21 @@ def _sandbox_limits() -> Tuple[str, str, str, str, str]:
     return mem, "1024", cpus, uid, gid
 
 
+def _host_group_ids() -> dict:
+    """The host's video and render group numbers, for the ROCm and Vulkan overlays.
+
+    A name in group_add resolves in the image, while the device nodes belong
+    to the host's numbers. A group the host does not have stays out of .env,
+    and the overlay keeps the name.
+    """
+    import grp  # POSIX only, as are these two backends
+    ids = {}
+    for key, name in (("ATLAS_VIDEO_GID", "video"), ("ATLAS_RENDER_GID", "render")):
+        with contextlib.suppress(KeyError):
+            ids[key] = str(grp.getgrnam(name).gr_gid)
+    return ids
+
+
 def _render_env(m: model_registry.Model, profile: tier.TierProfile,
                  selected_gpu: Optional[tier.GPUInfo],
                  models_dir: str, atlas_root: str, image_tag: str,
@@ -607,6 +622,8 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
         "ATLAS_PROXY_UID": sandbox_uid,
         "ATLAS_PROXY_GID": sandbox_gid,
     }
+    if backend_id in ("rocm", "vulkan"):
+        keys.update(_host_group_ids())
 
     gpu_descr = (f"{selected_gpu.name} ({selected_gpu.vram_gb:.1f} GB VRAM)"
                  if selected_gpu else "none")

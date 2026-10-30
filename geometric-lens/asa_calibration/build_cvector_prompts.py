@@ -42,6 +42,16 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _service_token() -> str:
+    """The install's service token, found as atlas/token.py finds it; "" when it has none."""
+    explicit = os.environ.get("ATLAS_SERVICE_TOKEN_FILE", "").strip()
+    path = Path(explicit) if explicit else Path(__file__).resolve().parents[2] / "secrets" / "service-token"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
 def render(pair: dict, llama_url: str) -> str:
     """Use the loaded model's template, then escape newlines for the tool."""
     payload = json.dumps({
@@ -55,6 +65,10 @@ def render(pair: dict, llama_url: str) -> str:
         data=payload,
         headers={"Content-Type": "application/json"},
     )
+    token = _service_token()
+    if token:
+        # Unredirected: urllib copies a plain header to a redirect's address.
+        req.add_unredirected_header("Authorization", f"Bearer {token}")
     try:
         with urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read())

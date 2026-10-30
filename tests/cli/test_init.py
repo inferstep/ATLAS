@@ -6,6 +6,7 @@ secrets/api-keys.json, when it refuses, when it prompts, and which backend
 it picks for each kind of GPU.
 """
 
+import grp
 import json
 import os
 import pathlib
@@ -376,6 +377,27 @@ def test_backend_vulkan_flag_wins_over_the_gpu_vendor(atlas_root, monkeypatch, c
     # Without the override file in the header, an operator could start the
     # stack with the base file alone, which runs the CUDA image.
     assert "docker-compose.vulkan.yml" in body
+
+
+@pytest.mark.parametrize("backend_args, written", [(["--backend", "vulkan"], True), ([], False)],
+                         ids=["vulkan", "cuda"])
+def test_the_host_group_numbers_go_into_env_for_a_gpu_overlay(atlas_root, monkeypatch, backend_args, written):
+    monkeypatch.setattr(init, "_host_group_ids", lambda: {"ATLAS_VIDEO_GID": "44", "ATLAS_RENDER_GID": "992"})
+
+    assert init.main(["--yes", "--skip-download", "--no-color", *backend_args]) == 0
+
+    body = (atlas_root / ".env").read_text()
+    assert ("ATLAS_VIDEO_GID=44\nATLAS_RENDER_GID=992\n" in body) is written
+
+
+def test_a_group_the_host_does_not_have_stays_out_of_the_group_numbers(monkeypatch):
+    def getgrnam(name):
+        if name == "render":
+            raise KeyError(name)
+        return grp.struct_group(("video", "x", 44, []))
+    monkeypatch.setattr(grp, "getgrnam", getgrnam)
+
+    assert init._host_group_ids() == {"ATLAS_VIDEO_GID": "44"}
 
 
 @pytest.mark.parametrize("vulkaninfo_on_path, has_dev_dri, platform, expected", [
