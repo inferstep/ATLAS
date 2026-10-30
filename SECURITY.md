@@ -102,7 +102,7 @@ Confirmed Critical/High reports stay embargoed until a fixed release is publishe
 
 ## Backports and releases
 
-Security fixes are released for the current release (N) and backported to N−1 within its 90-day window (see `SUPPORT_MATRIX.md`). A security release follows the normal release pipeline (immutable `sha-*` images, test-gated tag promotion) plus a changelog entry marking it security-relevant and an advisory publication.
+Security fixes are released for the current release (N) and backported to N−1 within its 90-day window (see `docs/SUPPORT_MATRIX.md`). A security release follows the normal release pipeline (immutable `sha-*` images, test-gated tag promotion) plus a changelog entry marking it security-relevant and an advisory publication.
 
 ## Artifact revocation
 

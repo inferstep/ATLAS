@@ -13,7 +13,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 
 | Component | Why | How to install |
 |---|---|---|
-| macOS 14+ (Sonoma or newer; the maintainer-verified configuration — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)) | Metal API requirements; earlier versions may work but are untested | System Settings → Software Update |
+| macOS 14+ (Sonoma or newer; the maintainer-verified configuration — see [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)) | Metal API requirements; earlier versions may work but are untested | System Settings → Software Update |
 | Apple Silicon (M1/M2/M3/M4) | Metal GPU backend | `uname -m` should print `arm64` |
 | 16 GB unified memory | medium tier minimum (9B-Q6 + KV cache) | 32 GB+ recommended for full context |
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |

@@ -30,7 +30,7 @@ docker compose logs --tail 50
 | Vulkan | `/dev/dri`가 존재하는지 확인한 다음 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`를 실행합니다. |
 | CPU 전용 | `compose/docker-compose.vulkan.yml`과 `compose/docker-compose.cpu.yml` 오버레이가 활성화되어 있는지 확인합니다. GPU가 없다는 이유만으로 `atlas doctor`가 실패하지 않고 경고 후 정상 종료해야 합니다. |
 
-서비스별 헬스 체크 curl은 [SETUP.md § 설치 확인](../ko/SETUP.md#설치-확인)을 참고하세요. 분류(triage)에 가장 유용한 것은 atlas-proxy 헬스 엔드포인트입니다 — 모든 업스트림 서비스의 상태를 보고합니다:
+서비스별 헬스 체크 curl은 [SETUP.md § 설치 확인](SETUP.md#설치-확인)을 참고하세요. 분류(triage)에 가장 유용한 것은 atlas-proxy 헬스 엔드포인트입니다 — 모든 업스트림 서비스의 상태를 보고합니다:
 ```json
 {
   "status": "ok",
@@ -256,7 +256,7 @@ atlas doctor
 
 **의미:** llama.cpp의 HIP 커널이 본인 GPU를 포함하지 않는 `gfx` 타깃으로 컴파일되었습니다. ROCm은 구형 소비자용 GPU를 공식 지원에서 제외하면서도 적절한 오버라이드로는 여전히 동작하게 두는 패턴이 오래됐습니다.
 
-**해결:** `ATLAS_HSA_OVERRIDE_GFX_VERSION`으로 런타임에 호환 gfx 버전을 강제하세요. 일반적인 오버라이드(정식 카드→gfx 표는 [SETUP.md § AMD GPU 타깃](../ko/SETUP.md#amd-gpu-타깃-dockerfilerocm) 참고):
+**해결:** `ATLAS_HSA_OVERRIDE_GFX_VERSION`으로 런타임에 호환 gfx 버전을 강제하세요. 일반적인 오버라이드(정식 카드→gfx 표는 [SETUP.md § AMD GPU 타깃](SETUP.md#amd-gpu-타깃-dockerfilerocm) 참고):
 
 | GPU | `ATLAS_HSA_OVERRIDE_GFX_VERSION=` 설정값 |
 |---|---|
@@ -495,7 +495,7 @@ docker compose up -d --no-deps llama-server
 ```
 GPU가 여러 종류이거나 이식성이 필요하면 세미콜론 목록을 전달하세요. 예:
 `--build-arg CUDA_ARCH="75;86;89"`. 전체 아치 표:
-[SETUP.md § CUDA 컴퓨트 캐퍼빌리티](../ko/SETUP.md#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
+[SETUP.md § CUDA 컴퓨트 캐퍼빌리티](SETUP.md#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
 
 **확인:**
 ```bash

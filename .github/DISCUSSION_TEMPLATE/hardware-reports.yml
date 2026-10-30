@@ -3,7 +3,7 @@ body:
     attributes:
       value: |
         Tell us how ATLAS runs on your hardware. Reports keep
-        [SUPPORT_MATRIX](https://github.com/inferstep/ATLAS/blob/main/SUPPORT_MATRIX.md) honest.
+        [SUPPORT_MATRIX](https://github.com/inferstep/ATLAS/blob/main/docs/SUPPORT_MATRIX.md) honest.
   - type: input
     id: gpu
     attributes:

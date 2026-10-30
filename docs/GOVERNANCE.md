@@ -1,7 +1,7 @@
 # Governance
 
 ATLAS is a **single-maintainer project** today (see
-[MAINTAINERS.md](MAINTAINERS.md)). This document states how decisions
+[MAINTAINERS.md](../MAINTAINERS.md)). This document states how decisions
 are made now, how people gain access, and the limits that apply at every
 level. It does not pretend a committee exists.
 
@@ -44,7 +44,7 @@ are still the ones it writes.
   approval, and only maintainers can dismiss a review. An admin's own
   pull request merges without the approval, which is logged. The two
   branches move forward by the release step in
-  [docs/RELEASE.md](docs/RELEASE.md#the-release-step).
+  [docs/RELEASE.md](RELEASE.md#the-release-step).
 - **Branches.** Only admins, the `maintainers` team, and Dependabot can
   create, push or delete other branches. Everyone else works from a fork.
   Anyone with write access could otherwise push a branch with a new
@@ -55,7 +55,7 @@ are still the ones it writes.
   `maintainers` team can create, push or delete one. Dependabot and the
   repository's admin role cannot. The development server builds and runs
   the tip of such a branch
-  ([docs/quality/gates.md](docs/quality/gates.md#the-smoke-run-of-one-commit)),
+  ([docs/quality/gates.md](quality/gates.md#the-smoke-run-of-one-commit)),
   so no program may push one.
 - **Release tags** (`v*`). Only admins and maintainers can create one,
   and nobody can move or delete one once it exists.
@@ -88,7 +88,7 @@ earning maintainer trust, so every rung also has hard technical limits.
   owners: `.github/workflows/`, `scripts/`, `sandbox/`, `SECURITY.md`,
   `docs/RELEASE.md`, `docs/PUBLISHING.md` and
   `atlas/commands/model_registry.py` (see
-  [CODEOWNERS](.github/CODEOWNERS)).
+  [CODEOWNERS](../.github/CODEOWNERS)).
 - Only keys in `.github/allowed_signers` make valid release tags. The
   `production` environment, which moves `:latest` and version tags, needs
   the lead's approval.
@@ -117,14 +117,14 @@ RFCs are issues, so they sit on the same board as all other work.
 6. **Declined:** the issue is closed as not planned, with the reason, so
    the next person with the same idea finds it.
 
-ADR statuses and format are in [docs/adr/README.md](docs/adr/README.md).
+ADR statuses and format are in [docs/adr/README.md](adr/README.md).
 
 ## Review times
 
 - A maintainer responds to a pull request within **5 business days**.
 - New issues are triaged within **5 business days**; see
   [Triage](#triage).
-- Security reports follow the targets in [SECURITY.md](SECURITY.md).
+- Security reports follow the targets in [SECURITY.md](../SECURITY.md).
 
 ## Triage
 
@@ -230,7 +230,7 @@ than 5 business days, the time CONTRIBUTING promises.
 Maintainers can promote `dev` to `staging`. A stable release (`main`, a
 `vX.Y.Z` tag, `:latest`) needs the lead's approval in the `production`
 environment and a tag signed by a key in `allowed_signers`. The checklist
-is in [docs/RELEASE.md](docs/RELEASE.md). Today each promotion is a
+is in [docs/RELEASE.md](RELEASE.md). Today each promotion is a
 release step, which needs admin rights on the repository, so the lead
 runs it.
 
@@ -242,9 +242,9 @@ artifacts allow forks to continue.
 
 ## Security
 
-Security reports follow [SECURITY.md](SECURITY.md). What to do when
+Security reports follow [SECURITY.md](../SECURITY.md). What to do when
 something goes wrong (a vulnerability, a leaked key, a bad release) is in
-[INCIDENT_RESPONSE.md](docs/INCIDENT_RESPONSE.md). Security fixes may land
+[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md). Security fixes may land
 ahead of the normal review flow, with the ADR or notes written
 afterwards.
 

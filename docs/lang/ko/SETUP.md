@@ -14,7 +14,7 @@
 
 설치 절차는 하드웨어와 OS에 따라 다릅니다. 본인 환경에 맞는 행을 찾아 링크된 섹션으로 이동하세요.
 
-| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../../SUPPORT_MATRIX.md)) |
+| 하드웨어 | OS | 권장 경로 | 지원 수준 ([매트릭스](../../SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50 시리즈 / Blackwell (B100, GB10) | Linux | [방법 0: 부트스트랩](#방법-0-원샷-부트스트랩) 또는 [방법 1: Docker](#방법-1-docker-compose-권장) | 지원(Supported) — 게시된 CUDA 이미지는 Blackwell 대상 |
 | NVIDIA RTX 20/30/40, GTX 10xx, 데이터센터 (V100/A100/H100/T4/L4) | Linux | [방법 1: Docker](#방법-1-docker-compose-권장) + 일회성 [로컬 재빌드](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | 프리뷰(Preview) — 로컬 재빌드 필요 |
@@ -293,7 +293,7 @@ ROCm 경로는 다음 세 가지를 *제외하면* NVIDIA와 동일합니다:
    ```
    본인 카드의 gfx 타깃은 [LLVM AMDGPU 프로세서 표](https://llvm.org/docs/AMDGPUUsage.html)를 참고하세요.
 
-"공식 미지원 GPU인데 ROCm이 어느 정도 동작하는" 케이스(구형 Vega, RDNA1)는 [TROUBLESHOOTING.md § AMD GPU가 감지되지 않음](../ko/TROUBLESHOOTING.md)의 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 우회책을 참고하세요.
+"공식 미지원 GPU인데 ROCm이 어느 정도 동작하는" 케이스(구형 Vega, RDNA1)는 [TROUBLESHOOTING.md § AMD GPU가 감지되지 않음](TROUBLESHOOTING.md)의 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 우회책을 참고하세요.
 
 #### Vulkan — 크로스 벤더 폴백
 
@@ -722,7 +722,7 @@ atlas tier --json       # machine output (for scripts)
 atlas tier --raw        # just the probe (no classification)
 ```
 
-등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](../ko/TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
+등급 표는 VRAM 구간별 출발점을 제공합니다. **`atlas tier fit`**은 실제로 실행하는 *특정* 모델에 맞게 이를 다듬습니다 — GGUF의 KV 기하 구조와 GPU의 VRAM을 읽어 완전히 GPU 안에 머무는 최대 컨텍스트를 계산합니다(`atlas tier fit --write`는 결과를 `.env`에 적용). `ATLAS_MODEL_FILE`이나 GPU를 바꿀 때마다 실행하세요. [CLI.md § atlas tier fit](../../CLI.md#atlas-tier-fit)과, 다운로드 전 사이징 안내는 [TROUBLESHOOTING.md § 내 GPU에는 무엇이 들어가는가?](TROUBLESHOOTING.md#내-gpu에는-무엇이-들어가는가)를 참고하세요.
 
 medium 등급이 ATLAS 개발 타깃입니다 — `atlas-bootstrap.sh`는 그 모델+컨텍스트 설정을 기본값으로 합니다. 다른 등급에서는 부트스트랩 완료 후 **`atlas init`**(첫 실행 마법사)을 실행하세요. `atlas tier`로 하드웨어를 탐침하고, 레지스트리에서 알맞은 모델을 골라 SHA 검증과 함께 다운로드하고, `.env`를 다시 씁니다. 하드웨어나 레지스트리 기본 모델이 바뀔 때마다 `atlas init --reconfigure`로 다시 실행하세요. 마법사 실행 후에는 `atlas tier fit --write`가 마법사의 등급 수준 기본값을 선택된 모델에 맞게 조입니다.
 
@@ -812,7 +812,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 | `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
 | `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
-> **RDNA4 (gfx1200/gfx1201) 사용자:** `ATLAS_ROCM_TAG=7.2.3-complete`를 설정하세요 — 기본 ROCm 6.2 베이스 이미지에는 gfx1200/gfx1201 컴파일러 지원이 없습니다. ROCm 7.0+는 이 타깃들을 네이티브로 지원하므로 `ATLAS_HSA_OVERRIDE_GFX_VERSION`을 설정하지 마세요. 자세한 내용은 [TROUBLESHOOTING.md § RDNA4](../ko/TROUBLESHOOTING.md)를 참고하세요.
+> **RDNA4 (gfx1200/gfx1201) 사용자:** `ATLAS_ROCM_TAG=7.2.3-complete`를 설정하세요 — 기본 ROCm 6.2 베이스 이미지에는 gfx1200/gfx1201 컴파일러 지원이 없습니다. ROCm 7.0+는 이 타깃들을 네이티브로 지원하므로 `ATLAS_HSA_OVERRIDE_GFX_VERSION`을 설정하지 마세요. 자세한 내용은 [TROUBLESHOOTING.md § RDNA4](TROUBLESHOOTING.md)를 참고하세요.
 
 본인 GPU의 gfx 타깃: `rocminfo | grep -i gfx | head -1` (또는 [LLVM AMDGPU 프로세서 표](https://llvm.org/docs/AMDGPUUsage.html)에서 조회).
 
@@ -822,7 +822,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS는 모든 요청에 Geometric Lens를 사용합니다([ADR 0011](../../adr/0011-the-lens-is-required.md)). 렌즈에는 서빙 중인 모델에 맞는 C(x)·G(x) 가중치가 필요합니다. 가중치가 없으면 프록시는 각 요청을 HTTP 503 `dependency_unavailable`으로 거부하면서 그 이유를 알려주고, `atlas doctor`는 실패합니다. 가중치는 있지만 아직 보정되지 않은 렌즈는 허용됩니다: 점수는 산출되고, 임계값 개입만 보정 이후로 미뤄집니다.
 
-[SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
+[SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)에 렌즈 아티팩트가 표기된 모델은 `atlas model install-artifacts`로 받을 수 있습니다. 사전 학습된 가중치와 학습 데이터도 HuggingFace에서 제공됩니다:
 
 **[HuggingFace의 ATLAS 데이터셋](https://huggingface.co/datasets/itigges22/ATLAS)** — 임베딩, 학습 데이터, 가중치 파일이 포함되어 있습니다.
 
@@ -936,5 +936,5 @@ atlas lens check
 
 - [CLI.md](../../CLI.md) — 실행 후 ATLAS 사용 방법
 - [CONFIGURATION.md](../../CONFIGURATION.md) — 모든 환경 변수 및 튜닝 옵션
-- [TROUBLESHOOTING.md](../ko/TROUBLESHOOTING.md) — 일반적인 문제 및 해결 방법
-- [ARCHITECTURE.md](../ko/ARCHITECTURE.md) — 시스템 내부 동작 원리
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — 일반적인 문제 및 해결 방법
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 시스템 내부 동작 원리

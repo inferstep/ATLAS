@@ -208,7 +208,7 @@ def test_the_bug_form_has_the_cause_field_and_the_triage_guide_says_when_to_set_
     assert options[cause["attributes"]["default"]] == "Not known yet"
     assert len(options) == len(set(options)) >= 5
     assert "validations" not in cause
-    governance = (ROOT / "GOVERNANCE.md").read_text(encoding="utf-8")
+    governance = (ROOT / "docs" / "GOVERNANCE.md").read_text(encoding="utf-8")
     triage = governance.split("\n## Triage\n", 1)[1].split("\n## ", 1)[0]
     guide = " ".join(triage.split())
     assert "### When a bug closes Set **Cause** in the text of the issue" in guide

@@ -8,7 +8,7 @@ Four deployment methods: **one-shot bootstrap** (recommended for new installs), 
 
 The install steps depend on your hardware + OS. Find the row that matches your setup, then jump to the linked section.
 
-| Your hardware | OS | Recommended path | Support level ([matrix](../SUPPORT_MATRIX.md)) |
+| Your hardware | OS | Recommended path | Support level ([matrix](SUPPORT_MATRIX.md)) |
 |---|---|---|---|
 | NVIDIA RTX 50-series / Blackwell (GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
 | NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
@@ -57,7 +57,7 @@ Or, from a checkout:
 ./scripts/atlas-bootstrap.sh
 ```
 
-**Distributions the bootstrap accepts** (CI tests Ubuntu 22.04/24.04, Debian 12 and Rocky 9 — see the [support matrix](../SUPPORT_MATRIX.md)):
+**Distributions the bootstrap accepts** (CI tests Ubuntu 22.04/24.04, Debian 12 and Rocky 9 — see the [support matrix](SUPPORT_MATRIX.md)):
 
 | Family | Distros |
 |---|---|
@@ -285,7 +285,7 @@ The ROCm path is identical to NVIDIA *except* for these four points:
    ```
    The override switches the llama-server image to the ROCm build, swaps the NVIDIA driver request for `/dev/kfd` + `/dev/dri` passthrough, and forces `ATLAS_BACKEND=rocm` so the entrypoint takes the HIP-tuning branch.
 
-2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
+2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
    ```bash
    docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml build llama-server
    ```
@@ -880,7 +880,7 @@ Your GPU's gfx target: `rocminfo | grep -i gfx | head -1` (or look it up in the 
 
 ATLAS needs the Geometric Lens for every request ([ADR 0011](adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_unavailable` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
 
-Models listed with lens artifacts in [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) get them from `atlas model install-artifacts`. Pre-trained weights and training data are also available on HuggingFace:
+Models listed with lens artifacts in [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) get them from `atlas model install-artifacts`. Pre-trained weights and training data are also available on HuggingFace:
 
 **[ATLAS Dataset on HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS)** — includes embeddings, training data, and weight files.
 

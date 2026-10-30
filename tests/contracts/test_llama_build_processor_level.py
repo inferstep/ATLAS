@@ -39,7 +39,7 @@ def test_the_build_names_the_processor_level_of_the_cpu_part(path):
 
 
 def test_the_support_page_says_which_processor_the_images_need():
-    page = " ".join((ROOT / "SUPPORT_MATRIX.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "SUPPORT_MATRIX.md").read_text(encoding="utf-8").split())
     assert "images for amd64 need a processor with AVX2" in page, (
         "SUPPORT_MATRIX.md does not say that the model-server images for amd64 need a processor with AVX2. The build "
         "files set that level (`-DGGML_NATIVE=OFF`). Fix: say it on the page.")

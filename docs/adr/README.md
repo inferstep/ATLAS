@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 An ADR records a significant decision: its context, the decision, and its
-consequences. Significant means what [GOVERNANCE](../../GOVERNANCE.md#proposals-rfc--adr--epic)
+consequences. Significant means what [GOVERNANCE](../GOVERNANCE.md#proposals-rfc--adr--epic)
 lists: architecture changes, new dependencies, security-model changes,
 release policy, support-matrix changes, and any breaking change. Each one
 starts as an **RFC issue**.

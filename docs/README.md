@@ -25,7 +25,7 @@ Task-oriented index for everything under `docs/`. The
   [SETUP.md § Supported GPUs](SETUP.md#supported-gpus) and
   [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
 - What is and isn't supported, with evidence:
-  [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)
+  [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)
 
 ### Use ATLAS day to day
 
@@ -100,14 +100,14 @@ Task-oriented index for everything under `docs/`. The
   measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
-- [GOVERNANCE.md § Triage](../GOVERNANCE.md#triage) — how new issues become Ready work.
+- [GOVERNANCE.md § Triage](GOVERNANCE.md#triage) — how new issues become Ready work.
 - [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) — what to do when a key
   leaks, a release is bad, or automation misbehaves.
 - [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — image accounts,
   writable dirs, dependency pinning.
-- [../GOVERNANCE.md](../GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
+- [GOVERNANCE.md](GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
   [../SECURITY.md](../SECURITY.md),
-  [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
+  [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
 - READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
   are not listed one-by-one here: they live in the tree next to what they
   describe (see the [repository map](#repository-map)), and
@@ -147,7 +147,7 @@ the [repository map](#repository-map) if you're looking for code rather than doc
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
-  ([ARCHITECTURE.md](ARCHITECTURE.md), [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)).
+  ([ARCHITECTURE.md](ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
   per-model, opt-in until validated ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
@@ -174,7 +174,7 @@ In order, each building on the last:
 10. [API.md](API.md) — the full HTTP surface
 11. [SOURCES.md](SOURCES.md) — the research it stands on
 12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
-13. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
+13. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
 14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
 15. [../CONTRIBUTING.md](../CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),

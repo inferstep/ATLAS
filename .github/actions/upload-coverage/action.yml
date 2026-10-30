@@ -16,10 +16,10 @@ runs:
       id: settings
       shell: bash
       run: |
-        if [ -f codecov.yml ]; then
+        if [ -f .github/codecov.yml ]; then
           echo "present=true" >> "$GITHUB_OUTPUT"
         else
-          echo "::notice title=coverage not uploaded::This commit has no codecov.yml, so Codecov would use its own defaults for it (it would comment on the pull request). Nothing is uploaded. Fix: update the branch from dev."
+          echo "::notice title=coverage not uploaded::This commit has no .github/codecov.yml, so Codecov would use its own defaults for it (it would comment on the pull request). Nothing is uploaded. Fix: update the branch from dev."
         fi
     - name: list the python reports
       id: python

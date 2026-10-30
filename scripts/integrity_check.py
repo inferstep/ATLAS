@@ -48,7 +48,11 @@ DOC_DIRS_ALLOWED = (".github/",)
 GATE_FILES = (
     ".github/workflows/", ".github/actions/", ".github/requirements/", ".github/code-health-baseline.json",
     ".github/canary.json", "scripts/tests_counted.py",
-    ".golangci.yml", ".golangci.yaml", ".codescene/", "codecov.yml",
+    ".golangci.yml", ".golangci.yaml", ".codescene/",
+    # Every place Codecov reads its settings from: a file in any of them takes effect.
+    "codecov.yml", ".codecov.yml", "codecov.yaml", ".codecov.yaml",
+    ".github/codecov.yml", ".github/.codecov.yml", ".github/codecov.yaml", ".github/.codecov.yaml",
+    "dev/codecov.yml", "dev/.codecov.yml", "dev/codecov.yaml", "dev/.codecov.yaml",
     ".sonarcloud.properties", "sonar-project.properties", "pyproject.toml",
     "extensions/vscode/eslint.config.mjs", "extensions/jetbrains/scripts/check-distribution.sh",
     "tests/perf/budgets.json", "tests/replay/recordings/",

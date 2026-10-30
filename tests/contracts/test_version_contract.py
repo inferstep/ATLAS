@@ -44,7 +44,7 @@ def test_doc_states_the_version(path, expected):
 
 @pytest.mark.parametrize("path, version_line", [
     pytest.param("atlas/__init__.py", r'^__version__\s*=\s*"([^"]+)"', id="package-dunder-version"),
-    pytest.param("SUPPORT_MATRIX.md", r"Applies to:\s*\*\*V(\d+\.\d+\.\d+)", id="support-matrix-applies-to"),
+    pytest.param("docs/SUPPORT_MATRIX.md", r"Applies to:\s*\*\*V(\d+\.\d+\.\d+)", id="support-matrix-applies-to"),
 ])
 def test_declared_version_matches(path, version_line):
     version = _truth()

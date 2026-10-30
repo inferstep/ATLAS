@@ -7,7 +7,7 @@ Roadmap items are tracked in GitHub and are not release claims.
 ## Status definitions
 
 Status terms follow the support-level taxonomy defined in
-[SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
+[SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
 Community-tested, Research-only, Unsupported, Roadmap). One term used here
 marks *audience* rather than maturity and composes with a level:
 
@@ -170,7 +170,7 @@ time by what the release contains (semantic versioning):
 
 **Breaking** means a change to a CLI flag, a config key, the API or SSE
 contract, or on-disk state, or dropping a supported backend. Breaking
-changes need an RFC (see [GOVERNANCE](../GOVERNANCE.md#proposals-rfc--adr--epic)).
+changes need an RFC (see [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic)).
 
 Image tags drop the `v`: the git tag `v3.2.0` publishes `:3.2.0`,
 `:v3.2.0` and `:3.2`. A release candidate `v3.2.0-rc.1` publishes
@@ -189,7 +189,7 @@ release.
 ## The release step
 
 No account can push to `dev`, `staging` or `main`, and no account can skip
-a required check ([GOVERNANCE](../GOVERNANCE.md#change-flow)). The merge
+a required check ([GOVERNANCE](GOVERNANCE.md#change-flow)). The merge
 button of a pull request squashes or rebases, so it makes new commits. A
 release needs the commit itself to land in two cases:
 
@@ -238,7 +238,7 @@ the waiting deployment does the pipeline move `:latest` or a version tag.
 without approval. Each promotion leaves a timestamped deployment record.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
-   [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) and write the
+   [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) and write the
    `CHANGELOG.md` entry.
 2. **Candidate.** Fast-forward `staging` to that `dev` commit with
    [the release step](#the-release-step): open a pull request from `dev`

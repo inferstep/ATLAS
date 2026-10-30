@@ -7,7 +7,7 @@ issue.
 **Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
 [Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
 [ARCHITECTURE](docs/ARCHITECTURE.md) · [MAP](docs/README.md#repository-map) ·
-[Development workflow](#development-workflow) · [GOVERNANCE](GOVERNANCE.md) ·
+[Development workflow](#development-workflow) · [GOVERNANCE](docs/GOVERNANCE.md) ·
 [Security reports](SECURITY.md)
 
 ## 1. How ATLAS is organized
@@ -32,7 +32,7 @@ candidate, and `staging` to `main` as a release. See
   issue, or send a pull request.
 - **Hardware reports.** Run ATLAS on your GPU and report what happened,
   with your `atlas doctor` output. AMD (ROCm), Apple Silicon (Metal) and
-  Vulkan reports help most; see [SUPPORT_MATRIX](SUPPORT_MATRIX.md).
+  Vulkan reports help most; see [SUPPORT_MATRIX](docs/SUPPORT_MATRIX.md).
 - **Trained artifacts** for a new model (see below).
 - **Questions** go to [Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
 
@@ -110,7 +110,7 @@ ATLAS_COVERAGE_DIR=coverage python scripts/production-readiness.py --only python
 CI sends its coverage reports to [Codecov](https://app.codecov.io/gh/inferstep/ATLAS).
 On a pull request it adds two statuses: the coverage of the whole project,
 and of the lines you changed. They show numbers and do not fail the pull
-request. Codecov does not comment. A branch that does not have `codecov.yml`
+request. Codecov does not comment. A branch that does not have `.github/codecov.yml`
 yet uploads nothing; update it from `dev`.
 
 CI also runs the SonarQube Cloud analysis (`sonar-project.properties`), and
@@ -302,7 +302,7 @@ Use the **RFC** issue form for architecture changes, new dependencies,
 security-model changes, release-policy or support-matrix changes, and any
 breaking change. An RFC gets a 7-day comment period and then a decision:
 Accepted, Revise, or Declined. An accepted RFC becomes an Epic with
-sub-issues. The whole flow is in [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic).
+sub-issues. The whole flow is in [GOVERNANCE](docs/GOVERNANCE.md#proposals-rfc--adr--epic).
 
 ## 12. Getting help
 
@@ -317,7 +317,7 @@ Report security problems privately, never in an issue (see
 Access follows trust built over time, not a count of pull requests. The
 path is Contributor → Triager → Reviewer → Maintainer. Each rung has a
 minimum time, a nomination, and hard technical limits. See the
-[trust ladder](GOVERNANCE.md#trust-ladder).
+[trust ladder](docs/GOVERNANCE.md#trust-ladder).
 
 ## Code style
 

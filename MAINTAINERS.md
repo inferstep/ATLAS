@@ -6,7 +6,7 @@
 | Anuj Kumar Sah | [@Anuj-72](https://github.com/Anuj-72) | Triager; first reviewer on client pull requests and the go-to for client issues | IDE clients (`extensions/vscode`, `extensions/jetbrains`) |
 
 Roles, what each can and can't do, and how people move between them are
-in the [trust ladder](GOVERNANCE.md#trust-ladder).
+in the [trust ladder](docs/GOVERNANCE.md#trust-ladder).
 
 **Client code ownership.** `extensions/vscode/` and
 `extensions/jetbrains/` join [CODEOWNERS](.github/CODEOWNERS) with the
