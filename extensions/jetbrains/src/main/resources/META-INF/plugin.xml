@@ -4,8 +4,14 @@
     <vendor url="https://inferstep.com">inferstep</vendor>
 
     <description><![CDATA[
-        Use the ATLAS agent from your JetBrains IDE. This build is an early
-        scaffold: it adds an ATLAS tool window and nothing else yet.
+        Use the ATLAS agent from your JetBrains IDE. The ATLAS tool window
+        holds a streaming chat against a local atlas-proxy, with inline
+        approval for the tool calls the proxy asks about, a side-by-side
+        diff of every file change, a warning when the proxy is editing a
+        different folder, and live model/V3 progress. A status bar item
+        reports the proxy's readiness, permission prompts also arrive as
+        native notifications, and the proxy URL, permission mode and token
+        are configured in the IDE (the token in its credential store).
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -28,8 +34,74 @@
     </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- The stripe button's own icon. The platform reads the dark variant
+             from icons/toolwindow_dark.svg by suffix, so only this file is
+             named here. 13 x 13 is the size the stripe draws it at. -->
         <toolWindow id="ATLAS"
                     anchor="right"
-                    factoryClass="com.inferstep.atlas.ui.AtlasToolWindowFactory"/>
+                    icon="/icons/toolwindow.svg"
+                    factoryClass="com.inferstep.atlas.ui.AtlasToolWindowFactory">
+            <actions>
+                <action id="Atlas.NewConversationAction"/>
+                <action id="Atlas.CancelTurnAction"/>
+                <action id="Atlas.OpenAtlasSettingsAction"/>
+            </actions>
+        </toolWindow>
+
+        <applicationConfigurable id="com.inferstep.atlas.settings"
+                                 displayName="ATLAS"
+                                 parentId="tools"
+                                 instance="com.inferstep.atlas.settings.AtlasConfigurable"/>
+
+        <!-- The id must equal AtlasStatusBarWidgetFactory.getId(); the verifier
+             fails the plugin structure when the two disagree. -->
+        <statusBarWidgetFactory id="AtlasStatus"
+                                implementation="com.inferstep.atlas.ui.AtlasStatusBarWidgetFactory"/>
+
+        <notificationGroup id="ATLAS" displayType="BALLOON"/>
     </extensions>
+
+    <actions>
+        <action id="Atlas.OpenChatAction"
+                class="com.inferstep.atlas.ui.OpenChatAction"
+                text="ATLAS: Open Chat"
+                description="Open the ATLAS chat tool window">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Atlas.NewConversationAction"
+                class="com.inferstep.atlas.ui.NewConversationAction"
+                text="ATLAS: New Conversation"
+                description="Cancel the current turn and clear the ATLAS conversation">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Atlas.CancelTurnAction"
+                class="com.inferstep.atlas.ui.CancelTurnAction"
+                text="ATLAS: Cancel Current Turn"
+                description="Stop the ATLAS turn that is running">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Atlas.SetServiceTokenAction"
+                class="com.inferstep.atlas.ui.SetServiceTokenAction"
+                text="ATLAS: Set Service Token"
+                description="Store the atlas-proxy bearer token in the IDE credential store">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Atlas.RefreshStatusAction"
+                class="com.inferstep.atlas.ui.RefreshStatusAction"
+                text="ATLAS: Refresh Status &amp; Calibration"
+                description="Probe /ready and re-read the lens/ASA calibration verdict">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Atlas.OpenAtlasSettingsAction"
+                class="com.inferstep.atlas.ui.OpenAtlasSettingsAction"
+                text="ATLAS: Settings"
+                description="Open the ATLAS settings page">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

@@ -36,8 +36,14 @@ def _service_token() -> str:
         try:
             with open(path) as fh:
                 return fh.read().strip()
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError as error:
+            # The file is there but cannot be read. Without a token every
+            # call would be refused, so it stops and says why.
+            raise SystemExit(f"the service token file {path} cannot be read ({error.strerror}), so this stops rather "
+                             f"than run with no token. It runs as user {os.getuid()}: make the file readable for that "
+                             f"user.") from error
     return ""
 
 
@@ -46,19 +52,9 @@ def _auth_headers() -> dict:
     return {"Authorization": f"Bearer {tok}"} if tok else {}
 
 
-def _install_auth_opener() -> None:
-    """Cover every urllib call site in the bench pipeline with the
-    internal-auth header (urllib merges these under explicit per-request
-    headers)."""
-    tok = _service_token()
-    if not tok:
-        return
-    opener = urllib.request.build_opener()
-    opener.addheaders = [("Authorization", f"Bearer {tok}")]
-    urllib.request.install_opener(opener)
-
-
-_install_auth_opener()
+# This module installs no global opener: the process that imports it does.
+# The V3 service's is in adapters.py; the bench's is the CLI's
+# (atlas/token.py). Each sends the token only to its own stack's addresses.
 
 try:
     import httpx

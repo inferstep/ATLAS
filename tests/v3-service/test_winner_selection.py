@@ -9,8 +9,6 @@ Covers:
     `try:` changed content inside triple-quoted strings).
 """
 
-import contextlib
-import io
 import sys
 from pathlib import Path
 

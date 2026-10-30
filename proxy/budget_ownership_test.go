@@ -15,13 +15,10 @@ import (
 	"time"
 )
 
-// Optional candidate generation owns its budget (STABILIZATION_CYCLE_1, C2).
-//
-// Measured on c5927b3: 32 V3 activations on writes took 3866 s, about half of
-// all session time, 7 were cut at the cap with their work discarded, and none
-// delivered a candidate -- under the default strict policy with no declared
-// outputs, nothing the producer returns can reach disk. Generation now runs
-// only where its result could be delivered and its cap leaves the declared
+// Optional candidate generation owns its budget. Under the default strict
+// policy with no declared outputs, nothing the producer returns can reach
+// disk, so a generation request there only spends time. Generation runs only
+// where its result could be delivered and its cap leaves the declared
 // allowance. The checks on the write itself run either way.
 
 type budgetWorld struct {
@@ -149,23 +146,23 @@ func TestNoGenerationWhenNoCandidateCouldBeDelivered(t *testing.T) {
 // (ii) Where a candidate could be delivered, generation is still requested:
 // declared outputs, or declared work whose own call grounds the target.
 func TestGenerationStillRunsWhereACandidateCouldBeDelivered(t *testing.T) {
-	t.Run("declared outputs", func(t *testing.T) {
-		w := newBudgetWorld(t)
-		w.ctx.TaskContract = declaredOutputs("solve.py")
-		w.write(t, "solve.py", budgetModule)
-		if w.v3Calls() == 0 {
-			t.Error("no generation request although declared outputs make a candidate deliverable")
-		}
-	})
-	t.Run("declared work", func(t *testing.T) {
-		w := newBudgetWorld(t)
-		w.ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork,
-			OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified}
-		w.write(t, "solve.py", budgetModule)
-		if w.v3Calls() == 0 {
-			t.Error("no generation request for declared work")
-		}
-	})
+	for _, tc := range []struct {
+		name     string
+		contract *TaskContract
+	}{
+		{"declared outputs", declaredOutputs("solve.py")},
+		{"declared work", &TaskContract{TaskMode: TaskModeWork,
+			OutputKnowledge: KnowledgeUnspecified, VerificationKnowledge: KnowledgeUnspecified}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newBudgetWorld(t)
+			w.ctx.TaskContract = tc.contract
+			w.write(t, "solve.py", budgetModule)
+			if w.v3Calls() == 0 {
+				t.Error("no generation request although a candidate could be delivered")
+			}
+		})
+	}
 }
 
 // (iii) Deliverable, but the cap would leave less than the allowance.
@@ -223,27 +220,25 @@ func TestMandatoryChecksRefuseOnTheDirectPath(t *testing.T) {
 		"<html><body>\n<script>\nlet x = 1;\n</script>\n</body></html>\n"
 	for _, c := range []struct {
 		name, rel, before, after string
-		setup                    func(w *budgetWorld)
+		unknown, embedded        string // the budgetWorld fields of the same name
 		want                     string
 	}{
 		{"healthy to broken syntax", "solve.py", budgetModule,
-			strings.Replace(budgetModule, "def area(radius):", "def broken(radius:", 1), nil, "syntax error"},
+			strings.Replace(budgetModule, "def area(radius):", "def broken(radius:", 1), "", "", "syntax error"},
 		{"unresolved name introduced", "solve.py", budgetModule,
 			strings.Replace(budgetModule, "return math.pi * radius * radius", "return frobnicate(radius)", 1),
-			func(w *budgetWorld) { w.unknown = "frobnicate" }, "frobnicate"},
+			"frobnicate", "", "frobnicate"},
 		{"embedded script broken", "index.html", healthyPage,
 			strings.Replace(healthyPage, "let x = 1;", "let x = 1;);", 1),
-			func(w *budgetWorld) { w.embedded = "let x = 1;);" }, "<script>"},
+			"", "let x = 1;);", "<script>"},
 		{"duplicate entrypoint", "solve.py",
 			budgetModule + "\n\nif __name__ == \"__main__\":\n    print(area(1))\n",
 			budgetModule + "\n\nif __name__ == \"__main__\":\n    print(area(1))\n\nif __name__ == \"__main__\":\n    print(area(2))\n",
-			nil, "__main__"},
+			"", "", "__main__"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newBudgetWorld(t)
-			if c.setup != nil {
-				c.setup(w)
-			}
+			w.unknown, w.embedded = c.unknown, c.embedded
 			w.seed(t, c.rel, c.before)
 			res := w.write(t, c.rel, c.after)
 			if res.Success {

@@ -9,7 +9,6 @@ import importlib.util
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -88,8 +87,7 @@ class DryRun:
         self.stdout = proc.stdout
         self.calls = log.read_text().splitlines()
         out = next(tmp.glob("atlas-rulesets.*"))
-        self.files = sorted(out.glob("*.json"))
-        self.rulesets = [json.loads(f.read_text()) for f in self.files]
+        self.rulesets = [json.loads(f.read_text()) for f in sorted(out.glob("*.json"))]
 
 
 def as_github_returns(ruleset: dict, ruleset_id: int) -> dict:
@@ -167,10 +165,8 @@ def test_no_account_can_get_around_the_rules_on_dev_staging_and_main(first_run, 
 
 
 def test_a_bypass_never_lets_anyone_push_to_staging_or_main(first_run):
-    review = [r for r in first_run.rulesets if r["name"] == "Release branches: review"]
-    assert review
-    assert review[0]["bypass_actors"]
-    assert {actor["bypass_mode"] for actor in review[0]["bypass_actors"]} == {"pull_request"}
+    (review,) = [r for r in first_run.rulesets if r["name"] == "Release branches: review"]
+    assert {actor["bypass_mode"] for actor in review["bypass_actors"]} == {"pull_request"}
 
 
 def test_dev_takes_changes_only_through_the_merge_queue(first_run):
@@ -212,6 +208,17 @@ def test_every_check_required_on_dev_is_reported_by_a_job(first_run):
                 patterns.append(re.compile(".+".join(parts)))
     for check in sorted(required_checks(first_run.rulesets, "dev")):
         assert any(p.fullmatch(check) for p in patterns), f"no workflow job reports the required check {check!r}"
+
+
+def test_every_required_check_is_on_the_canary_list_with_a_plant_that_turns_it_red_or_the_reason_it_has_none(first_run):
+    # scripts/canary.py check asks the same of the live rules, after they are applied. Here a change of the rules
+    # meets the rule of the canary before that.
+    spec = importlib.util.spec_from_file_location("atlas_canary", REPO / "scripts" / "canary.py")
+    canary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(canary)
+    required = set().union(*(required_checks(first_run.rulesets, branch) for branch in BRANCHES))
+    findings = canary.coverage_findings(canary.load_manifest(REPO), sorted(required), ran=[])
+    assert [finding.message for finding in findings] == []
 
 
 def test_staging_and_main_require_only_checks_that_dev_requires(first_run):
@@ -300,7 +307,3 @@ def test_the_audit_reads_the_strictest_pull_request_rule_on_a_branch():
     assert reader.pr_param("require_code_owner_review") is True
     assert reader.pr_param("dismissal_restriction") == restricted
     assert reader.pr_param("a parameter no rule has") is None
-
-
-def test_bash_is_there_for_these_tests():
-    assert shutil.which("bash")

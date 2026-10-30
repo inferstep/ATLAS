@@ -33,50 +33,39 @@ func compatibleLensHealth() map[string]any {
 	}
 }
 
-func TestProbeLensStatusRequiresSelectedModelCalibration(t *testing.T) {
-	health := compatibleLensHealth()
-	health["cx_calibrated"] = false
-	srv := lensHealthServer(t, health)
-	defer srv.Close()
+// A lens that is not ready says why: no calibration for the selected model,
+// G(x) artifacts missing, or artifacts built for another model, whose
+// self-test error is passed on as the hint.
+func TestProbeLensStatusReportsALensThatIsNotReady(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		change      map[string]any
+		wantVerdict string // empty: not checked
+		wantHint    string // empty: not checked
+	}{
+		{"not calibrated", map[string]any{"cx_calibrated": false}, "uncalibrated", ""},
+		{"G(x) missing", map[string]any{"gx_loaded": false}, "incomplete-artifacts", ""},
+		{"built for another model", map[string]any{
+			"cost_field_loaded": false,
+			"self_test_error":   "artifacts are for model-a, selected model is model-b",
+		}, "", "artifacts are for model-a, selected model is model-b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			health := compatibleLensHealth()
+			for k, v := range tc.change {
+				health[k] = v
+			}
+			srv := lensHealthServer(t, health)
+			defer srv.Close()
 
-	got := probeLensStatus(context.Background(), srv.URL)
-	if got.Verdict != "uncalibrated" {
-		t.Fatalf("verdict = %q, want uncalibrated", got.Verdict)
-	}
-}
-
-func TestProbeLensStatusSurfacesArtifactIdentityMismatch(t *testing.T) {
-	health := compatibleLensHealth()
-	health["cost_field_loaded"] = false
-	health["self_test_error"] = "artifacts are for model-a, selected model is model-b"
-	srv := lensHealthServer(t, health)
-	defer srv.Close()
-
-	got := probeLensStatus(context.Background(), srv.URL)
-	if got.Hint != health["self_test_error"] {
-		t.Fatalf("hint = %q, want identity mismatch", got.Hint)
-	}
-}
-
-func TestProbeLensStatusRequiresCompleteArtifacts(t *testing.T) {
-	health := compatibleLensHealth()
-	health["gx_loaded"] = false
-	srv := lensHealthServer(t, health)
-	defer srv.Close()
-
-	got := probeLensStatus(context.Background(), srv.URL)
-	if got.Verdict != "incomplete-artifacts" {
-		t.Fatalf("verdict = %q, want incomplete-artifacts", got.Verdict)
-	}
-}
-
-func TestProbeLensStatusSupportsCalibratedMatchingArtifacts(t *testing.T) {
-	srv := lensHealthServer(t, compatibleLensHealth())
-	defer srv.Close()
-
-	got := probeLensStatus(context.Background(), srv.URL)
-	if got.Verdict != "supported" {
-		t.Fatalf("verdict = %q, want supported (%s)", got.Verdict, got.Hint)
+			got := probeLensStatus(context.Background(), srv.URL)
+			if tc.wantVerdict != "" && got.Verdict != tc.wantVerdict {
+				t.Errorf("verdict = %q, want %q", got.Verdict, tc.wantVerdict)
+			}
+			if tc.wantHint != "" && got.Hint != tc.wantHint {
+				t.Errorf("hint = %q, want %q", got.Hint, tc.wantHint)
+			}
+		})
 	}
 }
 
@@ -125,23 +114,23 @@ func TestLensThresholdResolution(t *testing.T) {
 }
 
 // The same scores are interpreted only against the selected model's own
-// calibration.
+// calibration, for a run of writes and for one severe write alike.
 func TestAgentLensRegressionUsesPerModelThresholds(t *testing.T) {
-	scores := []float64{0.40, 0.39}
-	if _, fired := agentLensRegression(scores, 0.45, 0.30); !fired {
-		t.Errorf("model-calibrated thresholds should fire on a 0.40/0.39 run")
-	}
-}
-
-// Severe single-write short-circuit also honors the per-model severe value.
-func TestAgentLensRegressionSevereIsPerModel(t *testing.T) {
-	// One write at 0.32. Below a model severe of 0.35 → immediate fire.
-	if _, fired := agentLensRegression([]float64{0.32}, 0.45, 0.35); !fired {
-		t.Errorf("single write below per-model severe should fire")
-	}
-	// Same score under another valid calibration does not fire immediately.
-	if _, fired := agentLensRegression([]float64{0.32}, 0.2, 0.1); fired {
-		t.Errorf("single 0.32 write should not fire above calibrated severe=0.1")
+	for _, tc := range []struct {
+		name        string
+		scores      []float64
+		low, severe float64
+		wantFired   bool
+	}{
+		{"a run below low", []float64{0.40, 0.39}, 0.45, 0.30, true},
+		{"one write below severe", []float64{0.32}, 0.45, 0.35, true},
+		{"one write above severe", []float64{0.32}, 0.2, 0.1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, fired := agentLensRegression(tc.scores, tc.low, tc.severe); fired != tc.wantFired {
+				t.Errorf("fired = %v, want %v", fired, tc.wantFired)
+			}
+		})
 	}
 }
 
@@ -169,8 +158,7 @@ func TestBuildDimensionsSevenRows(t *testing.T) {
 }
 
 // The agent runs only while the lens can score (lens_required.go), and the
-// status says so. It used to report direct_agent "supported always", which
-// was true until the lens became required.
+// status says so.
 func TestDirectAgentIsBlockedWhileTheLensCannotScore(t *testing.T) {
 	for verdict, want := range map[string]string{
 		"supported": "supported", "uncalibrated": "supported",
@@ -190,39 +178,41 @@ func TestDirectAgentIsBlockedWhileTheLensCannotScore(t *testing.T) {
 }
 
 // A lens that loaded its artifacts can still be unable to score: drifted,
-// failing its self-test, or without llama-server. It reported "supported" /
-// "ready" in every one of those states.
+// failing its self-test, or without llama-server.
 func TestProbeLensStatusNamesALensThatCannotScore(t *testing.T) {
 	for _, c := range []struct {
 		name, verdict string
 		mutate        func(lens map[string]any, top map[string]any)
+		// The model server as the lens reports it: down only when llama-server is.
+		modelRuntime string
 	}{
-		{"drifted", "drifted", func(l, _ map[string]any) { l["fingerprint_ok"] = false }},
-		{"self-test failed", "self-test-failed", func(l, _ map[string]any) { l["self_test_pass"] = false }},
+		{"drifted", "drifted", func(l, _ map[string]any) { l["fingerprint_ok"] = false }, "supported"},
+		{"self-test failed", "self-test-failed", func(l, _ map[string]any) { l["self_test_pass"] = false }, "supported"},
 		{"llama down", "model-server-unreachable", func(_, top map[string]any) {
 			top["llama_server"] = map[string]any{"reachable": false}
-		}},
+		}, "unreachable"},
 	} {
-		lens := compatibleLensHealth()
-		subsystems := map[string]any{"lens": lens}
-		c.mutate(lens, subsystems)
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "degraded", "subsystems": subsystems})
-		}))
-		got := probeLensStatus(context.Background(), srv.URL)
-		srv.Close()
-		if got.Verdict != c.verdict || got.CanScore {
-			t.Errorf("%s: verdict %q can_score=%v, want %q and false", c.name, got.Verdict, got.CanScore, c.verdict)
-		}
-		dims := buildDimensions(got, ASAStatus{Verdict: "missing"})
-		if d := dimByName(dims, "direct_agent"); d.Status != "blocked" {
-			t.Errorf("%s: direct_agent %q", c.name, d.Status)
-		}
-		if c.verdict == "model-server-unreachable" {
-			if d := dimByName(dims, "model_runtime"); d.Status != "unreachable" {
-				t.Errorf("model_runtime %q while the lens reports llama-server down", d.Status)
+		t.Run(c.name, func(t *testing.T) {
+			lens := compatibleLensHealth()
+			subsystems := map[string]any{"lens": lens}
+			c.mutate(lens, subsystems)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "degraded", "subsystems": subsystems})
+			}))
+			defer srv.Close()
+
+			got := probeLensStatus(context.Background(), srv.URL)
+			if got.Verdict != c.verdict || got.CanScore {
+				t.Errorf("verdict %q can_score=%v, want %q and false", got.Verdict, got.CanScore, c.verdict)
 			}
-		}
+			dims := buildDimensions(got, ASAStatus{Verdict: "missing"})
+			if d := dimByName(dims, "direct_agent"); d.Status != "blocked" {
+				t.Errorf("direct_agent %q", d.Status)
+			}
+			if d := dimByName(dims, "model_runtime"); d.Status != c.modelRuntime {
+				t.Errorf("model_runtime %q, want %q", d.Status, c.modelRuntime)
+			}
+		})
 	}
 	srv := lensHealthServer(t, compatibleLensHealth())
 	defer srv.Close()
@@ -231,40 +221,34 @@ func TestProbeLensStatusNamesALensThatCannotScore(t *testing.T) {
 	}
 }
 
-func TestInterventionNeutralWhenUncalibrated(t *testing.T) {
-	// Loaded + scoring available but NOT calibrated → intervention must
-	// be "neutral" (never "active"), matching the runtime guarantee.
-	lens := LensStatus{
-		Verdict: "uncalibrated", CostFieldLoaded: true, GxLoaded: true,
-		CostFieldDim: 3840, EmbedDim: 3840,
-		CxCalibrated: false, GxCalibrated: false,
-	}
-	dims := buildDimensions(lens, ASAStatus{Verdict: "missing"})
-	if d := dimByName(dims, "lens_calibration"); d.Status != "uncalibrated" {
-		t.Errorf("calibration = %q, want uncalibrated", d.Status)
-	}
-	if d := dimByName(dims, "lens_intervention"); d.Status != "neutral" {
-		t.Fatalf("intervention = %q, want neutral when uncalibrated", d.Status)
-	}
-}
-
-func TestInterventionActiveOnlyWhenCalibrated(t *testing.T) {
-	lens := LensStatus{
-		Verdict: "supported", CostFieldLoaded: true, GxLoaded: true,
-		CostFieldDim: 3840, EmbedDim: 3840,
-		CxCalibrated: true, GxCalibrated: true,
-	}
-	dims := buildDimensions(lens, ASAStatus{Verdict: "supported"})
-	if d := dimByName(dims, "lens_intervention"); d.Status != "active" {
-		t.Fatalf("intervention = %q, want active when calibrated", d.Status)
-	}
-}
-
-func TestInterventionDisabledWhenNoArtifacts(t *testing.T) {
-	dims := buildDimensions(LensStatus{Verdict: "no-artifacts"},
-		ASAStatus{Verdict: "missing"})
-	if d := dimByName(dims, "lens_intervention"); d.Status != "disabled" {
-		t.Fatalf("intervention = %q, want disabled with no artifacts", d.Status)
+// Interventions act only on the selected model's calibration. A lens that
+// scores without it gives raw telemetry only ("neutral").
+func TestLensInterventionIsActiveOnlyWhenCalibrated(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		lens             LensStatus
+		wantCalibration  string
+		wantIntervention string
+	}{
+		{"calibrated", LensStatus{
+			Verdict: "supported", CostFieldLoaded: true, GxLoaded: true,
+			CostFieldDim: 3840, EmbedDim: 3840, CxCalibrated: true, GxCalibrated: true,
+		}, "calibrated", "active"},
+		{"not calibrated", LensStatus{
+			Verdict: "uncalibrated", CostFieldLoaded: true, GxLoaded: true,
+			CostFieldDim: 3840, EmbedDim: 3840, CxCalibrated: false, GxCalibrated: false,
+		}, "uncalibrated", "neutral"},
+		{"no artifacts", LensStatus{Verdict: "no-artifacts"}, "disabled", "disabled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dims := buildDimensions(tc.lens, ASAStatus{Verdict: "missing"})
+			if d := dimByName(dims, "lens_calibration"); d.Status != tc.wantCalibration {
+				t.Errorf("calibration = %q, want %q", d.Status, tc.wantCalibration)
+			}
+			if d := dimByName(dims, "lens_intervention"); d.Status != tc.wantIntervention {
+				t.Errorf("intervention = %q, want %q", d.Status, tc.wantIntervention)
+			}
+		})
 	}
 }
 

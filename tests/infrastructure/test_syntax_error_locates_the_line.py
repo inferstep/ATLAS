@@ -25,8 +25,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[2]
 
 # The measured content, reduced to the signature that broke.
@@ -90,7 +88,8 @@ def test_the_line_number_points_at_the_broken_signature(tmp_path):
 def test_an_indentation_error_is_located_too(tmp_path):
     source = "def f():\n    return 1\n  return 2\n"
     errors = _extract(_py_compile_stderr(tmp_path, source))
-    assert errors and re.search(r"line (\d+)", errors[0]), errors
+    assert errors, errors
+    assert re.search(r"line (\d+)", errors[0]), errors
 
 
 def test_a_line_number_already_present_is_not_duplicated(tmp_path):

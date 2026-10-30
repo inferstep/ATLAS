@@ -30,9 +30,8 @@ func TestTheExplorationNoteFollowsTheRequest(t *testing.T) {
 	}
 }
 
-// The bugfind session's request: a declared question. A question, or an
-// explicit "change nothing", wants an answer; declared work, or no contract
-// and no prohibition, keeps the write notes.
+// A question, or an explicit "change nothing", wants an answer; declared
+// work, or no contract and no prohibition, keeps the write notes.
 func TestAnAnswerOnlyRequestIsAQuestionOrAProhibition(t *testing.T) {
 	cases := []struct {
 		ctx  *AgentContext

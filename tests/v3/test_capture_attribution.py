@@ -15,8 +15,6 @@ import os
 import sys
 import threading
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "v3-service"))
 import pipeline
 
@@ -31,7 +29,8 @@ def open_capture(tmp_path, monkeypatch):
 
 
 def records(path):
-    return [json.loads(l) for l in open(path) if l.strip()]
+    with open(path) as fh:
+        return [json.loads(l) for l in fh if l.strip()]
 
 
 def test_disabled_capture_costs_nothing(tmp_path, monkeypatch):

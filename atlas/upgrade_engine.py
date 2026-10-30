@@ -305,6 +305,11 @@ def run_rollback(atlas_root: str, steps: Steps,
     if target_tag:
         previous = read_env_tag(atlas_root)
         steps.log(f"rolling back to {target_tag}…")
+        # As `atlas upgrade` does: the images are checked before .env
+        # changes or anything is pulled or started. A bad signature ends
+        # the rollback here with its error.
+        steps.log("verifying target image signatures…")
+        steps.verify_signatures(atlas_root, target_tag)
         steps.set_env_tag(atlas_root, target_tag)
         try:
             steps.pull(atlas_root)

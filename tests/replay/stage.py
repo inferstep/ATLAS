@@ -1,7 +1,9 @@
 """The stand-ins for the four services the proxy calls, and the proxy itself as a built binary.
 
 A Stage runs one HTTP server per service. In record mode each request is
-answered by a function and the exchange is kept. In play mode each request is
+answered by a function and the exchange is kept. The function gets a way to
+give a piece of its answer on to the proxy at once (`give_on`); one that does
+not use it answers whole. In play mode each request is
 compared with the next recorded request and answered with the recorded
 answer; the first request that differs is kept as the mismatch, and from then
 on the stage answers with an error, because the rest of the recording no
@@ -12,11 +14,19 @@ the next one of the whole recording, whichever service it goes to: a call to
 the sandbox where the recording has a call to V3 is a mismatch. A recording
 of a session in which the proxy calls two services at the same time says
 `"order": "per service"`, and then the next request of each service counts.
+
+A recording whose model replies a real model gave (`"model_replies":
+"captured"`) cannot be written again from new text. When the text that every
+request carries (the system prompt, the grammar, the schema of the reply)
+changed since it was made, its requests to the model are compared without
+those three parts, and the stage keeps one line that says so. Everything else
+is compared as before. A recording whose replies were written stays strict.
 """
 from __future__ import annotations
 
 import http.client
 import http.server
+import importlib.util
 import json
 import os
 import socket
@@ -26,6 +36,10 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+# The parts that every request carries, and the mark of their text, as the check of a smoke run reads them.
+_smoke_spec = importlib.util.spec_from_file_location("smoke_result", REPO / "scripts" / "smoke_result.py")
+smoke = importlib.util.module_from_spec(_smoke_spec)
+_smoke_spec.loader.exec_module(smoke)
 SERVICES = ("model", "sandbox", "v3", "lens")
 SERVICE_ENV = {"model": ("ATLAS_INFERENCE_URL", "ATLAS_LLAMA_URL"), "sandbox": ("ATLAS_SANDBOX_URL",),
                "v3": ("ATLAS_V3_URL",), "lens": ("ATLAS_LENS_URL",)}
@@ -72,6 +86,10 @@ class Stage:
         self.exchanges, self.mismatch, self.servers, self.ports = [], None, [], {}
         self.waiting = list((recording or {}).get("exchanges", []))
         self.per_service = (recording or {}).get("order") == "per service"
+        # Whether the replies of the recording came from a real model, and whether its carried text is still today's:
+        # decided at the first request to the model.
+        self.real_model = ((recording or {}).get("source") or {}).get("model_replies") == "captured"
+        self.text_checked, self.carried_compared, self.text_note = False, True, ""
 
     def start(self) -> dict[str, int]:
         for service in SERVICES:
@@ -103,14 +121,14 @@ class Stage:
             text = text.replace(f"127.0.0.1:{port}", f"<{service}>")
         return text
 
-    def answer(self, service: str, method: str, path: str, body: str):
+    def answer(self, service: str, method: str, path: str, body: str, give_on=None):
         clocked = clocked_answer(service, method, path)
         if clocked:
             return clocked
         request = {"service": service, "method": method, "path": path, "request": self.plain(body)}
         with self.lock:
             if self.upstreams is not None:
-                status, content_type, text = self.upstreams[service](method, path, body)
+                status, content_type, text = self.upstreams[service](method, path, body, give_on)
                 self.exchanges.append({**request, "response": {"status": status, "content_type": content_type,
                                                                "body": self.plain(text)}})
                 return status, content_type, text
@@ -123,14 +141,29 @@ class Stage:
             same_call = all(expected[k] == request[k] for k in ("service", "method", "path"))
             if same_call and self.accept and expected["request"] != request["request"]:
                 expected["request"], self.accepted = request["request"], self.accepted + 1
-            if {k: expected[k] for k in ("service", "method", "path", "request")} != request:
-                self.mismatch = {"service": service, "expected": expected, "got": request}
+            if same_call and self.real_model and is_a_model_request(request) and not self.text_checked:
+                self.compare_the_carried_text(expected, request)
+            held, now = expected, request
+            if not self.carried_compared and same_call and is_a_model_request(request):
+                held = {**expected, "request": without_the_carried_parts(expected["request"])}
+                now = {**request, "request": without_the_carried_parts(request["request"])}
+            if {k: held[k] for k in ("service", "method", "path", "request")} != now:
+                self.mismatch = {"service": service, "expected": held, "got": now}
                 return 599, "text/plain", "this request differs from the recorded one"
             self.waiting.remove(expected)
             self.exchanges.append(expected)
             response = expected["response"]
             body = response["body"].replace(WORKSPACE, self.workspace).replace(PROBE, self.probe_value())
             return response["status"], response["content_type"], body
+
+    def compare_the_carried_text(self, expected: dict, request: dict) -> None:
+        """At the first request to the model of a real-model recording: when the text that every request carries is
+        not the one the recording was made with, the carried parts are not compared from here on."""
+        made, today = text_mark(expected), text_mark(request)
+        self.text_checked = True
+        if made != today:
+            self.carried_compared = False
+            self.text_note = f"made with text {made}, today's is {today}; the carried parts are not compared"
 
     def next_recorded(self, service: str):
         """The recorded request this one is held against, or None when the recording has none left for it."""
@@ -150,9 +183,24 @@ class Stage:
             def log_message(self, *args):
                 pass
 
+            given_on = False
+
+            def give_on(self, status: int, content_type: str, piece: bytes):
+                """Give a piece of an answer to the proxy at once, as a real service does while it still computes.
+                Such an answer names no length; it ends when the connection ends."""
+                if not self.given_on:
+                    self.send_response(status)
+                    self.send_header("Content-Type", content_type)
+                    self.end_headers()
+                    self.given_on = True
+                self.wfile.write(piece)
+                self.wfile.flush()
+
             def _serve(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0") or 0)).decode("utf-8", "replace")
-                status, content_type, text = stage.answer(service, self.command, self.path, body)
+                status, content_type, text = stage.answer(service, self.command, self.path, body, self.give_on)
+                if self.given_on:
+                    return
                 data = text.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
@@ -163,6 +211,28 @@ class Stage:
             do_GET = do_POST = _serve
 
         return Handler
+
+
+def is_a_model_request(exchange: dict) -> bool:
+    return exchange["service"] == "model" and str(exchange["path"]).endswith("/chat/completions")
+
+
+def text_mark(exchange: dict) -> str:
+    """The mark of the text that one request to the model carries, made as scripts/smoke_result.py makes it."""
+    parts = smoke.carried_by_every_request({"exchanges": [exchange]})
+    return smoke.mark_of({part: [json.dumps(value, sort_keys=True, ensure_ascii=False)] if value is not None else []
+                          for part, value in parts.items()})
+
+
+def without_the_carried_parts(body: str) -> str:
+    """A request to the model without the parts that every request carries, as scripts/smoke_result.py reads them."""
+    request = json.loads(body)
+    messages = request.get("messages") or []
+    if messages and messages[0].get("role") == "system":
+        messages[0] = {**messages[0], "content": "<the system prompt>"}
+    request.pop("grammar", None)
+    request.pop("response_format", None)
+    return json.dumps(request, sort_keys=True, ensure_ascii=False)
 
 
 def build_proxy(target: Path) -> Path:

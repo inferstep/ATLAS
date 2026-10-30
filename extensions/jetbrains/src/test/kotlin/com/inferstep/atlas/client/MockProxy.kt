@@ -58,6 +58,14 @@ class MockProxy(
 
     val requests = CopyOnWriteArrayList<RecordedRequest>()
 
+    /**
+     * False when a paused agent stream went on because its wait for
+     * POST /v1/permission timed out.
+     */
+    @Volatile
+    var permissionArrivedInTime = true
+        private set
+
     private val executor: ExecutorService = Executors.newCachedThreadPool()
     private val resumeAfterPermission: CountDownLatch? =
         if (options.pauseAfterIndex != null) CountDownLatch(1) else null
@@ -162,7 +170,8 @@ class MockProxy(
                 out.write("data: $frame\n\n".toByteArray())
                 out.flush()
                 if (index == options.pauseAfterIndex) {
-                    resumeAfterPermission?.await(WAIT_SECONDS, TimeUnit.SECONDS)
+                    permissionArrivedInTime =
+                        resumeAfterPermission?.await(WAIT_SECONDS, TimeUnit.SECONDS) != false
                 }
             }
             if (!options.omitSentinel) {

@@ -5,8 +5,9 @@
   "ruled_branches": ["dev", "staging", "main"],
   "server": {
     "status": "server/nightly",
-    "writer": 0,
-    "max_age_days": 14
+    "writer": 340202947,
+    "look_back_days": 14,
+    "note_after_nights": 3
   },
   "plants": [
     {
@@ -442,6 +443,9 @@
     "codeql (python)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (javascript-typescript)": "The job reports that the analysis ran. A finding does not turn it red.",
     "codeql (java-kotlin)": "The job reports that the analysis ran. A finding does not turn it red.",
+    "golangci-lint (proxy)": "It reports a finding in new code as a note on the line. A finding does not turn it red. The plant of `go test (proxy)` shows that it still reports.",
+    "golangci-lint (tui)": "It reports a finding in new code as a note on the line. A finding does not turn it red. The plant of `go test (tui)` shows that it still reports.",
+    "hadolint (dockerfiles)": "It reports a finding as a note on the line. A finding does not turn it red. Its plant shows that it still reports.",
     "smoke result": "It turns red only for a pull request that changes text which every request to the model carries. No planted file is such text.",
     "dependency review": "It turns red only for a dependency with a published advisory. None is planted.",
     "checks ran": "Its violation is a job that had to run and reported nothing. A plant for that takes a job out of the run, and then the red of that job is missing here. On the canary it passes with a note: `coverage upload (extension)` is skipped behind the failed job `lint + test + build`.",

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ const javaDispatch = `def _syntax_check_impl(lang, code, workspace, filename=Non
     return errors
 `
 
-// The insertion 84296fd smallrung_toml rep2 made, verbatim.
+// A toml branch, as a model sent it for insertion into the java branch.
 const tomlBranch = `
     elif lang == "toml":
         try:
@@ -75,7 +76,7 @@ func TestInsertingIntoTheMiddleOfABlockIsRefusedThroughTheTool(t *testing.T) {
 	ctx.PermissionMode = PermissionYolo
 	ctx.RecordFileRead(path, javaDispatch)
 
-	// After `stderr = result.get("stderr", "")` -- exactly where rep2 put it.
+	// After `stderr = result.get("stderr", "")`, in the middle of the java branch.
 	at := blockLineOf(t, javaDispatch, `stderr = result.get("stderr", "")`)
 	res := callTool(t, ctx, "insert_after", map[string]interface{}{
 		"path": "executor_server.py", "line": at, "content": tomlBranch})
@@ -87,6 +88,11 @@ func TestInsertingIntoTheMiddleOfABlockIsRefusedThroughTheTool(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal should name %q so the model can see what would move; got: %s", want, msg)
 		}
+	}
+	// The model edits by line number, so the refusal names the first line that would move by its number.
+	moving := blockLineOf(t, javaDispatch, "for line in stderr.splitlines():")
+	if want := fmt.Sprintf("line %d `for line in stderr.splitlines():`", moving); !strings.Contains(msg, want) {
+		t.Errorf("refusal should name %q; got: %s", want, msg)
 	}
 	if got, _ := os.ReadFile(path); string(got) != javaDispatch {
 		t.Errorf("the file changed although the insertion was refused")

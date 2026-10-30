@@ -1,682 +1,241 @@
-"""Tests for V3 Refinement Loop (Feature 3E)."""
+"""Tests for the V3 refinement loop (Feature 3E): analyze why the candidates
+failed, refine the constraints, generate code, test it in the sandbox, and
+repeat until a candidate passes or the loop's budget is spent."""
 
 import json
-from typing import List, Optional, Tuple
 
 import pytest
 
-from stages.refinement_loop import (
-    IterationResult,
-    RefinementLoop,
-    RefinementLoopConfig,
-    RefinementLoopEvent,
-    RefinementResult,
-)
+from stages.constraint_refinement import RefinedHypothesis
 from stages.failure_analysis import (
     FailingCandidate,
     FailureAnalysisConfig,
     FailureAnalyzer,
 )
-from stages.constraint_refinement import (
-    ConstraintRefinementConfig,
-    ConstraintRefiner,
-    RefinedHypothesis,
+from stages.refinement_loop import (
+    IterationResult,
+    RefinementLoop,
+    RefinementLoopConfig,
+    RefinementResult,
 )
 
 
-# ---------------------------------------------------------------------------
-# Mock callables
-# ---------------------------------------------------------------------------
+# The input of every run below: two candidates that failed phases 1 and 2.
+FAILING_CANDIDATES = [
+    FailingCandidate(code="def solve(n): return n * 2",
+                     error_output="AssertionError: expected 3 got 4", index=0),
+    FailingCandidate(code="def solve(n): return n + 1",
+                     error_output="AssertionError: expected 0 got 1", index=1),
+]
 
-class MockLLM:
-    """Mock LLM that returns predefined responses for analysis and refinement."""
+# The code fake_llm writes inside its fenced answer.
+LLM_CODE = "def solve(n):\n    if n == 0: return 0\n    return n + 1\n"
 
-    def __init__(self):
-        self.calls: list = []
-        self._call_count = 0
 
-    def __call__(self, prompt: str, temperature: float,
-                 max_tokens: int, seed: Optional[int]) -> Tuple[str, int, float]:
-        self.calls.append({
-            "prompt": prompt, "temperature": temperature,
-            "max_tokens": max_tokens, "seed": seed,
-        })
-        self._call_count += 1
-
-        # Return analysis-like response for failure analyzer calls
-        if "Analyze these failures" in prompt or "expert debugger" in prompt:
-            return (
-                "CATEGORY:\nSolution 1: wrong_algorithm\n\n"
+def fake_llm(prompt, temperature, max_tokens, seed):
+    """Answers the three calls of one iteration in the formats the loop
+    parses: the failure analysis, one refined hypothesis, then the code."""
+    if "Analyze these failures" in prompt:
+        return ("CATEGORY:\nSolution 1: wrong_algorithm\n\n"
                 "VIOLATED:\n- Must handle edge cases properly\n\n"
                 "COMMON:\nAll solutions miss the zero case\n\n"
-                "NEW_CONSTRAINTS:\n- Always check for zero input first\n"
-            ), 80, 30.0
-
-        # Return hypothesis response for constraint refiner calls
-        if "REFINED constraint" in prompt or "constraint engineering" in prompt:
-            return (
-                "HYPOTHESIS 1:\n"
+                "NEW_CONSTRAINTS:\n- Always check for zero input first\n"), 80, 30.0
+    if "REFINED constraint" in prompt:
+        return ("HYPOTHESIS 1:\n"
                 "APPROACH: Check zero first then process\n"
                 "RATIONALE: Prevents the common failure pattern\n"
                 "CONSTRAINTS:\n"
                 "- Must handle edge cases\n"
-                "- NEW: Check for zero input at the start\n"
-            ), 60, 25.0
-
-        # Return code for code generation calls
-        return "```python\ndef solve(n):\n    if n == 0: return 0\n    return n + 1\n```", 40, 20.0
-
-
-class MockSandbox:
-    """Mock sandbox that can be configured to pass/fail."""
-
-    def __init__(self, pass_on_iteration: Optional[int] = None):
-        self.calls: list = []
-        self._call_count = 0
-        self._pass_on = pass_on_iteration
-
-    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
-        self.calls.append({"code": code, "input": test_input})
-        self._call_count += 1
-        if self._pass_on is not None and self._call_count >= self._pass_on:
-            return True, "correct", ""
-        return False, "", "AssertionError: wrong answer"
-
-
-class MockSandboxAlwaysPass:
-    """Mock sandbox that always passes."""
-
-    def __init__(self):
-        self.calls: list = []
-
-    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
-        self.calls.append({"code": code, "input": test_input})
-        return True, "correct", ""
-
-
-class MockSandboxAlwaysFail:
-    """Mock sandbox that always fails."""
-
-    def __init__(self):
-        self.calls: list = []
-
-    def __call__(self, code: str, test_input: str = "", **_) -> Tuple[bool, str, str]:
-        self.calls.append({"code": code, "input": test_input})
-        return False, "", "AssertionError: wrong answer"
-
-
-class MockEmbed:
-    """Mock embedding callable."""
-
-    def __init__(self, dim: int = 10):
-        self.dim = dim
-        self.calls: list = []
-
-    def __call__(self, text: str) -> List[float]:
-        self.calls.append(text)
-        return [float(len(text) % 10) / 10.0] * self.dim
-
-
-class MockCodeGen:
-    """Mock code generation callable."""
-
-    def __init__(self, code: str = "def solve(n): return n + 1"):
-        self.code = code
-        self.calls: list = []
-
-    def __call__(self, problem: str, constraints: List[str],
-                 seed: int) -> Tuple[str, int, float]:
-        self.calls.append({
-            "problem": problem, "constraints": constraints, "seed": seed,
-        })
-        return self.code, 50, 25.0
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def tmp_telemetry(tmp_path):
-    """Provide a temporary telemetry directory."""
-    d = tmp_path / "telemetry"
-    d.mkdir()
-    return d
-
-
-@pytest.fixture
-def loop_enabled(tmp_telemetry):
-    """RefinementLoop instance with enabled=True and sub-components enabled."""
-    cfg = RefinementLoopConfig(enabled=True, max_iterations=5)
-    fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-    cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-    return RefinementLoop(cfg, failure_analyzer=fa, constraint_refiner=cr,
-                          telemetry_dir=tmp_telemetry)
-
-
-@pytest.fixture
-def loop_disabled(tmp_telemetry):
-    """RefinementLoop instance with enabled=False."""
-    cfg = RefinementLoopConfig(enabled=False)
-    return RefinementLoop(cfg, telemetry_dir=tmp_telemetry)
-
-
-@pytest.fixture
-def sample_candidates():
-    """A set of failing candidates for testing."""
-    return [
-        FailingCandidate(
-            code="def solve(n): return n * 2",
-            error_output="AssertionError: expected 3 got 4",
-            index=0,
-        ),
-        FailingCandidate(
-            code="def solve(n): return n + 1",
-            error_output="AssertionError: expected 0 got 1",
-            index=1,
-        ),
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Test: Disabled noop behavior
-# ---------------------------------------------------------------------------
-
-class TestDisabledNoop:
-    """When enabled=False, RefinementLoop should be a complete noop."""
-
-    def test_returns_not_triggered(self, loop_disabled, sample_candidates):
-        result = loop_disabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["Must sort"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-        )
-        assert result.triggered is False
-        assert result.solved is False
-        assert result.reason == "disabled"
-
-    def test_preserves_task_id(self, loop_disabled, sample_candidates):
-        result = loop_disabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[], task_id="my_task",
-        )
-        assert result.task_id == "my_task"
-
-    def test_no_telemetry_when_disabled(self, loop_disabled, sample_candidates, tmp_telemetry):
-        loop_disabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[], llm_call=MockLLM(),
-            sandbox_run=MockSandboxAlwaysPass(), task_id="t1",
-        )
-        events_file = tmp_telemetry / "refinement_loop_events.jsonl"
-        assert not events_file.exists()
-
-    def test_no_iterations_when_disabled(self, loop_disabled, sample_candidates):
-        result = loop_disabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[],
-        )
-        assert result.iterations == []
-        assert result.total_iterations == 0
-
-
-# ---------------------------------------------------------------------------
-# Test: RefinementLoop.run — stops on sandbox pass
-# ---------------------------------------------------------------------------
-
-class TestStopsOnPass:
-
-    def test_stops_when_sandbox_passes(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        # Passes on first sandbox call
-        mock_sandbox = MockSandboxAlwaysPass()
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["Must handle zero"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-            task_id="t1",
-        )
-        assert result.solved is True
-        assert result.reason == "solved"
-        assert len(result.winning_code) > 0
-
-    def test_stops_on_second_iteration(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=5)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        mock_llm = MockLLM()
-        # Fails first, passes second
-        mock_sandbox = MockSandbox(pass_on_iteration=2)
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.solved is True
-        assert result.total_iterations == 2
-
-    def test_solved_result_has_winning_code(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert len(result.winning_code) > 0
-
-
-# ---------------------------------------------------------------------------
-# Test: RefinementLoop.run — stops at max_iterations
-# ---------------------------------------------------------------------------
-
-class TestStopsAtMaxIterations:
-
-    def test_respects_max_iterations(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=3)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysFail()
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.solved is False
-        assert result.total_iterations <= 3
-        assert result.reason == "max_iterations_exhausted"
-
-    def test_max_iterations_one(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=1)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysFail()
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.total_iterations <= 1
-
-
-# ---------------------------------------------------------------------------
-# Test: Time budget enforcement
-# ---------------------------------------------------------------------------
-
-class TestTimeBudget:
-
-    def test_respects_time_budget(self, tmp_telemetry, sample_candidates):
-        # Set a very short time budget (1ms) to guarantee it triggers
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=100, max_time_ms=1.0)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysFail()
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.reason == "time_budget_exceeded"
-        assert result.total_iterations < 100
-
-    def test_default_time_budget(self):
-        cfg = RefinementLoopConfig()
-        assert cfg.max_time_ms == 120000.0  # 2 minutes
-
-
-# ---------------------------------------------------------------------------
-# Test: Edge cases
-# ---------------------------------------------------------------------------
-
-class TestEdgeCases:
-
-    def test_empty_candidates(self, loop_enabled):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=[],
-            original_constraints=[],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-        )
-        assert result.triggered is False
-        assert result.reason == "no_candidates"
-
-    def test_missing_llm_callable(self, loop_enabled, sample_candidates):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[],
-            sandbox_run=MockSandboxAlwaysPass(),
-        )
-        assert result.triggered is False
-        assert result.reason == "missing_callables"
-
-    def test_missing_sandbox_callable(self, loop_enabled, sample_candidates):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=[],
-            llm_call=MockLLM(),
-        )
-        assert result.triggered is False
-        assert result.reason == "missing_callables"
-
-    def test_code_gen_callable_used(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        mock_codegen = MockCodeGen("def solve(n): return n")
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-            code_gen=mock_codegen,
-        )
-        assert result.solved is True
-        assert len(mock_codegen.calls) > 0
-
-    def test_embed_callable_used(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        mock_embed = MockEmbed(dim=5)
-        # Run for the embed-call side effect; the result itself isn't asserted
-        # here (the assertion is on the mock's call log below).
-        _ = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-            embed_call=mock_embed,
-        )
-        assert len(mock_embed.calls) > 0
-
-    def test_default_sub_components(self, tmp_telemetry, sample_candidates):
-        """RefinementLoop creates default sub-components if not provided."""
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=1)
-        loop = RefinementLoop(cfg, telemetry_dir=tmp_telemetry)
-        assert loop.failure_analyzer is not None
-        assert loop.constraint_refiner is not None
-
-    def test_failed_iteration_adds_to_failure_set(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=2)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysFail()
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        # After failing iterations, each generates a new FailingCandidate
-        assert result.total_iterations > 0
-        assert result.solved is False
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-3E-1 — Orchestrates analyze->refine->generate->test cycle
-# ---------------------------------------------------------------------------
-
-class TestAC3E1OrchestrationCycle:
-    """AC-3E-1: Loop orchestrates the full analyze->refine->generate->test cycle."""
-
-    def test_triggered_on_failing_candidates(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.triggered is True
-
-    def test_iterations_recorded(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert len(result.iterations) > 0
-        for it in result.iterations:
-            assert isinstance(it, IterationResult)
-            assert it.time_ms > 0
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-3E-2 — Stops when sandbox passes
-# ---------------------------------------------------------------------------
-
-class TestAC3E2StopsOnPass:
-    """AC-3E-2: Loop terminates immediately when a solution passes."""
-
-    def test_first_pass_terminates(self, loop_enabled, sample_candidates):
-        mock_llm = MockLLM()
-        mock_sandbox = MockSandboxAlwaysPass()
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=mock_llm, sandbox_run=mock_sandbox,
-        )
-        assert result.solved is True
-        assert result.total_iterations == 1
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-3E-3 — Stops at max_iterations
-# ---------------------------------------------------------------------------
-
-class TestAC3E3MaxIterations:
-    """AC-3E-3: Loop respects max_iterations limit."""
-
-    def test_exhausts_max_iterations(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=2)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysFail(),
-        )
-        assert result.total_iterations <= 2
-        assert result.reason == "max_iterations_exhausted"
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-3E-4 — Time budget enforcement
-# ---------------------------------------------------------------------------
-
-class TestAC3E4TimeBudget:
-    """AC-3E-4: Loop respects time budget."""
-
-    def test_time_budget_stops_loop(self, tmp_telemetry, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=100, max_time_ms=1.0)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=tmp_telemetry)
-
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysFail(),
-        )
-        assert result.reason == "time_budget_exceeded"
-
-
-# ---------------------------------------------------------------------------
-# Test: AC-3E-5 — Tracks total tokens and time
-# ---------------------------------------------------------------------------
-
-class TestAC3E5Tracking:
-    """AC-3E-5: Loop tracks total tokens, time, and iteration details."""
-
-    def test_total_tokens_tracked(self, loop_enabled, sample_candidates):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-            code_gen=MockCodeGen(),
-        )
-        assert result.total_tokens > 0
-
-    def test_total_time_tracked(self, loop_enabled, sample_candidates):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-        )
-        assert result.total_time_ms > 0
-
-    def test_iteration_details_tracked(self, loop_enabled, sample_candidates):
-        result = loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-        )
-        for it in result.iterations:
-            assert it.iteration >= 0
-            assert it.time_ms > 0
-
-
-# ---------------------------------------------------------------------------
-# Test: Telemetry
-# ---------------------------------------------------------------------------
-
-class TestTelemetry:
-
-    def test_event_written_to_jsonl(self, loop_enabled, sample_candidates, tmp_telemetry):
-        loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-            task_id="LCB_001",
-        )
-        events_file = tmp_telemetry / "refinement_loop_events.jsonl"
-        assert events_file.exists()
-        lines = events_file.read_text().strip().split("\n")
-        assert len(lines) == 1
-        data = json.loads(lines[0])
-        assert data["task_id"] == "LCB_001"
-        assert data["triggered"] is True
-        assert "solved" in data
-        assert "total_iterations" in data
-        assert "total_tokens" in data
-        assert "total_time_ms" in data
-        assert "reason" in data
-        assert "timestamp" in data
-
-    def test_multiple_events_appended(self, loop_enabled, sample_candidates, tmp_telemetry):
-        for i in range(3):
-            loop_enabled.run(
-                problem="test", failing_candidates=sample_candidates,
-                original_constraints=["c1"],
-                llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-                task_id=f"t{i}",
-            )
-        events_file = tmp_telemetry / "refinement_loop_events.jsonl"
-        lines = events_file.read_text().strip().split("\n")
-        assert len(lines) == 3
-
-    def test_no_telemetry_without_task_id(self, loop_enabled, sample_candidates, tmp_telemetry):
-        loop_enabled.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-        )
-        events_file = tmp_telemetry / "refinement_loop_events.jsonl"
-        assert not events_file.exists()
-
-    def test_no_crash_without_telemetry_dir(self, sample_candidates):
-        cfg = RefinementLoopConfig(enabled=True, max_iterations=1)
-        fa = FailureAnalyzer(FailureAnalysisConfig(enabled=True))
-        cr = ConstraintRefiner(ConstraintRefinementConfig(enabled=True))
-        loop = RefinementLoop(cfg, fa, cr, telemetry_dir=None)
-        result = loop.run(
-            problem="test", failing_candidates=sample_candidates,
-            original_constraints=["c1"],
-            llm_call=MockLLM(), sandbox_run=MockSandboxAlwaysPass(),
-            task_id="t1",
-        )
-        assert isinstance(result, RefinementResult)
-
-
-# ---------------------------------------------------------------------------
-# Test: Data structures
-# ---------------------------------------------------------------------------
-
-class TestDataStructures:
-
-    def test_iteration_result_to_dict(self):
-        it = IterationResult(
-            iteration=2,
-            hypothesis_used=RefinedHypothesis(approach="DP"),
-            code_generated="def solve(): pass",
-            passed=True, error="",
-            tokens_used=50, time_ms=200.0,
-        )
-        d = it.to_dict()
-        assert d["iteration"] == 2
-        assert d["has_hypothesis"] is True
-        assert d["passed"] is True
-        assert d["error_preview"] == ""
-        assert d["tokens_used"] == 50
-        assert d["time_ms"] == 200.0
-
-    def test_iteration_result_no_hypothesis(self):
-        it = IterationResult(iteration=0)
-        d = it.to_dict()
-        assert d["has_hypothesis"] is False
-
-    def test_iteration_result_error_truncated(self):
-        it = IterationResult(error="E" * 500)
-        d = it.to_dict()
-        assert len(d["error_preview"]) == 200
-
-    def test_refinement_result_to_dict(self):
-        r = RefinementResult(
-            task_id="t1", triggered=True, solved=True,
-            winning_code="def solve(): pass",
-            iterations=[IterationResult(iteration=0, passed=True)],
-            total_iterations=1, total_tokens=200,
-            total_time_ms=500.0, reason="solved",
-        )
-        d = r.to_dict()
-        assert d["task_id"] == "t1"
-        assert d["triggered"] is True
-        assert d["solved"] is True
-        assert d["total_iterations"] == 1
-        assert d["reason"] == "solved"
-        assert len(d["iterations"]) == 1
-
-    def test_event_to_dict(self):
-        e = RefinementLoopEvent(
-            task_id="t1", triggered=True, solved=False,
-            total_iterations=3, total_tokens=500,
-            total_time_ms=2000.0, reason="max_iterations_exhausted",
-        )
-        d = e.to_dict()
-        assert d["task_id"] == "t1"
-        assert d["triggered"] is True
-        assert d["solved"] is False
-        assert d["total_iterations"] == 3
-        assert d["reason"] == "max_iterations_exhausted"
-        assert "timestamp" in d
-
-    def test_config_defaults(self):
-        cfg = RefinementLoopConfig()
-        assert cfg.enabled is False
-        assert cfg.max_iterations == 2
-        assert cfg.max_time_ms == 120000.0
+                "- NEW: Check for zero input at the start\n"), 60, 25.0
+    return f"```python\n{LLM_CODE}```", 40, 20.0
+
+
+def sandbox_passes(code, test_input):
+    return True, "correct", ""
+
+
+def sandbox_fails(code, test_input):
+    return False, "", "AssertionError: wrong answer"
+
+
+@pytest.mark.parametrize("enabled, candidates, llm_call, sandbox_run, reason", [
+    pytest.param(False, FAILING_CANDIDATES, fake_llm, sandbox_passes, "disabled", id="disabled"),
+    pytest.param(True, [], fake_llm, sandbox_passes, "no_candidates", id="no failing candidates"),
+    pytest.param(True, FAILING_CANDIDATES, None, sandbox_passes, "missing_callables", id="no LLM"),
+    pytest.param(True, FAILING_CANDIDATES, fake_llm, None, "missing_callables", id="no sandbox"),
+])
+def test_a_loop_that_cannot_start_returns_an_empty_result(
+        tmp_path, enabled, candidates, llm_call, sandbox_run, reason):
+    loop = RefinementLoop(RefinementLoopConfig(enabled=enabled), telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=candidates, original_constraints=["c1"],
+                      llm_call=llm_call, sandbox_run=sandbox_run, task_id="t1")
+    # Not triggered, not solved, no iterations: only the task id and the reason.
+    assert result == RefinementResult(task_id="t1", reason=reason)
+    assert not (tmp_path / "refinement_loop_events.jsonl").exists()
+
+
+def test_a_passing_candidate_ends_the_loop_after_one_iteration(tmp_path):
+    # Built without an analyzer or a refiner: the loop makes enabled ones itself.
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=5),
+                          telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes)
+    assert result.triggered is True
+    assert result.solved is True
+    assert result.reason == "solved"
+    assert result.winning_code == LLM_CODE
+    assert result.total_iterations == 1
+    assert result.iterations[0].iteration == 0
+    assert result.iterations[0].time_ms > 0
+    assert result.total_time_ms > 0
+
+
+def test_the_loop_runs_on_until_a_candidate_passes(tmp_path):
+    # The sandbox fails the first new candidate and passes the second.
+    verdicts = iter([(False, "", "AssertionError: wrong answer"), (True, "correct", "")])
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=5),
+                          telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm,
+                      sandbox_run=lambda code, test_input: next(verdicts))
+    assert result.solved is True
+    assert result.total_iterations == 2
+
+
+def test_a_loop_that_never_passes_stops_after_max_iterations(tmp_path):
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=3),
+                          telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_fails)
+    assert result.solved is False
+    assert result.winning_code == ""
+    assert result.total_iterations == 3
+    assert result.reason == "max_iterations_exhausted"
+
+
+def test_each_failed_attempt_joins_the_failures_the_next_analysis_sees(tmp_path):
+    analysed = []
+
+    class RecordingAnalyzer(FailureAnalyzer):
+        def analyze(self, problem, candidates, *args, **kwargs):
+            analysed.append([c.code for c in candidates])
+            return super().analyze(problem, candidates, *args, **kwargs)
+
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=2),
+                          failure_analyzer=RecordingAnalyzer(FailureAnalysisConfig(enabled=True)),
+                          telemetry_dir=tmp_path)
+    loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+             original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_fails)
+    original = [c.code for c in FAILING_CANDIDATES]
+    assert analysed == [original, original + [LLM_CODE]]
+
+
+def test_the_loop_stops_when_its_time_budget_is_spent(tmp_path):
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=100, max_time_ms=1.0),
+                          telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_fails)
+    assert result.reason == "time_budget_exceeded"
+    assert result.total_iterations < 100
+
+
+def test_a_code_gen_callable_writes_the_code_in_place_of_the_llm(tmp_path):
+    def code_gen(problem, constraints, seed):
+        return "def solve(n): return n", 50, 25.0
+
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True), telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes,
+                      code_gen=code_gen)
+    assert result.solved is True
+    assert result.winning_code == "def solve(n): return n"
+    assert result.total_tokens == 50
+
+
+def test_a_hypothesis_embedded_on_top_of_a_failure_is_dropped(tmp_path):
+    # Every text embeds to the same point, so the refined hypothesis is at
+    # distance 0 from each failure: it is dropped and no code is written,
+    # though this sandbox would pass anything.
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=2),
+                          telemetry_dir=tmp_path)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes,
+                      embed_call=lambda text: [1.0, 1.0])
+    assert result.solved is False
+    assert [it.error for it in result.iterations] == ["no_viable_hypotheses"] * 2
+
+
+def test_each_run_with_a_task_id_appends_one_event(tmp_path):
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True), telemetry_dir=tmp_path)
+    for task_id in ("LCB_001", "LCB_002"):
+        loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                 original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes,
+                 task_id=task_id)
+    lines = (tmp_path / "refinement_loop_events.jsonl").read_text().splitlines()
+    assert [json.loads(line)["task_id"] for line in lines] == ["LCB_001", "LCB_002"]
+    event = json.loads(lines[0])
+    assert set(event) == {"task_id", "triggered", "solved", "total_iterations",
+                          "total_tokens", "total_time_ms", "reason", "timestamp"}
+    assert event["triggered"] is True
+    assert event["solved"] is True
+    assert event["total_iterations"] == 1
+    assert event["reason"] == "solved"
+    assert event["timestamp"] != ""
+
+
+def test_a_run_without_a_task_id_writes_no_event(tmp_path):
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True), telemetry_dir=tmp_path)
+    loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+             original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes)
+    assert not (tmp_path / "refinement_loop_events.jsonl").exists()
+
+
+def test_a_loop_without_a_telemetry_dir_still_runs():
+    loop = RefinementLoop(RefinementLoopConfig(enabled=True, max_iterations=1), telemetry_dir=None)
+    result = loop.run(problem="test", failing_candidates=FAILING_CANDIDATES,
+                      original_constraints=["c1"], llm_call=fake_llm, sandbox_run=sandbox_passes,
+                      task_id="t1")
+    assert result.solved is True
+
+
+@pytest.mark.parametrize("iteration, expected", [
+    pytest.param(IterationResult(iteration=2, hypothesis_used=RefinedHypothesis(approach="DP"),
+                                 code_generated="def solve(): pass", passed=True, error="",
+                                 tokens_used=50, time_ms=200.0),
+                 {"iteration": 2, "has_hypothesis": True, "passed": True,
+                  "error_preview": "", "tokens_used": 50, "time_ms": 200.0},
+                 id="a passing iteration"),
+    pytest.param(IterationResult(iteration=0),
+                 {"iteration": 0, "has_hypothesis": False, "passed": False,
+                  "error_preview": "", "tokens_used": 0, "time_ms": 0.0},
+                 id="no hypothesis"),
+    pytest.param(IterationResult(error="E" * 500),
+                 {"iteration": 0, "has_hypothesis": False, "passed": False,
+                  "error_preview": "E" * 200, "tokens_used": 0, "time_ms": 0.0},
+                 id="a long error cut to 200 characters"),
+])
+def test_iteration_result_to_dict(iteration, expected):
+    assert iteration.to_dict() == expected
+
+
+def test_refinement_result_to_dict():
+    iteration = IterationResult(iteration=0, passed=True)
+    result = RefinementResult(task_id="t1", triggered=True, solved=True,
+                              winning_code="def solve(): pass", iterations=[iteration],
+                              total_iterations=1, total_tokens=200, total_time_ms=500.0,
+                              reason="solved")
+    assert result.to_dict() == {
+        "task_id": "t1", "triggered": True, "solved": True, "total_iterations": 1,
+        "total_tokens": 200, "total_time_ms": 500.0, "reason": "solved",
+        "iterations": [iteration.to_dict()],
+    }
+
+
+def test_config_defaults():
+    cfg = RefinementLoopConfig()
+    assert cfg.enabled is False
+    assert cfg.max_iterations == 2
+    assert cfg.max_time_ms == 120000.0  # 2 minutes
 
 
 def test_refinement_prompt_preserves_the_declared_interface_contract():

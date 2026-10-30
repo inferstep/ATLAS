@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 EXECUTOR = ROOT / "sandbox" / "executor_server.py"
 PROXY = ROOT / "proxy"
 TESTS = (
+    "TestRealExecutorStagesTheExactCandidateForACleanPass|"
     "TestRealExecutorClassifiesEveryStagedOutcome|"
     "TestRealExecutorRunIsCancellable|"
     "TestRealExecutorRunsTheWholeDeclaredSetInOrder|"

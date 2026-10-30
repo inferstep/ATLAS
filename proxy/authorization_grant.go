@@ -231,43 +231,9 @@ func grantFor(ctx *AgentContext, in authorizationInput,
 			return nil, false, "the decision did not authorize"
 		}
 	}
-	// The target has to be GROUNDED: something structured, from the client or
-	// from the model's own tool call, has to have named exactly this path. A
-	// grant over a path nothing named is the one thing no amount of evidence
-	// can fix.
-	//
-	// Strict grounds it one way: the client declared the path as an expected
-	// output. automatic_v3 may also ground it in the structured mutation
-	// target -- the canonical path in the parsed arguments of the tool call
-	// this candidate belongs to -- because the ordinary interactive request
-	// declares no outputs and the substitution is for that one attempted
-	// mutation only. Neither grounding is ever read from prose.
-	//
-	// Canonical before the check: obligations hold canonical paths, and an
-	// alias spelling of a declared target is still that target. Resolving
-	// afterwards would let `./solve.py` be refused and `solve.py` accepted.
-	if ctx.TaskContract == nil {
-		return nil, false, "output knowledge was not declared"
-	}
-	target := resolveAgentPath(ctx, in.TargetPath)
-	grounding := ""
-	switch {
-	case in.OutputKnowledgeDeclared && targetIsAuthorized(in.Obligations, target):
-		grounding = targetGroundingDeclaredOutput
-	case in.OutputKnowledgeDeclared:
-		// The client named outputs and this is not one of them. No tool call
-		// widens a declared set, under any basis.
-		return nil, false, "the target is not declared"
-	case basis == grantBasisAutomaticV3:
-		// No declared outputs: only the model's own structured call can
-		// ground the target, and only for the automatic basis.
-		ok, why := structuredMutationTargetGrounds(ctx, in.Scope, target)
-		if !ok {
-			return nil, false, why
-		}
-		grounding = targetGroundingStructuredMutationTarget
-	default:
-		return nil, false, "output knowledge was not declared"
+	target, grounding, grounded, why := groundGrantTarget(ctx, in, basis)
+	if !grounded {
+		return nil, false, why
 	}
 	// The structured intent of the call this candidate belongs to. A licence
 	// is bounded by the mutation its own tool call defined: the target it
@@ -296,20 +262,8 @@ func grantFor(ctx *AgentContext, in authorizationInput,
 		if _, missing := declaredVerificationCoverage(in.Obligations, in.Evidence); len(missing) != 0 {
 			return nil, false, "a declared command has no current trusted evidence"
 		}
-		// Modern, non-legacy record only.
-		if in.Envelope != nil {
-			if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
-				return nil, false, "the service record is not usable"
-			}
-			// An adapter that cannot measure this artifact class cannot
-			// support a claim ABOUT evidence. The selection basis makes no such
-			// claim, which is why this check belongs to the strict basis alone:
-			// "nobody could measure it" is unavailable evidence, not failed
-			// evidence, and refusing on it would be treating the absence of an
-			// oracle as a fault of the candidate.
-			if !in.Envelope.Evaluation.Supported {
-				return nil, false, "the adapter does not support this artifact"
-			}
+		if usable, why := serviceRecordUsable(in); !usable {
+			return nil, false, why
 		}
 	}
 	// A DECLARED requirement is binding under every basis. If the client named
@@ -321,27 +275,11 @@ func grantFor(ctx *AgentContext, in authorizationInput,
 			return nil, false, "a declared command has no current trusted evidence"
 		}
 	}
+	if matches, why := grantIdentityMatches(ctx, in, target); !matches {
+		return nil, false, why
+	}
 
 	id := in.Identity
-	for _, f := range []struct{ name, value string }{
-		{"request_id", id.RequestID},
-		{"invocation_id", id.InvocationID},
-		{"candidate_instance_id", id.CandidateInstanceID},
-		{"candidate_hash", id.CandidateHash},
-		{"workspace_state_hash", id.WorkspaceStateHash},
-		{"target", target},
-	} {
-		if strings.TrimSpace(f.value) == "" {
-			return nil, false, f.name + " is missing"
-		}
-	}
-	if id.CandidateHash != in.CandidateHash {
-		return nil, false, "the identity and the candidate disagree"
-	}
-	if requestIDOf(ctx) != id.RequestID {
-		return nil, false, "the identity is not this request's"
-	}
-
 	g := &authorizationGrant{
 		ID:                  grantKey(id.RequestID, id.InvocationID, id.CandidateInstanceID, target),
 		RequestID:           id.RequestID,
@@ -364,6 +302,99 @@ func grantFor(ctx *AgentContext, in authorizationInput,
 		MutationScopeID:     in.Scope.identity(),
 	}
 	return g, true, ""
+}
+
+// groundGrantTarget resolves the target to its canonical path and names what
+// grounds it there: an output the client declared or, for the automatic basis
+// only, the structured mutation target of the tool call. It returns the
+// target and its grounding, or false and the refusal.
+func groundGrantTarget(ctx *AgentContext, in authorizationInput,
+	basis grantBasis) (target, grounding string, grounded bool, why string) {
+	// The target has to be GROUNDED: something structured, from the client or
+	// from the model's own tool call, has to have named exactly this path. A
+	// grant over a path nothing named is the one thing no amount of evidence
+	// can fix.
+	//
+	// Strict grounds it one way: the client declared the path as an expected
+	// output. automatic_v3 may also ground it in the structured mutation
+	// target -- the canonical path in the parsed arguments of the tool call
+	// this candidate belongs to -- because the ordinary interactive request
+	// declares no outputs and the substitution is for that one attempted
+	// mutation only. Neither grounding is ever read from prose.
+	//
+	// Canonical before the check: obligations hold canonical paths, and an
+	// alias spelling of a declared target is still that target. Resolving
+	// afterwards would let `./solve.py` be refused and `solve.py` accepted.
+	if ctx.TaskContract == nil {
+		return "", "", false, "output knowledge was not declared"
+	}
+	target = resolveAgentPath(ctx, in.TargetPath)
+	switch {
+	case in.OutputKnowledgeDeclared && targetIsAuthorized(in.Obligations, target):
+		grounding = targetGroundingDeclaredOutput
+	case in.OutputKnowledgeDeclared:
+		// The client named outputs and this is not one of them. No tool call
+		// widens a declared set, under any basis.
+		return "", "", false, "the target is not declared"
+	case basis == grantBasisAutomaticV3:
+		// No declared outputs: only the model's own structured call can
+		// ground the target, and only for the automatic basis.
+		grounded, why = structuredMutationTargetGrounds(ctx, in.Scope, target)
+		if !grounded {
+			return "", "", false, why
+		}
+		grounding = targetGroundingStructuredMutationTarget
+	default:
+		return "", "", false, "output knowledge was not declared"
+	}
+	return target, grounding, true, ""
+}
+
+// serviceRecordUsable checks the service's own record, when there is one: it
+// must be usable, and its adapter must support this artifact.
+func serviceRecordUsable(in authorizationInput) (bool, string) {
+	// Modern, non-legacy record only.
+	if in.Envelope != nil {
+		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+			return false, "the service record is not usable"
+		}
+		// An adapter that cannot measure this artifact class cannot
+		// support a claim ABOUT evidence. The selection basis makes no such
+		// claim, which is why this check belongs to the strict basis alone:
+		// "nobody could measure it" is unavailable evidence, not failed
+		// evidence, and refusing on it would be treating the absence of an
+		// oracle as a fault of the candidate.
+		if !in.Envelope.Evaluation.Supported {
+			return false, "the adapter does not support this artifact"
+		}
+	}
+	return true, ""
+}
+
+// grantIdentityMatches checks the identity the grant will bind: no field is
+// empty, its candidate hash is the candidate's, and it belongs to this
+// request.
+func grantIdentityMatches(ctx *AgentContext, in authorizationInput, target string) (bool, string) {
+	id := in.Identity
+	for _, f := range []struct{ name, value string }{
+		{"request_id", id.RequestID},
+		{"invocation_id", id.InvocationID},
+		{"candidate_instance_id", id.CandidateInstanceID},
+		{"candidate_hash", id.CandidateHash},
+		{"workspace_state_hash", id.WorkspaceStateHash},
+		{"target", target},
+	} {
+		if strings.TrimSpace(f.value) == "" {
+			return false, f.name + " is missing"
+		}
+	}
+	if id.CandidateHash != in.CandidateHash {
+		return false, "the identity and the candidate disagree"
+	}
+	if requestIDOf(ctx) != id.RequestID {
+		return false, "the identity is not this request's"
+	}
+	return true, ""
 }
 
 // grantClaim is what a consumer must present. It is built from the LIVE state

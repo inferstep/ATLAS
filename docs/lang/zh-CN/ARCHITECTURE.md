@@ -1,9 +1,9 @@
-<!-- source: docs/ARCHITECTURE.md synced-through: a5021a0 -->
+<!-- source: docs/ARCHITECTURE.md synced-through: fb1a649f8ad3d23c19524227bf89ff811f985f03 -->
 > **[English](../../ARCHITECTURE.md)** | **简体中文** | **[日本語](../ja/ARCHITECTURE.md)** | **[한국어](../ko/ARCHITECTURE.md)**
 
 # ATLAS 架构
 
-ATLAS V3.1.6 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
+ATLAS V3.1.7 的系统架构。采用双层设计：外层 agent 循环负责工具调用的编排，内层 V3 pipeline 则生成多样化的代码候选，并配合构建验证与基于能量的选择。
 
 ---
 
@@ -53,7 +53,7 @@ llama-server 是唯一使用 GPU 的服务；其余每个 ATLAS 服务都跑在 
 | **Vulkan**（跨厂商回退） | 预览 (Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `docker-compose.vulkan.yml` | lavapipe CPU 启动路径（已冒烟测试）；尚无真实 GPU 验证 |
 | **SYCL** (Intel Arc) | 路线图 (Roadmap) —— Intel Arc 目前使用 `vulkan` | 待定 | 待定 | — |
 
-**后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/cli/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
+**后端选择发生在安装时，而非运行时。** `atlas init` 运行 `tier.detect_gpu()`（见 `atlas/commands/tier.py`），在所有检测到的厂商中挑选显存最大的 GPU（可用 `ATLAS_GPU_VENDOR` / `ATLAS_GPU_INDEX` 覆盖），并把 `ATLAS_BACKEND={cuda|rocm|metal|vulkan}` 写入 `.env`。当主机存在打包好的原生后端时，检测会解析到它：NVIDIA 用 CUDA，x86_64 上的 AMD 用 ROCm，macOS 用混合 Metal 路径。当主机没有打包好的原生后端时（Intel Arc、arm64 上的 AMD、无法识别的厂商），向导会提供 Vulkan 通用回退（默认选是）：一个镜像覆盖 AMD、Intel、Adreno、MoltenVK 和 lavapipe CPU 光栅化器，性能比调优过的原生后端低大约 20–40%。只有当完全不存在可用的后端时，它才会拒绝 —— 而不是写出一个无法启动的 `.env`。每个后端都有自己预构建的镜像；用户不会运行一个打包了所有后端库的臃肿镜像。
 
 **自带模型的表面（V3.1.1）。** `atlas lens check` 是针对运行中的 llama-server 的一次廉价预检，用于报告当前加载的模型是否与 Lens 兼容。`atlas lens build --samples <path>` 封装了 `geometric-lens/geometric_lens/training.py`，按模型原生的嵌入维度训练全新的 C(x)（`cost_field.pt`）**和** G(x)（XGBoost）工件。二者结合让用户无需 fork lens 代码即可换入非默认的 GGUF —— C(x) 构造函数接受任意 `input_dim`，因此逐模型变化的只有训练出来的权重。面向用户的流程见 [CLI.md § atlas lens](../../CLI.md#atlas-lens)；`atlas lens publish`（或合并的 `atlas publish`）会把工件上传到 HuggingFace，并开出固定其哈希的注册表 PR。
 
@@ -93,12 +93,13 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
 | `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、卡死循环断路器 |
 | `tools.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
-| `gates.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
+| `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
 | `permissions.go` | 权限闸门（`/v1/permission`）、信任模式、硬阻断模式 |
 | `lens.go` | lens 打分调用、校准状态 |
-| `guardrails.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
+| `guardrails*.go` | 按工具的引导防护（收缩、缺失命令/模块的引导、doctype 剥离） |
+| `shell_wrapper.go` | `validateShellCommand` 背后的命令策略：拆分复合命令，最多深入 16 层检查执行包装器（`sh -c`、`eval` 等），拒绝灾难性命令和无法检查的包装器 |
 | `events.go` | 类型化信封 broker（`/events`）与 SSE 管道 |
 | `v3_bridge.go` | 面向 v3-service `/v3/generate` + `/v3/plan` 的 SSE 客户端 |
 | `types.go` | 共享类型、层级、轮次上限 |
@@ -376,7 +377,7 @@ tier 上限为 0（无上限）；由循环内部的检测器栈决定何时中�
 
 `comparison` 仍描述契约与旧有机制的对比；`influences_live_decision` 仍描述观察者及其 sink 能否影响策略，且保持为 false。一次 schema 变更意味着一个新版本 —— 封闭字段集加一个为它编写的读取器 —— 从不是对既有版本的重定义，也从不是一个对未知字段耸肩放行的解析器。
 
-客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；e2e 与可靠性 harness 发送 `work`。VS Code 扩展尚不发送契约，因此其请求不获得 V3 候选（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
+客户端：TUI 对普通消息发送 `work`，对一次性 `/ask <message>` 发送 `question`；VS Code 扩展与 JetBrains 插件发送用户选择的 Work/Question 模式，默认为 `work`；e2e 与可靠性 harness 发送 `work`。每个自有客户端都会声明，因此没有契约的请求来自外部调用者，不获得 V3 候选（[CANDIDATE_POLICY.md](../../CANDIDATE_POLICY.md)）。`expected_outputs` 与 `verification` 会被携带与校验，但**尚未迁移** —— 交付物与验证义务仍按旧方式推导。
 
 ### Plan 模式（按轮次预检）
 
@@ -386,7 +387,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 
 ### 安全限制
 
-面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails.go` 和 `proxy/agent.go`。
+面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/agent.go`。
 
 | 限制 | 取值 | 用途 |
 |-------|-------|---------|
@@ -395,7 +396,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 | V3 交互式墙钟上限 | 单次 V3 pipeline 调用被限制在 `ATLAS_V3_TIMEOUT`（默认 180s）；超时时代理回退到模型自身的语法门控内容（`0` 禁用） | 在长时间修复停滞下保持交互式会话的响应 |
 | 逐轮推理预算 | 在约 6144 个推理 token 后切断流（`ATLAS_REASONING_BUDGET`，0 禁用）；恢复时从推理中提取一个内嵌的 tool_call 或重新提示 | 限定推理螺旋 |
 | 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `structural_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`structural_edit`） |
-| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
+| 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
 | structural_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
 | 错误循环熔断器 | 连续 3 次失败 | 停止失控的失败循环 |
 | 探索预算 | 连续 4 次只读调用时提示（nudge）；5 次以上时升级提示。读取始终会执行 —— 提示是把*下一*轮引向写入 | 推动模型去写，而不是无限探索 |
@@ -590,10 +591,6 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 
 > **注意：** 模型权重（.pt、.pkl 文件）未提交到仓库 —— 它们在训练期间构建，并烘焙进容器镜像或在运行时挂载。当模型文件缺失时，服务会优雅降级：C(x) 返回中性能量，G(x) 返回 `gx_score: 0.5` 和 `verdict: "unavailable"`。训练数据与权重可在 [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS) 获取。
 
-<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
-
-> **已移除的子系统。** 早期版本在 lens 内部附带了 RAG/PageIndex 项目索引器、BM25 模式匹配器，以及基于 Thompson 采样的置信度路由器。它们只能通过产品中无人调用的 lens 端点触达，已在 2026-08 的简化行动中移除（见 CHANGELOG）。那套栈中最后残留的模式缓存也已于 2026-09 移除：它保存了每个成功会话（包括评测运行）的解答，并作为“经验”注入之后的每次运行，因而成了从测试集通向产品的通道。
-
 ---
 
 ## 6. Sandbox
@@ -604,7 +601,7 @@ C(x) 的归一化是 `sigmoid(steepness × (energy - midpoint))`。所选模型�
 graph LR
     subgraph executors["Language Executors"]
         Py["Python\npylint (0-10) + pytest"]
-        JS["JavaScript\nNode.js 20"]
+        JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
         Java["Java 21\njavac + java -cp"]

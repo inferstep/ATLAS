@@ -5,6 +5,7 @@ test, the model and the sandbox are fakes, and docker is never called.
 """
 import json
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,10 +18,10 @@ import atlas_arm
 import baseline_arm as B
 import driver
 import grading as G
-import provenance as P
 import report as R
 import suite as S
 from result import ArmResult
+from run_context import run_context, sandbox_network
 
 
 # --- a toy suite -----------------------------------------------------------------
@@ -47,19 +48,19 @@ def make_suite(root: Path, runtime="python3.13", extra=None) -> Path:
     return root
 
 
+def fake_docker(argv, **kw):
+    """Grades like the toy grader would: pass when the copy's answer.txt says 42.
+    It also writes into the copy, which must never reach the original."""
+    copy = Path(next(a.split(":")[0] for a in argv if a.endswith(":/w")))
+    ok = (copy / "answer.txt").is_file() and "42" in (copy / "answer.txt").read_text()
+    (copy / "grader-was-here").write_text("x")
+    return subprocess.CompletedProcess(argv, 0 if ok else 1, "found 42" if ok else "no 42", "")
+
+
 def test_a_frozen_suite_loads(tmp_path):
     tasks = S.load_suite(make_suite(tmp_path))
     assert [t.id for t in tasks] == ["t01"]
     assert tasks[0].prompt.startswith("Write answer.txt")
-
-
-def test_a_relative_suite_path_reaches_the_grader_as_an_absolute_one(tmp_path, monkeypatch):
-    make_suite(tmp_path / "s")
-    monkeypatch.chdir(tmp_path)
-    task = S.load_suite(Path("s"))[0]
-    argv = G.grader_argv(task, tmp_path / "w", "img")
-    mounts = [a.split(":")[0] for a in argv if a.endswith((":/grade:ro", ":/grader:ro"))]
-    assert mounts and all(Path(m).is_absolute() for m in mounts)
 
 
 def test_the_check_gives_the_same_result_for_a_relative_and_an_absolute_path(tmp_path, monkeypatch):
@@ -67,23 +68,30 @@ def test_the_check_gives_the_same_result_for_a_relative_and_an_absolute_path(tmp
     monkeypatch.chdir(tmp_path)
     seen = []
 
-    def fake_docker(argv, **kw):
+    def recording_docker(argv, **kw):
         seen.append(next(a for a in argv if a.endswith(":/grade:ro")))
-        return FakeDocker()(argv, **kw)
+        return fake_docker(argv, **kw)
 
     monkeypatch.setattr(driver, "resolve_image", lambda image: "sha256:img")
     monkeypatch.setattr(driver, "check_controls",
-                        lambda task, image: G.check_controls(task, image, run=fake_docker))
+                        lambda task, image: G.check_controls(task, image, run=recording_docker))
+    # Exit 0: the controls of the toy task separate, from either path.
     assert driver.main(["check", "s", "--image", "img"]) == 0
     assert driver.main(["check", str(suite), "--image", "img"]) == 0
-    assert len(seen) == 4 and len(set(seen)) == 1
+    # The grader is mounted by the same absolute path both times: docker
+    # reads a relative host path as a volume name.
+    assert len(seen) == 4
+    assert len(set(seen)) == 1
     assert Path(seen[0].split(":")[0]).is_absolute()
 
 
 @pytest.mark.parametrize("tamper, want", [
-    (lambda t: (t / "prompt.md").write_text("changed\n"), "changed since the freeze: prompt.md"),
-    (lambda t: (t / "seed" / "extra.py").write_text("x\n"), "added after the freeze: seed/extra.py"),
-    (lambda t: (t / "controls" / "fail" / "answer.txt").unlink(), "missing: controls/fail/answer.txt"),
+    pytest.param(lambda t: (t / "prompt.md").write_text("changed\n"),
+                 "changed since the freeze: prompt.md", id="a-changed-file"),
+    pytest.param(lambda t: (t / "seed" / "extra.py").write_text("x\n"),
+                 "added after the freeze: seed/extra.py", id="an-added-file"),
+    pytest.param(lambda t: (t / "controls" / "fail" / "answer.txt").unlink(),
+                 "missing: controls/fail/answer.txt", id="a-missing-file"),
 ])
 def test_a_suite_that_changed_after_the_freeze_is_refused(tmp_path, tamper, want):
     root = make_suite(tmp_path)
@@ -93,14 +101,19 @@ def test_a_suite_that_changed_after_the_freeze_is_refused(tmp_path, tamper, want
 
 
 def test_a_runtime_the_sandbox_lacks_is_refused(tmp_path):
+    suite = make_suite(tmp_path, runtime="cobol")
     with pytest.raises(S.SuiteError, match="runtime 'cobol'"):
-        S.load_suite(make_suite(tmp_path, runtime="cobol"))
+        S.load_suite(suite)
 
 
 # --- grading ---------------------------------------------------------------------
 
-@pytest.mark.parametrize("code, outcome", [(0, G.PASS), (1, G.FAIL), (2, G.GRADER_ERROR),
-                                           (124, G.GRADER_ERROR)])
+@pytest.mark.parametrize("code, outcome", [
+    pytest.param(0, G.PASS, id="exit-0-passes"),
+    pytest.param(1, G.FAIL, id="exit-1-fails"),
+    pytest.param(2, G.GRADER_ERROR, id="exit-2-is-a-grader-error"),
+    pytest.param(124, G.GRADER_ERROR, id="exit-124-timeout-is-a-grader-error"),
+])
 def test_only_exit_0_and_1_grade_the_work(code, outcome):
     assert G.outcome_of(code, "reason\n", "", 60).outcome == outcome
 
@@ -108,25 +121,10 @@ def test_only_exit_0_and_1_grade_the_work(code, outcome):
 def test_the_grader_runs_sealed(tmp_path):
     task = S.load_suite(make_suite(tmp_path))[0]
     argv = G.grader_argv(task, tmp_path / "copy", "sandbox:x")
-    assert argv[:4] == ["docker", "run", "--rm", "--network"] and argv[4] == "none"
+    assert argv[:4] == ["docker", "run", "--rm", "--network"]
+    assert argv[4] == "none"
     assert f"{task.grader}:/grade:ro" in argv
     assert argv[-4:] == ["sandbox:x", "60", "/grade", "/w"]
-
-
-class FakeDocker:
-    """Grades like the toy grader would: pass when the copy's answer.txt says 42.
-    It also writes into the copy, which must never reach the original."""
-
-    def __call__(self, argv, **kw):
-        copy = Path(next(a.split(":")[0] for a in argv if a.endswith(":/w")))
-        ok = (copy / "answer.txt").is_file() and "42" in (copy / "answer.txt").read_text()
-        (copy / "grader-was-here").write_text("x")
-
-        class P:
-            returncode = 0 if ok else 1
-            stdout = "found 42" if ok else "no 42"
-            stderr = ""
-        return P()
 
 
 def test_grading_uses_a_copy_and_leaves_the_workspace_alone(tmp_path):
@@ -134,7 +132,7 @@ def test_grading_uses_a_copy_and_leaves_the_workspace_alone(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "answer.txt").write_text("42\n")
-    assert G.grade(task, ws, "img", run=FakeDocker()).outcome == G.PASS
+    assert G.grade(task, ws, "img", run=fake_docker).outcome == G.PASS
     assert not (ws / "grader-was-here").exists()
 
 
@@ -149,7 +147,7 @@ def test_a_dangling_link_is_graded_as_a_link(tmp_path):
     def docker(argv, **kw):
         copy = Path(next(a.split(":")[0] for a in argv if a.endswith(":/w")))
         seen["link"] = (copy / "gone").is_symlink()
-        return FakeDocker()(argv, **kw)
+        return fake_docker(argv, **kw)
     assert G.grade(task, ws, "img", run=docker).outcome == G.PASS
     assert seen["link"]
 
@@ -160,36 +158,33 @@ def test_a_workspace_that_cannot_be_copied_is_a_grader_error(tmp_path, monkeypat
     def fails(*a, **k):
         raise G.shutil.Error([("src", "dst", "unreadable")])
     monkeypatch.setattr(G.shutil, "copytree", fails)
-    got = G.grade(task, tmp_path, "img", run=FakeDocker())
-    assert got.outcome == G.GRADER_ERROR and "could not be copied" in got.reason
-
-
-def test_controls_that_separate_pass_the_check(tmp_path):
-    task = S.load_suite(make_suite(tmp_path))[0]
-    assert G.check_controls(task, "img", run=FakeDocker()) == []
+    got = G.grade(task, tmp_path, "img", run=fake_docker)
+    assert got.outcome == G.GRADER_ERROR
+    assert "could not be copied" in got.reason
 
 
 def test_controls_that_do_not_separate_are_named(tmp_path):
     root = make_suite(tmp_path, extra={"controls/fail/answer.txt": "42\n"})
     task = S.load_suite(root)[0]
-    assert G.check_controls(task, "img", run=FakeDocker()) == [
+    assert G.check_controls(task, "img", run=fake_docker) == [
         "t01: controls/fail graded pass (found 42)"]
 
 
 # --- the ATLAS arm ---------------------------------------------------------------
 
-def test_the_atlas_arm_reports_the_sessions_own_terminal():
-    events = [{"type": "turn_start"}, {"type": "llm_call_end", "data": {"total_tokens": 900}},
-              {"type": "turn_start"}, {"type": "done", "data": {"status": "stopped",
-                                                               "reason": "repeat_detector"}}]
+@pytest.mark.parametrize("events, status, reason, turns, tokens", [
+    pytest.param([{"type": "turn_start"}, {"type": "llm_call_end", "data": {"total_tokens": 900}},
+                  {"type": "turn_start"},
+                  {"type": "done", "data": {"status": "stopped", "reason": "repeat_detector"}}],
+                 "stopped", "repeat_detector", 2, 900, id="the-sessions-own-done"),
+    pytest.param([{"type": "done", "data": {}}],
+                 "incomplete", "", 0, 0, id="a-done-without-status-is-incomplete"),
+    pytest.param([{"type": "error", "data": {"error": "stream failed: reset"}}],
+                 "no_terminal", "stream failed: reset", 0, 0, id="no-done-is-its-own-outcome"),
+])
+def test_the_atlas_arm_reports_how_the_session_ended(events, status, reason, turns, tokens):
     r = atlas_arm.result_of(events, 12.3)
-    assert (r.status, r.reason, r.turns, r.tokens) == ("stopped", "repeat_detector", 2, 900)
-
-
-def test_a_done_without_status_is_incomplete_and_no_done_is_its_own_outcome():
-    assert atlas_arm.result_of([{"type": "done", "data": {}}], 1).status == "incomplete"
-    r = atlas_arm.result_of([{"type": "error", "data": {"error": "stream failed: reset"}}], 1)
-    assert (r.status, r.reason) == ("no_terminal", "stream failed: reset")
+    assert (r.status, r.reason, r.turns, r.tokens) == (status, reason, turns, tokens)
 
 
 def test_the_atlas_arm_sends_what_the_tui_sends(tmp_path):
@@ -246,7 +241,7 @@ class FakeServers:
         return {"choices": [{"message": {"content": reply}}], "usage": {"total_tokens": 100}}
 
 
-def _run(tmp_path, replies, budget=600):
+def _run_baseline(tmp_path, replies, budget=600):
     task = S.load_suite(make_suite(tmp_path / "s"))[0]
     ws_dir = tmp_path / "ws"
     ws_dir.mkdir()
@@ -257,7 +252,7 @@ def _run(tmp_path, replies, budget=600):
 
 
 def test_the_baseline_writes_runs_and_finishes(tmp_path):
-    r, fake, ws = _run(tmp_path, [
+    r, fake, ws = _run_baseline(tmp_path, [
         '{"tool": "write_file", "path": "answer.txt", "content": "42\\n"}',
         '{"tool": "run_command", "command": "cat answer.txt"}',
         '{"tool": "done", "summary": "wrote it"}'])
@@ -267,31 +262,33 @@ def test_the_baseline_writes_runs_and_finishes(tmp_path):
 
 
 def test_the_baseline_samples_as_atlas_does_with_no_grammar(tmp_path):
-    _, fake, _ = _run(tmp_path, ['{"tool": "done", "summary": "."}'])
+    _, fake, _ = _run_baseline(tmp_path, ['{"tool": "done", "summary": "."}'])
     body = fake.bodies[0]
-    assert body["samplers"] == ["top_k"] and body["top_k"] == 1
+    assert body["samplers"] == ["top_k"]
+    assert body["top_k"] == 1
     assert body["max_tokens"] == 8192
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
-    assert "grammar" not in body and "response_format" not in body
+    assert "grammar" not in body
+    assert "response_format" not in body
     assert body["messages"][0]["content"] == B.SYSTEM_PROMPT
 
 
 def test_a_reply_without_a_tool_object_is_answered_and_costs_a_turn(tmp_path):
-    r, fake, _ = _run(tmp_path, ["I will now think about it.", '{"tool": "done", "summary": "."}'])
+    r, fake, _ = _run_baseline(tmp_path, ["I will now think about it.", '{"tool": "done", "summary": "."}'])
     assert r.turns == 2
     assert fake.bodies[1]["messages"][-1]["content"] == B.NO_JSON_REPLY
 
 
 def test_the_budget_ends_the_run(tmp_path):
-    r, _, _ = _run(tmp_path, [socket.timeout("slow")])
+    r, _, _ = _run_baseline(tmp_path, [socket.timeout("slow")])
     assert (r.status, r.turns) == ("timed_out", 0)
-    r, _, _ = _run(tmp_path / "b", ['{"tool": "done", "summary": "."}'], budget=0)
+    r, _, _ = _run_baseline(tmp_path / "b", ['{"tool": "done", "summary": "."}'], budget=0)
     assert r.status == "timed_out"
 
 
 def test_a_command_timeout_is_capped_as_atlas_caps_it(tmp_path):
-    _, fake, _ = _run(tmp_path, ['{"tool": "run_command", "command": "sleep 1", "timeout": 900}',
-                                 '{"tool": "done", "summary": "."}'])
+    _, fake, _ = _run_baseline(tmp_path, ['{"tool": "run_command", "command": "sleep 1", "timeout": 900}',
+                                          '{"tool": "done", "summary": "."}'])
     assert fake.commands[0]["timeout"] == 300
 
 
@@ -301,7 +298,8 @@ def test_the_oldest_results_give_way_when_the_context_is_full():
             {"role": "assistant", "content": "a2"}, {"role": "user", "content": "recent"}]
     fitted = B.fit_context(msgs, 8192 + 20000)
     assert fitted[3]["content"] == "[result omitted: 90000 characters]"
-    assert fitted[:2] == msgs[:2] and fitted[5]["content"] == "recent"
+    assert fitted[:2] == msgs[:2]
+    assert fitted[5]["content"] == "recent"
 
 
 # --- the report ------------------------------------------------------------------
@@ -322,7 +320,8 @@ def test_the_summary_counts_false_completions_and_keeps_no_task_text():
     assert (s["graded"], s["passed"], s["grader_errors"]) == (3, 2, 1)
     assert (s["completed"], s["false_completed"], s["passed_not_completed"]) == (2, 1, 1)
     assert s["tasks_whose_repeats_disagree"] == 1
-    assert "t1" not in json.dumps(s) and "t2" not in json.dumps(s)
+    assert "t1" not in json.dumps(s)
+    assert "t2" not in json.dumps(s)
 
 
 def test_the_report_gives_pass_rates_by_kind():
@@ -340,7 +339,8 @@ def test_the_arms_are_compared_with_an_interval():
     a = [_rec(f"t{i}", 1, "completed", G.PASS if i < 8 else G.FAIL) for i in range(10)]
     b = [_rec(f"t{i}", 1, "completed", G.PASS if i < 4 else G.FAIL) for i in range(10)]
     d = R.compare(a, b)["pass_rate_difference"]
-    assert d["estimate"] == 0.4 and d["ci95"][0] < 0.4 < d["ci95"][1]
+    assert d["estimate"] == 0.4
+    assert d["ci95"][0] < 0.4 < d["ci95"][1]
 
 
 # --- the driver ------------------------------------------------------------------
@@ -349,7 +349,8 @@ def test_the_reliability_runner_loads():
     """stack_identity reaches the #241 checks through this loader; the other
     driver tests replace stack_identity, so none of them load the module."""
     rel = driver._reliability_runner()
-    assert callable(rel.deployed_identity) and callable(rel.stack_identity)
+    assert callable(rel.deployed_identity)
+    assert callable(rel.stack_identity)
 
 
 def test_the_development_stack_is_never_measured(tmp_path):
@@ -357,7 +358,8 @@ def test_the_development_stack_is_never_measured(tmp_path):
                               "--image", "i", "--compose-project", "atlas",
                               "--workspace-root", str(tmp_path), "--commit", "b0e6013"])
     _, problems = driver.stack_identity(args)
-    assert problems and "development stack" in problems[0]
+    assert problems
+    assert "development stack" in problems[0]
 
 
 class FakeHost:
@@ -377,10 +379,7 @@ class FakeHost:
                "docker inspect": "atlaseval_sandbox-net",
                "docker network inspect": self.internal}
         text = next((v for k, v in out.items() if k in joined), "")
-
-        class R:
-            returncode, stdout, stderr = 0, text + "\n", ""
-        return R()
+        return subprocess.CompletedProcess(argv, 0, text + "\n", "")
 
     def get(self, url, timeout):
         if url.endswith("/version"):
@@ -389,12 +388,12 @@ class FakeHost:
                 "model_path": "/models/gemma.gguf", "build_info": "b6000"}
 
 
-def _run_with(monkeypatch, tmp_path, host, arm="baseline", extra=()):
+def _run_driver(monkeypatch, tmp_path, host, arm="baseline"):
     suite = make_suite(tmp_path / "s")
     out = tmp_path / "records.jsonl"
     monkeypatch.setattr(driver, "stack_identity", lambda args: ({"commit": "b0e6013"}, []))
     monkeypatch.setattr(driver, "run_context",
-                        lambda args, root: P.run_context(args, root, run=host.run, get=host.get))
+                        lambda args, root: run_context(args, root, run=host.run, get=host.get))
     monkeypatch.setattr(driver, "run_baseline",
                         lambda *a, **k: ArmResult("completed", "done", 9.0, 3, 500))
     monkeypatch.setattr(driver, "run_atlas",
@@ -403,7 +402,7 @@ def _run_with(monkeypatch, tmp_path, host, arm="baseline", extra=()):
                         lambda task, ws, image: G.Grade(G.PASS, "ok", f"ok\ngraded with {image}\n"))
     code = driver.main(["run", str(suite), "--arm", arm, "--out", str(out), "--image", "sandbox:eval",
                         "--compose-project", "atlaseval", "--workspace-root", str(tmp_path / "w"),
-                        "--repeats", "2", "--commit", "b0e6013", *extra])
+                        "--repeats", "2", "--commit", "b0e6013"])
     recs = [json.loads(line) for line in out.read_text().splitlines()] if out.exists() else []
     return code, recs, suite
 
@@ -411,52 +410,58 @@ def _run_with(monkeypatch, tmp_path, host, arm="baseline", extra=()):
 def test_a_record_ties_its_result_to_suite_image_session_and_model(tmp_path, monkeypatch):
     """#275: every field that ties a result to the frozen suite, the grader
     image, the session, the driver and the model."""
-    code, recs, suite = _run_with(monkeypatch, tmp_path, FakeHost())
-    assert code == 0 and len(recs) == 2
+    code, recs, suite = _run_driver(monkeypatch, tmp_path, FakeHost())
+    assert code == 0
+    assert len(recs) == 2
     r = recs[0]
     assert r["suite_sha256"] == S.sha256_file(suite / "suite.json")
     assert (r["kind"], r["lang"], r["task_network"]) == ("cli", "python", False)
     assert r["grader_image"] == {"ref": "sandbox:eval", "id": "sha256:" + "ab" * 32}
     assert "graded with sha256:" in r["grade_output"]     # graded by ID, whole output kept
-    assert r["subdir"].startswith("eval-baseline-") and r["subdir"] != recs[1]["subdir"]
-    assert r["started_utc"].endswith("Z") and "T" in r["started_utc"]
+    assert r["subdir"].startswith("eval-baseline-")
+    assert r["subdir"] != recs[1]["subdir"]
+    assert r["started_utc"].endswith("Z")
+    assert "T" in r["started_utc"]
     assert r["sandbox_network"] == {"egress": True, "networks": {"atlaseval_sandbox-net": False}}
     assert r["driver"] == {"commit": "0123456789abcdef0123456789abcdef01234567", "dirty": False}
     assert r["context_tokens"] == 32768
     assert r["model"] == {"n_ctx": 32768, "model": "gemma",
                           "model_path": "/models/gemma.gguf", "build_info": "b6000"}
-    assert r["session_timeout_s"] == 600 and r["stack"] == {"commit": "b0e6013"}
-    assert (tmp_path / "w").is_dir() and len(list((tmp_path / "w").iterdir())) == 2
+    assert r["session_timeout_s"] == 600
+    assert r["stack"] == {"commit": "b0e6013"}
+    assert (tmp_path / "w").is_dir()
+    assert len(list((tmp_path / "w").iterdir())) == 2
 
 
 def test_a_budget_that_is_not_the_stacks_is_refused(tmp_path, monkeypatch):
-    code, recs, _ = _run_with(monkeypatch, tmp_path, FakeHost(timeout=900))
-    assert code == 2 and recs == []
+    code, recs, _ = _run_driver(monkeypatch, tmp_path, FakeHost(timeout=900))
+    assert code == 2
+    assert recs == []
 
 
 def test_an_older_proxy_that_reports_no_timeout_is_recorded_as_such(tmp_path, monkeypatch):
-    code, recs, _ = _run_with(monkeypatch, tmp_path, FakeHost(timeout=None), arm="atlas")
-    assert code == 0 and recs[0]["session_timeout_s"] is None and "model" not in recs[0]
+    code, recs, _ = _run_driver(monkeypatch, tmp_path, FakeHost(timeout=None), arm="atlas")
+    assert code == 0
+    assert recs[0]["session_timeout_s"] is None
+    assert "model" not in recs[0]
 
 
 def test_an_internal_sandbox_network_has_no_egress():
-    for internal, want in (("true", False), ("false", True)):
-        host = FakeHost(internal=internal)
-        assert P.sandbox_network("atlaseval", run=host.run)["egress"] is want
+    # A sandbox on a network that is not internal has egress: the record test
+    # above checks that case.
+    host = FakeHost(internal="true")
+    assert sandbox_network("atlaseval", run=host.run) == {
+        "egress": False, "networks": {"atlaseval_sandbox-net": True}}
 
-    def none_mode(argv, **kw):
-        class R:
-            returncode, stderr = 0, ""
-            stdout = "cid1\n" if argv[1] == "ps" else "none\n"
-        return R()
-    assert P.sandbox_network("atlaseval", run=none_mode) == {"egress": False, "networks": {"none": True}}
+    def network_mode_none(argv, **kw):
+        return subprocess.CompletedProcess(argv, 0, "cid1\n" if argv[1] == "ps" else "none\n", "")
+    assert sandbox_network("atlaseval", run=network_mode_none) == {
+        "egress": False, "networks": {"none": True}}
 
 
 def test_a_grader_image_docker_does_not_know_is_refused_before_any_check(tmp_path, monkeypatch):
     def unknown(argv, **kw):
-        class R:
-            returncode, stdout, stderr = 1, "", "No such image"
-        return R()
+        return subprocess.CompletedProcess(argv, 1, "", "No such image")
     assert G.resolve_image("sandbox:gone", run=unknown) == ""
     graded = []
     monkeypatch.setattr(driver, "resolve_image", lambda image: "")
@@ -468,7 +473,8 @@ def test_a_grader_image_docker_does_not_know_is_refused_before_any_check(tmp_pat
 def test_the_grader_output_is_kept_whole_up_to_the_cap():
     assert G.full_output("a\nb\n", "warn\n") == "a\nb\n\n[stderr]\nwarn\n"
     big = G.full_output("x" * (G.OUTPUT_CAP + 5), "")
-    assert big.startswith("x" * 10) and big.endswith(f"[cut: the grader wrote {G.OUTPUT_CAP + 5} characters]")
+    assert big.startswith("x" * 10)
+    assert big.endswith(f"[cut: the grader wrote {G.OUTPUT_CAP + 5} characters]")
 
 
 def test_an_unknown_task_id_is_refused(tmp_path):

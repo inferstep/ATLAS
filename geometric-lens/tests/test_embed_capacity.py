@@ -147,15 +147,15 @@ def _assert_scored(result, n_tokens):
     assert result["n_tokens"] == n_tokens
 
 
-def _assert_capacity_failure(result, input_tokens, capacity=CAPACITY):
+def _assert_capacity_failure(result, input_tokens):
     assert result["enabled"] is True
     assert result["scored"] is False
     failure = result["failure"]
     assert failure["kind"] == "embed_capacity"
     assert failure["input_tokens"] == input_tokens
-    assert failure["capacity_tokens"] == capacity
+    assert failure["capacity_tokens"] == CAPACITY
     # No number that could be read as a verdict.
-    assert result["per_step"] == [] if "per_step" in result else True
+    assert result.get("per_step", []) == []
     assert result.get("aggregate", {}) == {}
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert result.get(key) is None, key
@@ -165,33 +165,27 @@ def _assert_capacity_failure(result, input_tokens, capacity=CAPACITY):
 
 # --- the boundary, per-step path ----------------------------------------------------
 
-def test_below_the_boundary_scores_every_token():
-    out = service.evaluate_per_step(text_of(CAPACITY - 1))
-    _assert_scored(out, CAPACITY - 1)
-    assert len(out["per_step"]) == CAPACITY - 1
+@pytest.mark.parametrize("n_tokens", [
+    pytest.param(CAPACITY - 1, id="one-below-the-capacity"),
+    # llama-server rejects `tokens > n_ubatch`; equality is processed.
+    pytest.param(CAPACITY, id="exactly-the-capacity"),
+])
+def test_per_step_scores_every_token_up_to_the_capacity(n_tokens):
+    out = service.evaluate_per_step(text_of(n_tokens))
+    _assert_scored(out, n_tokens)
+    assert len(out["per_step"]) == n_tokens
     assert math.isfinite(out["aggregate"]["cx_energy_mean"])
 
 
-def test_exactly_the_boundary_is_accepted():
-    """llama-server rejects `tokens > n_ubatch`; equality is processed."""
-    out = service.evaluate_per_step(text_of(CAPACITY))
-    _assert_scored(out, CAPACITY)
-
-
-def test_one_past_the_boundary_is_a_typed_transport_failure():
-    out = service.evaluate_per_step(text_of(CAPACITY + 1))
-    _assert_capacity_failure(out, CAPACITY + 1)
-
-
-def test_the_r4_shape_2055_tokens_against_2048():
-    out = service.evaluate_per_step(text_of(2055))
-    _assert_capacity_failure(out, 2055, 2048)
+@pytest.mark.parametrize("n_tokens", [
+    pytest.param(CAPACITY + 1, id="one-past-the-capacity"),
+    pytest.param(2055, id="the-r4-shape-2055-tokens"),
+    pytest.param(12288, id="a-much-longer-input-reports-its-real-size"),
+])
+def test_per_step_past_the_capacity_is_a_typed_transport_failure(n_tokens):
+    out = service.evaluate_per_step(text_of(n_tokens))
+    _assert_capacity_failure(out, n_tokens)
     assert out["n_tokens"] == 0          # tokens scored, not tokens sent
-
-
-def test_substantially_longer_input_reports_its_real_size():
-    out = service.evaluate_per_step(text_of(12288))
-    _assert_capacity_failure(out, 12288)
 
 
 def test_unicode_boundary_is_judged_in_tokens_not_characters():
@@ -255,7 +249,8 @@ def test_plain_upstream_500_is_not_a_capacity_finding():
     out = service.evaluate_combined(text_of(20))
     assert out["scored"] is False
     assert out["failure"]["kind"] == "model_server_error"
-    assert out["cx_energy"] is None and out["gx_score"] is None
+    assert out["cx_energy"] is None
+    assert out["gx_score"] is None
 
 
 def test_unreachable_model_server_is_typed(monkeypatch):
@@ -279,11 +274,20 @@ def test_capacity_is_unknown_until_declared_or_observed():
     assert snap["embed_capacity_rejections"] == 0
 
 
-def test_declared_capacity_comes_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", "1024")
+@pytest.mark.parametrize("declared, tokens, source", [
+    pytest.param("1024", 1024, "declared", id="a-positive-integer"),
+    pytest.param("", None, None, id="empty"),
+    pytest.param("0", None, None, id="zero"),
+    pytest.param("-5", None, None, id="negative"),
+    pytest.param("many", None, None, id="a-word"),
+    pytest.param("12.5", None, None, id="a-fraction"),
+])
+def test_only_a_positive_integer_in_the_environment_declares_the_capacity(
+        monkeypatch, declared, tokens, source):
+    monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", declared)
     snap = ec.snapshot()
-    assert snap["embed_capacity_tokens"] == 1024
-    assert snap["embed_capacity_source"] == "declared"
+    assert snap["embed_capacity_tokens"] == tokens
+    assert snap["embed_capacity_source"] == source
 
 
 def test_observed_capacity_overrides_a_declaration(monkeypatch):
@@ -294,12 +298,6 @@ def test_observed_capacity_overrides_a_declaration(monkeypatch):
     assert snap["embed_capacity_source"] == "observed"
     assert snap["embed_capacity_rejections"] == 1
     assert snap["embed_capacity_max_rejected_tokens"] == 2055
-
-
-def test_malformed_declaration_is_ignored(monkeypatch):
-    for bad in ("", "0", "-5", "many", "12.5"):
-        monkeypatch.setenv("LLAMA_EMBED_CAPACITY_TOKENS", bad)
-        assert ec.snapshot()["embed_capacity_tokens"] is None
 
 
 def test_capacity_parser_reads_llama_servers_message():
@@ -383,7 +381,8 @@ def test_endpoint_failures_carry_no_numbers(app_client, monkeypatch):
                            json={"text": "def f(): pass"}).json()
     assert per_step["scored"] is False
     assert per_step["failure"]["kind"] == "internal"
-    assert per_step["aggregate"] == {} and per_step["per_step"] == []
+    assert per_step["aggregate"] == {}
+    assert per_step["per_step"] == []
     assert per_step["n_tokens"] == 0
 
     combined = client.post("/internal/lens/gx-score",
@@ -423,18 +422,25 @@ class _NonFiniteField(_TinyCostField):
 
 def _standard_json(response):
     assert response.status_code == 200
-    assert "NaN" not in response.text and "Infinity" not in response.text
+    assert "NaN" not in response.text
+    assert "Infinity" not in response.text
     return json.loads(response.text)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("value", [
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="inf"),
+    pytest.param(float("-inf"), id="minus-inf"),
+])
 def test_score_text_endpoint_reports_a_nonfinite_energy_unscored(app_client, monkeypatch, value):
     client, _ = app_client
     monkeypatch.setattr(service, "_cost_field", _NonFiniteField(value))
     out = _standard_json(client.post("/internal/lens/score-text",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["calibrated"] is False
-    assert out["energy"] is None and out["normalized"] is None
+    assert out["scored"] is False
+    assert out["calibrated"] is False
+    assert out["energy"] is None
+    assert out["normalized"] is None
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
 
 
@@ -446,7 +452,8 @@ def test_gx_score_endpoint_reports_a_nonfinite_energy_unscored(app_client, monke
                  {"midpoint": 0.5, "steepness": 4.0}, None))
     out = _standard_json(client.post("/internal/lens/gx-score",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["verdict"] == "unscored"
+    assert out["scored"] is False
+    assert out["verdict"] == "unscored"
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert out[key] is None, key
     assert out["failure"] == {"kind": ec.KIND_NONFINITE, "field": "cx_energy",
@@ -461,8 +468,10 @@ def test_per_step_endpoint_reports_a_nonfinite_energy_unscored(app_client, monke
                  {"midpoint": 0.5, "steepness": 4.0}, None))
     out = _standard_json(client.post("/internal/lens/score-per-step",
                                      json={"text": text_of(8)}))
-    assert out["scored"] is False and out["n_tokens"] == 0
-    assert out["per_step"] == [] and out["aggregate"] == {}
+    assert out["scored"] is False
+    assert out["n_tokens"] == 0
+    assert out["per_step"] == []
+    assert out["aggregate"] == {}
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
     assert out["failure"]["field"] == "cx_energy"
 
@@ -478,7 +487,8 @@ def test_drift_withdraws_the_per_step_thresholds(app_client, monkeypatch):
     monkeypatch.setattr(service, "evaluate_per_step", lambda text, layer=None: dict(scored))
     monkeypatch.setitem(main._BOOT_STATE, "fingerprint_ok", True)
     fresh = client.post("/internal/lens/score-per-step", json={"text": "x = 1"}).json()
-    assert fresh["drifted"] is False and fresh["thresholds"] is not None
+    assert fresh["drifted"] is False
+    assert fresh["thresholds"] is not None
     monkeypatch.setitem(main._BOOT_STATE, "fingerprint_ok", False)
     drifted = client.post("/internal/lens/score-per-step", json={"text": "x = 1"}).json()
     assert drifted["drifted"] is True

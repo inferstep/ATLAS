@@ -69,10 +69,9 @@ func guardCalls(t *testing.T, file, fn string) map[string]bool {
 	return out
 }
 
-func TestGuardNoShellOrProsePathParserWasAdded(t *testing.T) {
-	// commandNamesPath is the one place a path is read off a command line, it
-	// predates this work, and nothing in the new decision may call it or
-	// re-implement it.
+func TestGuardTheVerificationDecisionReadsNoShellText(t *testing.T) {
+	// commandNamesPath is the one place a path is read off a command line.
+	// Nothing in the verification decision may call it or re-implement it.
 	for _, fn := range []string{"pathCoverageSatisfied", "commandObligationSatisfied",
 		"commandEvidenceCurrent", "stagedCommandSatisfied", "stagedCoverageSatisfied",
 		"stagedFulfillmentCurrent", "recordStagedCommandFulfillment"} {
@@ -225,10 +224,13 @@ func TestGuardNoModelOwnedFieldCanCreateOrWeakenAnObligation(t *testing.T) {
 	if !names["obligationID"] || !names["ObligationDeclaredCommand"] {
 		t.Error("declared-command identity is no longer derived from the obligation owner")
 	}
-	// And the list of declared commands still comes from the request's own
+	// And the list of declared commands comes from the request's own
 	// obligations, never from anything the service returned.
 	wiring := guardCalls(t, "evidence_wiring.go", "observeCandidateVerification")
-	if wiring["recordStagedCommandFulfillment"] && !wiring["requestObligations"] {
+	if !wiring["recordStagedCommandFulfillment"] {
+		t.Fatal("observeCandidateVerification no longer records staged fulfillment")
+	}
+	if !wiring["requestObligations"] {
 		t.Error("staged fulfillment is recorded outside the request's obligation set")
 	}
 }

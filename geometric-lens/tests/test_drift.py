@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from geometric_lens import drift
 
 
-def _score_fixed(mapping, default=0.0):
+def _score_fixed(mapping):
     """A score_fn that returns a canned energy per reference text."""
-    return lambda text: mapping.get(text, default)
+    return lambda text: mapping.get(text, 0.0)
 
 
 # --- validation ------------------------------------------------------------
@@ -43,30 +43,31 @@ def test_validate_fingerprint_shape_and_bounds():
 def test_absent_fingerprint_is_present_false_ok_true(tmp_path):
     present, ok, detail = drift.check_fingerprint(
         str(tmp_path), _score_fixed({}))
-    assert present is False and ok is True and detail == ""
+    assert present is False
+    assert ok is True
+    assert detail == ""
 
 
 def test_in_tolerance_passes(tmp_path):
-    drift.write_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0))
-    }), tolerance_pct=15)
+    drift.write_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0)))), tolerance_pct=15)
     # Re-score slightly off but within 15%.
-    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (21.0, 29.0, 16.0))
-    }))
-    assert present is True and ok is True, detail
+    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (21.0, 29.0, 16.0)))))
+    assert present is True, detail
+    assert ok is True, detail
 
 
 def test_drift_beyond_tolerance_fails_with_reason(tmp_path):
-    drift.write_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0))
-    }), tolerance_pct=15)
+    drift.write_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (20.0, 30.0, 15.0)))), tolerance_pct=15)
     # The incident: energies balloon ~30x.
-    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed({
-        t: e for t, e in zip(drift.REFERENCE_TEXTS, (608.0, 700.0, 450.0))
-    }))
-    assert present is True and ok is False
-    assert "608" in detail and "20" in detail
+    present, ok, detail = drift.check_fingerprint(str(tmp_path), _score_fixed(
+        dict(zip(drift.REFERENCE_TEXTS, (608.0, 700.0, 450.0)))))
+    assert present is True
+    assert ok is False
+    assert "608" in detail
+    assert "20" in detail
 
 
 def test_unreadable_fingerprint_fails_closed(tmp_path):
@@ -75,7 +76,9 @@ def test_unreadable_fingerprint_fails_closed(tmp_path):
         fh.write("{not json")
     present, ok, detail = drift.check_fingerprint(str(tmp_path),
                                                   _score_fixed({}))
-    assert present is True and ok is False and "unreadable" in detail
+    assert present is True
+    assert ok is False
+    assert "unreadable" in detail
 
 
 # --- GPU-free reproduction (real cost field, stored embedding) -------------
@@ -114,10 +117,12 @@ def test_fingerprint_reproduces_energies(tmp_path):
     # Same embedding reproduces.
     present, ok, _ = drift.check_fingerprint(str(tmp_path),
                                              lambda _t: score(unit))
-    assert present and ok
+    assert present
+    assert ok
 
     # A 60x-scaled embedding (the unnormalized incident vector) diverges.
     drifted = [v * 60.0 for v in unit]
     present, ok, detail = drift.check_fingerprint(str(tmp_path),
                                                   lambda _t: score(drifted))
-    assert present and not ok, "wrong-scale embedding should fail the check"
+    assert present, "wrong-scale embedding should fail the check"
+    assert not ok, "wrong-scale embedding should fail the check"

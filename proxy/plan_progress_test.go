@@ -6,23 +6,12 @@ import (
 	"testing"
 )
 
-// A plan step is the work, not the tool call.
-//
-// Measured (family P, cycles 9 and 10, stabilization10/T/sessions/00-P read
-// from the relay capture). `write_file app.py` landed at t=41 s carrying
-// "written, but it does not parse (SyntaxError: unmatched ')' (line 111))".
-// That is a successful tool call, so step s1 ticked over, and from that turn
-// every request the model received carried:
-//
-//	[system note]: plan progress 4/5 — currently on step "s5" … Done: s1, s2,
-//	s3, s4 … Stay on the current step until it's complete; don't jump ahead and
-//	don't re-explore finished work.
-//
-// app.py was broken, had never been run, and the note called it finished work
-// not to revisit. The run spent its remaining 300 s elsewhere and delivered
-// that file unchanged.
+// A plan step is the work, not the tool call. A write that lands with a
+// failing check is a successful tool call, but the file is broken and has
+// never been run. Ticked off, the plan reminder would tell the model on every
+// later request that the broken file is finished work not to revisit.
 
-func planWorld(t *testing.T) (*AgentContext, []PlanStep) {
+func planWorld(t *testing.T) *AgentContext {
 	t.Helper()
 	ctx, _ := exactEditWorld(t, "app.py", "x = 1\n")
 	steps := []PlanStep{
@@ -31,11 +20,11 @@ func planWorld(t *testing.T) (*AgentContext, []PlanStep) {
 	}
 	ctx.Plan = &Plan{Steps: steps, VerifyStep: "s2"}
 	ctx.PlanStepsSatisfied = make([]bool, len(steps))
-	return ctx, steps
+	return ctx
 }
 
 func TestAWarnedWriteDoesNotSatisfyItsPlanStep(t *testing.T) {
-	ctx, _ := planWorld(t)
+	ctx := planWorld(t)
 	args, _ := json.Marshal(map[string]string{"path": "app.py"})
 	// The ledger records what the check said about the bytes that landed.
 	recordWarnedValidation(t, ctx, "app.py")
@@ -53,7 +42,7 @@ func TestAWarnedWriteDoesNotSatisfyItsPlanStep(t *testing.T) {
 }
 
 func TestACleanWriteStillSatisfiesItsPlanStep(t *testing.T) {
-	ctx, _ := planWorld(t)
+	ctx := planWorld(t)
 	args, _ := json.Marshal(map[string]string{"path": "app.py"})
 	recordPlanAdherence(ctx, "write_file", args, true)
 	if !ctx.PlanStepsSatisfied[0] {
@@ -67,7 +56,7 @@ func TestACleanWriteStillSatisfiesItsPlanStep(t *testing.T) {
 // Fixing the file finishes the step: the rule delays credit, it does not
 // withhold it.
 func TestARepairedFileSatisfiesTheStep(t *testing.T) {
-	ctx, _ := planWorld(t)
+	ctx := planWorld(t)
 	args, _ := json.Marshal(map[string]string{"path": "app.py"})
 	recordWarnedValidation(t, ctx, "app.py")
 	recordPlanAdherence(ctx, "write_file", args, true)
@@ -84,7 +73,7 @@ func TestARepairedFileSatisfiesTheStep(t *testing.T) {
 // Non-write steps are untouched: a verification command is judged by whether
 // it succeeded, as before.
 func TestAVerificationStepIsUnaffectedByFileWarnings(t *testing.T) {
-	ctx, _ := planWorld(t)
+	ctx := planWorld(t)
 	recordWarnedValidation(t, ctx, "app.py")
 	args, _ := json.Marshal(map[string]interface{}{"command": "python3 app.py", "timeout": 30})
 	recordPlanAdherence(ctx, "run_command", args, true)

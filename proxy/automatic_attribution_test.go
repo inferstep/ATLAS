@@ -219,33 +219,40 @@ func TestALandedAutomaticCandidateHasNoRefusalAndJoins(t *testing.T) {
 	if a["outcome"] != string(automaticOutcomeLanded) || a["refusal"] != "" {
 		t.Fatalf("landed candidate attributed as %v/%v", a["outcome"], a["refusal"])
 	}
-	if a["policy_mode"] != string(CandidatePolicyAutomaticV3) || a["policy_source"] != string(CandidatePolicySourceFixed) {
-		t.Errorf("policy %v/%v", a["policy_mode"], a["policy_source"])
-	}
-	if a["request_id"] != "req-automatic" {
-		t.Errorf("request id %v", a["request_id"])
+	for _, field := range []struct {
+		key  string
+		want interface{}
+	}{
+		{"policy_mode", string(CandidatePolicyAutomaticV3)},
+		{"policy_source", string(CandidatePolicySourceFixed)},
+		{"request_id", "req-automatic"},
+		{"candidate_hash", contentSHA256(routeWinner)},
+		{"disposition", string(routingCandidateAuthorized)},
+		// The record declares itself inert.
+		{"influences_live_decision", false},
+	} {
+		if a[field.key] != field.want {
+			t.Errorf("%s is %v, want %v", field.key, a[field.key], field.want)
+		}
 	}
 	policies := recordsOfKind(recs, "candidate_policy_decision")
 	grants := recordsOfKind(recs, "authorization_grant_event")
 	if len(policies) == 0 || len(grants) == 0 {
 		t.Fatal("no policy or grant records to join against")
 	}
-	if a["route_entry_id"] != policies[0]["route_entry_id"] || a["route_entry_id"] != grants[0]["route_entry_id"] {
-		t.Errorf("route entry does not join: %v vs %v vs %v", a["route_entry_id"],
-			policies[0]["route_entry_id"], grants[0]["route_entry_id"])
-	}
-	if a["invocation_id"] != grants[0]["invocation_id"] || a["candidate_instance_id"] != grants[0]["candidate_instance_id"] {
-		t.Errorf("candidate identity does not join the grant: %v/%v vs %v/%v", a["invocation_id"],
-			a["candidate_instance_id"], grants[0]["invocation_id"], grants[0]["candidate_instance_id"])
-	}
-	if a["candidate_hash"] != contentSHA256(routeWinner) {
-		t.Errorf("candidate hash %v", a["candidate_hash"])
-	}
-	if a["disposition"] != string(routingCandidateAuthorized) {
-		t.Errorf("disposition %v", a["disposition"])
-	}
-	if a["influences_live_decision"] != false {
-		t.Error("the record does not declare itself inert")
+	for _, join := range []struct {
+		key   string
+		owner string
+		other map[string]interface{}
+	}{
+		{"route_entry_id", "policy decision", policies[0]},
+		{"route_entry_id", "grant", grants[0]},
+		{"invocation_id", "grant", grants[0]},
+		{"candidate_instance_id", "grant", grants[0]},
+	} {
+		if a[join.key] != join.other[join.key] {
+			t.Errorf("%s does not join the %s: %v vs %v", join.key, join.owner, a[join.key], join.other[join.key])
+		}
 	}
 }
 
@@ -285,7 +292,7 @@ func TestASelectionMismatchIsAttributedFromTheLiveOwner(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if got := w.disk(t); got == routeWinner {
+	if w.disk(t) == routeWinner {
 		t.Fatal("a candidate the service did not name landed")
 	}
 	attr := attributionRecords(recs)
@@ -382,7 +389,7 @@ var attributionKeys = []string{
 	"route_entry_id", "schema_version",
 }
 
-func TestAttributionRecordsCarryClosedKeysAndNoContent(t *testing.T) {
+func TestAttributionRecordsCarryClosedKeys(t *testing.T) {
 	w := newRouteWorldWithClosure(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared","verification":["pytest -q --secret hunter2"],`+
@@ -412,6 +419,30 @@ func TestAttributionRecordsCarryClosedKeysAndNoContent(t *testing.T) {
 				t.Errorf("key %q carries a %T, not a scalar", k, v)
 			}
 		}
+		if !automaticRefusalVocabulary[automaticRefusal(a["refusal"].(string))] {
+			t.Errorf("refusal %v outside the vocabulary", a["refusal"])
+		}
+	}
+}
+
+// The same write, with a secret in the declared command: no record carries
+// the command, the bytes, the paths or the task.
+func TestAttributionRecordsCarryNoContent(t *testing.T) {
+	w := newRouteWorldWithClosure(t,
+		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+			`"verification_knowledge":"declared","verification":["pytest -q --secret hunter2"],`+
+			`"candidate_policy":"automatic_v3"}`,
+		map[string]stubEffect{"pytest -q --secret hunter2": {}}, false)
+	recs := captureShadow(t, func() {
+		if _, err := w.write(t); err != nil {
+			t.Fatal(err)
+		}
+	})
+	attr := attributionRecords(recs)
+	if len(attr) == 0 {
+		t.Fatal("no attribution record")
+	}
+	for _, a := range attr {
 		raw, _ := json.Marshal(a)
 		blob := string(raw)
 		for _, secret := range []string{routeWinner, routeBaseline, "hunter2", "pytest",
@@ -419,9 +450,6 @@ func TestAttributionRecordsCarryClosedKeysAndNoContent(t *testing.T) {
 			if strings.Contains(blob, secret) {
 				t.Errorf("attribution carries %q", secret)
 			}
-		}
-		if !automaticRefusalVocabulary[automaticRefusal(a["refusal"].(string))] {
-			t.Errorf("refusal %v outside the vocabulary", a["refusal"])
 		}
 	}
 }
@@ -521,20 +549,22 @@ func attributionIdentifiers(t *testing.T) map[string]bool {
 		t.Fatal(err)
 	}
 	names := map[string]bool{"automatic_delivery_attribution": true}
+	var specs []ast.Spec
 	for _, d := range tree.Decls {
 		switch decl := d.(type) {
 		case *ast.FuncDecl:
 			names[decl.Name.Name] = true
 		case *ast.GenDecl:
-			for _, spec := range decl.Specs {
-				switch sp := spec.(type) {
-				case *ast.TypeSpec:
-					names[sp.Name.Name] = true
-				case *ast.ValueSpec:
-					for _, n := range sp.Names {
-						names[n.Name] = true
-					}
-				}
+			specs = append(specs, decl.Specs...)
+		}
+	}
+	for _, spec := range specs {
+		switch sp := spec.(type) {
+		case *ast.TypeSpec:
+			names[sp.Name.Name] = true
+		case *ast.ValueSpec:
+			for _, n := range sp.Names {
+				names[n.Name] = true
 			}
 		}
 	}
@@ -601,14 +631,19 @@ func TestAttributionMethodsReturnNothingToTheRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	methods := 0
 	for _, d := range tree.Decls {
 		fn, ok := d.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil {
 			continue
 		}
+		methods++
 		if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
 			t.Errorf("%s returns a value to its caller", fn.Name.Name)
 		}
+	}
+	if methods == 0 {
+		t.Fatal("automatic_attribution.go holds no methods, so the check reads nothing; name the file that holds them")
 	}
 }
 
@@ -637,7 +672,13 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 		"verification_evidence.go", "staged_command_evidence.go", "evidence_wiring.go",
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
-		"advisory_policy.go", "agent.go", "gates.go", "guardrails.go"} {
+		"advisory_policy.go", "agent.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"} {
 		used := identifiersIn(t, f)
 		for name := range attributionIdentifiers(t) {
 			if used[name] {
@@ -654,11 +695,9 @@ func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.
 	}
 }
 
-// An edit V3 replaced reached the model as its own. Only write_file, whose
-// whole-file content compares with disk, got the note that the bytes differ;
-// the model then kept editing a file it had never seen. Every edit tool now
-// carries its whole-file proposal, so the model is told for all four, and its
-// read state follows what landed.
+// When V3's candidate replaces an edit, the model is told that the bytes on
+// disk are not the ones it sent, for every edit tool, and its read state
+// follows what landed. Untold, it keeps editing a file it has never seen.
 func TestTheModelIsToldWhenACandidateReplacedItsEdit(t *testing.T) {
 	for _, c := range editCases() {
 		t.Run(c.tool, func(t *testing.T) {
@@ -669,17 +708,11 @@ func TestTheModelIsToldWhenACandidateReplacedItsEdit(t *testing.T) {
 			if r.disk(t, "mod.py") != c.winner {
 				t.Fatalf("the winner did not land: %s", r.describe())
 			}
-			told := false
-			for _, p := range r.prompts {
-				if strings.Contains(p, "NOT the ones you sent") {
-					told = true
-				}
-			}
-			if !told {
+			if !strings.Contains(strings.Join(r.prompts, "\n"), "NOT the ones you sent") {
 				t.Errorf("the model was never told the bytes on disk are not its edit")
 			}
 			if seen := r.ctx.FilesRead[filepath.Join(r.dir, "mod.py")]; seen != c.winner {
-				t.Errorf("read state does not follow what landed")
+				t.Errorf("read state does not follow what landed: got %v", seen)
 			}
 		})
 	}

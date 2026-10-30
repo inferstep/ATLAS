@@ -41,13 +41,15 @@ class TestRepairContext:
         # load calls clean -> clean is a callee
         assert "clean" in ctx
         # path from an entry point (main) to load
-        assert "Call path" in ctx and "→" in ctx
+        assert "Call path" in ctx
+        assert "→" in ctx
 
-    def test_empty_when_function_absent(self):
-        assert graph.repair_context(PROJECT, "does_not_exist") == ""
-
-    def test_empty_when_no_python(self):
-        assert graph.repair_context({"a.md": "x"}, "load") == ""
+    @pytest.mark.parametrize("files, function", [
+        pytest.param(PROJECT, "does_not_exist", id="function-absent"),
+        pytest.param({"a.md": "x"}, "load", id="no-python-files"),
+    ])
+    def test_empty_when_function_not_in_graph(self, files, function):
+        assert graph.repair_context(files, function) == ""
 
     def test_leaf_function(self):
         ctx = graph.repair_context(PROJECT, "clean")
@@ -66,13 +68,14 @@ class TestSymbolNeighborhood:
 
     def test_unknown_symbol_empty(self):
         nb = graph.symbol_neighborhood(PROJECT, "nope")
-        assert nb["callers"] == [] and nb["callees"] == [] and nb["impact"] == []
+        assert nb["callers"] == []
+        assert nb["callees"] == []
+        assert nb["impact"] == []
         assert nb["defined_in"] == []
 
     def test_prebuilt_graph_reused(self):
-        # Passing a prebuilt graph avoids rebuilding per symbol and gives the
-        # same result as building internally.
+        # A prebuilt graph is used as it is: the file map is not read again
+        # (here it is empty), and the answer is the same as building one.
         g = graph.build_graph(PROJECT)
-        a = graph.symbol_neighborhood(PROJECT, "load", graph=g)
-        b = graph.symbol_neighborhood(PROJECT, "load")
-        assert a == b
+        assert (graph.symbol_neighborhood({}, "load", graph=g)
+                == graph.symbol_neighborhood(PROJECT, "load"))

@@ -41,8 +41,8 @@ this page: [Rules learned from review and from failures](#rules-learned-from-rev
   "this commit did not come through the merge queue; start `tests` for it by
   hand". Started by hand on `dev`, the `tests` workflow does what a push run
   does: the tests, both uploads and the cache.
-- `main` and `staging` require the same checks as `dev`, except
-  `code health (size)`, whose job is not on `main` yet.
+- `main` and `staging` require the same checks as `dev`, except the ones
+  marked (`dev` only) in the table below.
 - On a pull request from a fork, GitHub holds every run until a maintainer
   approves it ("Approve and run"). Until then the checks have no result, and
   nothing is wrong with the change; the contributor has nothing to do. If
@@ -57,15 +57,16 @@ this page: [Rules learned from review and from failures](#rules-learned-from-rev
 
 - A job with no condition must have run. That holds for every job definition
   in the workflow files that has no `if:` of its own.
-- 17 job definitions have an `if:` of their own, so they may be skipped by
+- 18 job definitions have an `if:` of their own, so they may be skipped by
   design, and `checks ran` does not report one of them as missing. Every
-  other job is judged for absence. The table below names the 17. On a pull
+  other job is judged for absence. The table below names the 18. On a pull
   request five of them count: Sonar's scan, the `PR build check`, `coverage upload`,
   `test results upload` and `test results upload (extension)`. If one of
   these does not start at all, nothing says so. The rest run only on other
   events: the four bot jobs, the three image jobs of a push, the release
-  file job, the scorecard, the staging record, the star chart and the job
-  that writes the weekly cleanup's issue.
+  file job, the scorecard, the staging record, the star chart, the job that
+  writes the weekly cleanup's issue and the job that writes the image scan's
+  issue.
 - For a job with a matrix, one reported leg is enough. The required checks
   cover the required legs by name. A leg that is not required can be missing
   unseen.
@@ -87,6 +88,7 @@ job on this list that does not start gives no red:
 | `bot-stale-claims.yml` | `stale` |
 | `bot-sync.yml` | `sync` |
 | `build-images.yml` | `pr-build`, `alias`, `build`, `promote` |
+| `container-scan.yml` | `report` |
 | `release-files.yml` | `sign` |
 | `scorecard.yml` | `analysis` |
 | `sonar.yml` | `scan` |
@@ -98,7 +100,7 @@ job on this list that does not start gives no red:
 
 ## Checks on a pull request
 
-### Required (24)
+### Required (36)
 
 | Check | What it does |
 |---|---|
@@ -107,36 +109,38 @@ job on this list that does not start gives no red:
 | `e2e acceptance (proxy + sandbox + fake llama)` | The real proxy and sandbox against a stand-in model server |
 | `ruff (python lint)`, `shellcheck`, `yamllint (workflows)` | Lint for Python, shell and workflow files |
 | `docker compose config` | Every compose file and overlay parses |
-| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows |
+| `code health (size)` | No new function over 100 lines or file over 1,500, and nothing on the size baseline grows (`dev` only) |
 | `llama.cpp patches apply to pinned SHA` | The patches still apply to the pinned upstream commit |
 | `bootstrap on debian-12`, `bootstrap on rockylinux-9`, `bootstrap on ubuntu-22.04`, `bootstrap on ubuntu-24.04`, `bootstrap via sudo for a regular user` | The installer's dry run on each system |
 | `codeql (go)`, `codeql (python)` | CodeQL analysis ran to its end |
+| `codeql (javascript-typescript)`, `codeql (java-kotlin)` | CodeQL analysis of the VS Code extension and of the JetBrains plugin ran to its end (`dev` only) |
+| `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job (`dev` only) |
+| `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds (`dev` only) |
+| `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint (`dev` only) |
+| `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites (`dev` only) |
+| `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) (`dev` only) |
 | `dependency review` | No new dependency with a known advisory |
 | `pr title` | The title is a conventional commit; it becomes the commit on `dev` |
 
 ### Not required (they report, and a red one is a reason to look)
 
-| Check | What it does |
-|---|---|
-| `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped |
-| `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue |
-| `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) |
-| `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix |
-| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents |
-| `zizmor (workflows)`, `actionlint (workflows)` | The workflow files themselves: security mistakes and mistakes GitHub shows only at run time. A finding fails the job |
-| `golangci-lint (proxy)`, `golangci-lint (tui)` | Go lint on the code a change adds |
-| `hadolint (dockerfiles)` | Lint of every Dockerfile. A finding does not fail it; it fails when it could not lint |
-| `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code |
-| `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" |
-| `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" |
-| `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing |
-| `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository |
-| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it |
-| `pytest (tests/perf)`, `pytest (tests/concurrency)`, `perf budget gate` | Performance and concurrency suites |
-| `sandbox tests (containerized)`, `proxy and TUI tests (no model)` | The tests that need a running service and no model: 80 against the sandbox image of the change, 13 against the proxy and the TUI built from the change. A job fails when one of its tests fails, is skipped or is not collected. See [below](#tests-that-the-plain-jobs-leave-out) |
-| `codeql (javascript-typescript)`, `lint + test + build` | Analysis and build of the VS Code extension |
-| `codeql (java-kotlin)`, `ktlint + test + build` | Analysis and build of the JetBrains plugin |
-| the `PR build check` jobs | Each service image builds |
+| Check | What it does | Why it reports and does not block |
+|---|---|---|
+| `checks ran` | Fails when a workflow did not start, a job with no condition was skipped or cancelled, or a required check was skipped | It waits for every other job, so as a required check it would be the last job of every merge, and a fault in GitHub's own answers would hold a merge (seen on 2026-10-13). |
+| `replay (proxy)` | The proxy, built from the change, does on each recorded session what the recording says. Runs when `proxy/` or `tests/replay/` changed, and in the merge queue | It starts only when `proxy/` or `tests/replay/` changes; GitHub waits without end for a required check that does not start. |
+| `smoke result` | For a pull request that changes text that every request to the model carries: red until the development server wrote the green status `server/smoke` on the head commit. See [below](#a-change-to-text-that-the-model-reads) | It reads a status that the development server writes, and that server is best effort: a merge must not wait on it. |
+| `fix tests (fail without the fix)` | For a pull request with the type `fix`: runs the tests it adds or changes on the base's code and on the pull request, and names each test that passes without the fix | It runs only on a pull request of the type `fix`, and does not start in the merge queue. |
+| `integrity check` | Reads the change for weakened checks: removed or skipped tests, new suppressions, changes to the files that configure checks, new documents | What it finds are things for a maintainer to confirm, not faults; a form that fails only on "needs action" is not built. |
+| `sonar scan`, `SonarCloud Code Analysis` | The SonarQube Cloud analysis, and Sonar's verdict on the new code | Report only, by the maintainers' decision of 2026-10-06. |
+| `canary check (reads only)` | Once a week, and on a pull request that changes its workflow file or `scripts/canary.py`: the checks of the canary pull request against the list. It only reads. See "The canary" | It runs once a week, and on a pull request only when its own files change. |
+| `weekly cleanup (make the text)` | Once a week, and on a pull request that changes its workflow file or `scripts/weekly_cleanup.py`: what the fixers would change, as a text on the page of the run. It changes nothing. See "The weekly cleanup" | The same: once a week, and when its own files change. |
+| `dev results lookup (sends nothing)` | On a pull request that changes the `dev results` workflow, the upload actions or the lookup script: the lookup and the download for the newest commit of `dev` that came through the merge queue. It sends nothing | It starts only when its own files change. |
+| `coverage upload`, `coverage upload (extension)`, `codecov/patch`, `codecov/project` | Coverage reports sent to Codecov, and Codecov's two statuses. `coverage upload` and `test results upload` have the head commit of a pull request in their workspace, because Codecov files a report under that commit. They take the upload action from a second checkout, the commit that the workflow file comes from, in the folder `workflow-commit`: a branch that left `dev` before an action was added does not have it. A test holds this for every job that uses an action of this repository | They send numbers to Codecov; a refused upload says nothing about the change, and Codecov's statuses show numbers and fail nothing. |
+| `test results upload`, `test results upload (extension)` | The result of each test sent to Codecov, also when a test job failed. A refused upload turns only this job red. When a job stopped before its tests ran there is no file of results; the upload job then says so and is not red for it | The same: a report to Codecov; a refused upload turns only this job red. |
+| `lint + test + build` | Build of the VS Code extension | It starts only when the VS Code extension's files change. |
+| `ktlint + test + build` | Build of the JetBrains plugin | It starts only when the JetBrains plugin's files change. |
+| `verifier (idea)`, `verifier (pycharm)`, `verifier (webstorm)`, `verifier (goland)` | Plugin Verifier reads the built JetBrains plugin ZIP against each product on the 2026.1 and 2026.2 lines, and uploads the report | Each job downloads two IDE distributions, so it starts only when the plugin's files change, one product per job to fit a runner's disk. |
+| the `PR build check` jobs | Each service image builds | They do not start in the merge queue. |
 
 A check that compares a change with its base compares with the base branch
 as it is now: the first parent of the merge commit that the job checks out.
@@ -208,7 +212,7 @@ It cannot judge these, and says so when it meets one:
 | SonarQube Cloud, gate | on SonarQube Cloud | The built-in "Sonar way" gate, on new code: reliability, security and maintainability rating A, duplicated lines at most 3%, security hotspots reviewed 100%. Its coverage condition has nothing to judge, because coverage is left out of the analysis. The gate reports and is not a required check |
 | CodeScene | on CodeScene | Analyses `dev` |
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
-| Hashed installs | `.github/requirements/ci.in`, `ci.txt`, `scripts/ci-lock.sh` | The pytest jobs, the lint jobs and the e2e job install from one lock that has a hash for every file, with `pip install --require-hashes`: pip refuses a file whose hash is not in the lock. The lock holds the tools and the packages of the product that the tests need. It is made by pip-compile under Python 3.12, and its header says so; Dependabot reads the header and makes the lock again the same way. Thirteen pins of `ci.in` are copies of pins in `sandbox/requirements-runtime.txt`, `sandbox/requirements-verify.txt` and `v3-service/requirements.txt`; a contract test holds each copy the same as its product file, and every line of `ci.in` against the lock. Not from the lock yet: the lens job's torch and lens packages, and the extension's `npm ci` (#335) |
+| Hashed installs | `.github/requirements/ci.in`, `ci.txt`, `lens.in`, `lens.txt`, `scripts/ci-lock.sh` | The pytest jobs, the lint jobs and the e2e job install from one lock that has a hash for every file, with `pip install --require-hashes`: pip refuses a file whose hash is not in the lock. The lock holds the tools and the packages of the product that the tests need. It is made by pip-compile under Python 3.12, and its header says so; Dependabot reads the header and makes the lock again the same way. Thirteen pins of `ci.in` are copies of pins in `sandbox/requirements-runtime.txt`, `sandbox/requirements-verify.txt` and `v3-service/requirements.txt`; a contract test holds each copy the same as its product file, and every line of `ci.in` against the lock. The lens job and the `tests/cli` job also install a second lock, `lens.txt` (the CPU-only torch, the lens packages, and huggingface_hub for the CLI's publish commands, made by the same script with uv for the Linux runners), and a contract test holds it to `geometric-lens/requirements.txt`. The extension's job runs `npm ci --ignore-scripts`. |
 | Image scan | `.github/workflows/container-scan.yml` | Trivy, weekly and by hand, on the six images CI publishes with the tag `dev`: proxy, v3, lens, sandbox, llama (CUDA) and llama-vulkan. Critical and high findings that have a fix. It reports and does not fail. The ROCm image is built on the user's machine and is not scanned |
 | Integrity check | `scripts/integrity_check.py` | Suppression markers are read by kind of file: Go, Python, TypeScript and JavaScript, shell, workflow files, Dockerfiles. In a workflow file `continue-on-error: true` and `persist-credentials: true` are named. The script holds the lists of files that need a maintainer's approval: the files that decide what a check accepts, and the scripts a workflow runs with a credential that can write. A skip with its reason asks for approval; a size baseline that only goes down and a test renamed in place are listed for information. The forms by which a test stops running are one table for each runner (pytest, unittest, Go, vitest). A form that stops more than one test says how far it reaches: the class, the group, the file, every other test of the file, whole test files, or the number of uses of a skip marker that has a name of its own. Such a name is one that the file sets at its top level or takes from a module by an import; a reason that is given by a name is shown as the text of that name |
 
@@ -223,13 +227,13 @@ Measured 2026-10-06 on commit `a413df4`, unless a row says otherwise.
 | Coverage, Python, the 8 suites together | 59.8% of lines (12,553 of 20,996). By folder: `v3-service` 84.0%, `sandbox` 68.1%, `geometric-lens` 67.2%, `atlas` 49.5%, `scripts` 30.0% |
 | Coverage, TypeScript (VS Code extension) | 51.5% of lines (943 of 1,831), from the extension's last run |
 | Coverage on Codecov | 67.91% of lines, all flags together (30,948 of 45,567). `go-proxy` 83.07%, `go-tui` 47.13%, `python` 59.78%, `typescript` 50.3% |
-| Workflow lint, on commit `f65e01b` | zizmor: 25 findings before the fixes (20 checkouts that kept the job's token, 4 values pasted into a shell line, 1 pin comment that named no tag); none after, with one written exception in `star-chart.yml`. actionlint: none. Measured and not adopted: zizmor's level "pedantic" 61, "auditor" 62 |
-| Python lint markers, on commit `eec0147` | 65 findings carry a `# noqa`: C901 37, S110 25, S112 3. The 180 markers that no finding used were removed, 155 of them `# noqa: E402` |
+| Workflow lint, on commit `e46a72a` | zizmor: none, with one written exception in `star-chart.yml`. actionlint: none (#377) |
+| Python lint markers, on commit `f603072` | 65 findings carry a `# noqa`: C901 37, S110 25, S112 3 (#435) |
 | Size baseline | 88 functions over 100 lines (longest: `runAgentLoop`, 2,112); 11 files over 1,500 lines (longest: `proxy/agent.go`, 9,929) |
 | Extension size rules, on commit `f65e01b` | 2 files listed: `src/ui/chatView.ts` for `dispatch` (188 lines, 33 decision points) and `src/session/editPreview.ts` for `predictEdit` (17 decision points). No other function is over a limit; the next longest has 94 lines |
 | Go lint, all code, with the repository's settings | proxy 220 (gocognit 121, errcheck 52, forbidigo 23, nilerr 22, gofmt 2); tui 48 (gocognit 21, errcheck 16, forbidigo 9, nilerr 2) |
-| SonarQube Cloud, 2026-10-06 on commit `be88079` | 72,603 lines of code in 277 files, test code not counted. As the tool reports them, not as confirmed defects: 133 security findings, 7 bugs, 1,384 code smells. Duplication 0.9%. Cognitive complexity 19,913. The gate passes. The security count is 71 lower than at the measurement before, and no fix is behind that: the 71 findings of `pythonsecurity:S8707` left the count when the rule was switched off |
-| CodeScene, first analysis of `dev`, 2026-10-05 | 165,035 lines of code. Hotspot code health 2.8, average code health 6.6 (scale 1 to 10) |
+| SonarQube Cloud, 2026-10-06 on commit `be88079` | 72,603 lines of code in 277 files, test code not counted. As the tool reports them, not as confirmed defects: 133 security findings, 7 bugs, 1,384 code smells. Duplication 0.9%. Cognitive complexity 19,913. The gate passes (#347) |
+| CodeScene, analysis of `dev`, 2026-10-05 | 165,035 lines of code. Hotspot code health 2.8, average code health 6.6 (scale 1 to 10) (#311) |
 | Dockerfile lint, on commit `f65e01b` | 37 findings in 8 Dockerfiles: no error, 32 warnings, 5 notes. By rule: DL3008 12, DL3003 11, DL4006 5, DL3066 4, DL3041 2, DL3016 1, SC2046 1, SC2086 1 |
 
 How to read the coverage rows:
@@ -283,52 +287,122 @@ How to read the coverage rows:
 
 ## What the checks found so far
 
-For each check that reports, or that blocks by another rule: how often it
-was red or made a finding, and how many of those were right. A check
-becomes required, or is switched off, on these numbers.
+For each check: how often its runs ended red in one week, and how many of
+those reds were right. A check becomes required, or is switched off, on
+these numbers.
 
-- **Right:** a change was the right answer to the red or the finding.
-- **False alarm:** no change was needed.
-- **Outside:** the cause was not in the change (the network, the runner, a
-  cancelled run).
-- The maintainers keep the count. This is its state on 2026-10-07. A week of
-  counts, in which every red of every pull request is sorted, runs from
-  2026-10-07 to 2026-10-14; the table gets its next state then.
+The week of counts ran from 2026-10-07 21:26Z to 2026-10-14 21:26Z. Every
+red of every run in it was judged by hand (#503). The next state of these tables
+comes at the monthly review (mid-November).
+
+- **Runs:** the runs of the job that ended passed or failed: on pull
+  requests, in the merge queue, on pushes and on other events.
+- **Right:** red, and the change had the fault.
+- **False alarm:** red, and the change had no such fault.
+- **Outside:** a cause outside the change, mostly a newer push that
+  cancelled the run.
+- A red on the canary pull request is red on purpose, and is not counted.
+- The rule, fixed before the week: under 10 false alarms per 100 runs.
+
+### Required now (36)
+
+The counts are of the week, whatever a check's state was then.
+
+| Check | Runs | Right | False alarm | Outside | False alarms per 100 runs |
+|---|---|---|---|---|---|
+| `go test (proxy)` | 191 | 0 | 0 | 11 | 0.0 |
+| `go test (tui)` | 199 | 0 | 0 | 3 | 0.0 |
+| `pytest (tests/v3)` | 199 | 0 | 1 | 3 | 0.5 |
+| `pytest (tests/cli)` | 197 | 0 | 0 | 5 | 0.0 |
+| `shellcheck` | 200 | 0 | 0 | 2 | 0.0 |
+| `docker compose config` | 200 | 0 | 0 | 2 | 0.0 |
+| `yamllint (workflows)` | 199 | 0 | 0 | 3 | 0.0 |
+| `bootstrap on ubuntu-22.04` | 235 | 0 | 8 | 7 | 3.4 |
+| `bootstrap on ubuntu-24.04` | 234 | 0 | 8 | 8 | 3.4 |
+| `bootstrap on debian-12` | 236 | 0 | 8 | 6 | 3.4 |
+| `bootstrap on rockylinux-9` | 230 | 0 | 1 | 12 | 0.4 |
+| `ruff (python lint)` | 199 | 0 | 0 | 3 | 0.0 |
+| `codeql (python)` | 232 | 0 | 0 | 19 | 0.0 |
+| `codeql (go)` | 235 | 0 | 0 | 15 | 0.0 |
+| `pytest (tests/v3-service)` | 199 | 0 | 0 | 3 | 0.0 |
+| `pytest (tests/contracts)` | 199 | 1 | 0 | 3 | 0.0 |
+| `pytest (tests/infrastructure)` | 197 | 3 | 0 | 5 | 0.0 |
+| `pytest (geometric-lens/tests)` | 198 | 0 | 0 | 4 | 0.0 |
+| `llama.cpp patches apply to pinned SHA` | 200 | 0 | 0 | 2 | 0.0 |
+| `e2e acceptance (proxy + sandbox + fake llama)` | 199 | 0 | 0 | 3 | 0.0 |
+| `bootstrap via sudo for a regular user` | 235 | 0 | 8 | 7 | 3.4 |
+| `dependency review` | 195 | 0 | 0 | 0 | 0.0 |
+| `pr title` | 275 | 1 | 0 | 0 | 0.0 |
+| `code health (size)` | 191 | 0 | 0 | 3 | 0.0 |
+| `golangci-lint (proxy)` | 189 | 0 | 0 | 1 | 0.0 |
+| `golangci-lint (tui)` | 189 | 0 | 0 | 1 | 0.0 |
+| `hadolint (dockerfiles)` | 190 | 0 | 0 | 0 | 0.0 |
+| `actionlint (workflows)` | 190 | 0 | 0 | 0 | 0.0 |
+| `zizmor (workflows)` | 188 | 0 | 0 | 2 | 0.0 |
+| `codeql (javascript-typescript)` | 228 | 0 | 0 | 15 | 0.0 |
+| `perf budget gate` | 200 | 0 | 0 | 2 | 0.0 |
+| `pytest (tests/concurrency)` | 197 | 0 | 0 | 5 | 0.0 |
+| `pytest (tests/perf)` | 197 | 0 | 0 | 5 | 0.0 |
+| `sandbox tests (containerized)` | 98 | 0 | 4 | 0 | 4.1 |
+| `proxy and TUI tests (no model)` | 98 | 0 | 1 | 0 | 1.0 |
+| `codeql (java-kotlin)` | 124 | 0 | 1 | 15 | 0.8 |
+
+### Not required
+
+| Check | Runs | Right | False alarm | Outside | False alarms per 100 runs |
+|---|---|---|---|---|---|
+| `checks ran` | 176 | 0 | 2 | 14 | 1.1 |
+| `replay (proxy)` | 75 | 1 | 0 | 0 | 0.0 |
+| `smoke result` | 126 | 0 | 1 | 0 | 0.8 |
+| `fix tests (fail without the fix)` | 108 | 0 | 0 | 2 | 0.0 |
+| `integrity check` | 190 | 0 | 0 | 0 | 0.0 |
+| `sonar scan` | 144 | 0 | 0 | 7 | 0.0 |
+| `canary check (reads only)` | 9 | 1 | 0 | 0 | 0.0 |
+| `dev results lookup (sends nothing)` | 6 | 0 | 0 | 0 | 0.0 |
+| `coverage upload` | 110 | 0 | 0 | 13 | 0.0 |
+| `coverage upload (extension)` | 2 | 0 | 0 | 0 | 0.0 |
+| `test results upload` | 119 | 0 | 1 | 13 | 0.8 |
+| `test results upload (extension)` | 7 | 0 | 0 | 0 | 0.0 |
+| `lint + test + build` | 7 | 0 | 0 | 0 | 0.0 |
+| `ktlint + test + build` | 11 | 0 | 0 | 1 | 0.0 |
+| `PR build check (lens)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (proxy)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (sandbox)` | 131 | 0 | 0 | 1 | 0.0 |
+| `PR build check (v3)` | 132 | 0 | 0 | 0 | 0.0 |
+
+- Checks that a service writes, counted on the pull-request runs of its
+  scan: SonarCloud Code Analysis, 8 right, 2 false alarms and 6 repeats of
+  another red; GitHub code scanning of SonarCloud, 1 right, 2 false alarms
+  and 1 repeat; GitHub code scanning of CodeQL, 1 right and 2 false alarms.
+- The week in one line: 3,144 runs. A job did not pass 809 times: 17 right,
+  83 false alarms, 320 outside, 172 on the canary, 210 waiting for a
+  maintainer's approval, and 7 repeats. 68 of the 83 false alarms came from
+  one outage of Docker Hub; the jobs that pull from Docker Hub ask a mirror
+  first (`.github/actions/docker-hub-mirror`, see
+  [Docker Hub and the checks](#docker-hub-and-the-checks)).
+- No check was over the rule.
+- `weekly cleanup (make the text)` is not in the tables: the count left the
+  weekly jobs out.
+
+### The dry run before the pipeline (2026-10-05 to 2026-10-07)
+
+What six checks found when they were first tried on the work before the
+pipeline, before the week of counts. Here a finding is right when a change
+was the right answer to it, and a false alarm when no change was needed.
 
 | Check | Mode | Counted on | Reds or findings | Right | False alarm | Outside |
 |---|---|---|---|---|---|---|
-| Sonar's gate on a pull request | reports | every pull request into `dev` since 2026-10-06 | 4 red pull requests | 4 | 0 | 0 |
 | Sonar's security findings that opened a review thread | blocks: every thread must be resolved | the trial of 2026-10-05 and 2026-10-06 | 8 threads | 1 | 7 | 0 |
 | Code scanning (CodeQL) alerts on a pull request | blocks: every thread must be resolved | 2026-10-07 | 3 alerts | 0 | 3 | 0 |
 | `integrity check`, lines that ask for action or approval | reports | the 30 commits of ordinary work before the pipeline | 8 lines in 7 commits | 8 | 0 | 0 |
-| `integrity check`, in the week of counts | reports | pull requests since 2026-10-07 | 14 lines on one pull request | 14 | 0 | 0 |
-| `checks ran` | reports | every pull request and merge group since #303 | 2 red | 0 | 2 | 0 |
 | golangci-lint on new Go code | reports | the 12 commits that touch Go among the last 50 before the pipeline | 3 findings in 2 commits | 2 | 1 | 0 |
 | zizmor | reports | every workflow file, at the first sorting | 25 findings | 25 | 0 | 0 |
 | actionlint | reports | every workflow file | 0 with the pinned version | 0 | 0 | 0 |
-| hadolint | reports | 8 Dockerfiles | 37 findings, none at the level "error" | not sorted yet | not sorted yet | 0 |
-| The two upload jobs of `tests` | reports | pull requests since 2026-10-07 | 1 red | 0 | 1 | 0 |
-| A required check that was red for another reason than the change | required | merge groups and pull requests since 2026-10-07 | 2 (the install matrix) | 0 | 0 | 2 |
-| A merge group that failed | required | every merge group on `dev` | 1 | 1 | 0 | 0 |
 
-- Sonar's seven false alarms came from four rules: two that read a
-  maintainer script's own command-line arguments as input from outside
-  (S8705: 3, S8707: 2), and two for workflow files (S8545: 1, S8541: 1). All
-  four are off since. The three CodeQL alerts were two texts of a list with
-  no comma between them, and a host name in a test: each was removed by
-  writing the line in another way.
 - Before five repairs of the `integrity check` the same 30 commits gave 29
   lines, 23 of them false alarms.
-- The two reds of `checks ran` were a fault in its reading of the list of
-  runs (repaired by #344) and a run that waited for a maintainer's approval.
 - The older version of actionlint gave 4 findings, all false; the pinned
   version reads the same files with none.
-- The red of the upload jobs came from the pipeline itself and not from the
-  pull request it stood on; #415 repaired the cause.
-- The two reds of the install matrix were the network; the installer now
-  tries a failed download again (#406).
-- Not in the table: the replay job (no red so far), and Codecov's statuses
-  and CodeScene, which show numbers and fail nothing.
 
 ## Rules learned from review and from failures
 
@@ -420,6 +494,11 @@ compared too.
   differ from run to run: six times and one estimate that depends on how
   long the path of the workspace is (`VARIES_IN_EVENTS` in
   `tests/replay/recording.py`). A field that is added later is compared.
+- One event is left out whole: `llm_prompt_progress`. The proxy sends it on
+  a clock of its own, every 100 ms while the model has given no first piece
+  of its reply, so how many there are follows the speed of the model. No
+  replay holds how many of them come, or when. It is the same rule as for
+  the requests that the proxy sends on its own clock.
 - A test here does not know how the proxy is built inside, so a change that
   only moves code does not touch it. A change in what the proxy sends, says
   or writes on a recorded session fails it, at the first place the run
@@ -432,12 +511,34 @@ The cases: a normal session; a tool call that is not well formed; a reply
 that is cut off; the same call again and again until the proxy stops the
 session; an edit that would leave the file unparseable; a write of a whole
 existing file, which is refused and redirected; and a `done` before anything
-was run.
+was run. In these seven the replies of the model are written by hand.
+
+The recording tool can also take the replies from a real model server
+(`--model-at`). A session that is recorded so holds the proxy to the real
+form of a reply: a stream in many small pieces, with the mistakes that this
+model makes. It is one sample. The model answers in another way the next
+time, and the replay says nothing about that. The tasks for it are the e2e
+task of the seven cases and the three tasks of the nightly's smoke run, and
+no other.
+
+- The reply is given on to the proxy piece by piece, as the model server
+  sends it. So the proxy waits as in a live session.
+- With a real model the commands of a session are the model's own choice,
+  and each prompt is answered with yes. Record such a session in a
+  container, not as a plain process of a person's machine.
+- No recording holds a path of the machine that it was made on. The sandbox
+  of a recording gets a small fixed environment. And the tool does not
+  write a recording whose text holds the home folder of the user who
+  records, or the folder of the model's file. The bare name of that user
+  is not looked for: it can be an ordinary word, and the text of every
+  session holds ordinary words. A bare name that a command prints is kept
+  out by the container: the user of the recording has no name there.
 
 | Command | What it does |
 |---|---|
 | `python -m pytest tests/replay` | Replays every recording. The tests build the proxy themselves and need Go. `make verify` runs them when a file of the proxy changed |
 | `python -m tests.replay.record <case>` | Makes a recording from a scripted case, with the real sandbox executor of the checkout. Needs the packages of `sandbox/requirements-runtime.txt` |
+| `python -m tests.replay.record <case> --model-at <port>` | Records a session that a real model answers, for a case named `real_model_...`. The model server answers at that port of the machine that records (127.0.0.1). The recording keeps what the model said, the name of the model's file and the build of its server. Needs the same packages |
 | `python -m tests.replay.rewrite <case>` | Writes the expected side of a recording again from the proxy of the checkout: the text of each request, the events, the end files. The recorded answers stay |
 | `python -m tests.replay.reach [--checks]` | Says how much of the proxy the recordings run through, by file, and which check functions no case reaches |
 
@@ -478,7 +579,12 @@ and a changed recording marks such a pull request. Two things follow:
   change from the recordings themselves: the part has other values than
   on the base, and none that the base's recordings had. A part that no
   request carries any more counts, and so does a part that is new in every
-  request.
+  request. The recordings it reads are those of what would land, the
+  merge of the pull request into its base, against those of the base as
+  GitHub made that merge on it: a branch made on an older base (or on
+  `main`, which has no recordings) is judged by its own change only. The
+  status is read on the pull request's head commit, where the server
+  writes it.
 - **Any other text** (a note, a refusal or a steer that the proxy writes in
   one situation): the pull request adds or changes a recording that shows
   the text in its situation. The recording is the proof, and no smoke run is
@@ -556,7 +662,7 @@ hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
 the mark to every test of the files it lists and to every test under
 `tests/integration/`.
 
-The marked files are in three groups, by what they need. Each group is run
+The marked files are in four groups, by what they need. Each group is run
 in one place.
 
 | File | Tests | What it needs | The job that runs it |
@@ -567,10 +673,19 @@ in one place.
 | `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |
-| `tests/infrastructure/test_llm.py` | 32 | a running model server | the nightly run, on the development server |
+| `tests/infrastructure/test_llm.py` | 30 | a running model server | the nightly run, on the development server |
+| `tests/infrastructure/test_nightly_images_docker.py` | 1 | a Docker engine and the network | the job `sandbox tests (containerized)` |
 
-- That is 125 tests in 7 files: 80 for the sandbox, 13 for the proxy and the
-  TUI, 32 for the model. `tests/integration/` holds no test.
+- That is 124 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
+  TUI, 30 for the model, and 1 that asks a real Docker engine what it
+  removes with an image's name by digest. `tests/integration/` holds no
+  test.
+- GitHub's runner has Docker 28.0.4 with the storage driver overlay2, not
+  the image store of containerd. So on GitHub that one test proves that
+  the guard keeps the name by digest: with the guard taken out it fails on
+  the answer of the code itself, on any store. What Docker itself does on
+  the store of containerd, the kind that the development server has, was
+  shown by tries on a developer's machine.
 - The groups, their files and their numbers are in one place:
   `scripts/tests_counted.py`. A test in the test suite holds that list, the
   hook's list, this table, the two jobs and the number of test functions in
@@ -586,17 +701,20 @@ in one place.
   and starts it as the stack starts it: by the `sandbox` service of the
   compose file, with its read-only base, its tmpfs mounts, its dropped
   capabilities and its limits. The job gives none of these itself, so a
-  change of the stack's settings is under test by itself. It waits for the
-  service's own health answer, and runs the 80 against it. The languages
-  are in the image. No test asks the runner for `javac`, `kotlinc`, `ruby`
-  or `php`: a sandbox that cannot run a language fails its tests.
+  change of the stack's settings is under test by itself. The build
+  downloads tools from servers outside GitHub, so a build that fails is
+  tried once more. It waits for the service's own health answer, and runs
+  the 80 against it. The languages are in the image. No test asks the
+  runner for `javac`, `kotlinc`, `ruby` or `php`: a sandbox that cannot run
+  a language fails its tests.
 - `proxy and TUI tests (no model)` builds the proxy and the TUI from the
   change and starts the proxy with no service behind it. The 13 ask the
   proxy's own answers and read the TUI's own screen in a terminal. None
   needs a model.
-- The 32 need a real model server. No job on GitHub has one; the nightly
+- The 30 need a real model server. No job on GitHub has one; the nightly
   run has.
-- The two jobs are not required checks.
+- The two jobs are required checks on a pull request into `dev`. They are
+  not required on `staging` or `main`.
 - Among the 80, a program of each of Java, Kotlin, Ruby and PHP is run and
   is checked for its syntax. Four `sandbox smoke` jobs did that before, each
   with a build of the same image. They are gone.
@@ -659,7 +777,7 @@ What follows from it:
 `scripts/nightly_run.py` is one run for the development server, in a folder
 of its own. A timer on the server starts it (see "The timer" below). It is
 not a CI job: a check on a pull request cannot see a real model that got
-slower, and it has no model server for the 32 tests above that need one.
+slower, and it has no model server for the 30 tests above that need one.
 
 The nightly run is best effort. The server is one machine, and it is not
 always on. A night with no run is not a failure: the server was off, the
@@ -669,12 +787,23 @@ it off (the timer is disabled).
 
 Each night it:
 
-1. takes the head of `dev`. When that changes the script itself or the
-   judge beside it (`scripts/tests_counted.py`), the new copy does the run,
-   so a repair of either acts in the night after its merge;
+1. takes the head of `dev`. When that changes the script itself or one of
+   the three files beside it (`scripts/tests_counted.py`, the judge,
+   `scripts/nightly_images.py`, the images, and `scripts/nightly_statuses.py`,
+   the sending of the statuses), the new copy does the run, so a repair of
+   one of them acts in the night after its merge;
 2. stops a stack of its own name that an earlier run left: a run that was
-   killed leaves its stack, and Docker starts that stack again;
-3. pulls the `dev` images and compares the commit that each was built from
+   killed leaves its stack, and Docker starts that stack again. Then it
+   reads the settings of the server (the name of the model, the folder of
+   the lens's files, and no token file). A wrong one ends the night here,
+   before any image, with the line to fix. The stop of a left stack comes
+   first, as it needs only the name of the model;
+3. takes the `dev` images of the registry under names of its own. It reads
+   the digest of each `<image>:dev` from the registry with no pull, pulls
+   the image by that digest, and names it
+   `localhost/atlas-nightly/<image>:night`. No tag of the server moves, so a
+   usual stack on the same machine keeps its own `:dev` images. Then the run
+   compares the commit that each image was built from
    with the head. The images of a push come some minutes after it, so the
    run looks again every two minutes, for up to twenty, and takes the head
    again each time;
@@ -685,12 +814,15 @@ Each night it:
 6. runs the driver `scripts/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
 7. runs the tests that need a real model, and judges pytest's result file
-   with the judge of such runs: all 32 of them are to be collected and to
+   with the judge of such runs: all 30 of them are to be collected and to
    pass, and none is to be skipped;
 8. asks the services again, and writes one report: the commit, the digest
    of each image, what the services said, the seconds of each task, and the
    tests collected, passed, failed and skipped;
-9. stops its stack, also when a step failed or the time ran out.
+9. keeps the last 200 lines of each service's log in its report folder
+   (`<service>.log`), and stops its stack; both also when a step failed or
+   the time ran out. A log that cannot be had is one line of the report
+   (`logs_not_saved`) and changes neither the result nor the exit status.
 
 Steps 1 to 3 need no card. They come before the lock, and the time limit of
 30 minutes does not count them.
@@ -703,6 +835,7 @@ The first line of the report is its result:
 | `failed: ...` | A step did not end, the time limit was reached, a service was not whole after the start or at the end, the driver found a defect of the harness, a test failed, a test was skipped, the tests collected were not 32 (a missing package skips whole files without another sign), or the stack could not be stopped |
 | `not run: the card was in use` | Another run held the lock of the graphics card, or a process computed on the card; then the result gives how many processes and how much memory |
 | `not run: the images are not of the head of the branch yet` | After the wait an image was still not built from the head of `dev`. Nothing more is done: the numbers would be those of another commit |
+| `not run: too little room for ...` | Before a pull or a build, Docker's disk had less free room than that step needs with the reserve after it. Nothing more is pulled or built, and no stack is started |
 
 - A task whose change did not land is in the report and does not fail the
   run. That number moves with the model and with chance; one night says
@@ -716,7 +849,7 @@ The first line of the report is its result:
 - A failed test is named in the result.
 - Counting nights, for a number such as "passed in 9 of 10 nights": a night
   counts as passed only with the result `passed`, which needs every one of
-  the 32 tests collected, none failed and none skipped. A night that is
+  the 30 tests collected, none failed and none skipped. A night that is
   `not run`, and a night with no report (the server was off), counts
   neither as passed nor as failed. At most one run counts for a night: the
   first one whose result is not `not run`.
@@ -737,6 +870,31 @@ The first line of the report is its result:
   send none. A user's install has a token when `atlas init` was run.
 - The run writes only inside its own folder, and it stops and removes only
   the containers of its own compose project.
+
+What a run keeps on disk:
+
+- On Docker's disk: one set of the five images, under the run's own names.
+  When the registry has another image for a service, the run removes its
+  last one before it pulls the new one. It removes by the two names that
+  the run itself gave that image, its own name and the name by digest that
+  its pull left, by no other name, and it never prunes. Docker deletes a
+  layer only when no other image uses it, so an image of another name
+  keeps every layer.
+- With a name by digest Docker also removes every tag of the same
+  repository that names the same image (seen with Docker 29 and the image
+  store of containerd). Such a tag, like `<image>:dev` or `<image>:eval`,
+  is not the run's own. So the run first asks Docker which names the image
+  has, and leaves the name by digest alone while a tag of the same
+  repository is among them. The name stays written down, and a later run
+  removes it when no such tag names the image any more.
+- An image that a smoke run builds is removed at the end of that run. The
+  build cache that such a build leaves is not removed: it cannot be told
+  from the cache of another build on the machine. `docker builder prune`
+  removes it, by hand.
+- In the folder of the run: one folder for each run under `reports/`, one
+  small file for each status, and the workspace of the last session. A
+  smoke run that builds keeps its copy of the commit's build folders in its
+  report folder. Nothing removes an old report folder.
 
 ### The result on GitHub
 
@@ -789,13 +947,57 @@ The server only calls out: it has no open port, no tunnel and no runner for
 this. One look:
 
 1. sends each status that waits;
-2. starts nothing when the graphics card is in use;
+2. starts nothing when the graphics card is in use, and nothing when
+   Docker's disk has too little free room;
 3. runs the night, when the hour of the night has come (`--night-hour`, in
    UTC) and no night was started that day;
 4. or else runs the tip of one branch `smoke/<name>` that has no result
    yet;
 5. or else does nothing, and leaves no report.
 
+- The room: a look that would start a run first reads the free room of
+  Docker's disk, at Docker's own folder and at the folder of containerd.
+  With too little it starts nothing and says `nothing is started: too
+  little room on Docker's disk (<n> GB free, <m> GB needed)`. The usual
+  stack is then not stopped, and no status is written. `--docker-folder`
+  names another folder to read.
+- The look wants two numbers, and each is a setting:
+  - `--reserve-gb`, 5 GB when it is not given, before every run. It is for
+    what the containers of the stack write and for an image that grew. It
+    is a choice, not a measure.
+  - `--first-set-gb`, 17 GB when it is not given, on top of the reserve,
+    while Docker has not an image under each of the run's five own names.
+    The look asks Docker that with one question. The measure: the five
+    images were 4.18 GB compressed in the registry and 12.9 GB unpacked
+    when this was written, and the image store of containerd keeps both. A
+    server that has some of their layers already needs less. Compare the
+    layers of the registry's images with the layers of the images on the
+    server, and give the smaller number as `--first-set-gb` in the
+    server's copy of the unit.
+- The run reads the free room again before each pull, and before each
+  build of a smoke run. When the room of that step and the reserve after it
+  are not there, the run ends `not run: too little room for <the step>
+  (<n> GB free, <m> GB needed)`. Nothing more is pulled or built, and no
+  stack is started. The usual stack is started again as after any run.
+  - The room of a pull: the run reads the layers of the image from the
+    registry, with no pull, and counts those that no image on the server
+    has yet. A layer counts as there only together with every layer under
+    it. The registry gives the compressed size only. On disk a layer is
+    given 4.1 times that, for the compressed and the unpacked layer
+    together. The measure: the five images took 17.1 GB on disk for 4.18 GB
+    compressed when this was written. One image alone took between 3.3 and
+    6.3 times its compressed size; the reserve is for that difference.
+  - The room of a build: that of the finished image as the registry has
+    it for the service, with no layer counted as there. What a build
+    writes cannot be known before it. It can be more than its finished
+    image: the images that the build starts from, and its cache. The
+    reserve is for that.
+  - The room is read after the last image of the service was removed: the
+    removal frees room, and it can take away layers that the new image
+    has too. So when a pull is refused, that last image is gone, and the
+    next look wants the room of a first set again.
+- The report of a run says the free room on Docker's disk before the run
+  and after it, in GB (`free_gb_before`, `free_gb_after`).
 - A tip has a result when the app wrote a `server/smoke` status on it. The
   look compares the id of the account that wrote the status
   (`--status-writer`), not a name: a status of that name by another account
@@ -816,7 +1018,8 @@ this. One look:
   are not run by the timer; one line says so, and no status is written.
 - The timer starts a smoke run only in the hours for smoke runs
   (`--smoke-hours`, in UTC, as in `22-23,0-5`). With no such hours given it
-  starts none. Outside them a smoke branch waits, and the look says so. The
+  starts none. Outside them the look does not look for a smoke branch, and
+  says so; a branch that is there waits. The
   night has its own hour. The unit names the hours 6 and 7. The hours are
   in UTC, so against a local clock they move by one hour when that clock
   changes between summer time and winter time; the setting is one argument
@@ -833,6 +1036,11 @@ this. One look:
 - `--tick --look` says what is due and starts nothing. Its status is 0 when
   a run is due and 3 when none is. A server whose usual stack holds the card
   asks this first, and stops that stack only when a run is due.
+- A look decides with the script that the last run left in the tree: only
+  a run moves the tree to the head of `dev`. So a change to what a look
+  decides does not reach a server whose looks start nothing. Move the tree
+  by hand then: `git -C ~/atlas-nightly/tree fetch origin dev`, then
+  `git -C ~/atlas-nightly/tree checkout --detach FETCH_HEAD`.
 - The files of the timer are in `scripts/server/`. `atlas-nightly.timer`
   starts `atlas-nightly.service` every 15 minutes. The unit starts
   `nightly_look.sh`, which asks with `--look`. Only status 3 is "nothing
@@ -915,10 +1123,18 @@ night and gives the same "not run" answers, each with status 0.
 
 What it needs on the server:
 
-- a folder for the run, and Docker for the user that runs it;
+- a folder for the run, and Docker for the user that runs it, with its
+  `buildx` plugin: the run reads the digest of an image from the registry
+  with it;
+- free room on Docker's disk: 5 GB before every run, and before the first
+  one also the room of the first set of the images (17 GB when the server
+  has no layer of them);
 - a Python with `pytest` and `httpx`, and `git` and `openssl`;
 - the file `nightly.env` in the folder, with the settings of the model for
-  that server and nothing else. The key is not in it;
+  that server, the folder of the model files and the folder of the lens's
+  files, each folder as a full path, and nothing else. The key is not in it.
+  A run with no lens folder, or with one that is not a full path, fails
+  before it pulls an image, and says which line to add;
 - the key file of the app, outside that folder, owned by that user, with
   mode 600;
 - a timer that starts the script with `--tick` every 15 minutes, with the
@@ -946,7 +1162,22 @@ needs no change.
 2. Its Python: `python3 -m venv ~/atlas-nightly/venv`, then
    `~/atlas-nightly/venv/bin/pip install pytest httpx`.
 3. The settings of the model: the file `~/atlas-nightly/nightly.env`, as
-   above. No key and no token goes into it.
+   above. No key and no token goes into it. From the `.env` of the usual
+   install, which takes the settings of the model by their names and
+   nothing else:
+   `grep -E '^(ATLAS_MODEL_FILE|ATLAS_MODEL_NAME|ATLAS_CTX_SIZE|ATLAS_PARALLEL_SLOTS|ATLAS_KV_TYPE_[KV]|ATLAS_UBATCH|ATLAS_BATCH|ATLAS_GPU_INDEX|ATLAS_LLAMA_MEM|ATLAS_EMBED_POOLING|ATLAS_CONTROL_VECTOR[A-Z_]*|PARALLEL_SLOTS|KV_CACHE_TYPE_[KV])=' <the usual install>/.env > ~/atlas-nightly/nightly.env`
+   Then the folder of the model files, as a full path. With none, or with
+   `./models`, the stack of the run looks inside its own copy of the
+   repository, where no model is. Docker says where the usual model server
+   takes its models from:
+   `echo "ATLAS_MODELS_DIR=$(docker inspect atlas-llama-server-1 --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Source}}{{end}}{{end}}')" >> ~/atlas-nightly/nightly.env`
+   Then the folder of the lens's files, as a full path, for the same
+   reason: the run's own copy of the repository has no `cost_field.pt`
+   (git leaves it out), so a lens that reads that copy cannot score. Docker
+   says where the usual lens takes its files from:
+   `echo "ATLAS_LENS_MODELS=$(docker inspect atlas-geometric-lens-1 --format '{{range .Mounts}}{{if eq .Destination "/app/geometric_lens/models"}}{{.Source}}{{end}}{{end}}')" >> ~/atlas-nightly/nightly.env`
+   Then `cat ~/atlas-nightly/nightly.env`: it has to show the file of the
+   model, its name, and two folders that start with `/`.
 4. The key of the app: `mkdir -p ~/.config/atlas-nightly`, then the key as
    the file `~/.config/atlas-nightly/status-app.pem`, then
    `chmod 600 ~/.config/atlas-nightly/status-app.pem`. The file lies outside
@@ -963,11 +1194,16 @@ needs no change.
 7. The timer: `systemctl --user daemon-reload`, then
    `systemctl --user enable --now atlas-nightly.timer`. So that it runs
    when nobody is logged in: `loginctl enable-linger`.
-8. To see what a look did: `journalctl --user -u atlas-nightly.service`.
+8. To see what a look did: `journalctl --user-unit atlas-nightly.service`.
+   The last lines are also in `systemctl --user status atlas-nightly.service`.
+   The form `journalctl --user -u atlas-nightly.service` prints "No journal
+   files were found" on a server that keeps no journal of the user's own
+   (seen on RHEL 9).
    To switch the nightly run off:
    `systemctl --user disable --now atlas-nightly.timer`.
 
-What a look needs on its path: `docker`, `git` and `openssl`. The Python is
+What a look needs on its path: `docker`, `git` and `openssl`. Docker needs
+its `buildx` plugin (`docker buildx version` shows it). The Python is
 named by its full path. The path of a look is the user unit's own, not the
 path of a login shell; `systemctl --user show-environment` shows it.
 
@@ -1005,6 +1241,13 @@ and red for its own violation.
 - Every check that runs on the canary is in the list: with a violation, or
   under `not_covered` (a job of a workflow) or `other_checks` (the check of
   a service) with the reason why it has none.
+- Every required check has a violation that turns it red, or is under
+  `not_covered` with the reason. A check that reports its findings as notes
+  and does not fail for them, as `golangci-lint` and `hadolint` do, is under
+  `not_covered`: no violation can turn it red. Its violation still shows
+  that it reports. A test of `scripts/setup/rulesets.sh` holds this for each
+  check that the script requires, so a change of the rules cannot leave one
+  out before it is applied.
 - A check with no violation of its own that is red through the violation of
   another check is under `side_effects`, with the path. A check with no
   violation that is red and is not there is named: a red with no cause on the
@@ -1036,10 +1279,13 @@ and red for its own violation.
   is one machine that is not always on.
 - It reads how old the newest night of the development server is: the
   newest `server/nightly` status that the server's own account wrote on a
-  commit of `dev`. A night that started more than 14 days ago, or none in
-  that time, is a finding. While no account is set as the writer
+  commit of `dev`. When the newest night started 3 or more days ago, or
+  there is none in the last 15 days, one line of notes says for how many
+  nights there was none; it is never a finding, as the nightly run is best
+  effort. While no account is set as the writer
   (`server.writer` in the list), one line says that nothing was looked for.
-  Today the list names no account, so the nights are not looked for yet.
+  The list names the account of the app that writes the server's statuses,
+  `atlas-server-results[bot]`, so the nights are looked for.
 
 A maintainer renews the canary once a week, and after a change to a workflow
 or to a file that configures a check:
@@ -1072,7 +1318,9 @@ statuses of a commit, and nothing else.
   listed check is red for its violation. "A finding": the lines below name
   each thing and its fix. "Not judged": GitHub could not be read, so nothing
   is known. "A finding" and "Not judged" both fail the job. "Not judged" is
-  never a pass.
+  never a pass. A read of a job's log that fails is tried once more before
+  the check gives up; its words then say that the log could not be read in
+  two tries, and give the error.
 - While the canary is as listed, that first line also says by which day it
   has to be renewed. The renew above is a step by hand, once a week, so that
   the Monday run is not red for age.

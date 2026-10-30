@@ -20,7 +20,7 @@ const sizeRules = (lines, complexity) => ({
 // number to make a change pass.
 const OVER_THE_LIMIT = {
     // ChatViewProvider.dispatch
-    "src/ui/chatView.ts": { lines: 188, complexity: 33 },
+    "src/ui/chatView.ts": { lines: 186, complexity: 32 },
     // predictEdit
     "src/session/editPreview.ts": { lines: FUNCTION_LINES, complexity: 17 },
 };

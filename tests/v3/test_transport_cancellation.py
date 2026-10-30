@@ -12,6 +12,7 @@ a worker merely returning.
 """
 import json
 import os
+import select
 import socket
 import sys
 import threading
@@ -37,6 +38,17 @@ class Upstream(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def wait_out_the_gap(self):
+        """Wait for the next chunk's turn, or raise at once when the client closes its end.
+
+        A closed client makes the socket readable with nothing to read. Waiting on the
+        socket, not on the clock, lets the record show the client's going as it happens,
+        not on a later write.
+        """
+        readable, _, _ = select.select([self.connection], [], [], Upstream.chunk_gap)
+        if readable and not self.connection.recv(1, socket.MSG_PEEK):
+            raise ConnectionResetError("the client closed its end")
+
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         self.rfile.read(n)
@@ -58,7 +70,7 @@ class Upstream(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 with Upstream.lock:
                     rec["sent"] += 1
-                time.sleep(Upstream.chunk_gap)
+                self.wait_out_the_gap()
             tail = b"data: [DONE]\n\n"
             self.wfile.write(b"%x\r\n" % len(tail) + tail + b"\r\n")
             self.wfile.write(b"0\r\n\r\n")
@@ -97,9 +109,9 @@ def upstream():
 def upstream_settled(index=0, timeout=8):
     """Wait for one upstream record to finish unwinding.
 
-    The peer notices a torn-down connection on its NEXT write, so the record's
-    outcome is not readable the instant the local worker returns. Waiting is
-    part of the measurement, not a workaround.
+    The peer notices a torn-down connection in its next gap or on its next
+    write, so the record's outcome is not readable the instant the local
+    worker returns. Waiting is part of the measurement, not a workaround.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:

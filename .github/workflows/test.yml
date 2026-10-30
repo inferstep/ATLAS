@@ -53,17 +53,17 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         id: go
         with:
-          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
-          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # 1.26.10 covers both modules (tui's go.mod requires 1.26.10;
+          # proxy's 1.24 floor builds fine on it). setup-go pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # The step below keeps the caches, under a key of this job's own.
           cache: false
 
       - name: point the gates at Go's own build cache folder
-        # The gate script builds in a folder of its own unless GOCACHE is
-        # set. The step below keeps Go's own folder, so the gates use that.
+        # The cache step below saves Go's own build folder. The gate script
+        # uses it when GOCACHE is unset; this step names it for every step.
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       - name: Go module and build cache
@@ -179,21 +179,27 @@ jobs:
           pip install --no-deps -e .
 
       - name: install lens dependencies (CPU torch)
-        if: matrix.subset == 'geometric-lens/tests'
+        if: matrix.subset == 'geometric-lens/tests' || matrix.subset == 'tests/cli'
         # Mirrors geometric-lens/Dockerfile: CPU-only torch wheel (the
         # CUDA default is ~2 GB and pointless on a CPU runner), then the
-        # service requirements. xgboost tests importorskip if absent, but
-        # requirements.txt pins xgboost-cpu so they run here.
-        run: |
-          pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install -r geometric-lens/requirements.txt
+        # service requirements, from a hashed lock (see lens.in). xgboost
+        # tests importorskip if absent, but requirements.txt pins
+        # xgboost-cpu so they run here. The CLI's lens and ASA tests need
+        # torch, gguf and huggingface_hub, and skip without them.
+        run: pip install --require-hashes -r .github/requirements/lens.txt
 
       - name: pytest
         env:
           # Makes the test gate write an LCOV report, the raw data and the
           # test results there.
           ATLAS_COVERAGE_DIR: ${{ runner.temp }}/coverage
-        run: python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+        # tests/infrastructure is the long subset: its tests run in four
+        # processes at once, one for each CPU of the runner. Every test still
+        # runs once, and the result file holds every test. The other subsets
+        # take seconds and stay in one process.
+        run: >-
+          python scripts/production-readiness.py --only python-tests --pytest-path "${{ matrix.subset }}"
+          --pytest-workers "${{ matrix.subset == 'tests/infrastructure' && 4 || 1 }}"
 
       - name: coverage total
         if: ${{ !cancelled() }}
@@ -224,7 +230,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # No cache: this job builds the proxy once, in about ten seconds,
           # and restoring a cache takes as long.
           cache: false
@@ -365,7 +371,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # No cache: this job builds the proxy once, in about ten seconds,
           # and restoring a cache takes as long.
           cache: false
@@ -554,7 +560,15 @@ jobs:
           } > "$RUNNER_TEMP/sandbox.env"
 
       - name: build sandbox image
-        run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+        run: |
+          # The build downloads tools from servers outside GitHub (go.dev among
+          # them), and a download can break off in its middle. A build that
+          # fails is tried once more; a second failure fails the step with
+          # docker's own words.
+          docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox || {
+            echo "The build of the sandbox image failed. It is tried once more."
+            docker compose --env-file "$RUNNER_TEMP/sandbox.env" build sandbox
+          }
 
       - name: start the sandbox as the stack starts it, and wait for its health answer
         run: |
@@ -585,6 +599,21 @@ jobs:
       - name: every sandbox test ran and passed
         run: python scripts/tests_counted.py sandbox "$RUNNER_TEMP/sandbox-tests.xml"
 
+      # One test asks the Docker engine of this runner what it removes with
+      # an image's name by digest: the group `docker` of
+      # scripts/tests_counted.py. The nightly run removes its last image that
+      # way, and a stand-in for Docker cannot show what Docker does.
+      - name: the test that needs a real Docker engine
+        # `-rP` shows what the test printed: the version of the engine and
+        # its storage driver.
+        run: |
+          # shellcheck disable=SC2046  # the files of the group, each a word of its own
+          python -m pytest -m integration $(python scripts/tests_counted.py --files docker) -q -rsP -p no:cacheprovider \
+            --junitxml="$RUNNER_TEMP/docker-tests.xml" || echo "pytest ended with status $?. The next step judges the result file."
+
+      - name: the test of the Docker engine ran and passed
+        run: python scripts/tests_counted.py docker "$RUNNER_TEMP/docker-tests.xml"
+
       - name: the log of the sandbox, when a step failed
         if: failure()
         run: docker compose --env-file "$RUNNER_TEMP/sandbox.env" logs --tail 120 sandbox
@@ -608,7 +637,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # No cache: the two builds take less time than restoring one.
           cache: false
 
@@ -629,6 +658,10 @@ jobs:
       - name: build the proxy and the TUI
         run: |
           (cd proxy && go build -o "$RUNNER_TEMP/atlas-proxy" .)
+          # Go fetches the TUI's modules first, with no cache (none would act in
+          # the merge queue). A download that breaks off in its middle is tried
+          # once more; a second failure fails the step with Go's own words.
+          (cd tui && { go mod download || { echo "The download of the TUI's modules broke off. It is tried once more."; go mod download; }; })
           # The TUI tests start this file.
           (cd tui && go build -o atlas-tui .)
 

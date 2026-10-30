@@ -4,128 +4,67 @@
 // rounds of manual `atlas workspace align` to notice each time.
 
 import { describe, expect, it, vi } from 'vitest';
-import { checkAlignment, WorkspaceClient } from '../src/workspace/alignment';
+import { checkAlignment, type AlignState, type Runner, type WorkspaceClient } from '../src/workspace/alignment';
+
+/** What GET /workspace answers when the proxy is bound to `projectDir`. */
+const boundTo = (projectDir: string) => ({ project_dir: projectDir, working_dir: '/workspace', containerized: true });
 
 describe('checkAlignment', () => {
-	it('maps the `atlas workspace` exit code to a state', async () => {
-		// 0 = this directory is covered by the bind, 1 = it is not.
-		await expect(checkAlignment('/x', async () => 0)).resolves.toBe('aligned');
-		await expect(checkAlignment('/x', async () => 1)).resolves.toBe('misaligned');
-	});
-
-	it('is unknown when atlas is not installed', async () => {
+	it.each<[string, AlignState, Runner]>([
+		// `atlas workspace`: 0 = this directory is covered by the bind, 1 = it is not.
+		['exit code 0', 'aligned', async () => 0],
+		['exit code 1', 'misaligned', async () => 1],
+		// Any other exit code, e.g. docker unreachable: do not claim a
+		// misalignment we cannot see.
+		['exit code 2', 'unknown', async () => 2],
+		['exit code 127', 'unknown', async () => 127],
 		// A missing CLI must never nag a user whose setup is otherwise fine.
-		const spawnFailure = () => Promise.reject(new Error('ENOENT'));
-		await expect(checkAlignment('/x', spawnFailure)).resolves.toBe('unknown');
-	});
-
-	it('is unknown on any other exit code', async () => {
-		// e.g. docker unreachable — do not claim misalignment we cannot see.
-		await expect(checkAlignment('/x', async () => 2)).resolves.toBe('unknown');
-		await expect(checkAlignment('/x', async () => 127)).resolves.toBe('unknown');
-	});
-
-	it('runs in the folder being checked', async () => {
-		const run = vi.fn(async () => 0);
-		await checkAlignment('/home/isaac/demo2', run);
+		['atlas not installed', 'unknown', () => Promise.reject(new Error('ENOENT'))],
+	])('runs `atlas workspace` in the folder: %s is %s', async (_case, state, cli) => {
+		const run = vi.fn(cli);
+		await expect(checkAlignment('/home/isaac/demo2', run)).resolves.toBe(state);
 		expect(run).toHaveBeenCalledWith('atlas workspace', '/home/isaac/demo2');
 	});
 
 	describe('with an injected client', () => {
 		it('trusts the endpoint when misaligned, without touching the CLI', async () => {
-			const client: WorkspaceClient = {
-				getWorkspace: async () => ({
-					project_dir: '/home/HiIsaac/sudoku-solver',
-					working_dir: '/workspace',
-					containerized: true
-				})
-			};
-
+			const client: WorkspaceClient = { getWorkspace: async () => boundTo('/home/HiIsaac/sudoku-solver') };
 			const run = vi.fn(async () => 0); // would say 'aligned' if it were ever called
+
 			const result = await checkAlignment('/home/HiIsaac/tic-tac-toe', run, client);
 
 			expect(result).toBe('misaligned');
 			expect(run).not.toHaveBeenCalled();
 		});
 
-		it('endpoint unreachable, CLI fallback', async () => {
-			const client: WorkspaceClient = {
-				getWorkspace: async () => null,
-			};
-			const run = vi.fn(async () => 0);
-
-			const result = await checkAlignment('/home/HiIsaac/wanna-play', run, client);
-
-			expect(result).toBe('aligned');
-			expect(run).toHaveBeenCalledWith('atlas workspace', '/home/HiIsaac/wanna-play');
-		});
-
-		it(`is 'unknown' when both the endpoint and the CLI are unavailable`, async () => {
-			const client: WorkspaceClient = {
-				getWorkspace: async () => null
-			};
-			const run = vi.fn(() => Promise.reject(new Error('ENOENT')));
-			const result = await checkAlignment('/home/HiIsaac/assassins', run, client);
-
-			expect(result).toBe('unknown');
-			expect(run).toHaveBeenCalled();
-		});
-
-		it(`relative host path falls through to the CLI instead of a bogus mismatch`, async () => {
-			const client: WorkspaceClient = {
-				getWorkspace: async () => ({
-					project_dir: '.',
-					working_dir: '/workspace',
-					containerized: true,
-				}),
-			};
-			const run = vi.fn(async () => 1); // CLI says misaligned
-
-			const result = await checkAlignment('/home/HiIsaac/relative-path', run, client);
-
-			expect(result).toBe('misaligned');
-			expect(run).toHaveBeenCalledWith('atlas workspace', '/home/HiIsaac/relative-path');
-		});
-
-		// The endpoint is authoritative for 'no' only. It reports the proxy's
-		// own bind and knows nothing about the sandbox's, so a proxy-side
-		// match cannot conclude 'aligned' on its own — `atlas workspace`
-		// compares both binds and is the only thing that sees a SPLIT. An
-		// early return here would report the split-brain case as aligned,
-		// which is precisely the failure this module exists to catch.
-		it('proxy-side match still consults the CLI, which sees the sandbox bind', async () => {
-			const client: WorkspaceClient = {
-				getWorkspace: async () => ({
-					project_dir: '/home/HiIsaac/tic-tac-toe',
-					working_dir: '/workspace',
-					containerized: true,
-				}),
-			};
-			const run = vi.fn(async () => 1); // sandbox bind has drifted: SPLIT
-
-			const result = await checkAlignment('/home/HiIsaac/tic-tac-toe', run, client);
-
-			expect(result).toBe('misaligned');
-			expect(run).toHaveBeenCalledWith('atlas workspace', '/home/HiIsaac/tic-tac-toe');
-		});
-
-		it('a folder nested inside the bind is covered, not a mismatch', async () => {
-			// `covers` is containment, not equality — opening a subdirectory
-			// of the bound project is aligned, and must not fast-path to
+		// In every case below the CLI decides, and it runs in the open folder.
+		it.each([
+			['endpoint unreachable, CLI fallback',
+				{ workspace: null, folder: '/home/HiIsaac/wanna-play', cli: async () => 0, state: 'aligned' }],
+			[`is 'unknown' when both the endpoint and the CLI are unavailable`,
+				{ workspace: null, folder: '/home/HiIsaac/assassins', cli: () => Promise.reject(new Error('ENOENT')), state: 'unknown' }],
+			['relative host path falls through to the CLI instead of a bogus mismatch',
+				{ workspace: boundTo('.'), folder: '/home/HiIsaac/relative-path', cli: async () => 1, state: 'misaligned' }],
+			// The endpoint is authoritative for 'no' only. It reports the proxy's
+			// own bind and knows nothing about the sandbox's, so a proxy-side
+			// match cannot conclude 'aligned' on its own — `atlas workspace`
+			// compares both binds and is the only thing that sees a SPLIT. An
+			// early return here would report the split-brain case as aligned,
+			// which is precisely the failure this module exists to catch. Here
+			// the sandbox bind has drifted, so the CLI says 1.
+			['proxy-side match still consults the CLI, which sees the sandbox bind',
+				{ workspace: boundTo('/home/HiIsaac/tic-tac-toe'), folder: '/home/HiIsaac/tic-tac-toe', cli: async () => 1, state: 'misaligned' }],
+			// `covers` is containment, not equality — opening a subdirectory of
+			// the bound project is aligned, and must not fast-path to
 			// 'misaligned' before the CLI is asked.
-			const client: WorkspaceClient = {
-				getWorkspace: async () => ({
-					project_dir: '/home/HiIsaac/monorepo',
-					working_dir: '/workspace',
-					containerized: true,
-				}),
-			};
-			const run = vi.fn(async () => 0); // both binds agree
+			['a folder nested inside the bind is covered, not a mismatch',
+				{ workspace: boundTo('/home/HiIsaac/monorepo'), folder: '/home/HiIsaac/monorepo/packages/api', cli: async () => 0, state: 'aligned' }],
+		])('%s', async (_name, { workspace, folder, cli, state }) => {
+			const client: WorkspaceClient = { getWorkspace: async () => workspace };
+			const run = vi.fn(cli);
 
-			const result = await checkAlignment('/home/HiIsaac/monorepo/packages/api', run, client);
-
-			expect(result).toBe('aligned');
-			expect(run).toHaveBeenCalledWith('atlas workspace', '/home/HiIsaac/monorepo/packages/api');
+			await expect(checkAlignment(folder, run, client)).resolves.toBe(state);
+			expect(run).toHaveBeenCalledWith('atlas workspace', folder);
 		});
 	});
 });

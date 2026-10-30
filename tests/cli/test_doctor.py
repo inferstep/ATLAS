@@ -12,8 +12,16 @@ real CI runs. These tests cover the new check_metal_native() added in
      for non-Mac users
 """
 
+import http.server
+import io
 import json
+import os
 import sys
+import threading
+import urllib.error
+from types import SimpleNamespace
+
+import pytest
 
 from atlas.commands import doctor
 
@@ -53,20 +61,88 @@ def test_e2e_smoke_uses_public_proxy_path(monkeypatch):
     assert captured["timeout"] == 60
 
 
-def test_health_endpoint_reports_degraded_as_warning(monkeypatch):
+def test_the_lens_line_asks_the_strict_address_and_names_why_the_lens_is_not_ready(monkeypatch):
     def fake_get(url, timeout=3):
-        status = "degraded" if url.endswith(":8099/health") else "ok"
-        return True, json.dumps({"status": status})
+        return True, json.dumps({"status": "ok"})
+
+    def fake_urlopen(url, timeout=5):
+        assert url == "http://127.0.0.1:8099/ready"
+        answer = json.dumps({"detail": {"ready": False, "llama_server": True, "reason": "the self-test could not embed"}})
+        raise urllib.error.HTTPError(url, 503, "Service Unavailable", {}, io.BytesIO(answer.encode()))
 
     monkeypatch.setattr(doctor, "_http_get", fake_get)
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake_urlopen)
     # The lens URL comes from the checkout's .env at import; pin the default.
     monkeypatch.setattr(doctor, "LENS_URL", "http://127.0.0.1:8099")
 
     results = {item.name: item for item in doctor.check_health_endpoints()}
 
-    assert results["health/lens"].status == "warn"
-    assert results["health/lens"].message == "degraded"
+    assert (results["health/lens"].status, results["health/lens"].message) == ("warn", "not ready")
+    assert results["health/lens"].detail == "the self-test could not embed"
     assert results["health/proxy"].status == "pass"
+
+
+def a_token_file(tmp_path, monkeypatch):
+    """A token file as `atlas init` makes it: 0600 in a 0700 folder, of the user who runs the test."""
+    secrets = tmp_path / "secrets"
+    secrets.mkdir(mode=0o700)
+    token = secrets / "service-token"
+    token.write_text("atlas-st-doctorfixture\n")
+    token.chmod(0o600)
+    monkeypatch.setenv("ATLAS_SERVICE_TOKEN_FILE", str(token))
+    return token
+
+
+def test_internal_auth_fails_when_the_services_run_as_a_user_who_cannot_read_the_token(tmp_path, monkeypatch):
+    token = a_token_file(tmp_path, monkeypatch)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setenv("ATLAS_PROXY_UID", str(os.getuid() + 1))
+    monkeypatch.setenv("ATLAS_SANDBOX_UID", str(os.getuid()))
+
+    (result,) = doctor.check_internal_auth(str(tmp_path))
+
+    assert result.status == "fail"
+    assert result.message == (f"the services run as user {os.getuid() + 1} (ATLAS_PROXY_UID), but {token.parent} belongs "
+                              f"to user {os.getuid()} with mode 0o700: they cannot read the token, and each stops")
+
+
+def test_internal_auth_asks_each_of_the_four_services_with_a_wrong_token_and_with_the_token(tmp_path, monkeypatch):
+    a_token_file(tmp_path, monkeypatch)
+    monkeypatch.setenv("ATLAS_PROXY_UID", str(os.getuid()))
+    monkeypatch.setenv("ATLAS_SANDBOX_UID", str(os.getuid()))
+    asked = []
+
+    class Services(http.server.BaseHTTPRequestHandler):
+        """The four services on one stand-in. The V3 service's check is off: it takes any token."""
+        def answer(self):
+            asked.append((self.command, self.path))
+            right = self.headers.get("Authorization") == "Bearer atlas-st-doctorfixture"
+            status = 200 if right or self.path == "/internal/outline" else 401
+            self.send_response(422 if status == 200 and self.path == "/internal/lens/score-text" else status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST = answer
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Services)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for name in ("PROXY_URL", "LENS_URL", "V3_URL", "SANDBOX_URL"):
+        monkeypatch.setattr(doctor, name, f"http://127.0.0.1:{server.server_port}")
+
+    results = {item.name: (item.status, item.message) for item in doctor.check_internal_auth(str(tmp_path))}
+    server.shutdown()
+
+    assert results == {
+        "internal_auth/proxy": ("pass", "enforced (wrong token 401; valid token 200)"),
+        "internal_auth/lens": ("pass", "enforced (wrong token 401; valid token 422)"),
+        "internal_auth/v3": ("warn", "token file present but the v3 accepts wrong tokens"),
+        "internal_auth/sandbox": ("pass", "enforced (wrong token 401; valid token 200)"),
+    }
+    assert sorted(set(asked)) == [("GET", "/jobs"), ("GET", "/v1/models"), ("POST", "/internal/lens/score-text"),
+                                  ("POST", "/internal/outline")]
 
 
 def test_check_model_file_requires_explicit_selection(monkeypatch, tmp_path):
@@ -422,7 +498,8 @@ def test_grammar_mode_check_compares_the_env_with_the_registry(tmp_path):
                    "ATLAS_GRAMMAR_MODE=strict\n")
     r = doctor.check_grammar_mode(str(tmp_path))
     assert r.status == "warn", r
-    assert "loose" in r.message and "ATLAS_GRAMMAR_MODE=loose" in r.detail
+    assert "loose" in r.message
+    assert "ATLAS_GRAMMAR_MODE=loose" in r.detail
     env.write_text("ATLAS_MODEL_FILE=gemma-4-12b-it-Q4_K_M.gguf\n"
                    "ATLAS_GRAMMAR_MODE=loose\n")
     assert doctor.check_grammar_mode(str(tmp_path)).status == "pass"
@@ -454,3 +531,94 @@ def test_status_dimensions_fail_while_the_agent_is_blocked(monkeypatch):
         True, status("supported", "the lens can score")))
     [fine] = doctor.check_status_dimensions()
     assert fine.status == "pass"
+
+
+# ---------------------------------------------------------------------------
+# tier_match: the configured model against the host's tier, and its Lens files
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("host_tier, model_file, artifacts_ok, status, words", [
+    pytest.param("medium", "Qwen3.5-9B-Q6_K.gguf", False, "warn",
+                 "registered as Lens-supported but 1 artifact file(s) missing: cost_field.pt",
+                 id="the tier's own model, its Lens files missing"),
+    pytest.param("medium", "Qwen3.5-9B-Q6_K.gguf", True, "pass",
+                 "medium tier matches configured model",
+                 id="the tier's own model, its Lens files present"),
+    pytest.param("large", "Qwen3.5-7B-Q4_K_M.gguf", True, "warn",
+                 "has Lens status `no-artifacts`",
+                 id="a smaller model without a Lens bundle"),
+    pytest.param("large", "Qwen3.5-9B-Q6_K.gguf", True, "pass",
+                 "running medium-tier model on large-tier hardware (under-utilized but safe)",
+                 id="a smaller model with its Lens files present"),
+])
+def test_tier_match_checks_the_lens_files_of_the_configured_model(
+        monkeypatch, host_tier, model_file, artifacts_ok, status, words):
+    from atlas.commands import model_registry
+    monkeypatch.setattr(doctor.tier, "probe", lambda: SimpleNamespace(has_gpu=True, vram_gb=24.0))
+    monkeypatch.setattr(doctor.tier, "classify", lambda probe: SimpleNamespace(tier=host_tier))
+    monkeypatch.setattr(doctor, "MODEL_FILE", model_file)
+    missing = [] if artifacts_ok else ["cost_field.pt"]
+    monkeypatch.setattr(model_registry, "lens_artifacts_present", lambda model, root: {
+        "ok": artifacts_ok, "missing_files": missing, "expected_dir": "/lens"})
+
+    result = doctor.check_tier_match()
+
+    assert result.status == status
+    assert words in result.message
+
+
+# ---------------------------------------------------------------------------
+# main: every check, in its order, with what each needs
+# ---------------------------------------------------------------------------
+
+def test_doctor_runs_every_check_in_order_and_hands_each_what_it_needs(
+        monkeypatch, tmp_path, capsys):
+    """With Metal as the backend and a running container, every check runs,
+    in its order. The Metal and auth checks get the install root, and the
+    mount and image checks get the services `docker compose ps` listed."""
+    services = [{"Service": "llama-server", "State": "running"}]
+    given = {}
+
+    def one_result(name):
+        def check(*args, **kwargs):
+            given[name] = args
+            return doctor.CheckResult(name, "pass", "ok")
+        return check
+
+    def a_list_of_results(name):
+        def check(*args, **kwargs):
+            given[name] = args
+            return [doctor.CheckResult(name, "pass", "ok")]
+        return check
+
+    for name in ("check_docker", "check_compose", "check_arch", "check_gpu",
+                 "_check_metal_native", "check_model_file", "check_lens_weights",
+                 "check_asa_steering", "check_grammar_mode", "check_workspace_mounts",
+                 "check_image_skew", "check_tier_match", "check_tier_constraints",
+                 "check_e2e_smoke", "check_inference_contract"):
+        monkeypatch.setattr(doctor, name, one_result(name))
+    for name in ("check_containers", "check_health_endpoints", "check_internal_auth",
+                 "check_status_dimensions"):
+        monkeypatch.setattr(doctor, name, a_list_of_results(name))
+    monkeypatch.setattr(doctor, "_find_atlas_root", lambda: str(tmp_path))
+    monkeypatch.setattr(doctor, "_resolve_backend", lambda root: "metal")
+    monkeypatch.setattr(doctor, "_compose_ps", lambda root: services)
+    monkeypatch.setattr(doctor.compose_config, "format_command",
+                        lambda root, args: "docker compose up -d")
+
+    rc = doctor.main(["--json"])
+
+    assert rc == 0
+    checks = json.loads(capsys.readouterr().out)["checks"]
+    assert [check["name"] for check in checks] == [
+        "check_docker", "check_compose", "check_arch", "check_gpu", "_check_metal_native",
+        "check_containers", "check_health_endpoints", "check_internal_auth",
+        "check_status_dimensions", "check_model_file", "check_lens_weights",
+        "check_asa_steering", "check_grammar_mode", "check_workspace_mounts",
+        "check_image_skew", "check_tier_match", "check_tier_constraints",
+        "check_e2e_smoke", "check_inference_contract"]
+    assert given["_check_metal_native"] == (str(tmp_path),)
+    assert given["check_internal_auth"] == (str(tmp_path),)
+    assert given["check_workspace_mounts"] == (services,)
+    assert given["check_image_skew"] == (services,)
+    assert given["check_tier_constraints"] == (str(tmp_path),)

@@ -13,45 +13,40 @@ import (
 // A checker the sandbox stopped before a verdict (a wall-clock or memory
 // ceiling, or it never started) is not a pass and not a syntax error, and it
 // is not the sandbox being down either: that flag feeds producer-unavailable
-// reasons elsewhere (audit S-sandbox/INTEGRITY#1).
+// reasons elsewhere.
 func TestAStoppedSyntaxCheckerIsNotRun(t *testing.T) {
-	replies := map[string]map[string]interface{}{
-		"stopped": {"valid": false, "status": "not_run", "outcome": "timed_out",
-			"errors": []string{"syntax verification unavailable: the checker ended timed_out"}},
-		"broken": {"valid": false, "status": "checked", "outcome": "completed",
-			"errors": []string{"SyntaxError: invalid syntax (line 2)"}},
-		"clean": {"valid": true, "status": "checked", "outcome": "completed", "errors": []string{}},
-		// A sandbox that predates the field answers as before.
-		"legacy": {"valid": true, "errors": []string{}},
-	}
-	for name, reply := range replies {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = json.NewEncoder(w).Encode(reply)
-		}))
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL = srv.URL
-		got := sandboxSyntaxOutcome(ctx, "app.py", "x = 1\n")
-		srv.Close()
-		switch name {
-		case "stopped":
-			if got.Status != ValidationNotRun || got.ProducerUnavailable {
-				t.Errorf("stopped checker: %+v, want not_run without producer-unavailable", got)
+	for _, c := range []struct {
+		name  string
+		reply map[string]interface{}
+		want  ValidationStatus
+	}{
+		{"stopped", map[string]interface{}{"valid": false, "status": "not_run", "outcome": "timed_out",
+			"errors": []string{"syntax verification unavailable: the checker ended timed_out"}}, ValidationNotRun},
+		{"broken", map[string]interface{}{"valid": false, "status": "checked", "outcome": "completed",
+			"errors": []string{"SyntaxError: invalid syntax (line 2)"}}, ValidationFailed},
+		{"clean", map[string]interface{}{"valid": true, "status": "checked", "outcome": "completed",
+			"errors": []string{}}, ValidationPassed},
+		// A sandbox without the status field answers with valid alone.
+		{"legacy", map[string]interface{}{"valid": true, "errors": []string{}}, ValidationPassed},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(c.reply)
+			}))
+			defer srv.Close()
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+			ctx.SandboxURL = srv.URL
+			got := sandboxSyntaxOutcome(ctx, "app.py", "x = 1\n")
+			if got.Status != c.want || got.ProducerUnavailable {
+				t.Errorf("outcome %+v, want %s without producer-unavailable", got, c.want)
 			}
-		case "broken":
-			if got.Status != ValidationFailed {
-				t.Errorf("syntax error: %+v, want failed", got)
-			}
-		default:
-			if got.Status != ValidationPassed {
-				t.Errorf("%s: %+v, want passed", name, got)
-			}
-		}
+		})
 	}
 }
 
-// P-gates/INTEGRITY#1: completion read only the whole-file parse, so a Flask
-// app whose embedded <script> the harness had just found broken was
-// "demonstrated", and a clean run of the server then overwrote that verdict.
+// Completion reads more than the whole-file parse: a Flask app whose embedded
+// <script> the harness found broken is not "demonstrated", and a clean run of
+// the server does not overwrite that verdict.
 func TestABrokenEmbeddedScriptIsNotDemonstrated(t *testing.T) {
 	app := flaskWithScript(strayParenLine)
 	for _, reachable := range []bool{true, false} {
@@ -102,10 +97,9 @@ func TestACleanRunDoesNotSettleAnEmbeddedScriptFailure(t *testing.T) {
 	}
 }
 
-// V-pipeline/INTEGRITY#2: the run was told "V3 verified this edit ... The
-// fix is on disk and build-checked ... respond NOW with done" whenever V3's
-// phase name sounded like success, including a phase1 reached by agreement
-// between candidates or a compile, with nothing ever running the code.
+// The V3 nudge says what a run showed, not what V3's phase name suggests: a
+// phase1 can be reached by agreement between candidates or by a compile, with
+// nothing running the code, so it must not tell the run to respond with done.
 func TestTheV3NudgeSaysWhatARunShowed(t *testing.T) {
 	ctx, dir := sepCtx(t, nil)
 	h := sepWrite(t, ctx, dir, "app.py", "print('ok')\n")
@@ -129,9 +123,9 @@ func TestTheV3NudgeSaysWhatARunShowed(t *testing.T) {
 	}
 }
 
-// P-safety/INTEGRITY#4: the identical-resend refusal keyed structural_edit on
-// path and selector only, so a corrected body was refused "byte for byte",
-// the tool was banned for the file and the run ended repeated_refusal.
+// The identical-resend refusal keys structural_edit on the body too: keyed on
+// path and selector only, a corrected body would be refused "byte for byte"
+// and the tool banned for the file.
 func TestAStructuralEditWithANewBodyIsNotAResend(t *testing.T) {
 	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
 	call := func(body string) json.RawMessage {
@@ -143,11 +137,11 @@ func TestAStructuralEditWithANewBodyIsNotAResend(t *testing.T) {
 	if msg := identicalRetryRefusal(ctx, "structural_edit", call("def update():\n    pass\n")); msg != "" {
 		t.Fatalf("a corrected body was refused as a byte-for-byte re-send: %q", msg)
 	}
-	if msg := identicalRetryRefusal(ctx, "structural_edit", call("def update(:\n    pass\n")); msg == "" {
-		t.Fatal("an identical re-send of a refused call is no longer refused")
+	if identicalRetryRefusal(ctx, "structural_edit", call("def update(:\n    pass\n")) == "" {
+		t.Fatal("an identical re-send of a refused call is not refused")
 	}
 	// The repeat window keeps its own identity: the selector, whatever the body.
 	if toolCallSignature("structural_edit", call("a")) != toolCallSignature("structural_edit", call("b")) {
-		t.Fatal("the repeat window no longer treats bodies against one selector as repeats")
+		t.Fatal("the repeat window does not treat bodies against one selector as repeats")
 	}
 }

@@ -14,7 +14,7 @@ Provenance (ported behavior-for-behavior):
   resolve.py  <- src/graph/suffix-index.ts (adapted to Python modules)
   cache.py    <- src/graph/cache.ts (in-process)
 
-See docs/reports/CALL_GRAPH_REASONING_V3.md.
+The design is issue #39 (https://github.com/inferstep/ATLAS/issues/39).
 
 The package facade exports only what production imports (pipeline.py and
 main.py); tests import the submodules directly.

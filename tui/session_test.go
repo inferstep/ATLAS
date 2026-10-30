@@ -1,12 +1,13 @@
 // Tests for session persistence — round-trip save/load, listing order, cwd
-// filtering, malformed-file tolerance, and that a resumed transcript feeds
-// buildChatHistory.
+// filtering, malformed-file tolerance, and the model's own saves.
 
 package main
 
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,21 +45,15 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadSession: %v", err)
 	}
-	if got.Cwd != sess.Cwd || got.Mode != sess.Mode || got.Title != sess.Title {
-		t.Errorf("metadata mismatch: got %+v", got)
-	}
-	if len(got.Messages) != 3 {
-		t.Fatalf("messages len = %d, want 3", len(got.Messages))
-	}
-	if got.Messages[0].Body != "fix the bug" || got.Messages[1].Role != roleAssistant {
-		t.Errorf("messages not preserved: %+v", got.Messages)
-	}
-	if !got.Messages[2].Echo || got.Messages[2].Meta != "turn" {
-		t.Errorf("row flags not preserved: %+v", got.Messages[2])
+	// Every field and every row comes back, with its role and flags.
+	if !reflect.DeepEqual(*got, sess) {
+		t.Errorf("loaded %+v, want what was saved: %+v", *got, sess)
 	}
 }
 
-func TestListSessionsNewestFirst(t *testing.T) {
+// listSessions returns every saved session newest first, and skips a file
+// that does not hold one.
+func TestListSessionsNewestFirstSkippingMalformed(t *testing.T) {
 	isolateSessions(t)
 	for _, s := range []Session{
 		{ID: "a", UpdatedAt: "2026-07-01T10:00:00Z", Messages: []chatMessage{{Role: roleUser, Body: "a"}}},
@@ -69,15 +64,23 @@ func TestListSessionsNewestFirst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	dir, err := sessionsDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, err := listSessions()
 	if err != nil {
 		t.Fatalf("listSessions: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("listSessions len = %d, want 3", len(got))
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.ID)
 	}
-	if got[0].ID != "b" || got[1].ID != "c" || got[2].ID != "a" {
-		t.Errorf("order = %s,%s,%s, want b,c,a", got[0].ID, got[1].ID, got[2].ID)
+	if strings.Join(ids, ",") != "b,c,a" {
+		t.Errorf("listSessions = %v, want b,c,a", ids)
 	}
 }
 
@@ -108,28 +111,6 @@ func TestMostRecentForCwd(t *testing.T) {
 	}
 }
 
-func TestListSessionsSkipsMalformed(t *testing.T) {
-	isolateSessions(t)
-	if err := saveSession(Session{ID: "good", UpdatedAt: "2026-07-01T10:00:00Z",
-		Messages: []chatMessage{{Role: roleUser, Body: "x"}}}); err != nil {
-		t.Fatal(err)
-	}
-	dir, err := sessionsDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := listSessions()
-	if err != nil {
-		t.Fatalf("listSessions: %v", err)
-	}
-	if len(got) != 1 || got[0].ID != "good" {
-		t.Errorf("listSessions = %+v, want only the good session", got)
-	}
-}
-
 // A model persists per turn and reloads exactly.
 func TestModelSaveSessionRoundTrip(t *testing.T) {
 	isolateSessions(t)
@@ -156,6 +137,21 @@ func TestModelSaveSessionRoundTrip(t *testing.T) {
 	}
 }
 
+// A session keeps the time it was created; a model without one stamps the
+// current time. (The round-trip tests above do not read CreatedAt.)
+func TestBuildSessionKeepsTheCreationTime(t *testing.T) {
+	m := &tuiModel{sessionCreatedAt: "2026-07-01T10:00:00Z"}
+	if got := m.buildSession().CreatedAt; got != "2026-07-01T10:00:00Z" {
+		t.Errorf("CreatedAt = %q, want the model's own 2026-07-01T10:00:00Z", got)
+	}
+
+	m = &tuiModel{}
+	got := m.buildSession().CreatedAt
+	if _, err := time.Parse(time.RFC3339, got); err != nil {
+		t.Errorf("CreatedAt with no creation time = %q, want the current time in RFC 3339: %v", got, err)
+	}
+}
+
 // Persistence is skipped when disabled (demo child models) or empty.
 func TestSaveSessionRespectsGuards(t *testing.T) {
 	isolateSessions(t)
@@ -172,38 +168,6 @@ func TestSaveSessionRespectsGuards(t *testing.T) {
 	m.saveSession()
 	if _, err := loadSession(m.sessionUID); err == nil {
 		t.Error("empty transcript should not write a file")
-	}
-}
-
-// A resumed transcript feeds buildChatHistory just like live rows.
-func TestResumedTranscriptFeedsBuildChatHistory(t *testing.T) {
-	isolateSessions(t)
-	saved := Session{
-		ID: "sess-x", Cwd: "/w", Mode: "default",
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-		Messages: []chatMessage{
-			{Role: roleUser, Body: "earlier ask"},
-			{Role: roleAssistant, Body: "earlier reply"},
-			{Role: roleUser, Body: "current message"},
-		},
-	}
-	if err := saveSession(saved); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := loadSession("sess-x")
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := newTUIModel("http://test")
-	m.chat = loaded.Messages
-	got := m.buildChatHistory()
-	// The last user row is the message being sent this turn; the two earlier
-	// rows become history.
-	if len(got) != 2 {
-		t.Fatalf("buildChatHistory len = %d, want 2 (got %+v)", len(got), got)
-	}
-	if got[0].Role != "user" || got[0].Content != "earlier ask" {
-		t.Errorf("history[0] = %+v", got[0])
 	}
 }
 

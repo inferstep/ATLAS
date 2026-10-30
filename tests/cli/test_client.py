@@ -1,37 +1,31 @@
 """Tests for atlas.client seams against the real service contracts."""
 
+import importlib
+
+import pytest
+
 from atlas import client
 
 
-def test_run_sandbox_reads_success_field(monkeypatch):
-    """The sandbox executor's ExecuteResponse reports `success` — the
-    client must read it (and must not send fields ExecuteRequest doesn't
-    define, like stdin)."""
-    captured = {}
+@pytest.mark.parametrize("response", [
+    pytest.param({"success": True, "stdout": "hi\n", "stderr": ""}, id="executor reports success"),
+    pytest.param({"passed": True, "stdout": "hi\n", "stderr": ""}, id="older one reports passed"),
+])
+def test_run_sandbox_reads_the_pass_result(monkeypatch, response):
+    """The sandbox executor's ExecuteResponse reports `success`; older builds
+    reported `passed`, which is still read when `success` is absent. The
+    request must not send fields ExecuteRequest doesn't define, like stdin."""
+    sent = {}
 
     def fake_post(url, body, timeout=120):
-        captured["url"] = url
-        captured["body"] = body
-        return {"success": True, "stdout": "hi\n", "stderr": ""}
+        sent.update(body)
+        return response
 
     monkeypatch.setattr(client, "_post", fake_post)
-    passed, stdout, stderr = client.run_sandbox("print('hi')", "assert True")
-    assert passed is True
-    assert stdout == "hi\n"
-    assert "stdin" not in captured["body"]
-    assert captured["body"]["code"] == "print('hi')"
-    assert captured["body"]["test_code"] == "assert True"
-
-
-def test_run_sandbox_falls_back_to_passed_field(monkeypatch):
-    """Older sandbox builds returned `passed` — keep reading it when
-    `success` is absent."""
-    monkeypatch.setattr(client, "_post",
-                        lambda url, body, timeout=120: {"passed": True,
-                                                        "stdout": "",
-                                                        "stderr": ""})
-    passed, _, _ = client.run_sandbox("code")
-    assert passed is True
+    assert client.run_sandbox("print('hi')", "assert True") == (True, "hi\n", "")
+    assert sent["code"] == "print('hi')"
+    assert sent["test_code"] == "assert True"
+    assert "stdin" not in sent
 
 
 def test_run_sandbox_returns_error_on_connection_failure(monkeypatch):
@@ -44,32 +38,51 @@ def test_run_sandbox_returns_error_on_connection_failure(monkeypatch):
     assert "connection refused" in stderr
 
 
-def test_check_llama_reads_model_id_from_v1_models(monkeypatch):
+@pytest.mark.parametrize("models_reply, expected_model", [
+    pytest.param({"data": [{"id": "/models/Qwen3.5-9B-Q6_K.gguf"}]}, "Qwen3.5-9B-Q6_K.gguf",
+                 id="id from v1 models"),
+    pytest.param(OSError("404"), "unknown", id="unknown when v1 models fails"),
+])
+def test_check_llama_reads_model_id_from_v1_models(monkeypatch, models_reply, expected_model):
     """llama-server's /health carries no model metadata; the id comes
     from /v1/models (fallback: "unknown")."""
     def fake_get(url, timeout=10):
         if url.endswith("/health"):
             return {"status": "ok"}
-        if url.endswith("/v1/models"):
-            return {"data": [{"id": "/models/Qwen3.5-9B-Q6_K.gguf"}]}
-        raise AssertionError(url)
+        assert url.endswith("/v1/models"), url
+        if isinstance(models_reply, Exception):
+            raise models_reply
+        return models_reply
 
     monkeypatch.setattr(client, "_get", fake_get)
-    ok, model = client.check_llama()
-    assert ok is True
-    assert model == "Qwen3.5-9B-Q6_K.gguf"
+    assert client.check_llama() == (True, expected_model)
 
 
-def test_check_llama_unknown_when_models_endpoint_missing(monkeypatch):
-    def fake_get(url, timeout=10):
-        if url.endswith("/health"):
-            return {"status": "ok"}
-        raise OSError("404")
+@pytest.mark.parametrize("health_reply, embedding_reply, expected", [
+    pytest.param({"status": "ok"}, [{"embedding": [0.1, 0.2, 0.3]}],
+                 (True, 3, False), id="pooled vector"),
+    pytest.param({"status": "ok"}, [{"embedding": [[0.1, 0.2, 0.3, 0.4],
+                                                   [0.5, 0.6, 0.7, 0.8]]}],
+                 (True, 4, False), id="one vector per token"),
+    pytest.param({"status": "ok"},
+                 [{"embedding": [0.1, 0.2, 0.3], "hidden_states_dim": 3}],
+                 (True, 3, True), id="hidden-states patch present"),
+    pytest.param(None, None, (False, 0, False), id="server not reachable"),
+])
+def test_probe_llama_reads_reachability_dim_and_patch(monkeypatch, health_reply,
+                                                      embedding_reply, expected):
+    """`atlas lens check` and `atlas asa check` judge the loaded model by
+    these fields: an embedding dim that differs from the artifact's is a
+    mismatch, and lens training needs the hidden-states patch."""
+    monkeypatch.setattr(client, "get_json_or_none",
+                        lambda url, timeout: health_reply if url.endswith("/health") else {})
+    monkeypatch.setattr(client, "post_json_or_none",
+                        lambda url, body, timeout: embedding_reply)
 
-    monkeypatch.setattr(client, "_get", fake_get)
-    ok, model = client.check_llama()
-    assert ok is True
-    assert model == "unknown"
+    probe = client.probe_llama("http://llama:8080")
+
+    got = (probe.reachable, probe.embedding_dim, probe.has_hidden_states_patch)
+    assert got == expected
 
 
 def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
@@ -85,9 +98,7 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     ]
 
     class Response:
-        def __init__(self):
-            self._chunks = list(events)
-
+        """Hands out one SSE line per read(), like a chunked HTTP body."""
         def __enter__(self):
             return self
 
@@ -95,7 +106,7 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
             return False
 
         def read(self, _n):
-            return self._chunks.pop(0) if self._chunks else b""
+            return events.pop(0) if events else b""
 
     monkeypatch.setattr(client.urllib.request, "urlopen",
                         lambda req, timeout=900: Response())
@@ -104,35 +115,23 @@ def test_chat_stream_bridges_reasoning_content_into_think_tags(monkeypatch):
     assert tokens == ["<think>", "pondering", "</think>", "print(42)"]
 
 
-# --- lens URL resolution ---------------------------------------------------
-
-def _reload_client(monkeypatch, env):
-    """Re-import client with a controlled environment (URLs bind at import)."""
-    import importlib
-    for k in ("ATLAS_LENS_URL", "ATLAS_RAG_URL"):
-        monkeypatch.delenv(k, raising=False)
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    return importlib.reload(client)
-
-
-def test_lens_url_prefers_current_name_over_deprecated(monkeypatch):
-    """ATLAS_LENS_URL must win. It previously lost to ATLAS_RAG_URL, so the
-    documented current name was overridden by the name it replaced."""
-    mod = _reload_client(monkeypatch, {
-        "ATLAS_LENS_URL": "http://current:1111",
-        "ATLAS_RAG_URL": "http://deprecated:2222",
-    })
+@pytest.mark.parametrize("env, expected", [
+    pytest.param({"ATLAS_LENS_URL": "http://current:1111",
+                  "ATLAS_RAG_URL": "http://deprecated:2222"},
+                 "http://current:1111", id="current name wins over deprecated"),
+    pytest.param({"ATLAS_RAG_URL": "http://deprecated:2222"},
+                 "http://deprecated:2222", id="deprecated name alone still works"),
+])
+def test_lens_url_env_names(monkeypatch, env, expected):
+    """ATLAS_LENS_URL must win: it once lost to ATLAS_RAG_URL, the name it
+    replaced. An .env carrying only ATLAS_RAG_URL keeps working. The URLs
+    bind at import, so the module is reloaded under each environment."""
+    monkeypatch.delenv("ATLAS_LENS_URL", raising=False)
+    monkeypatch.delenv("ATLAS_RAG_URL", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
     try:
-        assert mod.LENS_URL == "http://current:1111"
+        assert importlib.reload(client).LENS_URL == expected
     finally:
-        _reload_client(monkeypatch, {})
-
-
-def test_lens_url_still_honours_deprecated_name(monkeypatch):
-    """An existing .env carrying only ATLAS_RAG_URL keeps working."""
-    mod = _reload_client(monkeypatch, {"ATLAS_RAG_URL": "http://deprecated:2222"})
-    try:
-        assert mod.LENS_URL == "http://deprecated:2222"
-    finally:
-        _reload_client(monkeypatch, {})
+        monkeypatch.undo()  # restore the real environment
+        importlib.reload(client)  # and rebind the URLs to it

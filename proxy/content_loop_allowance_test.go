@@ -14,15 +14,9 @@ import (
 	"testing"
 )
 
-// The bound on answering repetition cuts, and what it counts.
-//
-// Measured (stabilization cycle 4, flask_pause, both repetitions, identical to
-// the token): cut, recovery 1, cut, recovery 2, a valid replace_lines that
-// landed, then a third cut that hit the allowance and ended the run with the
-// change half applied — at 271 s of a 570 s work budget, with the prompt at
-// 7,270 tokens of an 18,432-token conversation budget. Neither wall clock,
-// context, per-response cap nor turn count was near its limit: the allowance
-// ended it, and the productive edit between the cuts had given nothing back.
+// The bound on answering repetition cuts, and what it counts. Counting every
+// cut can end a run that is making progress between cuts, with its change
+// half applied, long before any other budget is near its limit.
 //
 // ATLAS_CONTENT_LOOP_COUNT=unproductive charges the allowance only for
 // CONSECUTIVE recoveries after which nothing landed. ATLAS_CONTENT_LOOP_RECOVERIES
@@ -35,6 +29,7 @@ import (
 type loopWorld struct {
 	dir      string
 	prompts  []string
+	checked  []string // the code of each syntax-check request
 	terminal map[string]string
 	mu       sync.Mutex
 }
@@ -42,6 +37,22 @@ type loopWorld struct {
 func repeatingBody() string {
 	return `{"type":"tool_call","name":"write_file","args":{"path":"app.py","content":"` +
 		strings.Repeat(`x = 1\nx = 1\n`, 400)
+}
+
+// streamInChunks sends content as chat-completion deltas of 256 bytes,
+// flushing each one, then ends the stream: a long body arrives the way
+// llama-server sends it, a piece at a time.
+func streamInChunks(rw http.ResponseWriter, content string) {
+	rw.Header().Set("Content-Type", "text/event-stream")
+	for i := 0; i < len(content); i += 256 {
+		end := min(i+256, len(content))
+		d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": content[i:end]}}}})
+		fmt.Fprintf(rw, "data: %s\n\n", d)
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	fmt.Fprint(rw, "data: [DONE]\n\n")
 }
 
 // runLoopWorld plays the given per-turn scripts; an empty string means "emit a
@@ -55,10 +66,48 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 	if err := os.WriteFile(filepath.Join(w.dir, "app.py"), []byte("v = 0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	srv := loopWorldServer(w, scripts)
+	t.Cleanup(srv.Close)
+
+	ctx := NewAgentContext(w.dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.StreamFn = func(et string, data interface{}) {
+		if et != "done" {
+			return
+		}
+		b, _ := json.Marshal(data)
+		var m map[string]interface{}
+		_ = json.Unmarshal(b, &m)
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		for k, v := range m {
+			w.terminal[k] = fmt.Sprint(v)
+		}
+	}
+	if err := runAgentLoop(ctx, "Add a pause flag to app.py."); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// loopWorldServer stands in for every service the loop calls. The sandbox
+// passes every syntax check, recording the code it was given, and runs every
+// command with no output except the mount probe, which it answers from w.dir.
+// V3 and the internal services are unavailable. The model plays one script
+// per turn (an empty one is the repeating body), then says it is done.
+func loopWorldServer(w *loopWorld, scripts []string) *httptest.Server {
 	turn := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			w.mu.Lock()
+			w.checked = append(w.checked, in.Code)
+			w.mu.Unlock()
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
 			return
 		case strings.HasSuffix(r.URL.Path, "/execute"):
@@ -84,14 +133,6 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 		turn++
 		w.prompts = append(w.prompts, string(body))
 		w.mu.Unlock()
-		rw.Header().Set("Content-Type", "text/event-stream")
-		send := func(s string) {
-			d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
-			fmt.Fprintf(rw, "data: %s\n\n", d)
-			if f, ok := rw.(http.Flusher); ok {
-				f.Flush()
-			}
-		}
 		script := `{"type":"done","summary":"finished"}`
 		if k < len(scripts) {
 			script = scripts[k]
@@ -99,39 +140,8 @@ func runLoopWorld(t *testing.T, env map[string]string, scripts []string) *loopWo
 		if script == "" {
 			script = repeatingBody()
 		}
-		for i := 0; i < len(script); i += 256 {
-			end := i + 256
-			if end > len(script) {
-				end = len(script)
-			}
-			send(script[i:end])
-		}
-		fmt.Fprint(rw, "data: [DONE]\n\n")
+		streamInChunks(rw, script)
 	}))
-	t.Cleanup(srv.Close)
-
-	ctx := NewAgentContext(w.dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.VerifyOnHost = true
-	ctx.StreamFn = func(et string, data interface{}) {
-		if et != "done" {
-			return
-		}
-		b, _ := json.Marshal(data)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		for k, v := range m {
-			w.terminal[k] = fmt.Sprint(v)
-		}
-	}
-	if err := runAgentLoop(ctx, "Add a pause flag to app.py."); err != nil {
-		t.Fatal(err)
-	}
-	return w
 }
 
 func edit(line int, text string) string {
@@ -234,6 +244,9 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 	var cancel context.CancelFunc
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasPrefix(r.URL.Path, "/slots/"):
+			http.NotFound(rw, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
 			return
@@ -244,6 +257,7 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 			http.Error(rw, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		requests++
 		n := requests
@@ -251,20 +265,7 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 		if n >= 2 {
 			cancel() // the user hung up while the model was repeating
 		}
-		rw.Header().Set("Content-Type", "text/event-stream")
-		body := repeatingBody()
-		for i := 0; i < len(body); i += 256 {
-			end := i + 256
-			if end > len(body) {
-				end = len(body)
-			}
-			d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": body[i:end]}}}})
-			fmt.Fprintf(rw, "data: %s\n\n", d)
-			if f, ok := rw.(http.Flusher); ok {
-				f.Flush()
-			}
-		}
-		fmt.Fprint(rw, "data: [DONE]\n\n")
+		streamInChunks(rw, repeatingBody())
 	}))
 	defer srv.Close()
 
@@ -303,7 +304,6 @@ func TestCancellationStopsTheRunWhateverTheAllowanceSays(t *testing.T) {
 // checks — the allowance changes how long a run may continue, not what is
 // checked before bytes land.
 func TestWritesAfterARecoveryAreStillChecked(t *testing.T) {
-	t.Setenv("ATLAS_CONTENT_LOOP_COUNT", "unproductive")
 	w := runLoopWorld(t, map[string]string{"ATLAS_CONTENT_LOOP_COUNT": "unproductive"},
 		readFirst("", edit(1, "a = 1\n"), "", edit(1, "b = 2\n"),
 			`{"type":"done","summary":"added the flag"}`))
@@ -311,8 +311,13 @@ func TestWritesAfterARecoveryAreStillChecked(t *testing.T) {
 	if !strings.Contains(string(got), "a = 1") || !strings.Contains(string(got), "b = 2") {
 		t.Fatalf("the edits did not land: %q", got)
 	}
-	// The gate log line is the product's own record that checks ran.
-	if !strings.Contains(strings.Join(w.prompts, "\n"), "app.py") {
-		t.Error("the conversation lost the file under edit")
+	checked := false
+	for _, code := range w.checked {
+		if strings.Contains(code, "b = 2") {
+			checked = true
+		}
+	}
+	if !checked {
+		t.Error("the write after the second recovery landed without a syntax check")
 	}
 }

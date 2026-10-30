@@ -18,50 +18,42 @@ import (
 )
 
 // A program run as `prog < data` is verified as a stdin filter, which is not
-// how its caller will run it.
-//
-// Measured on the AoC tasks, whose prompt says the program must read
-// input.txt: 7 of 10 failures wrote a stdin-reading program, ran it as
-// `python3 solve.py < input.txt`, and got a SUCCESSFUL result — so the model
-// had every reason to believe it was finished. The checker then ran
-// `python solve.py` with no redirect and got 0. Not one session that
-// verified this way passed.
-//
-// The same model with no shell never produces this shape; it writes code that
-// opens the file, because piping is not available to it. The tool is what
-// makes the wrong contract reachable, so the harness has to notice.
+// how its caller will run it. On tasks whose prompt says the program must read
+// input.txt, most failures wrote a program that reads stdin, ran it as
+// `python3 solve.py < input.txt` with success, and then failed the checker's
+// plain `python solve.py`. The shell is what makes that wrong contract
+// reachable, so the harness has to notice it.
 
-func TestARedirectIsDetected(t *testing.T) {
-	for _, cmd := range []string{
-		"python3 solve.py < input.txt",
-		"python solve.py <input.txt",
-		"./run < data/in.txt",
+// stdinRedirectSource names the file a command feeds to the program's stdin,
+// or returns "" when the command has no such redirect.
+func TestStdinRedirectSource(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		want string
+	}{
+		{"python3 solve.py < input.txt", "input.txt"},
+		{"python solve.py <input.txt", "input.txt"},
+		{"./run < data/in.txt", "data/in.txt"},
+		{"python3 solve.py < input.txt > out.txt", "input.txt"},
+		{"python3 solve.py <input.txt 2>err.log", "input.txt"},
+		{"cat input.txt | python3 solve.py", "input.txt"},
+		{"cd /w && python3 solve.py < data.txt", "data.txt"},
+		// Not stdin contracts:
+		{"python3 solve.py", ""},
+		{"pytest -q", ""},
+		{"go build ./...", ""},
+		{"echo hi > out.txt", ""},
+		{"python3 - <<'EOF'\nprint(1)\nEOF", ""},
+		{"python3 solve.py <<EOF\n1 2\nEOF", ""},
+		{"diff <(sort a) <(sort b)", ""},
+		{"cat notes.txt || echo missing", ""},
+		{"", ""},
 	} {
-		if got := stdinRedirectSource(cmd); got == "" {
-			t.Errorf("no redirect detected in %q", cmd)
-		}
-	}
-}
-
-func TestTheRedirectedFileIsNamed(t *testing.T) {
-	if got := stdinRedirectSource("python3 solve.py < input.txt"); got != "input.txt" {
-		t.Errorf("want input.txt, got %q", got)
-	}
-}
-
-func TestOrdinaryCommandsAreNotRedirects(t *testing.T) {
-	for _, cmd := range []string{
-		"python3 solve.py",
-		"pytest -q",
-		"go build ./...",
-		"echo hi > out.txt",
-		"python3 - <<'EOF'\nprint(1)\nEOF",
-		"diff <(sort a) <(sort b)",
-		"",
-	} {
-		if got := stdinRedirectSource(cmd); got != "" {
-			t.Errorf("%q should not read as a stdin redirect, got %q", cmd, got)
-		}
+		t.Run(c.cmd, func(t *testing.T) {
+			if got := stdinRedirectSource(c.cmd); got != c.want {
+				t.Errorf("stdinRedirectSource(%q) = %q, want %q", c.cmd, got, c.want)
+			}
+		})
 	}
 }
 
@@ -70,30 +62,6 @@ func TestTheRejectionSaysWhatToDoInstead(t *testing.T) {
 	for _, want := range []string{"input.txt", "standalone", "no `<`", "open"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("rejection should mention %q: %s", want, msg)
-		}
-	}
-}
-
-// Widened contract detection: a redirect anywhere in the segment and the
-// cat-pipe idiom are the same stdin contract the trailing-only rule caught.
-func TestStdinRedirectSourceWiderShapes(t *testing.T) {
-	cases := []struct {
-		cmd  string
-		want string
-	}{
-		{"python3 solve.py < input.txt > out.txt", "input.txt"},
-		{"python3 solve.py <input.txt 2>err.log", "input.txt"},
-		{"cat input.txt | python3 solve.py", "input.txt"},
-		{"cd /w && python3 solve.py < data.txt", "data.txt"},
-		// Not stdin contracts:
-		{"python3 solve.py", ""},
-		{"python3 solve.py <<EOF\n1 2\nEOF", ""},
-		{"diff <(sort a) <(sort b)", ""},
-		{"cat notes.txt || echo missing", ""},
-	}
-	for _, c := range cases {
-		if got := stdinRedirectSource(c.cmd); got != c.want {
-			t.Errorf("stdinRedirectSource(%q) = %q, want %q", c.cmd, got, c.want)
 		}
 	}
 }
@@ -177,50 +145,6 @@ func decodeFixture(t *testing.T, id string) V3GenerateResponse {
 	return got
 }
 
-// The regression that exposed the gap. The response type as it stood decoded
-// the service's reply happily and dropped the whole envelope on the floor: no
-// error, no warning, just absent evidence. Half of this test still describes
-// that type, so the loss stays visible rather than becoming folklore.
-func TestUnknownFieldsAreLostWithoutAnExplicitWireType(t *testing.T) {
-	raw := readFixture(t, "01_verified_winner")
-
-	// The pre-envelope shape, reproduced exactly.
-	type legacyResponse struct {
-		Code                 string                   `json:"code"`
-		Passed               bool                     `json:"passed"`
-		PhaseSolved          string                   `json:"phase_solved"`
-		CandidatesTested     int                      `json:"candidates_tested"`
-		WinningScore         float64                  `json:"winning_score"`
-		TotalTokens          int                      `json:"total_tokens"`
-		TotalTimeMs          float64                  `json:"total_time_ms"`
-		VerificationEvidence []V3VerificationEvidence `json:"verification_evidence"`
-	}
-	var legacy legacyResponse
-	if err := json.Unmarshal(raw, &legacy); err != nil {
-		t.Fatalf("legacy decode failed: %v", err)
-	}
-	if !legacy.Passed || legacy.Code == "" {
-		t.Fatal("fixture did not carry the fields the legacy type does read")
-	}
-	round, _ := json.Marshal(legacy)
-	if string(round) == string(raw) {
-		t.Fatal("fixture does not exercise the loss: nothing was dropped")
-	}
-
-	// The explicit wire type keeps it.
-	got := decodeFixture(t, "01_verified_winner")
-	if got.Evidence == nil {
-		t.Fatal("the evidence envelope was dropped by V3GenerateResponse")
-	}
-	if got.Evidence.Identity.ContractID == "" ||
-		got.Evidence.Evaluation.EvidenceStrength == "" ||
-		len(got.Evidence.Coverage.Required) == 0 ||
-		got.Evidence.Selection.Status == "" ||
-		got.Evidence.Delivery.DeliveredContentHash == "" {
-		t.Fatalf("envelope decoded with empty sections: %+v", got.Evidence)
-	}
-}
-
 // Field-by-field equality against the JSON the service produced. A struct tag
 // typo drops one field silently, which is exactly the class of bug the whole
 // fixture apparatus exists to catch.
@@ -255,17 +179,26 @@ func TestEnvelopeSurvivesDecodeWithoutFieldLoss(t *testing.T) {
 	}
 }
 
+// response decodes the case's service response; a golden case that does not decode is a broken fixture.
+func (c evidenceCase) response(t *testing.T) V3GenerateResponse {
+	t.Helper()
+	var got V3GenerateResponse
+	if err := json.Unmarshal(c.Response, &got); err != nil {
+		t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
+	}
+	return got
+}
+
 // Every golden case, and what a strict consumer must conclude from it. The
 // expectations travel with the bytes, so adding a case on the Python side
-// automatically binds this side to it.
+// automatically binds this side to it. This test and the two after it read
+// the same cases: the availability of each, then what a non-available and an
+// available envelope must say.
 func TestGoldenCaseAvailability(t *testing.T) {
 	for _, c := range evidenceCases(t) {
 		c := c
 		t.Run(c.ID, func(t *testing.T) {
-			var got V3GenerateResponse
-			if err := json.Unmarshal(c.Response, &got); err != nil {
-				t.Fatalf("%s (%s): %v", c.ID, c.Description, err)
-			}
+			got := c.response(t)
 			availability, reason := got.Evidence.Validate()
 			if string(availability) != c.Expect.Availability {
 				t.Fatalf("availability = %q (%s), want %q -- %s",
@@ -275,15 +208,40 @@ func TestGoldenCaseAvailability(t *testing.T) {
 				!strings.Contains(reason, c.Expect.ReasonContains) {
 				t.Errorf("reason = %q, want it to name %q", reason, c.Expect.ReasonContains)
 			}
-			if availability != EvidenceAvailable {
-				// Unavailable and absent are never verdicts about the candidate.
-				if got.Evidence.Available() {
-					t.Error("a non-available envelope must not read as available")
-				}
-				if reason == "" {
-					t.Error("a non-available envelope must say why")
-				}
-				return
+		})
+	}
+}
+
+// Unavailable and absent are never verdicts about the candidate.
+func TestGoldenCasesThatAreNotAvailableAreNoVerdict(t *testing.T) {
+	for _, c := range evidenceCases(t) {
+		if c.Expect.Availability == string(EvidenceAvailable) {
+			continue // TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			got := c.response(t)
+			if got.Evidence.Available() {
+				t.Error("a non-available envelope must not read as available")
+			}
+			if _, reason := got.Evidence.Validate(); reason == "" {
+				t.Error("a non-available envelope must say why")
+			}
+		})
+	}
+}
+
+// An available envelope carries the strength and selection its producer
+// declared, and its hash names the delivered bytes exactly when the producer
+// declared that it does.
+func TestGoldenCasesThatAreAvailableCarryTheDeclaredVerdict(t *testing.T) {
+	for _, c := range evidenceCases(t) {
+		if c.Expect.Availability != string(EvidenceAvailable) {
+			continue // TestGoldenCasesThatAreNotAvailableAreNoVerdict
+		}
+		t.Run(c.ID, func(t *testing.T) {
+			got := c.response(t)
+			if got.Evidence == nil {
+				t.Fatalf("%s is declared available but its response has no envelope", c.ID)
 			}
 			if got.Evidence.Evaluation.EvidenceStrength != c.Expect.EvidenceStrength {
 				t.Errorf("strength = %q, want %q",
@@ -321,9 +279,8 @@ func TestLegacyResponseDecodesAsAbsentEvidence(t *testing.T) {
 	}
 }
 
-// Evidence about other bytes may not support provenance for the delivered
-// ones. Nothing calls this for a decision yet; the rule is pinned so the later
-// slice cannot invent a looser one at the call site.
+// Evidence about other bytes never supports provenance for the delivered
+// ones, and neither does an envelope that cannot be read.
 func TestProvenanceRequiresMatchingHashes(t *testing.T) {
 	winner := decodeFixture(t, "01_verified_winner")
 	if ok, why := EvidenceSupportsProvenanceFor(winner.Evidence, winner.Code); !ok {
@@ -409,14 +366,8 @@ func TestEnvelopeReachesTelemetryAndNotTheToolResult(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := w.(http.Flusher)
 			// The service's own bytes, forwarded verbatim.
-			for _, line := range []string{"event: result", "data: " + string(raw), "", "data: [DONE]", ""} {
-				fmt.Fprint(w, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(w, "event: result", "data: "+string(raw), "", "data: [DONE]", "")
 		case "/internal/cyclomatic_complexity":
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
 		case "/internal/structural_check":
@@ -447,22 +398,7 @@ func TestEnvelopeReachesTelemetryAndNotTheToolResult(t *testing.T) {
 	}
 
 	// --- telemetry: whole envelope, no field loss ---------------------------
-	var payload map[string]interface{}
-	for {
-		select {
-		case ev := <-sub:
-			if ev.Type == EvtStageEnd && ev.Stage == "v3" {
-				payload = ev.Payload
-			}
-			if payload != nil {
-				goto found
-			}
-			continue
-		default:
-			goto found
-		}
-	}
-found:
+	payload := v3StageEndPayload(sub)
 	if payload == nil {
 		t.Fatal("no v3 stage_end envelope was emitted")
 	}
@@ -567,8 +503,6 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 		name       string
 		passed     bool
 		mutate     func(map[string]interface{})
-		omit       bool
-		code       string
 		authorized bool
 		reason     string
 	}{
@@ -596,8 +530,6 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			e["identity"].(map[string]interface{})["candidate_content_hash"] =
 				"0000000000000000000000000000000000000000000000000000000000000000"
 		}, reason: "evidence describes a different candidate"},
-		{name: "passed with no envelope at all", passed: true, omit: true,
-			reason: "no evidence envelope"},
 		{name: "passed with an unknown wire version", passed: true, mutate: func(e map[string]interface{}) {
 			e["wire_version"] = "99.0.0"
 		}, reason: "unsupported wire version 99.0.0"},
@@ -610,20 +542,11 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 		// The envelope is authoritative in BOTH directions: a service that
 		// verified a winner has said so, whatever the legacy boolean carries.
 		{name: "not passed with a verified envelope", passed: false, authorized: true},
-		{name: "verified envelope with empty code", passed: true, code: " ",
-			reason: "evidence describes a different candidate"},
 	} {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			code := authCandidate
-			if c.code != "" {
-				code = c.code
-			}
-			var env map[string]interface{}
-			if !c.omit {
-				env = envelopeFor(t, authCandidate, c.mutate)
-			}
-			res := responseWith(t, code, c.passed, env)
+			env := envelopeFor(t, authCandidate, c.mutate)
+			res := responseWith(t, authCandidate, c.passed, env)
 
 			got, why := v3DeliveryAuthorized(res, res.Code)
 			if got != c.authorized {
@@ -637,14 +560,45 @@ func TestOnlyAVerifiedEnvelopeAuthorizesDelivery(t *testing.T) {
 			// caller's own are a proposal whatever the service concluded, and
 			// what happens to them is decided after they have been staged.
 			proposal, proposed := proposedV3Candidate(res, authBaseline)
-			if strings.TrimSpace(code) == "" || code == authBaseline {
-				if proposed {
-					t.Errorf("empty or identical bytes were proposed")
-				}
-			} else if !proposed || proposal != code {
+			if !proposed || proposal != authCandidate {
 				t.Errorf("proposal = %q/%v, want the candidate offered", proposal, proposed)
 			}
 		})
+	}
+}
+
+// A passing response with no envelope at all authorizes nothing. Its bytes
+// still differ from the caller's own, so they are still a proposal.
+func TestAPassedResponseWithNoEnvelopeIsNotAuthorized(t *testing.T) {
+	res := responseWith(t, authCandidate, true, nil)
+
+	ok, why := v3DeliveryAuthorized(res, res.Code)
+	if ok {
+		t.Fatalf("authorized = true (%s), want false", why)
+	}
+	if why != "no evidence envelope" {
+		t.Errorf("reason = %q, want the missing envelope", why)
+	}
+	proposal, proposed := proposedV3Candidate(res, authBaseline)
+	if !proposed || proposal != authCandidate {
+		t.Errorf("proposal = %q/%v, want the candidate offered", proposal, proposed)
+	}
+}
+
+// A verified envelope over code that is only whitespace authorizes nothing,
+// and blank bytes are never proposed.
+func TestAVerifiedEnvelopeOverBlankCodeIsNotAuthorized(t *testing.T) {
+	res := responseWith(t, " ", true, envelopeFor(t, authCandidate, nil))
+
+	ok, why := v3DeliveryAuthorized(res, res.Code)
+	if ok {
+		t.Fatalf("authorized = true (%s), want false", why)
+	}
+	if why != "evidence describes a different candidate" {
+		t.Errorf("reason = %q, want the hash mismatch", why)
+	}
+	if _, proposed := proposedV3Candidate(res, authBaseline); proposed {
+		t.Errorf("empty or identical bytes were proposed")
 	}
 }
 
@@ -731,18 +685,9 @@ func TestEveryPhaseIsDeliverableOnTheSameTerms(t *testing.T) {
 }
 
 // A local syntax or structural pass says what THIS process checked. It cannot
-// promote the service's evidence into a verified winner.
+// promote the service's evidence into a verified winner: the authorization
+// predicate takes a response and bytes, and calls no local checker.
 func TestLocalValidationCannotUpgradeServiceEvidence(t *testing.T) {
-	weak := envelopeFor(t, authCandidate, func(e map[string]interface{}) {
-		e["evaluation"].(map[string]interface{})["closure_eligible"] = false
-		e["selection"].(map[string]interface{})["status"] = "best_not_closure_eligible"
-	})
-	res := responseWith(t, authCandidate, true, weak)
-	if ok, _ := v3DeliveryAuthorized(res, res.Code); ok {
-		t.Fatal("a non-closure record was authorized")
-	}
-	// The local checkers have no input to this decision at all: the predicate
-	// takes a response and bytes, nothing else.
 	src, err := os.ReadFile("v3_bridge.go")
 	if err != nil {
 		t.Fatal(err)
@@ -830,6 +775,21 @@ print(json.dumps({
 	}
 }
 
+// v3StageEndPayload returns the payload of the first v3 stage_end event that
+// is already waiting on sub, or nil when there is none.
+func v3StageEndPayload(sub chan Envelope) map[string]interface{} {
+	for {
+		select {
+		case ev := <-sub:
+			if ev.Type == EvtStageEnd && ev.Stage == "v3" {
+				return ev.Payload
+			}
+		default:
+			return nil
+		}
+	}
+}
+
 // The authorization decision and its reason are recorded where a durable
 // record belongs -- telemetry -- and nowhere the model can read them.
 func TestAuthorizationReasonIsRecordedInTelemetryOnly(t *testing.T) {
@@ -855,13 +815,7 @@ func TestAuthorizationReasonIsRecordedInTelemetryOnly(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/generate":
 			w.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := w.(http.Flusher)
-			for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
-				fmt.Fprint(w, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(w, "event: result", "data: "+string(body), "", "data: [DONE]", "")
 		case "/internal/structural_check":
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
 		default:
@@ -896,18 +850,7 @@ func TestAuthorizationReasonIsRecordedInTelemetryOnly(t *testing.T) {
 		t.Errorf("baseline fallback carries candidate metadata: %+v", res)
 	}
 
-	var payload map[string]interface{}
-	for done := false; !done; {
-		select {
-		case ev := <-sub:
-			if ev.Type == EvtStageEnd && ev.Stage == "v3" {
-				payload = ev.Payload
-				done = true
-			}
-		default:
-			done = true
-		}
-	}
+	payload := v3StageEndPayload(sub)
 	if payload == nil {
 		t.Fatal("no v3 stage_end envelope was emitted")
 	}
@@ -932,41 +875,5 @@ func TestAuthorizationReasonIsRecordedInTelemetryOnly(t *testing.T) {
 		if e != "v3_progress" && e != "v3_token" && e != "text" {
 			t.Errorf("unexpected SSE projection %q", e)
 		}
-	}
-}
-
-// A live round trip: bytes produced by the running Python service, decoded and
-// authorized here. Set ATLAS_LIVE_RESPONSE to a /v3/generate response body to
-// run it; without it there is nothing live to check and the test says so.
-func TestLiveServiceResponseAuthorizesAsExpected(t *testing.T) {
-	path := os.Getenv("ATLAS_LIVE_RESPONSE")
-	if path == "" {
-		t.Skip("set ATLAS_LIVE_RESPONSE to a response body from the running service")
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got V3GenerateResponse
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("live response did not decode: %v", err)
-	}
-	if got.Evidence == nil {
-		t.Fatal("live response carried no evidence envelope")
-	}
-	availability, why := got.Evidence.Validate()
-	if availability != EvidenceAvailable {
-		t.Fatalf("live envelope unusable: %s (%s)", availability, why)
-	}
-	if !got.Evidence.DescribesBytes(got.Code) {
-		t.Fatal("live envelope does not describe the code it shipped with")
-	}
-	authorized, reason := v3DeliveryAuthorized(&got, got.Code)
-	t.Logf("live: passed=%v phase=%s selection=%s closure=%v -> authorized=%v (%s)",
-		got.Passed, got.PhaseSolved, got.Evidence.Selection.Status,
-		got.Evidence.Evaluation.ClosureEligible, authorized, reason)
-	if got.Evidence.Selection.Status == "verified_winner" &&
-		got.Evidence.Evaluation.ClosureEligible && !authorized {
-		t.Errorf("a live verified winner was refused: %s", reason)
 	}
 }

@@ -692,7 +692,8 @@ def test_the_generate_endpoint_cannot_activate_it():
 
 
 def test_the_go_request_has_no_representation_for_it():
-    go = (Path(__file__).resolve().parents[2] / "proxy" / "types.go").read_text()
+    proxy = Path(__file__).resolve().parents[2] / "proxy"
+    go = "".join((proxy / name).read_text() for name in ("types.go", "tool_io.go"))
     for name in ("diagnostic_total_candidates", "min_candidates",
                  "DiagnosticTotalCandidates", "MinCandidates"):
         assert name not in go, name

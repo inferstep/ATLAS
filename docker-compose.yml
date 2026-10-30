@@ -79,7 +79,7 @@ services:
       - CONTEXT_LENGTH=${ATLAS_CTX_SIZE:-131072}
       # Embedding pooling for the Geometric Lens (`--pooling`). `none`
       # returns per-token vectors, which the per-step C(x)/G(x) path
-      # requires; the whole-text path pools and L2-normalizes them
+      # requires; the whole-text path mean-pools the raw vectors
       # client-side, so it reads the same vector it would under `mean`.
       # `--pooling` is server-global in llama.cpp, so one mode has to
       # serve both consumers and only `none` carries enough information.
@@ -124,7 +124,10 @@ services:
     mem_limit: ${ATLAS_LENS_MEM:-1792m}
     build:
       context: ./geometric-lens
+    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      - HOME=/tmp
       - LLAMA_URL=http://llama-server:8080
       - LLAMA_EMBED_URL=http://llama-server:8080
       # The /embedding physical batch llama-server runs with (its `-ub`,
@@ -190,7 +193,10 @@ services:
     build:
       context: .
       dockerfile: v3-service/Dockerfile
+    # The installing user's ids, written by `atlas init`; all four services run as that user.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"
     environment:
+      - HOME=/tmp
       - ATLAS_INFERENCE_URL=http://llama-server:8080
       - ATLAS_LENS_URL=http://geometric-lens:8099
       - ATLAS_SANDBOX_URL=http://sandbox:8020
@@ -205,7 +211,7 @@ services:
       # an unwritable dir disables telemetry, never generation.
       - ATLAS_V3_TELEMETRY_DIR=${ATLAS_V3_TELEMETRY_DIR:-/data/telemetry}
       # Same wall-clock cap the proxy's V3 bridge enforces (seconds,
-      # default 180, 0 disables). The service reads it for the
+      # default 300, 0 disables). The service reads it for the
       # refinement budget gate, so both sides must see one value.
       - ATLAS_V3_TIMEOUT=${ATLAS_V3_TIMEOUT:-}
       - ATLAS_SERVICE_TOKEN_FILE=/run/atlas-secrets/service-token
@@ -453,6 +459,7 @@ services:
       # Security + observability knobs read in-container; without these
       # passthroughs a .env setting silently does nothing (doc-audit fix).
       - ATLAS_TRUST_MODE=${ATLAS_TRUST_MODE:-}
+      - ATLAS_ALLOWED_ORIGINS=${ATLAS_ALLOWED_ORIGINS:-}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
       - ATLAS_ALLOW_CREDENTIAL_READS=${ATLAS_ALLOW_CREDENTIAL_READS:-}
       - ATLAS_PERMISSION_TIMEOUT_SEC=${ATLAS_PERMISSION_TIMEOUT_SEC:-}
@@ -494,10 +501,11 @@ services:
       # PC-192: opt-in host execution for run_command. Set to "host"
       # to bypass the sandbox container and run verifications on the
       # host (works when proxy runs locally, not in Docker — Docker
-      # proxy can only see its own container fs). Per-project override
-      # via /workspace/.atlas/config.toml [execution] target=host.
+      # proxy can only see its own container fs). It needs
+      # ATLAS_TRUST_MODE=fully-trusted too; a workspace's
+      # .atlas/config.toml may choose only the sandbox.
       - ATLAS_VERIFY_IN=${ATLAS_VERIFY_IN:-sandbox}
-      # PC-200: turn cap override. Tier defaults: T0=5, T1-T3 uncapped
+      # PC-200: turn cap override. Tier defaults: T0=12, T1-T3 uncapped
       # (the error-loop breaker and done-gates bound runaway turns). Set
       # a positive int to cap every tier. Useful for "fix the entire app"
       # prompts that legitimately need more turns.

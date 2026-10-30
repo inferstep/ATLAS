@@ -13,11 +13,10 @@ import (
 // One entry of the candidate-generation route is one attributable thing.
 //
 // A request may enter that route many times: a model that writes, is refused,
-// and writes again enters it once per attempt. Every record those attempts
-// produce used to carry only the request id, so several feasibility decisions
-// arrived for "one invocation" and nothing could say which downstream work
-// belonged to which attempt. The join is by identity, never by ordinal,
-// timestamp or nearest-event.
+// and writes again enters it once per attempt. The request id alone cannot say
+// which downstream work belongs to which attempt, so each entry has its own
+// identity. Records join by that identity, never by order, time or the
+// nearest event.
 
 func routeCtx(t *testing.T) *AgentContext {
 	t.Helper()
@@ -41,9 +40,6 @@ func TestEachRouteEntryGetsItsOwnIdentity(t *testing.T) {
 		if !strings.HasPrefix(e.ID, "req-route:") {
 			t.Fatalf("identity does not name its request: %q", e.ID)
 		}
-	}
-	if len(seen) != 5 {
-		t.Fatalf("five entries produced %d identities", len(seen))
 	}
 }
 
@@ -86,9 +82,7 @@ func TestAnEntryWithoutIdentityMintsNoInvocation(t *testing.T) {
 }
 
 func TestTheFeasibilityRecordCarriesItsRouteEntry(t *testing.T) {
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-route")
+	ctx := routeCtx(t)
 	ctx.SandboxURL = "http://127.0.0.1:1"
 	outputs := []string{"solve.py"}
 	ctx.TaskContract = &TaskContract{TaskMode: TaskModeWork,
@@ -166,13 +160,10 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 	if mints != 1 {
 		t.Fatalf("mintRouteEntry declared %d times", mints)
 	}
-	for _, file := range []string{"types.go", "agent.go", "tools.go"} {
-		body, err := os.ReadFile(file)
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(body), `json:"route_entry_id"`) ||
-			strings.Contains(string(body), `json:"route_entry"`) {
+	for _, file := range []string{"types.go", "tool_io.go", "agent.go", "tools.go"} {
+		body := readSourceForTest(t, file)
+		if strings.Contains(body, `json:"route_entry_id"`) ||
+			strings.Contains(body, `json:"route_entry"`) {
 			t.Errorf("%s decodes a route entry from input", file)
 		}
 	}

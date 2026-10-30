@@ -5,8 +5,8 @@ map of the repository itself, see [MAP.md](MAP.md).
 
 > 翻訳 / 번역 / 翻译: [简体中文](lang/zh-CN/README.md) ·
 > [日本語](lang/ja/README.md) · [한국어](lang/ko/README.md)
-> (README, SETUP, ARCHITECTURE, TROUBLESHOOTING are translated; everything
-> else is English-only.)
+> (README, SETUP, ARCHITECTURE and TROUBLESHOOTING are translated, and
+> GETTING_STARTED in zh-CN only; everything else is English-only.)
 
 ---
 
@@ -77,23 +77,12 @@ map of the repository itself, see [MAP.md](MAP.md).
   loop, inner V3 pipeline, Geometric Lens, sandbox.
 - [PLAN_MODE.md](PLAN_MODE.md) — per-turn pre-flight planning.
 - [SOURCES.md](SOURCES.md) — the research papers behind each component.
-- [reports/V3_ABLATION_STUDY.md](reports/V3_ABLATION_STUDY.md) — the
-  V3.0 ablation report; its 74.6% result is withdrawn (notice at the top).
-- [reports/CALL_GRAPH_REASONING_V3.md](reports/CALL_GRAPH_REASONING_V3.md)
-  — structural call-graph reasoning design notes.
-- [reports/RPG_WAVELET_PLANNING_V3_2.md](reports/RPG_WAVELET_PLANNING_V3_2.md)
-  — the V3.2 RPG/wavelet planning design record: built, A/B-measured (no
-  improvement on the reference 12B at ~10x planning latency), and removed in
-  the 2026-08 simplification; kept in-tree per [#148](https://github.com/inferstep/ATLAS/issues/148).
 - [reports/ablation/README.md](reports/ablation/README.md) — the raw
   per-task traces behind the V3.0 ablation study (LiveCodeBench, 599 tasks).
-- [reports/archive/](reports/archive/) — kept-for-reference reports,
-  including the V2.5 ablation study.
 - [adr/](adr/README.md) — architecture decision records 0001-0011 (trust
   model, Redis, per-model bundles, fail-soft V3, lens optionality
   (superseded), release strategy, the SQLite store (retired), harness
   mechanisms, embedding convention, lens capacity, the lens is required).
-- [STORY.md](STORY.md) — why this project exists.
 
 ### Contribute
 
@@ -174,23 +163,20 @@ whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
 In order, each building on the last:
 
 1. [../README.md](../README.md) — what and why
-2. [STORY.md](STORY.md) — background
-3. [GETTING_STARTED.md](GETTING_STARTED.md) — the first hour
-4. [SETUP.md](SETUP.md) / [SETUP_MACOS.md](SETUP_MACOS.md) — install
-5. [CLI.md](CLI.md) — the surface you actually touch
-6. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — failure modes and diagnosis
-7. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
-8. [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit
-9. [PLAN_MODE.md](PLAN_MODE.md) — pre-flight planning
-10. [PROTOCOL.md](PROTOCOL.md) — the event contract
-11. [API.md](API.md) — the full HTTP surface
-12. [reports/V3_ABLATION_STUDY.md](reports/V3_ABLATION_STUDY.md) — historical V3.0 ablation report (result withdrawn)
-13. [reports/CALL_GRAPH_REASONING_V3.md](reports/CALL_GRAPH_REASONING_V3.md)
-14. [SOURCES.md](SOURCES.md) — the research it stands on
-15. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
-16. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
-17. [OPERATIONS.md](OPERATIONS.md) — running it long-term
-18. [DEVELOPMENT.md](DEVELOPMENT.md), [../CONTRIBUTING.md](../CONTRIBUTING.md),
+2. [GETTING_STARTED.md](GETTING_STARTED.md) — the first hour
+3. [SETUP.md](SETUP.md) / [SETUP_MACOS.md](SETUP_MACOS.md) — install
+4. [CLI.md](CLI.md) — the surface you actually touch
+5. [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — failure modes and diagnosis
+6. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
+7. [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit
+8. [PLAN_MODE.md](PLAN_MODE.md) — pre-flight planning
+9. [PROTOCOL.md](PROTOCOL.md) — the event contract
+10. [API.md](API.md) — the full HTTP surface
+11. [SOURCES.md](SOURCES.md) — the research it stands on
+12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
+13. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
+14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
+15. [DEVELOPMENT.md](DEVELOPMENT.md), [../CONTRIBUTING.md](../CONTRIBUTING.md),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
-19. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
+16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here

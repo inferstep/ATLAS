@@ -5,13 +5,14 @@ One run, started by a timer on the development server, in a folder of its own
 (--dir). Only one run of a folder goes at a time. It:
 
   1. takes the head of `dev` into <dir>/tree. When that changes this very
-     file or the judge beside it (the run was started from the tree), the
-     new copy does the run;
+     file or one of the three beside it (the judge, the images and the
+     statuses; the run was started from the tree), the new copy does the run;
   2. stops a stack of its own name that an earlier run left;
-  3. pulls the `dev` images and compares the commit each was built from with
-     the head. The images of a push come some minutes after it, so the run
-     looks again for a while. When one still differs, the night is "not
-     run" and nothing more is done;
+  3. takes the `dev` images of the registry under names of its own, so that
+     no tag of the server moves (scripts/nightly_images.py), and compares
+     the commit each was built from with the head. The images of a push
+     come some minutes after it, so the run looks again for a while. When
+     one still differs, the night is "not run" and nothing more is done;
   4. takes the lock of the graphics card, and reads what the card holds;
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
@@ -22,7 +23,9 @@ One run, started by a timer on the development server, in a folder of its own
      to be collected, to pass, and not to be skipped;
   8. asks the services again, and writes one report file,
      <dir>/reports/<start time>/report.json;
-  9. stops its stack. Always: also when a step failed or the time ran out.
+  9. keeps the last 200 lines of each service's log in the report folder,
+     and stops its stack. Always: also when a step failed or the time ran
+     out. A log that cannot be had changes nothing but a line of the report.
 
 Steps 1 to 3 need no card. They come before the lock, and the time limit of
 the run does not count them: each of their commands has a limit of its own.
@@ -103,17 +106,14 @@ found nothing due.
 from __future__ import annotations
 
 import argparse
-import base64
 import contextlib
 import datetime as dt
 import fcntl
-import http.client
 import importlib.util
 import json
 import os
 import re
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -123,9 +123,6 @@ import urllib.request
 from pathlib import Path
 
 PROJECT = "atlas-nightly"
-# The service of the compose file -> the image it runs.
-IMAGES = {"llama-server": "atlas-llama", "geometric-lens": "atlas-lens", "v3-service": "atlas-v3",
-          "sandbox": "atlas-sandbox", "atlas-proxy": "atlas-proxy"}
 # What a run for one commit can build, as the compose file builds it: for each service the folder that is the
 # context of its build, its Dockerfile, and the paths of the repository that the build reads. The model server is
 # not here: its image is never built on the server.
@@ -139,10 +136,15 @@ BUILDS = {"geometric-lens": ("geometric-lens", "geometric-lens/Dockerfile", ("ge
 FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/server/": "the files of the timer, which run on the server itself",
             "scripts/tests_counted.py": "the judge of the tests, which the script loads on the server itself",
+            "scripts/nightly_images.py": "the images of a run, which the script loads on the server itself",
+            "scripts/nightly_statuses.py": "the sending of the statuses, which the script loads on the server itself",
             "scripts/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
             "scripts/code_quality.py": "a module of the driver, which runs on the server itself",
             "scripts/reliability_report.py": "a module of the driver, which runs on the server itself",
             "scripts/reliability_stream.py": "a module of the driver, which runs on the server itself",
+            "scripts/reliability_detectors.py": "a module of the driver, which runs on the server itself",
+            "scripts/reliability_records.py": "a module of the driver, which runs on the server itself",
+            "scripts/reliability_sandbox.py": "a module of the driver, which runs on the server itself",
             "scripts/smoke_result.py": "the script that makes the mark of the result line",
             "inference/": "the model server, whose image is never built on the server and whose start script the "
                           "stack mounts from the tree",
@@ -150,9 +152,8 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
 # A run for one commit takes only the tip of a branch of this name: what a maintainer has pushed for a smoke run.
 # No workflow starts on a push to such a branch, and no program pushes one.
 SMOKE = "smoke/"
-# The names of this run's own for the smoke branches that it fetches, and for the images that it builds. An image
-# name that starts with `localhost/` is in no registry, so Docker cannot pull another image under it.
-BRANCHES, OWN_IMAGES = "refs/nightly/smoke/", "localhost/atlas-nightly"
+# The names of this run's own for the smoke branches that it fetches.
+BRANCHES = "refs/nightly/smoke/"
 # The service that sends the text which the mark is made from.
 SENDS_THE_TEXT = "atlas-proxy"
 RESULT_LINE = ("Smoke run on {commit}: {good} of {tasks} sessions with no harness defect, {seconds} s; the changed "
@@ -164,25 +165,18 @@ TASKS = ("add_function", "offbyone", "ask_explain")
 # Loopback ports of this stack's own, so that it stands beside a stack on the usual ports.
 PORTS = {"ATLAS_LLAMA_PORT": 18080, "ATLAS_LENS_PORT": 18099, "ATLAS_V3_PORT": 18070,
          "ATLAS_SANDBOX_PORT": 18020, "ATLAS_PROXY_PORT": 18090}
-REVISION = "org.opencontainers.image.revision"
 NOT_RUN = "not run: the card was in use"
 STALE = "not run: the images are not of the head of the branch yet"
+NO_ROOM = "not run: too little room"
 REPO_URL, BRANCH = "https://github.com/inferstep/ATLAS.git", "dev"
-REGISTRY, TAG = "ghcr.io/inferstep", "dev"
-REPOSITORY, GITHUB_API = "inferstep/ATLAS", "https://api.github.com"
-# The status that a run writes on the commit that ran, by the kind of run. Each name starts with `server/`: no
-# required check has such a name.
-STATUS = {"night": "server/nightly", "one commit": "server/smoke"}
-# Where a status waits until it is sent, where it lies when it is sent, and where one goes that was tried for too
-# long. All three are folders of the run's own folder.
-WAITING, SENT, GIVEN_UP, KEEP_TRYING_DAYS = "to-send", "sent", "not-sent", 14
 # The file of the run's folder that holds the time when a look found a process on the card with no lock, and for how
 # many minutes after it the looks start nothing.
 CARD_HELD, QUIET_MINUTES = "card-held-with-no-lock", 60
 # The name of a smoke branch that the timer runs: one part after `smoke/`, of letters, digits, `.`, `_` and `-`.
 SMOKE_BRANCH = re.compile(r"smoke/[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # The steps of a run, as the report names the one that a run ended in. A status names a step only from this list.
-STEPS = ("start", "take the head of the branch", "stop a stack that an earlier run left", "pull the images",
+STEPS = ("start", "take the head of the branch", "stop a stack that an earlier run left", "read the settings of the server",
+         "pull the images",
          "wait for the images of the head", "take the lock of the card", "read what the card holds", "start the stack",
          "ask the services whether they are whole", "the smoke run", "the tests that need a real model",
          "ask the services again", "done", "look for the commit at the tip of a smoke branch",
@@ -195,23 +189,30 @@ NOTHING_DUE = 3
 STAMP = "%Y%m%dT%H%M%SZ"
 NEW_COPY_LEFT_NO_REPORT = ("failed: taking the head changed the script of the run, the run started the new copy in its "
                            "place, and that copy left no report")
-# The judge of a run of tests that must all run, and the list of such tests: the file beside this one.
+# The judge of a run of tests that must all run, and the list of such tests: a file beside this one. And the file
+# of the images of a run: the run's own names for them, and the room that they need. And the file that keeps and
+# sends the statuses of a run on GitHub.
 JUDGE = Path(__file__).resolve().with_name("tests_counted.py")
+IMAGES_FILE = JUDGE.with_name("nightly_images.py")
+STATUSES_FILE = JUDGE.with_name("nightly_statuses.py")
 
 
-def load_the_judge():
-    spec = importlib.util.spec_from_file_location("atlas_tests_counted", JUDGE)
+def load_beside(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-counted = load_the_judge()
+counted, images = load_beside(JUDGE, "atlas_tests_counted"), load_beside(IMAGES_FILE, "atlas_nightly_images")
+IMAGES, REGISTRY, TAG, REVISION, OWN_IMAGES = images.IMAGES, images.REGISTRY, images.TAG, images.REVISION, images.OWN
+statuses = load_beside(STATUSES_FILE, "atlas_nightly_statuses")
+REPOSITORY, STATUS, NotSent, github = statuses.REPOSITORY, statuses.STATUS, statuses.NotSent, statuses.github
 # The tests of the run: the group that needs a real model.
 TESTS = counted.GROUPS["model"]
-# This file and the judge as Python read them when the run started.
-AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE)}
+# This file and the three beside it as Python read them when the run started.
+AS_STARTED = {path: path.read_bytes() for path in (Path(__file__).resolve(), JUDGE, IMAGES_FILE, STATUSES_FILE)}
 # What the run asks the services about themselves. Each is asked inside its own container, with the tool and at the
 # port of its health check. The health check of the lens asks /health, which says that the process serves; /ready
 # says whether the lens can score. The proxy's /ready asks the model server, the lens, the sandbox and v3-service.
@@ -220,6 +221,9 @@ QUESTIONS = {"the proxy's /ready": ("atlas-proxy", "http://localhost:8090/ready"
              "the lens's /health": ("geometric-lens", "http://localhost:8099/health")}
 # The parts of the proxy's answer, and what each is called in a result.
 PROXY_PARTS = {"inference": "the model server", "lens_ready": "the lens", "sandbox": "the sandbox", "v3": "v3-service"}
+# The same parts by a short fixed name, for a status on GitHub: it has room for few words, and takes none that a
+# service wrote.
+SHORT_NAMES = {"inference": "model", "lens_ready": "lens", "sandbox": "sandbox", "v3": "v3"}
 
 
 class StepFailed(Exception):
@@ -343,8 +347,8 @@ def take_head(args) -> str:
 
 
 def script_changed(args) -> bool:
-    """Whether taking the head changed this very file or the judge beside it: the run was started from the tree, and one
-    of the two holds other bytes now."""
+    """Whether taking the head changed this very file or one of the three beside it: the run was started from the
+    tree, and one of the four holds other bytes now."""
     own = Path(__file__).resolve()
     try:
         return (own == (args.dir / "tree" / "scripts" / "nightly_run.py").resolve()
@@ -378,21 +382,25 @@ def stop_a_left_stack(args) -> str:
                 ["docker", "ps", "--all", "--quiet", "--filter", f"label=com.docker.compose.project={PROJECT}"], 60).split()
     if not left:
         return "none"
+    # Compose reads no file of the stack without the name of the model, so no stop can go without it either.
+    model_name(args)
     write_settings(args)
     must("the stop of the stack that an earlier run left", [*compose(args), "down", "--volumes", "--remove-orphans"], 300)
     return f"{len(left)} container(s) of an earlier run were stopped first"
 
 
-def pull_images(services=tuple(IMAGES)) -> dict:
-    """Pull the image of each service and give, for each service, its digest and the commit it was built from."""
-    found = {}
-    for service, name in ((service, IMAGES[service]) for service in services):
-        ref = f"{REGISTRY}/{name}:{TAG}"
-        must(f"the pull of {ref}", ["docker", "pull", "--quiet", ref], 1200)
-        about = json.loads(must(f"the reading of {ref}", ["docker", "image", "inspect", ref], 60))[0]
-        digests = about.get("RepoDigests") or [""]
-        found[service] = {"image": ref, "digest": digests[0].split("@")[-1],
-                          "commit": ((about.get("Config") or {}).get("Labels") or {}).get(REVISION, "")}
+def hold_room(args, step: str, room_gb: float) -> None:
+    """End the run as not run when Docker's disk has not the room of a step and the reserve after it."""
+    short = images.room_fault(args.docker_folder, room_gb + args.reserve_gb, f"for {step}")
+    if short:
+        raise NotRun(short)
+
+
+def pull_images(args, report: dict, services=tuple(IMAGES)) -> dict:
+    """Bring the registry's image of each service under this run's own name, and give, for each service, its digest
+    and the commit it was built from. No tag of the server moves, and the run keeps one set (scripts/nightly_images.py)."""
+    found, removed = images.take(args.dir, services, must, ended, StepFailed, lambda step, room: hold_room(args, step, room))
+    report.setdefault("images_removed", {}).update(removed)
     return found
 
 
@@ -412,7 +420,7 @@ def images_of_the_head(args, report: dict) -> None:
     pause = args.image_wait_minutes * 60 / 10
     for look in range(looks + 1):
         now_in(report, "pull the images")
-        report["images"] = pull_images()
+        report["images"] = pull_images(args, report)
         report["stale"] = stale_images(report["images"], report["commit"])
         report["waited_for_images"] = f"{look * pause:g} s"
         if not report["stale"] or look == looks:
@@ -431,6 +439,8 @@ def before_the_card(args, report: dict, first_start: bool) -> None:
         raise NewScript
     now_in(report, "stop a stack that an earlier run left")
     report["left_stack"] = stop_a_left_stack(args)
+    now_in(report, "read the settings of the server")
+    check_settings(args)
     images_of_the_head(args, report)
 
 
@@ -473,16 +483,22 @@ def as_compose_reads(value: str) -> str:
     return re.split(r"\s#", value, maxsplit=1)[0].strip()
 
 
-def model_name(args) -> str:
-    """The name of the model of this server, from <dir>/nightly.env. One of the tests compares the served model with
-    it, and skips without it."""
+def setting(args, key: str) -> str:
+    """The last value of a key in <dir>/nightly.env as compose reads it, or nothing when the file gives the key none."""
     base = args.dir / "nightly.env"
     if not base.is_file():
         raise StepFailed(f"{base} is not there. It holds the settings of the model for this server (ATLAS_MODELS_DIR, "
                          "ATLAS_MODEL_FILE, ATLAS_MODEL_NAME and the sizes). Fix: write it once, from the .env of the "
                          "stack that runs on this server.")
-    given = re.findall(r"^[ \t]*(?:export[ \t]+)?ATLAS_MODEL_NAME[ \t]*=(.*)$", base.read_text(encoding="utf-8"), re.M)
-    name = as_compose_reads(given[-1]) if given else ""
+    given = re.findall(rf"^[ \t]*(?:export[ \t]+)?{key}[ \t]*=(.*)$", base.read_text(encoding="utf-8"), re.M)
+    return as_compose_reads(given[-1]) if given else ""
+
+
+def model_name(args) -> str:
+    """The name of the model of this server, from <dir>/nightly.env. One of the tests compares the served model with
+    it, and skips without it."""
+    base = args.dir / "nightly.env"
+    name = setting(args, "ATLAS_MODEL_NAME")
     if not name:
         raise StepFailed(f"{base} has no line `ATLAS_MODEL_NAME=<name>`. The model server does not start without the name "
                          "of its model, and a test compares the served model with it. Fix: add the line, from the .env "
@@ -490,17 +506,37 @@ def model_name(args) -> str:
     return name
 
 
-def write_settings(args) -> dict:
-    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
-    base = args.dir / "nightly.env"
+def check_lens_folder(args) -> None:
+    """The folder of the lens's files has to be a full path in <dir>/nightly.env. The run's own copy of the repository
+    has no cost_field.pt (git leaves `*.pt` out), and compose reads a relative folder inside that copy, so the lens of
+    the stack would have no model to score with."""
+    folder = setting(args, "ATLAS_LENS_MODELS")
+    if not Path(folder).is_absolute():
+        raise StepFailed(f"the run's settings name no folder of lens files as a full path (ATLAS_LENS_MODELS in "
+                         f"{args.dir / 'nightly.env'}), so the lens of the stack would have no model to score with. Fix: "
+                         "add the line with the folder that the usual lens mounts, as the page docs/quality/gates.md "
+                         "gives it in the steps on the server.")
+
+
+def check_settings(args) -> None:
+    """The settings of the server that the run's stack needs, read once before an image is pulled.
+
+    A left stack is stopped before this: its stop needs none of these but the name of the model.
+    """
     model_name(args)
-    for name in ("workspace/_reliability", "secrets", "no-deploy-record"):
-        (args.dir / name).mkdir(parents=True, exist_ok=True)
+    check_lens_folder(args)
     token = args.dir / "secrets" / "service-token"
     if token.exists():
         raise StepFailed(f"{token} is there. With a token file the services of the stack ask for the token, and the "
                          "driver and the tests send none, so every session and most tests would be refused. Fix: "
                          "remove that file.")
+
+
+def write_settings(args) -> dict:
+    """Write <dir>/run.env: the server's own settings for the model, then this run's ports, folders and image tag."""
+    base = args.dir / "nightly.env"
+    for name in ("workspace/_reliability", "secrets", "no-deploy-record"):
+        (args.dir / name).mkdir(parents=True, exist_ok=True)
     # The proxy and the sandbox mount the same workspace, so both run as the user of this run.
     own = {**PORTS, "ATLAS_IMAGE_TAG": TAG, "ATLAS_PROJECT_DIR": str(args.dir / "workspace"),
            "ATLAS_SECRETS_DIR": str(args.dir / "secrets"), "ATLAS_PROXY_UID": os.getuid(), "ATLAS_PROXY_GID": os.getgid(),
@@ -528,6 +564,23 @@ def stop_stack(args, report: dict) -> None:
     if report["stack_stopped"] != "yes":
         # A stack that still runs holds the card, so this is the first thing the result says.
         report["result"] = f"failed: the stack was not stopped ({report['stack_stopped'][4:]}); before that: {report.get('result')}"
+
+
+def save_logs(args, report: dict, folder: Path) -> None:
+    """Keep the last lines of each service's log in the report folder: the stop that follows removes them. Best effort:
+    a log that cannot be had is a line in the report, and the run's result and status stay as they are."""
+    if not (args.dir / "run.env").is_file() or not (args.dir / "tree" / "docker-compose.yml").is_file():
+        return
+    for service in IMAGES:
+        try:
+            done = command([*compose(args), "logs", "--no-color", "--tail", "200", service], 60)
+            if done.returncode == 0:
+                (folder / f"{service}.log").write_text(done.stdout, encoding="utf-8")
+            else:
+                report.setdefault("logs_not_saved", []).append(f"{service}: status {done.returncode}")
+        except Exception as error:  # a stop, a time-out or a full disk: the stack still has to be stopped next
+            report.setdefault("logs_not_saved", []).append(f"{service}: {error!r}; the services after it were not asked")
+            return
 
 
 def read_answer(printed: str) -> dict:
@@ -643,6 +696,9 @@ def with_the_card(args, report: dict, folder: Path) -> None:
     """
     now_in(report, "start the stack")
     write_settings(args)
+    # The stack runs the images under this run's own names: the ones it built, and else the registry's.
+    args.own_images = folder / "own-images.yml"
+    args.own_images.write_text(images.compose_file(report.get("built") or {}), encoding="utf-8")
     start_stack(args)
     now_in(report, "ask the services whether they are whole")
     answers, faults = ask_the_services(args, args.settle_seconds)
@@ -746,9 +802,8 @@ def mark_of_the_text(args, commit: str) -> str:
     return printed
 
 
-def own_image(service: str, stamp: str, commit: str) -> str:
-    """The name of an image that this run builds: of this machine only, with the start time of the run and the commit."""
-    return f"{OWN_IMAGES}/{IMAGES[service]}:{stamp}-{commit[:12]}"
+# The name of an image that this run builds: of this machine only, with the start time of the run and the commit.
+own_image = images.built_name
 
 
 def build_images(args, report: dict, folder: Path) -> None:
@@ -770,15 +825,12 @@ def build_images(args, report: dict, folder: Path) -> None:
     must("the unpacking of that copy", ["tar", "-x", "-f", str(folder / "commit.tar"), "-C", str(folder / "commit")], 300)
     for service in services:
         context, dockerfile, _paths = BUILDS[service]
+        hold_room(args, f"the build of {service} from the commit", images.room_of_a_build(service, must, StepFailed))
         name = report["built"][service] = own_image(service, folder.name, commit)
         must(f"the build of {service} from the commit", ["docker", "build", "--tag", name, "--label", f"{REVISION}={commit}",
                                                          "--file", str(folder / "commit" / dockerfile), str(folder / "commit" / context)],
              args.build_seconds)
     report["build"] = f"built from the commit: {', '.join(services)}"
-    args.own_images = folder / "own-images.yml"
-    # JSON is YAML. An image of this run is never looked for in a registry.
-    args.own_images.write_text(json.dumps({"services": {service: {"image": name, "pull_policy": "never"}
-                                                        for service, name in report["built"].items()}}, indent=2) + "\n", encoding="utf-8")
 
 
 def remove_built(report: dict) -> None:
@@ -815,8 +867,10 @@ def before_the_card_for_a_commit(args, report: dict, folder: Path, first_start: 
     carried_by_the_sessions(report)
     now_in(report, "stop a stack that an earlier run left")
     report["left_stack"] = stop_a_left_stack(args)
+    now_in(report, "read the settings of the server")
+    check_settings(args)
     now_in(report, "pull the images")
-    report["images"] = pull_images([service for service in IMAGES if service not in report["changed_services"]])
+    report["images"] = pull_images(args, report, [service for service in IMAGES if service not in report["changed_services"]])
     report["stale"] = stale_images(report["images"], head)
     if report["stale"]:
         return
@@ -914,51 +968,11 @@ def on_the_card(args, report: dict, folder: Path) -> None:
                 with_the_card(args, report, folder)
                 report["result"] = judge(report)
         finally:
+            save_logs(args, report, folder)
             stop_stack(args, report)
 
 
 # --- the result on GitHub ----------------------------------------------------------------------------------------
-
-class NotSent(Exception):
-    """GitHub could not be asked, or a status could not be sent now. The words say why, and they are fixed words: no
-    path, no name of a machine and nothing that a tool printed."""
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    """An answer that points to another address is not followed: the token would go there too."""
-
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-# The paths of the calls that this script makes. A value from a file, from an argument or from an answer goes into a
-# path only as letters, digits and the few signs of a commit id, a number or an encoded name of a branch.
-PATHS = re.compile(rf"/repos/{re.escape(REPOSITORY)}/(?:installation|statuses/[0-9a-f]{{40}}|commits/[0-9a-f]{{40}}/(?:statuses|pulls)\?per_page=100"
-                   r"|activity\?ref=[A-Za-z0-9._%-]+&per_page=5)|/app/installations/[0-9]+/access_tokens")
-
-
-def github(method: str, path: str, bearer: str = "", body: dict | None = None):
-    """One call to GitHub's own address, and the decoded answer. A call that reads sends no key: the repository is public."""
-    if not PATHS.fullmatch(path):
-        raise NotSent("the call was not made: its path is not one that this script makes")
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "atlas-nightly",
-               **({"Authorization": f"Bearer {bearer}"} if bearer else {})}
-    request = urllib.request.Request(f"{GITHUB_API}{path}", data=json.dumps(body).encode() if body is not None else None,
-                                     method=method, headers=headers)
-    try:
-        # No proxy of the environment either: no variable changes where the call goes.
-        with urllib.request.build_opener(NoRedirect, urllib.request.ProxyHandler({})).open(request, timeout=30) as response:
-            answer = response.read()
-    except urllib.error.HTTPError as error:
-        raise NotSent(f"GitHub answered {error.code}") from None
-    except (http.client.HTTPException, OSError):
-        # A URLError and a timeout are an OSError too.
-        raise NotSent("GitHub could not be reached") from None
-    try:
-        return json.loads(answer)
-    except ValueError:
-        return None
-
 
 def counts_hold(report: dict) -> bool:
     """Whether the report holds the numbers of a run that passed: each session there with no harness defect and, for
@@ -1003,11 +1017,27 @@ def what_failed(report: dict) -> str:
     return "a service was not whole at the end" if report.get("not_whole_at_the_end") else "see the report on the server"
 
 
+def parts_not_whole(answers: dict) -> list:
+    """The parts that the services' answers at the start say are not whole, by their short fixed names."""
+    if not answers:
+        return []
+    proxy = (answers.get("the proxy's /ready") or {}).get("answer")
+    if not isinstance(proxy, dict):
+        parts = ["proxy"]
+    else:
+        parts = [SHORT_NAMES[part] for part in PROXY_PARTS if proxy.get(part) is not True]
+    if (answers.get("the lens's /ready") or {}).get("status") != 200 and SHORT_NAMES["lens_ready"] not in parts:
+        parts.append(SHORT_NAMES["lens_ready"])
+    return parts
+
+
 def numbers_of(report: dict) -> list:
     """What a status says about the sessions and the tests of a run, in fixed words and numbers."""
     tasks, tests = report.get("tasks") or [], report.get("tests") or {}
     if len(tasks) != len(TASKS):
-        return [f"ended in the step: {report.get('step') if report.get('step') in STEPS else 'not named'}"]
+        step = report.get("step") if report.get("step") in STEPS else "not named"
+        parts = parts_not_whole((report.get("services") or {}).get("at the start") or {})
+        return [f"ended in the step: {step}"] + ([f"not whole: {', '.join(parts)}"] if parts else [])
     said = [f"{sum(1 for task in tasks if not task.get('defects'))} of {len(TASKS)} sessions with no harness defect"]
     if report["mode"] == "one commit":
         return said + [f"text {report['mark']}" if re.fullmatch(r"[0-9a-f]{12}", str(report.get("mark"))) else "text not marked"]
@@ -1018,166 +1048,6 @@ def numbers_of(report: dict) -> list:
     return said + [f"{passed} of {expected} tests passed" if whole else f"tests: {passed} passed, {failed} failed, {skipped} skipped of {expected}"]
 
 
-def key_fault(args) -> str:
-    """Why the key cannot be used, or nothing. It is a file of the user of this run that nobody else can read, and
-    it lies outside the folder of the run, so no container of the stack can have it."""
-    if args.status_key is None or not args.status_app:
-        return "no key: the run was started without --status-key or without --status-app"
-    try:
-        about = args.status_key.stat()
-    except OSError:
-        return "no key: the file that --status-key names is not there"
-    if not stat.S_ISREG(about.st_mode) or about.st_uid != os.getuid():
-        return "the key is not used: it is not a file of the user of this run"
-    if about.st_mode & 0o077:
-        return "the key is not used: its file is open to the group or to others. Fix: chmod 600 on that file"
-    if args.dir.resolve() in args.status_key.resolve().parents:
-        return ("the key is not used: its file lies in the folder of the run, which the containers of the stack can "
-                "read. Fix: move it out of that folder")
-    return ""
-
-
-def base64url(raw: bytes) -> bytes:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=")
-
-
-def token_for_statuses(args) -> str:
-    """A token of the app, made for one send: for this one repository and for statuses only. It is kept nowhere.
-
-    openssl signs with the key and gets the key as the path of its file. This script never reads the key.
-    """
-    now = int(time.time())
-    unsigned = b".".join(base64url(json.dumps(part).encode()) for part in (
-        {"alg": "RS256", "typ": "JWT"}, {"iat": now - 60, "exp": now + 300, "iss": str(args.status_app)}))
-    try:
-        done = subprocess.run(["openssl", "dgst", "-sha256", "-sign", str(args.status_key)], input=unsigned,
-                              capture_output=True, timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        raise NotSent("openssl could not be started, or did not end") from None
-    if done.returncode != 0 or not done.stdout:
-        raise NotSent(f"openssl could not sign with the key (status {done.returncode})")
-    proof = (unsigned + b"." + base64url(done.stdout)).decode()
-    try:
-        installation = github("GET", f"/repos/{REPOSITORY}/installation", proof)
-        token = github("POST", f"/app/installations/{int(installation['id'])}/access_tokens", proof,
-                       {"repositories": [REPOSITORY.split("/")[1]], "permissions": {"statuses": "write"}})["token"]
-    except (KeyError, TypeError, ValueError):
-        token = None
-    if not isinstance(token, str) or not token:
-        raise NotSent("GitHub gave an answer of another shape")
-    return token
-
-
-def is_ours(status) -> bool:
-    """Whether a waiting file holds a status as this script writes it. Another file is not sent."""
-    return (isinstance(status, dict) and status.get("context") in STATUS.values() and status.get("state") in ("success", "failure")
-            and bool(re.fullmatch(r"[0-9a-f]{40}", str(status.get("sha")))) and isinstance(status.get("description"), str)
-            and len(status["description"]) <= 140)
-
-
-def not_the_runs_own(about: os.stat_result) -> bool:
-    """Whether a file or a folder is not the run's own: another user owns it, or the group or others can write it."""
-    return about.st_uid != os.getuid() or bool(about.st_mode & 0o022)
-
-
-def folder_fault(args) -> str:
-    """Why the folder of the waiting statuses cannot be used, or nothing. As for the key: it is a folder of the user
-    of this run, and nobody else can write into it. What lies in another folder is not sent."""
-    try:
-        about = (args.dir / WAITING).lstat()
-    except OSError:
-        return ""
-    if not stat.S_ISDIR(about.st_mode) or not_the_runs_own(about):
-        return ("the folder of the waiting statuses is not a folder that only the user of this run can write. Fix: "
-                "look at what lies in it; then chmod go-w on that folder")
-    return ""
-
-
-def keep_for_sending(args, status: dict, stamp: str) -> None:
-    (args.dir / WAITING).mkdir(mode=0o700, exist_ok=True)
-    if folder_fault(args):
-        return
-    place = args.dir / WAITING / f"{stamp}-{status['context'].replace('/', '-')}.json"
-    # The file is made for the user of the run alone, whatever the settings of the server give a new file.
-    with os.fdopen(os.open(place, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as out:
-        out.write(json.dumps(status, indent=2) + "\n")
-
-
-def set_aside(args, path: Path, folder: str) -> None:
-    (args.dir / folder).mkdir(mode=0o700, exist_ok=True)
-    path.replace(args.dir / folder / path.name)
-
-
-def waiting_status(path: Path, now: dt.datetime) -> dict | None:
-    """The status that a waiting file holds, or None when the file is not one to send: this script did not write it,
-    it is not a file of the run's own, or it has waited for longer than KEEP_TRYING_DAYS."""
-    try:
-        about = path.lstat()
-        status = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not stat.S_ISREG(about.st_mode) or not_the_runs_own(about):
-        return None
-    too_old = now.timestamp() - about.st_mtime > KEEP_TRYING_DAYS * 86400
-    return status if is_ours(status) and not too_old else None
-
-
-def send_one(args, status: dict) -> str:
-    """Send one status, with a token made for it. Gives a note when the account that wrote it is not the one that
-    the settings name, and else nothing. Only the name, the state and the text of the status are sent."""
-    made = github("POST", f"/repos/{REPOSITORY}/statuses/{urllib.parse.quote(str(status['sha']), safe='')}", token_for_statuses(args),
-                  {key: status[key] for key in ("state", "context", "description")})
-    creator = made.get("creator") if isinstance(made, dict) else None
-    writer = creator.get("id") if isinstance(creator, dict) else None
-    if not isinstance(writer, int) or writer == args.status_writer:
-        return ""
-    return (f"; the statuses of this key are written by the account {writer}, and --status-writer names "
-            f"{args.status_writer or 'none'}. Fix: give --status-writer {writer}")
-
-
-def send_waiting(args, now: dt.datetime) -> str:
-    """Try once to send each status that waits. Gives what happened, in fixed words.
-
-    A status that was sent is moved to the folder of the sent ones, so it is sent once. One that has waited for
-    longer than KEEP_TRYING_DAYS, or that this script did not write, is moved aside and tried no more. When GitHub
-    does not answer, the others wait for the next start too.
-    """
-    waiting = sorted((args.dir / WAITING).glob("*.json")) if (args.dir / WAITING).is_dir() else []
-    if folder_fault(args):
-        # Nothing of such a folder is sent, and nothing of it is moved.
-        return f"not sent: {folder_fault(args)}; the status of a run is then in its report only"
-    fault, sent, aside, other = key_fault(args), 0, 0, ""
-    for path in waiting:
-        status = waiting_status(path, now)
-        if status is None:
-            set_aside(args, path, GIVEN_UP)
-            aside += 1
-        elif not fault:
-            try:
-                other = send_one(args, status) or other
-            except NotSent as reason:
-                fault = str(reason)
-                continue
-            set_aside(args, path, SENT)
-            sent += 1
-    left = len(waiting) - sent - aside
-    said = [f"sent: {sent}"] if sent else []
-    said += [f"not sent: {fault}; waits: {left}"] if left else []
-    said += [f"set aside after {KEEP_TRYING_DAYS} days or as not written by this script: {aside}"] if aside else []
-    return ("; ".join(said) or "nothing waits") + other
-
-
-def send_what_waits(args, status: dict | None = None, stamp: str = "") -> str:
-    """Keep the status of a run for sending, and try once to send each status that waits. Gives what happened.
-
-    A fault of this step itself is given as words too: sending never stops a run, its report or a look of the timer.
-    """
-    try:
-        if status:
-            keep_for_sending(args, status, stamp)
-        return send_waiting(args, dt.datetime.now(dt.timezone.utc))
-    except Exception as error:  # the caller says so, and goes on
-        return f"not sent: an error of the sending step itself ({type(error).__name__})"
 
 
 def to_github(args, report: dict, folder: Path, stamp: str) -> None:
@@ -1190,7 +1060,7 @@ def to_github(args, report: dict, folder: Path, stamp: str) -> None:
     except Exception as error:  # a report of another shape gets no status, and is written all the same
         status, report["status"] = None, f"no status: an error of the run itself ({type(error).__name__})"
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    report["sent"] = send_what_waits(args, status, stamp)
+    report["sent"] = statuses.send_what_waits(args, status, stamp)
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1254,9 +1124,10 @@ def not_our_own_code(tip: str) -> str:
 
 def settled(report: dict) -> bool:
     """Whether the run for a commit needs no second run: it made a status, or it did not take place for a reason that
-    the commit itself carries. A run that found the card in use, or images that were not of the head yet, settles nothing."""
+    the commit itself carries. A run that found the card in use, images that were not of the head yet, or too little
+    room on Docker's disk, settles nothing."""
     result = str(report.get("result", ""))
-    return isinstance(report.get("status"), dict) or (result.startswith("not run: ") and not result.startswith((NOT_RUN, STALE)))
+    return isinstance(report.get("status"), dict) or (result.startswith("not run: ") and not result.startswith((NOT_RUN, STALE, NO_ROOM)))
 
 
 def smoke_that_is_due(args, today: list, hour: int) -> tuple:
@@ -1266,7 +1137,7 @@ def smoke_that_is_due(args, today: list, hour: int) -> tuple:
     if not args.smoke_hours:
         return None, "no smoke: the settings of the server name no hours in which a look may start a smoke run (--smoke-hours)"
     if hour not in args.smoke_hours:
-        return None, "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). A smoke branch waits"
+        return None, "no smoke in this hour: it is not one of the hours for smoke runs (--smoke-hours). Smoke branches are looked at only in those hours"
     ran = {report.get("commit") for report in reports_of(args) if report.get("mode") == "one commit" and settled(report)}
     for name, tip in smoke_tips():
         if tip in ran or has_a_status(tip, STATUS["one commit"], args.status_writer):
@@ -1309,7 +1180,18 @@ def card_is_free(args, now: dt.datetime) -> bool:
 
 def what_is_due(args, now: dt.datetime) -> tuple:
     """What this look of the timer runs, and why, in one line: ("night", None, why), ("one commit", <its id>, why) or
-    (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day."""
+    (None, None, why not). A look that finds the card in use starts nothing, so it uses up no try of the day. The
+    same holds for a look that finds too little room on Docker's disk: the usual stack is then not stopped."""
+    mode, commit, why = run_that_is_due(args, now)
+    if not mode:
+        return mode, commit, why
+    wanted = images.room_wanted(args.first_set_gb, args.reserve_gb, ended)
+    short = images.room_fault(args.docker_folder, wanted)
+    return (None, None, f"nothing is started: {short}") if short else (mode, commit, why)
+
+
+def run_that_is_due(args, now: dt.datetime) -> tuple:
+    """What a look would run if Docker's disk has the room, as `what_is_due` gives it."""
     today = [report for report in reports_of(args) if str(report.get("started", "")).startswith(now.strftime("%Y-%m-%d"))]
     night_is_due = now.hour == args.night_hour and not [report for report in today if report.get("mode") == "night"]
     lately = held_lately(args, now)
@@ -1372,6 +1254,11 @@ def parse(argv: list) -> argparse.Namespace:
                         help="the hours, in UTC, in which a look may start a smoke run, as in 22-23,0-5; with none, the timer starts no smoke run")
     parser.add_argument("--commit", type=full_id, default=None, help="run the three sessions for this commit of a branch, and nothing else")
     parser.add_argument("--build-seconds", type=int, default=1800, help="the time limit of one image build of a run for a commit")
+    parser.add_argument("--first-set-gb", type=float, default=images.FIRST_SET_GB,
+                        help="the room on Docker's disk, in GB, of the first set of the run's images: wanted free on top of the reserve until the run has pulled each image once")
+    parser.add_argument("--reserve-gb", type=float, default=images.RESERVE_GB, help="the free room on Docker's disk, in GB, that a look of the timer wants before every run")
+    parser.add_argument("--docker-folder", action="append", default=[], metavar="FOLDER",
+                        help="a folder whose disk holds Docker's images; with none, Docker's own folder and the one of containerd")
     parser.set_defaults(own_images=None)
     args = parser.parse_args(argv)
     if args.tick and args.commit:
@@ -1400,7 +1287,7 @@ def one_look(args, started: dt.datetime) -> tuple:
     """One look of the timer: send what waits, and say what is due. Gives the commit that the look chose, if any,
     and the status to end with now, or None when a run starts."""
     # What waits goes out first: a run can take long. A look with nothing to run leaves no report.
-    print(f"tick: statuses: {send_what_waits(args)}")
+    print(f"tick: statuses: {statuses.send_what_waits(args)}")
     mode, chosen, why = what_is_due(args, started)
     print(f"tick: {why}")
     if args.look or not mode:
@@ -1425,12 +1312,14 @@ def run(args, argv: list, started: dt.datetime, first_start: bool, folder: Path,
     report = {"started": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "step": "start", "mode": "one commit" if args.commit else "night",
               "script": "as it was started" if first_start else "the new copy: taking the head changed the script"}
     folder.mkdir(parents=True, exist_ok=not first_start)
+    report["free_gb_before"] = images.free_room(args.docker_folder)[0]
     try:
         with halt_on(signal.SIGTERM, "the run was told to stop"), failures_into(report):
             (one_commit if args.commit else one_night)(args, report, folder, first_start)
     except NewScript:
         start_the_new_copy(argv, started.strftime(STAMP), report, folder, held)
     report["ended"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    report["free_gb_after"] = images.free_room(args.docker_folder)[0]
     to_github(args, report, folder, started.strftime(STAMP))
     return report
 

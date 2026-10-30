@@ -83,8 +83,8 @@ def _verify_signatures(atlas_root: str, tag: str) -> None:
     """Verify each target image's keyless cosign signature. Best-effort:
     if cosign isn't installed we log and continue (an install without
     cosign still upgrades); a signature that FAILS verification raises
-    UpgradeError so the upgrade aborts + restores. Skippable with
-    ATLAS_UPGRADE_SKIP_VERIFY=1."""
+    UpgradeError so the upgrade aborts + restores, and a rollback stops
+    before it changes anything. Skippable with ATLAS_UPGRADE_SKIP_VERIFY=1."""
     import shutil
     if os.environ.get("ATLAS_UPGRADE_SKIP_VERIFY") == "1":
         return
@@ -103,7 +103,7 @@ def _verify_signatures(atlas_root: str, tag: str) -> None:
         except subprocess.TimeoutExpired:
             raise eng.UpgradeError(
                 f"signature verification timed out for {ref} — refusing "
-                "to upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
+                f"to deploy {tag} (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
         if proc.returncode == 0:
             continue
         err = proc.stderr or ""
@@ -121,9 +121,17 @@ def _verify_signatures(atlas_root: str, tag: str) -> None:
         if any(code in err_upper for code in not_published):
             print(f"  (skipping {ref}: not published in the registry)")
             continue
+        # The images are signed in the bundle form that cosign 3 reads; an
+        # older cosign finds no signature in it.
+        if "NO SIGNATURES FOUND" in err_upper:
+            raise eng.UpgradeError(
+                f"cosign found no signature it can read for {ref}. Install "
+                "cosign 3 or newer and try again: an older cosign cannot read "
+                f"the signatures of these images. Refusing to deploy {tag} "
+                "until then (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
         raise eng.UpgradeError(
             f"signature verification failed for {ref} — refusing to "
-            "upgrade (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
+            f"deploy {tag} (set ATLAS_UPGRADE_SKIP_VERIFY=1 to override)")
 
 
 def _snapshot_digests(atlas_root: str) -> Dict[str, str]:

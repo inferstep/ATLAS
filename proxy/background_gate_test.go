@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,11 +11,10 @@ import (
 	"testing"
 )
 
-// A model that verified its work by starting a server and then declared done
-// used to get its summary replaced by "Still running in the sandbox" and the
-// run reported as unfinished (dev scenario, 2026-09-14). The exit gate now
-// names the job and asks for stop_background; a model that complies finishes
-// with its own account of the work.
+// A model that verified its work by starting a server and then declares done
+// is not reported as unfinished with "Still running in the sandbox" in place
+// of its summary. The exit gate names the job and asks for stop_background,
+// and a model that complies finishes with its own account of the work.
 func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 	const good = "def solve():\n    return 7\n\n\nprint(solve())\n"
 	zero := 0
@@ -44,10 +44,15 @@ func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 		return map[string]interface{}{"type": "done", "summary": "Built solve.py and verified it prints 7."}
 	}
 	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slots/") {
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		i := turns
 		turns++

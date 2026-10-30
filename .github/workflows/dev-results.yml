@@ -118,17 +118,17 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         id: go
         with:
-          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
-          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # 1.26.10 covers both modules (tui's go.mod requires 1.26.10;
+          # proxy's 1.24 floor builds fine on it). setup-go pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # The step below keeps the caches, under a key of this job's own.
           cache: false
 
       - name: point the gates at Go's own build cache folder
-        # The gate script builds in a folder of its own unless GOCACHE is
-        # set. The step below keeps Go's own folder, so the gates use that.
+        # The cache step below saves Go's own build folder. The gate script
+        # uses it when GOCACHE is unset; this step names it for every step.
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
 
       - name: Go module and build cache

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,10 +14,9 @@ import (
 )
 
 // A truncated read shows part of a file. The unread-citation check works per
-// file, so it let a reply describe code past the cut. Smoke run 2026-09-27,
-// bugfind_tiebreak: both reads stopped near line 190, the reply named
-// `_score_plan` and said it lay "past the provided snippet", and the run ended
-// completed.
+// file, so on its own it lets a reply describe code past the cut: both reads
+// stop near line 190, the reply names `_score_plan` and says it lies "past the
+// provided snippet", and the run ends completed. The range check catches this.
 
 // planningSource is a 600-line file with _score_plan defined at line 412.
 func planningSource() string {
@@ -50,52 +50,68 @@ func TestATruncatedReadDoesNotShowTheWholeFile(t *testing.T) {
 	}
 }
 
-func TestASymbolInsideTheReadIsNotFlagged(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 380, 440, 600)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("line 412 was shown: %+v", got)
-	}
-}
-
-func TestReadingTheRestClearsTheGap(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 189, 600)
-	ctx.RecordBodyRead(path, 401, 440, 600)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("a second read showed line 412: %+v", got)
-	}
-}
-
-func TestAWholeReadOrAWriteShowsEverything(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path := resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 600, 600)
-	ctx.RecordBodyRead(path, 1, 50, 600) // a later partial read takes nothing back
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("the whole file was read: %+v", got)
-	}
-
-	ctx = evidenceCtx(t, map[string]string{"planning.py": planningSource()})
-	path = resolveAgentPath(ctx, "planning.py")
-	ctx.RecordBodyRead(path, 1, 189, 600)
-	ctx.RecordBodySeen(path) // what every write and edit path records
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("after a write the old line numbers no longer hold: %+v", got)
-	}
-}
-
-func TestANameShownInAnotherFileIsNotFlagged(t *testing.T) {
-	ctx := evidenceCtx(t, map[string]string{
-		"planning.py": planningSource(),
-		"helpers.py":  "def _score_plan(plans):\n    return plans\n",
-	})
-	ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 1, 189, 600)
-	ctx.RecordBodyRead(resolveAgentPath(ctx, "helpers.py"), 1, 3, 3)
-	if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
-		t.Fatalf("a definition of the name was shown in helpers.py: %+v", got)
+// Once the line that defines a cited name has been shown, in any of these
+// ways, the citation is not flagged.
+func TestACitedSymbolThatWasShownIsNotFlagged(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		show  func(ctx *AgentContext)
+	}{
+		{
+			name:  "one read that holds line 412",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 380, 440, 600)
+			},
+		},
+		{
+			name:  "a second read of the rest",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 189, 600)
+				ctx.RecordBodyRead(path, 401, 440, 600)
+			},
+		},
+		{
+			name:  "a whole read, which a later partial read does not take back",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 600, 600)
+				ctx.RecordBodyRead(path, 1, 50, 600)
+			},
+		},
+		{
+			// After a write the old line numbers do not hold.
+			name:  "a write after a partial read",
+			files: map[string]string{"planning.py": planningSource()},
+			show: func(ctx *AgentContext) {
+				path := resolveAgentPath(ctx, "planning.py")
+				ctx.RecordBodyRead(path, 1, 189, 600)
+				ctx.RecordBodySeen(path) // what every write and edit path records
+			},
+		},
+		{
+			name: "a definition of the name in another file that was read",
+			files: map[string]string{
+				"planning.py": planningSource(),
+				"helpers.py":  "def _score_plan(plans):\n    return plans\n",
+			},
+			show: func(ctx *AgentContext) {
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "planning.py"), 1, 189, 600)
+				ctx.RecordBodyRead(resolveAgentPath(ctx, "helpers.py"), 1, 3, 3)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := evidenceCtx(t, tc.files)
+			tc.show(ctx)
+			if got := unshownSymbolCitations(ctx, unshownAnswer); len(got) != 0 {
+				t.Fatalf("the definition was shown, got %+v", got)
+			}
+		})
 	}
 }
 
@@ -184,35 +200,23 @@ func TestReadFileRecordsWhatItShowed(t *testing.T) {
 	}
 }
 
-// End to end, as the smoke run went: a truncated read, an answer about code
-// past the cut, and one bounce that sends the model back to read it.
-func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
-	dir := t.TempDir()
-	src := planningSource()
-	for len(src) < 2*maxReadFileBytes {
-		src += "# more padding past the end\n"
-	}
-	if err := os.WriteFile(filepath.Join(dir, "planning.py"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+// planModelServer is a model server that answers its i-th request with
+// plan(i), and refuses any request after the eighth. It has no slots to erase,
+// and every other service is unavailable.
+func planModelServer(t *testing.T, plan func(i int) map[string]interface{}) *httptest.Server {
+	t.Helper()
 	var mu sync.Mutex
 	turns := 0
-	plan := func(i int) map[string]interface{} {
-		switch i {
-		case 0:
-			return map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]string{"path": "planning.py"}}
-		case 2:
-			return map[string]interface{}{"type": "tool_call", "name": "read_file",
-				"args": map[string]interface{}{"path": "planning.py", "offset": 400, "limit": 40}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/slots/") {
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
 		}
-		return map[string]interface{}{"type": "text", "content": unshownAnswer}
-	}
-	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/v1/chat/completions") {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		mu.Lock()
 		i := turns
 		turns++
@@ -222,17 +226,40 @@ func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 			return
 		}
 		call, _ := json.Marshal(plan(i))
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		serveReply(w, string(call))
 	}))
-	t.Cleanup(inference.Close)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// End to end: a truncated read, an answer about code past the cut, and one
+// bounce that sends the model back to read it.
+func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
+	dir := t.TempDir()
+	src := planningSource()
+	for len(src) < 2*maxReadFileBytes {
+		src += "# more padding past the end\n"
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning.py"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inference := planModelServer(t, func(i int) map[string]interface{} {
+		switch i {
+		case 0:
+			return map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]string{"path": "planning.py"}}
+		case 2:
+			return map[string]interface{}{"type": "tool_call", "name": "read_file",
+				"args": map[string]interface{}{"path": "planning.py", "offset": 400, "limit": 40}}
+		}
+		return map[string]interface{}{"type": "text", "content": unshownAnswer}
+	})
 
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.InferenceURL = inference.URL
 	ctx.PermissionMode = PermissionYolo
 	ctx.MaxTurns = 0
+	var mu sync.Mutex
 	var gates []string
 	terminal := map[string]string{}
 	ctx.StreamFn = func(et string, data interface{}) {
@@ -246,11 +273,7 @@ func TestAnAnswerAboutUnshownCodeIsSentBackToRead(t *testing.T) {
 			}
 		}
 		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
+			json.Unmarshal(b, &terminal) // adds the payload's keys to the map
 		}
 	}
 	runAgentLoop(ctx, "Why does the planner pick a longer plan when two plans tie? Do not change the code.")

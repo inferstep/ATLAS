@@ -11,35 +11,34 @@ import (
 
 // --- the vocabularies are closed ------------------------------------------
 
+// Every routing disposition is registered, and only an authorized candidate
+// counts as routing success.
 func TestRoutingDispositionsAreAClosedSet(t *testing.T) {
-	for _, d := range []routingDisposition{
-		routingSkippedInfeasible, routingProducerUnavailable, routingProducerTimedOut,
-		routingCancelled, routingNoCandidate, routingNotClosureEligible,
-		routingRevokedByGate, routingBaselineRetained, routingAuthorizationRefused,
-		routingCandidateAuthorized, routingUnclassified,
+	for _, tc := range []struct {
+		disposition routingDisposition
+		success     bool
+	}{
+		{routingSkippedInfeasible, false},
+		{routingProducerUnavailable, false},
+		{routingProducerTimedOut, false},
+		{routingCancelled, false},
+		{routingNoCandidate, false},
+		{routingNotClosureEligible, false},
+		{routingRevokedByGate, false},
+		{routingBaselineRetained, false},
+		{routingAuthorizationRefused, false},
+		{routingUnclassified, false},
+		{routingCandidateAuthorized, true},
 	} {
-		if !knownRoutingDisposition(d) {
-			t.Errorf("%q is used and not registered", d)
+		if !knownRoutingDisposition(tc.disposition) {
+			t.Errorf("%q is used and not registered", tc.disposition)
+		}
+		if got := routingDispositionSucceeded(tc.disposition); got != tc.success {
+			t.Errorf("routingDispositionSucceeded(%q) = %v, want %v", tc.disposition, got, tc.success)
 		}
 	}
 	if knownRoutingDisposition("delivered") {
 		t.Error("an unregistered disposition was accepted")
-	}
-}
-
-func TestOnlyAnAuthorizedCandidateCountsAsRoutingSuccess(t *testing.T) {
-	if !routingDispositionSucceeded(routingCandidateAuthorized) {
-		t.Error("an authorized candidate is the success case")
-	}
-	for _, d := range []routingDisposition{
-		routingUnclassified, routingBaselineRetained, routingNotClosureEligible,
-		routingProducerUnavailable, routingCancelled, routingAuthorizationRefused,
-		routingSkippedInfeasible, routingNoCandidate, routingRevokedByGate,
-		routingProducerTimedOut,
-	} {
-		if routingDispositionSucceeded(d) {
-			t.Errorf("%q was read as success", d)
-		}
 	}
 }
 
@@ -131,9 +130,6 @@ func TestBaselineRetentionIsNotADelivery(t *testing.T) {
 	got := recordsOfKind(recs, "shadow_delivery_disposition")
 	if len(got) != 1 || got[0]["disposition"] != string(deliveryNotAttemptedBaseline) {
 		t.Fatalf("baseline retention was not named: %v", got)
-	}
-	if deliveryDispositionLanded(deliveryNotAttemptedBaseline) {
-		t.Fatal("baseline retention read as a landing")
 	}
 }
 

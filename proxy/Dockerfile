@@ -1,5 +1,5 @@
-# golang:1.24-alpine — digest-pinned for reproducible builds (Dependabot maintains)
-FROM docker.io/golang:1.27-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+# golang:1.27-alpine — digest-pinned for reproducible builds (Dependabot maintains)
+FROM docker.io/golang:1.27-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS builder
 WORKDIR /build
 COPY go.mod ./
 COPY *.go ./
@@ -24,7 +24,7 @@ FROM docker.io/alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910dd
 # collects superseded -rN builds; a pin may need bumping when Alpine ships
 # a patch (the digest-pinned base keeps the rest of the toolchain fixed).
 RUN apk add --no-cache \
-        curl=8.22.0-r0 \
+        curl=8.23.0-r0 \
         bash=5.3.9-r1
 
 # Non-root application account created inside this image. The proxy reads

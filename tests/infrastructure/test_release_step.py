@@ -23,10 +23,9 @@ CHECKS_RULESET = "Release branches: required checks"
 
 
 class StandInGitHub:
-    """A repository with one green pull request to `branch` whose head is SHA."""
+    """A repository with one green pull request whose head is SHA, to whichever branch is asked for."""
 
-    def __init__(self, branch="main", merge_commits=0):
-        self.branch = branch
+    def __init__(self, merge_commits=0):
         self.pulls = [{"number": 12, "head": {"sha": SHA}}]
         commits = [{"parents": ["p"]}] * 3 + [{"parents": ["p", "q"]}] * merge_commits
         self.compare = {"ahead_by": len(commits), "behind_by": 0, "commits": commits}
@@ -79,26 +78,15 @@ class StandInGitHub:
                       if "always" in " ".join(step.modes(r["bypass_actors"])))
 
 
-def names(plan):
-    return [name for _id, name, _closed in plan.to_open]
-
-
-def test_a_green_fast_forward_of_main_opens_only_the_review_rule():
-    plan = step.make_plan(StandInGitHub("main"), "main", SHA)
+@pytest.mark.parametrize("branch, merge_commits, opened", [
+    pytest.param("main", 0, [step.REVIEW], id="a fast-forward of main opens only the review rule"),
+    pytest.param("staging", 1, [step.REVIEW, step.RELEASE_MERGE], id="a range with a merge commit also opens the linear history rule"),
+    pytest.param("dev", 1, [step.DEV_MERGE], id="a merge back into dev opens only the dev rule"),
+])
+def test_a_green_push_opens_only_the_rules_that_stop_it(branch, merge_commits, opened):
+    plan = step.make_plan(StandInGitHub(merge_commits=merge_commits), branch, SHA)
     assert plan.problems == []
-    assert names(plan) == [step.REVIEW]
-
-
-def test_a_range_with_a_merge_commit_also_opens_the_linear_history_rule():
-    plan = step.make_plan(StandInGitHub("staging", merge_commits=1), "staging", SHA)
-    assert plan.problems == []
-    assert names(plan) == [step.REVIEW, step.RELEASE_MERGE]
-
-
-def test_a_merge_back_into_dev_opens_only_the_dev_rule():
-    plan = step.make_plan(StandInGitHub("dev", merge_commits=1), "dev", SHA)
-    assert plan.problems == []
-    assert names(plan) == [step.DEV_MERGE]
+    assert [name for _id, name, _closed in plan.to_open] == opened
 
 
 def test_a_commit_that_is_not_the_head_of_an_open_pull_request_is_refused():
@@ -131,7 +119,7 @@ def test_a_rule_that_is_already_open_is_refused():
 
 
 def test_the_rules_are_closed_again_after_the_push():
-    gh = StandInGitHub("staging", merge_commits=1)
+    gh = StandInGitHub(merge_commits=1)
     plan = step.make_plan(gh, "staging", SHA)
     seen_open = []
 
@@ -146,7 +134,7 @@ def test_the_rules_are_closed_again_after_the_push():
 
 
 def test_the_required_checks_are_never_opened():
-    gh = StandInGitHub("staging", merge_commits=1)
+    gh = StandInGitHub(merge_commits=1)
     step.apply(gh, step.make_plan(gh, "staging", SHA), lambda: True)
     assert gh.writes
     assert 4 not in {ruleset_id for ruleset_id, _modes in gh.writes}
@@ -171,36 +159,26 @@ def test_the_rules_are_closed_when_the_push_breaks():
 
 
 def test_a_rule_that_cannot_be_closed_is_reported_and_the_others_are_still_closed(capsys):
-    gh = StandInGitHub("staging", merge_commits=1)
+    gh = StandInGitHub(merge_commits=1)
     gh.fail_closing = {1}
     assert step.apply(gh, step.make_plan(gh, "staging", SHA), lambda: True) == 2
     assert gh.open_now() == [step.REVIEW]
     assert "STILL OPEN" in capsys.readouterr().out
 
 
-def run_main(monkeypatch, gh, *args):
+@pytest.mark.parametrize("lint, args, ends, says", [
+    pytest.param("success", ["main", SHA], 0, "Nothing changed", id="without --apply"),
+    pytest.param("failure", ["main", SHA, "--apply"], 1, "STOP, nothing changed", id="with a problem, even with --apply"),
+    pytest.param("success", ["main", "abc1234", "--apply"], 2, "give the full 40-character commit id", id="with a short commit id"),
+])
+def test_the_command_writes_nothing_without_apply_with_a_problem_or_with_a_short_commit_id(monkeypatch, capsys, lint, args, ends, says):
+    gh = StandInGitHub()
+    gh.results["lint"] = lint
     monkeypatch.setattr(step, "GitHub", lambda repo: gh)
+    # Should the command ever reach the push, it gets one that runs no git.
     monkeypatch.setattr(step, "git_push", lambda checkout, sha, branch: (lambda: True))
     monkeypatch.setattr(sys, "argv", ["release_step.py", *args])
-    return step.main()
-
-
-def test_without_apply_nothing_is_written(monkeypatch, capsys):
-    gh = StandInGitHub()
-    assert run_main(monkeypatch, gh, "main", SHA) == 0
+    assert step.main() == ends
     assert gh.writes == []
-    assert "Nothing changed" in capsys.readouterr().out
-
-
-def test_with_a_problem_apply_writes_nothing(monkeypatch, capsys):
-    gh = StandInGitHub()
-    gh.results["lint"] = "failure"
-    assert run_main(monkeypatch, gh, "main", SHA, "--apply") == 1
-    assert gh.writes == []
-    assert "STOP, nothing changed" in capsys.readouterr().out
-
-
-def test_a_short_commit_id_is_refused(monkeypatch):
-    gh = StandInGitHub()
-    assert run_main(monkeypatch, gh, "main", "abc1234", "--apply") == 2
-    assert gh.writes == []
+    printed = capsys.readouterr()
+    assert says in printed.out + printed.err

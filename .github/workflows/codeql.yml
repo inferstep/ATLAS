@@ -45,6 +45,12 @@ jobs:
       matrix:
         language: [python, go, javascript-typescript, java-kotlin]
 
+    # Tests are code too, and get the same scan. The Go extractor leaves out
+    # every _test.go file unless this option is on (GitHub's "build options
+    # for compiled languages"); it is read by the Go extractor only.
+    env:
+      CODEQL_EXTRACTOR_GO_OPTION_EXTRACT_TESTS: 'true'
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -57,11 +63,11 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
-          # 1.26.6 covers both modules (tui requires 1.26.6+ via go.mod;
-          # proxy's 1.24 floor builds fine on it). setup-go v6 pins
+          # 1.26.10 covers both modules (tui's go.mod requires 1.26.10;
+          # proxy's 1.24 floor builds fine on it). setup-go pins
           # GOTOOLCHAIN=local, so the version here must satisfy every
           # module — no auto-fetch.
-          go-version: '1.26.6'
+          go-version: '1.26.10'
           # The modules live in proxy/ and tui/ (no root go.mod); without
           # this the default cache lookup warns and never caches.
           cache-dependency-path: |
@@ -75,14 +81,14 @@ jobs:
       # javascript-typescript (the JS extractor reads source directly).
       - name: setup java
         if: matrix.language == 'java-kotlin'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
 
       - name: init codeql (java-kotlin)
         if: matrix.language == 'java-kotlin'
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
         with:
           languages: java-kotlin
           build-mode: manual
@@ -90,7 +96,7 @@ jobs:
 
       - name: init codeql (${{ matrix.language }})
         if: matrix.language != 'java-kotlin'
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
         with:
           languages: ${{ matrix.language }}
           # security-and-quality runs the broader pack — catches both
@@ -103,27 +109,38 @@ jobs:
         # CodeQL needs to observe a real compile to extract dataflow.
         # autobuild can't handle our two-module layout (proxy/ + tui/)
         # so we do it manually. Each module's `go build ./...` is enough
-        # for extraction — we don't need the artifacts.
+        # for extraction of its code — we don't need the artifacts. The
+        # tests are extracted only from a traced `go test` (with the option
+        # above), so `go test -c` compiles them too, without running them.
         if: matrix.language == 'go'
         run: |
-          (cd proxy && go build ./...)
-          (cd tui   && go build ./...)
+          (cd proxy && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/proxy/" ./...)
+          (cd tui   && go build ./... && go test -c -o "$RUNNER_TEMP/go-tests/tui/" ./...)
 
       # The Kotlin plugin is a Gradle build, and CodeQL only extracts
       # Kotlin from a compile it observes. Force the plugin's compileKotlin
-      # task to actually run: --rerun defeats the task's own up-to-date
-      # check, --no-build-cache defeats the cache, and in-process keeps the
-      # Kotlin compiler in the JVM CodeQL instruments — the Kotlin compiler
-      # daemon is a separate process that --no-daemon does not cover.
+      # and compileTestKotlin tasks (its code and its tests) to actually
+      # run: --rerun defeats each task's own up-to-date check,
+      # --no-build-cache defeats the cache, and in-process keeps the Kotlin
+      # compiler in the JVM CodeQL instruments — the Kotlin compiler daemon
+      # is a separate process that --no-daemon does not cover.
       - name: build kotlin (forced, in-process)
         if: matrix.language == 'java-kotlin'
         working-directory: extensions/jetbrains
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --no-build-cache --console=plain \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Pkotlin.incremental=false \
-            :compileKotlin --rerun 2>&1 | tee kotlin-compile.log
+          # Gradle first downloads its plugins and the plugin's dependencies,
+          # and a download can break off. A build that fails is tried once
+          # more; a second failure fails the step with Gradle's own words. Each
+          # try writes kotlin-compile.log again, so the check below reads the
+          # last one.
+          build() {
+            ./gradlew --no-daemon --no-build-cache --console=plain \
+              -Pkotlin.compiler.execution.strategy=in-process \
+              -Pkotlin.incremental=false \
+              :compileKotlin --rerun :compileTestKotlin --rerun 2>&1 | tee kotlin-compile.log
+          }
+          build || { echo "The build of the plugin failed. It is tried once more."; build; }
 
       # A skipped Kotlin compile extracts nothing and the leg would pass
       # while scanning zero Kotlin, so fail loudly instead. The negative
@@ -134,19 +151,42 @@ jobs:
         working-directory: extensions/jetbrains
         run: |
           set -euo pipefail
-          if grep -Eq '^> Task :compileKotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
+          if grep -Eq '^> Task :compile(Test)?Kotlin (UP-TO-DATE|FROM-CACHE|NO-SOURCE|SKIPPED)$' kotlin-compile.log; then
             echo "::error::the Kotlin compile was skipped (see kotlin-compile.log); CodeQL would extract nothing"
             exit 1
           fi
-          for task in ':compileKotlin'; do
+          for task in ':compileKotlin' ':compileTestKotlin'; do
             if ! grep -Eq "^> Task ${task}$" kotlin-compile.log; then
               echo "::error::$task did not run (see kotlin-compile.log)"
               exit 1
             fi
           done
-          echo "ok: the Kotlin compile executed"
+          echo "ok: the Kotlin compiles of the code and the tests executed"
 
       - name: analyze
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
         with:
           category: "/language:${{ matrix.language }}"
+
+      # The scan reads only what the extractor took in. Count the test files
+      # in the database's source archive, so a change that leaves them out
+      # again fails here instead of passing quietly.
+      - name: assert the tests were scanned
+        if: matrix.language == 'go' || matrix.language == 'java-kotlin'
+        env:
+          DATABASE: ${{ matrix.language == 'go' && 'go' || 'java' }}
+          TESTS: ${{ matrix.language == 'go' && '_test[.]go$' || '/src/test/kotlin/.*[.]kt$' }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/codeql_databases/$DATABASE/src.zip"
+          if [ ! -f "$archive" ]; then
+            echo "::error::$archive is not there, so the tests that CodeQL read cannot be counted"
+            exit 1
+          fi
+          files=$(unzip -Z1 "$archive")
+          tests=$(grep -cE "$TESTS" <<< "$files" || true)
+          echo "the source archive holds $(wc -l <<< "$files") files, $tests of them tests"
+          if [ "$tests" -eq 0 ]; then
+            echo "::error::CodeQL took in no test file (see the step that builds the code)"
+            exit 1
+          fi

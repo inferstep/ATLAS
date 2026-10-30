@@ -6,6 +6,7 @@ the case, so the judge is held against the file as pytest writes it.
 import ast
 import importlib.util
 import json
+import math
 import re
 import subprocess
 import sys
@@ -75,12 +76,6 @@ def result_file(folder, tests):
     return result
 
 
-def group_of(counted, monkeypatch, expected):
-    """Give the group `sandbox` this number of tests for the test, and nothing else of it another value."""
-    group = counted.GROUPS["sandbox"]
-    monkeypatch.setitem(counted.GROUPS, "sandbox", group._replace(expected=expected))
-
-
 # --- reading a result file ----------------------------------------------------------------------------------------
 
 def test_the_numbers_of_a_result_file_that_pytest_wrote(counted, tmp_path):
@@ -116,11 +111,6 @@ def test_the_suites_of_a_result_file_are_added_up(counted):
     assert (numbers["collected"], numbers["failed"], numbers["skipped"], numbers["passed"]) == (9, 2, 2, 5)
 
 
-def test_a_file_with_no_suite_is_not_a_result_file(counted):
-    with pytest.raises(counted.Unreadable):
-        counted.read("<html>not found</html>")
-
-
 # --- what keeps a run from holding --------------------------------------------------------------------------------
 
 def numbers(collected=4, failed=0, skipped=0, failed_tests=(), skip_reasons=None):
@@ -129,21 +119,27 @@ def numbers(collected=4, failed=0, skipped=0, failed_tests=(), skip_reasons=None
 
 
 @pytest.mark.parametrize("measured, says", [
-    (numbers(), []),
-    (numbers(collected=3), ["3 tests were collected, and there are 4"]),
-    (numbers(collected=5), ["5 tests were collected, and there are 4"]),
-    (numbers(failed=2, failed_tests=["test_a", "test_b"]), ["2 test(s) failed (test_a; test_b)"]),
-    (numbers(failed=1), ["1 test(s) failed"]),
-    (numbers(collected=8, failed=7, failed_tests=["a", "b", "c", "d", "e", "f", "g"]),
-     ["8 tests were collected, and there are 4", "7 test(s) failed (a; b; c; d; e; and 2 more test(s))"]),
+    pytest.param(numbers(), [], id="all ran and passed"),
+    pytest.param(numbers(collected=3), ["3 tests were collected, and there are 4"], id="fewer were collected"),
+    pytest.param(numbers(collected=5), ["5 tests were collected, and there are 4"], id="more were collected"),
+    pytest.param(numbers(failed=2, failed_tests=["test_a", "test_b"]), ["2 test(s) failed (test_a; test_b)"],
+                 id="failed tests with their names"),
+    pytest.param(numbers(failed=1), ["1 test(s) failed"], id="a failed test with no name"),
+    pytest.param(numbers(collected=8, failed=7, failed_tests=["a", "b", "c", "d", "e", "f", "g"]),
+                 ["8 tests were collected, and there are 4", "7 test(s) failed (a; b; c; d; e; and 2 more test(s))"],
+                 id="more failed tests than are named"),
     # A skipped test counts as collected: all 4 are there, and 2 of them were not run.
-    (numbers(skipped=2, skip_reasons={"the service is not there": 2}), ["2 test(s) were skipped (2: the service is not there)"]),
-    (numbers(skipped=2), ["2 test(s) were skipped (the result file gives no reason)"]),
-    (numbers(collected=9, skipped=8, skip_reasons={"one": 2, "two": 2, "three": 1, "four": 1, "five": 1, "six": 1}),
-     ["9 tests were collected, and there are 4",
-      "8 test(s) were skipped (2: one; 2: two; 1: three; 1: four; 1: five; and 1 more reason(s))"]),
-    (numbers(collected=3, failed=1, skipped=1, failed_tests=["test_a"], skip_reasons={"no tool": 1}),
-     ["3 tests were collected, and there are 4", "1 test(s) failed (test_a)", "1 test(s) were skipped (1: no tool)"]),
+    pytest.param(numbers(skipped=2, skip_reasons={"the service is not there": 2}),
+                 ["2 test(s) were skipped (2: the service is not there)"], id="skipped tests with their reason"),
+    pytest.param(numbers(skipped=2), ["2 test(s) were skipped (the result file gives no reason)"],
+                 id="skipped tests with no reason"),
+    pytest.param(numbers(collected=9, skipped=8, skip_reasons={"one": 2, "two": 2, "three": 1, "four": 1, "five": 1, "six": 1}),
+                 ["9 tests were collected, and there are 4",
+                  "8 test(s) were skipped (2: one; 2: two; 1: three; 1: four; 1: five; and 1 more reason(s))"],
+                 id="more skip reasons than are named"),
+    pytest.param(numbers(collected=3, failed=1, skipped=1, failed_tests=["test_a"], skip_reasons={"no tool": 1}),
+                 ["3 tests were collected, and there are 4", "1 test(s) failed (test_a)", "1 test(s) were skipped (1: no tool)"],
+                 id="each fault at once"),
 ])
 def test_each_thing_that_keeps_a_run_from_holding_is_named(counted, measured, says):
     assert counted.faults(measured, 4) == says
@@ -152,7 +148,7 @@ def test_each_thing_that_keeps_a_run_from_holding_is_named(counted, measured, sa
 # --- the command --------------------------------------------------------------------------------------------------
 
 def test_a_run_in_which_every_test_of_the_group_ran_and_passed_holds(counted, tmp_path, monkeypatch, capsys):
-    group_of(counted, monkeypatch, 2)
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=2))
     assert counted.main(["sandbox", str(result_file(tmp_path, PASSES))]) == 0
     assert capsys.readouterr().out == "tests counted: all 2 tests that need a running sandbox service ran and passed.\n"
 
@@ -164,7 +160,7 @@ def test_a_run_with_a_skipped_test_does_not_hold_though_pytest_ended_with_status
     done = subprocess.run([sys.executable, "-m", "pytest", "test_made.py", "-q", "-p", "no:cacheprovider", "--rootdir", str(folder)],
                           cwd=folder, capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, "pytest itself calls such a run a success"
-    group_of(counted, monkeypatch, 3)
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=3))
     assert counted.main(["sandbox", str(result)]) == 1
     said = capsys.readouterr().out
     assert said.startswith("::error title=tests counted::the run of the tests that need a running sandbox service does not hold: ")
@@ -172,18 +168,18 @@ def test_a_run_with_a_skipped_test_does_not_hold_though_pytest_ended_with_status
     assert "Fix: " in said
 
 
-@pytest.mark.parametrize("tests, expected, says", [
-    (PASSES, 3, "2 tests were collected, and there are 3"),
-    (PASSES + "\n\ndef test_three():\n    assert 1 == 2\n", 3, "1 test(s) failed (test_three)"),
+@pytest.mark.parametrize("tests, says", [
+    pytest.param(PASSES, "2 tests were collected, and there are 3", id="a test less"),
+    pytest.param(PASSES + "\n\ndef test_three():\n    assert 1 == 2\n", "1 test(s) failed (test_three)", id="a failed test"),
 ])
-def test_a_run_with_a_failed_test_or_with_another_number_of_tests_does_not_hold(counted, tmp_path, monkeypatch, capsys, tests,
-                                                                                expected, says):
-    group_of(counted, monkeypatch, expected)
+def test_a_run_with_a_failed_test_or_with_another_number_of_tests_does_not_hold(counted, tmp_path, monkeypatch, capsys,
+                                                                                tests, says):
+    monkeypatch.setitem(counted.GROUPS, "sandbox", counted.GROUPS["sandbox"]._replace(expected=3))
     assert counted.main(["sandbox", str(result_file(tmp_path, tests))]) == 1
     assert says in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("written", [None, "", "pytest could not start"])
+@pytest.mark.parametrize("written", [None, "", "pytest could not start"], ids=["no file", "an empty file", "a file with no suite"])
 def test_a_result_file_that_cannot_be_read_is_not_a_pass(counted, tmp_path, capsys, written):
     result = tmp_path / "result.xml"
     if written is not None:
@@ -195,8 +191,14 @@ def test_a_result_file_that_cannot_be_read_is_not_a_pass(counted, tmp_path, caps
     assert "so no test is known to have run. Fix: " in said
 
 
-@pytest.mark.parametrize("arguments", [[], ["sandbox"], ["no-such-group", "result.xml"], ["--files"], ["--files", "no-such-group"],
-                                       ["sandbox", "result.xml", "one more"]])
+@pytest.mark.parametrize("arguments", [
+    pytest.param([], id="nothing"),
+    pytest.param(["sandbox"], id="a group with no result file"),
+    pytest.param(["no-such-group", "result.xml"], id="a group that is not one"),
+    pytest.param(["--files"], id="files of no group"),
+    pytest.param(["--files", "no-such-group"], id="files of a group that is not one"),
+    pytest.param(["sandbox", "result.xml", "one more"], id="one argument more"),
+])
 def test_a_call_that_names_no_group_is_refused(counted, capsys, arguments):
     assert counted.main(arguments) == 2
     said = capsys.readouterr().err
@@ -229,17 +231,22 @@ def test_the_groups_hold_the_files_that_carry_the_mark_and_no_other(counted):
 
 
 def number_of_tests(file):
-    """The number of test functions of a file. A function that runs once for each of a list of values is refused."""
+    """The number of tests of a file: one for each test function, and one for each value of its table, if it has one."""
     tree = ast.parse((ROOT / file).read_text(encoding="utf-8"))
     functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test")]
-    many = [node.name for node in functions if any("parametrize" in ast.unparse(mark) for mark in node.decorator_list)]
-    assert not many, (
-        f"{file}: {many} now runs once for each of its values, so the number of its tests is no longer the number of its "
-        "functions. Fix: count its values in this test, then give the new number to the group and to the page.")
-    return len(functions)
+    count = 0
+    for function in functions:
+        tables = [mark for mark in function.decorator_list if "parametrize" in ast.unparse(mark)]
+        values = [mark.args[1] for mark in tables if isinstance(mark, ast.Call) and len(mark.args) > 1]
+        why = (f"{file}: the values of {function.name} are not written out as a list in its mark, so this test cannot "
+               "count them. Fix: write them as a list there.")
+        assert len(values) == len(tables), why
+        assert all(isinstance(value, (ast.List, ast.Tuple)) for value in values), why
+        count += math.prod(len(value.elts) for value in values)
+    return count
 
 
-def test_the_number_of_each_group_is_the_number_of_test_functions_in_its_files_and_the_gates_page_has_each(counted):
+def test_the_number_of_each_group_is_the_number_of_tests_in_its_files_and_the_gates_page_has_each(counted):
     page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     rows = {file: (int(count), runs_in) for file, count, runs_in in
             re.findall(r"^\| `(tests/infrastructure/test_\w+\.py)` \| (\d+) \| [^|]+ \| ([^|]+?) \|$", page, re.MULTILINE)}
@@ -265,13 +272,13 @@ def job_of(name):
     return found[0]
 
 
-@pytest.mark.parametrize("name", ["sandbox", "proxy"])
+@pytest.mark.parametrize("name", ["sandbox", "proxy", "docker"])
 def test_the_job_of_a_group_runs_its_files_and_gives_the_result_file_to_the_judge(counted, name):
     group = counted.GROUPS[name]
     job = job_of(re.fullmatch(r"the job `(.+)`", group.runs_in).group(1))
     assert "continue-on-error" not in job
     runs = [step for step in job["steps"] if "run" in step]
-    tests = [step for step in runs if "-m pytest" in step["run"]]
+    tests = [step for step in runs if "-m pytest" in step["run"] and f"--files {name})" in step["run"]]
     assert len(tests) == 1
     command = " ".join(tests[0]["run"].replace("\\\n", " ").split())
     assert f"-m integration $(python scripts/tests_counted.py --files {name})" in command
@@ -314,7 +321,7 @@ def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_n
     job = job_of("sandbox tests (containerized)")
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     docker = [line.strip() for line in commands.splitlines() if line.strip().startswith("docker ")]
-    assert len(docker) == 5
+    assert len(docker) == 6
     for line in docker:
         assert line.startswith(COMPOSE), f"`{line}` is not a command on the compose file with the job's one settings file"
     assert COMPOSE + "build sandbox" in docker
@@ -327,6 +334,45 @@ def test_the_sandbox_job_starts_the_service_through_the_compose_file_and_gives_n
     page = " ".join((ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8").split())
     assert ("starts it as the stack starts it: by the `sandbox` service of the compose file, with its read-only base, its tmpfs "
             "mounts, its dropped capabilities and its limits. The job gives none of these itself") in page
+
+
+# A stand-in for `docker`. It writes each call down. A build fails as many times as the file `breaks` says, with the words
+# of the build that broke off on 15 October; every other call passes.
+DOCKER = """#!/bin/bash
+echo "$*" >> "$CALLS"
+if [ "${*: -2}" = "build sandbox" ]; then
+    left=$(cat "$BREAKS")
+    if [ "$left" -gt 0 ]; then
+        echo $((left - 1)) > "$BREAKS"
+        echo "curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2)" >&2
+        echo "tar: Unexpected EOF in archive" >&2
+        exit 1
+    fi
+fi
+"""
+
+
+@pytest.mark.parametrize("breaks, ends, builds, said", [
+    pytest.param(0, 0, 1, False, id="a build that passes is not built again"),
+    pytest.param(1, 0, 2, True, id="a build that fails once is tried again"),
+    pytest.param(2, 1, 2, True, id="a build that fails twice fails the step with docker's own words"),
+])
+def test_a_build_of_the_sandbox_image_that_fails_is_tried_once_more(tmp_path, breaks, ends, builds, said):
+    job = job_of("sandbox tests (containerized)")
+    step = next(step["run"] for step in job["steps"] if step.get("name") == "build sandbox image")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "docker").write_text(DOCKER, encoding="utf-8")
+    (tmp_path / "bin" / "docker").chmod(0o755)
+    (tmp_path / "breaks").write_text(f"{breaks}\n", encoding="utf-8")
+    # As a runner runs a step: bash, which stops at the first command that fails.
+    done = subprocess.run(["bash", "-e", "-c", step], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+                          env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path),
+                               "CALLS": str(tmp_path / "calls"), "BREAKS": str(tmp_path / "breaks")})
+    assert done.returncode == ends, done.stdout + done.stderr
+    calls = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
+    assert calls == [f"compose --env-file {tmp_path}/sandbox.env build sandbox"] * builds
+    assert ("The build of the sandbox image failed. It is tried once more." in done.stdout) == said
+    assert done.stderr.count("tar: Unexpected EOF in archive") == breaks
 
 
 def test_the_settings_file_of_the_sandbox_job_holds_what_an_install_gives_and_no_limit_and_no_mount():

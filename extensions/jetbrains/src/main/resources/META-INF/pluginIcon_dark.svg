@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+  <!--
+    The inferstep mark for a dark theme. Same geometry and scale as
+    pluginIcon.svg, in #f7f7f4 so it reads on a dark background.
+  -->
+  <g transform="translate(-2.404 -2.233) scale(0.44519)" fill="#f7f7f4">
+    <rect x="50" y="35.85" width="12.90" height="8.60" rx="4.3"/>
+    <rect x="41.2" y="49.77" width="21.70" height="8.60" rx="4.3"/>
+    <rect x="31.7" y="63.7" width="31.20" height="8.60" rx="4.3"/>
+    <rect x="22.8" y="77.28" width="40.10" height="8.60" rx="4.3"/>
+    <rect x="65.6" y="34.4" width="11.60" height="51.60" rx="0.8"/>
+    <circle cx="71.4" cy="20.45" r="6.45"/>
+  </g>
+</svg>

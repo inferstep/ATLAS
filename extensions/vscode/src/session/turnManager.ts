@@ -5,7 +5,7 @@
 // Deliberately vscode-free so it is unit-testable under plain vitest.
 
 import { randomBytes } from 'node:crypto';
-import type { AgentRequest, ChatEvent, HistoryMessage, PermissionMode } from '../client/types';
+import type { AgentRequest, ChatEvent, HistoryMessage, PermissionMode, TaskMode } from '../client/types';
 
 /** The proxy caps replayed history at the most recent 40 entries; we cap
  * client-side too so the request body never grows unbounded (tui/chat.go). */
@@ -50,11 +50,18 @@ export class TurnManager {
 	 *
 	 * `workingDir` is the client's workspace root, like the TUI's host cwd
 	 * (tui/model.go): on Docker installs the proxy uses it for host-to-
-	 * container path translation; on bare metal file ops resolve against it. */
+	 * container path translation; on bare metal file ops resolve against it.
+	 *
+	 * `taskMode` is the user's Work/Question declaration for this one request
+	 * and goes on the wire as `task_contract.task_mode`. Every turn declares
+	 * one: without a contract the proxy falls back to guessing from the
+	 * message and produces no V3 candidate, because nothing grounds a target
+	 * (docs/API.md, "Building a non-TUI client"). */
 	async *runTurn(
 		client: TurnClient,
 		message: string,
 		mode: PermissionMode,
+		taskMode: TaskMode,
 		workingDir: string,
 	): AsyncGenerator<ChatEvent, void, undefined> {
 		if (this.abort) {
@@ -71,6 +78,10 @@ export class TurnManager {
 			mode,
 			session_id: this.activeSessionId,
 			history: [...this.history],
+			// Declared, never derived: the only input is the caller's
+			// selection. The obligation lists stay absent for the same reason
+			// the TUI's do (tui/chat.go).
+			task_contract: { task_mode: taskMode },
 		};
 		if (this.sessionAllowedTools.size > 0) {
 			request.session_allowed_tools = [...this.sessionAllowedTools];

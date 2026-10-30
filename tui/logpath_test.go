@@ -12,14 +12,7 @@ import (
 // file called "off" in the working directory (one got committed that way).
 func TestInitDebugLogTreatsOffAsDisabled(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(wd) })
+	t.Chdir(dir)
 
 	for _, val := range []string{"off", "OFF", " off "} {
 		closer, err := initDebugLog(val)

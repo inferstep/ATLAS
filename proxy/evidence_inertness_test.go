@@ -9,13 +9,11 @@ import (
 
 // The delivery graph, enumerated.
 //
-// Two producers now exist and each computes authority. Nothing consults it.
-// This file is the proof: every production consumer of provenance is named
-// here, and a new one fails the build's tests rather than quietly shipping.
-//
-// The rule is not "provenance is unused" -- it is computed, serialised and
-// compared. The rule is that no result of it reaches a decision about what
-// lands on disk.
+// Two producers compute provenance and the authority it carries. Every
+// production consumer of provenance is named here, and a new one fails these
+// tests rather than shipping quietly. One owner turns provenance into a
+// decision about what lands on disk, and the guards below pin that it stays
+// the only one.
 
 // deliveryDecisions are the functions that decide whether a generated
 // candidate may replace the caller's content. Adding a caller to any of them
@@ -66,8 +64,11 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		"candidate_delivery.go:deliverCandidateBytes": true,
 		// The protected edit route. It asks the same owners the write route
 		// asks, and observes feasibility without consulting the answer --
-		// pinned separately by the feasibility guard.
-		"edit_route_delivery.go:deliverEditCandidate": true,
+		// pinned separately by the feasibility guard. Its evidence and its
+		// decision are two of its named steps (v3DeliveryRouteSteps).
+		"edit_route_delivery.go:deliverEditCandidate":         true,
+		"edit_route_delivery.go:collectEditCandidateEvidence": true,
+		"edit_route_delivery.go:decideEditCandidateDelivery":  true,
 		// The decision's own refusal classifier, called from the decision.
 		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
@@ -107,27 +108,36 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 	}
 }
 
-// TestNoProducerReachesTheDeliveryGraph pins the direction: a producer may
-// never call a delivery decision, and a delivery decision may never call a
-// producer.
+// evidenceProducers are the functions that build evidence and obligations.
+// The two guards below pin the direction between them and the delivery
+// decisions.
+var evidenceProducers = map[string]bool{
+	"produceSyntaxEvidence":               true,
+	"produceDeclaredVerificationEvidence": true,
+	"declaredVerificationCoverage":        true,
+	"deriveTaskObligations":               true,
+	"newTaskObligation":                   true,
+}
+
+// TestNoProducerReachesTheDeliveryGraph pins one direction: a producer may
+// never call a delivery decision.
 func TestNoProducerReachesTheDeliveryGraph(t *testing.T) {
 	files := proxyFiles(t)
-	producers := map[string]bool{
-		"produceSyntaxEvidence":               true,
-		"produceDeclaredVerificationEvidence": true,
-		"declaredVerificationCoverage":        true,
-		"deriveTaskObligations":               true,
-		"newTaskObligation":                   true,
-	}
 	for _, fn := range deliveryDecisions {
 		for site := range callSites(files, fn) {
 			caller := site[strings.Index(site, ":")+1:]
-			if producers[caller] {
+			if evidenceProducers[caller] {
 				t.Errorf("producer %s calls the delivery decision %s", caller, fn)
 			}
 		}
 	}
-	for fn := range producers {
+}
+
+// TestNoDeliveryDecisionReachesAProducer pins the other: a delivery decision
+// may never call a producer.
+func TestNoDeliveryDecisionReachesAProducer(t *testing.T) {
+	files := proxyFiles(t)
+	for fn := range evidenceProducers {
 		for site := range callSites(files, fn) {
 			for _, d := range deliveryDecisions {
 				if strings.HasSuffix(site, ":"+d) {
@@ -174,11 +184,12 @@ func TestExactlyOneLiveAuthorizationOwnerAnswersForACandidate(t *testing.T) {
 		}
 	}
 	// The routes that may ask for authorization at all are exactly the
-	// registered V3 byte-delivery routes. A new caller is a new way for
-	// service bytes to reach disk and has to be registered to exist.
+	// registered V3 byte-delivery routes, or their named steps. A new caller
+	// is a new way for service bytes to reach disk and has to be registered
+	// to exist.
 	for _, fn := range []string{"authorizeCandidateDelivery", "deliverCandidateBytes"} {
 		for site := range callSites(files, fn) {
-			if !registeredV3DeliveryRoute(site) {
+			if !registeredV3DeliveryRoute(routeOf(site)) {
 				t.Errorf("%s is called from unregistered route %s", fn, site)
 			}
 		}

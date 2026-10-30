@@ -17,20 +17,18 @@ import (
 	"unicode"
 )
 
-// GH #39 point 4: auto-inject reachability slice. When a user message names
-// project symbols (a function, class, method) directly, we want the model
-// to start its first turn already holding those definitions instead of
-// burning agent turns on read_file/list_directory recon. Concrete failure
-// mode this fixes: "fix the dashboard route" → model spends 4 turns finding
-// app.py before it starts editing.
+// Auto-inject reachability slice. When a user message names project symbols (a
+// function, class, method) directly, the model should start its first turn
+// already holding those definitions instead of spending agent turns on
+// read_file/list_directory recon.
 //
 // Pipeline:
 //   1. extractCandidateSymbols  — regex over the user message
 //   2. walkPythonFiles          — list .py under working_dir (caps applied)
 //   3. POST /internal/symbol_index → v3-service tree-sitter walks each file,
 //      returns snippets for symbols defined in the project
-//   4. formatProjectContextMessage — render as a system-role message that
-//      prepends the user message in ctx.Messages
+//   4. formatProjectContextMessage — rendered into a user-role "[system note]:"
+//      message placed before the user message in ctx.Messages
 //
 // All caps are enforced upstream (max 50 files, 500 KB total) so a giant
 // monorepo can't OOM v3-service. Per-snippet trim happens server-side.
@@ -243,7 +241,7 @@ func resolveProjectSymbols(ctx *AgentContext, fileMap map[string]string, symbols
 		return zero, false
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return zero, false
 	}
@@ -293,8 +291,8 @@ func formatProjectContextMessage(matched []struct {
 }
 
 // formatGraphNeighborhood renders the call-graph neighborhood (callers /
-// callees) of the matched symbols (issue #39 Phase 3). Empty when no graph
-// data was returned (flag off, or no edges). Gives the model the structurally
+// callees) of the matched symbols. Empty when no graph data was returned (no
+// edges, or the service skipped the graph). Gives the model the structurally
 // related code without a read_file loop.
 func formatGraphNeighborhood(graph []symbolGraphNode) string {
 	if len(graph) == 0 {
@@ -364,18 +362,24 @@ func detectProjectInfo(projectDir string) *ProjectInfo {
 // Language-specific detectors
 // ---------------------------------------------------------------------------
 
+// The manifest names that a detector reads in more than one place.
+const (
+	packageJSONFile     = "package.json"
+	requirementsTxtFile = "requirements.txt"
+)
+
 func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
-	if !files["package.json"] {
+	if !files[packageJSONFile] {
 		return nil
 	}
 
 	info := &ProjectInfo{
 		Language:    "nodejs",
-		ConfigFiles: []string{"package.json"},
+		ConfigFiles: []string{packageJSONFile},
 	}
 
 	// Parse package.json for framework detection
-	data, err := readConfined(projectDir, "package.json")
+	data, err := readConfined(projectDir, packageJSONFile)
 	if err != nil {
 		return info
 	}
@@ -410,18 +414,7 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	// Detect framework
-	if _, ok := allDeps["next"]; ok {
-		info.Framework = "nextjs"
-		if info.BuildCommand == "" {
-			info.BuildCommand = "npx next build"
-		}
-	} else if _, ok := allDeps["react"]; ok {
-		info.Framework = "react"
-	} else if _, ok := allDeps["vue"]; ok {
-		info.Framework = "vue"
-	} else if _, ok := allDeps["express"]; ok {
-		info.Framework = "express"
-	}
+	detectNodeFramework(info, allDeps)
 
 	// Add detected config files
 	for _, f := range []string{"tsconfig.json", "tailwind.config.ts", "tailwind.config.js",
@@ -436,6 +429,24 @@ func detectNodeJS(projectDir string, files map[string]bool) *ProjectInfo {
 	}
 
 	return info
+}
+
+// detectNodeFramework sets info.Framework from the first of next, react, vue
+// and express that the dependencies hold. A Next.js project with no build
+// script of its own builds with "npx next build".
+func detectNodeFramework(info *ProjectInfo, allDeps map[string]string) {
+	if _, ok := allDeps["next"]; ok {
+		info.Framework = "nextjs"
+		if info.BuildCommand == "" {
+			info.BuildCommand = "npx next build"
+		}
+	} else if _, ok := allDeps["react"]; ok {
+		info.Framework = "react"
+	} else if _, ok := allDeps["vue"]; ok {
+		info.Framework = "vue"
+	} else if _, ok := allDeps["express"]; ok {
+		info.Framework = "express"
+	}
 }
 
 func detectNodePackageManager(files map[string]bool, packageManager string) string {
@@ -486,7 +497,7 @@ func nodeScriptCommand(pm, script string) string {
 }
 
 func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
-	hasPython := files["pyproject.toml"] || files["setup.py"] || files["requirements.txt"] || files["Pipfile"]
+	hasPython := files["pyproject.toml"] || files["setup.py"] || files[requirementsTxtFile] || files["Pipfile"]
 	if !hasPython {
 		// Check for .py files
 		entries, _ := filepath.Glob(filepath.Join(projectDir, "*.py"))
@@ -500,14 +511,14 @@ func detectPython(projectDir string, files map[string]bool) *ProjectInfo {
 		ConfigFiles: []string{},
 	}
 
-	for _, f := range []string{"pyproject.toml", "setup.py", "requirements.txt", "Pipfile"} {
+	for _, f := range []string{"pyproject.toml", "setup.py", requirementsTxtFile, "Pipfile"} {
 		if files[f] {
 			info.ConfigFiles = append(info.ConfigFiles, f)
 		}
 	}
 
 	// Detect framework from requirements or pyproject
-	if data, err := readConfined(projectDir, "requirements.txt"); err == nil {
+	if data, err := readConfined(projectDir, requirementsTxtFile); err == nil {
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "flask") {
 			info.Framework = "flask"
@@ -724,10 +735,9 @@ var workspacePathFields = map[string][]string{
 	"write_file":      {"path"},
 	"edit_file":       {"path"},
 	"structural_edit": {"path"},
-	// Both were absent, so the workspace-containment pre-check never ran on
-	// them even though their doc comments claim "same gates as every other
-	// write". Mitigated transitively by the read-first requirement, but the
-	// explicit gate belongs here.
+	// insert_after and replace_lines write to a path, so they are listed
+	// here and take the same workspace-containment pre-check as every other
+	// write.
 	"insert_after":   {"path"},
 	"replace_lines":  {"path"},
 	"delete_file":    {"path"},
@@ -740,33 +750,8 @@ var workspacePathFields = map[string][]string{
 }
 
 func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentContext) string {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(args, &fields); err != nil {
-		return ""
-	}
-	keys := workspacePathFields
-	if k := nonCanonicalArgName(fields); k != "" {
-		return fmt.Sprintf("%s: argument names are lowercase, as the tool lists them; %q is not", name, k)
-	}
-	for _, key := range keys[name] {
-		raw, ok := fields[key]
-		if !ok {
-			continue
-		}
-		var value string
-		if json.Unmarshal(raw, &value) != nil || strings.TrimSpace(value) == "" {
-			continue
-		}
-		// The ledger trims a path and the handler does not, so a padded
-		// path would be checked in one form and recorded in another.
-		if value != strings.TrimSpace(value) {
-			return fmt.Sprintf("%s: %s %q starts or ends with whitespace", name, key, value)
-		}
-		if _, err := resolveWorkspacePath(ctx, value); err != nil {
-			return fmt.Sprintf("%s: %v", name, err)
-		}
-	}
-	return ""
+	_, rejection := canonicalToolArgs(name, args, ctx)
+	return rejection
 }
 
 // nonCanonicalArgName is an argument name that is not lowercase ASCII. Every
@@ -774,7 +759,7 @@ func validateToolWorkspacePaths(name string, args json.RawMessage, ctx *AgentCon
 // "PATH" or "ſource" reaches the handler's field while every exact-key
 // reader (this check, the deny-list, the TUI's tool line) sees no such argument.
 func nonCanonicalArgName(fields map[string]json.RawMessage) string {
-	for k := range fields {
+	for _, k := range sortedKeys(fields) {
 		for _, r := range k {
 			if r > unicode.MaxASCII || unicode.IsUpper(r) {
 				return k
@@ -784,22 +769,20 @@ func nonCanonicalArgName(fields map[string]json.RawMessage) string {
 	return ""
 }
 
-// Session file manifest. The agent creates multi-file projects one
-// write at a time, and each write is generated as if it were the first
-// file in an empty project — SessionWrites knows what exists, but that
-// knowledge never reached the model or V3's candidate generation.
-// Observed 2026-07-18: the model wrote templates/index.html and
-// static/game.js, then generated an app.py that inlined its own page
-// with render_template_string, orphaning both of its earlier files.
+// Session file manifest. The agent creates multi-file projects one write at a
+// time, and each write is generated as if it were the first file in an empty
+// project unless what SessionWrites knows reaches the model and V3's candidate
+// generation; without it a later file can re-create or inline what an earlier
+// one provides (an app.py that inlines its page instead of rendering the
+// template the session wrote).
 //
 // Two consumers:
 //   - sessionManifestNote: a [system note] appended to the conversation
 //     when the session's file set grows past one file, listing what
 //     exists so later files reference earlier ones.
-//   - mergeSessionWritesIntoContext (tools.go): puts session-written
-//     files into V3GenerateRequest.ProjectContext, which previously
-//     held only files the model had READ — written-but-never-read
-//     files were invisible to candidate generation.
+//   - writeFileWithV3 (tools.go): puts session-written files, read from
+//     disk, into V3GenerateRequest.ProjectContext next to the files the
+//     model has read.
 
 // sessionManifestNote returns a one-shot context note listing the files
 // this session has created, or "" when there is nothing new to say.

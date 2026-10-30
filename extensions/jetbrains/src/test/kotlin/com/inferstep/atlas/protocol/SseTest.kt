@@ -8,69 +8,38 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
 
 class SseTest {
-    @Test
-    fun `parses a simple stream and stops at the sentinel`() {
-        val events =
-            collect(
-                ": connected\n\n",
-                frame("text", """{"content":"hello"}"""),
-                frame("done", """{"summary":""}"""),
-                "data: [DONE]\n\n",
-            )
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("streams")
+    fun `a stream yields the events of its well-formed frames`(
+        name: String,
+        chunks: List<String>,
+        want: List<String>,
+    ) {
+        val events = collect(chunks)
 
-        assertEquals(listOf("text", "done"), events.map { it.type })
-        assertEquals("hello", events[0].payload<TextPayload>().content)
+        // Each event as its type and its raw data.
+        assertEquals(want, events.map { "${it.type} ${it.data}" }, name)
     }
 
     @Test
-    fun `skips comments and blank lines`() {
-        val events =
-            collect(
-                ": connected\n\n: heartbeat\n\n",
-                frame("text", """{"content":"x"}"""),
-                "data: [DONE]\n\n",
-            )
+    fun `a frame split at any byte boundary reassembles, multibyte characters included`() {
+        val text = "héllo→ 日本語 — ok"
+        val bytes = (frame("text", """{"content":"$text"}""") + DONE).toByteArray()
 
-        assertEquals(1, events.size)
-    }
-
-    @Test
-    fun `reassembles a frame split across arbitrary chunk boundaries`() {
-        val full = frame("tool_call", """{"name":"read_file","args":{"path":"a.py"},"turn":1}""")
-        // Split mid-"data:", mid-JSON, and mid-newline.
-        val events =
-            collect(
-                full.substring(0, 2),
-                full.substring(2, 18),
-                full.substring(18, 40),
-                full.substring(40),
-                "data: [DONE]\n\n",
-            )
-
-        assertEquals(1, events.size)
-        assertEquals("read_file", events[0].payload<ToolCallPayload>().name)
-    }
-
-    @Test
-    fun `handles a multibyte character split across byte chunks`() {
-        val body = frame("text", """{"content":"héllo→"}""") + "data: [DONE]\n\n"
-        // One byte at a time: every multi-byte sequence is split somewhere.
-        val events = collectByBytes(body, chunkSize = 1)
-
-        assertEquals(1, events.size)
-        assertEquals("héllo→", events[0].payload<TextPayload>().content)
-    }
-
-    @Test
-    fun `handles a multibyte character split at every byte boundary`() {
-        val body = frame("text", """{"content":"日本語 — ok"}""") + "data: [DONE]\n\n"
-        val expected = "日本語 — ok"
+        // Chunk size 1 splits inside "data:", inside the JSON, between the two
+        // newlines and inside every multibyte character.
         for (chunkSize in 1..8) {
-            val events = collectByBytes(body, chunkSize)
+            val chunks = bytes.toList().chunked(chunkSize).map { it.toByteArray() }
+            val parser = SseParser()
+            val events = chunks.flatMap { parser.feed(it) } + parser.endOfStream()
+
             assertEquals(
-                expected,
+                text,
                 events.single().payload<TextPayload>().content,
                 "chunk size $chunkSize",
             )
@@ -82,8 +51,10 @@ class SseTest {
         val big = "x".repeat(1_200_000)
         val events =
             collect(
-                frame("tool_result", """{"tool":"read_file","success":true,"data":"$big"}"""),
-                "data: [DONE]\n\n",
+                listOf(
+                    frame("tool_result", """{"tool":"read_file","success":true,"data":"$big"}"""),
+                    DONE,
+                ),
             )
 
         assertEquals(1, events.size)
@@ -96,105 +67,85 @@ class SseTest {
     }
 
     @Test
-    fun `skips malformed JSON frames without killing the stream`() {
-        val events =
-            collect(
-                "data: {not json}\n\n",
-                frame("text", """{"content":"ok"}"""),
-                "data: [DONE]\n\n",
-            )
-
-        assertEquals(listOf("text"), events.map { it.type })
-    }
-
-    @Test
-    fun `skips frames with a missing or empty type`() {
-        val events =
-            collect(
-                """data: {"data":{"content":"no type"}}""" + "\n\n",
-                """data: {"type":"","data":{}}""" + "\n\n",
-                "data: [DONE]\n\n",
-            )
-
-        assertTrue(events.isEmpty())
-    }
-
-    @Test
-    fun `handles CRLF line endings`() {
-        val events =
-            collect(
-                ": connected\r\n\r\n" +
-                    "data: {\"type\":\"text\",\"data\":{\"content\":\"crlf\"}}\r\n\r\n" +
-                    "data: [DONE]\r\n\r\n",
-            )
-
-        assertEquals("crlf", events.single().payload<TextPayload>().content)
-    }
-
-    @Test
-    fun `yields events already received when the stream ends without the sentinel`() {
-        val events = collect(frame("text", """{"content":"partial"}"""))
-
-        assertEquals("partial", events.single().payload<TextPayload>().content)
-    }
-
-    @Test
-    fun `flushes a final unterminated data line at end of stream`() {
-        val events = collect("""data: {"type":"text","data":{"content":"tail"}}""")
-
-        assertEquals("tail", events.single().payload<TextPayload>().content)
-    }
-
-    @Test
-    fun `ignores anything after the sentinel`() {
-        val events =
-            collect(
-                "data: [DONE]\n\n",
-                frame("text", """{"content":"late"}"""),
-            )
-
-        assertTrue(events.isEmpty())
-    }
-
-    @Test
     fun `reports done only once the sentinel arrives`() {
         val parser = SseParser()
-        parser.feed(frame("text", """{"content":"x"}""").toByteArray(Charsets.UTF_8))
+        parser.feed(frame("text", """{"content":"x"}""").toByteArray())
         assertFalse(parser.isDone)
 
-        parser.feed("data: [DONE]\n\n".toByteArray(Charsets.UTF_8))
+        parser.feed(DONE.toByteArray())
         assertTrue(parser.isDone)
     }
 
-    private fun frame(
-        type: String,
-        data: String,
-    ): String = "data: {\"type\":\"$type\",\"data\":$data}\n\n"
-
-    private fun collect(vararg chunks: String): List<ChatEvent> {
+    /** Feeds each chunk to one parser, then ends the stream. */
+    private fun collect(chunks: List<String>): List<ChatEvent> {
         val parser = SseParser()
-        val events = mutableListOf<ChatEvent>()
-        for (chunk in chunks) {
-            events += parser.feed(chunk.toByteArray(Charsets.UTF_8))
-        }
-        events += parser.endOfStream()
-        return events
+        return chunks.flatMap { parser.feed(it.toByteArray()) } + parser.endOfStream()
     }
 
-    private fun collectByBytes(
-        text: String,
-        chunkSize: Int,
-    ): List<ChatEvent> {
-        val parser = SseParser()
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        val events = mutableListOf<ChatEvent>()
-        var offset = 0
-        while (offset < bytes.size) {
-            val end = minOf(offset + chunkSize, bytes.size)
-            events += parser.feed(bytes.copyOfRange(offset, end))
-            offset = end
-        }
-        events += parser.endOfStream()
-        return events
+    companion object {
+        /** The sentinel frame that ends a stream. */
+        private const val DONE = "data: [DONE]\n\n"
+
+        private fun frame(
+            type: String,
+            data: String,
+        ): String = "data: {\"type\":\"$type\",\"data\":$data}\n\n"
+
+        @JvmStatic
+        fun streams(): List<Arguments> =
+            listOf(
+                Arguments.of(
+                    "comments and blank lines are skipped and the sentinel ends the stream",
+                    listOf(
+                        ": connected\n\n: heartbeat\n\n",
+                        frame("text", """{"content":"hello"}"""),
+                        frame("done", """{"summary":""}"""),
+                        DONE,
+                    ),
+                    listOf("""text {"content":"hello"}""", """done {"summary":""}"""),
+                ),
+                Arguments.of(
+                    "a malformed JSON frame is skipped without ending the stream",
+                    listOf(
+                        "data: {not json}\n\n",
+                        frame("text", """{"content":"ok"}"""),
+                        DONE,
+                    ),
+                    listOf("""text {"content":"ok"}"""),
+                ),
+                Arguments.of(
+                    "a frame with a missing or an empty type is skipped",
+                    listOf(
+                        """data: {"data":{"content":"no type"}}""" + "\n\n",
+                        """data: {"type":"","data":{}}""" + "\n\n",
+                        DONE,
+                    ),
+                    emptyList<String>(),
+                ),
+                Arguments.of(
+                    "CRLF line endings",
+                    listOf(
+                        ": connected\r\n\r\n" +
+                            "data: {\"type\":\"text\",\"data\":{\"content\":\"crlf\"}}\r\n\r\n" +
+                            "data: [DONE]\r\n\r\n",
+                    ),
+                    listOf("""text {"content":"crlf"}"""),
+                ),
+                Arguments.of(
+                    "a stream that ends without the sentinel keeps the events received",
+                    listOf(frame("text", """{"content":"partial"}""")),
+                    listOf("""text {"content":"partial"}"""),
+                ),
+                Arguments.of(
+                    "a final data line without its newline is flushed at the end",
+                    listOf("""data: {"type":"text","data":{"content":"tail"}}"""),
+                    listOf("""text {"content":"tail"}"""),
+                ),
+                Arguments.of(
+                    "anything after the sentinel is ignored",
+                    listOf(DONE, frame("text", """{"content":"late"}""")),
+                    emptyList<String>(),
+                ),
+            )
     }
 }

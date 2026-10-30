@@ -1,6 +1,6 @@
 [project]
 name = "atlas"
-version = "3.1.6"
+version = "3.1.7"
 description = "Adaptive Test-time Learning and Autonomous Specialization"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

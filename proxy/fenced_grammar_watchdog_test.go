@@ -17,16 +17,8 @@ import (
 
 // The fence grammar reserves four backticks for the closer (fenceBlockGrammar),
 // and the model closes code with three, which the grammar takes as a body
-// line. Attempt 0 then could not end, and it ran with no watchdog to the token
-// ceiling: four fetches of 306-317s in the 2026-09-27 smoke run (8192 tokens
-// each in llama-server's log), each followed by a grammar-free retry of ~10s.
-
-// serveStuckFence streams the start of a fenced block, closes it the way the
-// model does (three backticks), then holds the stream open with frames that
-// carry no content: what the smoke run's streams showed for five minutes.
-func serveStuckFence(w http.ResponseWriter, r *http.Request, stop <-chan struct{}) {
-	serveStuckStream(w, r, stop, "````python\n", "print(1)\n", "```\n")
-}
+// line. A grammar-constrained attempt then cannot end on its own: the fenced
+// watchdog must cut it, and a retry without the grammar lands the file.
 
 // serveStuckStream streams parts, then holds the stream open with frames that
 // carry no content until the client gives up.
@@ -62,7 +54,32 @@ func serveStuckStream(w http.ResponseWriter, r *http.Request, stop <-chan struct
 	}
 }
 
-func serveFencedBlock(w http.ResponseWriter, body string) {
+// serveReasoningOnly streams reasoning_content frames and no content until
+// the client gives up.
+func serveReasoningOnly(w http.ResponseWriter, r *http.Request, stop <-chan struct{}) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fl, _ := w.(http.Flusher)
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-stop:
+			return
+		default:
+		}
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"reasoning_content": "thinking "}}},
+		})
+		fmt.Fprintf(w, "data: %s\n\n", d)
+		if fl != nil {
+			fl.Flush()
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// serveReply streams body as one content frame and ends the stream.
+func serveReply(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	d, _ := json.Marshal(map[string]interface{}{
 		"choices": []map[string]interface{}{{"delta": map[string]string{"content": body}}},
@@ -76,7 +93,9 @@ func TestAGrammarConstrainedFencedAttemptIsWatched(t *testing.T) {
 	stop := make(chan struct{})
 	defer close(stop)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveStuckFence(w, r, stop)
+		// The block closed the way the model closes it (three backticks),
+		// then frames with no content.
+		serveStuckStream(w, r, stop, "````python\n", "print(1)\n", "```\n")
 	}))
 	defer srv.Close()
 
@@ -108,7 +127,7 @@ func TestAnUnclosedFenceIsRetriedWithoutTheGrammar(t *testing.T) {
 	var mu sync.Mutex
 	var grammarUsed []bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		if !isChatCompletion(r) {
 			http.NotFound(w, r)
 			return
 		}
@@ -122,7 +141,7 @@ func TestAnUnclosedFenceIsRetriedWithoutTheGrammar(t *testing.T) {
 			serveStuckStream(w, r, stop, "````python\n", "print(1)\n")
 			return
 		}
-		serveFencedBlock(w, "````python\nprint(1)\n````")
+		serveReply(w, "````python\nprint(1)\n````")
 	}))
 	defer srv.Close()
 
@@ -168,45 +187,23 @@ func fencedLoopStub(t *testing.T, stop <-chan struct{}) *httptest.Server {
 			return
 		}
 		raw, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		fl, _ := w.(http.Flusher)
 		if strings.Contains(string(raw), "single fenced block") {
-			for {
-				select {
-				case <-r.Context().Done():
-					return
-				case <-stop:
-					return
-				default:
-				}
-				d, _ := json.Marshal(map[string]interface{}{
-					"choices": []map[string]interface{}{
-						{"delta": map[string]string{"reasoning_content": "thinking "}}},
-				})
-				fmt.Fprintf(w, "data: %s\n\n", d)
-				if fl != nil {
-					fl.Flush()
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
+			serveReasoningOnly(w, r, stop)
+			return
 		}
 		call, _ := json.Marshal(map[string]interface{}{
 			"type": "tool_call", "name": "write_file",
 			"args": map[string]string{"path": "solve.py", "content": "@fenced"},
 		})
-		d, _ := json.Marshal(map[string]interface{}{
-			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}},
-		})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		serveReply(w, string(call))
 	}))
 }
 
-// firstWriteError runs the loop and returns the error text of the first
-// write_file result.
-func firstWriteError(t *testing.T, ctx *AgentContext) string {
-	t.Helper()
+// writeFileErrors runs the agent loop on task and returns the error text of
+// each write_file result, in order.
+func writeFileErrors(ctx *AgentContext, task string) []string {
 	var mu sync.Mutex
-	first := ""
+	var errs []string
 	ctx.StreamFn = func(et string, data interface{}) {
 		m, ok := data.(map[string]interface{})
 		if et != "tool_result" || !ok || m["tool"] != "write_file" {
@@ -214,63 +211,63 @@ func firstWriteError(t *testing.T, ctx *AgentContext) string {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if first == "" {
-			first, _ = m["error"].(string)
-		}
+		e, _ := m["error"].(string)
+		errs = append(errs, e)
 	}
-	runAgentLoop(ctx, "Create solve.py.")
+	runAgentLoop(ctx, task)
 	mu.Lock()
 	defer mu.Unlock()
-	return first
+	return errs
 }
 
-// The session is cancelled while the file is being fetched. The model sent
-// nothing wrong: it is told the session stopped, not that no block followed.
-func TestAFetchCutByTheSessionSaysSo(t *testing.T) {
+// The session stops the fetch: it is cancelled while the file is being
+// fetched, or too little session time is left to fetch the file and check it.
+// The model sent nothing wrong, so the write result gives that reason, not
+// "no fenced block followed", and no file is written.
+func TestAFetchStoppedByTheSessionSaysWhy(t *testing.T) {
 	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "30")
-	stop := make(chan struct{})
-	defer close(stop)
-	srv := fencedLoopStub(t, stop)
-	defer srv.Close()
+	for _, tc := range []struct {
+		name        string
+		maxTurns    int
+		cancelAfter time.Duration // cancel the session after this long
+		timeout     time.Duration // or give the session this deadline
+		want        string
+	}{
+		{"cancelled during the fetch", 4, 1500 * time.Millisecond, 0, "was cancelled"},
+		{"too little time left", 2, 0, 8 * time.Second, "too little session time"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stop := make(chan struct{})
+			defer close(stop)
+			srv := fencedLoopStub(t, stop)
+			defer srv.Close()
 
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.MaxTurns = 4
-	cctx, cancel := context.WithCancel(context.Background())
-	ctx.Ctx = cctx
-	time.AfterFunc(1500*time.Millisecond, cancel)
+			dir := t.TempDir()
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+			ctx.PermissionMode = PermissionYolo
+			ctx.MaxTurns = tc.maxTurns
+			var session context.Context
+			var cancel context.CancelFunc
+			if tc.timeout > 0 {
+				session, cancel = context.WithTimeout(context.Background(), tc.timeout)
+			} else {
+				session, cancel = context.WithCancel(context.Background())
+				time.AfterFunc(tc.cancelAfter, cancel)
+			}
+			defer cancel()
+			ctx.Ctx = session
 
-	msg := firstWriteError(t, ctx)
-	if strings.Contains(msg, "no fenced block followed") || !strings.Contains(msg, "was cancelled") {
-		t.Errorf("the write result does not give the true reason: %q", msg)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "solve.py")); err == nil {
-		t.Error("solve.py was written")
-	}
-}
-
-// Too little session time is left to fetch the file and check it: the fetch is
-// refused before it starts, and the model is told that.
-func TestAFetchRefusedForTimeSaysSo(t *testing.T) {
-	t.Setenv("ATLAS_FENCED_FIRST_CONTENT_SEC", "30")
-	stop := make(chan struct{})
-	defer close(stop)
-	srv := fencedLoopStub(t, stop)
-	defer srv.Close()
-
-	dir := t.TempDir()
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.MaxTurns = 2
-	dctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	ctx.Ctx = dctx
-
-	msg := firstWriteError(t, ctx)
-	if strings.Contains(msg, "no fenced block followed") || !strings.Contains(msg, "too little session time") {
-		t.Errorf("the write result does not give the true reason: %q", msg)
+			errs := writeFileErrors(ctx, "Create solve.py.")
+			if len(errs) == 0 {
+				t.Fatal("no write_file result")
+			}
+			if strings.Contains(errs[0], "no fenced block followed") || !strings.Contains(errs[0], tc.want) {
+				t.Errorf("the write result does not give the true reason: %q", errs[0])
+			}
+			if _, err := os.Stat(filepath.Join(dir, "solve.py")); err == nil {
+				t.Error("solve.py was written")
+			}
+		})
 	}
 }

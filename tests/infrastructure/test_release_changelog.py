@@ -21,6 +21,8 @@ SENTENCE = ("The installer keeps its downloads in a private folder now, and a do
             "three times before the installer stops with the address that did not answer.")
 ITEM = ("`atlas doctor` names the port that is taken and the program that holds it, and it says which setting "
         "moves the service to another port.")
+# One word longer than a line of the merge: the merge leaves a list mark alone on its line before it.
+LONG_WORD = "`tests/infrastructure/test_a_very_long_name.py::test_the_name_is_longer_than_one_line_of_the_merge`"
 
 
 @pytest.fixture(scope="module")
@@ -45,18 +47,9 @@ def git(root, *args, author=PERSON):
                           env={**os.environ, **who}).stdout.strip()
 
 
-def as_the_merge_writes(text):
-    """The text of a pull request as its commit on the branch holds it."""
-    lines = []
-    for line in text.split("\n"):
-        long = len(line) > 72
-        lines += textwrap.wrap(" ".join(line.split()), 72, break_long_words=False, break_on_hyphens=False) if long else [line]
-    return "\n".join(lines)
-
-
-def users(part, before="What it changes.\n\n", after="\n\n## How it was verified\n\nBy its tests."):
+def users(part):
     """The text of a pull request with this part for users."""
-    return f"{before}## What users will notice\n\n{part}{after}"
+    return f"What it changes.\n\n## What users will notice\n\n{part}\n\n## How it was verified\n\nBy its tests."
 
 
 def from_pull_requests(section):
@@ -80,8 +73,13 @@ class Made:
         """One commit as the merge of a pull request writes it; its hash."""
         for name, content in (files or {}).items():
             (self.root / name).write_text(content, encoding="utf-8")
+        # The merge breaks each line longer than 72 columns, and takes the spaces at its start away.
+        lines = []
+        for line in text.split("\n"):
+            long = len(line) > 72
+            lines += textwrap.wrap(" ".join(line.split()), 72, break_long_words=False, break_on_hyphens=False) if long else [line]
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "--allow-empty", "-m", title, "-m", as_the_merge_writes(text), author=author)
+        git(self.root, "commit", "-q", "--allow-empty", "-m", title, "-m", "\n".join(lines), author=author)
         return git(self.root, "rev-parse", "HEAD")
 
     def run(self, release, *args):
@@ -96,25 +94,17 @@ def made(tmp_path, capsys):
     return Made(tmp_path / "repo", capsys)
 
 
-def test_a_part_with_sentences_is_an_entry_and_its_broken_lines_are_put_together_again(release, made):
-    made.merged("fix(install): the installer tries a failed download again (#7)", users(f"{SENTENCE}\n\nA second paragraph."))
+@pytest.mark.parametrize("part", [
+    pytest.param(f"{SENTENCE}\n\nA second paragraph.", id="paragraphs"),
+    pytest.param(f"- {ITEM}\n- A short one.\n- {SENTENCE}", id="the items of a list"),
+    pytest.param(f"- A first item.\n- {LONG_WORD}\n- {LONG_WORD} and more", id="a list mark that the merge left alone on its line"),
+])
+def test_the_lines_that_the_merge_broke_are_put_together_again_in_the_entry(release, made, part):
+    made.merged("fix(install): the installer tries a failed download again (#7)", users(part))
     status, section, said = made.run(release)
     assert status == 0
-    assert f"### Fixed: the installer tries a failed download again (#7)\n\n{SENTENCE}\n\nA second paragraph.\n" in section
+    assert f"### Fixed: the installer tries a failed download again (#7)\n\n{part}\n" in section
     assert "1 gave an entry: #7" in said
-
-
-def test_each_item_of_a_list_is_put_together_again_and_stays_an_item(release, made):
-    made.merged("feat(cli): doctor names the port (#8)", users(f"- {ITEM}\n- A short one.\n- {SENTENCE}"))
-    _, section, _ = made.run(release)
-    assert f"### Added: doctor names the port (#8)\n\n- {ITEM}\n- A short one.\n- {SENTENCE}\n" in section
-
-
-def test_a_list_mark_that_the_merge_left_alone_on_its_line_starts_an_item(release, made):
-    word = "`tests/infrastructure/test_a_very_long_name.py::test_the_name_is_longer_than_one_line_of_the_merge`"
-    made.merged("fix(cli): two names (#8)", users(f"- A first item.\n- {word}\n- {word} and more"))
-    _, section, _ = made.run(release)
-    assert f"- A first item.\n- {word}\n- {word} and more\n" in section
 
 
 def test_a_line_that_starts_with_a_dash_or_a_number_and_no_space_after_it_is_not_a_list_item(release, made):
@@ -192,21 +182,25 @@ def test_the_heading_more_than_once_is_decided_by_hand(release, made):
     assert from_pull_requests(section) == []
 
 
-def test_the_part_ends_at_the_next_heading_of_its_level_and_takes_any_level(release):
-    assert release.users_part("# What users will notice\n\nOne.\n\n# Why\n\nTwo.") == (1, "One.")
-    assert release.users_part("### What users will notice  \nOne.\n\n## Proof\n\nTwo.") == (1, "One.")
-    assert release.users_part("## What users will notice\n\nOne.\n\n### More\n\nTwo.\n\n## Why") == (1, "One.\n\n### More\n\nTwo.")
-    assert release.users_part("## What users will notice\n\nOne.") == (1, "One.")
-    assert release.users_part("## Why\n\nOne.") == (0, "")
+@pytest.mark.parametrize("text, found", [
+    pytest.param("# What users will notice\n\nOne.\n\n# Why\n\nTwo.", (1, "One."), id="up to the next heading of its level"),
+    pytest.param("### What users will notice  \nOne.\n\n## Proof\n\nTwo.", (1, "One."), id="up to a heading of a higher level"),
+    pytest.param("## What users will notice\n\nOne.\n\n### More\n\nTwo.\n\n## Why", (1, "One.\n\n### More\n\nTwo."),
+                 id="a heading of a lower level is in the part"),
+    pytest.param("## What users will notice\n\nOne.", (1, "One."), id="up to the end of the text"),
+    pytest.param("## Why\n\nOne.", (0, ""), id="no such heading"),
+])
+def test_the_part_ends_at_the_next_heading_of_its_level_and_takes_any_level(release, text, found):
+    assert release.users_part(text) == found
 
 
 @pytest.mark.parametrize("part, what", [
-    ("| Before | Now |\n|---|---|\n| a | b |", "a table"),
-    ("Run this:\n\n```\natlas doctor\n```", "a code block"),
-    ("The first.\n\n### For Windows\n\nThe second.", "a heading of its own"),
-    ("> A quoted line.", "a quoted block"),
-    ("<details>\nMore.\n</details>", "HTML"),
-    ("- An item.\n  - An item inside it.", "a list inside a list"),
+    pytest.param("| Before | Now |\n|---|---|\n| a | b |", "a table", id="a table"),
+    pytest.param("Run this:\n\n```\natlas doctor\n```", "a code block", id="a code block"),
+    pytest.param("The first.\n\n### For Windows\n\nThe second.", "a heading of its own", id="a heading"),
+    pytest.param("> A quoted line.", "a quoted block", id="a quoted block"),
+    pytest.param("<details>\nMore.\n</details>", "HTML", id="HTML"),
+    pytest.param("- An item.\n  - An item inside it.", "a list inside a list", id="a list inside a list"),
 ])
 def test_a_part_that_is_not_sentences_or_a_list_is_decided_by_hand(release, made, part, what):
     made.merged("fix(tui): a (#1)", users(part))
@@ -232,16 +226,12 @@ def test_dependabot_is_known_by_the_address_of_the_bot_and_not_by_a_name(release
     assert "#1  chore(deps): bump a (#1)\n          its text has no heading" in said
 
 
-def test_a_made_commit_has_its_author_also_where_the_environment_names_another(release, made, monkeypatch):
+def test_one_dependency_update_is_not_called_updates(release, made, monkeypatch):
+    # The environment names another author: the commit that the test makes still has Dependabot's.
     for name in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
         monkeypatch.setenv(name, "The Person Who Runs The Tests")
     for name in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         monkeypatch.setenv(name, "runs-the-tests@example.invalid")
-    made.merged("chore(deps): bump a (#1)", "Bumps a.", author=DEPENDABOT)
-    assert "1 dependency updates, put together as one line: #1" in made.run(release)[2]
-
-
-def test_one_dependency_update_is_not_called_updates(release, made):
     made.merged("chore(deps): bump a (#1)", "Bumps a.", author=DEPENDABOT)
     assert "### Changed: 1 dependency update (#1)\n" in made.run(release)[1]
 
@@ -417,10 +407,12 @@ def test_the_range_can_be_given(release, made):
 
 
 @pytest.mark.parametrize("arguments, changelog, why", [
-    (["--version", "1.0.0"], CHANGELOG, "CHANGELOG.md has a section for 1.0.0 already; nothing was written"),
-    (["--version", "next"], CHANGELOG, "`next` is not a version as in 3.2.0"),
-    ([], CHANGELOG.replace("## [Unreleased]\n", ""), "CHANGELOG.md must have the heading `## [Unreleased]` once"),
-    (["--since", "v9.9.9"], CHANGELOG, "git log --first-parent ended with status 128"),
+    pytest.param(["--version", "1.0.0"], CHANGELOG, "CHANGELOG.md has a section for 1.0.0 already; nothing was written",
+                 id="a version that has a section"),
+    pytest.param(["--version", "next"], CHANGELOG, "`next` is not a version as in 3.2.0", id="not a version"),
+    pytest.param([], CHANGELOG.replace("## [Unreleased]\n", ""), "CHANGELOG.md must have the heading `## [Unreleased]` once",
+                 id="no Unreleased heading"),
+    pytest.param(["--since", "v9.9.9"], CHANGELOG, "git log --first-parent ended with status 128", id="a tag that is not there"),
 ])
 def test_what_cannot_be_read_stops_the_script_and_writes_nothing(release, made, arguments, changelog, why):
     made.merged("fix(tui): a (#1)", users("One."), files={"CHANGELOG.md": changelog})

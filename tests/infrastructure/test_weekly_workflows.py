@@ -14,8 +14,6 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CANARY, CLEANUP = "canary-check.yml", "weekly-cleanup.yml"
 SCRIPT = {CANARY: "scripts/canary.py", CLEANUP: "scripts/weekly_cleanup.py"}
-# A scheduled run and a run by hand read `dev`; a pull request reads itself.
-READS = "${{ github.event_name != 'pull_request' && 'dev' || '' }}"
 
 
 def text(name):
@@ -33,13 +31,6 @@ def steps(name, job):
     return workflow(name)["jobs"][job]["steps"]
 
 
-def rights(name):
-    """Every right that the workflow or one of its jobs gives, as (job, right, how far)."""
-    loaded = workflow(name)
-    given = [("the workflow", right, level) for right, level in loaded["permissions"].items()]
-    return given + [(job_id, right, level) for job_id, job in loaded["jobs"].items() for right, level in job["permissions"].items()]
-
-
 def uses(name):
     return re.findall(r"^\s*-? ?uses: (\S+)@(\S+)(.*)$", text(name), re.MULTILINE)
 
@@ -53,12 +44,6 @@ def test_it_starts_on_a_schedule_by_hand_and_for_a_pull_request_that_changes_its
     assert set(on) == {"schedule", "workflow_dispatch", "pull_request"}
     assert on["pull_request"] == {"branches": ["dev"], "paths": [f".github/workflows/{name}", SCRIPT[name]]}
     assert on["workflow_dispatch"] in ({}, None)
-
-
-@BOTH
-def test_it_does_not_start_with_the_rights_of_the_base_branch_for_a_pull_request(name):
-    assert "pull_request_target" not in text(name)
-    assert "workflow_run" not in text(name)
 
 
 @pytest.mark.parametrize("name, cron", [(CANARY, "47 2 * * 1"), (CLEANUP, "17 3 * * 1")])
@@ -82,12 +67,12 @@ def test_the_workflow_gives_no_right_by_itself_and_each_job_names_its_own(name):
         assert job["runs-on"] == "ubuntu-24.04"
 
 
-def test_the_canary_check_can_only_read(name=CANARY):
-    (job,) = workflow(name)["jobs"].values()
+def test_the_canary_check_can_only_read():
+    # The workflow itself gives no right (the test above), so its one job's rights are all it has.
+    (job,) = workflow(CANARY)["jobs"].values()
     assert job["permissions"] == {"contents": "read", "pull-requests": "read", "checks": "read", "actions": "read", "statuses": "read"}
     page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     assert "the\ncontents, the pull request, the check runs, the logs of the jobs and the\nstatuses of a commit, and nothing else." in page
-    assert {level for _job, _right, level in rights(name)} == {"read"}
     assert job["name"] == "canary check (reads only)"
 
 
@@ -96,7 +81,6 @@ def test_of_the_weekly_cleanup_only_the_job_that_writes_the_issue_can_write_and_
     assert list(jobs) == ["text", "issue"]
     assert jobs["text"]["permissions"] == {"contents": "read"}
     assert jobs["issue"]["permissions"] == {"contents": "read", "issues": "write"}
-    assert [given for given in rights(CLEANUP) + rights(CANARY) if given[2] != "read"] == [("issue", "issues", "write")]
     assert jobs["text"]["name"] == "weekly cleanup (make the text)"
     assert jobs["issue"]["name"] == "weekly cleanup (write the issue)"
 
@@ -151,7 +135,7 @@ def test_the_token_of_the_canary_check_is_the_jobs_own_and_only_the_script_gets_
 def test_on_a_schedule_and_by_hand_the_job_reads_dev_and_for_a_pull_request_it_reads_the_pull_request(name, job):
     checkout = steps(name, job)[0]
     assert checkout["uses"].startswith("actions/checkout@")
-    assert checkout["with"] == {"ref": READS, "persist-credentials": False}
+    assert checkout["with"] == {"ref": "${{ github.event_name != 'pull_request' && 'dev' || '' }}", "persist-credentials": False}
 
 
 @BOTH

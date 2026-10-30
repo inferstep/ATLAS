@@ -14,7 +14,6 @@ generated tests as an oracle. It runs candidates on the generated INPUTS and
 clusters them by agreement. These tests pin that behaviour.
 """
 
-import json
 import subprocess
 import sys
 import tempfile
@@ -23,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import pipeline
+import stage_telemetry
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -114,7 +114,7 @@ def test_the_probe_reports_output_rather_than_asserting():
 def test_the_consensus_stage_is_registered():
     """An unregistered stage contributes no phase row, so the run summary
     loses the reason a candidate was selected."""
-    assert pipeline._STAGE_PHASE["consensus"] == "selection"
+    assert stage_telemetry._STAGE_PHASE["consensus"] == "selection"
 
 
 # --- verification holds candidates to the ENVIRONMENT's contract -----------

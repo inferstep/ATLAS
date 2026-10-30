@@ -25,9 +25,16 @@ RUN git init /llama.cpp && \
 FROM docker.io/nvidia/cuda:12.9.2-runtime-rockylinux9@sha256:663416e2b4c199399ead053e3250bdbab3f124db696a7d01f26e215d18ecbd44
 COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/
 COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
-RUN mkdir -p /models
+RUN groupadd --gid 1001 atlas && \
+    useradd --create-home --uid 1001 --gid 1001 atlas && \
+    (getent group video >/dev/null 2>&1 && usermod -aG video atlas || true) && \
+    (getent group render >/dev/null 2>&1 && usermod -aG render atlas || true) && \
+    mkdir -p /models && \
+    chown -R atlas:atlas /models
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+USER atlas
+ENV HOME=/home/atlas
 # The entrypoint's default listen port (PORT env) is 8080.
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

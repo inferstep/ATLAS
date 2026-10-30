@@ -52,16 +52,17 @@ def test_clean_code_scores_alike_at_any_length():
     long_ = normalize_cx_energy(14.80, FITTED, length=5000)
     assert abs(short - long_) < 0.15, (
         f"length still dominates: {short:.2f} vs {long_:.2f}")
-    assert short < 0.5 and long_ < 0.5, "clean code must sit below neutral"
+    assert short < 0.5, "clean code must sit below neutral"
+    assert long_ < 0.5, "clean code must sit below neutral"
 
 
 def test_pathology_separates_from_real_code():
     real = normalize_cx_energy(12.61, FITTED, length=2400)
     repetition = normalize_cx_energy(12.22, FITTED, length=480)
     stub = normalize_cx_energy(24.71, FITTED, length=880)
+    # The raw energies say the opposite: real code (12.61) scores HIGHER
+    # than the loop (12.22).
     assert real < 0.5 < repetition < stub
-    # Raw energies say the opposite — real code scores HIGHER than the loop.
-    assert 12.61 > 12.22
 
 
 def test_without_a_baseline_nothing_changes():

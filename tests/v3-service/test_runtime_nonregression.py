@@ -13,7 +13,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 import adapters
-import pipeline as P
 import scoring
 from test_mode_semantics import _service
 from runtime_verification import IMPORT_COMPLETE, PythonImportComparison

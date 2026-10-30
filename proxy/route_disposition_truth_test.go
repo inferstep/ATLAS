@@ -12,13 +12,10 @@ import (
 	"testing"
 )
 
-// --- how a route that kept the caller's bytes says so -----------------------
-//
-// `baseline_retained` covered two different endings and named a candidate for
-// both. The pilot has one of each shape, and route entry 1 of
-// pilot_go_duration_label proves the naming was wrong: the hash recorded under
-// `candidate_hash` is the sha256 of the main.go the MODEL wrote, which is the
-// file that was on disk when the run ended.
+// How a route that kept the caller's bytes says so. Two endings keep them:
+// nothing new came back, or a candidate came back and a gate withdrew it. Only
+// the second has a candidate to name; the first must not name the caller's
+// own bytes as one.
 
 // retainWorld is the real write route with a producer whose answer, and whose
 // structural verdict on that answer, are both fixtures.

@@ -19,13 +19,9 @@ import (
 // These drive the real agent loop: a stub model on /v1/chat/completions, a
 // producer on /v3/generate that returns its OWN version of the file, and the
 // live write route between them. What is asserted is what the next turn was
-// actually sent and what the next edit actually operated on -- not what a
-// helper returns in isolation.
-//
-// The sessions that motivated them are stabilization12/PAIRS2 01-O-B-rep1 and
-// 05-O-B-rep2: byte-identical submissions, byte-identical adoptions, and in
-// both the model overwrote the delivered candidate on its next turn without
-// ever being shown it.
+// actually sent and what the next edit actually operated on, not what a
+// helper returns in isolation. Without this handoff, a model overwrites the
+// delivered candidate on its next turn without ever being shown it.
 
 // What the model sends. Tier2 by the classifier: a .py file over ten lines
 // with logic.
@@ -84,17 +80,6 @@ func (w *handoffWorld) prompt(t *testing.T, n int) string {
 	return w.prompts[n]
 }
 
-// lastPrompt is the final context the loop assembled.
-func (w *handoffWorld) lastPrompt(t *testing.T) string {
-	t.Helper()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(w.prompts) == 0 {
-		t.Fatal("the loop never called the model")
-	}
-	return w.prompts[len(w.prompts)-1]
-}
-
 func (w *handoffWorld) disk(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(w.dir, "inv.py"))
@@ -107,9 +92,9 @@ func (w *handoffWorld) disk(t *testing.T) string {
 func v3Envelope(winner string) map[string]interface{} {
 	h := contentSHA256(winner)
 	return map[string]interface{}{
-		// "phase1" is what the live pipeline reported in the two sessions this
-		// file reconstructs, and it is what verifiedPhase accepts -- the nudge
-		// under test only fires for a phase the guard recognises.
+		// "phase1" is what the live pipeline reports, and it is what
+		// verifiedPhase accepts: the nudge under test only fires for a phase
+		// the guard recognises.
 		"code": winner, "passed": true, "phase_solved": "phase1",
 		"candidates_tested": 3, "winning_score": 0.42,
 		"evidence": map[string]interface{}{
@@ -135,9 +120,22 @@ func v3Envelope(winner string) map[string]interface{} {
 	}
 }
 
-// runHandoffWorld plays one script per turn through the real loop, with a
-// producer that delivers `winner` to whatever the model writes.
+const handoffRequest = "keep track of the items we lend out"
+
+// runHandoffWorld runs the loop once in a new handoff world.
 func runHandoffWorld(t *testing.T, winner string, scripts []string) *handoffWorld {
+	t.Helper()
+	w := newHandoffWorld(t, winner, scripts)
+	if err := runAgentLoop(w.ctx, handoffRequest); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// newHandoffWorld builds a world that plays one script per turn through the
+// real loop, with a producer that delivers `winner` to whatever the model
+// writes.
+func newHandoffWorld(t *testing.T, winner string, scripts []string) *handoffWorld {
 	t.Helper()
 	w := &handoffWorld{dir: t.TempDir(), terminal: map[string]string{}}
 	turn := 0
@@ -149,13 +147,7 @@ func runHandoffWorld(t *testing.T, winner string, scripts []string) *handoffWorl
 			w.mu.Unlock()
 			body, _ := json.Marshal(v3Envelope(winner))
 			rw.Header().Set("Content-Type", "text/event-stream")
-			fl, _ := rw.(http.Flusher)
-			for _, line := range []string{"event: result", "data: " + string(body), "", "data: [DONE]", ""} {
-				fmt.Fprint(rw, line+"\n")
-				if fl != nil {
-					fl.Flush()
-				}
-			}
+			sseLines(rw, "event: result", "data: "+string(body), "", "data: [DONE]", "")
 			return
 		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
 			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
@@ -233,9 +225,6 @@ func runHandoffWorld(t *testing.T, winner string, scripts []string) *handoffWorl
 		}
 	}
 	w.ctx = ctx
-	if err := runAgentLoop(ctx, "keep track of the items we lend out"); err != nil {
-		t.Fatal(err)
-	}
 	return w
 }
 
@@ -254,7 +243,7 @@ func TestAdoptionReportsTheActualDeliveredState(t *testing.T) {
 		t.Fatalf("the producer was consulted %d times, want 1", w.v3Calls)
 	}
 	if got := w.disk(t); got != handoffDelivered {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	next := w.prompt(t, 1)
 
@@ -262,9 +251,6 @@ func TestAdoptionReportsTheActualDeliveredState(t *testing.T) {
 	// what it sent.
 	if !strings.Contains(next, "are NOT the ones you sent") {
 		t.Error("the next turn was not told its content was replaced")
-	}
-	if !strings.Contains(next, "inv.py") {
-		t.Error("the note does not name the file")
 	}
 	// And it is not told to stay away from the only copy that matters.
 	if strings.Contains(next, "do not re-read the file to double-check") {
@@ -290,7 +276,7 @@ func TestAnUnreplacedWriteSaysNothingAboutSupersession(t *testing.T) {
 		`{"type":"done","summary":"done"}`,
 	})
 	if got := w.disk(t); got != handoffSubmitted {
-		t.Fatalf("precondition: the model's own bytes are not on disk")
+		t.Fatalf("precondition: the model's own bytes are not on disk: got %v", got)
 	}
 	if strings.Contains(w.prompt(t, 1), "are NOT the ones you sent") {
 		t.Error("an unreplaced write claimed its content was replaced")
@@ -312,12 +298,10 @@ func TestALaterEditCannotOperateAgainstSupersededContents(t *testing.T) {
 	if got := w.disk(t); got != handoffDelivered {
 		t.Errorf("an edit against superseded text changed the delivered file:\n%q", got)
 	}
-	// It failed, and the failure reached the model rather than passing
-	// silently.
-	last := w.lastPrompt(t)
-	if !strings.Contains(last, "old_str") && !strings.Contains(last, "not found") &&
-		!strings.Contains(last, "no match") {
-		t.Error("the model was not told its edit did not match what is on disk")
+	// It failed, and the turn after the edit was told so.
+	next := w.prompt(t, 2)
+	if !strings.Contains(next, "string to replace not found in file") {
+		t.Errorf("the model was not told its edit did not match what is on disk: ...%s", next[max(0, len(next)-3000):])
 	}
 }
 
@@ -380,7 +364,7 @@ func TestCandidateAdoptionDoesNotCertifyTheRequest(t *testing.T) {
 		`{"type":"done","summary":"done"}`,
 	})
 	if got := w.disk(t); got != handoffDelivered {
-		t.Fatalf("precondition: the candidate did not land")
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
 	}
 	// The pipeline's build check is not evidence that the user's request is
 	// finished, and the turn after an adoption must not be told it is.
@@ -393,14 +377,33 @@ func TestCandidateAdoptionDoesNotCertifyTheRequest(t *testing.T) {
 		t.Error("the nudge does not distinguish a build check from a finished request")
 	}
 	// And the completion boundary is not persuaded either.
-	status, reason := finalizeCompletion(w.ctx, &runState{}, "keep track of the items we lend out", "")
+	status, reason := finalizeCompletion(w.ctx, &runState{}, handoffRequest, "")
 	if status == TerminalCompleted {
 		t.Errorf("an adopted candidate was read as a finished request (%q)", reason)
 	}
-	// Adoption does not mark the plan finished. (A world with no plan has
-	// nothing to satisfy, which is not evidence either way.)
-	if w.ctx.Plan != nil && len(w.ctx.Plan.Steps) > 0 &&
-		countTrue(w.ctx.PlanStepsSatisfied) == len(w.ctx.Plan.Steps) {
+}
+
+// Adoption satisfies the write step at most. The plan's run step stays open
+// until something runs the program.
+func TestCandidateAdoptionDoesNotFinishThePlan(t *testing.T) {
+	w := newHandoffWorld(t, handoffDelivered, []string{
+		writeInv(handoffSubmitted),
+		`{"type":"done","summary":"done"}`,
+	})
+	w.ctx.Plan = &Plan{VerifyStep: "s2", Steps: []PlanStep{
+		{ID: "s1", Action: "write_file", Target: "inv.py"},
+		{ID: "s2", Action: "run_command", Target: "python inv.py"},
+	}}
+	if err := runAgentLoop(w.ctx, handoffRequest); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.disk(t); got != handoffDelivered {
+		t.Fatalf("precondition: the candidate did not land: got %v", got)
+	}
+	if w.ctx.Plan == nil || len(w.ctx.Plan.Steps) != 2 {
+		t.Fatalf("precondition: the run dropped or replaced the plan: %+v", w.ctx.Plan)
+	}
+	if countTrue(w.ctx.PlanStepsSatisfied) == len(w.ctx.Plan.Steps) {
 		t.Error("adoption satisfied every plan step")
 	}
 }

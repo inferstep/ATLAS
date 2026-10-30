@@ -46,7 +46,7 @@ echo "canary: the bootstrap stops here on purpose" >&2; exit 97
 #   ATLAS_BOOTSTRAP_NO_SUDO=1         fail instead of attempting sudo
 #   ATLAS_REPO_URL=...                clone source if no local repo (default: GitHub)
 #   ATLAS_INSTALL_DIR=...             where to clone/install (default: /opt/atlas)
-#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.6)
+#   ATLAS_GO_VERSION=...              Go toolchain to install for the TUI build (default: 1.26.10)
 #   ATLAS_DOWNLOAD_TRIES=...          how often a download that fails is tried (default: 3)
 #   ATLAS_DOWNLOAD_WAIT_SECONDS=...   the wait between two tries (default: 5)
 #
@@ -207,6 +207,9 @@ PIP_NETWORK_ERROR='Read timed out|ReadTimeoutError|ConnectTimeoutError|NewConnec
 # What `go mod download` prints when the fault is in what it got or in the
 # module file: the same on every try.
 GO_NOT_A_NETWORK_ERROR='checksum mismatch|SECURITY ERROR|errors parsing go\.mod|malformed module path|invalid go version'
+# What curl -f prints when the server answers that the file is not there: the
+# same on every try.
+CURL_NOT_A_NETWORK_ERROR='The requested URL returned error: 4[0-9][0-9]'
 
 # ---------------------------------------------------------------------------
 # sudo wrapper — uses sudo if we're not root, fails fast if blocked
@@ -512,10 +515,10 @@ install_docker() {
     # Add invoking user to docker group so they can run without sudo
     if [[ -n "${SUDO_USER:-}" ]]; then
         $SUDO usermod -aG docker "$SUDO_USER" 2>/dev/null || true
-        log_warn "Added $SUDO_USER to the docker group. Log out and back in for it to take effect."
+        log_warn "Added $SUDO_USER to the docker group. The docker group grants root-level privileges. Set ATLAS_BOOTSTRAP_SKIP_DOCKER=1 to manage Docker manually. Log out and back in for it to take effect."
     elif [[ "$(id -u)" != "0" ]]; then
         $SUDO usermod -aG docker "$USER" 2>/dev/null || true
-        log_warn "Added $USER to the docker group. Log out and back in for it to take effect."
+        log_warn "Added $USER to the docker group. The docker group grants root-level privileges. Set ATLAS_BOOTSTRAP_SKIP_DOCKER=1 to manage Docker manually. Log out and back in for it to take effect."
     fi
 
     log_ok "Docker installed: $(docker --version | awk '{print $3}' | tr -d ',')"
@@ -1227,7 +1230,7 @@ install_go() {
     # toolchain when building tui. We pick 1.24 as the install target
     # since it's the proven floor and the smallest stable download.
     local need_version="1.24"
-    local install_version="${ATLAS_GO_VERSION:-1.26.6}"
+    local install_version="${ATLAS_GO_VERSION:-1.26.10}"
 
     # Already have new-enough Go? A previous bootstrap may have installed it
     # under /usr/local/go while this non-login process still lacks that PATH.
@@ -1269,7 +1272,7 @@ install_go() {
     local go_url="https://go.dev/dl/go${install_version}.linux-${arch}.tar.gz"
     local tmp="$ATLAS_RUN_DIR/atlas-go.tar.gz"
     log_info "  Downloading $go_url…"
-    if ! curl -fL -# -o "$tmp" "$go_url"; then
+    if ! retry_download "The Go download" --not-if "$CURL_NOT_A_NETWORK_ERROR" -- curl -fL -# -o "$tmp" "$go_url"; then
         log_warn "Go download failed — atlas-tui binary will need manual install."
         log_warn "  Recovery: install Go from https://go.dev/dl/ then re-run this script."
         return 1
@@ -1297,7 +1300,15 @@ build_atlas_tui() {
     # only does so silently — and if Go isn't on PATH for that shell yet
     # (because .bashrc wasn't sourced) the user just gets "binary not found
     # and Go is not available". Pre-building dodges both.
-    if ! command -v go &>/dev/null && [[ ! -x /usr/local/go/bin/go ]]; then
+    #
+    # The Go that install_go() checked or installed, found the same way: the
+    # one on the path, else the one under /usr/local/go.
+    local go_cmd
+    go_cmd=$(command -v go 2>/dev/null || true)
+    if [[ -z "$go_cmd" && -x /usr/local/go/bin/go ]]; then
+        go_cmd="/usr/local/go/bin/go"
+    fi
+    if [[ -z "$go_cmd" ]]; then
         log_warn "Go not available — skipping atlas-tui build."
         log_warn "  Recovery: cd $ATLAS_INSTALL_DIR/tui && go build -o ~/.local/bin/atlas-tui ."
         return 1
@@ -1315,22 +1326,20 @@ build_atlas_tui() {
 
     # GOTOOLCHAIN=auto (Go 1.21+ default) handles the tui's go.mod
     # requirement of Go 1.26+ — auto-downloads the newer toolchain even
-    # if the installed go is 1.24. PATH includes /usr/local/go/bin from
-    # install_go() above.
+    # if the installed go is 1.24.
     #
     # The modules are downloaded in a step of their own, which is tried again
     # when it fails. The build then needs no network, and a compile error is
     # not tried again.
     #
-    # The path is set inside double quotes: inside single quotes `$PATH`
-    # stays as that text, and a Go that is on the path, and not under
-    # /usr/local/go, is not found.
+    # Go is run by its full path: through sudo, the target user's command
+    # gets sudo's own PATH, which may not hold the Go found above.
     set +e
     retry_download "The Go module download" --not-if "$GO_NOT_A_NETWORK_ERROR" -- \
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' mod download" | tee "$ATLAS_RUN_DIR/atlas-tui-build.log"
     local rc=${PIPESTATUS[0]}
     if [[ $rc -eq 0 ]]; then
-        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && PATH=\"/usr/local/go/bin:\$PATH\" go build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
+        run_as_target sh -c "cd '$ATLAS_INSTALL_DIR/tui' && '$go_cmd' build -o '$out' ." 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-tui-build.log"
         rc=${PIPESTATUS[0]}
     fi
     set -e

@@ -167,6 +167,32 @@ func TestDetectNextJSFallsBackToNextBuild(t *testing.T) {
 	}
 }
 
+func TestDetectNextJSKeepsItsDeclaredBuildScript(t *testing.T) {
+	dir := t.TempDir()
+	packageJSON := `{
+		"scripts": {
+			"build": "next build"
+		},
+		"dependencies": {
+			"next": "latest"
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(packageJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	info := detectProjectInfo(dir)
+	if info == nil {
+		t.Fatal("detectProjectInfo returned nil")
+	}
+	if info.Framework != "nextjs" {
+		t.Fatalf("Framework = %q, want nextjs", info.Framework)
+	}
+	if info.BuildCommand != "npm run build" {
+		t.Fatalf("BuildCommand = %q, want npm run build (the declared script)", info.BuildCommand)
+	}
+}
+
 func TestExtractCandidateSymbols(t *testing.T) {
 	cases := []struct {
 		name string
@@ -362,8 +388,14 @@ func TestAnArgumentNameThatIsNotLowercaseIsRefused(t *testing.T) {
 	calls := []struct{ tool, args string }{
 		{"read_file", `{"PATH":` + jsonQuote(secret) + `}`},
 		{"read_file", `{"path":"inside.txt","Path":` + jsonQuote(secret) + `}`},
-		{"write_file", `{"Path":` + jsonQuote(escaped) + `,"content":"x\n"}`},
-		{"move_file", `{"source":"inside.txt","ſource":` + jsonQuote(secret) + `,"destination":"moved.txt"}`},
+		{"write_file", jsonOf(map[string]string{"Path": escaped, "content": "x\n"})},
+		// A struct keeps its keys in this order: "ſource" comes after "source",
+		// so without the refusal the handler's field gets the outside path.
+		{"move_file", jsonOf(struct {
+			Source          string `json:"source"`
+			SourceWithLongS string `json:"ſource"`
+			Destination     string `json:"destination"`
+		}{"inside.txt", secret, "moved.txt"})},
 		{"run_command", `{"Command":"rm -rf /"}`}, // the deny-list reads "command"
 	}
 	for _, c := range calls {
@@ -385,12 +417,26 @@ func TestAnArgumentNameThatIsNotLowercaseIsRefused(t *testing.T) {
 	}
 }
 
+// With two names that are not lowercase, the refusal named whichever one the
+// map gave first, so one request got two texts: a real model's session did not
+// replay for it. The refusal names the first in sorted order, each time.
+func TestARefusalOfTwoNamesThatAreNotLowercaseNamesTheSameOneEachTime(t *testing.T) {
+	ctx := &AgentContext{WorkingDir: t.TempDir()}
+	args := json.RawMessage(`{"path":"app.py","Expected_last_line":"b","Expected_first_line":"a","content":"c"}`)
+	want := `replace_lines: argument names are lowercase, as the tool lists them; "Expected_first_line" is not`
+	for try := 1; try <= 100; try++ {
+		if got := validateToolWorkspacePaths("replace_lines", args, ctx); got != want {
+			t.Fatalf("try %d: %q, want %q", try, got, want)
+		}
+	}
+}
+
 // The ledger trims a path and the handler does not, so " /x" would be
 // checked as a file inside the workspace and recorded as /x outside it.
 func TestAPathPaddedWithWhitespaceIsRefused(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	for _, args := range []string{
-		`{"path":` + jsonQuote(" "+filepath.Join(outside, "padded.txt")) + `,"content":"x\n"}`,
+		jsonOf(writeFileArgs{Path: " " + filepath.Join(outside, "padded.txt"), Content: "x\n"}),
 		`{"path":"inside.txt\n","content":"x\n"}`,
 	} {
 		ctx := NewAgentContext(root, Tier2Medium)

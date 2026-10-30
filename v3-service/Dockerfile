@@ -4,7 +4,7 @@
 # code the sandbox then executes, so it has to use that interpreter's grammar.
 # On 3.11 it rejected valid 3.12+ code (PEP 701 f"{d["k"]}", PEP 695 type
 # parameters) that the sandbox runs fine.
-FROM docker.io/python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
+FROM docker.io/python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 WORKDIR /app
 
 # Install system deps
@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 # the tree-sitter layer during local image rebuilds. This service parses and
 # orchestrates; it never scores — all tensor work lives in geometric-lens,
 # so no torch here (it shipped ~900 MB of it unimported until 2026-08-01).
-COPY v3-service/requirements.txt /tmp/v3-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/v3-requirements.txt
+COPY v3-service/requirements-lock.txt /tmp/v3-requirements.txt
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r /tmp/v3-requirements.txt
 
 # V3 pipeline stages (candidate generation, selection, repair)
 COPY v3-service/stages/ /app/stages/
@@ -23,9 +23,15 @@ COPY v3-service/main.py /app/main.py
 COPY v3-service/adapters.py /app/adapters.py
 COPY v3-service/scoring.py /app/scoring.py
 COPY v3-service/symbols.py /app/symbols.py
+COPY v3-service/grammars.py /app/grammars.py
+COPY v3-service/edit_checks.py /app/edit_checks.py
+COPY v3-service/embedded_script.py /app/embedded_script.py
 COPY v3-service/node_splice.py /app/node_splice.py
 COPY v3-service/planning.py /app/planning.py
 COPY v3-service/pipeline.py /app/pipeline.py
+COPY v3-service/stage_telemetry.py /app/stage_telemetry.py
+COPY v3-service/candidate_records.py /app/candidate_records.py
+COPY v3-service/vetoes.py /app/vetoes.py
 COPY v3-service/runtime_verification.py /app/runtime_verification.py
 # contract.py was added and the image kept building without it: this COPY
 # list enumerates modules, so a new one is silently excluded and the service
@@ -51,10 +57,11 @@ RUN cd /app && python -c "import main, adapters, pipeline, contract"
 # so Python never tries to write .pyc into the read-only /app.
 ENV PYTHONDONTWRITEBYTECODE=1
 RUN useradd --create-home --uid 1001 --user-group appuser && \
-    # Pre-create the telemetry path owned by appuser: a named volume
-    # copies this ownership on first mount, so stage telemetry is
-    # writable without a root init step.
-    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry
+    # Pre-create the telemetry path: a named volume copies its owner and
+    # mode on first mount, so stage telemetry is writable without a root
+    # init step. Mode 1777, because docker-compose.yml runs the service as
+    # the installing user, not as appuser.
+    mkdir -p /data/telemetry && chown appuser:appuser /data/telemetry && chmod 1777 /data/telemetry
 USER appuser
 ENV HOME=/home/appuser
 

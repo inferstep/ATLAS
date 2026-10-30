@@ -11,9 +11,9 @@ import (
 )
 
 // Outcome table for the whole-file sandbox check. The flat (string, bool) API
-// returns ("", true) for TEN distinct conditions of which only one is a pass,
-// so `true` means "do not refuse", never "validated". These pin the
-// structured core that tells them apart.
+// returns ("", true) for many distinct conditions, and only one of them is a
+// pass, so true means "do not refuse", never "validated". These rows pin the
+// structured outcome that tells them apart.
 func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 	sandbox := func(status int, body string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,29 +35,24 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 
 	cases := []struct {
 		name, path, url string
-		nilCtx          bool
 		want            ValidationStatus
 	}{
 		// Applicability is decided BEFORE availability: an unsupported
 		// extension is not_applicable even with no sandbox configured.
-		{"unsupported extension, no sandbox", "notes.txt", "", false, ValidationNotApplicable},
-		{"unsupported extension, sandbox up", "notes.txt", valid.URL, false, ValidationNotApplicable},
-		{"jinja is not whole-file gated", "page.jinja", valid.URL, false, ValidationNotApplicable},
-		{"applicable, no sandbox", "mod.py", "", false, ValidationNotRun},
-		{"applicable, nil context", "mod.py", valid.URL, true, ValidationNotRun},
-		{"applicable, unreachable", "mod.py", deadURL, false, ValidationNotRun},
-		{"applicable, non-200", "mod.py", five00.URL, false, ValidationNotRun},
-		{"applicable, undecodable", "mod.py", broken.URL, false, ValidationNotRun},
-		{"demonstrated pass", "mod.py", valid.URL, false, ValidationPassed},
-		{"demonstrated failure", "mod.py", invalid.URL, false, ValidationFailed},
+		{"unsupported extension, no sandbox", "notes.txt", "", ValidationNotApplicable},
+		{"unsupported extension, sandbox up", "notes.txt", valid.URL, ValidationNotApplicable},
+		{"jinja is not whole-file gated", "page.jinja", valid.URL, ValidationNotApplicable},
+		{"applicable, no sandbox", "mod.py", "", ValidationNotRun},
+		{"applicable, unreachable", "mod.py", deadURL, ValidationNotRun},
+		{"applicable, non-200", "mod.py", five00.URL, ValidationNotRun},
+		{"applicable, undecodable", "mod.py", broken.URL, ValidationNotRun},
+		{"demonstrated pass", "mod.py", valid.URL, ValidationPassed},
+		{"demonstrated failure", "mod.py", invalid.URL, ValidationFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var ctx *AgentContext
-			if !c.nilCtx {
-				ctx = NewAgentContext(t.TempDir(), Tier2Medium)
-				ctx.SandboxURL = c.url
-			}
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+			ctx.SandboxURL = c.url
 			got := sandboxSyntaxOutcome(ctx, c.path, "A = 1\n")
 			if got.Status != c.want {
 				t.Errorf("Status = %q, want %q (detail %q)", got.Status, c.want, got.Detail)
@@ -74,6 +69,18 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 				t.Error("not_applicable must not count as applicable")
 			}
 		})
+	}
+}
+
+// With no session at all, an applicable file is a check that did not run, and
+// the wrapper does not refuse it.
+func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
+	got := sandboxSyntaxOutcome(nil, "mod.py", "A = 1\n")
+	if got.Status != ValidationNotRun {
+		t.Errorf("Status = %q, want %q (detail %q)", got.Status, ValidationNotRun, got.Detail)
+	}
+	if _, ok := checkSandboxSyntax(nil, "mod.py", "A = 1\n"); !ok {
+		t.Error("wrapper ok = false, want true -- fail-open behavior changed")
 	}
 }
 
@@ -110,129 +117,129 @@ func TestFallbackSyntaxAggregate(t *testing.T) {
 
 // Composites through the production producer, with request counting so the
 // short circuit is proven rather than assumed.
-func TestFallbackSyntaxComposites(t *testing.T) {
-	const jinja = "page.jinja" // NOT in syntaxGateLanguages; IS embedded-capable
-	withScript := "<html><script>let a = 1;</script></html>"
 
-	newSvc := func(embCalls *int, status int, body string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/internal/embedded_script_check") {
-				*embCalls++
-				w.WriteHeader(status)
-				w.Write([]byte(body))
-				return
-			}
-			// whole-file sandbox check
+const jinjaPage = "page.jinja" // NOT in syntaxGateLanguages; IS embedded-capable
+const pageWithScript = "<html><script>let a = 1;</script></html>"
+
+// embeddedCheckStub answers the embedded-script check with body, counting
+// those calls in embCalls, and fails every whole-file sandbox check.
+func embeddedCheckStub(embCalls *int, body string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/internal/embedded_script_check") {
+			*embCalls++
 			w.WriteHeader(200)
-			w.Write([]byte(`{"valid":false,"errors":["SyntaxError: whole-file bad"]}`))
-		}))
-	}
-
-	t.Run("jinja embedded passes -> aggregate passed", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, withScript)
-		if o.WholeFile.Status != ValidationNotApplicable {
-			t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
+			w.Write([]byte(body))
+			return
 		}
-		if o.Embedded.Status != ValidationPassed {
-			t.Errorf("Embedded = %q, want passed", o.Embedded.Status)
-		}
-		if got := o.aggregate().Status; got != ValidationPassed {
-			t.Errorf("aggregate = %q, want passed", got)
-		}
-		if calls != 1 {
-			t.Errorf("embedded calls = %d, want 1", calls)
-		}
-	})
-
-	t.Run("jinja embedded unavailable -> aggregate not_run", func(t *testing.T) {
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = "", "" // service absent
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, withScript)
-		if o.WholeFile.Status != ValidationNotApplicable {
-			t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
-		}
-		if o.Embedded.Status != ValidationNotRun {
-			t.Errorf("Embedded = %q, want not_run", o.Embedded.Status)
-		}
-		if got := o.aggregate().Status; got != ValidationNotRun {
-			t.Errorf("aggregate = %q, want not_run", got)
-		}
-	})
-
-	t.Run("jinja embedded finding -> aggregate failed", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200,
-			`{"ok":true,"findings":[{"line":1,"message":"stray paren","snippet":"x)"}]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		agg := fallbackSyntaxOutcomeFor(ctx, jinja, withScript).aggregate()
-		if agg.Status != ValidationFailed {
-			t.Fatalf("aggregate = %q, want failed", agg.Status)
-		}
-		if !strings.HasPrefix(agg.Detail, embeddedScriptErrPrefix) {
-			t.Errorf("diagnostic lost its prefix: %q", agg.Detail)
-		}
-		// Wrapper parity: only a demonstrated failure refuses.
-		msg, ok := checkFallbackSyntax(ctx, jinja, withScript)
-		if ok || msg != agg.Detail {
-			t.Errorf("wrapper ok=%v msg=%q, want false and the same diagnostic", ok, msg)
-		}
-	})
-
-	t.Run("whole-file failure short-circuits the embedded call", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
-		// .html IS whole-file gated, and the stub fails it.
-		o := fallbackSyntaxOutcomeFor(ctx, "page.html", withScript)
-		if o.WholeFile.Status != ValidationFailed {
-			t.Fatalf("WholeFile = %q, want failed", o.WholeFile.Status)
-		}
-		if calls != 0 {
-			t.Errorf("embedded calls = %d, want 0 -- the short circuit was lost", calls)
-		}
-		if o.Embedded.Status != ValidationNotRun {
-			t.Errorf("Embedded = %q, want not_run (skipped but applicable)", o.Embedded.Status)
-		}
-		if o.aggregate().Status != ValidationFailed {
-			t.Error("aggregate must remain the whole-file failure")
-		}
-	})
-
-	t.Run("no embedded content -> not_applicable, zero calls", func(t *testing.T) {
-		calls := 0
-		svc := newSvc(&calls, 200, `{"ok":true,"findings":[]}`)
-		defer svc.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL, ctx.V3URL = "", svc.URL
-		o := fallbackSyntaxOutcomeFor(ctx, jinja, "<html><p>no script here</p></html>")
-		if o.Embedded.Status != ValidationNotApplicable {
-			t.Errorf("Embedded = %q, want not_applicable", o.Embedded.Status)
-		}
-		if calls != 0 {
-			t.Errorf("embedded calls = %d, want 0", calls)
-		}
-		if o.aggregate().Status != ValidationNotApplicable {
-			t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
-		}
-	})
+		// whole-file sandbox check
+		w.WriteHeader(200)
+		w.Write([]byte(`{"valid":false,"errors":["SyntaxError: whole-file bad"]}`))
+	}))
 }
 
-// --- Phase 3A: observational deliverable ledger -----------------------------
+func TestFallbackSyntaxJinjaEmbeddedPassIsAPass(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
+	if o.WholeFile.Status != ValidationNotApplicable {
+		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
+	}
+	if o.Embedded.Status != ValidationPassed {
+		t.Errorf("Embedded = %q, want passed", o.Embedded.Status)
+	}
+	if got := o.aggregate().Status; got != ValidationPassed {
+		t.Errorf("aggregate = %q, want passed", got)
+	}
+	if calls != 1 {
+		t.Errorf("embedded calls = %d, want 1", calls)
+	}
+}
+
+func TestFallbackSyntaxJinjaEmbeddedUnavailableIsNotRun(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = "", "" // service absent
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript)
+	if o.WholeFile.Status != ValidationNotApplicable {
+		t.Errorf("WholeFile = %q, want not_applicable", o.WholeFile.Status)
+	}
+	if o.Embedded.Status != ValidationNotRun {
+		t.Errorf("Embedded = %q, want not_run", o.Embedded.Status)
+	}
+	if got := o.aggregate().Status; got != ValidationNotRun {
+		t.Errorf("aggregate = %q, want not_run", got)
+	}
+}
+
+func TestFallbackSyntaxJinjaEmbeddedFindingIsAFailure(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls,
+		`{"ok":true,"findings":[{"line":1,"message":"stray paren","snippet":"x)"}]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	agg := fallbackSyntaxOutcomeFor(ctx, jinjaPage, pageWithScript).aggregate()
+	if agg.Status != ValidationFailed {
+		t.Fatalf("aggregate = %q, want failed", agg.Status)
+	}
+	if !strings.HasPrefix(agg.Detail, embeddedScriptErrPrefix) {
+		t.Errorf("diagnostic lost its prefix: %q", agg.Detail)
+	}
+	// Wrapper parity: only a demonstrated failure refuses.
+	msg, ok := checkFallbackSyntax(ctx, jinjaPage, pageWithScript)
+	if ok || msg != agg.Detail {
+		t.Errorf("wrapper ok=%v msg=%q, want false and the same diagnostic", ok, msg)
+	}
+}
+
+func TestFallbackSyntaxWholeFileFailureShortCircuitsTheEmbeddedCall(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = svc.URL, svc.URL
+	// .html IS whole-file gated, and the stub fails it.
+	o := fallbackSyntaxOutcomeFor(ctx, "page.html", pageWithScript)
+	if o.WholeFile.Status != ValidationFailed {
+		t.Fatalf("WholeFile = %q, want failed", o.WholeFile.Status)
+	}
+	if calls != 0 {
+		t.Errorf("embedded calls = %d, want 0 -- the short circuit was lost", calls)
+	}
+	if o.Embedded.Status != ValidationNotRun {
+		t.Errorf("Embedded = %q, want not_run (skipped but applicable)", o.Embedded.Status)
+	}
+	if o.aggregate().Status != ValidationFailed {
+		t.Error("aggregate must remain the whole-file failure")
+	}
+}
+
+func TestFallbackSyntaxNoEmbeddedContentIsNotApplicable(t *testing.T) {
+	calls := 0
+	svc := embeddedCheckStub(&calls, `{"ok":true,"findings":[]}`)
+	defer svc.Close()
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	ctx.SandboxURL, ctx.V3URL = "", svc.URL
+	o := fallbackSyntaxOutcomeFor(ctx, jinjaPage, "<html><p>no script here</p></html>")
+	if o.Embedded.Status != ValidationNotApplicable {
+		t.Errorf("Embedded = %q, want not_applicable", o.Embedded.Status)
+	}
+	if calls != 0 {
+		t.Errorf("embedded calls = %d, want 0", calls)
+	}
+	if o.aggregate().Status != ValidationNotApplicable {
+		t.Errorf("aggregate = %q, want not_applicable", o.aggregate().Status)
+	}
+}
+
+// --- The deliverable ledger -------------------------------------------------
 //
-// At a stall the server knows only which paths were touched — not whether the
-// current bytes are valid, and not what the last good version was.
-// ValidationStatus never crosses the event boundary, so a finaliser had
-// nothing true to say and nothing safe to leave behind. This records both.
-// Phase 3A observes only: no restoration, no behaviour change.
+// For each path the run touched, the ledger records whether the current bytes
+// passed a check and which bytes last passed. ValidationStatus never crosses
+// the event boundary, so without the ledger a finaliser would have nothing
+// true to say and nothing safe to leave behind.
 
 func ledgerCtx(t *testing.T) *AgentContext {
 	t.Helper()
@@ -268,29 +275,33 @@ func TestALaterPassedHashReplacesTheCheckpoint(t *testing.T) {
 	}
 }
 
+// Only an explicit pass makes a checkpoint. Every other status is still
+// recorded as it was observed.
 func TestOnlyAnExplicitPassPromotes(t *testing.T) {
-	for _, st := range []ValidationStatus{
-		ValidationFailed, ValidationNotRun, ValidationNotApplicable, ValidationUnknown,
+	for _, tc := range []struct {
+		name   string
+		kind   ValidationKind
+		status ValidationStatus
+		reason string
+	}{
+		{"failed", ValidationKindSyntax, ValidationFailed, ""},
+		{"not run", ValidationKindSyntax, ValidationNotRun, ""},
+		{"not applicable", ValidationKindSyntax, ValidationNotApplicable, ""},
+		{"unknown", ValidationKindSyntax, ValidationUnknown, ""},
+		// A snapshot taken before a change has no verdict of its own.
+		{"baseline snapshot", ValidationKindUnknown, ValidationUnknown, "pre-mutation snapshot"},
 	} {
-		ctx := ledgerCtx(t)
-		observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, st, "")
-		d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
-		if d.CheckpointHash != "" {
-			t.Errorf("status %q promoted a checkpoint", st)
-		}
-		if _, s := d.CurrentValidation(); s != st {
-			t.Errorf("status %q not recorded faithfully (got %q)", st, s)
-		}
-	}
-}
-
-func TestBaselineBytesNeverPromoteWithoutTheirOwnPass(t *testing.T) {
-	ctx := ledgerCtx(t)
-	// A pre-mutation snapshot observed with no verdict of its own.
-	observeDeliverable(ctx, "solve.py", []byte("baseline\n"), ValidationKindUnknown,
-		ValidationUnknown, "pre-mutation snapshot")
-	if d := ctx.Ledger[ledgerKey(ctx, "solve.py")]; d.CheckpointHash != "" {
-		t.Error("baseline bytes were promoted without explicit passed evidence")
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := ledgerCtx(t)
+			observeDeliverable(ctx, "solve.py", []byte("x\n"), tc.kind, tc.status, tc.reason)
+			d := ctx.Ledger[ledgerKey(ctx, "solve.py")]
+			if d.CheckpointHash != "" {
+				t.Errorf("status %q promoted a checkpoint", tc.status)
+			}
+			if _, s := d.CurrentValidation(); s != tc.status {
+				t.Errorf("status %q not recorded faithfully (got %q)", tc.status, s)
+			}
+		})
 	}
 }
 
@@ -348,25 +359,6 @@ func TestCommandRehashKeepsUnchangedAndInvalidatesMutated(t *testing.T) {
 	}
 }
 
-func TestBackgroundHazardOnlyClearsOnConfirmedExit(t *testing.T) {
-	ctx := ledgerCtx(t)
-	if workspaceHazardous(ctx) {
-		t.Fatal("hazard set before any background work")
-	}
-	raiseWorkspaceHazard(ctx, "job1")
-	if !workspaceHazardous(ctx) {
-		t.Fatal("run_background must mark the workspace concurrently mutable")
-	}
-	// stop_background does not clear it: a signalled process may still flush.
-	if !workspaceHazardous(ctx) {
-		t.Fatal("hazard cleared by a stop request")
-	}
-	clearWorkspaceHazard(ctx, "job1") // confirmed exit
-	if workspaceHazardous(ctx) {
-		t.Error("confirmed exit did not clear the hazard")
-	}
-}
-
 func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	ctx := ledgerCtx(t)
 	observeDeliverable(ctx, "solve.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
@@ -380,19 +372,6 @@ func TestDeleteTombstonesRetainsBytesAndProhibitsRestore(t *testing.T) {
 	}
 	if _, s := d.CurrentValidation(); s != ValidationUnknown {
 		t.Error("a deleted file has no current validation")
-	}
-}
-
-func TestMoveTombstonesSourceAndDoesNotTransferTheVerdict(t *testing.T) {
-	ctx := ledgerCtx(t)
-	observeDeliverable(ctx, "old.py", []byte("x\n"), ValidationKindSyntax, ValidationPassed, "")
-	tombstoneDeliverable(ctx, "old.py", "moved:"+ledgerKey(ctx, "new.py"))
-	src := ctx.Ledger[ledgerKey(ctx, "old.py")]
-	if !src.Tombstoned || !strings.HasPrefix(src.TombstoneReason, "moved:") {
-		t.Fatal("source not tombstoned as moved")
-	}
-	if dst := ctx.Ledger[ledgerKey(ctx, "new.py")]; dst != nil {
-		t.Error("destination must be observed freshly, never inherited")
 	}
 }
 

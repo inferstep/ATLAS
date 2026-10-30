@@ -1,4 +1,4 @@
-<!-- source: README.md synced-through: a5021a0 -->
+<!-- source: README.md synced-through: 69f2deafee29f4669c9fba659cebec683da94630 -->
 > **[English](../../../README.md)** | **简体中文** | **[日本語](../ja/README.md)** | **[한국어](../ko/README.md)**
 
 <p align="center">
@@ -10,7 +10,7 @@
 <p align="center"><b>Adaptive Test-time Learning and Autonomous Specialization</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.1.6-blue" alt="Version"/>
+  <img src="https://img.shields.io/badge/version-V3.1.7-blue" alt="Version"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"/>
   <img src="https://img.shields.io/badge/model-agnostic-green" alt="模型无关"/>
 </p>
@@ -40,14 +40,9 @@
 
 ---
 
-## 📰 最新动态
+## 📰 最新版本
 
-- **2026-07-06** - **[V3.1.3 "Maia" 发布](https://github.com/inferstep/ATLAS/releases/tag/v3.1.3)** - 面向生产平台的一轮打磨：分阶段升级/回滚并自动还原、SQLite 状态存储（不再需要 Redis）、签名的工件清单、结构化日志 + 关联 ID、交互式权限、会话恢复，以及两轮对抗性 bug 修复扫荡
-- **2026-06-17** - **[V3.1.2 "Maia" 发布](https://github.com/inferstep/ATLAS/releases/tag/v3.1.2)** - 更广的硬件覆盖（ROCm / Metal / Vulkan）、自带模型的 Lens + ASA 训练、基于自有工作负载的在环 lens 重训练（后已移除，见 CHANGELOG），以及一轮 agent 可靠性加固
-- **2026-05-12** - **[V3.1.0 "Maia" 发布](https://github.com/inferstep/ATLAS/releases/tag/v3.1.0)** - 原生 Bubbletea TUI、一条命令的 bootstrap、流式 Lens + ASA 激活操控、感知 AST 的外科式编辑
-- **2026-03-26** - [Hacker News 首页](https://news.ycombinator.com/item?id=47533297) - 489 点赞、285 条评论
-- **2026-03-05** - **V3.0 发布** - 在冻结的 Qwen3-14B 上运行的多阶段 V3 流水线。*随本次发布公布的 LiveCodeBench 74.6% 已撤回：基准测试运行器从未运行 LiveCodeBench 的隐藏测试，并且只要三个候选之一、或看过失败输出的修复通过题面给出的示例，就把任务记为通过（[撤回说明](../../reports/V3_ABLATION_STUDY.md)）。当前产品重新验证后将重新测量。*
-- **2026-02-18** - **[V2.0 发布](../../../CHANGELOG.md)** - 基准测试基础设施、HumanEval/MBPP/LiveCodeBench/GPQA/SciCode 评估套件
+当前版本是 **[V3.1.7 "Maia"](https://github.com/inferstep/ATLAS/releases/tag/v3.1.7)**。发布说明见该版本的发布页面和 [CHANGELOG](../../../CHANGELOG.md)。
 
 ## ⭐ Star 历史
 
@@ -90,8 +85,6 @@
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
    - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 用于候选选择的 XGBoost 集成
-   - [RAG / PageIndex V2](../../ARCHITECTURE.md#rag--pageindex-v2) - 感知 AST 的代码检索与项目索引
-   - [Confidence Router](../../ARCHITECTURE.md#confidence-router--pattern-cache) - Thompson Sampling 把算力路由到真正需要的候选
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
    - 多语言执行：Python、Rust、Go、C、Shell 等
@@ -117,8 +110,8 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
 不想把一个随 `main` 变动的脚本直接管道进 bash？还是同一个安装器，另有两种更稳妥的运行方式：
 ```bash
 # Pinned to a release: script, checkout, and images all at the signed tag
-curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.7/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.7 bash
 
 # Review before running
 curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
@@ -146,7 +139,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 ## ⚠️ 已知限制
 
 - **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
-- **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见最新动态），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
+- **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见 [CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
 - **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。
 - **语法约束解码比不受约束的解码更慢。**
 
@@ -154,16 +147,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## 🗺️ 路线图
 
-**V3.1.3 "Maia"** - 当前版本。在 V3.1.2 之上的生产平台打磨：带自动还原的分阶段 `atlas upgrade`/`rollback`、用 SQLite 状态存储替代 Redis（[ADR 0007](../../adr/0007-sqlite-state-store.md)；2026-09 在 `dev` 上随其唯一使用者模式缓存一并停用）、签名的工件清单、带跨服务关联 ID 的结构化 JSON 日志、交互式权限提示、会话恢复、类型化的配置校验/迁移，以及两轮对抗性 bug 修复扫荡（33 个确认修复）。
-
-**V3.1.2 "Maia"** - 在 V3.1.0 基座（TUI、一条命令安装、流式 Lens + ASA）之上的更广硬件覆盖、自带模型训练与 agent 可靠性加固。
-- 硬件覆盖：通过 llama.cpp 支持 AMD ROCm，包括 RDNA4 / RX 9070 (gfx1200/gfx1201) ([#26](https://github.com/inferstep/ATLAS/issues/26))；Apple Silicon 原生 macOS 混合 Metal 方案（[#32](https://github.com/inferstep/ATLAS/issues/32)，见 [SETUP_MACOS.md](../../SETUP_MACOS.md)）；Vulkan 通用回退，覆盖 AMD / Intel / Snapdragon / 通过 MoltenVK 的 Apple / CPU ([#114](https://github.com/inferstep/ATLAS/issues/114))。
-- 自带模型：本地 Lens 训练流水线（`atlas lens build`，[#100](https://github.com/inferstep/ATLAS/issues/100)）与 ASA 逐模型校准对齐（`atlas asa check/build/publish`，[#113](https://github.com/inferstep/ATLAS/issues/113)）- 为额外的 GGUF 训练 Lens + ASA 工件，逐模型的工作阈值随 lens 一起发布。
-- Agent 可靠性：工具结果可见性修复、读取去重、回溯 → 定向编辑、`move_file`、pip 安装 / 大小写不匹配操控、沙箱 shell 策略 + 按主机调整的 cgroup 限制。
-- 结构化调用图推理（[#39](https://github.com/inferstep/ATLAS/issues/39) / [#125](https://github.com/inferstep/ATLAS/pull/125)，感谢 [@yogthos](https://github.com/yogthos)）；ARCHITECTURE.md 翻译为 zh-CN / ja / ko ([#25](https://github.com/inferstep/ATLAS/issues/25))。
-
 **V3.2** - 下一个里程碑：更深入的代码推理与规划。
-- 架构优先的规划阶段 - RPG 式的先规划后填充：在模块尺度规划，再在函数尺度实现（[#120](https://github.com/inferstep/ATLAS/issues/120)，PR [#124](https://github.com/inferstep/ATLAS/pull/124)）。
 - 结构化代码推理（收尾）- 求解器支撑的可达性分析 + 语法无关的小波分解，实现多分辨率的"哪些文件重要"检索 ([#39](https://github.com/inferstep/ATLAS/issues/39))。
 - 带采样的推理 - 兼顾效率与质量提升 ([#9](https://github.com/inferstep/ATLAS/issues/9))。
 - 顺延的基础设施：自动化 HuggingFace 提交流水线 ([#102](https://github.com/inferstep/ATLAS/issues/102))；ROCm 跑在 K3s / Kubernetes 上；注册表模型的正式基准测试 - LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28))。
@@ -178,7 +162,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## ❤️ 支持 ATLAS
 
-ATLAS 由一名大学生在业余时间、用一块消费级 GPU 独立开发（[ATLAS 背后的故事](../../STORY.md)）。如果这个项目对你有帮助，并且你愿意帮它持续走下去，请考虑 **[在 GitHub 上赞助](https://github.com/sponsors/itigges22)**。
+ATLAS 由一名大学生在业余时间、用一块消费级 GPU 独立开发。如果这个项目对你有帮助，并且你愿意帮它持续走下去，请考虑 **[在 GitHub 上赞助](https://github.com/sponsors/itigges22)**。
 
 赞助将直接用于：
 

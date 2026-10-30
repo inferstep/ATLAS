@@ -10,7 +10,6 @@ import json
 import os
 import sys
 import threading
-import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,3 +176,43 @@ def test_timeout_value_is_preserved():
     import inspect
     src = inspect.getsource(adapters.LLMAdapter._open_inference)
     assert "timeout=600" in src, "the transport swap changed the timeout"
+
+
+def test_a_retry_after_a_dropped_stream_sends_the_same_request(monkeypatch):
+    """A stream that breaks mid-way is retried, and the retry carries the request body, not the last line read."""
+    sent = []
+
+    class Stream:
+        """A response that yields its lines, then breaks like a reset connection when `breaks` is set."""
+
+        def __init__(self, lines, breaks):
+            self.lines, self.breaks = lines, breaks
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def __iter__(self):
+            yield from self.lines
+            if self.breaks:
+                raise OSError("connection reset mid-stream")
+
+    chunk = b'data: {"choices": [{"delta": {"content": "x = 1"}}]}\n'
+    answers = [Stream([chunk], breaks=True), Stream([chunk, b"data: [DONE]\n"], breaks=False)]
+
+    def open_inference(payload):
+        sent.append(payload)
+        return answers[len(sent) - 1]
+
+    a = adapters.LLMAdapter(progress_callback=None)
+    monkeypatch.setattr(a, "_open_inference", open_inference)
+    monkeypatch.setattr(adapters.time, "sleep", lambda seconds: None)
+
+    out = a._send({"prompt": "<|im_start|>user\nwrite x<|im_end|>\n", "stream": True})
+
+    assert len(sent) == 2
+    assert sent[1] == sent[0], "the retry did not send the original request body"
+    assert json.loads(sent[0])["stream"] is True
+    assert out["choices"][0]["text"] == "x = 1"

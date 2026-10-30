@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,21 +16,18 @@ import (
 // ---------------------------------------------------------------------------
 
 // TierMaxTurns returns the maximum agent loop iterations for this tier.
+// Tool-using tiers (T1/T2/T3) are uncapped: the stuck-pattern detectors
+// (parse-error, tool-repeat, reasoning-repeat, lens-regression,
+// exploration-budget, path-aware error-loop, action gate, verification
+// gate) are the safety net, and a numeric turn cap cuts legitimate
+// multi-file long-form work more often than it catches a real runaway.
+// User-initiated cancellation (ctx.Ctx) is the upper bound. T0 keeps a
+// small cap as a SHAPE constraint (conversational input shouldn't loop),
+// not as runaway protection.
 //
-// May 10 2026: cap removed entirely for tool-using tiers (T1/T2/T3). The
-// 8 stuck-pattern detectors (parse-error / tool-repeat / reasoning-repeat
-// / lens-regression / exploration-budget / path-aware error-loop /
-// action gate / verification gate) are the real safety net; a numeric
-// turn cap was insurance against unknown failure modes the detectors
-// might miss, but it bit legitimate multi-file long-form work harder
-// than it ever caught a real runaway. User-initiated cancellation
-// (ctx.Ctx) still works as the upper bound. T0 keeps a small cap as
-// a SHAPE constraint (conversational input shouldn't loop) — not a
-// runaway-protection.
-//
-// MaxTurns == 0 is the agent-loop's "uncapped" sentinel. Override via
-// ATLAS_MAX_TURNS env (any positive int caps; setting unset / 0 →
-// uncapped).
+// MaxTurns == 0 is the agent loop's "uncapped" sentinel. ATLAS_MAX_TURNS
+// overrides it: any positive int caps every tier; unset or 0 keeps the
+// tier defaults.
 
 func TierMaxTurns(t Tier) int {
 	if n := envOverrideMaxTurns(); n > 0 {
@@ -89,181 +85,6 @@ type AgentMessage struct {
 	Content    string `json:"content"`
 	ToolCallID string `json:"tool_call_id,omitempty"` // for tool results
 	ToolName   string `json:"tool_name,omitempty"`    // for tool results
-}
-
-// ---------------------------------------------------------------------------
-// Tool definitions
-// ---------------------------------------------------------------------------
-
-// ToolEffect declares what a tool is CAPABLE of doing to workspace state. It
-// is a property of the tool, not of any one call, and it lives on ToolDef so a
-// new tool cannot be registered without the decision being made. A parallel
-// map keyed by tool name would drift; this cannot.
-//
-// Capability is not outcome. A direct mutator still reports applied, refused,
-// failed or none per branch -- the effect only says the tool is capable of
-// mutating and therefore owes a local classification that the shared boundary
-// must not invent for it.
-type ToolEffect string
-
-const (
-	// ToolEffectUnknown is the zero value: a registration that never declared
-	// its effect. It is a migration defect, never a runtime state.
-	ToolEffectUnknown ToolEffect = ""
-
-	// ToolEffectReadOnly cannot mutate workspace state by construction.
-	ToolEffectReadOnly ToolEffect = "read_only"
-
-	// ToolEffectDirectMutation performs and observes its own mutation, so only
-	// the branch that ran it knows the outcome.
-	ToolEffectDirectMutation ToolEffect = "direct_mutation"
-
-	// ToolEffectCommandUnobserved may change the workspace without measuring
-	// it: arbitrary shell, background jobs, and killing a running process
-	// (SIGTERM/SIGKILL mid-write can leave partial bytes nobody compared).
-	ToolEffectCommandUnobserved ToolEffect = "command_unobserved"
-)
-
-// BoundaryClassifiable reports whether executeToolCall may supply the
-// classification itself. It may do so only where the ANSWER FOLLOWS FROM THE
-// CLASS: read-only tools mutate nothing, command tools measure nothing.
-// Direct mutators are excluded on purpose -- their outcome is branch-local,
-// and letting the boundary fill it in would conceal a missed producer.
-func (e ToolEffect) BoundaryClassifiable() bool {
-	return e == ToolEffectReadOnly || e == ToolEffectCommandUnobserved
-}
-
-// ToolDef defines a tool that the model can call.
-type ToolDef struct {
-	// Effect is required. The registry exhaustiveness test fails on any
-	// production tool left at ToolEffectUnknown.
-	Effect ToolEffect
-
-	Name        string
-	Description string
-	InputSchema interface{} // Go struct with json tags, marshaled to JSON Schema
-	Execute     func(input json.RawMessage, ctx *AgentContext) (*ToolResult, error)
-	ReadOnly    bool // true = can run in parallel, no side effects
-	Destructive bool // true = requires permission confirmation
-}
-
-// MutationStatus reports what happened to the filesystem, separately from
-// whether the tool ran. `Success` alone could not express the difference
-// between a write that landed and one a gate refused.
-//
-// The zero value is MutationUnknown, NOT MutationNone. An unmigrated
-// producer and one that intentionally mutated nothing must stay
-// distinguishable, or the producer audit cannot prove its own completeness:
-// a missed call site would look exactly like a deliberate no-op.
-type MutationStatus string
-
-const (
-	MutationUnknown MutationStatus = ""     // unclassified: nobody set it (zero value)
-	MutationNone    MutationStatus = "none" // deliberately mutated nothing
-	MutationApplied MutationStatus = "applied"
-	MutationRefused MutationStatus = "refused" // a gate declined it
-	MutationFailed  MutationStatus = "failed"  // attempted, errored
-
-	// MutationUnobserved: this tool can change the workspace and did not
-	// look. Command tools run arbitrary shell -- `sed -i`, a build step,
-	// `python fix.py` -- and perform no pre/post state comparison, so
-	// reporting MutationNone would assert a fact the producer does not have.
-	// Unobserved is a current producer explicitly saying side effects were
-	// not measured. It is Classified (the producer spoke) but never Applied
-	// (nothing was demonstrated).
-	MutationUnobserved MutationStatus = "unobserved"
-)
-
-// Applied is true for exactly MutationApplied. Comparing against a literal
-// at a call site is what lets an unknown, case-shifted or future value leak
-// through as success.
-func (m MutationStatus) Applied() bool { return m == MutationApplied }
-
-// Classified reports whether a producer actually set this field.
-func (m MutationStatus) Classified() bool {
-	switch m {
-	case MutationNone, MutationApplied, MutationRefused, MutationFailed,
-		MutationUnobserved:
-		return true
-	}
-	return false
-}
-
-// ValidationKind names WHAT was checked. A syntax pass is not evidence the
-// task was verified; keeping the kind explicit stops a cheap check from
-// being read later as an expensive one.
-type ValidationKind string
-
-const (
-	ValidationKindUnknown ValidationKind = ""     // unclassified (zero value)
-	ValidationKindNone    ValidationKind = "none" // deliberately checked nothing
-	ValidationKindSyntax  ValidationKind = "syntax"
-
-	// ValidationKindStructural: the content parses but references something
-	// that does not resolve. In the write_file handler the syntax gate runs
-	// BEFORE the structural one, so a structural rejection means syntax
-	// PASSED on those exact bytes -- recording it as syntax/failed would
-	// assert the opposite of what happened.
-	//
-	// Where two checks ran with different outcomes, these singular fields
-	// carry the DECISIVE one: the failure that caused the refusal, or the
-	// applicable result for an applied write.
-	ValidationKindStructural ValidationKind = "structural"
-
-	// ValidationKindExecution: the run executed these exact bytes and the
-	// process came up clean -- exited 0, or is still serving after its settle
-	// window. That is stronger evidence than a parse, and it is what settles
-	// a content debt the parse-based routes never got to settle (a
-	// structural_edit that landed through V3, then ran fine, was reported
-	// "never written in a checkable state" at completion, 2026-09-15).
-	// Recorded without a checkpoint: an execution is not a write.
-	ValidationKindExecution ValidationKind = "execution"
-)
-
-func (k ValidationKind) Classified() bool {
-	switch k {
-	case ValidationKindNone, ValidationKindSyntax, ValidationKindStructural, ValidationKindExecution:
-		return true
-	}
-	return false
-}
-
-// ValidationStatus reports the OUTCOME of that check. `not_run` and
-// `not_applicable` are distinct facts -- "could not check" versus "nothing
-// here to check" -- and both are distinct from Unknown, which means no
-// producer spoke at all.
-type ValidationStatus string
-
-const (
-	ValidationUnknown       ValidationStatus = ""        // unclassified (zero value)
-	ValidationNotRun        ValidationStatus = "not_run" // deliberately not checked
-	ValidationNotApplicable ValidationStatus = "not_applicable"
-	ValidationPassed        ValidationStatus = "passed"
-	ValidationFailed        ValidationStatus = "failed"
-)
-
-// Passed is true for exactly ValidationPassed, for the same reason as Applied.
-func (v ValidationStatus) Passed() bool { return v == ValidationPassed }
-
-func (v ValidationStatus) Classified() bool {
-	switch v {
-	case ValidationNotRun, ValidationNotApplicable, ValidationPassed, ValidationFailed:
-		return true
-	}
-	return false
-}
-
-// Classified reports whether every fact on this result was set by a
-// producer. The producer audit asserts this over each mutation-producing
-// path; until it holds everywhere, no consumer may read the new fields.
-//
-// A syntax kind paired with an unknown status is NOT classified: claiming a
-// check happened without saying how it came out is exactly the ambiguity
-// these fields exist to remove.
-func (r *ToolResult) Classified() bool {
-	return r.MutationStatus.Classified() &&
-		r.ValidationKind.Classified() &&
-		r.ValidationStatus.Classified()
 }
 
 // ToolResult is the structured output returned to the model after tool execution.
@@ -382,64 +203,6 @@ func (r *ToolResult) MarshalText() string {
 // Tool input/output types
 // ---------------------------------------------------------------------------
 
-// -- read_file --
-
-type ReadFileInput struct {
-	Path   string `json:"path"`
-	Offset *int   `json:"offset,omitempty"` // line offset (0-based)
-	Limit  *int   `json:"limit,omitempty"`  // max lines to read
-}
-
-type ReadFileOutput struct {
-	Content    string `json:"content"`
-	TotalLines int    `json:"total_lines"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-}
-
-// -- outline_file --
-
-type OutlineInput struct {
-	Path string `json:"path"`
-}
-
-type OutlineSymbol struct {
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
-	// Intra-file call-graph neighborhood (issue #39, from v3-service's
-	// outline of a Python file). Calls = functions this symbol
-	// invokes; CalledBy = functions that invoke it. Lets the model follow a
-	// symptom to its callee-rooted cause instead of editing where the
-	// symptom surfaces.
-	Calls    []string `json:"calls,omitempty"`
-	CalledBy []string `json:"called_by,omitempty"`
-}
-
-type OutlineOutput struct {
-	Symbols   []OutlineSymbol `json:"symbols"`
-	Supported bool            `json:"supported"`
-	// Outline is the rendered human-readable listing (header, L<start>-<end>
-	// lines, call edges). The model reads this; Symbols carries the same
-	// data structurally.
-	Outline string `json:"outline,omitempty"`
-	// Regions holding code in ANOTHER language — <script>/<style> blocks,
-	// including inside Python string literals. The host grammar cannot see
-	// into a string, so these are exactly the symbols a selector CANNOT
-	// reach, and naming them is what stops the model reaching for them.
-	EmbeddedRegions []EmbeddedRegion `json:"embedded_regions"`
-}
-
-// EmbeddedRegion is one foreign-language block inside a file.
-type EmbeddedRegion struct {
-	Where     string   `json:"where"`
-	Kind      string   `json:"kind"`
-	StartLine int      `json:"start_line"`
-	EndLine   int      `json:"end_line"`
-	Symbols   []string `json:"symbols"`
-}
-
 // -- write_file --
 
 type WriteFileInput struct {
@@ -460,330 +223,9 @@ type WriteFileOutput struct {
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 }
 
-// -- edit_file --
-
-type EditFileInput struct {
-	Path       string `json:"path"`
-	OldStr     string `json:"old_str"`
-	NewStr     string `json:"new_str"`
-	ReplaceAll bool   `json:"replace_all,omitempty"`
-}
-
-// InsertAfterInput places new lines after a line the model NAMES rather than
-// reproduces. read_file already returns "N<tab>content", so the model cites a
-// number it can see instead of transcribing an anchor byte-for-byte — the step
-// that measurably fails on long spans.
-type InsertAfterInput struct {
-	Path string `json:"path"`
-	// 0 inserts at the top of the file; N inserts after line N (1-based).
-	Line    int    `json:"line"`
-	Content string `json:"content"`
-}
-
-// ReplaceLinesInput is insert_after's rationale extended to REPLACEMENT, which
-// is where the verbatim burden actually bites. edit_file needs the old text
-// reproduced byte-for-byte; on a 9-13 line span this model corrupts one token
-// somewhere in it essentially every time. Here the address is a pair of numbers
-// read_file already printed.
-//
-// ExpectedFirstLine/ExpectedLastLine are the safety belt, and they are not
-// optional. A line range degrades catastrophically and SILENTLY: an off-by-one
-// still applies cleanly and produces plausible corruption, where a bad anchor
-// merely fails to match. Every surveyed implementation that ships a line-range
-// replace carries some form of this assertion. One line each is the length
-// regime this model is reliable in.
-type ReplaceLinesInput struct {
-	Path string `json:"path"`
-	// 1-based, inclusive on both ends — the convention read_file prints.
-	StartLine int `json:"start_line"`
-	EndLine   int `json:"end_line"`
-	// Verbatim text of the first and last line being replaced, without the
-	// "N<tab>" display prefix. Whitespace-trimmed before comparison.
-	ExpectedFirstLine string `json:"expected_first_line"`
-	ExpectedLastLine  string `json:"expected_last_line"`
-	Content           string `json:"content"`
-}
-
-type EditFileOutput struct {
-	OK           bool   `json:"ok"`
-	DiffPreview  string `json:"diff_preview,omitempty"`
-	LinesAdded   int    `json:"lines_added,omitempty"`
-	LinesRemoved int    `json:"lines_removed,omitempty"`
-}
-
-// -- structural_edit (GH #39 v1) --
-//
-// Friendly-selector structural edits via tree-sitter. Replaces a single named node
-// (function, class, HTML element) with new content. The selector grammar is
-// per-language and intentionally narrow in v1 to avoid the model
-// hallucinating raw tree-sitter s-expressions (42% intended-match measured
-// on the then-reference local model, May 8 — see GH #39 open design questions).
-//
-//   Selectors v1:
-//     python: function:NAME, class:NAME (decorator-aware: replaces
-//             decorated_definition wrapper when present)
-//     html:   <tag>             (top-level tag-name match)
-
-type StructuralEditInput struct {
-	Path     string `json:"path"`
-	Selector string `json:"selector"`
-	Content  string `json:"content"`
-}
-
-type StructuralEditOutput struct {
-	OK       bool   `json:"ok"`
-	Selector string `json:"selector"`
-	Language string `json:"language,omitempty"`
-	BytesOld int    `json:"bytes_old,omitempty"`
-	BytesNew int    `json:"bytes_new,omitempty"`
-	// Set when the spliced file no longer parses. The edit still landed --
-	// this tool does not refuse after the rename -- but the model is told,
-	// the same way write_file tells it.
-	Warning string `json:"warning,omitempty"`
-}
-
-// -- delete_file --
-
-type DeleteFileInput struct {
-	Path string `json:"path"`
-}
-
-type DeleteFileOutput struct {
-	Deleted bool `json:"deleted"`
-}
-
-// -- move_file --
-//
-// Relocate or rename a file within the workspace. A pure move/rename is not a
-// content change, so it does NOT go through the V3 / surgical-edit gate the way
-// write_file/edit_file do — it exists so "reorganize the files" (e.g. move
-// index.html into templates/) is a single tool call instead of a
-// read→write→delete dance the model can't reliably compose. Shell `mv`/`cp`
-// stay refused; this is the supported relocation path.
-
-type MoveFileInput struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-}
-
-type MoveFileOutput struct {
-	Moved       bool   `json:"moved"`
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-}
-
-// -- run_command --
-
-type RunCommandInput struct {
-	Command string `json:"command"`
-	Timeout *int   `json:"timeout,omitempty"` // seconds, default 30
-	Cwd     string `json:"cwd,omitempty"`
-}
-
-type RunCommandOutput struct {
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
-	ExitCode int    `json:"exit_code"`
-
-	// TimedOut is the executor's own structural answer, decoded rather than
-	// read out of the stderr text. A killed command's exit status is whatever
-	// the signal left behind, so a caller that only looked at the code would
-	// be guessing about the one case where guessing is worst.
-	TimedOut bool `json:"timed_out,omitempty"`
-	// OutputTruncated says the transcript this result carries is not the whole
-	// one. It does not change the exit status, and is recorded so no consumer
-	// has to infer completeness from length.
-	OutputTruncated bool `json:"output_truncated,omitempty"`
-	// Outcome is HOW the command ended, from the executor's closed vocabulary.
-	// A command stopped at a resource ceiling exits non-zero exactly like a
-	// failing one, so the exit code alone cannot tell a reader whether the
-	// command answered the question it was asked. Absent or unrecognised is
-	// read as unclassified, never as completed.
-	Outcome ExecutionOutcome `json:"outcome,omitempty"`
-	// PeakMemoryBytes is what the command and everything it spawned actually
-	// reached. Telemetry only: no decision reads it, and it is never shown to
-	// the model.
-	PeakMemoryBytes int `json:"-"`
-}
-
-// -- background commands --
-//
-// Three tools wrap the sandbox /jobs/* endpoints so the model can
-// run a server, probe it from another command, and clean up. Used
-// for the "verify HTTP routes" workflow that foreground run_command
-// can't satisfy (server doesn't exit).
-
-type RunBackgroundInput struct {
-	Command string `json:"command"`
-	Cwd     string `json:"cwd,omitempty"`
-	// SettleMs gives the process time to print initial output before
-	// we return — typical use is "wait 1500ms for the dev server's
-	// startup banner so the model can confirm it bound the port."
-	// Default 1500. Capped at 10000 server-side.
-	SettleMs *int `json:"settle_ms,omitempty"`
-}
-
-type RunBackgroundOutput struct {
-	JobID    string   `json:"job_id"`
-	PID      int      `json:"pid"`
-	Stdout   []string `json:"stdout"` // initial output captured during settle
-	Stderr   []string `json:"stderr"`
-	Running  bool     `json:"running"` // false if the process exited within settle window
-	ExitCode *int     `json:"exit_code,omitempty"`
-}
-
-type TailBackgroundInput struct {
-	JobID string `json:"job_id"`
-	Lines *int   `json:"lines,omitempty"` // default 50, max 500
-}
-
-type TailBackgroundOutput struct {
-	JobID      string   `json:"job_id"`
-	Running    bool     `json:"running"`
-	ExitCode   *int     `json:"exit_code,omitempty"`
-	Stdout     []string `json:"stdout"`
-	Stderr     []string `json:"stderr"`
-	ElapsedSec float64  `json:"elapsed_sec"`
-	Command    string   `json:"command"`
-}
-
-type StopBackgroundInput struct {
-	JobID string `json:"job_id"`
-}
-
-type StopBackgroundOutput struct {
-	JobID    string   `json:"job_id"`
-	Killed   bool     `json:"killed"`
-	ExitCode *int     `json:"exit_code,omitempty"`
-	Stdout   []string `json:"stdout"`
-	Stderr   []string `json:"stderr"`
-}
-
-// -- search_files --
-
-type SearchFilesInput struct {
-	Pattern string `json:"pattern"`        // regex pattern
-	Path    string `json:"path,omitempty"` // directory to search in
-	Glob    string `json:"glob,omitempty"` // file glob filter (e.g., "*.go")
-}
-
-type SearchMatch struct {
-	File    string `json:"file"`
-	Line    int    `json:"line"`
-	Content string `json:"content"`
-}
-
-type SearchFilesOutput struct {
-	Matches    []SearchMatch `json:"matches"`
-	TotalCount int           `json:"total_count"`
-	Truncated  bool          `json:"truncated,omitempty"`
-	// SkippedCredentialFiles counts files not searched because they hold
-	// credentials (see denyReadPathReason).
-	SkippedCredentialFiles int `json:"skipped_credential_files,omitempty"`
-}
-
-// -- find_file --
-
-type FindFileInput struct {
-	Pattern string `json:"pattern"`        // regex matched against filename or relative path
-	Path    string `json:"path,omitempty"` // directory to search in (defaults to working dir)
-}
-
-type FindFileMatch struct {
-	Path string `json:"path"` // relative path from working dir
-	Name string `json:"name"` // basename
-}
-
-type FindFileOutput struct {
-	Matches    []FindFileMatch `json:"matches"`
-	TotalCount int             `json:"total_count"`
-	Truncated  bool            `json:"truncated,omitempty"`
-}
-
-// -- list_directory --
-
-type ListDirectoryInput struct {
-	Path string `json:"path"`
-}
-
-type DirEntry struct {
-	Name string `json:"name"`
-	Type string `json:"type"` // "file", "dir", "symlink"
-	Size int64  `json:"size,omitempty"`
-}
-
-type ListDirectoryOutput struct {
-	Entries []DirEntry `json:"entries"`
-	Path    string     `json:"path"`
-}
-
 // ---------------------------------------------------------------------------
 // Agent context — shared state for the agent loop
 // ---------------------------------------------------------------------------
-
-// DeliverableState is one canonical path's observed state. Four different
-// things are kept apart deliberately and must never be collapsed: what is on
-// disk now, what evidence exists about some exact bytes, whether a restorable
-// checkpoint is available, and task correctness -- which this type never
-// claims and never stores.
-type DeliverableState struct {
-	Path        string // canonical workspace-relative
-	CurrentHash string // sha256 of the bytes last observed on disk
-	CurrentSize int
-	Generation  int // increments on every observed mutation
-
-	// The verdict and the EXACT bytes it describes. A verdict whose
-	// ValidatedHash differs from CurrentHash is historical, never current.
-	ValidationKind   ValidationKind
-	ValidationStatus ValidationStatus
-	ValidationDetail string
-	ValidatedHash    string
-
-	// At most one prior demonstrably-passed version. Bytes are held in
-	// memory only, under explicit ceilings.
-	CheckpointHash        string
-	CheckpointBytes       []byte
-	CheckpointUnavailable string // why there is none, when there is none
-	// CheckpointKind is the kind of check the checkpoint's pass came from.
-	// Restoration compares kinds: a structural pass is not evidence about
-	// syntax, so swapping one for the other would be a guess dressed as
-	// recovery.
-	CheckpointKind ValidationKind
-	// Recovered records that the CURRENT bytes were put there by system
-	// recovery rather than by the model. It is a server-side fact like the
-	// rest of the ledger and never reaches the model, SSE or the wire.
-	Recovered bool
-
-	// Tombstones. A deliberately removed file must never be resurrected, so
-	// the state is recorded and restoration is prohibited outright.
-	Tombstoned        bool
-	TombstoneReason   string // "deleted" | "moved:<canonical dst>"
-	RestoreProhibited bool
-}
-
-// CurrentValidation reports the verdict ONLY when it describes the bytes
-// currently recorded. Anything else is historical evidence and is reported as
-// unknown, which fails closed.
-func (d *DeliverableState) CurrentValidation() (ValidationKind, ValidationStatus) {
-	if d == nil || d.ValidatedHash == "" || d.ValidatedHash != d.CurrentHash {
-		return ValidationKindUnknown, ValidationUnknown
-	}
-	return d.ValidationKind, d.ValidationStatus
-}
-
-// Checkpoint ceilings. Stage-1 artifacts were 1.3-7.2 KiB and the largest
-// fenced payload observed live was 10.8 KiB, so 256 KiB is ~25x the worst
-// case while bounding a pathological file, and 2 MiB caps a session at
-// roughly eight such files. Over budget fails closed: the observation is
-// kept, the bytes are not, and the reason is recorded.
-// maxLedgerReadBytes bounds what the ledger will re-read to hash. A file above
-// it is not hashed at all, so its verdict reads as unknown rather than as a
-// stale claim about bytes nobody looked at.
-const (
-	maxCheckpointFileBytes    = 256 * 1024
-	maxCheckpointSessionBytes = 2 * 1024 * 1024
-	maxLedgerReadBytes        = 8 * 1024 * 1024
-)
 
 // TerminalStatus is what a session's single terminal event says happened. It
 // exists because `summary` is prose: every consumer that needed to know
@@ -867,9 +309,9 @@ type AgentContext struct {
 	fulfilledDeletions map[string]*fulfilledDeletion
 
 	// TaskContract is what the client declared about this request, validated
-	// at the request boundary. Nil means the client declared nothing, which
-	// stays distinct from declaring an empty contract. Nothing consults it
-	// yet -- see validateTaskContract.
+	// at the request boundary (validateTaskContract). Nil means the client
+	// declared nothing, which stays distinct from declaring an empty
+	// contract.
 	TaskContract *TaskContract
 
 	// AllowedTools names tools the client has pre-approved for this session
@@ -910,14 +352,14 @@ type AgentContext struct {
 	FilesRead     map[string]string    // cache of read file contents
 	TotalTokens   int
 
-	// VerificationEvidence holds one record per GREEN verification command,
-	// binding the result to what the command actually exercised: the
-	// command line, its stdin contract, and the sha256 of each covered
-	// session-written file at the moment it passed. Lens labels are drawn
-	// from these records, never from a session-wide boolean — a flag can't
-	// answer "verified WHAT, at WHICH bytes", and labeling on it trained
-	// the lens on files the passing command never touched (third-party
-	// audit finding).
+	// VerificationEvidence holds one record per verification run, binding
+	// the result to what the command actually exercised: the command line,
+	// its stdin contract, and the sha256 of each covered session-written
+	// file at that moment. A failed run is recorded too and takes back an
+	// earlier pass over the same bytes. Lens labels are drawn from these
+	// records, never from a session-wide boolean: a flag can't answer
+	// "verified WHAT, at WHICH bytes", and labelling on it would train the
+	// lens on files the passing command never touched.
 	VerificationEvidence []VerificationRecord
 
 	// StagedCommands are declared commands that ran against exact candidate
@@ -974,7 +416,7 @@ type AgentContext struct {
 	// HumanTask (fenced blocks, "exactly ...:" lines). Landed writes are
 	// verified against these and whitespace-only drift is repaired
 	// mechanically — the model plans, the harness copies. See
-	// extractLiteralBlocks / repairLiteralDrift in guardrails.go.
+	// extractLiteralBlocks / repairLiteralDrift in guardrails_write.go.
 	LiteralBlocks []string
 
 	// FencedCalls / FencedTokens account the @fenced sub-calls
@@ -1003,32 +445,28 @@ type AgentContext struct {
 	// wrong 11/11, planning.py right 1/1.
 	BodySeen map[string]bool
 
-	// BodyShown records WHICH lines a read showed, where BodySeen records
-	// only that some were. A truncated or ranged read shows part of a file,
-	// and a claim about code outside that part is as much a guess as a claim
-	// about a file never opened. Smoke run 2026-09-27 (bugfind_tiebreak): both
-	// reads stopped near line 190, the reply named a function it said lay
-	// "past the provided snippet", and the run ended completed. A file with
-	// no entry, or a whole one, counts as shown.
+	// BodyShown records WHICH lines a read showed, where BodySeen records only
+	// that some were. A truncated or ranged read shows part of a file, and a
+	// claim about code outside that part is as much a guess as a claim about a
+	// file never opened. A file with no entry, or a whole one, counts as
+	// shown.
 	BodyShown map[string]*bodyCoverage
 
-	// SessionWrites tracks files this agent loop wrote during this run.
-	// The write_file guard rejects overwrites of "existing" files >5
-	// lines (BiasBusters #3 — protects the user's code from clobbering).
-	// But a file the agent itself wrote in this session is NOT the
-	// user's code; it's the agent's own working output, and the agent
-	// must be allowed to iterate on it. Without this, the model can
-	// realize mid-loop that app.py was a stub and needs rewriting
-	// (May 12 2026 /demo multi-file flask run — the entire wiring bug
-	// stemmed from the guard refusing the model's self-correction).
+	// SessionWrites tracks files this agent loop wrote during this run. The
+	// write_file guard rejects overwrites of existing files over 5 lines,
+	// to protect the user's code from clobbering. A file the agent itself
+	// wrote in this session is NOT the user's code; it is the agent's own
+	// working output, and the agent must be allowed to iterate on it:
+	// without this, a model that realizes mid-loop that its own app.py was
+	// a stub cannot rewrite it.
 	//
 	// Keyed on the RAW path the model supplied, so "solve.py" and
 	// "./solve.py" are two entries for one file and the overwrite guard can
 	// refuse the agent's own output under a second spelling. Recorded here
-	// rather than changed: every consumer above reads these keys, and
+	// rather than changed: every consumer reads these keys, and
 	// canonicalising them is a behavioural change with its own evidence to
-	// gather. The Phase 3A ledger keys on the resolved path instead, so the
-	// two do not share this defect.
+	// gather. The ledger keys on the resolved path instead, so the two do
+	// not share this defect.
 	SessionWrites map[string]bool
 
 	// FencedFailures counts CONSECUTIVE zero-byte fenced resolutions per
@@ -1079,27 +517,27 @@ type AgentContext struct {
 	TerminalUnresolved string
 	terminalOnce       sync.Once
 
-	// Ledger is the observational record of what this session has done to
-	// each declared/session-owned deliverable, keyed by CANONICAL
-	// workspace-relative path. Phase 3A only observes: nothing here changes
-	// what is written, refused, or reported.
+	// Ledger is the record of what this session has done to each declared
+	// or session-owned deliverable, keyed by CANONICAL workspace-relative
+	// path.
 	//
-	// It exists because at a stall the server knows only which paths were
-	// touched -- not whether the current bytes are valid, and not what the
-	// last good version was. ValidationStatus never crosses the event
-	// boundary, so a finaliser had nothing true to say and nothing safe to
-	// leave behind.
+	// It exists because at a stall the server otherwise knows only which
+	// paths were touched, not whether the current bytes are valid or what
+	// the last good version was. ValidationStatus never crosses the event
+	// boundary, so without the ledger a finaliser has nothing true to say
+	// and nothing safe to leave behind. Restoration, the completion check
+	// and delivery grants read it.
 	Ledger   map[string]*DeliverableState
 	LedgerMu sync.Mutex
 
 	// WorkspaceHazards is the set of background work that may still be
-	// writing, keyed by job identity rather than counted by start attempt.
-	// A counter could not be lowered by anything but a reap, so a start that
-	// registered no job raised a hazard nothing could ever clear -- and once
-	// completion consulted it, that session could never finish.
-	// workspace. run_background raises it; stop_background does NOT clear it,
-	// because a signalled process may still be flushing. Only a confirmed
-	// exit clears it, and tracked paths must be rehashed afterwards.
+	// writing, keyed by job identity rather than counted by start attempt, so
+	// a job's confirmed exit clears only its own hazard and a start refused
+	// before dispatch raises none. run_background raises it. A signal alone
+	// does not clear it, because a signalled process may still be flushing:
+	// only a confirmed exit (a reaped exit code) clears it, and tracked paths
+	// must be rehashed afterwards. A dispatch that came back with no job id
+	// raises hazardUnidentifiedJob, which nothing can clear.
 	WorkspaceHazards map[string]bool
 
 	// ManifestAnnounced tracks which SessionWrites paths have been named
@@ -1182,24 +620,24 @@ type AgentContext struct {
 	// change".
 	OriginalContent map[string]string
 
-	// Reasoning-repetition detector state (May 10 2026, BiasBusters
-	// follow-up #30). Per-turn snapshot of the model's reasoning_content
-	// stream. When the same opening prose ("Now I need to look at the
-	// file" / similar) appears across consecutive turns, the loop
-	// injects a corrective so the model breaks out of the thought loop.
-	// The streak fields are owned by the detector: recordReasoning
-	// clears them as it fires and hands the count and snippet back in
-	// its repeatObservation. See proxy/detectors.go.
+	// Reasoning-repetition detector state. Per-turn snapshot of the
+	// model's reasoning_content stream. When the same opening prose
+	// ("Now I need to look at the file" or similar) appears across
+	// consecutive turns, the loop injects a corrective so the model
+	// breaks out of the thought loop. The streak fields are owned by the
+	// detector: recordReasoning clears them as it fires and hands the
+	// count and snippet back in its repeatObservation. See
+	// proxy/detectors.go.
 	LastTurnReasoning           string
 	LastReasoningSnippet        string
 	ConsecutiveReasoningRepeats int
 
-	// Path-aware error-loop detector (May 10 2026). Tracks recent
-	// failure paths so the 3-consecutive-failures breaker can
-	// distinguish "stuck on one file" (real loop, stop) from
-	// "grinding through different files, some succeed, some fail"
-	// (progress, keep going). Cleared on any successful tool result.
-	// See proxy/agent.go error-loop break for the use site.
+	// Path-aware error-loop detector. Tracks recent failure paths so
+	// the 3-consecutive-failures breaker can distinguish "stuck on one
+	// file" (real loop, stop) from "grinding through different files,
+	// some succeed, some fail" (progress, keep going). Cleared on any
+	// successful tool result. See the error-loop break in
+	// proxy/agent.go for the use site.
 	RecentFailurePaths []string
 
 	mu sync.Mutex
@@ -1227,11 +665,11 @@ type AgentContext struct {
 	PlanRevisions int
 
 	// VerifyOnHost flips run_command from sandbox-routing to local
-	// host execution. Set from ATLAS_VERIFY_IN=host or
-	// per-project .atlas/config.toml. The default (false) is the
-	// safer sandbox path; opt-in is for working codebases that
-	// depend on host services (DBs, env vars, system tools) the
-	// sandbox can't see. Shell-op guardrails still apply either way.
+	// host execution. Set only from ATLAS_VERIFY_IN=host together with
+	// ATLAS_TRUST_MODE=fully-trusted; a workspace's .atlas/config.toml
+	// may choose only the sandbox. The default (false) is the safer path;
+	// opt-in is for codebases that depend on host services (DBs, env vars,
+	// system tools) the sandbox can't see. Guardrails apply either way.
 	VerifyOnHost bool
 
 	// TrustMode gates command execution (untrusted refuses; trusted =
@@ -1292,112 +730,6 @@ func (c *AgentContext) RecordFileRead(path string, content string) {
 	}
 	c.FilesRead[path] = content
 	c.LastReadPath = path
-}
-
-// bodyCoverage is the part of a file the model has been shown: all of it, or
-// 1-based inclusive line spans.
-type bodyCoverage struct {
-	whole bool
-	spans [][2]int
-}
-
-// RecordBodySeen marks a file's contents as having been shown to the model in
-// full: written or edited by it, or delivered to it. See BodySeen for why this
-// is not the same as being in the read cache. It also ends any partial-read
-// record, because the line numbers of an earlier read no longer hold for the
-// new bytes.
-func (c *AgentContext) RecordBodySeen(path string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.markBodySeenLocked(path)
-	c.BodyShown[path] = &bodyCoverage{whole: true}
-}
-
-// RecordBodyRead marks lines from..to (1-based, inclusive) of a file of total
-// lines as shown by a read. A read of every line shows the whole file, and a
-// later partial read does not take that back.
-func (c *AgentContext) RecordBodyRead(path string, from, to, total int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.markBodySeenLocked(path)
-	cov := c.BodyShown[path]
-	if cov == nil {
-		cov = &bodyCoverage{}
-		c.BodyShown[path] = cov
-	}
-	if cov.whole {
-		return
-	}
-	if from <= 1 && to >= total {
-		cov.whole, cov.spans = true, nil
-		return
-	}
-	if to >= from {
-		cov.spans = append(cov.spans, [2]int{from, to})
-	}
-}
-
-func (c *AgentContext) markBodySeenLocked(path string) {
-	if c.BodySeen == nil {
-		c.BodySeen = make(map[string]bool)
-	}
-	if c.BodyShown == nil {
-		c.BodyShown = make(map[string]*bodyCoverage)
-	}
-	c.BodySeen[path] = true
-}
-
-// LineWasShown reports whether line n (1-based) of a file was shown to the
-// model. A file with no coverage record counts as shown: whether it was
-// opened at all is WasBodySeen's question.
-func (c *AgentContext) LineWasShown(path string, n int) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cov := c.BodyShown[path]
-	if cov == nil || cov.whole {
-		return true
-	}
-	for _, s := range cov.spans {
-		if n >= s[0] && n <= s[1] {
-			return true
-		}
-	}
-	return false
-}
-
-// ShownSpans returns the line spans a partly read file has shown, or nil for a
-// file shown whole or not recorded.
-func (c *AgentContext) ShownSpans(path string) [][2]int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	cov := c.BodyShown[path]
-	if cov == nil || cov.whole {
-		return nil
-	}
-	return append([][2]int(nil), cov.spans...)
-}
-
-// bodySeenPaths returns every file whose contents the model has been shown,
-// sorted so a caller that reports one of them reports the same one each time.
-func (c *AgentContext) bodySeenPaths() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, 0, len(c.BodySeen))
-	for p, ok := range c.BodySeen {
-		if ok {
-			out = append(out, p)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-// WasBodySeen reports whether the model has actually been shown this file's
-// contents. Distinct from WasFileRead, which outline_file also satisfies.
-func (c *AgentContext) WasBodySeen(path string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.BodySeen[path]
 }
 
 // OriginalOf returns a file's content as the run first saw it, and whether the
@@ -1686,10 +1018,9 @@ type V3EvidenceEnvelope struct {
 	Delivery            V3EvidenceDelivery   `json:"delivery"`
 
 	// Provenance says WHO produced the evidence and WHAT it is about.
-	// Additive and omitted when absent: a producer that predates it emits an
-	// envelope byte-identical to the one it always did, and this build reads
-	// that envelope exactly as before. Nothing consults it yet -- see
-	// MayAuthorize.
+	// Additive and omitted when absent: a producer that does not send it
+	// emits the same envelope as before, and this build reads that envelope
+	// the same way.
 	Provenance *V3EvidenceProvenance `json:"provenance,omitempty"`
 }
 
@@ -1785,10 +1116,7 @@ type V3EvidenceProvenance struct {
 
 // MayAuthorize reports whether this evidence COULD close its obligation, on
 // source and strength alone. It says nothing about which candidate the
-// evidence is about -- that is BindsTo, and both must hold.
-//
-// Not called from any delivery path in this build. Wiring it in changes what
-// lands on disk and is a separate change.
+// evidence is about: that is BindsTo, and both must hold.
 func (p *V3EvidenceProvenance) MayAuthorize() (bool, string) {
 	if p == nil {
 		return false, "no provenance"
@@ -1913,17 +1241,14 @@ type SSEEvent struct {
 
 // --- The structured task contract -------------------------------------------
 //
-// ATLAS decides what the user demanded by reading their English: which verbs
-// appeared decides whether work was required, which filenames sat near a write
-// verb become deliverables, which phrases demand verification. Those lists are
-// open vocabularies and they are measurably wrong -- "Write four files."
-// produces no expected outputs at all, and "Run the tests and make sure they
-// pass." sets no verification requirement.
+// Without it, ATLAS decides what the user demanded by reading their English:
+// which verbs appeared decides whether work was required, which filenames sat
+// near a write verb become deliverables, which phrases demand verification.
+// Those lists are open vocabularies and they are measurably wrong -- "Write
+// four files." produces no expected outputs at all, and "Run the tests and make
+// sure they pass." sets no verification requirement.
 //
-// This is the client saying, in typed fields, what it already knows. It is the
-// first piece of the replacement and it decides nothing yet: this commit adds
-// the shape, validates it and stores it, and a guard proves no production
-// decision reads it.
+// The contract is the client saying, in typed fields, what it already knows.
 //
 // Three rules hold for good. The model cannot write this -- it arrives in the
 // HTTP request or not at all. It is a statement of obligation, never of
@@ -1984,13 +1309,14 @@ type TaskContract struct {
 	VerificationKnowledge ObligationKnowledge `json:"verification_knowledge,omitempty"`
 
 	// ExpectedOutputs are exact paths the client knows the request must
-	// produce. Canonicalised and deduplicated through the workspace resolver
-	// the rest of the proxy uses -- there is no second path rule.
+	// produce. Validated and deduplicated through the workspace resolver the
+	// rest of the proxy uses (there is no second path rule), and stored as
+	// the client spelled them.
 	//
 	// A POINTER, so absence survives: nil is "no list arrived", a non-nil
 	// empty slice is "the caller sent []". Read it through OutputPaths and
-	// OutputsPresent rather than testing nilness at each site, because that
-	// is the test the old code got wrong.
+	// OutputsPresent rather than testing nilness at each site, where that
+	// test is easy to get wrong.
 	ExpectedOutputs *[]string `json:"expected_outputs,omitempty"`
 	// Verification are the exact commands the client requires be run. Kept as
 	// the client wrote them: the command/result contract already records

@@ -1,10 +1,12 @@
 // Integration tests for AtlasClient against the mockProxy fixture:
 // happy-path turn, bearer auth, permission pause + resume, permission
-// 404-as-success, error envelope, cancel/abort, /ready 200 and 503.
+// 404-as-success, error envelope, a non-JSON error page, cancel/abort,
+// /ready 200 and 503.
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agentDispatcher, AtlasApiError, AtlasClient } from '../src/client/atlasClient';
 import type { AgentRequest, ChatEvent } from '../src/client/types';
+import { TurnManager } from '../src/session/turnManager';
 import { MockProxy } from './fixtures/mockProxy';
 
 const BASE_REQUEST: AgentRequest = {
@@ -17,6 +19,7 @@ const BASE_REQUEST: AgentRequest = {
 let proxy: MockProxy | undefined;
 
 afterEach(async () => {
+	vi.unstubAllGlobals();
 	await proxy?.stop();
 	proxy = undefined;
 });
@@ -46,27 +49,35 @@ describe('AtlasClient.sendAgentTurn', () => {
 		expect(mock.requests[0].body).toMatchObject({ message: 'hello', session_id: 'test-abc123' });
 	});
 
-	it('sends the bearer token on every request', async () => {
+	it('puts a turn manager\'s task contract on the wire', async () => {
+		const mock = await startProxy({ agentEvents: [{ type: 'done', data: { summary: '' } }] });
+		const client = new AtlasClient({ baseUrl: mock.url });
+		const turns = new TurnManager();
+
+		for await (const _ of turns.runTurn(client, 'is this a question?', 'default', 'question', '.')) {
+			// drain
+		}
+
+		// What the proxy receives, not what the request object holds: the
+		// contract is what decides whether V3 is consulted at all.
+		expect(mock.requests[0].body).toMatchObject({
+			message: 'is this a question?',
+			task_contract: { task_mode: 'question' },
+		});
+	});
+
+	it.each([
+		['sends the bearer token on every request', 'sk-test', 'Bearer sk-test'],
+		['omits the Authorization header when no token is set', undefined, undefined],
+	])('%s', async (_name, token, authorization) => {
 		const mock = await startProxy({ agentEvents: [] });
-		const client = new AtlasClient({ baseUrl: mock.url, token: 'sk-test' });
+		const client = new AtlasClient({ baseUrl: mock.url, token });
 
 		for await (const _ of client.sendAgentTurn(BASE_REQUEST)) {
 			// drain
 		}
 		await client.cancelTurn('test-abc123');
-		expect(mock.requests).toHaveLength(2);
-		for (const request of mock.requests) {
-			expect(request.headers.authorization).toBe('Bearer sk-test');
-		}
-	});
-
-	it('omits the Authorization header when no token is set', async () => {
-		const mock = await startProxy({ agentEvents: [] });
-		const client = new AtlasClient({ baseUrl: mock.url });
-		for await (const _ of client.sendAgentTurn(BASE_REQUEST)) {
-			// drain
-		}
-		expect(mock.requests[0].headers.authorization).toBeUndefined();
+		expect(mock.requests.map((request) => request.headers.authorization)).toEqual([authorization, authorization]);
 	});
 
 	it('throws AtlasApiError with the envelope code on non-200', async () => {
@@ -75,35 +86,9 @@ describe('AtlasClient.sendAgentTurn', () => {
 		});
 		const client = new AtlasClient({ baseUrl: mock.url });
 
-		const iterate = async () => {
-			for await (const _ of client.sendAgentTurn(BASE_REQUEST)) {
-				// unreachable
-			}
-		};
-		await expect(iterate()).rejects.toSatisfy((error: unknown) => {
-			expect(error).toBeInstanceOf(AtlasApiError);
-			const apiError = error as AtlasApiError;
-			expect(apiError.status).toBe(401);
-			expect(apiError.code).toBe('unauthorized');
-			expect(apiError.detail).toBe('bad token');
-			return true;
-		});
-	});
-
-	it('keeps the code empty on a non-JSON error body', async () => {
-		const mock = await startProxy({ agentError: { status: 502, body: 'Bad Gateway' } });
-		const client = new AtlasClient({ baseUrl: mock.url });
-		const iterate = async () => {
-			for await (const _ of client.sendAgentTurn(BASE_REQUEST)) {
-				// unreachable
-			}
-		};
-		await expect(iterate()).rejects.toSatisfy((error: unknown) => {
-			const apiError = error as AtlasApiError;
-			expect(apiError.status).toBe(502);
-			expect(apiError.code).toBe('');
-			return true;
-		});
+		const error = await client.sendAgentTurn(BASE_REQUEST).next().catch((thrown: unknown) => thrown);
+		expect(error).toBeInstanceOf(AtlasApiError);
+		expect(error).toMatchObject({ status: 401, code: 'unauthorized', detail: 'bad token' });
 	});
 
 	it('aborts the stream via AbortSignal', async () => {
@@ -213,18 +198,13 @@ describe('AtlasClient.cancelTurn', () => {
 });
 
 describe('AtlasClient.getReady', () => {
-	it('returns the gate body on 200', async () => {
-		const mock = await startProxy();
+	it.each([
+		{ status: 200, body: { ready: true, inference: true, lens_ready: true, sandbox: true, v3: true } },
+		{ status: 503, body: { ready: false, inference: true, lens_ready: false, sandbox: true, v3: true } },
+	])('returns the gate body on $status', async (ready) => {
+		const mock = await startProxy({ ready });
 		const client = new AtlasClient({ baseUrl: mock.url });
-		await expect(client.getReady()).resolves.toMatchObject({ ready: true });
-	});
-
-	it('returns the gate body on 503 (degraded)', async () => {
-		const mock = await startProxy({
-			ready: { status: 503, body: { ready: false, inference: true, lens_ready: false, sandbox: true, v3: true } },
-		});
-		const client = new AtlasClient({ baseUrl: mock.url });
-		await expect(client.getReady()).resolves.toMatchObject({ ready: false, lens_ready: false });
+		await expect(client.getReady()).resolves.toEqual(ready.body);
 	});
 });
 
@@ -233,6 +213,17 @@ describe('AtlasClient.getVersion', () => {
 		const mock = await startProxy();
 		const client = new AtlasClient({ baseUrl: mock.url });
 		await expect(client.getVersion()).resolves.toMatchObject({ api_version: '1.0.0', protocol_version: 1 });
+	});
+
+	it('keeps the code empty and the raw text as detail on a non-JSON error body', async () => {
+		// An error page from a reverse proxy in front of the ATLAS proxy. The
+		// mock proxy answers JSON only, so a stand-in fetch gives this answer.
+		vi.stubGlobal('fetch', async () => new Response('Bad Gateway', { status: 502 }));
+		const client = new AtlasClient({ baseUrl: 'http://atlas.invalid' });
+
+		const error = await client.getVersion().catch((thrown: unknown) => thrown);
+		expect(error).toBeInstanceOf(AtlasApiError);
+		expect(error).toMatchObject({ status: 502, code: '', detail: 'Bad Gateway' });
 	});
 });
 
@@ -255,22 +246,5 @@ describe('agentDispatcher', () => {
 		expect(dispatcher).toBeTypeOf('object');
 		// Memoized: the second call returns the same instance.
 		await expect(agentDispatcher()).resolves.toBe(dispatcher);
-	});
-
-	it('streams a full turn with the dispatcher attached', async () => {
-		// The happy-path turn above exercises sendAgentTurn, which now always
-		// passes the dispatcher — re-assert explicitly for clarity.
-		const mock = await startProxy({
-			agentEvents: [
-				{ type: 'text', data: { content: 'ok' } },
-				{ type: 'done', data: { summary: '' } },
-			],
-		});
-		const client = new AtlasClient({ baseUrl: mock.url });
-		const events: ChatEvent[] = [];
-		for await (const event of client.sendAgentTurn(BASE_REQUEST)) {
-			events.push(event);
-		}
-		expect(events.at(-1)?.type).toBe('done');
 	});
 });

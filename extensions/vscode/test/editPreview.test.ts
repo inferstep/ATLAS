@@ -1,8 +1,9 @@
 // Unit tests for the permission-time edit predictions: write_file (new and
 // existing file), edit_file (old_str found / not found / replace_all /
-// literal-$ splice), and the structural_edit best-effort splices (python function
+// literal-$ splice), the structural_edit best-effort splices (python function
 // incl. decorators and async, class, html tag incl. nesting and the <html>
-// doctype quirk, no-match fallback).
+// doctype quirk, no-match fallback), and the exact line splices of
+// insert_after and replace_lines.
 
 import { describe, expect, it } from 'vitest';
 import { editTargetPath, predictEdit } from '../src/session/editPreview';
@@ -32,18 +33,21 @@ const HTML = [
 ].join('\n');
 
 describe('editTargetPath', () => {
-	it('returns the path for the three file-edit tools only', () => {
-		expect(editTargetPath('write_file', { path: 'a.py', content: 'x' })).toBe('a.py');
-		expect(editTargetPath('edit_file', { path: 'a.py' })).toBe('a.py');
-		expect(editTargetPath('structural_edit', { path: 'a.py' })).toBe('a.py');
-		expect(editTargetPath('run_command', { command: 'ls' })).toBeUndefined();
-		expect(editTargetPath('move_file', { source: 'a', destination: 'b' })).toBeUndefined();
-		expect(editTargetPath('delete_file', { path: 'a.py' })).toBeUndefined();
-	});
-
-	it('rejects malformed args', () => {
-		expect(editTargetPath('write_file', null)).toBeUndefined();
-		expect(editTargetPath('write_file', { path: 42 })).toBeUndefined();
+	it.each([
+		['write_file', { path: 'a.py', content: 'x' }, 'a.py'],
+		['edit_file', { path: 'a.py' }, 'a.py'],
+		['structural_edit', { path: 'a.py' }, 'a.py'],
+		['insert_after', { path: 'f.py' }, 'f.py'],
+		['replace_lines', { path: 'f.py' }, 'f.py'],
+		// Not a file-edit tool.
+		['run_command', { command: 'ls' }, undefined],
+		['move_file', { source: 'a', destination: 'b' }, undefined],
+		['delete_file', { path: 'a.py' }, undefined],
+		// Malformed args.
+		['write_file', null, undefined],
+		['write_file', { path: 42 }, undefined],
+	])('%s %j targets %s', (tool, args, path) => {
+		expect(editTargetPath(tool, args)).toBe(path);
 	});
 });
 
@@ -174,99 +178,54 @@ describe('predictEdit: structural_edit html', () => {
 describe('predictEdit: insert_after', () => {
 	const SRC = 'a\nb\nc\n';
 
-	it('inserts after a 1-based line number', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 2, content: 'X' }, SRC)!;
-		expect(p.right).toBe('a\nb\nX\nc\n');
-		// Exact, unlike structural_edit: the model named a line, it did not
-		// reproduce one, so there is nothing to match approximately.
-		expect(p.approximate).toBe(false);
-		expect(p.kind).toBe('file');
+	// Exact, unlike structural_edit: the model named a line, it did not
+	// reproduce one, so there is nothing to match approximately.
+	it.each([
+		['inserts after a 1-based line number', SRC, 2, 'X', 'a\nb\nX\nc\n'],
+		['treats line 0 as the top of the file', SRC, 0, 'X', 'X\na\nb\nc\n'],
+		['appends when the line is past the end', SRC, 99, 'X', 'a\nb\nc\nX\n'],
+		['preserves a missing trailing newline', 'a\nb', 1, 'X', 'a\nX\nb'],
+		['does not double a newline when content carries one', SRC, 1, 'X\n', 'a\nX\nb\nc\n'],
+		['handles multi-line content', SRC, 1, 'X\nY', 'a\nX\nY\nb\nc\n'],
+	])('%s', (_name, current, line, content, right) => {
+		const p = predictEdit('insert_after', { path: 'f.py', line, content }, current)!;
+		expect(p).toMatchObject({ kind: 'file', right, approximate: false });
 	});
 
-	it('treats line 0 as the top of the file', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 0, content: 'X' }, SRC)!;
-		expect(p.right).toBe('X\na\nb\nc\n');
-	});
-
-	it('appends when the line is past the end', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 99, content: 'X' }, SRC)!;
-		expect(p.right).toBe('a\nb\nc\nX\n');
-	});
-
-	it('preserves a missing trailing newline', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X' }, 'a\nb')!;
-		expect(p.right).toBe('a\nX\nb');
-	});
-
-	it('does not double a newline when content carries one', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X\n' }, SRC)!;
-		expect(p.right).toBe('a\nX\nb\nc\n');
-	});
-
-	it('handles multi-line content', () => {
-		const p = predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X\nY' }, SRC)!;
-		expect(p.right).toBe('a\nX\nY\nb\nc\n');
-	});
-
-	it('returns undefined on a missing or non-integer line', () => {
-		expect(predictEdit('insert_after', { path: 'f.py', content: 'X' }, SRC)).toBeUndefined();
-		expect(predictEdit('insert_after', { path: 'f.py', line: '2', content: 'X' }, SRC)).toBeUndefined();
-		expect(predictEdit('insert_after', { path: 'f.py', line: 1.5, content: 'X' }, SRC)).toBeUndefined();
-		expect(predictEdit('insert_after', { path: 'f.py', line: -1, content: 'X' }, SRC)).toBeUndefined();
-	});
-
-	it('returns undefined when the file is not readable locally', () => {
+	it.each([
+		['a missing line', { path: 'f.py', content: 'X' }, SRC],
+		['a line given as text', { path: 'f.py', line: '2', content: 'X' }, SRC],
+		['a fractional line', { path: 'f.py', line: 1.5, content: 'X' }, SRC],
+		['a negative line', { path: 'f.py', line: -1, content: 'X' }, SRC],
 		// Unlike write_file, there is no sensible prediction without a base.
-		expect(predictEdit('insert_after', { path: 'f.py', line: 1, content: 'X' }, undefined)).toBeUndefined();
-	});
-
-	it('is recognised as a file-edit tool', () => {
-		expect(editTargetPath('insert_after', { path: 'f.py' })).toBe('f.py');
+		['a file not readable locally', { path: 'f.py', line: 1, content: 'X' }, undefined],
+	])('returns undefined for %s', (_case, args, current) => {
+		expect(predictEdit('insert_after', args, current)).toBeUndefined();
 	});
 });
 
 describe('predictEdit: replace_lines', () => {
 	const SRC = 'a\nb\nc\nd\n';
 
-	it('replaces an inclusive range exactly', () => {
-		const p = predictEdit('replace_lines',
-			{ path: 'f.py', start_line: 2, end_line: 3, content: 'X\nY' }, SRC)!;
-		expect(p.right).toBe('a\nX\nY\nd\n');
-		expect(p.approximate).toBe(false);
-		expect(p.note).toBe('replaced lines 2-3');
+	it.each([
+		['replaces an inclusive range exactly', SRC, 2, 3, 'X\nY', 'a\nX\nY\nd\n', 'replaced lines 2-3'],
+		['replaces a single line', SRC, 1, 1, 'Z', 'Z\nb\nc\nd\n', 'replaced line 1'],
+		['preserves a missing trailing newline', 'a\nb', 2, 2, 'X', 'a\nX', 'replaced line 2'],
+	])('%s', (_name, current, start, end, content, right, note) => {
+		const p = predictEdit('replace_lines', { path: 'f.py', start_line: start, end_line: end, content }, current)!;
+		expect(p).toMatchObject({ right, approximate: false, note });
 	});
 
-	it('replaces a single line', () => {
-		const p = predictEdit('replace_lines',
-			{ path: 'f.py', start_line: 1, end_line: 1, content: 'Z' }, SRC)!;
-		expect(p.right).toBe('Z\nb\nc\nd\n');
-		expect(p.note).toBe('replaced line 1');
-	});
-
-	it('preserves a missing trailing newline', () => {
-		const p = predictEdit('replace_lines',
-			{ path: 'f.py', start_line: 2, end_line: 2, content: 'X' }, 'a\nb')!;
-		expect(p.right).toBe('a\nX');
-	});
-
-	it('declines a range the file cannot satisfy', () => {
-		for (const range of [{ start_line: 0, end_line: 1 }, { start_line: 3, end_line: 2 },
-			{ start_line: 2, end_line: 99 }]) {
-			expect(predictEdit('replace_lines', { path: 'f.py', ...range, content: 'X' }, SRC))
-				.toBeUndefined();
-		}
-	});
-
-	it('declines when a field is missing or not an integer', () => {
-		expect(predictEdit('replace_lines', { path: 'f.py', end_line: 2, content: 'X' }, SRC))
-			.toBeUndefined();
-		expect(predictEdit('replace_lines',
-			{ path: 'f.py', start_line: '1', end_line: 2, content: 'X' }, SRC)).toBeUndefined();
-		expect(predictEdit('replace_lines',
-			{ path: 'f.py', start_line: 1, end_line: 2, content: 'X' }, undefined)).toBeUndefined();
-	});
-
-	it('names the target path', () => {
-		expect(editTargetPath('replace_lines', { path: 'f.py' })).toBe('f.py');
+	it.each([
+		// A range the file cannot satisfy.
+		['a start before line 1', { start_line: 0, end_line: 1 }, SRC],
+		['an end before the start', { start_line: 3, end_line: 2 }, SRC],
+		['an end past the file', { start_line: 2, end_line: 99 }, SRC],
+		// A field missing or not an integer.
+		['a missing start', { end_line: 2 }, SRC],
+		['a start given as text', { start_line: '1', end_line: 2 }, SRC],
+		['a file not readable locally', { start_line: 1, end_line: 2 }, undefined],
+	])('declines %s', (_case, range, current) => {
+		expect(predictEdit('replace_lines', { path: 'f.py', ...range, content: 'X' }, current)).toBeUndefined();
 	});
 });

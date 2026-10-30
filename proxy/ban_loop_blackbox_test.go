@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,23 +12,19 @@ import (
 	"testing"
 )
 
-// Black-box regression for the ban-branch runaway recorded in the locked
-// benchmark (redteam/runs/locked, dev head 78d345c).
-//
-// It drives the real agent loop with a model that behaves exactly like the
-// archived session: one accepted write, then an invalid rewrite, then the
-// same invalid rewrite forever. That sequence rejects, bans (write_file,
-// path), and then bounces off the ban indefinitely. The archived session
-// bounced 19 times against a failure ceiling of 12 and only ended when the
-// model deleted its own artifact.
+// A black-box check that a model re-sending a refused write cannot loop past
+// the failure ceiling. It drives the real agent loop with a model that makes
+// one accepted write, then an invalid rewrite, then the same invalid rewrite
+// forever. Without a bound, that sequence is rejected, banned (write_file,
+// path), and then bounces off the ban without end.
 //
 // Nothing here calls shouldStopForFailures or appendRecentFailurePath, and
 // nothing restates their conditions. The assertion is on what the loop
 // actually does: how many tool calls it streams before it terminates.
 
 // Tier2Medium requires a recognized code extension at >= 10 lines
-// (classifyFileTier, tools.go). Both bodies clear that so the write takes the
-// V3-gated branch at tools.go:855 rather than the ungated T0/T1 direct path.
+// (classifyFileTier). Both bodies clear that, so the write takes the V3-gated
+// branch rather than the ungated T0/T1 direct path.
 const banLoopValidBody = `import sys
 
 
@@ -153,10 +150,7 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 		case "gate":
 			// Proves the ban branch specifically, not merely that some
 			// breaker stopped the session.
-			b, err := json.Marshal(data)
-			if err != nil {
-				return
-			}
+			b, _ := json.Marshal(data)
 			if strings.Contains(string(b), "no longer available") {
 				banEntries++
 			}
@@ -165,9 +159,8 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 			}
 		case "done":
 			doneEvents++
-			if b, err := json.Marshal(data); err == nil {
-				doneSummary = string(b)
-			}
+			b, _ := json.Marshal(data)
+			doneSummary = string(b)
 		}
 	}
 
@@ -191,18 +184,11 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 			"would take the ungated direct path and this test would not "+
 			"exercise the ban branch", tier)
 	}
-	// Ownership note. This archived session IS a C4 session -- a valid file on
-	// disk, then the same invalid rewrite re-sent against it -- so the
-	// refused-replacement recovery now answers the re-send BEFORE the resend
-	// ban escalates to withdrawing the tool. The runaway property this test
-	// exists for is unchanged: the same four tool calls and the same terminal
-	// as before, measured on the parent. What moved is which branch speaks.
-	//
-	// TestBannedEditLoopEntersTheBanBranch keeps the ban branch itself
-	// covered, on a shape the recovery does not own.
-	if banEntries != 0 {
-		t.Logf("the ban branch also fired (%d)", banEntries)
-	}
+	// A valid file on disk, then the same invalid rewrite re-sent against it:
+	// the refused-replacement recovery answers the re-send before the ban
+	// withdraws the tool. Either may answer; the property here is that the
+	// loop stops. TestBannedEditLoopEntersTheBanBranch covers the ban branch
+	// itself, on a shape the recovery does not own.
 	if recoveries == 0 && banEntries == 0 {
 		t.Fatal("neither the refused-replacement recovery nor the ban branch " +
 			"answered the re-send, so this run measured some other breaker")
@@ -236,9 +222,8 @@ func TestBannedWriteLoopTerminatesAtTheFailureCeiling(t *testing.T) {
 
 // The ban branch itself, on a shape the refused-replacement recovery does not
 // own: an edit_file rejected for a reason that is not a no-op and not a
-// write_file proposal, re-sent unchanged. The archived runaway was about the
-// ban counting failures without reading the ceiling, and that has to stay
-// covered wherever the ban is still the branch that answers.
+// write_file proposal, re-sent unchanged. The ban must count failures
+// against the ceiling wherever it is the branch that answers.
 func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "mod.py"),
@@ -259,6 +244,7 @@ func TestBannedEditLoopEntersTheBanBranch(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		io.Copy(io.Discard, r.Body) // the whole request first, as a real model server reads it
 		i := calls
 		calls++
 		var reply string

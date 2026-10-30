@@ -19,8 +19,8 @@ import (
 // Every fixture pins the activation condition rather than assuming it:
 // Tier2+ content, non-empty V3URL, BypassV3 false, isActiveDebugIteration
 // false. The stub records requests IN ORDER, so "one preflight request" is
-// measured as the requests that arrive BEFORE /v3/generate -- what the
-// pipeline and its fallback do afterwards belongs to a later slice.
+// measured as the requests that arrive BEFORE /v3/generate. What the
+// pipeline and its fallback do afterwards is not checked here.
 
 const preflightSyntaxMark = "def area(radius:"
 const preflightSyntaxDetail = "SyntaxError: invalid syntax (line 4)"
@@ -56,63 +56,23 @@ def perimeter(radius):
     return 2 * math.pi * radius
 `
 
-const preflightBaselineHealthy = preflightBaselineMark + `
-import math
-
-
-def area(radius):
-    if radius < 0:
-        raise ValueError("negative radius")
-    return math.pi * radius * radius
-
-
-def perimeter(radius):
-    for _ in range(1):
-        pass
-    return 2 * math.pi * radius
-`
-
-const preflightBaselineBroken = preflightBaselineMark + `
-import math
-
-
-` + preflightSyntaxMark + `
-    if radius < 0:
-        raise ValueError("negative radius")
-    return math.pi * radius * radius
-
-
-def perimeter(radius):
-    for _ in range(1):
-        pass
-    return 2 * math.pi * radius
-`
+// The baselines are the same two programs with a marker line on top, so the
+// stub can tell the file on disk from the proposal.
+const preflightBaselineHealthy = preflightBaselineMark + "\n" + preflightHealthy
+const preflightBaselineBroken = preflightBaselineMark + "\n" + preflightBroken
 
 type preflightStub struct {
 	mu       sync.Mutex
 	events   []string // "syntax" / "embedded" / "structural" / "v3", in arrival order
 	unexpect []string
+
+	unavailableFor string // content carrying this gets a non-200 from /syntax-check
 }
 
 func (s *preflightStub) record(kind string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, kind)
-}
-
-// before returns the requests that arrived before V3 generation was entered,
-// and whether it was entered at all. Counting this way keeps the preflight's
-// budget separate from the pipeline's and its fallback's.
-func (s *preflightStub) before() (checks []string, enteredV3 bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, e := range s.events {
-		if e == "v3" {
-			return checks, true
-		}
-		checks = append(checks, e)
-	}
-	return checks, false
 }
 
 type preflightOpts struct {
@@ -124,46 +84,52 @@ type preflightOpts struct {
 	before         func(t *testing.T, dir string)
 }
 
+// serve is the stub server of runPreflight: it records each request in order,
+// answers every check as passing except a syntax check of content that does
+// not parse, answers a non-200 to a syntax check of content that carries
+// unavailableFor, and records any other endpoint as unexpected.
+func (st *preflightStub) serve(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v3/"):
+		st.record("v3")
+		// A 418 sends writeFileWithV3 down its fallback. That is fine here:
+		// everything this fixture asserts is measured BEFORE this point.
+		http.Error(w, "V3 generation stub", http.StatusTeapot)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+	case r.URL.Path == "/internal/embedded_script_check":
+		st.record("embedded")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
+	case r.URL.Path == "/internal/structural_check":
+		st.record("structural")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		st.record("syntax")
+		var in struct{ Code string }
+		json.NewDecoder(r.Body).Decode(&in)
+		if st.unavailableFor != "" && strings.Contains(in.Code, st.unavailableFor) {
+			http.Error(w, "checker unavailable", http.StatusInternalServerError)
+			return
+		}
+		valid := !strings.Contains(in.Code, preflightSyntaxMark)
+		out := map[string]interface{}{"valid": valid}
+		if !valid {
+			out["errors"] = []string{preflightSyntaxDetail}
+		}
+		json.NewEncoder(w).Encode(out)
+	default:
+		st.mu.Lock()
+		st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "unexpected endpoint", http.StatusTeapot)
+	}
+}
+
 func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *preflightStub) {
 	t.Helper()
 	dir := t.TempDir()
-	st := &preflightStub{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/v3/"):
-			st.record("v3")
-			// A 418 sends writeFileWithV3 down its fallback. That is fine here:
-			// everything this fixture asserts is measured BEFORE this point.
-			http.Error(w, "V3 generation stub", http.StatusTeapot)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/embedded_script_check":
-			st.record("embedded")
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			st.record("structural")
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			st.record("syntax")
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if o.unavailableFor != "" && strings.Contains(in.Code, o.unavailableFor) {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			valid := !strings.Contains(in.Code, preflightSyntaxMark)
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{preflightSyntaxDetail}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
+	st := &preflightStub{unavailableFor: o.unavailableFor}
+	srv := httptest.NewServer(http.HandlerFunc(st.serve))
 	defer srv.Close()
 
 	target := filepath.Join(dir, o.rel)
@@ -179,8 +145,8 @@ func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *prefligh
 	var events []string
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
-	// Generation runs only where a candidate could be delivered (C2); declared
-	// outputs make this session one, so the fixture still reaches the V3 route.
+	// Generation runs only where a candidate could be delivered. Declared
+	// outputs make this session one, so the fixture reaches the V3 route.
 	ctx.TaskContract = declaredOutputs(o.rel)
 	ctx.StreamFn = func(event string, _ interface{}) { events = append(events, event) }
 	ctx.V3URL = srv.URL
@@ -228,9 +194,22 @@ func runPreflight(t *testing.T, o preflightOpts) (*ToolResult, string, *prefligh
 	return res, string(after), st
 }
 
+// assertPreflightChecks counts only the requests that arrived before V3
+// generation was entered. This keeps the preflight's budget separate from
+// the pipeline's and its fallback's.
 func assertPreflightChecks(t *testing.T, st *preflightStub, want int, wantV3 bool) {
 	t.Helper()
-	checks, entered := st.before()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var checks []string
+	entered := false
+	for _, e := range st.events {
+		if e == "v3" {
+			entered = true
+			break
+		}
+		checks = append(checks, e)
+	}
 	if len(checks) != want {
 		t.Errorf("preflight requests = %v (%d), want %d", checks, len(checks), want)
 	}
@@ -239,7 +218,7 @@ func assertPreflightChecks(t *testing.T, st *preflightStub, want int, wantV3 boo
 	}
 }
 
-// 1. A NEW file that does not parse lands with a warning: there is nothing on
+// A NEW file that does not parse lands with a warning: there is nothing on
 // disk to protect, and the model needs the real traceback more than it needs
 // our rejection. V3 is skipped -- feeding it broken content wastes the budget.
 func TestPreflightWarnsOnBrokenNewFile(t *testing.T) {
@@ -266,7 +245,7 @@ func TestPreflightWarnsOnBrokenNewFile(t *testing.T) {
 	assertPreflightChecks(t, st, 1, false)
 }
 
-// 2. Already broken on disk: there is no working version to protect, so the
+// Already broken on disk: there is no working version to protect, so the
 // repair attempt lands with a warning rather than being refused into a loop.
 func TestPreflightWarnedRepairOverBrokenBaseline(t *testing.T) {
 	res, disk, st := runPreflight(t, preflightOpts{
@@ -287,7 +266,7 @@ func TestPreflightWarnedRepairOverBrokenBaseline(t *testing.T) {
 	assertPreflightChecks(t, st, 2, false)
 }
 
-// 3. Working code on disk is protected: the regression is refused, the bytes
+// Working code on disk is protected: the regression is refused, the bytes
 // are untouched, and V3's budget is never spent on content that cannot parse.
 func TestPreflightRefusesRegressionOverHealthyBaseline(t *testing.T) {
 	res, disk, st := runPreflight(t, preflightOpts{
@@ -317,7 +296,7 @@ func TestPreflightRefusesRegressionOverHealthyBaseline(t *testing.T) {
 	assertPreflightChecks(t, st, 2, false)
 }
 
-// 4. The baseline could not be verified. Absence of evidence is not evidence
+// The baseline could not be verified. Absence of evidence is not evidence
 // that the file was already broken, so the failed proposal is still refused.
 func TestPreflightRefusesWhenBaselineEvidenceIsUnavailable(t *testing.T) {
 	res, disk, st := runPreflight(t, preflightOpts{
@@ -339,7 +318,7 @@ func TestPreflightRefusesWhenBaselineEvidenceIsUnavailable(t *testing.T) {
 	assertPreflightChecks(t, st, 2, false)
 }
 
-// 5. The baseline could not be READ at all -- the only way the preflight's own
+// The baseline could not be READ at all -- the only way the preflight's own
 // refusal is reached, since a readable baseline is decided by the regression
 // gate upstream. One request: the proposal's, reused rather than repeated.
 func TestPreflightRefusesWhenBaselineCannotBeRead(t *testing.T) {
@@ -368,7 +347,7 @@ func TestPreflightRefusesWhenBaselineCannotBeRead(t *testing.T) {
 	assertPreflightChecks(t, st, 1, false)
 }
 
-// 6. The warned write is a mutation like any other and can fail. The
+// The warned write is a mutation like any other and can fail. The
 // observation that justified the warning survives the failure: these exact
 // bytes do not parse, whether or not they reached disk.
 func TestPreflightWarnedWriteFilesystemFailure(t *testing.T) {
@@ -405,29 +384,29 @@ func TestPreflightWarnedWriteFilesystemFailure(t *testing.T) {
 	assertPreflightChecks(t, st, 1, false)
 }
 
-// 7. The proposal parses: exactly one preflight request, and the pipeline is
-// entered. What the pipeline decides about its own candidate is a later slice
-// -- this asserts the handoff, not the outcome.
-func TestPreflightPassesIntoGeneration(t *testing.T) {
-	_, _, st := runPreflight(t, preflightOpts{rel: "solve.py", proposal: preflightHealthy})
-	assertPreflightChecks(t, st, 1, true)
-}
-
-// 8. The checker applied and could not run. Fail-open is the whole posture of
-// this gate: it blocks KNOWN-broken content, so an unavailable checker must
-// not cost the model its pipeline run.
-func TestPreflightUnavailableCheckerStillEntersGeneration(t *testing.T) {
-	_, _, st := runPreflight(t, preflightOpts{
-		rel: "solve.py", proposal: preflightHealthy, unavailableFor: "def perimeter"})
-	assertPreflightChecks(t, st, 1, true)
-}
-
-// 9. Neither check applies: no service is asked anything, and generation is
-// entered on content the gate has no opinion about.
-func TestPreflightNonApplicableContentEntersGeneration(t *testing.T) {
+// The gate lets content into generation unless it is known to be broken.
+// "parses": one preflight request, then the pipeline. What the pipeline
+// decides about its own candidate is not checked here, only the handoff.
+// "checker unavailable": fail-open is the whole posture of this gate. It
+// blocks KNOWN-broken content, so an unavailable checker must not cost the
+// model its pipeline run.
+// "no check applies": no service is asked anything.
+func TestPreflightEntersGenerationUnlessTheContentIsKnownBroken(t *testing.T) {
 	if _, gated := syntaxGateLanguages[".rs"]; gated {
 		t.Fatal(".rs gained a sandbox checker; pick a type neither check applies to")
 	}
-	_, _, st := runPreflight(t, preflightOpts{rel: "engine.rs", proposal: debugRustProposal})
-	assertPreflightChecks(t, st, 0, true)
+	for _, tc := range []struct {
+		name       string
+		opts       preflightOpts
+		wantChecks int
+	}{
+		{"parses", preflightOpts{rel: "solve.py", proposal: preflightHealthy}, 1},
+		{"checker unavailable", preflightOpts{rel: "solve.py", proposal: preflightHealthy, unavailableFor: "def perimeter"}, 1},
+		{"no check applies", preflightOpts{rel: "engine.rs", proposal: debugRustProposal}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, st := runPreflight(t, tc.opts)
+			assertPreflightChecks(t, st, tc.wantChecks, true)
+		})
+	}
 }

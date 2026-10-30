@@ -5,6 +5,8 @@ secret-ish values, and runs values through the private-value filter.
 No services required (the collectors are unit-tested in isolation).
 """
 
+import json
+
 from atlas.commands import diagnostics
 
 
@@ -45,6 +47,32 @@ def test_collect_excludes_source_and_has_schema(tmp_path, monkeypatch):
 
     bundle = diagnostics._collect(str(tmp_path), 10)
     assert bundle["schema_version"] == 1
-    assert "meta" in bundle and "config" in bundle
+    assert "meta" in bundle
+    assert "config" in bundle
     # no source-code section
-    assert "source" not in bundle and "files" not in bundle
+    assert "source" not in bundle
+    assert "files" not in bundle
+
+
+def test_recent_logs_hide_the_password_of_a_url(tmp_path, monkeypatch):
+    log_text = "lens: connect postgres://demo:example@db:5432/x failed\n"
+    monkeypatch.setattr(diagnostics, "_run", lambda cmd, cwd, timeout: log_text)
+
+    logs = diagnostics._recent_logs(str(tmp_path), 50)
+
+    assert set(logs) == {"atlas-proxy", "v3-service", "geometric-lens", "sandbox"}
+    for text in logs.values():
+        assert ":example@" not in text
+
+
+def test_collect_writes_the_bundle_to_the_output_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(diagnostics, "_collect",
+                        lambda root, log_lines: {"schema_version": 1,
+                                                 "log_lines": log_lines})
+    out = tmp_path / "bundle.json"
+
+    exit_code = diagnostics.main(["collect", "--output", str(out),
+                                  "--log-lines", "7"])
+
+    assert exit_code == 0
+    assert json.loads(out.read_text()) == {"schema_version": 1, "log_lines": 7}

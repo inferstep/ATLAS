@@ -10,7 +10,7 @@ The install steps depend on your hardware + OS. Find the row that matches your s
 
 | Your hardware | OS | Recommended path | Support level ([matrix](../SUPPORT_MATRIX.md)) |
 |---|---|---|---|
-| NVIDIA RTX 50-series / Blackwell (B100, GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
+| NVIDIA RTX 50-series / Blackwell (GB10) | Linux | [Method 0: bootstrap](#method-0-one-shot-bootstrap) or [Method 1: Docker](#method-1-docker-compose-recommended) | Supported — published CUDA image targets Blackwell |
 | NVIDIA RTX 20/30/40, GTX 10xx, datacenter (V100/A100/H100/T4/L4) | Linux | [Method 1: Docker](#method-1-docker-compose-recommended) + one-time [local rebuild](#cuda-compute-capability-dockerfilev31) | Preview — local rebuild required |
 | NVIDIA GPU | Windows (WSL2) | [Method 1: Docker — NVIDIA section](#method-1-docker-compose-recommended) | Unsupported — untested, no claims made; reports welcome |
 | AMD GPU (RX 6000/7000, MI200+) | Linux | [Method 1: Docker — AMD ROCm](#amd-rocm--whats-different) | Community-tested ([GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
@@ -35,7 +35,7 @@ Single curl command that detects your distro, installs Docker + nvidia-container
 
 > **NVIDIA pre-Blackwell GPUs (RTX 20/30/40-series, GTX 10xx, V100/A100/T4/L4/H100): read this first.**
 > The published `atlas-llama` CUDA image is compiled for compute capability
-> `120;121` (Blackwell — RTX 50xx, B100, GB10) **only**. On older NVIDIA GPUs
+> `120;121` (Blackwell — RTX 50xx, GB10) **only**. On older NVIDIA GPUs
 > llama-server will fail at startup with
 > `no kernel image is available for execution on the device`.
 > Rebuild the inference image once for your GPU's architecture:
@@ -57,7 +57,7 @@ Or, from a checkout:
 ./scripts/atlas-bootstrap.sh
 ```
 
-**Supported distributions:**
+**Distributions the bootstrap accepts** (CI tests Ubuntu 22.04/24.04, Debian 12 and Rocky 9 — see the [support matrix](../SUPPORT_MATRIX.md)):
 
 | Family | Distros |
 |---|---|
@@ -67,7 +67,14 @@ Or, from a checkout:
 
 Other distros with `ID_LIKE` matching one of the above (e.g. Linux Mint, Pop!_OS) are accepted with a warning. Distros not in this list — Arch, openSUSE, Alpine, NixOS — aren't tested and the script will refuse to run on them.
 
-The bootstrap works around EPEL, nouveau driver conflicts, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race.
+The bootstrap works around EPEL, the missing-libnvidia-ml.so.1 case (RHEL minimal installs), and the "user added to docker group but current shell doesn't see it yet" race; on RHEL-family hosts it warns when nouveau is loaded and prints the steps to blacklist it.
+
+**Docker group security:** The bootstrap may add your user to the `docker`
+group so Docker commands can run without `sudo`. Membership in the `docker`
+group grants root-level privileges on the host. Only grant this access to
+trusted users. To manage Docker installation and group membership yourself,
+set `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` before running the bootstrap.
+
 
 **Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
 
@@ -117,8 +124,8 @@ pipe a moving `main` script into bash):
 # Pinned to a release: fetch the script AT the tag and install that tag.
 # The checkout is pinned to the (SSH-signed) tag and ATLAS_IMAGE_TAG is
 # pinned to the matching cosign-signed images.
-curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.6/scripts/atlas-bootstrap.sh \
-  | ATLAS_BOOTSTRAP_REF=v3.1.6 bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.7/scripts/atlas-bootstrap.sh \
+  | ATLAS_BOOTSTRAP_REF=v3.1.7 bash
 
 # Review before running: download, read, then execute the same bytes.
 curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
@@ -134,13 +141,13 @@ bash atlas-bootstrap.sh
 | `ATLAS_BOOTSTRAP_SKIP_GPU=1` | Skip the GPU runtime install (NVIDIA toolkit or ROCm setup). |
 | `ATLAS_BOOTSTRAP_SKIP_MODELS=1` | Don't download model weights |
 | `ATLAS_BOOTSTRAP_SKIP_COMPOSE=1` | Don't run `docker compose up` |
-| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built ~5 min after services come up; skipped automatically when no GPU is available) |
+| `ATLAS_BOOTSTRAP_SKIP_ASA=1` | Skip the ASA steering-vector build (default: built after the services come up; skipped automatically when no GPU is available) |
 | `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` | Open the service ports in firewalld (default: off — services bind loopback) |
 | `ATLAS_BOOTSTRAP_NO_SUDO=1` | Fail instead of attempting sudo |
 | `ATLAS_BOOTSTRAP_REF=vX.Y.Z` | Pin the install to a git tag/sha instead of tracking `main`; a `vX.Y.Z` value also pins `ATLAS_IMAGE_TAG` to the matching images |
 | `ATLAS_INSTALL_DIR=/path` | Where to clone (default `/opt/atlas` — see below) |
 | `ATLAS_REPO_URL=https://...` | Alternate repo URL |
-| `ATLAS_GO_VERSION=1.26.6` | Go toolchain version installed for the TUI build (the TUI needs 1.26.6+; older installed toolchains auto-fetch it) |
+| `ATLAS_GO_VERSION=1.26.10` | Go toolchain version installed for the TUI build (the TUI needs 1.26.10+; older installed toolchains auto-fetch it) |
 | `ATLAS_DOWNLOAD_TRIES=3` | How often a download that fails is tried before the install stops (the pip downloads and the Go module download) |
 | `ATLAS_DOWNLOAD_WAIT_SECONDS=5` | The wait between two tries of a download |
 
@@ -153,7 +160,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-
   | ATLAS_INSTALL_DIR=$HOME/atlas bash
 ```
 
-When complete, prints a green "ATLAS ready" banner with quick-start commands. Total time on a fresh VM with a fast connection: ~10-30 minutes (model download dominates).
+When complete, prints a green "ATLAS ready" banner with quick-start commands.
 
 If you'd rather do each step manually, use Method 1 below.
 
@@ -163,9 +170,9 @@ If you'd rather do each step manually, use Method 1 below.
 
 | Requirement | Details |
 |-------------|---------|
-| **GPU** | 16 GB+ VRAM. NVIDIA (CUDA, Supported — the published image targets Blackwell; older cards need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31)); AMD (ROCm, Community-tested); Apple Silicon (Metal, macOS hybrid, Supported — see [SETUP_MACOS.md](SETUP_MACOS.md)); Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
+| **GPU** | 8 GB+ VRAM (16 GB recommended). NVIDIA (CUDA, Supported — the published image targets Blackwell; older cards need a one-time [local rebuild](#cuda-compute-capability-dockerfilev31)); AMD (ROCm, Community-tested); Apple Silicon (Metal, macOS hybrid, Supported — see [SETUP_MACOS.md](SETUP_MACOS.md)); Vulkan (Preview) is the cross-vendor fallback; Intel Arc (SYCL) is Roadmap. See [§ Supported GPUs](#supported-gpus). |
 | **GPU drivers** | NVIDIA: proprietary drivers (`nvidia-smi` should show your GPU). AMD: `amdgpu-dkms` kernel driver (`/dev/kfd` must exist; `rocm-smi` should show your GPU). |
-| **Python 3.9+** | With pip |
+| **Python 3.9+** | With pip, for the CLI. Method 2 runs the services on the host: Python 3.11+ |
 | **curl** | For downloading model weights |
 | **Model weights** | A registry or BYO GGUF that fits the host. `atlas init` recommends one and writes the selection to `.env`. |
 
@@ -196,7 +203,7 @@ rocm-smi --showproductname --showmeminfo vram
 ```bash
 pip install -e .
 atlas tier              # prints detected GPU, tier classification, recommended settings
-atlas tier --json       # machine-readable (used by atlas init wizard)
+atlas tier --json       # machine-readable (for scripts)
 ```
 
 ---
@@ -214,8 +221,7 @@ This is the most heavily exercised deployment method: CI validates the compose f
 **AMD (ROCm):**
 - **Docker** alone — ROCm doesn't need a separate container runtime; passthrough via `--device=/dev/kfd --device=/dev/dri` is enough
 - Your user must be in the `video` and `render` groups: `sudo usermod -aG video,render $USER` (then re-login)
-- ~22 GB disk space (ROCm image is ~2 GB larger than the CUDA equivalent)
-- 30-60 min for the first `up`: the ROCm llama-server image is compiled on your machine rather than pulled (see [AMD ROCm — what's different](#amd-rocm--whats-different))
+- The first `up` compiles the ROCm llama-server image on your machine rather than pulling it (see [AMD ROCm — what's different](#amd-rocm--whats-different))
 
 ### Setup
 
@@ -236,13 +242,12 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 # 3. Select/install a model and write model-aware runtime sizing
 atlas init
 
-# 4. Install Go 1.26.6+ — required for the TUI client (atlas tui) and
-#    optional for the proxy (proxy builds automatically on first run if Go
-#    is present; otherwise it runs in Docker with file access limited to
-#    ATLAS_PROJECT_DIR). Quickest path:
+# 4. Install Go 1.26.10+ — required for the TUI client (atlas tui). With
+#    this method the proxy runs in Docker, with file access limited to
+#    ATLAS_PROJECT_DIR. Quickest path:
 mkdir -p /tmp/go-install && cd /tmp/go-install
-curl -LO https://go.dev/dl/go1.26.6.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.6.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.26.10.linux-amd64.tar.gz
 echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 cd -
@@ -255,7 +260,7 @@ cd tui && go build -o ~/.local/bin/atlas-tui . && cd ..
 #    selected model; they are intentionally not project-wide defaults.
 ${EDITOR:-vi} .env
 
-# 6. Start all services (first run builds container images — this takes several minutes)
+# 6. Start all services (the first run pulls the container images — this takes a few minutes; on ROCm it builds llama-server)
 #    NVIDIA hosts (default):
 docker compose up -d                                                  # or: podman-compose up -d
 #    AMD ROCm hosts:
@@ -274,13 +279,13 @@ atlas
 
 The ROCm path is identical to NVIDIA *except* for these four points:
 
-1. **Bring up with both compose files** (or let `atlas init` do it for you):
+1. **Bring up with both compose files** (`atlas init` writes this command into `.env` and prints it):
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
    ```
    The override switches the llama-server image to the ROCm build, swaps the NVIDIA driver request for `/dev/kfd` + `/dev/dri` passthrough, and forces `ATLAS_BACKEND=rocm` so the entrypoint takes the HIP-tuning branch.
 
-2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`: 30-60 min the first time, seconds afterwards from the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
+2. **The llama-server image is built on your machine, not pulled.** GHCR carries prebuilt CUDA and Vulkan llama images; there is no published `atlas-llama-rocm`, because CI has no AMD GPU to test one on (ROCm is Community-tested — see [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)). The override declares `pull_policy: build`, so `docker compose pull` skips llama-server and the `up` above compiles it from `inference/Dockerfile.rocm`; later builds reuse the layer cache. Every other ATLAS service still pulls its prebuilt image as usual. To build it ahead of time:
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.rocm.yml build llama-server
    ```
@@ -300,13 +305,13 @@ The ROCm path is identical to NVIDIA *except* for these four points:
    ```
    See [LLVM AMDGPU processor table](https://llvm.org/docs/AMDGPUUsage.html) for the gfx target of your card.
 
-For "I have an unsupported GPU but ROCm sort-of works on it" cases (older Vega, RDNA1), see [TROUBLESHOOTING.md § AMD GPU not detected](TROUBLESHOOTING.md) for the `ATLAS_HSA_OVERRIDE_GFX_VERSION` workaround.
+For "I have an unsupported GPU but ROCm sort-of works on it" cases (older Vega, RDNA1), see [TROUBLESHOOTING.md § AMD GPU is "unsupported" by ROCm](TROUBLESHOOTING.md#amd-gpu-is-unsupported-by-rocm-but-you-want-to-try-anyway-no-kernel-image-on-rocm) for the `ATLAS_HSA_OVERRIDE_GFX_VERSION` workaround.
 
 #### Vulkan — cross-vendor fallback
 
 When the native vendor backend isn't packaged for your hardware (Intel Arc, Snapdragon Adreno, older AMD without ROCm 6.x), Vulkan is the fallback. One Dockerfile covers AMD (Mesa RADV), Intel (Mesa ANV), NVIDIA (nvidia-container-toolkit), Apple (MoltenVK via macOS Docker), Snapdragon (Adreno), and CPU (Mesa lavapipe).
 
-Tradeoff: typically 20–40% slower than tuned native backends. Use it when CUDA/ROCm isn't an option, or to smoke-test whether ATLAS boots on unusual hardware.
+Use it when CUDA/ROCm isn't an option, or to smoke-test whether ATLAS boots on unusual hardware.
 
 ```bash
 # Option A — let atlas init pick it for you
@@ -325,7 +330,7 @@ What's different from CUDA/ROCm:
 
 1. **No vendor-specific kernel driver requirement.** Vulkan ICDs live inside the image (`mesa-vulkan-drivers` covers AMD/Intel/CPU; NVIDIA's ICD comes from the nvidia-container-toolkit mount).
 2. **`/dev/dri` passthrough only** — no `/dev/kfd`, no `--gpus all` (unless you're routing through the NVIDIA toolkit, in which case both still work).
-3. **Per-GPU selection via `ATLAS_VK_DEVICE_SELECT`** instead of `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES`. Format is Mesa-standard: `"vendorID:deviceID"` (hex) or a substring of the device name. `GGML_VK_VISIBLE_DEVICES` (numeric index) also works.
+3. **Per-GPU selection via `ATLAS_VK_DEVICE_SELECT`** instead of `CUDA_VISIBLE_DEVICES` / `HIP_VISIBLE_DEVICES`. Format is Mesa-standard: `"vendorID:deviceID"` (hex) or a substring of the device name. `ATLAS_GPU_INDEX` (numeric index, which the entrypoint passes on as `GGML_VK_VISIBLE_DEVICES`) also works.
 4. **`atlas doctor`** runs a `_check_vulkan_via_docker` probe — but only when `ATLAS_BACKEND=vulkan` is set (otherwise it skips to keep CUDA/ROCm runs fast).
 
 If you hit `vulkaninfo` showing only the `llvmpipe` CPU device when you expected a GPU, the kernel-side device passthrough failed — verify `/dev/dri/renderD*` exists on the host and your user is in the `video` + `render` groups (same as the ROCm requirement above).
@@ -377,18 +382,18 @@ For Jetson, swap to `nvcr.io/nvidia/l4t-jetpack:r36.3.0` in both build args (l4t
 
 **Known gaps (#115 tracks these):**
 
-- No prebuilt arm64 images on GHCR yet — arm64 users must build locally with the recipes above. Prebuilt multi-arch images will land once at least one arm64 device has been validated end-to-end.
-- Bootstrap installer (`scripts/atlas-bootstrap.sh`) hasn't been audited for arm64 paths.
-- Hardware testing matrix is empty for all five target devices — early adopters with any of these please drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/inferstep/ATLAS/issues/115).
+- Only `atlas-llama-vulkan` is published for arm64 (on release tags); the CUDA llama image and the proxy, V3, lens and sandbox images are amd64 only, so arm64 users build those locally with the recipes above.
+- The bootstrap installer is not tested on arm64 (its CI test runs on amd64 only).
+- Reports from any of these devices are welcome: drop your `atlas doctor` output and `vulkaninfo --summary` on [#115](https://github.com/inferstep/ATLAS/issues/115).
 
 ### What Happens on First Run
 
 1. Docker pulls 5 prebuilt container images from
-   `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}` (~3 min on a
-   fast connection). To build from source instead (the dev path), run
+   `ghcr.io/inferstep/atlas-{proxy,v3,lens,llama,sandbox}`. To build from
+   source instead (the dev path), run
    `docker compose build` before the `up` step — see "Image source"
    below.
-2. llama-server loads the 7GB model into GPU VRAM (~1-2 min)
+2. llama-server loads the 7GB model into GPU VRAM
 3. All services start health checks
 4. Once all 5 services (llama-server, geometric-lens, v3-service, sandbox, atlas-proxy) report healthy, `atlas` connects and launches the Bubbletea TUI
 
@@ -437,8 +442,8 @@ The exact number of checks varies with backend, stack state, and flags.
 This is also what `atlas-bootstrap.sh` runs at the end of install.
 
 ```bash
-atlas doctor              # full check (~5–10s)
-atlas doctor --quick      # skip the e2e model inference (~2s)
+atlas doctor              # full check
+atlas doctor --quick      # skip the e2e model inference
 atlas doctor --json       # machine output, for scripts/CI (buffered, one JSON document)
 atlas doctor -v           # verbose: show detail for each check
 ```
@@ -455,17 +460,20 @@ The checks:
 | Host | metal-native | native llama-server binary present and executable — only when `ATLAS_BACKEND=metal` (macOS hybrid) |
 | Host | model_file | The `ATLAS_MODEL_FILE` selected in `.env` exists and is > 100 MB |
 | Host | lens_weights | `cost_field.pt` + G(x) artifacts present |
-| Host | asa_steering | `ast_edit_steering.gguf` present (BiasBusters #4 — warn-not-fail; ATLAS works without it, just unsteered structural_edit-vs-edit_file bias) |
+| Host | asa_steering | `ast_edit_steering.gguf` present (warn-not-fail; ATLAS works without it, just unsteered structural_edit-vs-edit_file bias) |
 | Host | tier_match | `.env` model selection matches host hardware (warn on overshoot — OOM risk — pass on match or undershoot) |
+| Host | grammar_mode | `ATLAS_GRAMMAR_MODE` matches the registry's profile for the selected model (warns on a mismatch) |
 | Host | tier_constraints | host CPU/RAM/disk meets the recommended tier minimums (catches "16 GB GPU but 8 GB RAM" mismatches) |
 | Stack | container/llama-server, geometric-lens, v3-service, sandbox, atlas-proxy | all 5 running and healthy |
-| Stack | health/llama, lens, v3, sandbox, proxy | all 5 `/health` endpoints return ok |
-| Stack | internal_auth | internal service auth: token file present with tight permissions, and live enforcement probed both ways (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
-| Stack | status_dimensions | informational: the seven lens/ASA status dimensions from the proxy `/v1/calibration/status` (the same source the TUI badge reads); never fails the run |
+| Stack | health/llama, lens, v3, sandbox, proxy | the `/health` endpoints return ok; for the lens, the strict `/ready` (scoring works), and when not, the reason it gives |
+| Stack | internal_auth | internal service auth: token file present with tight permissions and readable by the user the services run as, and live enforcement probed both ways at each of the proxy, the lens, the V3 service and the sandbox (wrong token → 401, valid token accepted); warns when auth is disabled (no `secrets/service-token`) |
+| Stack | status_dimensions | the seven lens/ASA status dimensions from the proxy `/v1/calibration/status` (the same source the TUI badge reads); fails when a dimension is `blocked` (the proxy then refuses every request), otherwise informational |
 | Stack | image_skew | all 5 `atlas-*` images on the same tag |
-| End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip to llama-server (`--quick` to skip) |
+| Stack | workspace_mounts | proxy and sandbox bind the same host dir as `/workspace` |
+| End-to-end | e2e_smoke | live `/v1/chat/completions` round-trip through the proxy to llama-server (`--quick` to skip) |
+| End-to-end | inference_contract | llama-server serves `/embedding` vectors and the per-layer hidden states the lens can use (warns if not; skipped by `--quick`) |
 
-The `vulkan` and `metal-native` rows are conditional on the configured backend; the health, `internal_auth`, and `status_dimensions` rows run only when at least one container is up; `e2e_smoke` is skipped by `--quick`. The remaining checks always run.
+The `vulkan` and `metal-native` rows are conditional on the configured backend; the health, `internal_auth`, and `status_dimensions` rows run only when at least one container is up; `e2e_smoke` and `inference_contract` are skipped by `--quick`. The remaining checks always run, unless the `docker` check fails: then doctor stops there.
 
 If you'd rather check by hand:
 
@@ -489,7 +497,7 @@ All health endpoints should return `{"status": "ok"}` or `{"status": "healthy"}`
 
 ```bash
 docker compose down          # Stop all services (preserves images)
-docker compose down --rmi all  # Stop and remove images (next start rebuilds)
+docker compose down --rmi all  # Stop and remove images (next start pulls them again)
 ```
 
 ### Viewing Logs
@@ -547,7 +555,7 @@ Run all services as local processes without containers. Useful for development o
 
 | Requirement | Details |
 |-------------|---------|
-| **Go 1.26.6+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
+| **Go 1.26.10+** | For building atlas-proxy and the atlas-tui client (older Go toolchains auto-fetch it) |
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
@@ -634,13 +642,15 @@ cd /path/to/your/project
 atlas    # Checks atlas-proxy is reachable, then launches the TUI
 ```
 
-`atlas` builds the `atlas-tui` binary from `tui/` automatically if it is missing or older than the checkout (requires Go 1.26.6+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
+`atlas` builds the `atlas-tui` binary from `tui/` automatically if it is missing or older than the checkout (requires Go 1.26.10+ on PATH), and verifies the proxy on localhost:8090 before handing over to the TUI.
 
 ---
 
 ## Method 3: K3s
 
 Kubernetes deployment with GPU scheduling, health probes, and resource limits. Preview — templates are validated and rendered in CI; there is no automated live-cluster test.
+
+> **Network exposure.** This method publishes all five services as NodePorts (defaults `30080`, `32735`, `31144`, `30070`, `30820`). A NodePort answers on every network address of the node, not only on `127.0.0.1`, so other machines on the same network can reach the services. The K3s templates do not mount the service token, so no service checks a token on this method. Use this method only on a network you trust, or close these ports to other machines with the host firewall. The Docker Compose method binds every published port to `127.0.0.1`.
 
 ### Additional Prerequisites
 
@@ -658,7 +668,7 @@ The install script handles the complete setup — K3s installation, GPU Operator
 ```bash
 # 1. Configure
 cp atlas.conf.example atlas.conf
-# Edit atlas.conf: model paths, GPU layers, context size, NodePorts
+# Edit atlas.conf: model paths, context size, NodePorts
 
 # 2. Run the installer (requires root)
 sudo scripts/install.sh
@@ -697,7 +707,7 @@ scripts/verify-install.sh
 
 ### K3s-Specific Configuration
 
-K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts and pipeline behavior are identical to Docker Compose; only deployment plumbing differs:
+K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts are the same as Docker Compose. Besides the deployment plumbing below, two runtime settings differ: K3s runs llama-server with `ATLAS_EMBED_POOLING=mean` (Compose: `none`), and it mounts no service token, so internal auth is off:
 
 | Setting | Docker Compose | K3s |
 |---------|---------------|-----|
@@ -709,7 +719,7 @@ K3s uses `atlas.conf` (not `.env`) for configuration. The HTTP contracts and pip
 | GPU allocation | `deploy.resources.reservations.devices` (nvidia) | `resources.limits.nvidia.com/gpu: 1` (requires GPU Operator or device plugin) |
 | Sandbox toolchain caches | `tmpfs` mounts per language | `emptyDir` with `sizeLimit` per language (universal pattern, same set) |
 
-Model + runtime parameters (`ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH`, `ATLAS_PARALLEL_SLOTS`, `ATLAS_FLASH_ATTENTION`, KV cache quantization, `--embeddings` for the lens scoring path) all read from the same env vars in both modes — see `atlas.conf.example` and `.env.example`.
+Model + runtime parameters use different keys in the two modes: Compose reads `ATLAS_MODEL_FILE`, `ATLAS_CTX_SIZE`, `ATLAS_PARALLEL_SLOTS` and `ATLAS_KV_TYPE_K`/`_V` from `.env`; K3s reads `ATLAS_MAIN_MODEL`, `ATLAS_CONTEXT_LENGTH` and `ATLAS_PARALLEL_SLOTS` from `atlas.conf`. Flash attention and `--embeddings` are always on (set by the llama-server entrypoint) — see `atlas.conf.example` and `.env.example`.
 
 See [CONFIGURATION.md](CONFIGURATION.md) for the full `atlas.conf` reference.
 
@@ -745,6 +755,8 @@ which tier your hardware lands in and the exact `.env` values to use.
 | **large** | 20–32 GB | Qwen3.5 14B Q5_K_M (10.5 GB) | 32K | 2 | RTX 3090, 4090, 5090 24GB |
 | **xlarge** | 32 GB+ | Qwen3.5 32B Q5_K_M (23 GB) | 64K | 2 | RTX 5090 32GB, A6000, A100, H100 |
 
+The small, large and xlarge models have no download source and no lens bundle yet, so `atlas init` picks Qwen3.5 9B Q6_K instead. To run one of them, install your own GGUF (`atlas model install --url`) and build its bundle (`atlas bench`, then `atlas lens build --from-results`): requests are refused until it has one.
+
 ```bash
 atlas tier              # classify this host + show recommendations
 atlas tier list         # show all 5 tier definitions
@@ -763,7 +775,8 @@ stays fully on-GPU (`atlas tier fit --write` applies the result to
 for pre-download sizing guidance.
 
 The medium tier is the ATLAS development target — `atlas-bootstrap.sh`
-defaults to its model+context settings. For other tiers, run
+defaults to its model; context and slots stay at the `.env.example` values
+(`ATLAS_CTX_SIZE=131072`, 4 slots) until you run `atlas tier fit --write`. For other tiers, run
 **`atlas init`** (the first-run wizard) after the bootstrap
 completes. It probes hardware via `atlas tier`, picks the right model
 from the registry, downloads it with SHA verification, and rewrites
@@ -774,8 +787,8 @@ or model registry default changes; after a wizard run, `atlas tier fit
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
 | GPU VRAM | 8 GB | 16 GB | See tier table above |
-| System RAM | 14 GB | 16 GB+ | PyTorch runtime + container overhead |
-| Disk | 15 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
+| System RAM | 12 GB | 16 GB+ | PyTorch runtime + container overhead |
+| Disk | 20 GB | 25 GB | Model (4.4–23 GB depending on tier) + container images (5–8 GB) + working space |
 | CPU | 4 cores | 8+ cores | V3 pipeline is CPU-intensive during repair phases |
 
 ### Supported GPUs
@@ -784,7 +797,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 
 | Vendor | Backend | Status | Build path | Tested cards |
 |---|---|---|---|---|
-| NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
+| NVIDIA (Blackwell — RTX 50xx, GB10) | CUDA | Supported (published image) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (primary dev) |
 | NVIDIA (pre-Blackwell — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | Preview — one-time [local rebuild required](#cuda-compute-capability-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (upstream llama.cpp supports these; no maintainer validation on ATLAS) |
 | AMD | ROCm / HIP | Community-tested | `inference/Dockerfile.rocm` | RX 7900 XTX (community smoke-test, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
 | Apple Silicon | Metal | Supported (macOS hybrid: native llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `docker-compose.macos.yml` | M2 Pro 32GB (verified); M3/M4 (target) |
@@ -795,7 +808,7 @@ Any GPU with 8 GB+ VRAM and a llama.cpp-supported backend:
 
 #### CUDA Compute Capability (Dockerfile.v31)
 
-`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, B100, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
+`inference/Dockerfile.v31` compiles llama.cpp for a specific CUDA compute capability. The default — and what the published `atlas-llama` image on GHCR is built with — is `120;121` (Blackwell: RTX 50xx, GB10) **only**. The published image contains no kernels for earlier GPUs, and its embedded PTX cannot be JIT-compiled downward, so on RTX 20/30/40-series, GTX 10xx, and pre-Blackwell datacenter cards (V100/A100/H100/T4/L4) llama-server fails at startup with `no kernel image is available for execution on the device`. You must rebuild the inference image once for your architecture. (A local build with the wrong arch value fails earlier, with `nvcc fatal: unsupported gpu architecture`.)
 
 Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 
@@ -804,7 +817,7 @@ Find your GPU's arch, then rebuild with `--build-arg CUDA_ARCH=<value>`:
 nvidia-smi --query-gpu=compute_cap --format=csv,noheader
 
 # Compose-native rebuild — only llama-server is rebuilt, the other
-# services keep using the GHCR images (~30-75 min, one time):
+# services keep using the GHCR images:
 docker compose build --build-arg CUDA_ARCH=89 llama-server
 docker compose up -d --no-deps llama-server
 
@@ -829,7 +842,7 @@ Common values:
 
 #### AMD GPU Targets (Dockerfile.rocm)
 
-`inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`. Each additional target adds ~150 MB to the binary.
+`inference/Dockerfile.rocm` compiles llama.cpp's HIP backend for one or more `gfx` targets. The default is a fat build covering the most common consumer + datacenter AMD GPUs: `gfx1100;gfx1101;gfx1102;gfx1030;gfx90a`.
 
 Override at build time with `--build-arg GFX_TARGET=<value>` (or via `ATLAS_GFX_TARGET` env var, which the compose override forwards):
 
@@ -854,8 +867,8 @@ Common values:
 | `gfx90a` | CDNA2 | MI210, MI250, MI250X |
 | `gfx942` | CDNA3 | MI300X |
 | `gfx900` | Vega | Vega 56/64 (may need HSA override — see TROUBLESHOOTING.md) |
-| `gfx1200` | RDNA4 (Navi 44) | RX 9070 |
-| `gfx1201` | RDNA4 (Navi 48) | RX 9070 XT |
+| `gfx1200` | RDNA4 (Navi 44) | RX 9060 XT |
+| `gfx1201` | RDNA4 (Navi 48) | RX 9070, 9070 XT |
 
 > **RDNA4 (gfx1200/gfx1201) users:** set `ATLAS_ROCM_TAG=7.2.3-complete` — the default ROCm 6.2 base image does not include gfx1200/gfx1201 compiler support. ROCm 7.0+ supports these targets natively; do not set `ATLAS_HSA_OVERRIDE_GFX_VERSION`. See [TROUBLESHOOTING.md § RDNA4](TROUBLESHOOTING.md) for details.
 
@@ -865,7 +878,7 @@ Your GPU's gfx target: `rocminfo | grep -i gfx | head -1` (or look it up in the 
 
 ## Geometric Lens Weights (Required)
 
-ATLAS needs the Geometric Lens for every request ([ADR 0011](adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_down` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
+ATLAS needs the Geometric Lens for every request ([ADR 0011](adr/0011-the-lens-is-required.md)). The lens needs C(x) and G(x) weights for the served model. Without them, the proxy refuses each request with HTTP 503 `dependency_unavailable` and says why, and `atlas doctor` fails. A lens that has weights but no calibration yet is accepted: it scores, and its threshold interventions wait for calibration.
 
 Models listed with lens artifacts in [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) get them from `atlas model install-artifacts`. Pre-trained weights and training data are also available on HuggingFace:
 
@@ -873,10 +886,10 @@ Models listed with lens artifacts in [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) g
 
 Place weight files in `geometric-lens/geometric_lens/models/` (or mount via `ATLAS_LENS_MODELS` in Docker Compose). The service loads them automatically on startup.
 
-For a model with no weights, build them from your own benchmark data. `atlas bench` runs the V3 stages directly, not through the proxy, so it works before the lens has weights. The whole loop is CLI-driven:
+For a model with no weights, build them from your own benchmark data. `atlas bench` runs the model on the benchmark tasks directly (baseline mode: V3 stages off, one candidate per task), not through the proxy, so it works before the lens has weights. The whole loop is CLI-driven:
 
 ```bash
-atlas bench --run-id mymodel_lens --tasks 200    # generate + self-label candidates
+atlas bench --run-id mymodel_lens --tasks 200    # generate + self-label one candidate per task
 atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/per_task
 ```
 
@@ -885,7 +898,7 @@ atlas lens build --force --from-results benchmark/results/mymodel_lens/v3_lcb/pe
 ### Bringing your own llama-server
 
 To run inference yourself — a host-native build, a remote box, or llama.cpp in
-router mode — point the four consuming services at it and stub the bundled
+router mode — point the three consuming services at it and stub the bundled
 container. Create `docker-compose.override.yml`:
 
 ```yaml
@@ -895,15 +908,20 @@ services:
     entrypoint: []
     healthcheck:
       test: ["CMD", "true"]
-    deploy: {}
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []         # drop the base file's GPU reservation
   geometric-lens:
     environment:
       LLAMA_URL: http://host.docker.internal:8080
+      LLAMA_EMBED_URL: http://host.docker.internal:8080
   v3-service:
     environment:
-      LLAMA_URL: http://host.docker.internal:8080
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
   atlas-proxy:
     environment:
+      ATLAS_INFERENCE_URL: http://host.docker.internal:8080
       ATLAS_LLAMA_URL: http://host.docker.internal:8080
 ```
 
@@ -917,14 +935,8 @@ directly, though it is what that mapping resolves to.
 in `.env` to the served model's name — `atlas doctor`'s smoke test sends it, and
 single-model servers ignore it.
 
-**Before the first `docker compose up`,** make sure the secrets directory
-exists — the bind mount fails without it:
-
-```bash
-mkdir -p secrets     # or set ATLAS_SECRETS_DIR
-```
-
-`atlas init` creates it for you; only a manual compose-first flow needs this.
+Without a secrets directory, internal service auth is off. `atlas init` creates
+it and the token.
 
 ### Bringing your own model
 
@@ -952,18 +964,19 @@ Full reference: [CLI.md § atlas lens](CLI.md#atlas-lens).
 
 ## ASA Steering Vector (Auto-Built)
 
-May 2026 BiasBusters #4. A residual-stream steering vector that biases
-the model toward `structural_edit` over `edit_file` for whole-function /
-class / element rewrites, applied **before** the grammar gate has a
-chance to reject anything. Strictly optional — ATLAS continues to work
+A residual-stream steering vector that biases the model toward
+`structural_edit` over `edit_file` for whole-function / class / element
+rewrites, applied **before** the grammar gate has a chance to reject
+anything. Strictly optional — ATLAS continues to work
 without it, just with an unsteered tool-selection bias.
 
 `atlas-bootstrap.sh` builds it automatically after the services come
 up. The pipeline is:
 
-1. `build_cvector_prompts.py` turns the committed
-   `geometric-lens/asa_calibration/contrast_pairs.jsonl` (1000 pairs)
-   into positive / negative prompt files.
+1. `build_cvector_prompts.py` turns
+   `geometric-lens/asa_calibration/contrast_pairs.jsonl` (1000 pairs,
+   generated on demand by `generate_pairs.py`) into positive / negative
+   prompt files.
 2. The bootstrap stops `llama-server` briefly, runs
    `llama-cvector-generator` as a one-shot container with `--method mean
    -ngl 99`, writes `models/ast_edit_steering.gguf` plus a
@@ -977,10 +990,9 @@ up. The pipeline is:
    stays **disabled** (the startup banner reports why) — vectors are
    residual-space artifacts tied to one model.
 
-Total wall time on a 16GB GPU: ~5 minutes. Build runs on the same
-hardware the model lives on; the resulting vector is model-specific
-(do not move an `ast_edit_steering.gguf` built against
-one model's artifacts to a host running a different base model).
+The build runs on the same hardware the model lives on; the resulting
+vector is model-specific (do not move an `ast_edit_steering.gguf` built
+against one model's artifacts to a host running a different base model).
 
 > The `ast_edit_steering` filename is intentional and stable: the registry
 > SHA-pins it and the `.model` marker sits beside it, so it keeps the name
@@ -997,11 +1009,9 @@ one model's artifacts to a host running a different base model).
 
 **If the local build fails** (e.g. cvector-generator missing in an
 older `atlas-llama` image, GPU OOM, network hiccup pulling the
-runtime), the bootstrap falls back to downloading a prebuilt
-`ast_edit_steering.gguf` from the
-[ATLAS HuggingFace dataset](https://huggingface.co/datasets/itigges22/ATLAS).
-If that also fails the install completes with a warning — `atlas
-doctor` will flag the gap as `warn`, not `fail`.
+runtime), the install completes with a warning and ATLAS runs without
+steering; it does not apply a vector built for another model. `atlas
+doctor` flags the gap as `warn`, not `fail`.
 
 To skip the build entirely, set `ATLAS_BOOTSTRAP_SKIP_ASA=1` before
 running the installer.

@@ -43,18 +43,14 @@ ALLOWLIST = {
 }
 
 
-def _tracked_files():
-    out = subprocess.check_output(["git", "ls-files"], cwd=REPO, text=True)
-    return [p for p in out.splitlines() if p]
-
-
 def test_no_secrets_in_tracked_files():
+    tracked = subprocess.check_output(["git", "ls-files"], cwd=REPO, text=True).splitlines()
     findings = []
-    for rel in _tracked_files():
+    for rel in tracked:
         if rel in ALLOWLIST:
             continue
         path = REPO / rel
-        # skip binaries / large files
+        # skip large files
         try:
             if path.stat().st_size > 2_000_000:
                 continue

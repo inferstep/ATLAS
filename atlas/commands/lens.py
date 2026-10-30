@@ -1,17 +1,12 @@
-"""atlas lens — Geometric Lens probe + build pipeline (PC-057, PC-058).
+"""atlas lens: Geometric Lens probe, build and publish.
 
-Two subcommands wrap the existing geometric-lens training code into a
-model-path-driven workflow so users can bring their own GGUF and either
-verify it's Lens-compatible (`check`) or actually train fresh artifacts
-for it (`build`).
+Three subcommands wrap the existing geometric-lens training code into a
+model-path-driven workflow so users can bring their own GGUF and verify
+it is Lens-compatible (`check`, a cheap pre-flight), train fresh
+artifacts for it (`build`, wraps training.train_cost_field), or upload
+artifacts and open a registry PR (`publish`).
 
-Layering:
-    PC-057 `atlas lens check`  -> this file, cheap pre-flight
-    PC-058 `atlas lens build`  -> this file, wraps training.train_cost_field
-    PC-059 `atlas lens push`   -> roadmap, publishes to registry
-    PC-060 HF middleman        -> roadmap, automated distribution
-
-Probe contract: both subcommands talk to a *running* llama-server via
+Probe contract: `check` and `build` talk to a *running* llama-server via
 its `/embedding` and `/props` endpoints. ATLAS users typically already
 have one up (`docker compose up -d`); if not, the commands print a
 clear "start the stack first" hint rather than spinning their own
@@ -24,6 +19,7 @@ Invoke:
     atlas lens check <model-name>       # probe a registry entry
     atlas lens check /path/to/model.gguf  # probe an arbitrary file
     atlas lens build <name|path>        # train fresh C(x) artifacts
+    atlas lens publish [<name|path>]    # upload artifacts, open a registry PR
     atlas lens --json                   # machine-readable output for scripts
 
 Exit codes (check):
@@ -45,7 +41,15 @@ from atlas import compose as compose_config
 from atlas import env as cli_env
 from atlas import publishing
 from atlas.client import LlamaProbe, post_json_or_none, probe_llama
-from atlas.commands import lens_card, model_registry
+from atlas.commands import model_registry
+# Moved beside this module, by subject, and imported back under their names.
+from atlas.commands.lens_publish import (
+    _open_registry_pr, _print_pr_body_for_paste, _print_pr_body_without_gh,
+    _render_registry_pr_body, _upload_to_hf,
+)
+from atlas.commands.lens_samples import (
+    _load_results_samples, _load_telemetry_embeddings, _load_training_samples,
+)
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -95,14 +99,14 @@ def _inspect_cost_field(artifact_dir: str) -> ArtifactInspection:
         return ArtifactInspection(present=True, dim=None,
                                   torch_available=False,
                                   error="torch not installed on host")
+    # Only in torch's restricted mode, as the lens service loads it: an
+    # unrestricted load could run code from the file.
     try:
         state = torch.load(cost_path, map_location="cpu", weights_only=True)
-    except Exception:
-        try:
-            state = torch.load(cost_path, map_location="cpu")
-        except Exception as e:
-            return ArtifactInspection(present=True, dim=None,
-                                      error=f"torch.load failed: {e}")
+    except Exception as e:
+        return ArtifactInspection(present=True, dim=None,
+                                  error=f"cost_field.pt cannot be read in torch's restricted mode, so the lens service "
+                                        f"would refuse it too; rebuild it with `atlas lens build` ({e})")
     if not isinstance(state, dict):
         return ArtifactInspection(present=True, dim=None,
                                   error="state dict has unexpected shape")
@@ -220,31 +224,9 @@ def _check_model(arg: Optional[str], atlas_root: str) -> CheckVerdict:
     return v
 
 
-def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
-    """The actual probe + verdict logic. Pure function for testability."""
-    probe = probe_llama()
-    if not probe.reachable:
-        return CheckVerdict(verdict="incompatible", reason=probe.error,
-                            probe=probe)
-    if probe.embedding_dim == 0:
-        return CheckVerdict(verdict="incompatible", reason=probe.error,
-                            probe=probe)
-
-    matched = publishing.resolve_model_arg(arg)
-    matched_name = matched.name if matched else None
-    requested_model = (matched.name if matched else arg) or ""
-    if (requested_model and probe.model_name
-            and publishing.canonical_model_identity(requested_model)
-            != publishing.canonical_model_identity(probe.model_name)):
-        return CheckVerdict(
-            verdict="incompatible",
-            reason=(f"Requested model {requested_model!r}, but llama-server "
-                    f"has {probe.model_name!r} loaded. Start the requested "
-                    "model before checking or building its Lens artifacts."),
-            probe=probe,
-            matched_model=matched_name,
-        )
-
+def _lens_artifact_dir(matched, atlas_root: str) -> str:
+    """The dir `atlas lens check` inspects: the registry's own for a
+    Lens-supported entry, else ATLAS_LENS_MODELS or the default models dir."""
     # Resolve artifact dir. For known-supported registry entries this is
     # already wired; for arbitrary models we fall back to ATLAS_LENS_MODELS
     # or the global default. Either way, "is there a cost_field.pt whose
@@ -259,79 +241,53 @@ def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
         else:
             artifact_dir = os.path.normpath(os.path.join(
                 atlas_root, "geometric-lens", "geometric_lens", "models"))
+    return artifact_dir
 
-    inspection = (_inspect_cost_field(artifact_dir) if artifact_dir
-                  else ArtifactInspection(present=False))
 
-    if not inspection.present:
+def _verdict_without_torch(probe: LlamaProbe, artifact_dir: str,
+                           matched_name: Optional[str]) -> CheckVerdict:
+    """The verdict for a cost_field.pt the host cannot read, for want of torch:
+    needs-build when the runtime artifacts are missing or invalid, else an
+    unverified compat."""
+    missing = _missing_runtime_artifacts(artifact_dir)
+    if missing:
         return CheckVerdict(
             verdict="needs-build",
-            reason=(f"Model produces {probe.embedding_dim}-dim embeddings, but "
-                    f"no cost_field.pt found in {artifact_dir}. Run "
-                    f"`atlas lens build` to train fresh artifacts."),
+            reason=("Lens weights are incomplete or uncalibrated; missing "
+                    f"{', '.join(missing)}. Run `atlas lens build`."),
             probe=probe, artifact_dir=artifact_dir,
             artifact_dim=None, matched_model=matched_name,
         )
-
-    if inspection.dim is None and not inspection.torch_available:
-        missing = _missing_runtime_artifacts(artifact_dir)
-        if missing:
-            return CheckVerdict(
-                verdict="needs-build",
-                reason=("Lens weights are incomplete or uncalibrated; missing "
-                        f"{', '.join(missing)}. Run `atlas lens build`."),
-                probe=probe, artifact_dir=artifact_dir,
-                artifact_dim=None, matched_model=matched_name,
-            )
-        invalid = _invalid_runtime_artifacts(
-            artifact_dir, probe.model_name, probe.embedding_dim)
-        if invalid:
-            return CheckVerdict(
-                verdict="needs-build",
-                reason=("Lens calibration is invalid: " + "; ".join(invalid)
-                        + ". Run `atlas lens build`."),
-                probe=probe, artifact_dir=artifact_dir,
-                artifact_dim=None, matched_model=matched_name,
-            )
-        # Artifact exists but the host Python can't peek at its dim. Don't
-        # send the user to needs-build over a tooling gap on the host —
-        # the lens service in the container has its own torch and will
-        # score fine. Surface the unverified state via the dedicated flag.
+    invalid = _invalid_runtime_artifacts(
+        artifact_dir, probe.model_name, probe.embedding_dim)
+    if invalid:
         return CheckVerdict(
-            verdict="compat", unverified=True,
-            reason=(f"cost_field.pt exists at {artifact_dir} but the host "
-                    f"Python can't introspect its dim (torch not installed). "
-                    f"Assuming compat — the lens service in the container "
-                    f"has torch and will score normally. `pip install torch` "
-                    f"on the host if you want this to verify properly."),
+            verdict="needs-build",
+            reason=("Lens calibration is invalid: " + "; ".join(invalid)
+                    + ". Run `atlas lens build`."),
             probe=probe, artifact_dir=artifact_dir,
             artifact_dim=None, matched_model=matched_name,
         )
+    # Artifact exists but the host Python can't peek at its dim. Don't
+    # send the user to needs-build over a tooling gap on the host —
+    # the lens service in the container has its own torch and will
+    # score fine. Surface the unverified state via the dedicated flag.
+    return CheckVerdict(
+        verdict="compat", unverified=True,
+        reason=(f"cost_field.pt exists at {artifact_dir} but the host "
+                f"Python can't introspect its dim (torch not installed). "
+                f"Assuming compat — the lens service in the container "
+                f"has torch and will score normally. `pip install torch` "
+                f"on the host if you want this to verify properly."),
+        probe=probe, artifact_dir=artifact_dir,
+        artifact_dim=None, matched_model=matched_name,
+    )
 
-    if inspection.dim is None:
-        # Torch is available but the load failed for some other reason —
-        # corrupted file, unrecognized layout, etc. Treat as needs-build
-        # since we can't confirm the artifact is usable.
-        return CheckVerdict(
-            verdict="needs-build",
-            reason=(f"cost_field.pt at {artifact_dir} could not be inspected: "
-                    f"{inspection.error}. Rebuild with `atlas lens build`."),
-            probe=probe, artifact_dir=artifact_dir,
-            artifact_dim=None, matched_model=matched_name,
-        )
-    artifact_dim = inspection.dim
 
-    if artifact_dim != probe.embedding_dim:
-        return CheckVerdict(
-            verdict="needs-build",
-            reason=(f"Dim mismatch: model emits {probe.embedding_dim}-dim "
-                    f"embeddings but the saved cost_field.pt expects "
-                    f"{artifact_dim}-dim input. Run `atlas lens build` to "
-                    f"train fresh artifacts at the model's native dim."),
-            probe=probe, artifact_dir=artifact_dir,
-            artifact_dim=artifact_dim, matched_model=matched_name,
-        )
-
+def _verdict_at_matching_dim(probe: LlamaProbe, artifact_dir: str, artifact_dim: int,
+                             matched_name: Optional[str]) -> CheckVerdict:
+    """The verdict once cost_field.pt's input dim matches the model's: compat
+    when the calibrated runtime artifacts are present and valid."""
     missing = _missing_runtime_artifacts(artifact_dir)
     if missing:
         return CheckVerdict(
@@ -371,6 +327,76 @@ def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
         probe=probe, artifact_dir=artifact_dir,
         artifact_dim=artifact_dim, matched_model=matched_name,
     )
+
+
+def _check_model_inner(arg: Optional[str], atlas_root: str) -> CheckVerdict:
+    """The actual probe + verdict logic. Pure function for testability."""
+    probe = probe_llama()
+    if not probe.reachable:
+        return CheckVerdict(verdict="incompatible", reason=probe.error,
+                            probe=probe)
+    if probe.embedding_dim == 0:
+        return CheckVerdict(verdict="incompatible", reason=probe.error,
+                            probe=probe)
+
+    matched = publishing.resolve_model_arg(arg)
+    matched_name = matched.name if matched else None
+    requested_model = (matched.name if matched else arg) or ""
+    if (requested_model and probe.model_name
+            and publishing.canonical_model_identity(requested_model)
+            != publishing.canonical_model_identity(probe.model_name)):
+        return CheckVerdict(
+            verdict="incompatible",
+            reason=(f"Requested model {requested_model!r}, but llama-server "
+                    f"has {probe.model_name!r} loaded. Start the requested "
+                    "model before checking or building its Lens artifacts."),
+            probe=probe,
+            matched_model=matched_name,
+        )
+
+    artifact_dir = _lens_artifact_dir(matched, atlas_root)
+
+    inspection = (_inspect_cost_field(artifact_dir) if artifact_dir
+                  else ArtifactInspection(present=False))
+
+    if not inspection.present:
+        return CheckVerdict(
+            verdict="needs-build",
+            reason=(f"Model produces {probe.embedding_dim}-dim embeddings, but "
+                    f"no cost_field.pt found in {artifact_dir}. Run "
+                    f"`atlas lens build` to train fresh artifacts."),
+            probe=probe, artifact_dir=artifact_dir,
+            artifact_dim=None, matched_model=matched_name,
+        )
+
+    if inspection.dim is None and not inspection.torch_available:
+        return _verdict_without_torch(probe, artifact_dir, matched_name)
+
+    if inspection.dim is None:
+        # Torch is available but the load failed for some other reason —
+        # corrupted file, unrecognized layout, etc. Treat as needs-build
+        # since we can't confirm the artifact is usable.
+        return CheckVerdict(
+            verdict="needs-build",
+            reason=(f"cost_field.pt at {artifact_dir} could not be inspected: "
+                    f"{inspection.error}. Rebuild with `atlas lens build`."),
+            probe=probe, artifact_dir=artifact_dir,
+            artifact_dim=None, matched_model=matched_name,
+        )
+    artifact_dim = inspection.dim
+
+    if artifact_dim != probe.embedding_dim:
+        return CheckVerdict(
+            verdict="needs-build",
+            reason=(f"Dim mismatch: model emits {probe.embedding_dim}-dim "
+                    f"embeddings but the saved cost_field.pt expects "
+                    f"{artifact_dim}-dim input. Run `atlas lens build` to "
+                    f"train fresh artifacts at the model's native dim."),
+            probe=probe, artifact_dir=artifact_dir,
+            artifact_dim=artifact_dim, matched_model=matched_name,
+        )
+
+    return _verdict_at_matching_dim(probe, artifact_dir, artifact_dim, matched_name)
 
 
 def _emit_check(args: argparse.Namespace, color: bool) -> int:
@@ -560,68 +586,6 @@ def _extract_training_embeddings(samples: List[Dict],  # noqa: C901
     return out
 
 
-def _load_telemetry_embeddings(emb_path: str,
-                                expect_dim: int) -> "tuple[List[Dict], int]":
-    """Load labeled embeddings banked by v3_runner during a bench run.
-
-    Every sandbox-tested candidate (probe + PlanSearch fan-out + repair
-    iterations) gets its embedding + PASS/FAIL label appended to
-    telemetry/embeddings.emb as the bench runs — in V3 mode that is several
-    labeled samples per task, not one. Returns ({"embedding", "label"}
-    dicts, n_skipped) with UNKNOWN labels and dim mismatches dropped.
-    """
-    # stages/ (the V3 pipeline stages) lives in v3-service — same pattern
-    # as the geometric-lens sys.path setup above.
-    v3_dir = os.path.join(cli_env.atlas_root(), "v3-service")
-    if v3_dir not in sys.path:
-        sys.path.insert(0, v3_dir)
-    from stages.embedding_store import EmbeddingReader
-
-    out: List[Dict] = []
-    skipped = 0
-    for rec in EmbeddingReader(emb_path).read_all():
-        label = {"PASS": 1, "FAIL": 0}.get(rec.get("label"))
-        emb = rec.get("embedding")
-        if label is None or not emb or (expect_dim
-                                        and len(emb) != expect_dim):
-            skipped += 1
-            continue
-        out.append({"embedding": emb, "label": label})
-    return out, skipped
-
-
-def _load_training_samples(path: Optional[str]) -> List[Dict]:
-    """Load training samples from a JSON or JSONL file.
-
-    Format: list of {"text": str, "label": 0|1} or {"content": str, "label": 0|1}.
-    JSONL is detected by .jsonl extension or by leading whitespace check.
-    """
-    if not path or not os.path.isfile(path):
-        return []
-    with open(path) as fh:
-        content = fh.read()
-    if path.endswith(".jsonl") or content.lstrip().startswith("{\""):
-        # JSONL
-        samples = []
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                samples.append(jsonlib.loads(line))
-            except jsonlib.JSONDecodeError:
-                continue
-        return samples
-    # JSON array
-    try:
-        parsed = jsonlib.loads(content)
-        if isinstance(parsed, list):
-            return parsed
-    except jsonlib.JSONDecodeError:
-        return []
-    return []
-
-
 _MANAGED_LENS_ARTIFACTS = (
     "cost_field.pt",
     "cost_field.safetensors",
@@ -742,39 +706,9 @@ def _activate_lens_bundle(staging_dir: str, artifact_dir: str) -> None:
         shutil.rmtree(backup_dir, ignore_errors=True)
 
 
-def _load_results_samples(results_dir: str) -> List[Dict]:
-    """Load training samples from a benchmark results directory — the per-task
-    JSONs written by `atlas bench` (each has `code` + `passed`). Maps to the
-    same {text, label} shape `_extract_training_embeddings` consumes, so the
-    model trains C(x) on its own pass/fail candidates."""
-    import glob
-    samples: List[Dict] = []
-    for fp in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
-        try:
-            with open(fp) as fh:
-                d = jsonlib.load(fh)
-        except (OSError, jsonlib.JSONDecodeError):
-            continue
-        if not isinstance(d, dict):
-            continue  # stray non-result JSON (array/scalar) in the dir
-        code = d.get("code")
-        if not code:
-            continue
-        samples.append({"text": code, "label": 1 if d.get("passed") else 0})
-    return samples
-
-
-def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
-    """Train fresh Lens artifacts for the model llama-server has loaded.
-
-    Doesn't ship its own dataset — users point --samples at a labeled
-    JSON/JSONL file (typically pulled from huggingface.co/datasets/itigges22/ATLAS,
-    which has the V3 ablation traces with pass/fail labels). Tiny built-in
-    sanity datasets are intentionally NOT bundled: a 20-sample C(x) is
-    worse than no C(x) (it'll badly mis-rank and the user won't know).
-    """
-    atlas_root = cli_env.atlas_root()
-
+def _probe_for_build(args: argparse.Namespace, atlas_root: str, color: bool):
+    """[1/5]: probe the loaded model as `atlas lens check` does. Returns
+    (verdict, exit_code); exit_code is None when the build goes on."""
     # 1. Pre-flight: confirm we can probe the model. Reuses the check path
     # so build's UX agrees with check's "this is/isn't compat" verdict.
     _safe_print("[1/5] Probing llama-server…")
@@ -782,42 +716,56 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if verdict.verdict == "incompatible":
         _safe_print(f"  {RED if color else ''}Cannot proceed: "
                     f"{verdict.reason}{RESET if color else ''}")
-        return 2
+        return verdict, 2
     _safe_print(f"  Model emits {verdict.probe.embedding_dim}-dim embeddings "
                 f"(model: {verdict.probe.model_name or 'unknown'})")
     if verdict.verdict == "compat" and not args.force:
         _safe_print(f"  {YELL if color else ''}Artifacts already exist at "
                     f"{verdict.artifact_dir} for the current dim. Pass "
                     f"--force to retrain anyway.{RESET if color else ''}")
-        return 0
+        return verdict, 0
+    return verdict, None
 
-    # 2. Load training data
+
+def _samples_from_results(args: argparse.Namespace, atlas_root: str, color: bool):
+    """--from-results: the per-task JSONs of a bench run. Returns (samples,
+    results_dir); samples is None after printing that the dir has none."""
+    results_dir = args.from_results
+    # A relative path that doesn't exist under the cwd is resolved against
+    # the repo root, so the command works from any directory.
+    if not os.path.isdir(results_dir):
+        rooted = os.path.join(atlas_root, results_dir)
+        if os.path.isdir(rooted):
+            results_dir = rooted
+    samples = _load_results_samples(results_dir)
+    if not samples:
+        _safe_print(f"  {RED if color else ''}No usable samples in "
+                    f"{results_dir} — expected per-task JSONs with "
+                    f"`code` + `passed` (from `atlas bench`)."
+                    f"{RESET if color else ''}")
+        # Common slip: pointing at the run root instead of the per-task dir.
+        for sub in ("v3_lcb/per_task", "per_task"):
+            cand = os.path.join(results_dir, sub)
+            if os.path.isdir(cand):
+                _safe_print(f"  Did you mean: --from-results {cand}")
+                break
+        return None, results_dir
+    return samples, results_dir
+
+
+def _load_build_samples(args: argparse.Namespace, atlas_root: str, color: bool):
+    """[2/5]: the labeled samples, from --from-results or --samples. Returns
+    (samples, results_dir); samples is None after printing why there are none."""
+    results_dir = None
     _safe_print("[2/5] Loading training samples…")
     if getattr(args, "from_results", None) and args.samples:
         _safe_print(f"  {RED if color else ''}--from-results and --samples are "
                     f"mutually exclusive — pass one.{RESET if color else ''}")
-        return 1
+        return None, results_dir
     if getattr(args, "from_results", None):
-        results_dir = args.from_results
-        # A relative path that doesn't exist under the cwd is resolved against
-        # the repo root, so the command works from any directory.
-        if not os.path.isdir(results_dir):
-            rooted = os.path.join(atlas_root, results_dir)
-            if os.path.isdir(rooted):
-                results_dir = rooted
-        samples = _load_results_samples(results_dir)
-        if not samples:
-            _safe_print(f"  {RED if color else ''}No usable samples in "
-                        f"{results_dir} — expected per-task JSONs with "
-                        f"`code` + `passed` (from `atlas bench`)."
-                        f"{RESET if color else ''}")
-            # Common slip: pointing at the run root instead of the per-task dir.
-            for sub in ("v3_lcb/per_task", "per_task"):
-                cand = os.path.join(results_dir, sub)
-                if os.path.isdir(cand):
-                    _safe_print(f"  Did you mean: --from-results {cand}")
-                    break
-            return 1
+        samples, results_dir = _samples_from_results(args, atlas_root, color)
+        if samples is None:
+            return None, results_dir
     elif args.samples:
         samples = _load_training_samples(args.samples)
     else:
@@ -827,7 +775,13 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
                     "dir (this model's own candidates, via `atlas bench`)")
         _safe_print("  --samples: a labeled [{\"text\": str, \"label\": 0|1}, ...] "
                     "file (e.g. huggingface.co/datasets/itigges22/ATLAS)")
-        return 1
+        return None, results_dir
+    return samples, results_dir
+
+
+def _trainable_samples(samples: List[Dict], color: bool) -> Optional[List[Dict]]:
+    """The samples with int labels, when there are enough of them and of both
+    labels to train on; None after printing why not."""
     # Coerce labels to int once, here; rows with malformed labels are dropped
     # so the counting and embedding-extraction below can rely on clean ints.
     cleaned = []
@@ -845,16 +799,22 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         _safe_print(f"  {RED if color else ''}Only {len(samples)} samples "
                     f"loaded. Need >=50 for meaningful training (>=200 "
                     f"recommended).{RESET if color else ''}")
-        return 1
+        return None
     n_pass = sum(1 for s in samples if int(s.get("label", 0)) == 1)
     n_fail = len(samples) - n_pass
     _safe_print(f"  Loaded {len(samples)} samples (PASS={n_pass}, FAIL={n_fail})")
     if n_pass == 0 or n_fail == 0:
         _safe_print(f"  {RED if color else ''}Need both pass and fail "
                     f"samples for contrastive training.{RESET if color else ''}")
-        return 1
+        return None
+    return samples
 
-    # 3. Extract embeddings via /embedding
+
+def _extract_build_embeddings(args: argparse.Namespace, verdict: CheckVerdict,
+                              samples: List[Dict], results_dir: Optional[str],
+                              color: bool) -> Optional[Dict]:
+    """[3/5]: the samples' embeddings from llama-server, through the embedding
+    cache; None after printing that none came back."""
     _safe_print(f"[3/5] Extracting embeddings via {verdict.probe.url}…")
     if getattr(args, "from_results", None):
         cache_path = os.path.normpath(
@@ -871,58 +831,89 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if not data["embeddings"]:
         _safe_print(f"  {RED if color else ''}No embeddings extracted. "
                     f"Check llama-server logs.{RESET if color else ''}")
-        return 1
+        return None
     _safe_print(f"  Extracted {len(data['embeddings'])} embeddings "
                 f"in {elapsed:.1f}s")
+    return data
 
-    # Merge the bench run's banked per-candidate embeddings (PASS/FAIL
-    # labeled by the sandbox). A V3-mode bench tests several candidates per
-    # task and banks each one, so this multiplies the training set without
-    # any extra labeling or embedding work. Near-identical vectors (the
-    # selected candidate appears in both sources) are deduped.
-    if getattr(args, "from_results", None) and not getattr(
-            args, "no_telemetry", False):
-        emb_path = os.path.normpath(os.path.join(
-            results_dir, os.pardir, os.pardir, "telemetry", "embeddings.emb"))
-        if os.path.isfile(emb_path):
-            try:
-                import numpy as np
-                dim = len(data["embeddings"][0])
-                tele, skipped = _load_telemetry_embeddings(emb_path, dim)
-                # The selected candidate appears in both sources, but the
-                # banked copy was embedded mid-bench under concurrent
-                # batching — same text, FP noise up to ~5e-5 per element.
-                # Dedup numerically: a telemetry vector within 1e-3 (L-inf)
-                # of any kept vector is the same sample; genuinely
-                # different candidates differ by orders of magnitude more.
-                kept = np.array(data["embeddings"], dtype=np.float32)
-                merged = dups = 0
-                for rec in tele:
-                    v = np.array(rec["embedding"], dtype=np.float32)
-                    if np.abs(kept - v).max(axis=1).min() < 1e-3:
-                        dups += 1
-                        continue
-                    kept = np.vstack([kept, v])
-                    data["embeddings"].append(rec["embedding"])
-                    data["labels"].append(rec["label"])
-                    merged += 1
-                _safe_print(f"  Merged {merged} banked candidate embeddings "
-                            f"from {os.path.basename(emb_path)} "
-                            f"({dups} duplicates of extracted samples"
-                            + (f", {skipped} skipped" if skipped else "")
-                            + ") — pass --no-telemetry to train on the "
-                            "results dir alone")
-                n_p = sum(data["labels"])
-                _safe_print(f"  Training set: {len(data['labels'])} samples "
-                            f"(PASS={n_p}, FAIL={len(data['labels']) - n_p})")
-            except Exception as e:
-                _safe_print(f"  (telemetry merge unavailable: {e})")
 
-    if args.dry_run:
-        _safe_print("  (dry-run) skipping training + save")
-        return 0
+def _merge_banked_embeddings(data: Dict, results_dir: str) -> None:
+    """Add the candidate embeddings the bench run banked to data, leaving out
+    those that duplicate an extracted sample."""
+    emb_path = os.path.normpath(os.path.join(
+        results_dir, os.pardir, os.pardir, "telemetry", "embeddings.emb"))
+    if os.path.isfile(emb_path):
+        try:
+            import numpy as np
+            dim = len(data["embeddings"][0])
+            tele, skipped = _load_telemetry_embeddings(emb_path, dim)
+            # The selected candidate appears in both sources, but the
+            # banked copy was embedded mid-bench under concurrent
+            # batching — same text, FP noise up to ~5e-5 per element.
+            # Dedup numerically: a telemetry vector within 1e-3 (L-inf)
+            # of any kept vector is the same sample; genuinely
+            # different candidates differ by orders of magnitude more.
+            kept = np.array(data["embeddings"], dtype=np.float32)
+            merged = dups = 0
+            for rec in tele:
+                v = np.array(rec["embedding"], dtype=np.float32)
+                if np.abs(kept - v).max(axis=1).min() < 1e-3:
+                    dups += 1
+                    continue
+                kept = np.vstack([kept, v])
+                data["embeddings"].append(rec["embedding"])
+                data["labels"].append(rec["label"])
+                merged += 1
+            _safe_print(f"  Merged {merged} banked candidate embeddings "
+                        f"from {os.path.basename(emb_path)} "
+                        f"({dups} duplicates of extracted samples"
+                        + (f", {skipped} skipped" if skipped else "")
+                        + ") — pass --no-telemetry to train on the "
+                        "results dir alone")
+            n_p = sum(data["labels"])
+            _safe_print(f"  Training set: {len(data['labels'])} samples "
+                        f"(PASS={n_p}, FAIL={len(data['labels']) - n_p})")
+        except Exception as e:
+            _safe_print(f"  (telemetry merge unavailable: {e})")
 
-    # 4. Train + save
+
+def _print_training_import_error(e: ImportError, color: bool) -> None:
+    """Say what the host needs to import the C(x) training module."""
+    _safe_print(f"  {RED if color else ''}Could not import training "
+                f"module: {e}.{RESET if color else ''}")
+    if "torch" in str(e):
+        _safe_print("  Training runs on the host and needs the train "
+                    "extra (or a CPU torch, which is enough here):")
+        _safe_print("    pip install 'atlas[train]'   # or:")
+        _safe_print("    pip install torch --index-url "
+                    "https://download.pytorch.org/whl/cpu")
+    else:
+        _safe_print("  The atlas CLI must point at an ATLAS checkout "
+                    "containing geometric-lens/ (check `pip show atlas` "
+                    "→ Editable project location).")
+
+
+def _print_low_auc_advice(train_auc: float, color: bool) -> None:
+    """Advice for a test AUC under 0.70: more samples when the train AUC shows
+    overfitting, more epochs otherwise."""
+    if train_auc >= 0.95:
+        # Memorized the train fold but doesn't generalize: the sample
+        # set is too small for the capacity. Epochs won't help.
+        _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
+                    f"train AUC {train_auc:.2f} — overfit on too few "
+                    f"samples. More training data is the fix (e.g. a "
+                    f"larger `atlas bench --tasks N` run); more epochs "
+                    f"won't help.{RESET if color else ''}")
+    else:
+        _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
+                    f"train AUC {train_auc:.2f} — undertrained. Try "
+                    f"more epochs (--epochs 400) or a higher learning "
+                    f"rate.{RESET if color else ''}")
+
+
+def _train_cost_field(args: argparse.Namespace, atlas_root: str, data: Dict, color: bool):
+    """[4/5]: train C(x) on the embeddings. Returns (result, save_cost_field,
+    derive_cx_normalization), or None when the training module cannot load."""
     _safe_print(f"[4/5] Training CostField "
                 f"({args.epochs} epochs, lr={args.lr})…")
     try:
@@ -934,19 +925,8 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         from geometric_lens.training import train_cost_field, save_cost_field
         from geometric_lens.calibration import derive_cx_normalization
     except ImportError as e:
-        _safe_print(f"  {RED if color else ''}Could not import training "
-                    f"module: {e}.{RESET if color else ''}")
-        if "torch" in str(e):
-            _safe_print("  Training runs on the host and needs the train "
-                        "extra (or a CPU torch, which is enough here):")
-            _safe_print("    pip install 'atlas[train]'   # or:")
-            _safe_print("    pip install torch --index-url "
-                        "https://download.pytorch.org/whl/cpu")
-        else:
-            _safe_print("  The atlas CLI must point at an ATLAS checkout "
-                        "containing geometric-lens/ (check `pip show atlas` "
-                        "→ Editable project location).")
-        return 1
+        _print_training_import_error(e, color)
+        return None
     result = train_cost_field(data, epochs=args.epochs, lr=args.lr,
                               margin=args.margin)
     # train_cost_field returns final_* and best_* keys, not bare test_auc.
@@ -958,20 +938,110 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     _safe_print(f"  Train AUC: {train_auc:.4f}  |  Test AUC: {test_auc:.4f} "
                 f"(best across epochs)")
     if test_auc < 0.7:
-        if train_auc >= 0.95:
-            # Memorized the train fold but doesn't generalize: the sample
-            # set is too small for the capacity. Epochs won't help.
-            _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
-                        f"train AUC {train_auc:.2f} — overfit on too few "
-                        f"samples. More training data is the fix (e.g. a "
-                        f"larger `atlas bench --tasks N` run); more epochs "
-                        f"won't help.{RESET if color else ''}")
-        else:
-            _safe_print(f"  {YELL if color else ''}Test AUC < 0.70 with "
-                        f"train AUC {train_auc:.2f} — undertrained. Try "
-                        f"more epochs (--epochs 400) or a higher learning "
-                        f"rate.{RESET if color else ''}")
+        _print_low_auc_advice(train_auc, color)
+    return result, save_cost_field, derive_cx_normalization
 
+
+def _train_gx(staging_dir: str, data: Dict, color: bool) -> Optional[Dict]:
+    """[5/5]: train G(x) on the same embeddings and save it in the staging dir;
+    None after printing why it could not be trained."""
+    _safe_print("[5/5] Training G(x) XGBoost…")
+    try:
+        from geometric_lens.training import train_gx, save_gx
+        gx_result = train_gx(data)
+    except ImportError as e:
+        _safe_print(f"  {RED if color else ''}Could not import the G(x) "
+                    f"trainer: {e}.{RESET if color else ''}")
+        _safe_print("  G(x) training needs XGBoost + scikit-learn on the "
+                    "host: pip install 'atlas[train]' (or pip install "
+                    "xgboost scikit-learn)")
+        _safe_print("  The previous live bundle is unchanged; embeddings "
+                    "are cached for a quick retry.")
+        return None
+    except ValueError as e:
+        _safe_print(f"  {RED if color else ''}G(x) training skipped: "
+                    f"{e}{RESET if color else ''}")
+        _safe_print("  The previous live bundle is unchanged. Add more "
+                    "bench samples and re-run.")
+        return None
+    save_gx(gx_result, save_dir=staging_dir)
+    return gx_result
+
+
+def _record_model_identity(args: argparse.Namespace, verdict: CheckVerdict,
+                           staging_dir: str, color: bool) -> Optional[str]:
+    """Save model_identity.json, with the embedding convention the bundle was
+    fitted on when it can be observed. Returns the model's name; None after
+    printing that the loaded model has none."""
+    from geometric_lens.identity import save_model_identity
+    model_identity = (args.model or verdict.probe.model_name or "").strip()
+    if not model_identity:
+        _safe_print(f"  {RED if color else ''}Could not identify the loaded "
+                    f"model; refusing to activate these artifacts."
+                    f"{RESET if color else ''}")
+        return None
+    # Record the embedding convention these artifacts were fitted on.
+    # Without a declared contract, a server-side pooling or
+    # normalization change (unit-norm vectors served to a cost field
+    # fitted on unnormalized ones) shifts every score while health
+    # checks stay green.
+    #
+    # Best-effort: a probe failure must not block activation; the
+    # artifacts then declare no contract.
+    embedding_contract = None
+    try:
+        from geometric_lens.embedding_extractor import (
+            observe_embedding_convention,
+        )
+        embedding_contract = observe_embedding_convention()
+    except Exception as exc:  # telemetry, not correctness
+        _safe_print(f"  could not observe the embedding convention "
+                    f"({exc}); artifacts will declare none")
+    save_model_identity(
+        staging_dir, model_identity, verdict.probe.embedding_dim,
+        embedding_contract=embedding_contract)
+    return model_identity
+
+
+def _save_build_provenance(args: argparse.Namespace, verdict: CheckVerdict, data: Dict,
+                           result: Dict, gx_result: Dict, normalization,
+                           model_identity: str, staging_dir: str) -> None:
+    """Write the bundle's provenance manifest; a failure only warns."""
+    # Per-bundle provenance manifest (SUPPORT_MATRIX §9.5): every
+    # activated bundle is reproducible and auditable — `atlas artifact
+    # verify/snapshot/rollback` consume this file. Best-effort: a
+    # failed manifest never blocks activation.
+    try:
+        from datetime import datetime, timezone
+        from geometric_lens.provenance import build_manifest, save_provenance
+        n_p = sum(data["labels"])
+        save_provenance(staging_dir, build_manifest(
+            model=model_identity,
+            embedding_dim=verdict.probe.embedding_dim,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            dataset=(getattr(args, "from_results", None)
+                     or args.samples or ""),
+            n_samples=len(data["labels"]), n_pass=n_p,
+            n_fail=len(data["labels"]) - n_p,
+            metrics={"best_test_auc": result.get("best_test_auc"),
+                     "final_train_auc": result.get("final_train_auc"),
+                     "gx_cv_auc_mean": gx_result.get("cv_auc_mean"),
+                     "pass_energy_mean": result.get("pass_energy_mean"),
+                     "fail_energy_mean": result.get("fail_energy_mean")},
+            normalization=normalization,
+            hyperparameters={"epochs": args.epochs, "lr": args.lr,
+                             "margin": args.margin},
+            save_dir=staging_dir))
+    except Exception as e:
+        _safe_print(f"  WARN: provenance manifest not written: {e}")
+
+
+def _stage_and_activate(args: argparse.Namespace, verdict: CheckVerdict, data: Dict,
+                        result: Dict, save_cost_field, derive_cx_normalization,
+                        color: bool):
+    """Save C(x), G(x) and their metadata in a staging dir beside the artifact
+    dir, then activate the complete bundle. Returns (artifact_dir, gx_result);
+    None when the bundle could not be completed or activated."""
     artifact_dir = args.artifact_dir or verdict.artifact_dir
     artifact_parent = os.path.dirname(os.path.abspath(artifact_dir))
     os.makedirs(artifact_parent, exist_ok=True)
@@ -984,97 +1054,34 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
 
         # 5. Train + save G(x) on the same embeddings. Nothing reaches the
         # live directory unless both halves and their metadata are complete.
-        _safe_print("[5/5] Training G(x) XGBoost…")
-        try:
-            from geometric_lens.training import train_gx, save_gx
-            gx_result = train_gx(data)
-        except ImportError as e:
-            _safe_print(f"  {RED if color else ''}Could not import the G(x) "
-                        f"trainer: {e}.{RESET if color else ''}")
-            _safe_print("  G(x) training needs XGBoost + scikit-learn on the "
-                        "host: pip install 'atlas[train]' (or pip install "
-                        "xgboost scikit-learn)")
-            _safe_print("  The previous live bundle is unchanged; embeddings "
-                        "are cached for a quick retry.")
-            return 1
-        except ValueError as e:
-            _safe_print(f"  {RED if color else ''}G(x) training skipped: "
-                        f"{e}{RESET if color else ''}")
-            _safe_print("  The previous live bundle is unchanged. Add more "
-                        "bench samples and re-run.")
-            return 1
-        save_gx(gx_result, save_dir=staging_dir)
-        from geometric_lens.identity import save_model_identity
-        model_identity = (args.model or verdict.probe.model_name or "").strip()
-        if not model_identity:
-            _safe_print(f"  {RED if color else ''}Could not identify the loaded "
-                        f"model; refusing to activate these artifacts."
-                        f"{RESET if color else ''}")
-            return 1
-        # Record the convention these artifacts were actually fitted on.
-        # save_model_identity has always accepted it and nothing passed it,
-        # so shipped artifacts declare no contract — which is why a
-        # server-side pooling or normalization change shifts every score
-        # while health checks stay green. Measured 2026-08-03: served
-        # unit-norm vectors against a cost field fitted on |v|~137 returned
-        # 0.76-0.80 for a clean function, a repetition loop and truncated
-        # junk alike, against a calibrated 9.25/11.81 band.
-        #
-        # Best-effort: a probe failure must not block activation, and an
-        # absent contract is the behaviour we already have.
-        embedding_contract = None
-        try:
-            from geometric_lens.embedding_extractor import (
-                observe_embedding_convention,
-            )
-            embedding_contract = observe_embedding_convention()
-        except Exception as exc:  # telemetry, not correctness
-            _safe_print(f"  could not observe the embedding convention "
-                        f"({exc}); artifacts will declare none")
-        save_model_identity(
-            staging_dir, model_identity, verdict.probe.embedding_dim,
-            embedding_contract=embedding_contract)
+        gx_result = _train_gx(staging_dir, data, color)
+        if gx_result is None:
+            return None
+        model_identity = _record_model_identity(args, verdict, staging_dir, color)
+        if model_identity is None:
+            return None
         # Drift fingerprint (#230): the reference energies the lens re-checks
         # at boot. Before the provenance manifest, which hashes it.
         warning = _write_bundle_fingerprint(staging_dir, result["model"],
                                             llama_url=verdict.probe.url)
         if warning:
             _safe_print(f"  WARN: {warning}")
-        # Per-bundle provenance manifest (SUPPORT_MATRIX §9.5): every
-        # activated bundle is reproducible and auditable — `atlas artifact
-        # verify/snapshot/rollback` consume this file. Best-effort: a
-        # failed manifest never blocks activation.
-        try:
-            from datetime import datetime, timezone
-            from geometric_lens.provenance import build_manifest, save_provenance
-            n_p = sum(data["labels"])
-            save_provenance(staging_dir, build_manifest(
-                model=model_identity,
-                embedding_dim=verdict.probe.embedding_dim,
-                created_at=datetime.now(timezone.utc).isoformat(),
-                dataset=(getattr(args, "from_results", None)
-                         or args.samples or ""),
-                n_samples=len(data["labels"]), n_pass=n_p,
-                n_fail=len(data["labels"]) - n_p,
-                metrics={"best_test_auc": result.get("best_test_auc"),
-                         "final_train_auc": result.get("final_train_auc"),
-                         "gx_cv_auc_mean": gx_result.get("cv_auc_mean"),
-                         "pass_energy_mean": result.get("pass_energy_mean"),
-                         "fail_energy_mean": result.get("fail_energy_mean")},
-                normalization=normalization,
-                hyperparameters={"epochs": args.epochs, "lr": args.lr,
-                                 "margin": args.margin},
-                save_dir=staging_dir))
-        except Exception as e:
-            _safe_print(f"  WARN: provenance manifest not written: {e}")
+        _save_build_provenance(args, verdict, data, result, gx_result, normalization,
+                               model_identity, staging_dir)
         try:
             _activate_lens_bundle(staging_dir, artifact_dir)
         except (OSError, ValueError) as e:
             _safe_print(f"  {RED if color else ''}Could not activate the "
                         f"complete Lens bundle: {e}. The previous bundle was "
                         f"restored.{RESET if color else ''}")
-            return 1
+            return None
 
+    return artifact_dir, gx_result
+
+
+def _print_build_complete(verdict: CheckVerdict, artifact_dir: str, gx_result: Dict,
+                          color: bool) -> None:
+    """Say where the bundle is and what to do next."""
     _safe_print(f"  Activated: {artifact_dir}")
     _safe_print(f"  G(x) CV AUC: {gx_result['cv_auc_mean']:.4f}")
 
@@ -1091,6 +1098,61 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
                 f"registry entry for "
                 f"{verdict.matched_model or '<your model>'} to "
                 f"lens_status=\"supported\".")
+
+
+def _emit_build(args: argparse.Namespace, color: bool) -> int:
+    """Train fresh Lens artifacts for the model llama-server has loaded.
+
+    Doesn't ship its own dataset — users point --samples at a labeled
+    JSON/JSONL file (typically pulled from huggingface.co/datasets/itigges22/ATLAS,
+    which has the V3 ablation traces with pass/fail labels). Tiny built-in
+    sanity datasets are intentionally NOT bundled: a 20-sample C(x) is
+    worse than no C(x) (it'll badly mis-rank and the user won't know).
+    """
+    atlas_root = cli_env.atlas_root()
+
+    verdict, exit_code = _probe_for_build(args, atlas_root, color)
+    if exit_code is not None:
+        return exit_code
+
+    # 2. Load training data
+    samples, results_dir = _load_build_samples(args, atlas_root, color)
+    if samples is None:
+        return 1
+    samples = _trainable_samples(samples, color)
+    if samples is None:
+        return 1
+
+    # 3. Extract embeddings via /embedding
+    data = _extract_build_embeddings(args, verdict, samples, results_dir, color)
+    if data is None:
+        return 1
+
+    # Merge the bench run's banked per-candidate embeddings (PASS/FAIL
+    # labeled by the sandbox). A V3-mode bench tests several candidates per
+    # task and banks each one, so this multiplies the training set without
+    # any extra labeling or embedding work. Near-identical vectors (the
+    # selected candidate appears in both sources) are deduped.
+    if getattr(args, "from_results", None) and not getattr(
+            args, "no_telemetry", False):
+        _merge_banked_embeddings(data, results_dir)
+
+    if args.dry_run:
+        _safe_print("  (dry-run) skipping training + save")
+        return 0
+
+    # 4. Train + save
+    trained = _train_cost_field(args, atlas_root, data, color)
+    if trained is None:
+        return 1
+    result, save_cost_field, derive_cx_normalization = trained
+    staged = _stage_and_activate(args, verdict, data, result, save_cost_field,
+                                 derive_cx_normalization, color)
+    if staged is None:
+        return 1
+    artifact_dir, gx_result = staged
+
+    _print_build_complete(verdict, artifact_dir, gx_result, color)
     return 0
 
 
@@ -1098,152 +1160,9 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
 # atlas lens publish  (PC-059)
 # ---------------------------------------------------------------------------
 
-def _render_model_card_md(model_name: str, base_model: str, dim: int,
-                           sha256: str, size_bytes: int,
-                           license_id: str, files_uploaded: List[str],
-                           provenance: str) -> str:
-    """Generate the README.md / model card body for the HF upload.
-
-    Front-matter is the YAML block HuggingFace renders into the sidebar
-    badge (license, tags, base_model). Body documents what these artifacts
-    are and how to point ATLAS at them.
-    """
-    files_list = "\n".join(f"- `{f}`" for f in files_uploaded)
-    return f"""---
-license: {license_id}
-tags:
-- atlas
-- geometric-lens
-- code-evaluation
-base_model: {base_model}
----
-
-# ATLAS Geometric Lens artifacts for {model_name}
-
-Cost-field C(x), G(x) classifier, and their per-model calibration trained
-against the {base_model} embedding space. Loaded by the ATLAS geometric-lens
-service to score code candidates without execution.
-
-## Files
-
-{files_list}
-
-## Use
-
-```bash
-# Drop these into your ATLAS checkout
-mkdir -p geometric-lens/geometric_lens/models/
-huggingface-cli download <this-repo> \\
-  --local-dir geometric-lens/geometric_lens/models/
-
-# Verify ATLAS picks them up
-atlas lens check
-# expected: verdict: compat
-```
-
-## Artifact metadata
-
-| Field | Value |
-|---|---|
-| Base model | {base_model} |
-| Input embedding dim | {dim} |
-| cost_field.pt SHA256 | `{sha256}` |
-| cost_field.pt size | {size_bytes / (1024*1024):.2f} MB |
-
-## Provenance
-
-{provenance}
-
-## License
-
-{license_id}. The artifact derives from a {base_model} forward-pass —
-verify the base model's license is compatible with redistribution
-before publishing.
-
-## Registry submission
-
-To get ATLAS users this support automatically via `atlas model list`,
-open a PR against https://github.com/inferstep/ATLAS using the body
-`atlas lens publish` produced. PC-059 (#101) tracks the manual-review
-flow; PC-060 (#102) tracks the eventual auto-merge pipeline.
-"""
-
-
-def _render_registry_pr_body(model_name: str, hf_repo: str,
-                              base_model: str, dim: int, sha256: str,
-                              license_id: str,
-                              artifact_files: Optional[List[str]] = None) -> str:
-    """Markdown body for the registry-add PR.
-
-    Includes the suggested Python diff so the maintainer can paste it
-    directly into atlas/commands/model_registry.py.
-    """
-    dim_label = (f"{dim}" if dim
-                 else "(unverified — install torch on the publisher's host "
-                      "for atlas lens publish to capture this)")
-    return f"""## Add Lens artifacts for `{model_name}` (auto-generated by `atlas lens publish`)
-
-### Summary
-
-User-trained Geometric Lens cost-field for `{model_name}`, uploaded to
-HuggingFace at https://huggingface.co/{hf_repo}.
-
-### Verification checklist (maintainer review per PC-059)
-
-- [ ] HF link reachable: https://huggingface.co/{hf_repo}
-- [ ] License is permissive for redistribution ({license_id})
-- [ ] `cost_field.pt` SHA256 matches: `{sha256}`
-- [ ] Artifact input dim ({dim_label}) matches the base model's embedding dim
-- [ ] Spot-check: download + run `atlas lens check` against the base model
-
-### Suggested registry diff
-
-Add the following to `atlas/commands/model_registry.py` (or update
-the existing entry's `lens_status` from `no-artifacts`/`unverified`
-to `supported`):
-
-```python
-Model(
-    name="{model_name}",
-    # ... existing tier / model_file / model_size_gb / download_url ...
-    lens_status="supported",
-    lens_calibrated=True,
-    lens_artifact_dir=None,  # uses ATLAS_LENS_MODELS dir; per-model layout TBD by PC-058 follow-on
-    lens_artifact_files={(artifact_files or ["cost_field.pt"])!r},
-    license="{license_id}",
-),
-```
-
-### Provenance
-
-Trained locally via `atlas lens build` against `{base_model}`. Contrast
-the merged behavior with the prior `lens_status: {{no-artifacts | unverified}}`
-state — `atlas doctor` should stop warning about lens drift on this model
-once the PR merges.
-"""
-
-
-def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
-    """Upload local artifacts to HF + generate a registry-add PR body.
-
-    Pipeline (matches PC-059 issue spec):
-      0. publish_preflight: print requirements panel + bail if creds missing
-      1. Validate: artifact dir exists + cost_field.pt is in it
-      2. Compute SHA256 for the registry entry
-      3. (Unless --dry-run) upload artifacts + auto-generated model card to HF
-      4. Render the registry-PR markdown
-      5. (Unless --skip-pr) open the registry PR via `gh api`; otherwise print body
-    """
-    if not publishing.publish_preflight("lens", dry_run=args.dry_run,
-                                        color=color):
-        return 1
-
-    atlas_root = cli_env.atlas_root()
-
-    # 1. Resolve artifacts
-    matched = publishing.resolve_model_arg(args.model)
-    model_label = matched.name if matched else (args.model or "<unknown-model>")
-
+def _publish_artifact_dir(args: argparse.Namespace, matched, atlas_root: str) -> str:
+    """The dir to publish: --artifact-dir, the registry's own for a
+    Lens-supported entry, else ATLAS_LENS_MODELS or the default models dir."""
     if args.artifact_dir:
         artifact_dir = args.artifact_dir
     elif matched and matched.lens_status == "supported":
@@ -1252,13 +1171,18 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         env = _configured_lens_models_dir(atlas_root)
         artifact_dir = env or os.path.normpath(os.path.join(
             atlas_root, "geometric-lens", "geometric_lens", "models"))
+    return artifact_dir
 
-    cost_path = os.path.join(artifact_dir, "cost_field.pt")
+
+def _bundle_ready_to_publish(artifact_dir: str, cost_path: str, model_label: str,
+                             color: bool) -> bool:
+    """True when cost_field.pt is there with its complete, valid calibration;
+    False after printing what is missing or invalid."""
     if not os.path.isfile(cost_path):
         _safe_print(f"  {RED if color else ''}No cost_field.pt at "
                     f"{cost_path}. Run `atlas lens build` first."
                     f"{RESET if color else ''}")
-        return 1
+        return False
 
     missing = _missing_runtime_artifacts(artifact_dir)
     if missing:
@@ -1266,14 +1190,18 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
                     f"uncalibrated; missing {', '.join(missing)}. Run "
                     f"`atlas lens build` before publishing."
                     f"{RESET if color else ''}")
-        return 1
+        return False
     invalid = _invalid_runtime_artifacts(artifact_dir, model_label)
     if invalid:
         _safe_print(f"  {RED if color else ''}Lens calibration is invalid: "
                     f"{'; '.join(invalid)}. Run `atlas lens build` before "
                     f"publishing.{RESET if color else ''}")
-        return 1
+        return False
+    return True
 
+
+def _files_to_upload(artifact_dir: str, cost_path: str, color: bool) -> List[str]:
+    """The bundle's files that go to Hugging Face, cost_field.pt first."""
     files_to_upload = ["cost_field.pt", "model_identity.json", "cx_normalization.json"]
     # Pickle-free twin: include only when at least as fresh as the .pt —
     # an older safetensors is a previous model's weights.
@@ -1297,8 +1225,13 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         # Legacy G(x) carrier — only relevant when the JSON pair is absent.
         # `lens build` doesn't refresh this file, so on a retrained dir it
         # is a previous model's artifact and must not ship.
+    return files_to_upload
 
-    # 2. Compute SHA + inspect
+
+def _hash_and_inspect(artifact_dir: str, cost_path: str, files_to_upload: List[str],
+                      color: bool):
+    """[1/5]: hash cost_field.pt and read its input dim. Returns (sha, size,
+    dim); dim is 0 when it could not be read."""
     _safe_print(f"[1/5] Hashing {cost_path}…")
     sha = publishing.sha256_file(cost_path)
     size = os.path.getsize(cost_path)
@@ -1313,6 +1246,39 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     _safe_print(f"  Size:   {size / (1024 * 1024):.2f} MB")
     _safe_print(f"  Dim:    {dim if dim else '(unknown)'}")
     _safe_print(f"  Files:  {', '.join(files_to_upload)}")
+    return sha, size, dim
+
+
+def _emit_publish(args: argparse.Namespace, color: bool) -> int:
+    """Upload local artifacts to HF + generate a registry-add PR body.
+
+    Pipeline (matches PC-059 issue spec):
+      0. publish_preflight: print requirements panel + bail if creds missing
+      1. Validate: artifact dir exists + cost_field.pt is in it
+      2. Compute SHA256 for the registry entry
+      3. (Unless --dry-run) upload artifacts + auto-generated model card to HF
+      4. Render the registry-PR markdown
+      5. (Unless --skip-pr) open the registry PR via `gh api`; otherwise print body
+    """
+    if not publishing.publish_preflight("lens", dry_run=args.dry_run,
+                                        color=color):
+        return 1
+
+    atlas_root = cli_env.atlas_root()
+
+    # 1. Resolve artifacts
+    matched = publishing.resolve_model_arg(args.model)
+    model_label = matched.name if matched else (args.model or "<unknown-model>")
+
+    artifact_dir = _publish_artifact_dir(args, matched, atlas_root)
+
+    cost_path = os.path.join(artifact_dir, "cost_field.pt")
+    if not _bundle_ready_to_publish(artifact_dir, cost_path, model_label, color):
+        return 1
+    files_to_upload = _files_to_upload(artifact_dir, cost_path, color)
+
+    # 2. Compute SHA + inspect
+    sha, size, dim = _hash_and_inspect(artifact_dir, cost_path, files_to_upload, color)
 
     base_model = (matched.model_display if matched else
                   args.model or
@@ -1324,60 +1290,9 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     if args.dry_run:
         _safe_print(f"[2/5] (dry-run) would upload to "
                     f"https://huggingface.co/{hf_repo}")
-    else:
-        if not args.repo:
-            _safe_print(f"  {RED if color else ''}--repo HF_USERNAME/REPO_NAME "
-                        f"is required (or pass --dry-run to skip upload)."
-                        f"{RESET if color else ''}")
-            return 1
-        token = publishing.hf_token()
-        if not token:
-            _safe_print(f"  {RED if color else ''}HF_TOKEN env var not set. "
-                        f"Get a write token from https://huggingface.co/settings/tokens "
-                        f"and: export HF_TOKEN=hf_…{RESET if color else ''}")
-            return 1
-        try:
-            from huggingface_hub import HfApi  # lazy import — heavy dep
-        except ImportError:
-            _safe_print(f"  {RED if color else ''}huggingface_hub not installed. "
-                        f"Install with: pip install huggingface_hub{RESET if color else ''}")
-            return 1
-
-        _safe_print(f"[2/5] Uploading to https://huggingface.co/{hf_repo}…")
-        api = HfApi(token=token)
-        try:
-            api.create_repo(repo_id=hf_repo, exist_ok=True)
-        except Exception as e:
-            _safe_print(f"  {RED if color else ''}HF create_repo failed: "
-                        f"{e}{RESET if color else ''}")
-            return 1
-
-        # Upload artifact files
-        for fname in files_to_upload:
-            local = os.path.join(artifact_dir, fname)
-            try:
-                api.upload_file(path_or_fileobj=local,
-                                 path_in_repo=fname,
-                                 repo_id=hf_repo)
-                _safe_print(f"  uploaded {fname}")
-            except Exception as e:
-                _safe_print(f"  {RED if color else ''}upload of {fname} "
-                            f"failed: {e}{RESET if color else ''}")
-                return 1
-
-        # Upload model card
-        provenance = lens_card.model_card_provenance(artifact_dir, base_model, dim)
-        card_md = _render_model_card_md(model_label, base_model, dim, sha,
-                                          size, license_id, files_to_upload, provenance)
-        try:
-            api.upload_file(path_or_fileobj=card_md.encode(),
-                             path_in_repo="README.md",
-                             repo_id=hf_repo)
-            _safe_print("  uploaded README.md (model card)")
-        except Exception as e:
-            _safe_print(f"  {YELL if color else ''}model card upload "
-                        f"failed (artifacts uploaded fine): {e}"
-                        f"{RESET if color else ''}")
+    elif not _upload_to_hf(args, hf_repo, artifact_dir, files_to_upload, model_label,
+                           base_model, dim, sha, size, license_id, color):
+        return 1
 
     # 4. Render registry-PR body
     _safe_print("[3/5] Rendering registry-PR body…")
@@ -1387,82 +1302,15 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
 
     # 5. Open PR (or print body for paste)
     if args.skip_pr or args.dry_run:
-        _safe_print("[4/5] (skipping PR open — printing body for paste)")
-        _safe_print("")
-        _safe_print(pr_body)
-        _safe_print("")
-        _safe_print(f"  {GREEN if color else ''}Publish complete (dry-run mode).{RESET if color else ''}"
-                    if args.dry_run else
-                    f"  {GREEN if color else ''}Upload complete.{RESET if color else ''} "
-                    "Paste the body above into a PR at "
-                    "https://github.com/inferstep/ATLAS/compare")
+        _print_pr_body_for_paste(args, pr_body, color)
         return 0
 
     if not publishing.gh_available():
-        _safe_print("[4/5] `gh` not found — printing PR body for manual paste")
-        _safe_print("")
-        _safe_print(pr_body)
-        _safe_print(f"  {GREEN if color else ''}Upload complete.{RESET if color else ''} "
-                    "Install `gh` (https://cli.github.com) and re-run "
-                    "without --skip-pr to auto-open, or paste the body above "
-                    "into https://github.com/inferstep/ATLAS/compare manually.")
+        _print_pr_body_without_gh(pr_body, color)
         return 0
 
-    # The PR is built through the GitHub API (branch + commit + PR) so it
-    # works from any install — no local git checkout required. The commit
-    # is a real registry edit, not a paste-me suggestion.
-    _safe_print("[4/5] Opening registry-PR via the GitHub API…")
-    title = (f"Registry: add Lens artifacts for {model_label} "
-             f"(via atlas lens publish)")
-
-    # Tier for the new entry: classify the publisher's host (the hardware
-    # the artifacts were validated on); fall back to medium.
-    entry_tier = "medium"
-    try:
-        from atlas.commands.tier import classify, probe
-        entry_tier = classify(probe()).tier
-    except Exception:  # noqa: S110
-        # Host tier detection is optional publishing metadata; medium is the
-        # conservative registry fallback when hardware probing is unavailable.
-        pass
-    model_file = ""
-    size_gb = 0.0
-    try:
-        model_file = cli_env.MODEL_FILE
-        base = (cli_env.MODEL_DIR if os.path.isabs(cli_env.MODEL_DIR)
-                else os.path.join(atlas_root, cli_env.MODEL_DIR))
-        size_gb = round(os.path.getsize(
-            os.path.join(base, model_file)) / (1024 ** 3), 1)
-    except Exception:  # noqa: S110
-        # Model size enriches the registry entry but is not required to
-        # publish a verified artifact bundle.
-        pass
-
-    entry = publishing.render_registry_entry(
-        model_label, model_file or model_label, size_gb, entry_tier, dim,
-        hf_repo, license_id, files_to_upload)
-    def _edit_registry(content: str) -> Optional[str]:
-        updated = publishing.registry_set_lens(content, model_label, hf_repo,
-                                               files_to_upload)
-        if updated is not None:
-            return updated
-        return publishing.registry_insert_entry(content, model_label, entry)
-
-    pr_url = publishing.open_registry_pr_via_api(
-        model_label, title, pr_body,
-        _edit_registry)
-    if pr_url:
-        _safe_print(f"  {GREEN if color else ''}PR opened: "
-                    f"{pr_url}{RESET if color else ''}")
-    else:
-        _safe_print(f"  {YELL if color else ''}Could not open the PR "
-                    f"automatically — body below for manual paste at "
-                    f"https://github.com/{publishing.UPSTREAM_REPO}/compare"
-                    f"{RESET if color else ''}")
-        _safe_print("")
-        _safe_print(pr_body)
-
-    return 0
+    return _open_registry_pr(model_label, hf_repo, dim, license_id, files_to_upload,
+                             pr_body, atlas_root, color)
 
 
 # ---------------------------------------------------------------------------

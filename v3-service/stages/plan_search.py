@@ -481,8 +481,6 @@ class PlanSearch:
         result = PlanSearchResult(task_id=task_id, raw_responses={})
         total_start = time.time()
         step1_tokens = 0
-        step2_tokens = 0
-        step3_tokens = 0
 
         # Step 1: Constraint Extraction. The step-1 token count is returned
         # through locals (not stored on self) so concurrent generate() calls
@@ -515,6 +513,19 @@ class PlanSearch:
                 algorithmic_family="general",
             )]
             result.constraint_sets = constraint_sets
+
+        return self._plans_and_candidates(problem, task_id, llm_call, budget_tier, base_seed,
+                                          constraint_sets, result, total_start, step1_tokens)
+
+    def _plans_and_candidates(self, problem: str, task_id: str,
+                              llm_call: LLMCallable, budget_tier: str, base_seed: int,
+                              constraint_sets: List[ConstraintSet],
+                              result: PlanSearchResult, total_start: float,
+                              step1_tokens: int) -> PlanSearchResult:
+        """Steps 2 and 3 of generate(): a plan per constraint set, then code
+        per plan. Logs the telemetry line and returns the finished result."""
+        step2_tokens = 0
+        step3_tokens = 0
 
         # Steps 2 and 3 fan out. Each plan is built from its own constraint
         # set, and each candidate from its own plan and seed, so nothing in

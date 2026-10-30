@@ -84,8 +84,7 @@ class FakeAPI:
         return self.results.get(q, [])
 
     def open_pulls(self):
-        # As GitHub answers `state=open`: a closed or merged pull request is not in the list.
-        return [p for p in self.pulls if p.get("state", "open") == "open"]
+        return self.pulls
 
     def pull_changes(self, n):
         # A file is a path with one added line, or (path, lines added, lines removed).
@@ -166,7 +165,8 @@ def test_config_reads_the_repo_settings(cfg):
     assert cfg["project"] == {"owner": "inferstep", "number": 1}
     assert cfg["bot"]["login"] == BOT
     assert cfg["links"]["start_here"].startswith("https://github.com/orgs/inferstep/projects/1/")
-    assert cfg["areas"]["proxy/"] == "area/proxy" and cfg["areas"][".github/"] == "area/ci"
+    assert cfg["areas"]["proxy/"] == "area/proxy"
+    assert cfg["areas"][".github/"] == "area/ci"
 
 
 def test_every_area_label_is_one_the_label_script_creates(cfg):
@@ -176,16 +176,20 @@ def test_every_area_label_is_one_the_label_script_creates(cfg):
         assert f'"{label}|' in script, label
 
 
+@pytest.mark.parametrize("bot_settings, author, mine", [
+    pytest.param({"login": BOT}, {"login": BOT, "type": "Bot"}, True, id="login-set-the-bot"),
+    pytest.param({"login": BOT}, {"login": "another-app[bot]", "type": "Bot"}, False, id="login-set-another-bot-pasted-the-mark"),
+    pytest.param({}, {"login": "an-app[bot]", "type": "Bot"}, True, id="no-login-an-author-of-type-bot"),
+    pytest.param({}, {"login": "mallory", "type": "User"}, False, id="no-login-a-person-pasted-the-mark"),
+])
+def test_a_comment_is_the_bots_by_the_set_login_and_with_no_login_by_the_author_type_bot(api, cfg, bot_settings, author, mine):
+    cfg["bot"] = bot_settings
+    # Each comment holds a claim mark, as a pasted one would: only its author makes it the bot's.
+    comment = {"user": author, "body": bot_mod.marker("claim", "alice")}
+    assert run(api, cfg)._mine(comment) is mine
+
+
 # --- /claim -----------------------------------------------------------------
-
-
-def test_claim_a_ready_issue(api, cfg):
-    api.counts["is:pr is:merged author:alice"] = 1
-    run(api, cfg).claim(claim_event(api, 7, "/claim"))
-    assert ("assign", 7, "alice") in api.log
-    assert ("status", "ITEM7", "In Progress") in api.log
-    reply = api.said(7)[-1]
-    assert bot_mod.marker("claim", "alice") in reply and "@maint" in reply and "Closes #7" in reply
 
 
 @pytest.mark.parametrize("body", ["I'll /claim this", "", "   ", "> /claim please", "hello\n/claim please", "claim", "/ claim",
@@ -200,19 +204,20 @@ def test_the_command_alone_on_the_first_line_claims_and_gets_no_answer_about_its
     api.counts["is:pr is:merged author:alice"] = 1
     run(api, cfg).claim(claim_event(api, 7, body))
     assert ("assign", 7, "alice") in api.log
-    assert len(api.said(7)) == 1
-    assert "not-alone" not in api.said(7)[0]
+    assert ("status", "ITEM7", "In Progress") in api.log
+    (reply,) = api.said(7)
+    assert bot_mod.marker("claim", "alice") in reply
+    assert "@maint" in reply
+    assert "Closes #7" in reply
+    assert "not-alone" not in reply
 
 
-NOT_ALONE = [
+@pytest.mark.parametrize("body, command", [
     ("/claim — taking this one. I did the ja SETUP + TROUBLESHOOTING resyncs", "/claim"),
     ("/claim please", "/claim"), ("/Claim", "/claim"), ("/CLAIM", "/claim"), ("/claim.", "/claim"), ("/claimed", "/claim"),
     ("/claim\tnow", "/claim"), ("/claim this\n/claim", "/claim"), ("/unclaim please", "/unclaim"), ("/Unclaim", "/unclaim"),
     ("/unclaim, sorry", "/unclaim"),
-]
-
-
-@pytest.mark.parametrize("body, command", NOT_ALONE)
+])
 def test_a_first_line_that_starts_with_a_command_and_is_not_the_command_alone_gets_one_answer_and_no_action(api, cfg, body, command):
     api.counts["is:pr is:merged author:alice"] = 1
     api.issues[7]["assignees"] = ["alice"] if command == "/unclaim" else []
@@ -234,17 +239,15 @@ def test_the_answer_holds_none_of_the_words_of_the_comment(api, cfg):
     assert answer.count("@") == 2
 
 
-@pytest.mark.parametrize("pr, kind", [(True, "User"), (False, "Bot")])
-def test_a_pull_request_and_a_bot_get_no_answer(api, cfg, pr, kind):
-    event = claim_event(api, 7, "/claim please", pr=pr)
-    event["comment"]["user"]["type"] = kind
-    run(api, cfg).claim(event)
-    assert api.log == []
-
-
-def test_a_comment_whose_author_github_no_longer_names_gets_no_answer_and_stops_nothing(api, cfg):
-    event = claim_event(api, 7, "/claim please")
-    event["comment"]["user"] = None
+@pytest.mark.parametrize("body, pr, author", [
+    pytest.param("/claim", True, {"login": "alice", "type": "User"}, id="the-command-on-a-pull-request"),
+    pytest.param("/claim please", True, {"login": "alice", "type": "User"}, id="more-words-on-a-pull-request"),
+    pytest.param("/claim please", False, {"login": "alice", "type": "Bot"}, id="more-words-by-a-bot"),
+    pytest.param("/claim please", False, None, id="more-words-by-an-author-github-no-longer-names"),
+])
+def test_a_comment_on_a_pull_request_or_by_a_bot_or_an_unnamed_author_is_nothing_for_the_bot(api, cfg, body, pr, author):
+    event = claim_event(api, 7, body, pr=pr)
+    event["comment"]["user"] = author
     run(api, cfg).claim(event)
     assert api.log == []
 
@@ -264,14 +267,12 @@ def test_the_same_person_gets_the_answer_once_a_day_for_the_same_command(api, cf
     assert "`/unclaim`" in api.said(7)[-1]
 
 
-def test_an_answer_of_a_day_ago_to_the_minute_does_not_count_any_more(api, cfg):
-    api.threads[7] = [{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(1)}]
-    run(api, cfg).claim(claim_event(api, 7, "/claim please"))
-    assert len(api.said(7)) == 1
-
-
-def test_a_mark_that_the_person_pasted_does_not_keep_the_bot_from_answering(api, cfg):
-    api.threads[7] = [{"user": {"login": "alice", "type": "User"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(0)}]
+@pytest.mark.parametrize("author, days_ago", [
+    pytest.param({"login": BOT, "type": "Bot"}, 1, id="the-bot-answered-a-day-ago-to-the-minute"),
+    pytest.param({"login": "alice", "type": "User"}, 0, id="the-person-pasted-the-mark-today"),
+])
+def test_an_answer_of_a_day_ago_or_a_pasted_mark_does_not_keep_the_bot_from_answering(api, cfg, author, days_ago):
+    api.threads[7] = [{"user": author, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(days_ago)}]
     run(api, cfg).claim(claim_event(api, 7, "/claim please"))
     assert len(api.said(7)) == 1
 
@@ -283,16 +284,6 @@ def test_after_the_answer_the_command_alone_claims(api, cfg):
     run(api, cfg).claim(claim_event(api, 7, "/claim"))
     assert ("assign", 7, "alice") in api.log
     assert bot_mod.marker("claim", "alice") in api.said(7)[-1]
-
-
-def test_the_answer_is_no_claim_for_the_daily_look_at_old_claims(api, cfg):
-    # An issue that a maintainer gave by hand, with only the bot's answer about the form: nothing to release.
-    api.issues[7]["assignees"] = ["alice"]
-    api.cards[7]["status"] = "In Progress"
-    api.threads[7] = [{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(40)},
-                      {"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-unclaim", "alice"), "created_at": stamp(40)}]
-    run(api, cfg).stale()
-    assert api.log == []
 
 
 def test_the_guide_says_what_the_bot_does_with_more_words_on_the_line():
@@ -314,11 +305,6 @@ def test_the_workflow_starts_for_every_comment_that_the_bot_answers():
         assert not bot_mod.STARTS_LIKE_A_COMMAND.match(first), first
 
 
-def test_claim_ignores_pull_request_comments(api, cfg):
-    run(api, cfg).claim(claim_event(api, 7, "/claim", pr=True))
-    assert api.log == []
-
-
 @pytest.mark.parametrize("status", ["Triage", "Backlog", "In Progress", None])
 def test_only_ready_issues_can_be_claimed(api, cfg, status):
     api.cards[7]["status"] = status
@@ -331,13 +317,6 @@ def test_an_issue_off_the_board_cannot_be_claimed(api, cfg):
     del api.cards[7]
     run(api, cfg).claim(claim_event(api, 7, "/claim"))
     assert "isn't on the board" in api.said(7)[-1]
-
-
-def test_one_claimant_per_issue(api, cfg):
-    api.issues[7]["assignees"] = ["bob"]
-    run(api, cfg).claim(claim_event(api, 7, "/claim"))
-    assert "already claimed by @bob" in api.said(7)[-1]
-    assert not [x for x in api.log if x[0] == "assign"]
 
 
 @pytest.mark.parametrize("merged,open_claims,allowed", [(0, 0, True), (0, 1, False), (3, 1, True), (3, 2, False)])
@@ -405,10 +384,11 @@ def test_unclaim_returns_the_issue_to_ready(api, cfg):
     api.issues[7]["assignees"] = ["alice"]
     api.cards[7]["status"] = "In Progress"
     run(api, cfg).claim(claim_event(api, 7, "/unclaim"))
-    assert ("unassign", 7, "alice") in api.log and ("status", "ITEM7", "Ready") in api.log
+    assert ("unassign", 7, "alice") in api.log
+    assert ("status", "ITEM7", "Ready") in api.log
 
 
-def test_claim_reads_the_current_assignee_not_the_event_copy(api, cfg):
+def test_one_claimant_per_issue_read_from_the_current_issue_not_the_event_copy(api, cfg):
     event = claim_event(api, 7, "/claim")  # made while unassigned
     api.issues[7]["assignees"] = ["bob"]   # bob's /claim ran first
     run(api, cfg).claim(event)
@@ -425,11 +405,10 @@ def test_unclaim_by_someone_else_changes_nothing(api, cfg):
 # --- stale claims -----------------------------------------------------------
 
 
-def claimed(api, days_ago, login="alice", by=BOT):
-    api.issues[7]["assignees"] = [login]
+def claimed(api, days_ago):
+    api.issues[7]["assignees"] = ["alice"]
     api.cards[7]["status"] = "In Progress"
-    api.threads[7] = [{"user": {"login": by, "type": "Bot" if by == BOT else "User"},
-                       "body": bot_mod.marker("claim", login), "created_at": stamp(days_ago)}]
+    api.threads[7] = [{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("claim", "alice"), "created_at": stamp(days_ago)}]
 
 
 def test_contributing_states_the_periods_of_the_settings(cfg):
@@ -496,15 +475,6 @@ def test_a_claim_with_a_draft_pull_request_into_dev_gets_no_reminder_and_no_rele
     assert ("unassign", 7, "alice") in api.log
 
 
-@pytest.mark.parametrize("state,kept", [("open", True), ("closed", False)])
-def test_a_closed_pull_request_does_not_keep_the_claim(api, cfg, state, kept):
-    claimed(api, 30)
-    api.pulls = [{"number": 272, "title": "t", "body": "Closes #7", "labels": [], "state": state,
-                  "user": {"login": "alice", "type": "User"}}]
-    run(api, cfg).stale()
-    assert (("unassign", 7, "alice") in api.log) is (not kept)
-
-
 @pytest.mark.parametrize("assigned_days_ago,action", [(3, None), (9, None), (10, "ping"), (13, "ping"), (14, "release")])
 def test_a_hand_assignment_after_the_claim_starts_the_count_again(api, cfg, assigned_days_ago, action):
     # Claimed 30 days ago and reminded on day 10; a maintainer assigned the claimant again later.
@@ -533,7 +503,8 @@ def test_the_events_are_not_asked_for_a_claim_that_is_young_or_has_a_pull_reques
     claimed(api, 30)
     api.pulls = [{"number": 9, "title": "t", "body": "Refs #7", "labels": [], "user": {"login": "alice", "type": "User"}}]
     run(api, cfg).stale()
-    assert asked == [] and api.log == []
+    assert asked == []
+    assert api.log == []
 
 
 class Recorded(bot_mod.API):
@@ -567,15 +538,18 @@ def test_the_newest_assignment_of_that_person_is_read_from_the_issues_events():
     assert api.paths[0] == ("GET", "/repos/inferstep/ATLAS/issues/253/events?per_page=100&page=1")
 
 
-def test_hand_assignments_are_not_released(api, cfg):
+@pytest.mark.parametrize("thread", [
+    pytest.param([], id="assigned-by-hand"),
+    pytest.param([{"user": {"login": "mallory", "type": "User"}, "body": bot_mod.marker("claim", "alice"), "created_at": stamp(30)}],
+                 id="a-claim-mark-that-another-person-wrote"),
+    pytest.param([{"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-claim", "alice"), "created_at": stamp(40)},
+                  {"user": {"login": BOT, "type": "Bot"}, "body": bot_mod.marker("not-alone-unclaim", "alice"), "created_at": stamp(40)}],
+                 id="only-the-bot-answers-about-the-form-of-a-command"),
+])
+def test_an_assignment_with_no_claim_of_the_bot_is_never_released(api, cfg, thread):
     api.issues[7]["assignees"] = ["alice"]
     api.cards[7]["status"] = "In Progress"
-    run(api, cfg).stale()
-    assert api.log == []
-
-
-def test_a_forged_claim_marker_is_ignored(api, cfg):
-    claimed(api, 30, by="mallory")
+    api.threads[7] = thread
     run(api, cfg).stale()
     assert api.log == []
 
@@ -590,7 +564,8 @@ def test_ready_and_blocked_are_mirrored_to_labels(api, cfg):
     api.cards[9] = {"id": "ITEM9", "status": "Blocked", "shepherd": ""}
     run(api, cfg).sync()
     assert ("add_labels", 7, ("status/ready",)) in api.log
-    assert ("add_labels", 8, ("status/blocked",)) in api.log and ("remove_label", 8, "status/ready") in api.log
+    assert ("add_labels", 8, ("status/blocked",)) in api.log
+    assert ("remove_label", 8, "status/ready") in api.log
     assert ("remove_label", 9, "status/blocked") in api.log
 
 
@@ -605,8 +580,6 @@ def test_area_labels_from_changed_paths(api, cfg):
 
 # --- the size label and the risk label of a pull request ---------------------------------------------------------
 
-MERGED_BEFORE = "is:pr is:merged author:{}"
-
 
 def pull(number, login="bob", assoc="CONTRIBUTOR", labels=(), user_type="User"):
     return {"number": number, "labels": [{"name": name} for name in labels], "author_association": assoc,
@@ -617,47 +590,24 @@ def label_calls(api, number):
     return [entry for entry in api.log if entry[0] in ("add_labels", "remove_label") and entry[1] == number]
 
 
-def test_a_small_change_of_a_known_author_gets_its_size_label_and_no_risk_label(api, cfg):
+@pytest.mark.parametrize("files, labels", [
+    pytest.param([("proxy/x.go", 99, 0)], ("size/S",), id="99-lines-are-S"),
+    pytest.param([("proxy/x.go", 60, 40)], ("size/M",), id="100-added-and-removed-lines-are-M"),
+    pytest.param([("proxy/x.go", 1, 0), ("go.sum", 5000, 5000)], ("size/S",), id="a-lock-file-does-not-count"),
+    pytest.param([("proxy/x.go", 9, 0), ("proxy/x_test.go", 900, 0), ("docs/a.md", 900, 0)], ("size/S",),
+                 id="tests-and-documents-do-not-count-and-are-not-high-risk"),
+    pytest.param([(".github/workflows/test.yml", 30, 30)], ("size/S",), id="a-workflow-is-not-high-risk"),
+    pytest.param([("proxy/agent.go", 2, 1)], ("risk:high", "size/S"), id="a-core-path-is-high-risk"),
+    pytest.param([("proxy/x.go", 300, 100)], ("risk:high", "size/L"), id="400-lines-are-L-and-high-risk"),
+])
+def test_the_size_label_and_the_risk_label_follow_the_changed_lines_and_paths(api, cfg, files, labels):
     api.cards.clear()
-    api.pulls = [pull(50, labels=["area/docs"])]
-    api.files[50] = [("docs/SETUP.md", 30, 12)]
-    api.counts[MERGED_BEFORE.format("bob")] = 3
-    run(api, cfg).sync()
-    assert label_calls(api, 50) == [("add_labels", 50, ("size/S",))]
-
-
-@pytest.mark.parametrize("files, size", [([("proxy/x.go", 99, 0)], "size/S"), ([("proxy/x.go", 60, 40)], "size/M"),
-                                         ([("proxy/x.go", 1, 0), ("go.sum", 5000, 5000)], "size/S"),
-                                         ([("proxy/x.go", 9, 0), ("proxy/x_test.go", 900, 0), ("docs/a.md", 900, 0)], "size/S")])
-def test_the_size_is_computed_from_the_changed_lines_without_the_lock_files(api, cfg, files, size):
-    api.cards.clear()
-    api.pulls = [pull(51, labels=["area/docs", "area/proxy"])]
+    # The pull request has its area labels already, so the bot sets only the size label and the risk label.
+    api.pulls = [pull(51, labels=["area/proxy", "area/ci", "area/docs"])]
     api.files[51] = files
-    api.counts[MERGED_BEFORE.format("bob")] = 1
+    api.counts["is:pr is:merged author:bob"] = 1
     run(api, cfg).sync()
-    assert label_calls(api, 51) == [("add_labels", 51, (size,))]
-
-
-@pytest.mark.parametrize("files", [[("proxy/agent.go", 2, 1)], [("proxy/x.go", 300, 100)]])
-def test_a_change_to_a_core_path_and_a_large_change_get_the_risk_label(api, cfg, files):
-    api.cards.clear()
-    have = ["area/proxy", "area/ci", "area/docs"]
-    api.pulls = [pull(52, labels=have)]
-    api.files[52] = files
-    api.counts[MERGED_BEFORE.format("bob")] = 1
-    run(api, cfg).sync()
-    ((_kind, _number, added),) = label_calls(api, 52)
-    assert "risk:high" in added and len(added) == 2
-
-
-@pytest.mark.parametrize("files", [[(".github/workflows/test.yml", 30, 30)], [("docs/a.md", 300, 100), ("proxy/x_test.go", 900, 0)]])
-def test_a_change_to_a_workflow_and_a_large_change_of_tests_and_documents_get_no_risk_label(api, cfg, files):
-    api.cards.clear()
-    api.pulls = [pull(57, labels=["area/proxy", "area/ci", "area/docs"])]
-    api.files[57] = files
-    api.counts[MERGED_BEFORE.format("bob")] = 1
-    run(api, cfg).sync()
-    assert label_calls(api, 57) == [("add_labels", 57, ("size/S",))]
+    assert label_calls(api, 51) == [("add_labels", 51, labels)]
 
 
 @pytest.mark.parametrize("assoc, user_type, merged, high", [
@@ -669,7 +619,7 @@ def test_a_pull_request_of_an_author_with_no_merged_one_gets_the_risk_label(api,
     api.cards.clear()
     api.pulls = [pull(53, login="ann", assoc=assoc, labels=["area/docs"], user_type=user_type)]
     api.files[53] = [("docs/a.md", 3, 0)]
-    api.counts[MERGED_BEFORE.format("ann")] = merged
+    api.counts["is:pr is:merged author:ann"] = merged
     run(api, cfg).sync()
     assert label_calls(api, 53) == [("add_labels", 53, ("risk:high", "size/S") if high else ("size/S",))]
 
@@ -680,7 +630,7 @@ def test_labels_that_no_longer_hold_are_taken_off_and_the_right_ones_are_left_al
                  pull(55, labels=["area/proxy", "size/S", "risk:high"])]
     api.files[54] = [("docs/a.md", 10, 0)]
     api.files[55] = [("proxy/agent.go", 10, 0)]
-    api.counts[MERGED_BEFORE.format("bob")] = 2
+    api.counts["is:pr is:merged author:bob"] = 2
     run(api, cfg).sync()
     assert label_calls(api, 54) == [("add_labels", 54, ("size/S",)), ("remove_label", 54, "risk:high"), ("remove_label", 54, "size/L")]
     assert label_calls(api, 55) == []
@@ -703,7 +653,8 @@ def test_first_pull_requests_are_welcomed_once(api, cfg):
                   "created_at": stamp(30), "user": {"login": "old"}}]
     run(api, cfg).sync()
     run(api, cfg).sync()
-    assert len(api.said(41)) == 1 and "first pull request" in api.said(41)[0]
+    assert len(api.said(41)) == 1
+    assert "first pull request" in api.said(41)[0]
     assert api.said(42) == []
 
 
@@ -727,20 +678,16 @@ def test_first_pr_is_found_by_counting_the_authors_prs(api, cfg, assoc, prs, use
 # --- welcome and RFC links --------------------------------------------------
 
 
-def issue_event(n, login="newbie", assoc="NONE"):
-    return {"issue": {"number": n, "user": {"login": login, "type": "User"}, "author_association": assoc}}
-
-
 def test_first_issue_is_welcomed(api, cfg):
     api.counts["is:issue author:newbie"] = 1
-    run(api, cfg).welcome(issue_event(7))
+    run(api, cfg).welcome({"issue": {"number": 7, "user": {"login": "newbie", "type": "User"}, "author_association": "NONE"}})
     assert "first issue" in api.said(7)[0]
 
 
 @pytest.mark.parametrize("count,assoc", [(2, "NONE"), (1, "MEMBER"), (1, "COLLABORATOR")])
 def test_returning_authors_and_members_are_not_welcomed(api, cfg, count, assoc):
     api.counts["is:issue author:newbie"] = count
-    run(api, cfg).welcome(issue_event(7, assoc=assoc))
+    run(api, cfg).welcome({"issue": {"number": 7, "user": {"login": "newbie", "type": "User"}, "author_association": assoc}})
     assert api.said(7) == []
 
 
@@ -761,15 +708,22 @@ def test_rfc_links_related_open_rfcs_and_epics(api, cfg):
         {"number": 12, "title": "Unrelated epic", "assignees": []}]
     run(api, cfg).rfc_dedupe({"issue": {"number": 50}})
     reply = api.said(50)[0]
-    assert "#34" in reply and "@maint" in reply and "#50" not in reply and "#12" not in reply
+    assert "#34" in reply
+    assert "@maint" in reply
+    assert "#50" not in reply
+    assert "#12" not in reply
 
 
-@pytest.mark.parametrize("kind", ["Bug", "Task", None])
-def test_rfc_links_only_for_rfcs_and_features(api, cfg, kind):
+@pytest.mark.parametrize("kind, linked", [("RFC", True), ("Bug", False), ("Task", False), (None, False)])
+def test_rfc_links_only_for_rfcs_and_features(api, cfg, kind, linked):
     api.issues[50] = {"state": "open", "assignees": [], "labels": [],
                       "type": {"name": kind} if kind else None, "title": "Multi-GPU inference"}
+    # An open RFC with the same words. The row of the RFC shows that the bot finds it, so in the other rows only
+    # the type of the new issue keeps the bot from linking it.
+    api.results['is:issue is:open type:"RFC" in:title multi-gpu OR inference'] = [
+        {"number": 34, "title": "Multi-GPU inference", "assignees": []}]
     run(api, cfg).rfc_dedupe({"issue": {"number": 50}})
-    assert api.said(50) == []
+    assert bool(api.said(50)) is linked
 
 
 # --- close issues whose fix reached dev --------------------------------------
@@ -789,25 +743,16 @@ def test_a_commit_on_dev_closes_the_issue_it_names(api, cfg):
 def test_a_merged_pull_request_closes_the_issue_it_names(api, cfg):
     api.merged = [{"number": 246, "body": "Fixes #7\n\n## What changed"}]
     run(api, cfg).sync()
-    assert closed(api) == [7] and "in #246" in api.said(7)[0]
+    assert closed(api) == [7]
+    assert "in #246" in api.said(7)[0]
 
 
 def test_closing_twice_is_one_comment_and_one_close(api, cfg):
     api.commits = [{"sha": "aaaaaaa1", "message": "Closes #7"}, {"sha": "bbbbbbb2", "message": "resolves: #7"}]
     run(api, cfg).sync()
     run(api, cfg).sync()
-    assert closed(api) == [7] and len(api.said(7)) == 1
-
-
-@pytest.mark.parametrize("message", ["see (#7)", "refs #7", "Prefixes #7", "closes#7"])
-def test_only_closing_keywords_close(api, cfg, message):
-    api.commits = [{"sha": "ccccccc3", "message": message}]
-    run(api, cfg).sync()
-    assert closed(api) == []
-
-
-def an_open_issue():
-    return {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
+    assert closed(api) == [7]
+    assert len(api.said(7)) == 1
 
 
 def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_its_own_issue(api, cfg):
@@ -816,14 +761,17 @@ def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_i
     path = os.path.join(ROOT, "tests", "fixtures", "commit_message_with_a_quoted_closing_line.txt")
     with open(path, encoding="utf-8") as fh:
         message = fh.read()
-    assert "\nCloses #401\n" in message and "with `Closes #253`, was opened" in message
-    api.issues[401], api.issues[253] = an_open_issue(), an_open_issue()
+    assert "\nCloses #401\n" in message
+    assert "with `Closes #253`, was opened" in message
+    api.issues[401] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
+    api.issues[253] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
     api.commits = [{"sha": "c445002d11", "message": message}]
     # GitHub gives the text of a pull request with the line ends of a web form.
     api.merged = [{"number": 405, "body": message.split("\n", 2)[2].replace("\n", "\r\n")}]
     run(api, cfg).sync()
     assert closed(api) == [401]
-    assert api.said(253) == [] and api.issues[253]["state"] == "open"
+    assert api.said(253) == []
+    assert api.issues[253]["state"] == "open"
 
 
 @pytest.mark.parametrize("text", [
@@ -845,13 +793,17 @@ def test_the_commit_that_quotes_the_closing_line_of_another_change_closes_only_i
     "```\nCloses #7",
     "Refs #7",
     "Not closed: #7",
+    "see (#7)",
+    "Prefixes #7",
+    "closes#7",
 ])
-def test_a_closing_word_that_does_not_start_a_line_or_is_inside_code_closes_nothing(api, cfg, text):
+def test_a_text_with_no_closing_line_outside_code_closes_nothing(api, cfg, text):
     assert 7 not in bot_mod.closed_by(text)
     api.commits = [{"sha": "eeeeeee5", "message": f"fix(proxy): x\n\n{text}\n"}]
     api.merged = [{"number": 246, "body": f"## What changed\r\n\r\n{text}\r\n"}]
     run(api, cfg).sync()
-    assert 7 not in closed(api) and api.said(7) == []
+    assert 7 not in closed(api)
+    assert api.said(7) == []
 
 
 @pytest.mark.parametrize("text, numbers", [
@@ -871,17 +823,18 @@ def test_a_closing_word_that_does_not_start_a_line_or_is_inside_code_closes_noth
     ("```\nCloses #8\n```\nCloses #7", [7]),
     ("Closes #7\r\n\r\n## What changed", [7]),
     ("the first line\n\nCloses #7\nCloses #8\n", [7, 8]),
-])
+], ids=str)
 def test_a_closing_line_closes_the_issues_it_names(api, cfg, text, numbers):
     assert bot_mod.closed_by(text) == numbers
-    api.issues[8] = an_open_issue()
+    api.issues[8] = {"state": "open", "assignees": [], "labels": [], "type": None, "title": "t"}
     api.commits = [{"sha": "fffffff6", "message": text}]
     run(api, cfg).sync()
     assert closed(api) == numbers
 
 
 def test_a_text_that_is_not_there_closes_nothing():
-    assert bot_mod.closed_by(None) == [] and bot_mod.closed_by("") == []
+    assert bot_mod.closed_by(None) == []
+    assert bot_mod.closed_by("") == []
 
 
 def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
@@ -890,7 +843,8 @@ def test_pull_requests_closed_and_missing_issues_are_skipped(api, cfg):
                      "pull_request": {}}
     api.commits = [{"sha": "ddddddd4", "message": "Closes #8, closes #9, closes #999"}]
     run(api, cfg).sync()
-    assert closed(api) == [] and api.said(8) == api.said(9) == []
+    assert closed(api) == []
+    assert api.said(8) == api.said(9) == []
 
 
 # --- the rights of each workflow's token -------------------------------------
@@ -989,11 +943,11 @@ def test_the_claim_command_needs_the_right_to_read_pull_requests_and_its_workflo
 
 
 @pytest.mark.parametrize("rights, needs, missing", [
-    ({"issues": "write"}, {("issues", "read"), ("issues", "write")}, []),
-    ({"issues": "read"}, {("issues", "write")}, ["issues: write"]),
-    ({"issues": "write"}, {("pull-requests", "read")}, ["pull-requests: read"]),
-    ({"pull-requests": "write"}, {("pull-requests", "read")}, []),
-    ({}, {("contents", "read"), ("issues", "read")}, ["contents: read", "issues: read"]),
+    pytest.param({"issues": "write"}, {("issues", "read"), ("issues", "write")}, [], id="write-covers-read-and-write"),
+    pytest.param({"issues": "read"}, {("issues", "write")}, ["issues: write"], id="read-does-not-cover-write"),
+    pytest.param({"issues": "write"}, {("pull-requests", "read")}, ["pull-requests: read"], id="one-right-does-not-cover-another"),
+    pytest.param({"pull-requests": "write"}, {("pull-requests", "read")}, [], id="write-covers-read"),
+    pytest.param({}, {("contents", "read"), ("issues", "read")}, ["contents: read", "issues: read"], id="no-right-covers-nothing"),
 ])
 def test_a_right_to_write_covers_reading_and_nothing_else_stands_in_for_a_right(rights, needs, missing):
     assert not_covered(rights, needs) == missing

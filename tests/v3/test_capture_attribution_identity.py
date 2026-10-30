@@ -13,7 +13,6 @@ hold identical bytes.
 import json
 import os
 import sys
-import threading
 
 import pytest
 
@@ -33,7 +32,8 @@ def cap(tmp_path, monkeypatch, name="pool.jsonl", trace="req-1", inv="inv-1"):
 
 
 def recs(path):
-    return [json.loads(l) for l in open(path) if l.strip()]
+    with open(path) as fh:
+        return [json.loads(l) for l in fh if l.strip()]
 
 
 def test_one_request_one_invocation(tmp_path, monkeypatch):
@@ -203,7 +203,8 @@ def test_identity_never_reaches_generation_or_selection():
     the packing is never read anywhere that decides anything.
     """
     import ast as _ast
-    src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
+    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
+        src = fh.read()
     tree = _ast.parse(src)
     sink = next(n for n in _ast.walk(tree)
                 if isinstance(n, _ast.ClassDef) and n.name == "_PoolCapture")
@@ -233,7 +234,8 @@ def test_transport_identity_is_carried_and_never_read():
     allowed to buy.
     """
     import ast as _ast
-    src = open(os.path.join(V3, "pipeline.py"), encoding="utf-8").read()
+    with open(os.path.join(V3, "pipeline.py"), encoding="utf-8") as fh:
+        src = fh.read()
     mentions = [(i, l.strip()) for i, l in enumerate(src.split("\n"), start=1)
                 if "request_identity" in l]
     assigns = [m for m in mentions if "llm.request_identity =" in m[1]]
@@ -248,7 +250,8 @@ def test_transport_identity_is_carried_and_never_read():
 
     # And no scoring or selection module touches it at all.
     for module in ("scoring.py", "planning.py"):
-        text = open(os.path.join(V3, module), encoding="utf-8").read()
+        with open(os.path.join(V3, module), encoding="utf-8") as fh:
+            text = fh.read()
         for line in text.split("\n"):
             if "request_identity" not in line:
                 continue

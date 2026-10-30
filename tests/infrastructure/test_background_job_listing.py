@@ -10,7 +10,6 @@ GET /jobs lists the registry whole so the proxy can name the offender and the
 model can stop_background it.
 """
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -22,18 +21,21 @@ SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
 @pytest.fixture(scope="module")
 def executor(tmp_path_factory):
     root = tmp_path_factory.mktemp("ws-jobs")
-    os.environ["ATLAS_SANDBOX_WORKSPACE_ROOT"] = str(root)
-    sys.path.insert(0, str(SANDBOX_DIR))
-    spec = importlib.util.spec_from_file_location(
-        "executor_server_jobs", SANDBOX_DIR / "executor_server.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    try:
-        spec.loader.exec_module(mod)
-    except Exception:
-        sys.modules.pop(spec.name, None)
-        raise
-    return mod
+    # Put the environment and sys.path back after the module, also when the
+    # import fails.
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv("ATLAS_SANDBOX_WORKSPACE_ROOT", str(root))
+        env.syspath_prepend(str(SANDBOX_DIR))
+        spec = importlib.util.spec_from_file_location(
+            "executor_server_jobs", SANDBOX_DIR / "executor_server.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            sys.modules.pop(spec.name, None)
+            raise
+        yield mod
 
 
 def test_an_empty_registry_lists_nothing(executor):

@@ -90,7 +90,15 @@ A logical stage finished. `success` is required so consumers can distinguish com
 
 ### `tool_call`
 
-The agent is invoking a tool. When the tool executes, a `tool_result` for the same tool name follows within the same stage (typically a few hundred ms later). Pre-execution rejections — permission denial, truncated-args detection, workspace-boundary violation — emit no `tool_result`, so consumers must tolerate an unpaired `tool_call`.
+The agent is invoking a tool. Every `tool_call` the proxy emits is answered by
+a `tool_result` for the same tool name within the same stage (typically a few
+hundred ms later), and a refused call is answered too: a permission denial, a
+truncated argument, or a path outside the workspace arrives as a `tool_result`
+with `success: false` and the refusal in `error`. A call still outstanding when
+the session ends is answered the same way, so the calls and the results of a
+run balance at every exit. A proxy that predates this rule emits a `tool_call`
+with no result for a refused call; a client that supports one should treat an
+unpaired call as one that did not run.
 
 ```json
 {
@@ -192,7 +200,7 @@ ev = parse_envelope(blob)      # one frame → Event
 print(ev.type, ev.stage, ev.payload)
 ```
 
-The streaming consumer helpers (`iter_sse_lines`, `iter_events`, `is_terminal`, `collect`, `assert_monotonic`) live in the test harness, `tests/cli/event_harness.py` — they are assertion tooling for the suite, not part of the shipped package.
+The streaming consumer helpers (`iter_sse_lines`, `iter_events`) live in the test harness, `tests/cli/event_harness.py` — they are tooling for the suite, not part of the shipped package.
 
 ## Stage names from v3-service
 

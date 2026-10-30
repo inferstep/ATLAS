@@ -51,20 +51,59 @@ def _load_service_token() -> str:
     try:
         with open(path) as fh:
             return fh.read().strip()
-    except OSError:
+    except FileNotFoundError:
         return ""
+    except OSError as error:
+        # The file is there but cannot be read. Without a token the service
+        # would check nothing, so it stops and says why.
+        raise SystemExit(f"the service token file {path} cannot be read ({error.strerror}), so the V3 service "
+                         f"stops rather than run with no check. It runs as user {os.getuid()}: make the file readable "
+                         f"for that user.") from error
 
 
 SERVICE_TOKEN = _load_service_token()
 
-if SERVICE_TOKEN:
-    # Outbound injection: one opener covers every urllib call site
-    # (llama, lens, sandbox). urllib merges addheaders under explicit
-    # per-request headers, so requests that already set Authorization
-    # keep their own value.
-    _opener = urllib.request.build_opener()
-    _opener.addheaders = [("Authorization", f"Bearer {SERVICE_TOKEN}")]
-    urllib.request.install_opener(_opener)
+
+def _origin(url: str) -> tuple:
+    """(scheme, host, port) of an address; the port is 80 or 443 when the address leaves it out."""
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port or (443 if parts.scheme.lower() == "https" else 80)
+
+
+class _TokenForTheStackOnly(urllib.request.HTTPRedirectHandler):
+    """The token goes to the stack's own addresses (llama, lens, sandbox) and to no other.
+
+    urllib runs http_request for each request, also for each step of a
+    redirect, so a redirect to another address gets no token from here.
+    A redirect to another origin also loses an Authorization that the
+    caller set itself (llm_client's chat_completion does), which urllib
+    would copy.
+    """
+
+    def http_request(self, request):
+        stack = {_origin(INFERENCE_URL), _origin(LENS_URL), _origin(SANDBOX_URL)}
+        if _origin(request.full_url) in stack and not request.has_header("Authorization"):
+            request.add_unredirected_header("Authorization", f"Bearer {SERVICE_TOKEN}")
+        return request
+
+    https_request = http_request
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and _origin(newurl) != _origin(req.full_url):
+            new.remove_header("Authorization")
+        return new
+
+
+def install_urllib_opener() -> None:
+    """Outbound injection: one global opener covers every urllib call
+    site. A request that already sets Authorization keeps its own value.
+    No-op without a token."""
+    if SERVICE_TOKEN:
+        urllib.request.install_opener(urllib.request.build_opener(_TokenForTheStackOnly()))
+
+
+install_urllib_opener()
 
 
 REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
@@ -126,7 +165,6 @@ def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
     return headers
 
 
-# --- PC-061 step B: typed event emission ------------------------------------
 # --- LLM Adapter (calls llama-server /v1/chat/completions) ----------------------------
 
 class LLMAdapter:
@@ -146,21 +184,14 @@ class LLMAdapter:
     override via the `thinking` keyword for ad-hoc switches.
     """
 
-    # Bounds how many generations this service has in flight at once.
-    #
-    # This was a Lock, added when the service moved to ThreadingHTTPServer so
-    # a long pipeline call could not starve /health and /internal/* — its job
-    # was to keep concurrent REQUESTS from oversubscribing llama.cpp. Being
-    # class-level, it also serialized the calls inside a single pipeline run,
-    # which is where the cost landed: PlanSearch generates its candidates from
-    # independent plans and seeds, and 4 of them ran end to end at ~22s each
-    # while three of llama-server's four slots sat idle. Measured 2026-08-03,
-    # 8 sequential calls totalling 166s against the proxy's 180s cap.
-    #
-    # A semaphore keeps the original guarantee — never more in flight than the
-    # backend has slots — while letting independent generations share them.
-    # llama.cpp batches concurrent slots itself; serializing here did that job
-    # a second time, worse.
+    # Bounds how many generations this service has in flight at once: never
+    # more than the backend has slots, so concurrent requests cannot
+    # oversubscribe llama.cpp, while independent generations share the slots.
+    # A class-level Lock would also serialize the calls inside one pipeline
+    # run, where PlanSearch generates its candidates from independent plans
+    # and seeds, and leave llama-server's other slots idle. llama.cpp batches
+    # concurrent slots itself; serializing here would do that job a second
+    # time, worse.
     _slots = threading.BoundedSemaphore(_max_inflight())
 
     # Counter updates are read-modify-write and now run under concurrency.
@@ -207,12 +238,9 @@ class LLMAdapter:
         """Shrink max_tokens to what the remaining clock can actually decode.
 
         A generation runs until it stops or hits max_tokens, so an 8192-token
-        ceiling at ~25 tok/s is a 327-second call — longer than the whole
-        180s budget. Measured 2026-08-04: every V3 hang-up in a 28-session
-        run was the pipeline cut mid-probe, the first generation, which had
-        the full budget and still did not finish. Refusing the call is not
-        the answer either — that produces nothing at all. Asking for a
-        length the clock can deliver is.
+        ceiling at ~25 tok/s is a 327-second call, longer than the whole
+        default 300s budget. Refusing the call is not the answer either: that
+        produces nothing at all. Asking for a length the clock can deliver is.
 
         Raises BudgetExhausted when even a minimal generation will not fit.
         """
@@ -282,8 +310,8 @@ class LLMAdapter:
             "prompt": prompt,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "stream": True,  # streaming: per-token visibility + no
-                              # 300s urllib read-timeout on long gens.
+            "stream": True,  # streaming: per-token visibility, and
+                              # each read stays far below the 600s timeout.
             "stop": ["\n\n\n\n"],
             "top_k": 20,
             "top_p": 0.95,
@@ -401,44 +429,7 @@ class LLMAdapter:
         for the chat endpoint. ChatML format:
             <|im_start|>system\n...\n<|im_end|>\n<|im_start|>user\n...\n<|im_end|>\n<|im_start|>assistant\n
         """
-        prompt = body.pop("prompt", "")
-        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
-
-        # PC-206: thinking flag drops down from __call__. Default False so
-        # callers get bounded generation unless they opt into reasoning.
-        thinking = bool(body.pop("_thinking", False))
-
-        # Convert the internal prompt carrier into structured messages before
-        # llama-server applies the selected model's own template.
-        messages = chatml_to_messages(prompt)
-        if "<|im_start|>" not in prompt:
-            print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
-        else:
-            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
-                  f" (thinking={'on' if thinking else 'off'})", flush=True)
-            if thinking:
-                # Strip the legacy directive from old prompt templates when a
-                # caller explicitly enables reasoning.
-                for msg in messages:
-                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
-                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
-
-        chat_body = {
-            "model": model_name,
-            "messages": messages,
-            "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
-            "temperature": body.get("temperature", 0.6),
-            "stream": bool(body.get("stream", False)),
-            # The chat template may honor enable_thinking; templates that do
-            # not support it ignore the kwarg. Reasoning blocks are stripped
-            # in __call__ before downstream JSON parsing.
-            "chat_template_kwargs": {"enable_thinking": thinking},
-        }
-        if chat_body["stream"]:
-            # Need usage in the final chunk so we can report token counts.
-            chat_body["stream_options"] = {"include_usage": True}
-        if "seed" in body:
-            chat_body["seed"] = body["seed"]
+        chat_body = self._chat_body(body)
 
         payload = json.dumps(chat_body).encode()
         for attempt in range(5):
@@ -462,9 +453,9 @@ class LLMAdapter:
                         # Streaming path: parse SSE chunks, accumulate
                         # delta content, and forward each delta to the
                         # progress callback as ("token", text). The 600s
-                        # urllib timeout is per-read; with continuous
-                        # token flow each read is sub-second, so long
-                        # generations no longer hit the old 300s ceiling.
+                        # connection timeout is per read; with continuous
+                        # token flow each read is sub-second, so a long
+                        # generation does not hit it.
                         full = []
                         reasoning = []
                         usage = {}
@@ -473,36 +464,18 @@ class LLMAdapter:
                             line = raw.decode("utf-8", "replace").rstrip("\r\n")
                             if not line.startswith("data:"):
                                 continue
-                            payload = line[5:].lstrip()
-                            if payload == "[DONE]":
+                            event = line[5:].lstrip()
+                            if event == "[DONE]":
                                 break
                             try:
-                                chunk = json.loads(payload)
+                                chunk = json.loads(event)
                             except json.JSONDecodeError:
                                 continue
                             choices = chunk.get("choices") or []
                             if choices:
                                 delta_obj = choices[0].get("delta", {}) or {}
                                 if not first_chunk_logged and delta_obj:
-                                    # Metadata only. This line used to carry a
-                                    # 200-character sample of the delta, which
-                                    # is candidate source: harmless while logs
-                                    # were unstructured and local, and a
-                                    # retained content leak the moment
-                                    # ATLAS_LOG_FORMAT=json makes these records
-                                    # evidence. 84 such records were captured in
-                                    # one 63-cell rehearsal. The diagnostic
-                                    # exists to say which keys a build sends and
-                                    # whether anything arrived; request and
-                                    # invocation identity already join the line
-                                    # to its call, so no sample, prefix, excerpt
-                                    # or encoding of the content is needed.
-                                    _c = delta_obj.get("content")
-                                    _r = delta_obj.get("reasoning_content")
-                                    print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
-                                          f"content_chars={len(_c) if isinstance(_c, str) else 0} "
-                                          f"reasoning_chars={len(_r) if isinstance(_r, str) else 0}",
-                                          flush=True)
+                                    self._log_first_delta(delta_obj)
                                     first_chunk_logged = True
                                 delta = delta_obj.get("content", "") or ""
                                 # Some llama.cpp builds split <think>…</think>
@@ -547,16 +520,90 @@ class LLMAdapter:
         # which violates the -> dict signature).
         raise RuntimeError("unreachable: _send loop must return or raise")
 
+    @staticmethod
+    def _chat_body(body: dict) -> dict:
+        """The /v1/chat/completions request for one call: the messages, the
+        thinking switch and the sampling fields. Takes `prompt` and
+        `_thinking` out of `body`."""
+        prompt = body.pop("prompt", "")
+        model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
+
+        # PC-206: thinking flag drops down from __call__. Default False so
+        # callers get bounded generation unless they opt into reasoning.
+        thinking = bool(body.pop("_thinking", False))
+
+        messages = LLMAdapter._chat_messages(prompt, thinking)
+
+        chat_body = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": body.get("max_tokens", body.pop("n_predict", 4096)),
+            "temperature": body.get("temperature", 0.6),
+            "stream": bool(body.get("stream", False)),
+            # The chat template may honor enable_thinking; templates that do
+            # not support it ignore the kwarg. Reasoning blocks are stripped
+            # in __call__ before downstream JSON parsing.
+            "chat_template_kwargs": {"enable_thinking": thinking},
+        }
+        if chat_body["stream"]:
+            # Need usage in the final chunk so we can report token counts.
+            chat_body["stream_options"] = {"include_usage": True}
+        if "seed" in body:
+            chat_body["seed"] = body["seed"]
+        return chat_body
+
+    @staticmethod
+    def _chat_messages(prompt: str, thinking: bool) -> list:
+        """The ChatML prompt as chat messages. With thinking on, a user
+        message loses the legacy /nothink directive."""
+        # Convert the internal prompt carrier into structured messages before
+        # llama-server applies the selected model's own template.
+        messages = chatml_to_messages(prompt)
+        if "<|im_start|>" not in prompt:
+            print(f"  [LLM] ChatML parse failed, using raw prompt ({len(prompt)} chars)", flush=True)
+        else:
+            print(f"  [LLM] Parsed {len(messages)} messages from ChatML"
+                  f" (thinking={'on' if thinking else 'off'})", flush=True)
+            if thinking:
+                # Strip the legacy directive from old prompt templates when a
+                # caller explicitly enables reasoning.
+                for msg in messages:
+                    if msg["role"] == "user" and msg["content"].startswith("/nothink"):
+                        msg["content"] = msg["content"][len("/nothink"):].lstrip("\n")
+        return messages
+
+    @staticmethod
+    def _log_first_delta(delta_obj: dict) -> None:
+        """Log which keys the first streamed delta carries and how many
+        characters arrived, never the characters themselves."""
+        # Metadata only. This line used to carry a
+        # 200-character sample of the delta, which
+        # is candidate source: harmless while logs
+        # were unstructured and local, and a
+        # retained content leak the moment
+        # ATLAS_LOG_FORMAT=json makes these records
+        # evidence. 84 such records were captured in
+        # one 63-cell rehearsal. The diagnostic
+        # exists to say which keys a build sends and
+        # whether anything arrived; request and
+        # invocation identity already join the line
+        # to its call, so no sample, prefix, excerpt
+        # or encoding of the content is needed.
+        _c = delta_obj.get("content")
+        _r = delta_obj.get("reasoning_content")
+        print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
+              f"content_chars={len(_c) if isinstance(_c, str) else 0} "
+              f"reasoning_chars={len(_r) if isinstance(_r, str) else 0}",
+              flush=True)
+
 
 class BudgetExhausted(Exception):
-    """Not enough of ATLAS_V3_TIMEOUT is left to start another generation.
+    """Not enough of the call's budget is left to start another generation.
 
     Raised from LLMAdapter.__call__ rather than checked at phase boundaries.
     Boundary checks cannot hold: every phase runs its own internal loop —
     PR-CoT alone issues two calls — so a check that reserves one call is
-    already wrong by the second. Measured 2026-08-03: a boundary check with
-    ~50s left correctly allowed PR-CoT against a ~34s reserve, and PR-CoT
-    spent 44s then started a 21s call, overrunning the cap.
+    already wrong by the second.
 
     The pipeline catches this and returns its best candidate so far, which is
     the contract an anytime algorithm owes its caller.
@@ -683,22 +730,18 @@ def _sandbox_safe_filename(filename: str) -> Optional[str]:
     """The relative name the sandbox will accept, or None when none exists.
 
     The sandbox refuses an absolute path, a backslash-rooted one, or one
-    containing ".." -- _safe_overlay_path raises HTTP 400 -- and this boundary
-    used to forward the caller's spelling unchanged. The proxy relativises at
-    its own sandbox boundary for exactly this reason (proxy/gates.go,
-    workspaceRelativeName); this one did not. The proxy sends V3 a RESOLVED
-    absolute file_path, so the filename reaching here was always absolute, and
-    every candidate came back "syntax verification unavailable: HTTP Error 400:
-    Bad Request" -- a verification that never ran, reported as a candidate that
-    failed. Measured live on an exposed task 2026-09-18: 3 of 3 candidates
-    failed that way, the pipeline proposed nothing, and ~4 minutes of the
-    session's budget bought a result that could not have been otherwise.
+    containing ".." (_safe_overlay_path raises HTTP 400), and the proxy sends
+    V3 a RESOLVED absolute file_path. Forwarded unchanged, every candidate
+    would come back "syntax verification unavailable: HTTP Error 400", a
+    verification that never ran reported as a candidate that failed. The
+    proxy relativises at its own sandbox boundary for the same reason
+    (proxy/gates.go, workspaceRelativeName).
 
     Relativised here, at the one boundary that talks to the sandbox, so every
-    caller is fixed at once. When no safe relative form exists the filename is
-    omitted and the check still runs: that only forgoes the path-scoped checks
-    (the Jinja-template scoping, which keys off a "templates/" segment), which
-    is exactly what happens today for a caller that supplies no filename.
+    caller is covered at once. When no safe relative form exists the filename
+    is omitted and the check still runs: that only forgoes the path-scoped
+    checks (the Jinja-template scoping, which keys off a "templates/"
+    segment), as for a caller that supplies no filename.
 
     This never decides anything about the code. It decides whether the sandbox
     is asked at all, and the sandbox still returns the verdict.
@@ -906,16 +949,14 @@ class EmbedAdapter:
 # must not learn either -- it stays generic and derives completeness, coverage
 # and closure from what an adapter reports.
 #
-# Records are built by calling contract.build directly. Nothing here consults
-# the retiring evidence.py: strength is read from the OBSERVATIONS, not from
-# that module's graded string, so this file is a producer of contract records
+# Records are built by calling contract.build directly, and strength is read
+# from the OBSERVATIONS, so this file is a producer of contract records
 # rather than a translator of someone else's grade.
 
 import contract
 
 # Adapter identities. These are the ids the pipeline records carry, declared
-# here because they name THIS layer's verifiers. test_adapters.py pins them
-# against the retiring module's copies for as long as that module exists.
+# here because they name THIS layer's verifiers.
 ADAPTER_JAVASCRIPT_COMPILE = "javascript_compile"
 ADAPTER_CSS_SYNTAX = "css_syntax"
 ADAPTER_PYTHON_COMPILE = "python_compile"

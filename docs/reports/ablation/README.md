@@ -4,8 +4,8 @@ This documents the per-task pass/fail data from the ATLAS V3.0 ablation study on
 LiveCodeBench (599 tasks). They are the raw traces behind the 74.6% result,
 which is **withdrawn**: the runner graded only the examples printed in each
 problem, counted any of three candidates passing as a pass, and let repair see
-the examples' expected output (see the notice at the top of
-[V3_ABLATION_STUDY.md](../V3_ABLATION_STUDY.md)). The traces are kept so the
+the examples' expected output (see the withdrawal notice in the
+[CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)). The traces are kept so the
 withdrawal can be checked. Every pass rate on this page comes from that run.
 
 ## Where the data lives

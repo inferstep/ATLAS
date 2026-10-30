@@ -124,15 +124,22 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # CUDA image — the ASA workflow is backend-agnostic at the file level.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 
-RUN mkdir -p /models
+RUN groupadd --gid 1001 atlas && \
+    useradd --create-home --uid 1001 --gid 1001 atlas && \
+    (getent group video >/dev/null 2>&1 && usermod -aG video atlas || true) && \
+    (getent group render >/dev/null 2>&1 && usermod -aG render atlas || true) && \
+    mkdir -p /models && \
+    chown -R atlas:atlas /models
+
 COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # The HIP runtime needs the calling user in the `render` and `video`
 # groups on the host for /dev/kfd + /dev/dri access. The compose
 # override (docker-compose.rocm.yml) handles the device passthrough +
-# group_add. No USER directive here — entrypoint runs as root inside
-# the container; kernel-side permission check is on host.
+# group_add.
+USER atlas
+ENV HOME=/home/atlas
 
 # The entrypoint's default listen port (PORT env) is 8080; the compose
 # healthcheck and port mapping both target 8080.

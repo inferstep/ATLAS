@@ -27,6 +27,10 @@ WATCH_POLL_SEC = 0.25
 
 # The proxy forwards this; absence is normal for direct callers.
 REQUEST_ID_HEADER = "X-ATLAS-Request-ID"
+# The largest request body a route takes. The largest real one is a file with
+# its project context, a few MiB; 64 MiB is far above that, and keeps a
+# request without end from filling the service's memory.
+MAX_REQUEST_BODY_BYTES = 64 << 20
 import os
 import sys
 from pathlib import Path
@@ -48,7 +52,8 @@ from symbols import (structural_edit, structural_score, build_project_symbols,
 # The handler does not call these; tests exercise them through `import main`.
 # __all__ below states that so linters stop reading them as dead imports —
 # deleting any of them breaks the suite, which is the failure this guards.
-from pipeline import _candidate_by_index, _make_self_test
+from candidate_records import _candidate_by_index
+from pipeline import _make_self_test
 from planning import _score_plan, _known_files
 from scoring import (verify_build_command, smoke_compile_check,
                      score_candidate_per_step, _project_relative_path)
@@ -224,6 +229,17 @@ class V3Handler(BaseHTTPRequestHandler):
         _set_rid(self.headers.get("X-ATLAS-Request-ID", ""))
         if not self._authorized():
             return
+        # The one read of Content-Length: every route reads this many bytes.
+        try:
+            self.body_length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self.body_length = -1
+        if self.body_length < 0:
+            self._json_response(400, {"error": "Content-Length is not a whole number of 0 or more"})
+            return
+        if self.body_length > MAX_REQUEST_BODY_BYTES:
+            self._json_response(413, {"error": f"request body over {MAX_REQUEST_BODY_BYTES} bytes"})
+            return
         if self.path == "/v3/generate":
             self._handle_generate()
         elif self.path == "/v3/plan":
@@ -297,7 +313,7 @@ class V3Handler(BaseHTTPRequestHandler):
             total_tokens: int
             total_time_ms: float
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -319,45 +335,10 @@ class V3Handler(BaseHTTPRequestHandler):
             self._json_response(400, {"error": "file_path or baseline_code required"})
             return
 
-        # Build problem description from the adapter request
-        problem = _build_problem_from_request(
-            file_path, baseline_code, project_context,
-            framework, build_command, constraints, user_message,
-        )
+        problem, files = self._pipeline_inputs(file_path, baseline_code, project_context, framework,
+                                               build_command, constraints, user_message, tier)
 
-        # Build file context for the pipeline
-        files = dict(project_context) if project_context else {}
-
-        print(f"[generate] file={file_path} framework={framework} tier=T{tier}", flush=True)
-        if build_command:
-            print(f"[generate] requested build command: {build_command}", flush=True)
-        print(f"[generate] constraints: {constraints}", flush=True)
-
-        # Stream V3 pipeline progress as SSE events, then final result as JSON
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-
-        def emit_progress(stage, detail="", **data):
-            """Stream progress events to the Go proxy."""
-            payload = {"stage": stage, "detail": detail}
-            if data:
-                payload["data"] = data
-            event = json.dumps(payload)
-            try:
-                self.wfile.write(f"data: {event}\n\n".encode())
-                self.wfile.flush()
-                # Also log for debugging
-                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
-                      flush=True)
-            except (BrokenPipeError, ConnectionResetError):
-                # Client gone — flag it so pipeline.run aborts at the
-                # next phase boundary instead of grinding on.
-                emit_progress.disconnected = True
-            except Exception as e:
-                print(f"  [SSE ERROR] {e}", flush=True)
-
+        emit_progress = self._open_generate_stream()
         scope, stop_watch, watcher = _watch_parent_for(self, "generate")
         # Trace identity is a JOIN KEY, never authority: it may be missing, it
         # may repeat, and the invocation id is what makes a pool unique.
@@ -386,19 +367,77 @@ class V3Handler(BaseHTTPRequestHandler):
             print(f"[generate] pipeline aborted: {e}", flush=True)
             return
         except scoring.LensUnavailable as e:
-            # The lens is required: the run stops, and the caller is told why
-            # in the result it is waiting for. No code is sent, not even the
-            # baseline, so nothing can read this as a finished generation.
-            print(f"[generate] stopped: the lens cannot score ({e.reason})", flush=True)
-            self._write_result({
-                "code": "", "passed": False, "phase_solved": "lens_unavailable",
-                "candidates_tested": 0, "winning_score": 0.0,
-                "lens_unavailable": e.reason,
-            })
+            self._write_lens_unavailable(e)
             return
         finally:
             _release_scope(scope, stop_watch, watcher, "generate")
+        self._write_generate_result(result, baseline_code)
 
+    @staticmethod
+    def _pipeline_inputs(file_path, baseline_code, project_context, framework,
+                         build_command, constraints, user_message, tier):
+        """The problem statement and the file context the pipeline runs on,
+        built from the request fields. Logs what was asked."""
+        # Build problem description from the adapter request
+        problem = _build_problem_from_request(
+            file_path, baseline_code, project_context,
+            framework, build_command, constraints, user_message,
+        )
+
+        # Build file context for the pipeline
+        files = dict(project_context) if project_context else {}
+
+        print(f"[generate] file={file_path} framework={framework} tier=T{tier}", flush=True)
+        if build_command:
+            print(f"[generate] requested build command: {build_command}", flush=True)
+        print(f"[generate] constraints: {constraints}", flush=True)
+        return problem, files
+
+    def _open_generate_stream(self):
+        """Start the SSE response, and return the progress callback that
+        writes the pipeline's events to it."""
+        # Stream V3 pipeline progress as SSE events, then final result as JSON
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit_progress(stage, detail="", **data):
+            """Stream progress events to the Go proxy."""
+            payload = {"stage": stage, "detail": detail}
+            if data:
+                payload["data"] = data
+            event = json.dumps(payload)
+            try:
+                self.wfile.write(f"data: {event}\n\n".encode())
+                self.wfile.flush()
+                # Also log for debugging
+                print(f"  [SSE] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
+            except (BrokenPipeError, ConnectionResetError):
+                # Client gone — flag it so pipeline.run aborts at the
+                # next phase boundary instead of grinding on.
+                emit_progress.disconnected = True
+            except Exception as e:
+                print(f"  [SSE ERROR] {e}", flush=True)
+
+        return emit_progress
+
+    def _write_lens_unavailable(self, e):
+        """The result when the lens cannot score: no code, and the reason."""
+        # The lens is required: the run stops, and the caller is told why
+        # in the result it is waiting for. No code is sent, not even the
+        # baseline, so nothing can read this as a finished generation.
+        print(f"[generate] stopped: the lens cannot score ({e.reason})", flush=True)
+        self._write_result({
+            "code": "", "passed": False, "phase_solved": "lens_unavailable",
+            "candidates_tested": 0, "winning_score": 0.0,
+            "lens_unavailable": e.reason,
+        })
+
+    def _write_generate_result(self, result, baseline_code):
+        """The final result of /v3/generate: the baseline when the run gave no
+        code, the response fields, and the evidence envelope."""
         # If baseline code was provided and pipeline didn't produce anything better,
         # use the baseline
         if not result.get("code") and baseline_code:
@@ -477,7 +516,7 @@ class V3Handler(BaseHTTPRequestHandler):
             rationale: str
             reasons: list[str]
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -496,26 +535,7 @@ class V3Handler(BaseHTTPRequestHandler):
         print(f"[plan] msg={user_message[:80]!r} cwd={working_dir} files={len(project_context)} n={n_candidates}",
               flush=True)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-
-        def emit_progress(stage, detail="", **data):
-            payload = {"stage": stage, "detail": detail}
-            if data:
-                payload["data"] = data
-            event = json.dumps(payload)
-            try:
-                self.wfile.write(f"data: {event}\n\n".encode())
-                self.wfile.flush()
-                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
-                      flush=True)
-            except BrokenPipeError:
-                # best-effort: swallow on failure (caller continues)
-                pass
-            except Exception as e:
-                print(f"  [SSE plan ERROR] {e}", flush=True)
+        emit_progress = self._open_plan_stream()
 
         scope, stop_watch, watcher = _watch_parent_for(self, "plan")
         trace_id = self.headers.get(REQUEST_ID_HEADER, "") or ""
@@ -553,6 +573,32 @@ class V3Handler(BaseHTTPRequestHandler):
             # best-effort: swallow on failure (caller continues)
             pass
 
+    def _open_plan_stream(self):
+        """Start the SSE response, and return the progress callback that
+        writes the planner's events to it."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit_progress(stage, detail="", **data):
+            payload = {"stage": stage, "detail": detail}
+            if data:
+                payload["data"] = data
+            event = json.dumps(payload)
+            try:
+                self.wfile.write(f"data: {event}\n\n".encode())
+                self.wfile.flush()
+                print(f"  [SSE plan] {stage}: {_safe_progress_detail(stage, detail)}",
+                      flush=True)
+            except BrokenPipeError:
+                # best-effort: swallow on failure (caller continues)
+                pass
+            except Exception as e:
+                print(f"  [SSE plan ERROR] {e}", flush=True)
+
+        return emit_progress
+
     def _handle_structural_edit(self):
         """POST /internal/structural_edit — friendly-selector structural replacement.
 
@@ -570,7 +616,7 @@ class V3Handler(BaseHTTPRequestHandler):
         after lens-scoring, matching write_file's flow so PC-207 lens-veto
         can still reject stub-shaped replacements.
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -615,7 +661,7 @@ class V3Handler(BaseHTTPRequestHandler):
         which extracts symbols from the user message via regex and walks
         the working directory for .py files (with its own size cap).
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -683,7 +729,7 @@ class V3Handler(BaseHTTPRequestHandler):
         Malformed Python does NOT produce ok:false; tree-sitter parses it
         tolerantly and returns a best-effort extraction.
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -729,7 +775,7 @@ class V3Handler(BaseHTTPRequestHandler):
         Conservative by design: ambiguous blocks (template statement tags,
         `<script src>`, non-JS `type`, escaped Python strings) report nothing.
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -763,7 +809,7 @@ class V3Handler(BaseHTTPRequestHandler):
         skipped, and any mention of the name outside its own `def` line counts
         as a reference, so the check errs toward silence.
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -802,7 +848,7 @@ class V3Handler(BaseHTTPRequestHandler):
         cheap and never misses the file in a large repo. Additive: the
         symbols/supported shape is unchanged.
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:
@@ -857,7 +903,7 @@ class V3Handler(BaseHTTPRequestHandler):
         Response: {"ok": true, "language": "python", "cyclomatic_complexity": 12}
                   or {"ok": false, "error": "..."}
         """
-        content_len = int(self.headers.get("Content-Length", 0))
+        content_len = self.body_length
         try:
             body = json.loads(self.rfile.read(content_len) or b"{}")
         except json.JSONDecodeError as e:

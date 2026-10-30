@@ -23,15 +23,12 @@ names = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(names)
 
 
-def settings():
-    return yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
-
-
 def test_the_list_holds_single_licences_once_each_and_the_level_of_a_vulnerability_that_fails():
-    found = settings()
+    found = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))
     allowed = found["allow-licenses"]
     assert found["fail-on-severity"] == "high"
-    assert len(allowed) == len(set(allowed)) and all(isinstance(entry, str) and entry.strip() == entry for entry in allowed)
+    assert len(allowed) == len(set(allowed))
+    assert all(isinstance(entry, str) and entry.strip() == entry for entry in allowed)
     joined = [entry for entry in allowed if " AND " in entry or " OR " in entry]
     assert not joined, (
         f"{joined} in `allow-licenses` join two licences. The review action leaves such an entry out without a word. "
@@ -39,27 +36,30 @@ def test_the_list_holds_single_licences_once_each_and_the_level_of_a_vulnerabili
 
 
 def test_no_entry_of_the_list_lets_gpl_2_only_through():
-    wrong = [entry for entry in settings()["allow-licenses"] if re.match(r"(?:A|L)?GPL-(?:1|2)\.0", entry)]
+    allowed = yaml.safe_load(SETTINGS.read_text(encoding="utf-8"))["allow-licenses"]
+    wrong = [entry for entry in allowed if re.match(r"(?:A|L)?GPL-(?:1|2)\.0", entry)]
     assert not wrong, (
         f"{wrong} in `allow-licenses`: the review reads an older GPL entry as a range that GPL-2.0-only is in, and a "
         "work under AGPL-3.0 cannot take GPL-2.0-only in. Fix: take the entry out. A dependency under "
         "GPL-2.0-or-later still passes, by the GPL-3.0 entries.")
-    assert {"GPL-3.0-only", "GPL-3.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "MIT", "Apache-2.0"} <= set(settings()["allow-licenses"])
+    assert {"GPL-3.0-only", "GPL-3.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "MIT", "Apache-2.0"} <= set(allowed)
 
 
 def test_each_package_that_was_read_by_hand_has_its_licence_beside_it_and_every_part_of_it_is_allowed():
     text = SETTINGS.read_text(encoding="utf-8")
+    found = yaml.safe_load(text)
     entries = re.findall(r"^  - (pkg:\S+)[ \t]*(?:#[ \t]*(\S.*))?$", text.split("allow-dependencies-licenses:")[1], re.M)
-    assert sorted(purl for purl, _licence in entries) == sorted(settings()["allow-dependencies-licenses"])
+    assert sorted(purl for purl, _licence in entries) == sorted(found["allow-dependencies-licenses"])
     assert names.read_by_hand(text) == {purl for purl, _licence in entries}
     for purl, licence in entries:
         assert "@" not in purl, f"{purl} names a version, so the next version would not be covered"
         parts = re.split(r" (?:AND|OR) ", licence or "")
-        off_the_list = [part for part in parts if part not in settings()["allow-licenses"]]
-        assert licence and not off_the_list, (
-            f"{purl} has `{licence}` beside it, and {off_the_list or 'nothing'} of it is on `allow-licenses`. Fix: write "
-            "the licence that the package index names for the package after a `#` on its line; each part of it must "
-            "be a licence of the list.")
+        off_the_list = [part for part in parts if part not in found["allow-licenses"]]
+        why = (f"{purl} has `{licence}` beside it, and {off_the_list or 'nothing'} of it is on `allow-licenses`. Fix: "
+               "write the licence that the package index names for the package after a `#` on its line; each part "
+               "of it must be a licence of the list.")
+        assert licence, why
+        assert not off_the_list, why
 
 
 def test_the_workflow_gives_the_action_the_settings_file_and_then_runs_the_step_for_a_licence_with_no_name():
@@ -73,7 +73,8 @@ def test_the_workflow_gives_the_action_the_settings_file_and_then_runs_the_step_
     assert "python3 scripts/" not in after["run"], "the step runs a script from the checkout, which is the change's copy"
     assert after["env"] == {"BASE": "${{ steps.base.outputs.sha }}",
                             "INVALID_LICENSE_CHANGES": "${{ steps.%s.outputs.invalid-license-changes }}" % steps[at]["id"]}
-    assert "if" not in after and uses.index("actions/checkout") < at
+    assert "if" not in after
+    assert uses.index("actions/checkout") < at
     assert [step.get("id") for step in steps].index("base") < at + 1
 
 
@@ -108,6 +109,13 @@ def the_step_in_a_merge(tmp_path, on_the_base, on_the_branch, unlicensed):
         "INVALID_LICENSE_CHANGES": json.dumps({"unlicensed": unlicensed})})
 
 
+def change(purl, kind="added", licence=None):
+    """One entry of what the review action found, as GitHub writes it."""
+    name = purl.split("/", 1)[1].split("@")[0]
+    return {"change_type": kind, "package_url": purl, "name": name, "version": purl.split("@")[-1] if "@" in purl else "",
+            "manifest": "requirements.txt", "license": licence}
+
+
 A_SCRIPT_THAT_PASSES_ALL = 'print("the copy of the change ran")\n'
 
 
@@ -116,88 +124,89 @@ def test_the_step_runs_the_base_branchs_copy_of_the_script_when_a_change_rewrite
     real = SCRIPT.read_text(encoding="utf-8")
     done = the_step_in_a_merge(tmp_path, real, A_SCRIPT_THAT_PASSES_ALL, [change("pkg:pypi/new-package@1.0.0")])
     assert done.returncode == 1, done.stdout + done.stderr
-    assert "::error title=no named licence::new-package 1.0.0" in done.stdout and "the copy of the change ran" not in done.stdout
+    assert "::error title=no named licence::new-package 1.0.0" in done.stdout
+    assert "the copy of the change ran" not in done.stdout
 
 
 def test_the_changes_copy_of_the_script_runs_only_while_the_base_has_none(tmp_path):
     done = the_step_in_a_merge(tmp_path, None, A_SCRIPT_THAT_PASSES_ALL, [])
-    assert done.returncode == 0 and "the copy of the change ran" in done.stdout
+    assert done.returncode == 0
+    assert "the copy of the change ran" in done.stdout
 
 
 def test_the_base_branchs_copy_reads_the_settings_file_of_the_change(tmp_path):
     # The copy of the script lies outside the checkout; the list of the packages read by hand is the checkout's.
     real = SCRIPT.read_text(encoding="utf-8")
     done = the_step_in_a_merge(tmp_path, real, real + "# a line of the branch\n", [change("pkg:pypi/torch@2.14.0"), change("pkg:pypi/one@1.0")])
-    assert done.returncode == 1 and done.stdout.count("::error title=no named licence::") == 1
+    assert done.returncode == 1
+    assert done.stdout.count("::error title=no named licence::") == 1
     assert "::error title=no named licence::one 1.0" in done.stdout
 
 
-def change(purl, kind="added", licence=None):
-    name = purl.split("/", 1)[1].split("@")[0]
-    return {"change_type": kind, "package_url": purl, "name": name, "version": purl.split("@")[-1] if "@" in purl else "",
-            "manifest": "requirements.txt", "license": licence}
-
-
-BY_HAND = {"pkg:pypi/torch", "pkg:npm/%40scope/name"}
-
-
 @pytest.mark.parametrize("purl, kind, named", [
-    ("pkg:pypi/new-package@1.0.0", "added", True),
-    ("pkg:pypi/torch-extra@1.0.0", "added", True),
-    ("pkg:npm/torch@1.0.0", "added", True),
-    ("pkg:pypi/torch@2.14.0", "added", False),
-    ("pkg:pypi/torch", "added", False),
-    ("pkg:pypi/torch@2.14.0?arch=x86#sub", "added", False),
-    ("pkg:npm/%40scope/name@3.1.0", "added", False),
-    ("pkg:githubactions/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "added", False),
-    ("pkg:pypi/new-package@1.0.0", "removed", False),
+    pytest.param("pkg:pypi/new-package@1.0.0", "added", True, id="a-new-package"),
+    pytest.param("pkg:pypi/torch-extra@1.0.0", "added", True, id="a-name-that-starts-as-one-read-by-hand"),
+    pytest.param("pkg:npm/torch@1.0.0", "added", True, id="a-name-read-by-hand-in-another-index"),
+    pytest.param("pkg:pypi/torch@2.14.0", "added", False, id="read-by-hand"),
+    pytest.param("pkg:pypi/torch", "added", False, id="read-by-hand-with-no-version"),
+    pytest.param("pkg:pypi/torch@2.14.0?arch=x86#sub", "added", False, id="read-by-hand-with-qualifiers"),
+    pytest.param("pkg:npm/%40scope/name@3.1.0", "added", False, id="read-by-hand-with-a-scope"),
+    pytest.param("pkg:githubactions/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "added", False,
+                 id="an-action"),
+    pytest.param("pkg:pypi/new-package@1.0.0", "removed", False, id="a-removed-package"),
 ])
 def test_a_new_package_with_no_named_licence_is_named_unless_it_was_read_by_hand_or_is_an_action(purl, kind, named):
-    found = names.not_named({"unlicensed": [change(purl, kind)], "forbidden": [], "unresolved": []}, BY_HAND)
+    read_by_hand = {"pkg:pypi/torch", "pkg:npm/%40scope/name"}
+    found = names.not_named({"unlicensed": [change(purl, kind)], "forbidden": [], "unresolved": []}, read_by_hand)
     assert [c["package_url"] for c in found] == ([purl] if named else [])
 
 
-def run(found, **env):
-    value = found if isinstance(found, str) else json.dumps(found)
-    return subprocess.run([sys.executable, str(SCRIPT)], env={"PATH": os.environ["PATH"], "INVALID_LICENSE_CHANGES": value, **env},
+def run_the_script(*args, **env):
+    """Run scripts/licence_names.py with PATH and the given variables only."""
+    return subprocess.run([sys.executable, str(SCRIPT), *args], env={"PATH": os.environ["PATH"], **env},
                           capture_output=True, text=True, timeout=30)
 
 
 def test_the_step_passes_when_nothing_is_without_a_name_and_fails_with_the_fix_for_each_that_is():
-    nothing = run({"forbidden": [], "unresolved": [], "unlicensed": []})
-    assert nothing.returncode == 0 and "has a named licence" in nothing.stdout
-    known = run({"unlicensed": [change("pkg:pypi/torch@2.14.0"), change("pkg:githubactions/actions/checkout@abc")]})
-    assert known.returncode == 0, known.stdout + known.stderr
-    two = run({"unlicensed": [change("pkg:pypi/one@1.0"), change("pkg:pypi/torch@2.14.0"), change("pkg:npm/two@2.0")]})
+    nothing = run_the_script(INVALID_LICENSE_CHANGES=json.dumps({"forbidden": [], "unresolved": [], "unlicensed": []}))
+    assert nothing.returncode == 0
+    assert "has a named licence" in nothing.stdout
+    # torch was read by hand: two lines for three packages.
+    two = run_the_script(INVALID_LICENSE_CHANGES=json.dumps(
+        {"unlicensed": [change("pkg:pypi/one@1.0"), change("pkg:pypi/torch@2.14.0"), change("pkg:npm/two@2.0")]}))
     assert two.returncode == 1
     lines = [line for line in two.stdout.splitlines() if line.startswith("::error title=no named licence::")]
-    assert len(lines) == 2 and lines[0].startswith("::error title=no named licence::one 1.0 (requirements.txt): ")
+    assert len(lines) == 2
+    assert lines[0].startswith("::error title=no named licence::one 1.0 (requirements.txt): ")
     assert all("Fix: read the package's licence." in line and "allow-dependencies-licenses" in line for line in lines)
 
 
-@pytest.mark.parametrize("found", ["", "not json", "[]", '"text"'])
-def test_what_cannot_be_read_ends_the_step_with_status_2_and_the_fix(found):
-    done = run(found)
-    assert done.returncode == 2 and "cannot be read" in done.stderr and "Fix: the step must get" in done.stderr
-
-
-def test_a_settings_file_that_is_not_there_ends_the_step_with_status_2(tmp_path):
-    done = subprocess.run([sys.executable, str(SCRIPT), "--settings", str(tmp_path / "not-there.yml")], capture_output=True, text=True,
-                          timeout=30, env={"PATH": os.environ["PATH"], "INVALID_LICENSE_CHANGES": json.dumps({"unlicensed": []})})
-    assert done.returncode == 2 and "cannot be read" in done.stderr and "not-there.yml" in done.stderr
-
-
-def test_without_the_actions_output_the_step_ends_with_status_2():
-    done = subprocess.run([sys.executable, str(SCRIPT)], env={"PATH": os.environ["PATH"]}, capture_output=True, text=True, timeout=30)
-    assert done.returncode == 2 and "INVALID_LICENSE_CHANGES" in done.stderr
+@pytest.mark.parametrize("env, settings, said", [
+    pytest.param({"INVALID_LICENSE_CHANGES": ""}, None, ["cannot be read", "Fix: the step must get"], id="empty"),
+    pytest.param({"INVALID_LICENSE_CHANGES": "not json"}, None, ["cannot be read", "Fix: the step must get"],
+                 id="not-json"),
+    pytest.param({"INVALID_LICENSE_CHANGES": "[]"}, None, ["cannot be read", "Fix: the step must get"], id="a-list"),
+    pytest.param({"INVALID_LICENSE_CHANGES": '"text"'}, None, ["cannot be read", "Fix: the step must get"],
+                 id="a-text"),
+    pytest.param({"INVALID_LICENSE_CHANGES": '{"unlicensed": []}'}, "not-there.yml", ["cannot be read", "not-there.yml"],
+                 id="no-settings-file"),
+    pytest.param({}, None, ["INVALID_LICENSE_CHANGES"], id="no-output-of-the-action"),
+])
+def test_what_cannot_be_read_ends_the_step_with_status_2_and_the_fix(tmp_path, env, settings, said):
+    args = ["--settings", str(tmp_path / settings)] if settings else []
+    done = run_the_script(*args, **env)
+    assert done.returncode == 2
+    assert all(text in done.stderr for text in said), done.stderr
 
 
 def test_the_bug_form_has_the_cause_field_and_the_triage_guide_says_when_to_set_it():
     form = yaml.safe_load((ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8"))
     (cause,) = [field for field in form["body"] if field.get("id") == "cause"]
-    assert cause["type"] == "dropdown" and cause["attributes"]["label"] == "Cause"
+    assert cause["type"] == "dropdown"
+    assert cause["attributes"]["label"] == "Cause"
     options = cause["attributes"]["options"]
-    assert options[cause["attributes"]["default"]] == "Not known yet" and len(options) == len(set(options)) >= 5
+    assert options[cause["attributes"]["default"]] == "Not known yet"
+    assert len(options) == len(set(options)) >= 5
     assert "validations" not in cause
     guide = " ".join((ROOT / "docs" / "TRIAGE.md").read_text(encoding="utf-8").split())
     assert "## When a bug closes Set **Cause** in the text of the issue" in guide

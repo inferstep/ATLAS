@@ -17,7 +17,7 @@ def _atlas_root() -> Path:
     return Path(cli_env.atlas_root())
 
 
-def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
+def bench(dataset: str = "livecodebench", max_tasks: int = 0,
           selection_strategy: str = "random", run_id: str = None) -> int:
     """Run benchmark with live progress display. Returns a process exit
     code: 0 on success (including a fully-resumed run), 1 when the runner
@@ -41,14 +41,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
     # selection has nothing to choose between — selection_strategy is
     # carried through as run metadata only (see main()'s --strategy help).
     run_id = run_id or f"bench_{dataset}_{int(time.time())}"
-    cmd = [
-        sys.executable, "-m", "atlas.bench.v3_runner",
-        "--run-id", run_id,
-        "--baseline",
-        "--selection-strategy", selection_strategy,
-    ]
-    if max_tasks > 0:
-        cmd.extend(["--max-tasks", str(max_tasks)])
+    cmd = _runner_command(run_id, selection_strategy, max_tasks)
 
     # Connectivity (llama/RAG URLs, model name) is resolved by benchmark.config
     # from the deployment's .env / atlas.conf — nothing model- or
@@ -94,8 +87,7 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
                 with contextlib.suppress(IndexError, ValueError):
                     dataset_total = int(
                         line[1:].split("]", 1)[0].split("/", 1)[1].strip())
-                total = max_tasks if max_tasks > 0 else \
-                    (dataset_total or task_count)
+                total = _progress_total(max_tasks, dataset_total, task_count)
                 display.progress_bar(task_count, total, pass_count, line.split("]")[-1].strip()[:40])
             elif "BENCHMARK COMPLETE" in line:
                 saw_complete = True
@@ -114,6 +106,39 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
         display.warn("Benchmark interrupted")
         return 1
 
+    rc = _wait_for_runner(proc, task_count, saw_complete, tail)
+    if rc is not None:
+        return rc
+
+    # Final results
+    return _report_results(root, run_id, results_dir, tail)
+
+
+def _runner_command(run_id: str, selection_strategy: str,
+                    max_tasks: int) -> list:
+    """The V3 runner command line for a baseline run (see bench())."""
+    cmd = [
+        sys.executable, "-m", "atlas.bench.v3_runner",
+        "--run-id", run_id,
+        "--baseline",
+        "--selection-strategy", selection_strategy,
+    ]
+    if max_tasks > 0:
+        cmd.extend(["--max-tasks", str(max_tasks)])
+    return cmd
+
+
+def _progress_total(max_tasks: int, dataset_total: int, task_count: int) -> int:
+    """The progress bar's total: --tasks when set, else the dataset size the
+    runner printed, else the tasks seen so far."""
+    total = max_tasks if max_tasks > 0 else \
+        (dataset_total or task_count)
+    return total
+
+
+def _wait_for_runner(proc, task_count: int, saw_complete: bool, tail):
+    """Wait for the runner to exit. Returns 1 when it failed, or when it
+    processed no task and printed no BENCHMARK COMPLETE summary; else None."""
     proc.wait()
 
     if proc.returncode != 0:
@@ -131,12 +156,17 @@ def bench(dataset: str = "livecodebench", max_tasks: int = 0,  # noqa: C901
             print(f"    {l}")
         return 1
     if task_count == 0:
-        # Resume found every task already complete — the summary below is
-        # the prior run's results, which is exactly what the operator wants.
+        # Resume found every task already complete — the summary that
+        # _report_results prints next is the prior run's results, which is
+        # exactly what the operator wants.
         display.info("no tasks remaining — all requested tasks were already "
                      "complete on disk (resumed run)")
+    return None
 
-    # Final results
+
+def _report_results(root: Path, run_id: str, results_dir: Path, tail) -> int:
+    """Print the pass@1 summary from the per-task result files. Returns 0, or
+    1 when the run left no results."""
     if results_dir.exists():
         results = list(results_dir.glob("*.json"))
         # Read each result via context manager so handles close promptly

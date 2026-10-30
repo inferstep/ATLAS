@@ -21,19 +21,9 @@ Otherwise the model's own bytes land. A declared verification that failed is a
 hard veto under either basis.
 
 Nothing selects another rule. `task_contract.candidate_policy` is accepted and
-ignored, so older clients keep working. `ATLAS_CANDIDATE_POLICY` is no longer
-read. The model and the V3 service cannot change the rule either.
-
-### Why there is one rule
-
-Until 2026-09-26 there were three modes (`strict`, `advisory`, `automatic_v3`),
-chosen per request or by an operator default. The default was `strict`, and
-under `strict` a request that declared no outputs never generated a candidate.
-The ordinary interactive request declares no outputs, so V3 ran only for
-clients that opted in, and the configuration that was measured was not the
-configuration that shipped. `advisory` computed an answer and delivered
-nothing. The modes are removed: V3 is always on, and this one rule decides
-what lands.
+ignored, so a client that still sends it keeps working, and
+`ATLAS_CANDIDATE_POLICY` is not read. The model and the V3 service cannot
+change the rule either.
 
 ## What the V3 selection basis checks
 
@@ -80,8 +70,7 @@ otherwise safe selected candidate. Two things are different:
 
 Declared commands run against the exact candidate bytes in a staging
 workspace, for a declared output and for the target the model's own call
-named. Before 2026-09-26 they ran only for declared outputs, so a request that
-declared commands and no outputs could never have its candidate verified.
+named.
 
 **The user's involvement does not change.** The existing permission prompts
 still gate dangerous tools, deletion keeps its exact-object approval flow, and
@@ -99,11 +88,9 @@ before the mint, so the delivery decision, the capture-only answer and the
 mint read one answer. The policy owner reads which basis earned a grant, not
 the eligibility check alone.
 
-This fixed a defect found while removing the modes: the eligibility check
-allowed a candidate, the decision said "delivers", the mint then refused, and
-the write route wrote nothing at all while telling the model its content was
-kept. Now, if a delivery is refused before any byte moves, the model's own
-bytes are written, as on the edit route.
+If a delivery is refused before any byte moves, the model's own bytes are
+written, on the new-file route as on the edit route (`writeFileWithV3` in
+`proxy/tools.go`, and `proxy/edit_route_delivery.go`).
 
 ### The structured mutation target
 
@@ -152,10 +139,9 @@ The service **proposes**; the proxy **authorizes**.
   bytes, and decides.
 - A rejected candidate leaves the model's own proposal exactly as it was.
 
-**There is no service-certification path.** A request that declared no output
-knowledge once delivered on the service's own closure verdict — the producer of
-a candidate certifying that candidate. It is gone. A request with no contract
-keeps the model's own bytes.
+**There is no service-certification path.** The service's closure verdict
+does not deliver a candidate: the producer of a candidate never certifies it.
+A request with no contract keeps the model's own bytes.
 
 ## When the producer is not consulted at all
 
@@ -180,9 +166,9 @@ of the routes themselves. Each skip writes one `candidate_generation_bypass`
 capture record carrying the request, the tool, the reason and the predicate
 inputs that decided it — path-free and content-free, like every capture record.
 
-A client that sends no contract gets no V3 candidate. The TUI sends one; the
-VS Code extension does not yet, so its requests keep the model's bytes until
-it does.
+A client that sends no contract gets no V3 candidate. The TUI and both IDE
+clients send one; absence stays reserved for external and legacy callers,
+whose requests keep the model's bytes.
 
 ## Structured mutation scope
 
@@ -318,7 +304,7 @@ would be computed from.
 
 ## Product decisions
 
-- V3 is always on, and one rule decides what lands (2026-09-26). There are no
+- V3 is always on, and one rule decides what lands. There are no
   delivery modes and no switch that turns the pipeline off.
 - Destructive operations keep their explicit permission flow. A candidate's
   delivery is not a permission.

@@ -18,6 +18,7 @@ this repository's test data.
 import hashlib
 import importlib.util
 import json
+import logging
 
 import pytest
 
@@ -94,7 +95,6 @@ def test_corpus_passes(copy_path):
 
 
 def test_logging_filter_masks_records():
-    import logging
     mod = _load(PY_COPIES[0])
     records = []
 

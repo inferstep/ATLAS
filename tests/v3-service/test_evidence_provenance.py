@@ -70,91 +70,108 @@ def test_the_hidden_evaluator_is_structurally_absent():
         binding(source="hidden_evaluator")
 
 
-def test_an_unknown_source_fails_closed():
-    for bad in ("", None, "trusted", "repo", 7, "REPO_OWNED_CHECK"):
-        with pytest.raises(P.ProvenanceError):
-            binding(source=bad)
-
-
-def test_an_unknown_strength_fails_closed():
-    for bad in ("", None, "strong", "ORACLE", 3):
-        with pytest.raises(P.ProvenanceError):
-            binding(required_strength=bad)
-        with pytest.raises(P.ProvenanceError):
-            binding(observed_strength=bad)
+@pytest.mark.parametrize("field, bad", [
+    pytest.param("source", "", id="empty source"),
+    pytest.param("source", None, id="no source"),
+    pytest.param("source", "trusted", id="source trusted"),
+    pytest.param("source", "repo", id="source repo"),
+    pytest.param("source", 7, id="source 7"),
+    pytest.param("source", "REPO_OWNED_CHECK", id="source in capitals"),
+    pytest.param("required_strength", "", id="empty required strength"),
+    pytest.param("required_strength", None, id="no required strength"),
+    pytest.param("required_strength", "strong", id="required strength strong"),
+    pytest.param("required_strength", "ORACLE", id="required strength in capitals"),
+    pytest.param("required_strength", 3, id="required strength 3"),
+    pytest.param("observed_strength", "", id="empty observed strength"),
+    pytest.param("observed_strength", None, id="no observed strength"),
+    pytest.param("observed_strength", "strong", id="observed strength strong"),
+    pytest.param("observed_strength", "ORACLE", id="observed strength in capitals"),
+    pytest.param("observed_strength", 3, id="observed strength 3"),
+    pytest.param("request_id", "", id="empty request_id"),
+    pytest.param("invocation_id", "", id="empty invocation_id"),
+    pytest.param("candidate_instance_id", "", id="empty candidate_instance_id"),
+    pytest.param("candidate_hash", "", id="empty candidate_hash"),
+    pytest.param("workspace_state_hash", "", id="empty workspace_state_hash"),
+    pytest.param("obligation_id", "", id="empty obligation_id"),
+    # The workspace generation must be a non-negative integer.
+    pytest.param("workspace_generation", -1, id="generation -1"),
+    pytest.param("workspace_generation", "7", id="generation as a string"),
+    pytest.param("workspace_generation", None, id="no generation"),
+    pytest.param("workspace_generation", 1.5, id="generation 1.5"),
+    pytest.param("workspace_generation", True, id="generation True"),
+    # Absent and blank are different: a blank baseline would compare equal to
+    # another blank one and let two unrelated replacements share evidence.
+    pytest.param("baseline_identity", "   ", id="blank baseline_identity"),
+])
+def test_a_malformed_binding_is_refused(field, bad):
+    with pytest.raises(P.ProvenanceError):
+        binding(**{field: bad})
 
 
 # --- what may authorize what ------------------------------------------------
 
-def test_model_generated_is_recorded_but_never_authorizing():
-    b = binding(source=P.SOURCE_MODEL_GENERATED, observed_strength=C.ORACLE,
-                required_strength=C.ORACLE)
-    assert b["source"] == P.SOURCE_MODEL_GENERATED     # recorded
+@pytest.mark.parametrize("source, required, observed", [
+    pytest.param(P.SOURCE_PROXY_OWNED_VALIDATION, C.SYNTAX, C.SYNTAX,
+                 id="proxy validation closes syntax"),
+    pytest.param(P.SOURCE_CLIENT_DECLARED_EXAMPLE, C.BEHAVIORAL, C.BEHAVIORAL,
+                 id="client example closes behaviour"),
+    pytest.param(P.SOURCE_CLIENT_DECLARED_VERIFICATION, C.BEHAVIORAL, C.BEHAVIORAL,
+                 id="client verification closes behaviour"),
+    pytest.param(P.SOURCE_REPO_OWNED_CHECK, C.BEHAVIORAL, C.BEHAVIORAL,
+                 id="repo check closes behaviour"),
+])
+def test_evidence_may_authorize_its_obligation(source, required, observed):
+    ok, why = P.may_authorize(binding(source=source, required_strength=required,
+                                      observed_strength=observed))
+    assert ok, why
+
+
+@pytest.mark.parametrize("source, required, observed, reason", [
+    pytest.param(P.SOURCE_MODEL_GENERATED, C.ORACLE, C.ORACLE, "model_generated",
+                 id="model generated never authorizes"),
+    pytest.param(P.SOURCE_LEGACY, C.ORACLE, C.ORACLE, "legacy",
+                 id="legacy never authorizes"),
+    pytest.param(P.SOURCE_UNKNOWN, C.ORACLE, C.ORACLE, "unknown",
+                 id="unknown never authorizes"),
+    pytest.param(P.SOURCE_PROXY_OWNED_VALIDATION, C.BEHAVIORAL, C.SYNTAX, "strength",
+                 id="proxy validation cannot close behaviour"),
+    # Capability is an upper bound. A repo test that only compiled did not
+    # demonstrate behaviour merely because a repo test could have.
+    pytest.param(P.SOURCE_REPO_OWNED_CHECK, C.ORACLE, C.SYNTAX, "strength",
+                 id="repo check that observed only syntax"),
+])
+def test_evidence_may_not_authorize_its_obligation(source, required, observed, reason):
+    b = binding(source=source, required_strength=required, observed_strength=observed)
+    assert b["source"] == source    # recorded all the same
     ok, why = P.may_authorize(b)
-    assert not ok and "model_generated" in why
-
-
-def test_legacy_is_readable_but_never_authorizing():
-    b = binding(source=P.SOURCE_LEGACY, observed_strength=C.ORACLE)
-    assert b["source"] == P.SOURCE_LEGACY
-    ok, why = P.may_authorize(b)
-    assert not ok and "legacy" in why
-
-
-def test_unknown_never_authorizes():
-    ok, why = P.may_authorize(dict(binding(), source=P.SOURCE_UNKNOWN))
-    assert not ok and "unknown" in why
-
-
-def test_proxy_validation_may_close_syntax_but_not_behaviour():
-    ok, _ = P.may_authorize(binding(
-        source=P.SOURCE_PROXY_OWNED_VALIDATION,
-        obligation_id="parses", required_strength=C.SYNTAX,
-        observed_strength=C.SYNTAX))
-    assert ok
-    ok, why = P.may_authorize(binding(
-        source=P.SOURCE_PROXY_OWNED_VALIDATION,
-        obligation_id="behaves", required_strength=C.BEHAVIORAL,
-        observed_strength=C.SYNTAX))
-    assert not ok and "strength" in why
-
-
-def test_a_capable_source_still_needs_the_observed_strength():
-    """Capability is an upper bound. A repo test that only compiled did not
-    demonstrate behaviour merely because a repo test could have."""
-    ok, why = P.may_authorize(binding(
-        source=P.SOURCE_REPO_OWNED_CHECK,
-        required_strength=C.ORACLE, observed_strength=C.SYNTAX))
-    assert not ok and "strength" in why
-
-
-def test_client_declared_sources_may_reach_behavioural_closure():
-    for src in (P.SOURCE_CLIENT_DECLARED_EXAMPLE,
-                P.SOURCE_CLIENT_DECLARED_VERIFICATION,
-                P.SOURCE_REPO_OWNED_CHECK):
-        ok, why = P.may_authorize(binding(source=src,
-                                          required_strength=C.BEHAVIORAL,
-                                          observed_strength=C.BEHAVIORAL))
-        assert ok, (src, why)
+    assert not ok
+    assert reason in why
 
 
 # --- binding: evidence cannot cross an identity -----------------------------
 
-@pytest.mark.parametrize("field,other", [
-    ("request_id", "req-2"),
-    ("invocation_id", "inv-2"),
-    ("candidate_instance_id", "inv-1:generated:1"),
-    ("candidate_hash", "d" * 64),
-    ("command_identity", "python3 other.py"),
-    ("baseline_identity", "syntax:some-other-baseline"),
-    ("obligation_id", "something_else"),
-    ("workspace_generation", 8),
-    ("workspace_state_hash", "z" * 64),
+@pytest.mark.parametrize("field, held, asked", [
+    pytest.param("request_id", "req-1", "req-2", id="request"),
+    pytest.param("invocation_id", "inv-1", "inv-2", id="invocation"),
+    pytest.param("candidate_instance_id", "inv-1:generated:0", "inv-1:generated:1",
+                 id="candidate instance"),
+    pytest.param("candidate_hash", "c" * 64, "d" * 64, id="candidate hash"),
+    pytest.param("obligation_id", "oracle_cases_pass", "something_else", id="obligation"),
+    # A mutation since the evidence was observed bumps the generation.
+    pytest.param("workspace_generation", 7, 8, id="stale workspace generation"),
+    pytest.param("workspace_state_hash", "w" * 64, "z" * 64, id="workspace state"),
+    # A syntax obligation runs no command; a verification obligation does.
+    pytest.param("command_identity", "python3 solve.py", "python3 other.py", id="command"),
+    pytest.param("command_identity", None, "python3 solve.py", id="command absent, then present"),
+    # A candidate that replaces nothing has no baseline. One that replaces a
+    # validated artifact is about THAT artifact, and evidence earned against a
+    # different baseline is about a different replacement.
+    pytest.param("baseline_identity", None, "syntax:abc", id="baseline absent, then present"),
+    pytest.param("baseline_identity", "syntax:abc", "syntax:def", id="baseline"),
 ])
-def test_evidence_cannot_cross_an_identity(field, other):
-    held = binding()
-    asked = dict(held, **{field: other})
-    ok, why = P.binds_to(held, asked)
+def test_evidence_cannot_cross_an_identity(field, held, asked):
+    evidence = binding(**{field: held})
+    ok, why = P.binds_to(evidence, dict(evidence, **{field: asked}))
     assert not ok, f"{field} was allowed to differ"
     assert field in why
 
@@ -162,56 +179,10 @@ def test_evidence_cannot_cross_an_identity(field, other):
 def test_identical_identity_binds():
     ok, why = P.binds_to(binding(), binding())
     assert ok, why
-
-
-def test_a_stale_generation_fails_closed():
-    held = binding(workspace_generation=7)
-    asked = dict(held, workspace_generation=9)   # a mutation happened since
-    ok, why = P.binds_to(held, asked)
-    assert not ok and "workspace_generation" in why
-
-
-def test_a_missing_identity_component_fails_closed():
-    for field in ("request_id", "invocation_id", "candidate_instance_id",
-                  "candidate_hash", "workspace_state_hash", "obligation_id"):
-        with pytest.raises(P.ProvenanceError):
-            binding(**{field: ""})
-
-
-def test_command_identity_is_optional_but_binding_when_present():
-    """A syntax obligation runs no command; a verification obligation does."""
-    b = binding(command_identity=None)
-    ok, _ = P.binds_to(b, dict(b))
-    assert ok
-    ok, why = P.binds_to(b, dict(b, command_identity="python3 solve.py"))
-    assert not ok and "command_identity" in why
-
-
-def test_baseline_identity_is_optional_but_binding_when_present():
-    """A candidate that replaces nothing has no baseline. One that replaces a
-    validated artifact is about THAT artifact, and evidence earned against a
-    different baseline is about a different replacement."""
-    b = binding(baseline_identity=None)
-    ok, _ = P.binds_to(b, dict(b))
-    assert ok
-    ok, why = P.binds_to(b, dict(b, baseline_identity="syntax:abc"))
-    assert not ok and "baseline_identity" in why
-    held = binding(baseline_identity="syntax:abc")
-    ok, why = P.binds_to(held, dict(held, baseline_identity="syntax:def"))
-    assert not ok and "baseline_identity" in why
-
-
-def test_an_empty_baseline_identity_is_refused():
-    """Absent and blank are different: a blank one would compare equal to
-    another blank one and let two unrelated replacements share evidence."""
-    with pytest.raises(P.ProvenanceError):
-        binding(baseline_identity="   ")
-
-
-def test_workspace_generation_must_be_a_non_negative_integer():
-    for bad in (-1, "7", None, 1.5, True):
-        with pytest.raises(P.ProvenanceError):
-            binding(workspace_generation=bad)
+    # Command and baseline identities may be absent; absent on both sides binds.
+    absent = binding(command_identity=None, baseline_identity=None)
+    ok, why = P.binds_to(absent, dict(absent))
+    assert ok, why
 
 
 # --- no bytes anywhere ------------------------------------------------------
@@ -219,8 +190,10 @@ def test_workspace_generation_must_be_a_non_negative_integer():
 def test_a_binding_carries_no_candidate_bytes():
     b = binding()
     for k, v in b.items():
-        assert "def " not in str(v) and "import " not in str(v), k
-    assert "candidate_code" not in b and "code" not in b
+        assert "def " not in str(v), k
+        assert "import " not in str(v), k
+    assert "candidate_code" not in b
+    assert "code" not in b
 
 
 # --- inert: nothing consumes this yet ---------------------------------------

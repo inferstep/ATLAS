@@ -153,7 +153,13 @@ COPY --from=builder /llama.cpp/build/bin/llama-cli /usr/local/bin/
 # a separate llama.cpp install on the host. Same as CUDA + ROCm images.
 COPY --from=builder /llama.cpp/build/bin/llama-cvector-generator /usr/local/bin/
 
-RUN mkdir -p /models
+RUN groupadd --gid 1001 atlas && \
+    useradd --create-home --uid 1001 --gid 1001 atlas && \
+    (getent group video >/dev/null 2>&1 && usermod -aG video atlas || true) && \
+    (getent group render >/dev/null 2>&1 && usermod -aG render atlas || true) && \
+    mkdir -p /models && \
+    chown -R atlas:atlas /models
+
 COPY entrypoint-v3.1.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -161,6 +167,8 @@ RUN chmod +x /entrypoint.sh
 # overlay (docker-compose.vulkan.yml) handles those because they depend
 # on which Vulkan ICD the user is targeting (NVIDIA toolkit vs /dev/dri
 # vs neither for CPU lavapipe).
+USER atlas
+ENV HOME=/home/atlas
 
 # The entrypoint's default listen port (PORT env) is 8080; the compose
 # healthcheck and port mapping both target 8080.

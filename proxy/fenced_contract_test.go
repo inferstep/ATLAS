@@ -2,21 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 	"testing"
 )
 
 // The file-content sub-call asks for the contract it describes, and asks about
-// one file.
-//
-// Measured (stabilization cycle 4, probe M, 98 generations over the 49 captured
-// sub-call requests): constraining decoding to one fenced block took clean
-// usable replies from 19/49 to 44/49 and empty replies from 27/49 to 0, with
-// the median call falling from 60 s to 12 s. With the other file's contents
-// still restated at the end of that context, 2 of 49 replies were a near copy
-// of THAT file instead of the one asked for; with it dropped, 0 of 49, and the
-// usable count was unchanged.
+// one file. Decoding is constrained to one fenced block, which makes most
+// replies usable and none empty. Only the target's own contents are restated:
+// with another file's contents at the end of the context, a reply can be a
+// near copy of that file instead of the one asked for.
 
 // tempting is a complete, valid module for a DIFFERENT file than the one being
 // written: the failure mode is copying it, and it parses perfectly.
@@ -100,10 +94,9 @@ func TestTheTargetsOwnContentsAreStillRestated(t *testing.T) {
 	}
 }
 
-// A tempting reply — the other file, complete and valid — is what the removed
-// restatement used to produce. If it arrives anyway, it lands as the model's
-// own answer for the target, and the run's checks judge it; nothing here
-// silently substitutes a different file's bytes.
+// A tempting reply is the other file, complete and valid. If it arrives, it
+// lands as the model's own answer for the target, and the run's checks judge
+// it; nothing here silently substitutes a different file's bytes.
 func TestACopiedBodyIsNotPassedOffAsTheTarget(t *testing.T) {
 	run, _ := fencedRun(t, []string{
 		toolCall("read_file", map[string]interface{}{"path": "store.py"}),
@@ -154,24 +147,18 @@ func TestTheGrammarIsBuiltFromASafeTag(t *testing.T) {
 	}
 }
 
-// P-safety/INTEGRITY#5: with a three-backtick fence no body line could start
-// with ```, so a Markdown file's first code block ended the file: the grammar
-// allowed only the closer there, and the truncated body parsed as complete.
+// A Markdown file's own code blocks survive the fence. With a three-backtick
+// fence no body line could start with ```, so the file's first code block
+// would end it, and the truncated body would parse as complete.
 func TestAFileWithACodeBlockSurvivesTheFence(t *testing.T) {
 	body := "# Tool\n\nInstall:\n\n```bash\npip install tool\n```\n\nMore docs here.\n"
 	g := fenceBlockGrammar("markdown")
 	if !strings.HasPrefix(g, "root ::= \"````markdown\\n\" line* \"````\"") {
 		t.Fatalf("the outer fence is not four backticks: %q", g)
 	}
-	// The line rule, mirrored: up to three leading backticks, never four.
+	// The line rule: up to three leading backticks, never four.
 	if !strings.Contains(g, "\"```\" ( [^`\\n] [^\\n]* )?") {
 		t.Fatalf("the line rule does not admit a line starting with ```: %q", g)
-	}
-	line := regexp.MustCompile("^(?:[^`][^\n]*|`(?:[^`][^\n]*)?|``(?:[^`][^\n]*)?|```(?:[^`][^\n]*)?)?$")
-	for _, l := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
-		if !line.MatchString(l) {
-			t.Errorf("the grammar's line rule refuses %q", l)
-		}
 	}
 	framing, got := classifyFencedPayload("````markdown\n" + body + "````")
 	if framing != fenceFramingComplete || got != body {

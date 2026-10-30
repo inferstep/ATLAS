@@ -96,13 +96,16 @@ def _captured(path_prefix="/embedding"):
 def test_no_bound_identity_means_no_attribution_headers(stub):
     ee._post_embedding("def f(): pass")
     c = _captured()
-    assert len(c) == 1 and c[0]["rid"] == "" and c[0]["inv"] == ""
+    assert len(c) == 1
+    assert c[0]["rid"] == ""
+    assert c[0]["inv"] == ""
 
 
 def test_bound_pair_is_forwarded_exactly(stub):
     sl.bind_identity("req-1", "inv-1")
     ee._post_embedding("def f(): pass")
-    assert _captured()[-1]["rid"] == "req-1" and _captured()[-1]["inv"] == "inv-1"
+    assert _captured()[-1]["rid"] == "req-1"
+    assert _captured()[-1]["inv"] == "inv-1"
 
 
 def test_partial_identity_stays_partial(stub):
@@ -114,13 +117,6 @@ def test_partial_identity_stays_partial(stub):
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "inv-only")
 
 
-def test_repeated_calls_under_one_binding_carry_the_same_pair(stub):
-    sl.bind_identity("req-r", "inv-r")
-    for _ in range(3):
-        ee._post_embedding("y = 3")
-    assert {(c["rid"], c["inv"]) for c in _captured()} == {("req-r", "inv-r")}
-
-
 def test_served_model_probe_carries_the_bound_pair(stub):
     from geometric_lens import service
     service._served_model_probed = False
@@ -128,7 +124,9 @@ def test_served_model_probe_carries_the_bound_pair(stub):
     sl.bind_identity("req-p", "inv-p")
     assert service._probe_served_model() == "stub-model"
     c = _captured("/v1/models")
-    assert c and c[-1]["rid"] == "req-p" and c[-1]["inv"] == "inv-p"
+    assert c
+    assert c[-1]["rid"] == "req-p"
+    assert c[-1]["inv"] == "inv-p"
     service._served_model_probed = False
     service._served_model_id = ""
 
@@ -143,8 +141,9 @@ def test_headers_never_carry_content(stub):
 
 def test_concurrent_threads_never_exchange_identities(stub):
     """Each thread binds its own pair and makes several calls; every outbound
-    call must carry the pair of the thread that made it. Repeated to shake out
-    ordering luck."""
+    call must carry the pair of the thread that made it, so repeated calls
+    under one binding carry the same pair. Repeated to shake out ordering
+    luck."""
     for _round in range(20):
         with LOCK:
             CAPTURED.clear()
@@ -165,7 +164,9 @@ def test_concurrent_threads_never_exchange_identities(stub):
         for t in threads:
             t.join()
         assert errors == []
-        for c in _captured():
+        calls = _captured()
+        assert len(calls) == 12 * 3
+        for c in calls:
             i = int(re.search(r"z(\d+)_", c["body"]).group(1))
             assert (c["rid"], c["inv"]) == (f"req-{i}", f"inv-{i}"), c
 
@@ -222,11 +223,13 @@ def test_middleware_binds_both_ids_for_the_request_and_clears_after(app_client, 
         return {"ok": True}
 
     r = client.get("/internal/_identity_probe_test", headers={"X-ATLAS-Request-ID": "req-m", "X-ATLAS-V3-Invocation-ID": "inv-m"})
-    assert r.status_code == 200 and r.headers.get("X-ATLAS-Request-ID") == "req-m"
+    assert r.status_code == 200
+    assert r.headers.get("X-ATLAS-Request-ID") == "req-m"
     assert seen["during"] == ("req-m", "inv-m")
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("req-m", "inv-m")
-    r = client.get("/internal/_identity_probe_test")
-    assert seen["during"] == ("", "") and (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "")
+    client.get("/internal/_identity_probe_test")
+    assert seen["during"] == ("", "")
+    assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "")
 
 
 def test_exception_in_a_handler_still_clears_the_binding(app_client, stub):
@@ -268,7 +271,9 @@ def test_concurrent_http_requests_keep_their_own_pairs(app_client, stub):
         for t in threads:
             t.join()
         assert all(results[i] == [f"r{i}", f"i{i}"] for i in range(8)), results
-        for c in _captured():
+        calls = _captured()
+        assert len(calls) == 8
+        for c in calls:
             i = int(re.search(r"conc_(\d+)", c["body"]).group(1))
             assert (c["rid"], c["inv"]) == (f"r{i}", f"i{i}"), c
 
@@ -276,13 +281,15 @@ def test_concurrent_http_requests_keep_their_own_pairs(app_client, stub):
 # --- structural guards ----------------------------------------------------------------
 
 def _src(name):
-    return open(os.path.join(ROOT, name), encoding="utf-8").read()
+    with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
+        return fh.read()
 
 
 def test_every_model_bound_call_uses_the_single_transport():
     for name in ("geometric_lens/embedding_extractor.py", "geometric_lens/service.py"):
         text = _src(name)
-        assert "urlopen(" not in text and "Request(" not in text.replace("model_request(", ""), name
+        assert "urlopen(" not in text, name
+        assert "Request(" not in text.replace("model_request(", ""), name
     assert "model_request(" in _src("geometric_lens/embedding_extractor.py")
     assert "model_request(" in _src("geometric_lens/service.py")
     assert "_model_headers()" in _src("main.py")
@@ -292,7 +299,8 @@ def test_no_second_identity_store_exists():
     for dirpath, _d, files in os.walk(os.path.join(ROOT, "geometric_lens")):
         for f in files:
             if f.endswith(".py") and f != "structured_log.py":
-                text = open(os.path.join(dirpath, f), encoding="utf-8").read()
+                with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                    text = fh.read()
                 assert "ContextVar(" not in text, f
     assert "ContextVar(" not in _src("main.py")
 
@@ -301,8 +309,10 @@ def test_scoring_and_selection_never_read_the_attribution_headers():
     for name in ("geometric_lens/service.py", "geometric_lens/cost_field.py", "geometric_lens/thresholds.py",
                  "geometric_lens/calibration.py", "geometric_lens/identity.py"):
         text = _src(name)
-        assert "X-ATLAS-Request-ID" not in text and "X-ATLAS-V3-Invocation-ID" not in text, name
-        assert "identity_headers(" not in text and "current_identity(" not in text, name
+        assert "X-ATLAS-Request-ID" not in text, name
+        assert "X-ATLAS-V3-Invocation-ID" not in text, name
+        assert "identity_headers(" not in text, name
+        assert "current_identity(" not in text, name
 
 
 # --- declared startup identity ----------------------------------------------------------
@@ -311,16 +321,19 @@ def test_startup_identity_is_bound_only_when_both_variables_are_declared(monkeyp
     monkeypatch.delenv(mt.STARTUP_REQUEST_ID_ENV, raising=False)
     monkeypatch.delenv(mt.STARTUP_INVOCATION_ID_ENV, raising=False)
     with mt.startup_identity() as declared:
-        assert declared is None and sl.current_identity() == ("", "")
+        assert declared is None
+        assert sl.current_identity() == ("", "")
         ee._post_embedding("boot = 0")
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("", "")
     monkeypatch.setenv(mt.STARTUP_REQUEST_ID_ENV, "probe-req")
     with mt.startup_identity() as declared:      # half a pair is ignored
-        assert declared is None and sl.current_identity() == ("", "")
+        assert declared is None
+        assert sl.current_identity() == ("", "")
     monkeypatch.setenv(mt.STARTUP_INVOCATION_ID_ENV, "probe-inv")
     sl.bind_identity("req-before", "inv-before")
     with mt.startup_identity() as declared:
-        assert declared == ("probe-req", "probe-inv") and sl.current_identity() == ("probe-req", "probe-inv")
+        assert declared == ("probe-req", "probe-inv")
+        assert sl.current_identity() == ("probe-req", "probe-inv")
         ee._post_embedding("boot = 1")
     assert (_captured()[-1]["rid"], _captured()[-1]["inv"]) == ("probe-req", "probe-inv")
     assert sl.current_identity() == ("req-before", "inv-before")   # restored, not cleared
@@ -330,9 +343,12 @@ def test_startup_identity_restores_on_exception(monkeypatch):
     monkeypatch.setenv(mt.STARTUP_REQUEST_ID_ENV, "probe-req")
     monkeypatch.setenv(mt.STARTUP_INVOCATION_ID_ENV, "probe-inv")
     sl.bind_identity("", "")
-    with pytest.raises(RuntimeError):
+    def a_boot_that_fails():
         with mt.startup_identity():
             raise RuntimeError("boot failed")
+
+    with pytest.raises(RuntimeError):
+        a_boot_that_fails()
     assert sl.current_identity() == ("", "")
 
 

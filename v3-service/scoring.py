@@ -2,6 +2,7 @@
 scoring, task-type classification, language-aware smoke checks, build-command
 verification, and the interactive-task lint."""
 
+import ast as _ast
 import json
 import os
 import urllib.error
@@ -605,7 +606,7 @@ def verify_build_command(
 INTERACTIVE_LINT_NOT_RUN = "not run: the code does not parse in this interpreter"
 
 
-def interactive_lint(code: str) -> Tuple[bool, str]:  # noqa: C901
+def interactive_lint(code: str) -> Tuple[bool, str]:
     """Heuristic checks beyond compile-OK for interactive (terminal/UI) tasks.
 
     Compile-OK is necessary but not sufficient: a snake game using
@@ -616,7 +617,6 @@ def interactive_lint(code: str) -> Tuple[bool, str]:  # noqa: C901
 
     Returns (passed, reason). reason is empty when passed.
     """
-    import ast as _ast
     try:
         tree = _ast.parse(code)
     except SyntaxError:
@@ -633,86 +633,23 @@ def interactive_lint(code: str) -> Tuple[bool, str]:  # noqa: C901
     # in curses, which is why so many "snake game" runs crash with
     # `_curses.error: addwstr() returned ERR`).
     bottom_row_addstr_nodes: List[Tuple[int, str]] = []  # (lineno, snippet)
-    try_except_curses_lines: set = set()
-
-    def _is_lines_or_cols_minus(node: _ast.AST, name: str) -> bool:
-        """True if node is a `curses.{name} - <int>` BinOp expression
-        (or just `LINES - <int>` if the model imported the names)."""
-        if not isinstance(node, _ast.BinOp) or not isinstance(node.op, _ast.Sub):
-            return False
-        left = node.left
-        # curses.LINES - N
-        if (isinstance(left, _ast.Attribute) and left.attr == name
-                and isinstance(left.value, _ast.Name) and left.value.id == "curses"):
-            return True
-        # bare LINES - N (after `from curses import LINES, COLS`)
-        if isinstance(left, _ast.Name) and left.id == name:
-            return True
-        return False
 
     # First pass: find every `try: ... except curses.error / except _curses.error`
     # block and record the line ranges they protect, so we can skip
     # already-wrapped addstr calls below.
-    for node in _ast.walk(tree):
-        if isinstance(node, _ast.Try):
-            handles_curses = False
-            for handler in node.handlers:
-                exc = handler.type
-                if isinstance(exc, _ast.Attribute) and exc.attr == "error":
-                    if (isinstance(exc.value, _ast.Name)
-                            and exc.value.id in ("curses", "_curses")):
-                        handles_curses = True
-                elif isinstance(exc, _ast.Name) and exc.id == "Exception":
-                    handles_curses = True  # broad catch covers curses.error
-            if handles_curses:
-                start = node.lineno
-                end = max((getattr(n, "end_lineno", node.lineno) or node.lineno)
-                          for n in _ast.walk(node))
-                for ln in range(start, end + 1):
-                    try_except_curses_lines.add(ln)
+    try_except_curses_lines = _curses_guarded_lines(tree)
 
     for node in _ast.walk(tree):
         if isinstance(node, _ast.Import):
-            for alias in node.names:
-                if alias.name == "curses":
-                    has_curses = True
+            has_curses = _check_import(node, has_curses)
         elif isinstance(node, _ast.ImportFrom):
-            if node.module in ("curses", "termios", "tty"):
-                has_curses = has_curses or node.module == "curses"
-                has_termios_setraw = has_termios_setraw or node.module in ("termios", "tty")
+            has_curses, has_termios_setraw = _check_import_from(node, has_curses, has_termios_setraw)
         elif isinstance(node, _ast.Call):
-            func = node.func
-            if isinstance(func, _ast.Attribute):
-                # sys.stdin.read(1) without termios setup
-                if (
-                    func.attr == "read"
-                    and isinstance(func.value, _ast.Attribute)
-                    and func.value.attr == "stdin"
-                    and isinstance(func.value.value, _ast.Name)
-                    and func.value.value.id == "sys"
-                ):
-                    has_raw_stdin_read = True
-                # termios.tcsetattr / tty.setraw / tty.setcbreak
-                if func.attr in ("tcsetattr", "setraw", "setcbreak"):
-                    has_termios_setraw = True
-                # PC-047: addstr / addnstr / addch with a LINES-N first arg
-                # (writing to a row near the bottom — last row always errors)
-                # or a COLS-N second arg pair that targets the last column.
-                if func.attr in ("addstr", "addnstr", "addch"):
-                    args = node.args
-                    if args:
-                        first = args[0]
-                        if _is_lines_or_cols_minus(first, "LINES"):
-                            if node.lineno not in try_except_curses_lines:
-                                snippet = f"line {node.lineno}: {func.attr}(curses.LINES - N, ...) without try/except curses.error"
-                                bottom_row_addstr_nodes.append((node.lineno, snippet))
+            has_raw_stdin_read, has_termios_setraw = _check_interactive_call(
+                node, has_raw_stdin_read, has_termios_setraw,
+                try_except_curses_lines, bottom_row_addstr_nodes)
         elif isinstance(node, _ast.While):
-            # Look for `while True: ... input(...)` shape — blocking input
-            # in an interactive loop is almost always wrong.
-            for sub in _ast.walk(node):
-                if isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Name) and sub.func.id == "input":
-                    has_blocking_input_loop = True
-                    break
+            has_blocking_input_loop = _check_while_loop(node, has_blocking_input_loop)
 
     # Raw stdin read without termios is a near-certain bug for interactive
     # keystroke handling — single-char read is line-buffered and can't see
@@ -735,3 +672,120 @@ def interactive_lint(code: str) -> Tuple[bool, str]:  # noqa: C901
         return False, f"curses bottom-row write without try/except curses.error wrap — {first} (will raise ERR at runtime)"
 
     return True, ""
+
+
+def _curses_guarded_lines(tree) -> set:
+    """interactive_lint's first pass: the line numbers inside a try block
+    whose handler catches curses.error (or Exception)."""
+    try_except_curses_lines: set = set()
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Try):
+            handles_curses = _handles_curses_error(node)
+            if handles_curses:
+                start = node.lineno
+                end = max((getattr(n, "end_lineno", node.lineno) or node.lineno)
+                          for n in _ast.walk(node))
+                try_except_curses_lines.update(range(start, end + 1))
+    return try_except_curses_lines
+
+
+def _handles_curses_error(node) -> bool:
+    """Whether a try block has a handler that catches curses.error, or
+    Exception, which covers it."""
+    handles_curses = False
+    for handler in node.handlers:
+        exc = handler.type
+        if isinstance(exc, _ast.Attribute) and exc.attr == "error":
+            if (isinstance(exc.value, _ast.Name)
+                    and exc.value.id in ("curses", "_curses")):
+                handles_curses = True
+        elif isinstance(exc, _ast.Name) and exc.id == "Exception":
+            handles_curses = True  # broad catch covers curses.error
+    return handles_curses
+
+
+def _check_import(node, has_curses: bool) -> bool:
+    """interactive_lint, for an `import` statement: has_curses, set when it
+    imports curses."""
+    for alias in node.names:
+        if alias.name == "curses":
+            has_curses = True
+    return has_curses
+
+
+def _check_import_from(node, has_curses: bool, has_termios_setraw: bool) -> Tuple[bool, bool]:
+    """interactive_lint, for a `from ... import` statement: the two flags,
+    set when it imports from curses, termios or tty."""
+    if node.module in ("curses", "termios", "tty"):
+        has_curses = has_curses or node.module == "curses"
+        has_termios_setraw = has_termios_setraw or node.module in ("termios", "tty")
+    return has_curses, has_termios_setraw
+
+
+def _check_interactive_call(node, has_raw_stdin_read: bool, has_termios_setraw: bool,
+                            try_except_curses_lines: set,
+                            bottom_row_addstr_nodes: List[Tuple[int, str]]) -> Tuple[bool, bool]:
+    """interactive_lint, for a call: a raw stdin read or a termios/tty raw-mode
+    call sets its flag, and a curses write to the bottom row goes into
+    bottom_row_addstr_nodes. Returns the two flags."""
+    func = node.func
+    if isinstance(func, _ast.Attribute):
+        # sys.stdin.read(1) without termios setup
+        if (
+            func.attr == "read"
+            and isinstance(func.value, _ast.Attribute)
+            and func.value.attr == "stdin"
+            and isinstance(func.value.value, _ast.Name)
+            and func.value.value.id == "sys"
+        ):
+            has_raw_stdin_read = True
+        # termios.tcsetattr / tty.setraw / tty.setcbreak
+        if func.attr in ("tcsetattr", "setraw", "setcbreak"):
+            has_termios_setraw = True
+        # PC-047: addstr / addnstr / addch with a LINES-N first arg
+        # (writing to a row near the bottom — last row always errors)
+        # or a COLS-N second arg pair that targets the last column.
+        if func.attr in ("addstr", "addnstr", "addch"):
+            _add_bottom_row_write(node, func, try_except_curses_lines, bottom_row_addstr_nodes)
+    return has_raw_stdin_read, has_termios_setraw
+
+
+def _add_bottom_row_write(node, func, try_except_curses_lines: set,
+                          bottom_row_addstr_nodes: List[Tuple[int, str]]) -> None:
+    """An addstr / addnstr / addch call whose row is LINES - N, outside a
+    try/except curses.error: added to bottom_row_addstr_nodes."""
+    args = node.args
+    if args:
+        first = args[0]
+        if _is_lines_or_cols_minus(first, "LINES"):
+            if node.lineno not in try_except_curses_lines:
+                snippet = f"line {node.lineno}: {func.attr}(curses.LINES - N, ...) without try/except curses.error"
+                bottom_row_addstr_nodes.append((node.lineno, snippet))
+
+
+def _is_lines_or_cols_minus(node: _ast.AST, name: str) -> bool:
+    """True if node is a `curses.{name} - <int>` BinOp expression
+    (or just `LINES - <int>` if the model imported the names)."""
+    if not isinstance(node, _ast.BinOp) or not isinstance(node.op, _ast.Sub):
+        return False
+    left = node.left
+    # curses.LINES - N
+    if (isinstance(left, _ast.Attribute) and left.attr == name
+            and isinstance(left.value, _ast.Name) and left.value.id == "curses"):
+        return True
+    # bare LINES - N (after `from curses import LINES, COLS`)
+    if isinstance(left, _ast.Name) and left.id == name:
+        return True
+    return False
+
+
+def _check_while_loop(node, has_blocking_input_loop: bool) -> bool:
+    """interactive_lint, for a while loop: has_blocking_input_loop, set when
+    the loop calls input()."""
+    # Look for `while True: ... input(...)` shape — blocking input
+    # in an interactive loop is almost always wrong.
+    for sub in _ast.walk(node):
+        if isinstance(sub, _ast.Call) and isinstance(sub.func, _ast.Name) and sub.func.id == "input":
+            has_blocking_input_loop = True
+            break
+    return has_blocking_input_loop

@@ -13,6 +13,8 @@ export type ClientFactory = () => Promise<AtlasClient>;
 
 type State = 'ready' | 'starting' | 'unreachable' | 'unauthorized';
 
+const TOKEN_REJECTED = 'the proxy rejected the token (401)';
+
 /** Human labels for the /ready gates, in display order. */
 const GATE_LABELS: [keyof ReadyResponse, string][] = [
 	['inference', 'inference'],
@@ -28,6 +30,9 @@ export class StatusBar implements vscode.Disposable {
 	private disposed = false;
 	/** Last calibration verdict line, shown in the tooltip. */
 	private calibrationLine = '';
+	/** The calibration call needs the token, so its 401 is the one sign that
+	 * the proxy rejects it: /ready is an open path and answers without one. */
+	private tokenRejected = false;
 
 	constructor(private readonly clientFactory: ClientFactory) {
 		this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -67,9 +72,11 @@ export class StatusBar implements vscode.Disposable {
 		void this.poll();
 	}
 
-	/** Manual refresh: /ready now plus a calibration re-probe. */
+	/** Manual refresh: a calibration re-probe, then /ready. The probe goes
+	 * first, because its answer says whether the proxy takes the token. */
 	async refresh(): Promise<void> {
-		await Promise.all([this.poll(), this.refreshCalibration()]);
+		await this.refreshCalibration();
+		await this.poll();
 	}
 
 	private async poll(): Promise<void> {
@@ -84,7 +91,9 @@ export class StatusBar implements vscode.Disposable {
 		}
 		try {
 			const ready = await client.getReady();
-			if (ready.ready) {
+			if (this.tokenRejected) {
+				this.render('unauthorized', TOKEN_REJECTED);
+			} else if (ready.ready) {
 				this.render('ready', 'all gates passing');
 			} else {
 				const failing = GATE_LABELS.filter(([key]) => ready[key] !== true).map(([, label]) => label);
@@ -92,7 +101,7 @@ export class StatusBar implements vscode.Disposable {
 			}
 		} catch (error) {
 			if (error instanceof AtlasApiError && error.status === 401) {
-				this.render('unauthorized', 'the proxy rejected the token (401)');
+				this.render('unauthorized', TOKEN_REJECTED);
 			} else {
 				this.render('unreachable', 'the proxy is not reachable');
 			}
@@ -104,8 +113,17 @@ export class StatusBar implements vscode.Disposable {
 			const client = await this.clientFactory();
 			const status = await client.getCalibrationStatus();
 			this.calibrationLine = `lens: ${status.lens.verdict} · asa: ${status.asa.verdict}`;
-		} catch {
+			this.tokenRejected = false;
+		} catch (error) {
 			this.calibrationLine = ''; // proxy down or pre-auth — tooltip just omits it
+			// Only an answer clears a rejection; an error of another kind, such
+			// as a timeout, says nothing about the token.
+			if (error instanceof AtlasApiError && error.status === 401) {
+				this.tokenRejected = true;
+			}
+		}
+		if (this.tokenRejected) {
+			this.render('unauthorized', TOKEN_REJECTED);
 		}
 		this.rerenderTooltip();
 	}

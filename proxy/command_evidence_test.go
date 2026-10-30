@@ -8,10 +8,9 @@ import (
 	"testing"
 )
 
-// The audit's probes (P-guardrails/INTEGRITY#1-2, P-agent-1/INTEGRITY#1-2,
-// P-agent-3/INTEGRITY#2, GB-4#3) are the cases below: a parse, a lint or a
-// `--version` counted as verification, `| tail` and `|| true` hid a failing
-// test, and a red run after a green one never blocked completion.
+// The cases below are the ways a check can be miscounted: a parse, a lint or
+// a `--version` taken as verification, `| tail` or `|| true` hiding a failing
+// test, and a red run after a green one that does not block completion.
 
 func TestClassifyCommandEvidence(t *testing.T) {
 	cases := []struct {
@@ -187,7 +186,7 @@ func TestHereDocumentsAreNotSplit(t *testing.T) {
 		t.Fatalf("the body did not stay with its command: %q", ev.Honest)
 	}
 	if !executionAttempt(strings.Join(ev.Honest, " && "), "store.py") {
-		t.Fatal("an import inside a here-document is no longer an execution attempt")
+		t.Fatal("an import inside a here-document is not an execution attempt")
 	}
 }
 
@@ -204,7 +203,7 @@ func ranRed(stderr string) *ToolResult {
 }
 
 // A red run after a green one takes the verification back: the latest result
-// on these bytes is the one that describes them (P-agent-1/INTEGRITY#2).
+// on these bytes is the one that describes them.
 func TestARedRunAfterAGreenOneTakesTheVerificationBack(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -241,8 +240,7 @@ func TestARedRunAfterAGreenOneTakesTheVerificationBack(t *testing.T) {
 }
 
 // A parse or a lint is not verification. It is not recorded, it does not
-// discharge the contract, and the run is told why at the exit
-// (P-agent-3/INTEGRITY#2, P-tools-2/INTEGRITY#1).
+// discharge the contract, and the run is told why at the exit.
 func TestAStaticCheckIsNeverVerification(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -266,7 +264,7 @@ func TestAStaticCheckIsNeverVerification(t *testing.T) {
 	}
 }
 
-// A test whose failure `| tail` hid is not a pass (P-guardrails/INTEGRITY#1).
+// A test whose failure `| tail` hid is not a pass.
 func TestAHiddenResultIsNeverVerification(t *testing.T) {
 	tc := sepContract([]string{"app.py"}, nil)
 	ctx, dir := sepCtx(t, tc)
@@ -413,7 +411,7 @@ func TestAHiddenExecutionSettlesNoDebt(t *testing.T) {
 	}
 	settleDebtByExecution(ctx, st, "python3 app.py", true)
 	if len(st.mutationDebt) != 0 {
-		t.Fatal("a clean run no longer settles content debt")
+		t.Fatal("a clean run did not settle content debt")
 	}
 }
 
@@ -448,39 +446,39 @@ func TestARunnerCoversWhatItDiscovers(t *testing.T) {
 		name    string
 		files   map[string]string
 		command string
-		covered []string
-		not     []string
+		// covers says, for each file, whether the run must cover it.
+		covers map[string]bool
 	}{
 		{"bare pytest", map[string]string{
 			"stats.py":      "def median(xs):\n    return sorted(xs)[len(xs)//2]\n",
 			"test_stats.py": "from stats import median\n\ndef test_m():\n    assert median([3,1,2]) == 2\n",
 			"notes.py":      "print('unrelated')\n",
-		}, "pytest -q", []string{"stats.py", "test_stats.py"}, []string{"notes.py"}},
+		}, "pytest -q", map[string]bool{"stats.py": true, "test_stats.py": true, "notes.py": false}},
 		{"pytest on a directory", map[string]string{
 			"tests/test_a.py": "def test_a():\n    assert True\n",
 			"test_b.py":       "def test_b():\n    assert True\n",
-		}, "python3 -m pytest -k a tests/", []string{"tests/test_a.py"}, []string{"test_b.py"}},
+		}, "python3 -m pytest -k a tests/", map[string]bool{"tests/test_a.py": true, "test_b.py": false}},
 		{"cd then pytest", map[string]string{
 			"sub/test_a.py": "def test_a():\n    assert True\n",
 			"test_b.py":     "def test_b():\n    assert True\n",
-		}, "cd sub && pytest", []string{"sub/test_a.py"}, []string{"test_b.py"}},
+		}, "cd sub && pytest", map[string]bool{"sub/test_a.py": true, "test_b.py": false}},
 		{"go test with tests", map[string]string{
 			"main.go":      "package main\n\nfunc add(a, b int) int { return a + b }\n\nfunc main() {}\n",
 			"main_test.go": "package main\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {}\n",
-		}, "go test ./...", []string{"main.go", "main_test.go"}, nil},
+		}, "go test ./...", map[string]bool{"main.go": true, "main_test.go": true}},
 		{"go test without tests only compiles", map[string]string{
 			"main.go": "package main\n\nfunc main() {}\n",
-		}, "go test ./...", nil, []string{"main.go"}},
+		}, "go test ./...", map[string]bool{"main.go": false}},
 		{"go run of a package", map[string]string{
 			"main.go": "package main\n\nfunc main() {}\n",
-		}, "go run .", []string{"main.go"}, nil},
+		}, "go run .", map[string]bool{"main.go": true}},
 		{"npm test", map[string]string{
 			"app.js":      "module.exports = (a, b) => a + b\n",
 			"app.test.js": "const add = require('./app')\ntest('adds', () => expect(add(1, 2)).toBe(3))\n",
-		}, "npm test", []string{"app.js", "app.test.js"}, nil},
+		}, "npm test", map[string]bool{"app.js": true, "app.test.js": true}},
 		{"a hidden runner result covers nothing", map[string]string{
 			"test_a.py": "def test_a():\n    assert True\n",
-		}, "pytest | tail -3", nil, []string{"test_a.py"}},
+		}, "pytest | tail -3", map[string]bool{"test_a.py": false}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -493,16 +491,79 @@ func TestARunnerCoversWhatItDiscovers(t *testing.T) {
 			}
 			st := &runState{}
 			st.observeVerification(ctx, "", 1, c.command, ranClean("ok\n"))
-			for _, name := range c.covered {
-				if !pathCoverageSatisfied(ctx, resolveAgentPath(ctx, name), fileSHA256(ctx, name)) {
-					t.Errorf("%q did not cover %s", c.command, name)
-				}
-			}
-			for _, name := range c.not {
-				if pathCoverageSatisfied(ctx, resolveAgentPath(ctx, name), fileSHA256(ctx, name)) {
-					t.Errorf("%q covered %s, which it never ran", c.command, name)
+			for name, want := range c.covers {
+				if got := pathCoverageSatisfied(ctx, resolveAgentPath(ctx, name), fileSHA256(ctx, name)); got != want {
+					t.Errorf("%q covers %s: %v, want %v", c.command, name, got, want)
 				}
 			}
 		})
+	}
+}
+
+// shellScript gives the script that a shell runs inline, with the options the
+// shell was started with put in front of it. A shell without a -c script gives
+// none.
+func TestShellScript(t *testing.T) {
+	for _, c := range []struct {
+		seg    string
+		script string
+		ok     bool
+	}{
+		{`bash -c "x"`, "x", true},
+		{`bash -lc 'x'`, "x", true},
+		{`sh -ec "x"`, "set -e\nx", true},
+		{`bash -o pipefail -c "x"`, "set -o pipefail\nx", true},
+		{`bash -euo pipefail -c "x"`, "set -e\nset -o pipefail\nx", true},
+		{"bash run.sh", "", false},
+		{"sh -e", "", false},
+		{"bash", "", false},
+		{"bash -c", "", false},
+		{`bash -n -c "x"`, "", false},
+		{`python3 -c "x"`, "", false},
+	} {
+		script, ok := shellScript(c.seg)
+		if script != c.script || ok != c.ok {
+			t.Errorf("shellScript(%q) = %q, %v; want %q, %v", c.seg, script, ok, c.script, c.ok)
+		}
+	}
+}
+
+// compileStep judges each build tool by its own rule: a compiler always
+// compiles; go, cargo, dotnet and swift compile with `build`; Maven and Gradle
+// with compile, build, package or assemble; npm, pnpm and yarn with a build
+// script; make with any target that is not a test or a run.
+func TestCompileStep(t *testing.T) {
+	for seg, want := range map[string]bool{
+		"javac App.java":     true,
+		"gcc main.c -o main": true,
+		"python3 app.py":     false,
+		"go build ./...":     true,
+		"go test ./...":      false,
+		"cargo build":        true,
+		"cargo package":      false,
+		"dotnet build":       true,
+		"dotnet test":        false,
+		"swift build":        true,
+		"swift package":      false,
+		"mvn compile":        true,
+		"mvn test":           false,
+		"./mvnw package":     true,
+		"./mvnw verify":      false,
+		"gradle assemble":    true,
+		"gradle test":        false,
+		"./gradlew build":    true,
+		"./gradlew run":      false,
+		"npm run build":      true,
+		"npm test":           false,
+		"pnpm build":         true,
+		"pnpm test":          false,
+		"yarn run compile":   true,
+		"yarn start":         false,
+		"make":               true,
+		"make test":          false,
+	} {
+		if got := compileStep(seg); got != want {
+			t.Errorf("compileStep(%q) = %v, want %v", seg, got, want)
+		}
 	}
 }

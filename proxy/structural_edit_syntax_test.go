@@ -6,9 +6,8 @@ import (
 )
 
 // structural_edit refuses a splice that leaves a file that parsed unable to
-// parse, as edit_file, insert_after and replace_lines already did (#214). In
-// the 8b95baa smoke run a splice broke go_offbyone's chunk.go, and the edits
-// after it landed on the broken file.
+// parse, as edit_file, insert_after and replace_lines do. Otherwise the edits
+// after a broken splice land on a broken file.
 
 func TestStructuralEditRefusesToBreakAFileThatParses(t *testing.T) {
 	r := editLoopFixture(t, map[string]string{"mod.py": accountingSeed}, tuiStrictWork,

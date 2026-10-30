@@ -9,14 +9,10 @@ import (
 	"testing"
 )
 
-// Operator logs carry shape, never bodies.
-//
-// The sealed Stage-A acquisition wrote 353 agent trace lines, 291 of which
-// carried a content or command argument, each up to 200 bytes of
-// model-authored source. Those lines land in container stdout, which an
-// acquisition captures into its evidence archive -- so source fragments
-// become evidence-resident and get sealed and shared. The bound was a
-// character count, which is not a policy: it decides how MUCH source leaks,
+// Operator logs carry shape, never bodies. Log lines land in container
+// stdout, which is captured and shared, so a line that quotes a content or
+// command argument puts model-authored source, or a secret, into that
+// record. A length bound is not a policy: it decides how much source leaks,
 // not whether any does.
 //
 // Every assertion below drives the real logger and searches its real output
@@ -130,7 +126,7 @@ func TestSafeSummaryKeepsSelectorAndRangeMetadata(t *testing.T) {
 	}
 	got = safeArgsSummary("replace_lines",
 		json.RawMessage(`{"path":"a.py","start_line":4,"end_line":9,"content":"`+sentinelBody+`"}`))
-	if !strings.Contains(got, "4") || !strings.Contains(got, "9") {
+	if !strings.Contains(got, `"start_line":4`) || !strings.Contains(got, `"end_line":9`) {
 		t.Errorf("range metadata lost: %s", got)
 	}
 	if strings.Contains(got, sentinelBody) {
@@ -215,21 +211,13 @@ func TestHashesAreNotOfferedToTheModel(t *testing.T) {
 // --- the surface stays closed --------------------------------------------
 
 // Operator log call sites may not hand a body-bearing expression straight to
-// the logger. A new one must go through safeArgsSummary, safeTextSummary or
-// safeDiagnosticSummary, or be added to the model-visible carve-out below
-// with a reason.
-//
-// modelVisibleCarveOut names the three places a body-derived string is
-// deliberately kept: they are not logs. Two build text the MODEL reads back
-// (it authored the source, so quoting its own syntax error tells it nothing
-// new), and one is the /events envelope an external client subscribes to,
-// whose schema is out of scope for this change.
-var modelVisibleCarveOut = map[string]string{
-	"gates.go:v3CandidateRegression": "model-visible rejection text",
-	"tools.go:preflightWarnedWrite":  "model-visible ToolResult warning",
-	"agent.go:EvtToolCall":           "/events SSE envelope, schema unchanged",
-}
-
+// the logger; a new one must go through safeArgsSummary, safeTextSummary or
+// safeDiagnosticSummary. The test reads the files it lists and fails when one
+// of the forbidden expressions is on a log.Printf or logEvent line, or up to
+// five lines below one. Walking back stops at a return, a "Warning:" text or
+// a NewEnvelope call: those build text the MODEL reads back (it authored the
+// source, so quoting its own syntax error tells it nothing new), or the
+// /events envelope an external client subscribes to, and may quote a body.
 func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 	forbidden := []string{
 		"truncateStr(response",
@@ -240,7 +228,14 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 		"truncateStr(input.Content",
 	}
 	// Lines that are logger calls, or continuations of one.
-	for _, file := range []string{"agent.go", "tools.go", "gates.go", "guardrails.go", "main.go"} {
+	for _, file := range []string{"agent.go", "tools.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go",
+		"main.go"} {
 		src := readSourceForTest(t, file)
 		lines := strings.Split(src, "\n")
 		for i, line := range lines {
@@ -269,18 +264,6 @@ func TestOperatorLogSitesCannotQuoteABody(t *testing.T) {
 				t.Errorf("%s:%d hands %s to the logger; route it through a safe summary",
 					file, i+1, bad)
 			}
-		}
-	}
-}
-
-func TestTheCarveOutIsSmallAndNamed(t *testing.T) {
-	if len(modelVisibleCarveOut) != 3 {
-		t.Fatalf("the carve-out changed size (%d); every entry needs a reason",
-			len(modelVisibleCarveOut))
-	}
-	for k, v := range modelVisibleCarveOut {
-		if v == "" {
-			t.Errorf("%s has no reason recorded", k)
 		}
 	}
 }

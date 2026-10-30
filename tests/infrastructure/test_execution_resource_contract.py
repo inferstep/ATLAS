@@ -14,7 +14,9 @@ service, or a container.
 
 from __future__ import annotations
 
+import dataclasses
 import os
+import subprocess
 import sys
 import time
 
@@ -39,6 +41,7 @@ RUNAWAY = ("python3 -c \"out=[]\ncurrent=0\nstop=5\nstep=-1\n"
 
 @pytest.fixture
 def small():
+    """20 seconds, 384 MiB, 16 processes and 1 MiB of output."""
     c = rc.ResourceContract(wall_seconds=20, memory_bytes=384 * MiB,
                             max_processes=16, output_bytes=1 * MiB)
     c.validate()
@@ -56,35 +59,42 @@ def alive(seconds: int) -> int:
 
 # --- the operator's budget --------------------------------------------------
 
+# A budget that can be enforced. Each case below changes one field of it.
+BUDGET = dict(wall_seconds=10, memory_bytes=256 * MiB, max_processes=8, output_bytes=1 * MiB)
 
-def test_a_budget_that_cannot_be_enforced_fails_closed():
-    base = dict(wall_seconds=10, memory_bytes=256 * MiB, max_processes=8,
-                output_bytes=1 * MiB)
-    rc.ResourceContract(**base).validate()
-    for field, bad in [("wall_seconds", 0), ("wall_seconds", -1),
-                       ("memory_bytes", 0), ("memory_bytes", 1024),
-                       ("max_processes", 0), ("max_processes", -3),
-                       ("output_bytes", 0), ("output_bytes", -1)]:
-        with pytest.raises(rc.ResourceContractError):
-            rc.ResourceContract(**{**base, field: bad}).validate()
-    # Internally inconsistent: the output buffer is held by the executor, so a
-    # cap at or above the per-command memory ceiling kills the server first.
-    with pytest.raises(rc.ResourceContractError):
-        rc.ResourceContract(**{**base, "output_bytes": 256 * MiB}).validate()
+
+@pytest.mark.parametrize("field, value", [
+    pytest.param("wall_seconds", 0, id="no time"),
+    pytest.param("wall_seconds", -1, id="negative time"),
+    pytest.param("memory_bytes", 0, id="no memory"),
+    pytest.param("memory_bytes", 1024, id="too little memory for an interpreter"),
+    pytest.param("max_processes", 0, id="no processes"),
+    pytest.param("max_processes", -3, id="a negative number of processes"),
+    pytest.param("output_bytes", 0, id="no output"),
+    pytest.param("output_bytes", -1, id="negative output"),
+    # The output buffer is held by the executor, so a cap at or above the
+    # per-command memory ceiling kills the server first.
+    pytest.param("output_bytes", 256 * MiB, id="an output cap as large as the memory ceiling"),
     # 0 means the optional address-space backstop is off; anything between 0
     # and 1 would be a ceiling below the resident contract, which is not a
     # narrowing anyone can act on.
-    rc.ResourceContract(**{**base, "address_space_multiple": 0}).validate()
-    rc.ResourceContract(**{**base, "address_space_multiple": 2.0}).validate()
+    pytest.param("address_space_multiple", 0.5, id="an address-space ceiling below the memory ceiling"),
+])
+def test_a_budget_that_cannot_be_enforced_fails_closed(field, value):
+    rc.ResourceContract(**BUDGET).validate()
+    unenforceable = rc.ResourceContract(**{**BUDGET, field: value})
     with pytest.raises(rc.ResourceContractError):
-        rc.ResourceContract(**{**base, "address_space_multiple": 0.5}).validate()
+        unenforceable.validate()
 
 
-def test_a_malformed_operator_value_fails_at_startup(monkeypatch):
-    monkeypatch.setenv("ATLAS_EXEC_MEMORY_BYTES", "lots")
-    with pytest.raises(rc.ResourceContractError):
-        rc.contract_from_env()
-    monkeypatch.setenv("ATLAS_EXEC_MEMORY_BYTES", "-1")
+@pytest.mark.parametrize("multiple", [0, 2.0], ids=["off", "twice the memory ceiling"])
+def test_the_address_space_backstop_is_off_or_at_least_the_memory_ceiling(multiple):
+    rc.ResourceContract(**BUDGET, address_space_multiple=multiple).validate()
+
+
+@pytest.mark.parametrize("value", ["lots", "-1"], ids=["not a number", "negative"])
+def test_a_malformed_operator_value_fails_at_startup(monkeypatch, value):
+    monkeypatch.setenv("ATLAS_EXEC_MEMORY_BYTES", value)
     with pytest.raises(rc.ResourceContractError):
         rc.contract_from_env()
 
@@ -140,12 +150,12 @@ def test_a_rapid_allocator_is_stopped_and_named(small):
     assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
     assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
     assert not r.success
+    assert r.elapsed_seconds < small.wall_seconds  # stopped for its memory, long before its time is up
 
 
 @needs_proc
 def test_the_runaway_that_took_the_host_down(small):
     """`stepped(0, 5, -1)` exactly as the frozen family seeds it."""
-    import subprocess
     # The loop has no end. Before anything of the sandbox runs it: under a
     # limit of its own, and nothing else, it ends by itself.
     alone = subprocess.run(["bash", "-c", with_an_address_space_limit(RUNAWAY, 64 * MiB)],
@@ -192,35 +202,48 @@ def test_a_fork_tree_of_allocators_is_stopped(small):
     assert not r.success
 
 
-def test_a_command_near_the_limit_completes(small):
-    r = run("python3 -c \"a=bytearray(200<<20); print(len(a))\"", small)
+@pytest.mark.parametrize("script, returncode, success", [
+    pytest.param("python3 -c \"a=bytearray(200<<20); print(len(a))\"", 0, True,
+                 id="200 MiB under a ceiling of 384 MiB"),
+    pytest.param("exit 3", 3, False, id="an ordinary failure"),
+])
+def test_a_command_that_ends_by_itself_is_completed(small, script, returncode, success):
+    r = run(script, small)
     assert r.outcome == rc.OUTCOME_COMPLETED
-    assert r.success and r.returncode == 0
+    assert r.returncode == returncode
+    assert r.success is success
 
 
-def test_an_ordinary_failure_is_not_a_resource_event(small):
-    r = run("exit 3", small)
-    assert r.outcome == rc.OUTCOME_COMPLETED
-    assert not r.success and r.returncode == 3
+# The optional address-space ceiling (address_space_multiple) is a limit the
+# kernel holds the child to. The child asks for address space with a mapping
+# it never touches, so it uses no memory even when the ceiling is not there.
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux holds a process to RLIMIT_AS; macOS does not")
+def test_the_address_space_ceiling_stops_a_child_above_it():
+    contract = rc.ResourceContract(wall_seconds=20, memory_bytes=64 * MiB, max_processes=16,
+                                   output_bytes=1 * MiB, address_space_multiple=1.0)
+    contract.validate()
+    mapping = "python3 -c \"import mmap; mmap.mmap(-1, {} << 20); print('mapped')\""
+    below = run(mapping.format(16), contract)
+    assert below.returncode == 0, below.stderr
+    assert "mapped" in below.stdout, below.stderr
+    above = run(mapping.format(128), contract)
+    assert above.returncode != 0, (above.returncode, above.stdout)
+    assert "Cannot allocate memory" in above.stderr, (above.returncode, above.stdout)
 
 
 # --- time, output, processes -------------------------------------------------
 
 
-def test_timeout_before_memory(small):
-    c = rc.ResourceContract(wall_seconds=2, memory_bytes=384 * MiB,
-                            max_processes=16, output_bytes=1 * MiB)
-    r = run("sleep 60", c)
+@pytest.mark.parametrize("stdin", [
+    pytest.param(None, id="no input"),
+    # More than a pipe holds, to a command that never reads it.
+    pytest.param("x" * MiB, id="an input it never reads"),
+])
+def test_a_command_past_its_time_is_timed_out(small, stdin):
+    contract = dataclasses.replace(small, wall_seconds=2)
+    r = run("sleep 20", contract, stdin=stdin)
     assert r.outcome == rc.OUTCOME_TIMED_OUT
-    assert r.elapsed_seconds < 20
-
-
-@needs_proc
-def test_memory_before_timeout(small):
-    r = run(allocator(4, small.memory_bytes), small)
-    assert r.returncode != OWN_LIMIT, REACHED_OWN_LIMIT
-    assert r.outcome == rc.OUTCOME_MEMORY_EXHAUSTED
-    assert r.elapsed_seconds < small.wall_seconds
+    assert r.elapsed_seconds < contract.wall_seconds + contract.grace_seconds + 2
 
 
 def test_output_overflow_is_named_not_silently_truncated(small):
@@ -240,9 +263,8 @@ def test_output_overflow_while_allocating(small):
 
 @needs_proc
 def test_process_limit(small):
-    c = rc.ResourceContract(wall_seconds=15, memory_bytes=384 * MiB,
-                            max_processes=8, output_bytes=1 * MiB)
-    r = run("for i in $(seq 1 40); do sleep 12 & done; wait", c)
+    r = run("for i in $(seq 1 40); do sleep 12 & done; wait",
+            dataclasses.replace(small, wall_seconds=15, max_processes=8))
     assert r.outcome == rc.OUTCOME_PROCESS_LIMIT
     assert not r.success
 
@@ -250,60 +272,52 @@ def test_process_limit(small):
 # --- cancellation and cleanup ------------------------------------------------
 
 
-def test_cancellation_before_execution(small):
-    r = rc.run_bounded(["bash", "-c", "sleep 30"], small, cancelled=lambda: True)
-    assert r.outcome == rc.OUTCOME_CANCELLED
-    assert not r.success
-
-
-def test_cancellation_during_allocation(small):
-    started = time.time()
-    r = run(allocator(1, small.memory_bytes, pause=0.01), small,
-            cancelled=lambda: time.time() - started > 0.4)
-    assert r.outcome == rc.OUTCOME_CANCELLED
-    assert not r.success
-
-
-@needs_proc
-def test_a_child_that_ignores_termination_still_dies(small):
-    c = rc.ResourceContract(wall_seconds=2, memory_bytes=384 * MiB,
-                            max_processes=16, output_bytes=1 * MiB)
-    r = run("python3 -c \"import signal,time\n"
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(120)\"", c)
-    assert r.outcome == rc.OUTCOME_TIMED_OUT
-    assert r.survivors == 0
-
-
-@needs_proc
-def test_a_child_that_closes_stdout_and_keeps_running_still_dies(small):
-    c = rc.ResourceContract(wall_seconds=2, memory_bytes=384 * MiB,
-                            max_processes=16, output_bytes=1 * MiB)
-    r = run("python3 -c \"import os,time\nos.close(1)\ntime.sleep(120)\"", c)
-    assert r.outcome == rc.OUTCOME_TIMED_OUT
-    assert r.survivors == 0
-
-
-@needs_proc
-@pytest.mark.parametrize("name,script,secs", [
-    ("subshell background", "(sleep %d &) ; exit 0", 4211),
-    ("double fork", "bash -c 'sleep %d &' ; exit 0", 4212),
-    ("explicit setsid", "setsid sleep %d </dev/null >/dev/null 2>&1 & exit 0", 4213),
-    ("nohup disown", "nohup sleep %d >/dev/null 2>&1 & disown; exit 0", 4214),
-    ("grandchild via python",
-     "python3 -c \"import subprocess;subprocess.Popen(['sleep','%d'])\"", 4215),
+@pytest.mark.parametrize("script, cancel_after", [
+    pytest.param("sleep 30", 0, id="before it runs"),
+    pytest.param(allocator(1, 384 * MiB, pause=0.01), 0.4, id="while it allocates"),
 ])
-def test_nothing_the_command_started_outlives_the_request(small, name, script, secs):
+def test_a_cancelled_command_is_named_cancelled(small, script, cancel_after):
+    started = time.time()
+    r = run(script, small, cancelled=lambda: time.time() - started >= cancel_after)
+    assert r.outcome == rc.OUTCOME_CANCELLED
+    assert not r.success
+
+
+@needs_proc
+@pytest.mark.parametrize("script", [
+    pytest.param("python3 -c \"import signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(120)\"",
+                 id="it ignores termination"),
+    pytest.param("python3 -c \"import os,time\nos.close(1)\ntime.sleep(120)\"",
+                 id="it closes stdout and keeps running"),
+])
+def test_a_child_that_runs_past_its_time_still_dies(small, script):
+    r = run(script, dataclasses.replace(small, wall_seconds=2))
+    assert r.outcome == rc.OUTCOME_TIMED_OUT
+    assert r.survivors == 0
+
+
+# Each case sleeps a number of seconds of its own, so its processes can be
+# counted apart from those of any other case.
+@needs_proc
+@pytest.mark.parametrize("script, secs", [
+    pytest.param("(sleep %d &) ; exit 0", 4211, id="subshell background"),
+    pytest.param("bash -c 'sleep %d &' ; exit 0", 4212, id="double fork"),
+    pytest.param("setsid sleep %d </dev/null >/dev/null 2>&1 & exit 0", 4213, id="explicit setsid"),
+    pytest.param("nohup sleep %d >/dev/null 2>&1 & disown; exit 0", 4214, id="nohup disown"),
+    pytest.param("python3 -c \"import subprocess;subprocess.Popen(['sleep','%d'])\"", 4215,
+                 id="grandchild via python"),
+])
+def test_nothing_the_command_started_outlives_the_request(small, script, secs):
     assert alive(secs) == 0, "a previous run leaked into this one"
     r = run(script % secs, small)
     time.sleep(0.4)
-    assert r.survivors == 0, name
-    assert alive(secs) == 0, name
+    assert r.survivors == 0
+    assert alive(secs) == 0
 
 
 @needs_proc
 def test_a_healthy_sibling_survives_a_memory_kill(small):
     """One command's ceiling is its own. Nothing else on the box is touched."""
-    import subprocess
     sibling = subprocess.Popen(
         ["bash", "-c", "python3 -c \"import time;a=bytearray(80<<20);time.sleep(20)\""],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -332,7 +346,8 @@ def test_repeated_memory_failures_stay_bounded(small):
 
 
 def test_the_executor_runs_everything_through_the_owner():
-    src = open(os.path.join(SANDBOX, "executor_server.py")).read()
+    with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
+        src = fh.read()
     assert "EXEC_CONTRACT = contract_from_env()" in src
     assert "run_bounded(cmd, EXEC_CONTRACT.for_request(timeout)" in src
     # No execution site may spawn around the owner.
@@ -349,8 +364,8 @@ def test_the_executor_runs_everything_through_the_owner():
         assert banned not in body, f"the executor reaches {banned}"
 
 
-def test_the_executor_result_carries_the_outcome():
-    sys.path.insert(0, SANDBOX)
+def test_the_executor_result_carries_the_outcome(monkeypatch):
+    monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
     got = ex._run_cmd(["bash", "-c", "echo ok"], timeout=5)
     assert got["outcome"] == rc.OUTCOME_COMPLETED
@@ -360,7 +375,7 @@ def test_the_executor_result_carries_the_outcome():
 
 @needs_proc
 def test_the_executor_result_names_a_command_that_took_too_much_memory(monkeypatch, small):
-    sys.path.insert(0, SANDBOX)
+    monkeypatch.syspath_prepend(SANDBOX)
     import executor_server as ex
     # The small contract of this file, not the product's own ceiling: the
     # command's own limit is a multiple of the ceiling it runs under.

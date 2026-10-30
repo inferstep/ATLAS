@@ -55,13 +55,15 @@ pull_requests:
   core_paths:
     proxy/agent.go: the agent loop
     proxy/tools.go: the tool handlers
-    proxy/gates.go: the guards
-    proxy/guardrails.go: the guards
+    proxy/gates*: the guards
+    proxy/guardrails*: the guards
     proxy/permissions.go: the guards
     proxy/authorization_*: the guards
     proxy/shell_wrapper.go: the guards
     proxy/confined_dir.go: the guards
     sandbox/executor_server.py: the guards
+    sandbox/executor_models.py: the guards
+    sandbox/executor_parsers.py: the guards
     sandbox/resource_contract.py: the guards
   # Path -> what it is. A pull request that changes one is high risk too.
   # These files of v3-service hold a prompt, or shape the request that

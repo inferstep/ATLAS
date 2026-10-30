@@ -32,7 +32,6 @@ HTML_INLINE = "<html><body><canvas id='c'></canvas><script>const x=document.getE
 HTML_STATIC = "<html><body><h1>Hello</h1></body></html>"
 
 _SCOPE = "static/game.js"
-_CTX = None  # filled below, after contract import
 
 
 def _record(adapter, accepted=True):

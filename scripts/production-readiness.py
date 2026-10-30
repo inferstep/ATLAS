@@ -104,6 +104,18 @@ def _module_available(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+# The suites need more than pytest: the sandbox service (fastapi, defusedxml)
+# and the tree-sitter grammars. Without them many tests fail for a reason that
+# is not the change's, so the python-tests gate says what to install instead of
+# running.
+PYTHON_SUITES_MISSING = ("pytest, fastapi, defusedxml or tree_sitter is not installed "
+                         "(pip install --require-hashes -r .github/requirements/ci.txt)")
+
+
+def _python_suites_installed() -> bool:
+    return all(_module_available(name) for name in ("pytest", "fastapi", "defusedxml", "tree_sitter"))
+
+
 def _command_available(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -190,9 +202,18 @@ def _compose_gates() -> dict[str, Gate]:
     return gates
 
 
-def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
-    python = sys.executable
-    go_env = {"GOCACHE": os.environ.get("GOCACHE", "/tmp/atlas-go-cache")}
+def _with_workers(gates: dict[str, Gate], workers: int) -> dict[str, Gate]:
+    """With more than one worker, the gate python-tests gives its tests to that many processes at once
+    (pytest-xdist). Every test still runs once, and the result file holds every test."""
+    if workers <= 1:
+        return gates
+    gate = gates["python-tests"]
+    return {**gates, "python-tests": replace(gate, command=gate.command + ("-n", str(workers)))}
+
+
+def _tree_gates(python: str) -> dict[str, Gate]:
+    """The checks of the whole tree: the tests' integrity, that the Python compiles here and on the
+    oldest supported version, and that each Dockerfile COPY has its source."""
     return {
         "test-integrity": Gate(
             "test-integrity",
@@ -217,11 +238,18 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             "dockerfile-sources",
             (python, "scripts/check_dockerfile_sources.py"),
         ),
+    }
+
+
+def _python_test_gates(python: str, pytest_paths: Sequence[str], go_env: dict[str, str]) -> dict[str, Gate]:
+    """The Python test gates: the suites, the lens suite in its own process, and candidate staging
+    against a real executor."""
+    return {
         "python-tests": Gate(
             "python-tests",
             (python, "-m", "pytest", *pytest_paths, "--no-header", "-q"),
-            available=lambda: _module_available("pytest"),
-            unavailable_reason="pytest is not installed",
+            available=_python_suites_installed,
+            unavailable_reason=PYTHON_SUITES_MISSING,
         ),
         # Separate process on purpose — see the LENS_PYTEST_PATH comment.
         "python-tests-lens": Gate(
@@ -250,6 +278,12 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
                                "(pip install -r sandbox/requirements.txt)",
             env=go_env,
         ),
+    }
+
+
+def _go_gates(go_env: dict[str, str]) -> dict[str, Gate]:
+    """The tests and the go vet of the proxy and the TUI."""
+    return {
         "go-proxy-test": Gate(
             "go-proxy-test",
             # An explicit budget, because Go's implicit 10m default is not one
@@ -292,6 +326,13 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             unavailable_reason="Go is not installed",
             env=go_env,
         ),
+    }
+
+
+def _static_check_gates(python: str, go_env: dict[str, str]) -> dict[str, Gate]:
+    """The static checks: staticcheck of both Go modules, mypy on the typed files, ruff and
+    shellcheck."""
+    return {
         "go-proxy-staticcheck": Gate(
             "go-proxy-staticcheck",
             ("go", "run", "honnef.co/go/tools/cmd/staticcheck@2026.1",
@@ -351,6 +392,17 @@ def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
             available=lambda: _command_available("shellcheck"),
             unavailable_reason="shellcheck is not installed",
         ),
+    }
+
+
+def _gates(pytest_paths: Sequence[str]) -> dict[str, Gate]:
+    python = sys.executable
+    go_env = {"GOCACHE": os.environ.get("GOCACHE", "")}  # empty: Go's own folder for this user
+    return {
+        **_tree_gates(python),
+        **_python_test_gates(python, pytest_paths, go_env),
+        **_go_gates(go_env),
+        **_static_check_gates(python, go_env),
         **_compose_gates(),
         "workflow-yaml": Gate(
             "workflow-yaml",
@@ -521,6 +573,13 @@ def _parse_args() -> argparse.Namespace:
         metavar="PATH",
         help="override the default hermetic pytest subsets",
     )
+    parser.add_argument(
+        "--pytest-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run the tests of the gate python-tests in N processes at once (needs pytest-xdist); 1 is one process",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--list", action="store_true", help="list gate names")
     return parser.parse_args()
@@ -528,7 +587,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    gates = _with_coverage(_gates(args.pytest_path or PYTEST_PATHS))
+    gates = _with_workers(_with_coverage(_gates(args.pytest_path or PYTEST_PATHS)), args.pytest_workers)
     if args.list:
         for name, gate in gates.items():
             print(f"{name}\t{'required' if gate.required else 'optional'}")

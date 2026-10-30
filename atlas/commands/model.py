@@ -45,6 +45,7 @@ import shutil
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import List, Optional, Tuple
 
@@ -57,6 +58,22 @@ from atlas.commands.model_registry import Model
 # HF token resolution is shared publish machinery; the canonical resolver
 # (which also reads HUGGINGFACE_HUB_TOKEN) lives in atlas.publishing.
 from atlas.publishing import hf_token as _hf_token
+# The download's request and the checks around its GET are in model_download.py,
+# beside this module; imported back under their names.
+from atlas.commands.model_download import (
+    _build_request, _finish_part, _fold_part_into_hash, _human_bytes,
+    _print_http_error, _print_range_ignored, _print_unexpected_range_status,
+    _resume_point, _total_size,
+)
+
+
+def _hf_token_for(url: str) -> Optional[str]:
+    """The Hugging Face token for a download from Hugging Face itself, and
+    None for any other address, such as a --url download from another host."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" and (parts.hostname or "").lower() == "huggingface.co" and parts.port in (None, 443):
+        return _hf_token()
+    return None
 
 
 # Shared ANSI colors + unicode-safe output primitives.
@@ -270,13 +287,6 @@ def _emit_recommend(args: argparse.Namespace, color: bool) -> int:
 # `atlas model install`
 # ---------------------------------------------------------------------------
 
-def _human_bytes(n: float) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} PB"
-
 
 def _remote_size_gb(url: str, token: Optional[str]) -> float:
     """Best-effort HEAD to read Content-Length (GB); 0.0 if unknown. Follows
@@ -293,123 +303,127 @@ def _remote_size_gb(url: str, token: Optional[str]) -> float:
         return 0.0
 
 
-def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
-    if getattr(args, "url", None):
-        # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
-        # registry entry with no SHA pin and no lens artifacts; the lens-status
-        # gate and registry lookup below are bypassed. The download path handles
-        # sha256=None (skips verification) and model_size_gb=0.0 (uses the
-        # Content-Length header for progress). See docs/CONFIGURATION.md
-        # "Adding your own model".
-        from urllib.parse import urlparse, unquote
-        fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
-        if not fname or not fname.lower().endswith(".gguf"):
-            _safe_print(f"  {RED if color else ''}Could not infer a .gguf "
-                        f"filename from the URL.{RESET if color else ''}")
-            _safe_print("  Pass --file <name.gguf> to set the on-disk filename.")
-            return 1
-        m = Model(name=fname.rsplit(".", 1)[0], tier="unknown", model_file=fname,
-                  model_display=fname, model_size_gb=0.0,
-                  lens_status="no-artifacts", download_url=args.url, sha256=None,
-                  notes="unregistered (installed via --url)")
-        models_dir = _resolve_models_dir(args.models_dir)
-        _safe_print(f"  {YELL if color else ''}Unregistered model (--url): no "
-                    f"SHA pin, no bundled Lens artifacts.{RESET if color else ''}")
-        _safe_print("  After download: set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
-                    "in .env, then run `atlas onboard` to finish (rebuild check "
-                    "+ Lens retrain). See docs/CONFIGURATION.md \"Adding your "
-                    "own model\".")
+def _print_no_download_source(m: model_registry.Model, color: bool) -> None:
+    _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
+                f"ATLAS has no download source for this model."
+                f"{RESET if color else ''}")
+    _safe_print("  If you have a source for its .gguf file, give it with "
+                "`atlas model install --url <url>`.")
+    _safe_print(f"  Notes: {m.notes}")
+
+
+def _model_from_url(args: argparse.Namespace, color: bool) -> Optional[Tuple[Model, str]]:
+    """--url: an UNREGISTERED model, as a registry entry of its own. Returns
+    (model, models_dir); None after printing that the URL names no .gguf file."""
+    # --url: install an UNREGISTERED model (drop-in / BYO). Synthesize a
+    # registry entry with no SHA pin and no lens artifacts; the lens-status
+    # gate and registry lookup below are bypassed. The download path handles
+    # sha256=None (skips verification) and model_size_gb=0.0 (uses the
+    # Content-Length header for progress). See docs/CONFIGURATION.md
+    # "Adding your own model".
+    from urllib.parse import urlparse, unquote
+    fname = args.file or unquote(os.path.basename(urlparse(args.url).path))
+    if not fname or not fname.lower().endswith(".gguf"):
+        _safe_print(f"  {RED if color else ''}Could not infer a .gguf "
+                    f"filename from the URL.{RESET if color else ''}")
+        _safe_print("  Pass --file <name.gguf> to set the on-disk filename.")
+        return None
+    m = Model(name=fname.rsplit(".", 1)[0], tier="unknown", model_file=fname,
+              model_display=fname, model_size_gb=0.0,
+              lens_status="no-artifacts", download_url=args.url, sha256=None,
+              notes="unregistered (installed via --url)")
+    models_dir = _resolve_models_dir(args.models_dir)
+    _safe_print(f"  {YELL if color else ''}Unregistered model (--url): no "
+                f"SHA pin, no bundled Lens artifacts.{RESET if color else ''}")
+    _safe_print("  After download: set ATLAS_MODEL_FILE + ATLAS_MODEL_NAME "
+                "in .env, then run `atlas onboard` to finish (rebuild check "
+                "+ Lens retrain). See docs/CONFIGURATION.md \"Adding your "
+                "own model\".")
+    _safe_print()
+    return m, models_dir
+
+
+def _passes_lens_gate(m: Model, args: argparse.Namespace, color: bool) -> bool:
+    """The Lens-status gate: False after printing why a model with no Lens
+    bundle is refused (unless --no-lens); True otherwise, after a note for a
+    bundle without current calibration."""
+    # Lens-status gate: refuse no-artifacts unless --no-lens.
+    if m.lens_status != "supported" and not args.no_lens:
+        _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
+                    f"Lens status `{m.lens_status}`.{RESET if color else ''}")
         _safe_print()
-    else:
-        if not args.name:
-            _safe_print(f"  {RED if color else ''}Provide a registry model name "
-                        f"or --url.{RESET if color else ''}")
-            _safe_print("  `atlas model list` for names, or "
-                        "`atlas model install --url <hf-url>` for your own model.")
-            return 1
-        m = model_registry.by_name(args.name)
-        if m is None:
-            _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
-                        f"{RESET if color else ''}")
-            _safe_print("  Run `atlas model list` to see available names.")
-            return 1
+        _safe_print("  This model has no Lens bundle of its own. The lens is "
+                    "required: it cannot score this model, so ATLAS stops "
+                    "agent work on it and says why. The lens loads a bundle "
+                    "only for the model it was built for, so a bundle for "
+                    "another quant of the same model does not load.")
+        _safe_print()
+        _safe_print("  To build one: install with `--no-lens`, then run "
+                    f"{BUILD}.")
+        return False
+    if m.lens_status == "supported" and not m.lens_calibrated:
+        _safe_print(f"  {YELL if color else ''}Note: `{m.name}` has a "
+                    f"legacy Lens weight bundle without current per-model "
+                    f"C(x)/G(x) calibration. Installation may continue, "
+                    f"but Lens interventions remain disabled until you run "
+                    f"`atlas lens build`.{RESET if color else ''}")
+        _safe_print()
+    return True
 
-        models_dir = _resolve_models_dir(args.models_dir)
 
-        # Lens-status gate: refuse no-artifacts unless --no-lens.
-        if m.lens_status != "supported" and not args.no_lens:
-            _safe_print(f"  {YELL if color else ''}Refusing to install `{m.name}`: "
-                        f"Lens status `{m.lens_status}`.{RESET if color else ''}")
-            _safe_print()
-            _safe_print("  This model has no Lens bundle of its own. The lens is "
-                        "required: it cannot score this model, so ATLAS stops "
-                        "agent work on it and says why. The lens loads a bundle "
-                        "only for the model it was built for, so a bundle for "
-                        "another quant of the same model does not load.")
-            _safe_print()
-            _safe_print("  To build one: install with `--no-lens`, then run "
-                        f"{BUILD}.")
-            return 1
-        if m.lens_status == "supported" and not m.lens_calibrated:
-            _safe_print(f"  {YELL if color else ''}Note: `{m.name}` has a "
-                        f"legacy Lens weight bundle without current per-model "
-                        f"C(x)/G(x) calibration. Installation may continue, "
-                        f"but Lens interventions remain disabled until you run "
-                        f"`atlas lens build`.{RESET if color else ''}")
-            _safe_print()
-
-    if not m.can_install:
-        _safe_print(f"  {RED if color else ''}Cannot install `{m.name}`: "
-                    f"no known download URL.{RESET if color else ''}")
-        _safe_print(f"  Notes: {m.notes}")
-        return 1
-
-    # PC-056.1: HF_TOKEN gate for known-gated repos. Refuse early with
-    # a helpful message rather than letting the download path 401.
-    if m.requires_hf_token and not _hf_token():
-        _safe_print(f"  {YELL if color else ''}`{m.name}` upstream "
-                    f"({m.download_url}) requires HuggingFace authentication."
+def _model_from_registry(args: argparse.Namespace, color: bool) -> Optional[Tuple[Model, str]]:
+    """A registry model by name, past the Lens-status gate. Returns (model,
+    models_dir); None after printing why it cannot be installed."""
+    if not args.name:
+        _safe_print(f"  {RED if color else ''}Provide a registry model name "
+                    f"or --url.{RESET if color else ''}")
+        _safe_print("  `atlas model list` for names, or "
+                    "`atlas model install --url <hf-url>` for your own model.")
+        return None
+    m = model_registry.by_name(args.name)
+    if m is None:
+        _safe_print(f"  {RED if color else ''}Unknown model: `{args.name}`"
                     f"{RESET if color else ''}")
-        _safe_print()
-        _safe_print("  Set the HF_TOKEN env var to a HuggingFace access "
-                    "token with read access:")
-        _safe_print("    export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'")
-        _safe_print(f"    atlas model install {m.name}")
-        _safe_print("  Get one at https://huggingface.co/settings/tokens")
-        _safe_print()
-        if m.lens_status != "supported":
-            _safe_print(f"  Note: even with auth, this model has Lens "
-                        f"status `{m.lens_status}`: ATLAS stops agent work on "
-                        f"it until it has its own Lens bundle.")
-        return 1
+        _safe_print("  Run `atlas model list` to see available names.")
+        return None
 
-    target = os.path.join(models_dir, m.model_file)
+    models_dir = _resolve_models_dir(args.models_dir)
+    if not _passes_lens_gate(m, args, color):
+        return None
+    return m, models_dir
 
-    if args.dry_run:
-        _safe_print("  [DRY-RUN] Would download:")
-        _safe_print(f"    URL:    {m.download_url}")
-        _safe_print(f"    Target: {target}")
-        _safe_print(f"    Size:   ~{m.model_size_gb:.1f} GB")
-        if m.sha256:
-            _safe_print(f"    SHA256: {m.sha256}")
-        return 0
 
-    # Confirm before clobbering an existing file.
-    if os.path.exists(target) and not args.yes:
-        cur = model_registry.installed_size_gb(m, models_dir) or 0.0
-        _safe_print(f"  Target file already exists: {target} ({cur:.1f} GB)")
-        _safe_print(f"  Re-download will overwrite it. Pass `--yes` to "
-                    f"proceed, or `atlas model remove {m.name}` first.")
-        return 1
+def _print_hf_token_needed(m: Model, color: bool) -> None:
+    """Say how to give the HF token a gated repo needs."""
+    _safe_print(f"  {YELL if color else ''}`{m.name}` upstream "
+                f"({m.download_url}) requires HuggingFace authentication."
+                f"{RESET if color else ''}")
+    _safe_print()
+    _safe_print("  Set the HF_TOKEN env var to a HuggingFace access "
+                "token with read access:")
+    _safe_print("    export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'")
+    _safe_print(f"    atlas model install {m.name}")
+    _safe_print("  Get one at https://huggingface.co/settings/tokens")
+    _safe_print()
+    if m.lens_status != "supported":
+        _safe_print(f"  Note: even with auth, this model has Lens "
+                    f"status `{m.lens_status}`: ATLAS stops agent work on "
+                    f"it until it has its own Lens bundle.")
 
-    # Make sure models_dir exists.
-    try:
-        os.makedirs(models_dir, exist_ok=True)
-    except OSError as e:
-        _safe_print(f"  {RED if color else ''}Cannot create models dir "
-                    f"`{models_dir}`: {e}{RESET if color else ''}")
-        return 1
 
+def _print_dry_run(m: Model, target: str) -> None:
+    """--dry-run: say what would be downloaded, and where."""
+    _safe_print("  [DRY-RUN] Would download:")
+    _safe_print(f"    URL:    {m.download_url}")
+    _safe_print(f"    Target: {target}")
+    _safe_print(f"    Size:   ~{m.model_size_gb:.1f} GB")
+    if m.sha256:
+        _safe_print(f"    SHA256: {m.sha256}")
+
+
+def _enough_free_disk(m: Model, models_dir: str, color: bool) -> bool:
+    """True when the models dir has room for the model and some headroom;
+    False after printing how much is free and needed."""
     # Free-disk sanity check: refuse if free disk < 1.2 * model size.
     try:
         free_gb = shutil.disk_usage(models_dir).free / (1024 ** 3)
@@ -421,7 +435,7 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
         # Content-Length so the disk check still fails fast; if the server
         # won't report it, proceed (the mid-download OSError path keeps the
         # .part for retry) rather than refuse with an arbitrary floor.
-        remote_gb = _remote_size_gb(m.download_url, _hf_token())
+        remote_gb = _remote_size_gb(m.download_url, _hf_token_for(m.download_url))
         if remote_gb > 0:
             needed = remote_gb * 1.2
             _safe_print(f"  Remote size ~{remote_gb:.1f} GB (from Content-Length)")
@@ -434,12 +448,78 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
                     f"(model + headroom).{RESET if color else ''}")
         _safe_print("  Free up space or pass `--models-dir` pointing "
                     "at a larger partition.")
+        return False
+    return True
+
+
+def _target_ready(args: argparse.Namespace, m: Model, models_dir: str, target: str,
+                  color: bool) -> bool:
+    """True when the download may go to target: no file to overwrite without
+    --yes, a models dir that exists, and room on its disk."""
+    # Confirm before clobbering an existing file.
+    if os.path.exists(target) and not args.yes:
+        cur = model_registry.installed_size_gb(m, models_dir) or 0.0
+        _safe_print(f"  Target file already exists: {target} ({cur:.1f} GB)")
+        _safe_print(f"  Re-download will overwrite it. Pass `--yes` to "
+                    f"proceed, or `atlas model remove {m.name}` first.")
+        return False
+
+    # Make sure models_dir exists.
+    try:
+        os.makedirs(models_dir, exist_ok=True)
+    except OSError as e:
+        _safe_print(f"  {RED if color else ''}Cannot create models dir "
+                    f"`{models_dir}`: {e}{RESET if color else ''}")
+        return False
+
+    return _enough_free_disk(m, models_dir, color)
+
+
+def _fetch_artifacts_or_warn(m: Model, models_dir: str, color: bool,
+                             args: argparse.Namespace) -> None:
+    """Fetch the model's Lens and ASA artifacts; warn, without failing the
+    install, when a download fails."""
+    artifact_rc = _install_artifacts(m, models_dir, color, args)
+    if artifact_rc != 0:
+        # Non-fatal: gguf is installed, just artifacts failed. Warn
+        # and continue so the user can still run the model (G(x) will
+        # no-op, ASA steering disabled, both surfaced by atlas doctor).
+        _safe_print(f"  {YELL if color else ''}Warning: artifact "
+                    f"download had failures. Run `atlas model "
+                    f"install-artifacts {m.name}` to retry.{RESET if color else ''}")
+
+
+def _emit_install(args: argparse.Namespace, color: bool) -> int:
+    if getattr(args, "url", None):
+        chosen = _model_from_url(args, color)
+    else:
+        chosen = _model_from_registry(args, color)
+    if chosen is None:
+        return 1
+    m, models_dir = chosen
+    if not m.can_install:
+        _print_no_download_source(m, color)
+        return 1
+
+    # PC-056.1: HF_TOKEN gate for known-gated repos. Refuse early with
+    # a helpful message rather than letting the download path 401.
+    if m.requires_hf_token and not _hf_token():
+        _print_hf_token_needed(m, color)
+        return 1
+
+    target = os.path.join(models_dir, m.model_file)
+
+    if args.dry_run:
+        _print_dry_run(m, target)
+        return 0
+
+    if not _target_ready(args, m, models_dir, target, color):
         return 1
 
     _safe_print(f"  Downloading {m.name} ({m.model_size_gb:.1f} GB)")
     _safe_print(f"    From: {m.download_url}")
     _safe_print(f"    To:   {target}")
-    if _hf_token():
+    if _hf_token_for(m.download_url):
         _safe_print("    Auth: HF_TOKEN present (will send Authorization header)")
     _safe_print()
 
@@ -453,14 +533,7 @@ def _emit_install(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
     # and ASA steering disabled — the doctor flags both as failures and
     # the user has to know to download them by hand. This closes that gap.
     if not args.no_artifacts:
-        artifact_rc = _install_artifacts(m, models_dir, color, args)
-        if artifact_rc != 0:
-            # Non-fatal: gguf is installed, just artifacts failed. Warn
-            # and continue so the user can still run the model (G(x) will
-            # no-op, ASA steering disabled, both surfaced by atlas doctor).
-            _safe_print(f"  {YELL if color else ''}Warning: artifact "
-                        f"download had failures. Run `atlas model "
-                        f"install-artifacts {m.name}` to retry.{RESET if color else ''}")
+        _fetch_artifacts_or_warn(m, models_dir, color, args)
     return 0
 
 
@@ -628,7 +701,7 @@ def _download_artifact(url: str, target_path: str, color: bool,
     failure. Files without a registry hash download with an explicit
     "unverified" note rather than a silent [ok].
     """
-    token = _hf_token()
+    token = _hf_token_for(url)
     req = _build_request(url, range_start=0, token=token)
     fname = os.path.basename(target_path)
     tmp_path = target_path + ".part"
@@ -666,19 +739,6 @@ def _download_artifact(url: str, target_path: str, color: bool,
             with contextlib.suppress(OSError):
                 os.remove(tmp_path)
         return 1
-
-
-def _build_request(url: str, range_start: int = 0,
-                   token: Optional[str] = None) -> urllib.request.Request:
-    """Construct a urllib Request with optional resume + HF auth headers."""
-    headers = {"User-Agent": "atlas-cli/PC-056.1"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    if range_start > 0:
-        # bytes=N- = "from byte N to the end". HF supports this; the
-        # response will be 206 Partial Content with Content-Range.
-        headers["Range"] = f"bytes={range_start}-"
-    return urllib.request.Request(url, headers=headers)
 
 
 # ---------------------------------------------------------------------------
@@ -820,7 +880,7 @@ def _stream_download(m: Model, target: str, color: bool,
     tmp = target + ".part"
     chunk = 1024 * 1024  # 1 MiB
     started = time.monotonic()
-    token = _hf_token()
+    token = _hf_token_for(m.download_url)
 
     # PC-056.2 item A: acquire lock before touching .part.
     lock_path = _acquire_install_lock(tmp, color)
@@ -834,112 +894,51 @@ def _stream_download(m: Model, target: str, color: bool,
         _release_install_lock(lock_path)
 
 
-def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,  # noqa: C901
-                              started: float, token: Optional[str],
-                              color: bool, resume: bool) -> int:
-    """The actual download logic, factored out so the lock-release in
-    `_stream_download`'s `finally` always runs even on early returns
-    here. No new behavior — just a structural split."""
-    # Resume bookkeeping.
-    range_start = 0
-    file_mode = "wb"
-    if resume and os.path.exists(tmp):
-        try:
-            range_start = os.stat(tmp).st_size
-        except OSError:
-            range_start = 0
-        if range_start > 0:
-            # PC-056.2 item B: oversized .part detection. If the existing
-            # .part is wildly larger than the registered model size, it
-            # was created by something other than this CLI (manual
-            # touch / append, mismatched mirror, leftover from a model
-            # that was renamed). Refuse cleanly rather than send a
-            # nonsense Range request that would 416 OR hash garbage.
-            expected_bytes = int(m.model_size_gb * (1024 ** 3))
-            # 5% slack tolerates registry size drift. Anything bigger
-            # than that is unambiguously wrong.
-            if expected_bytes > 0 and range_start > int(expected_bytes * 1.05):
-                _safe_print(f"  {RED if color else ''}Existing .part file "
-                            f"({_human_bytes(range_start)}) is larger than "
-                            f"the expected model size "
-                            f"({m.model_size_gb:.1f} GB).{RESET if color else ''}")
-                _safe_print("  This isn't from a normal interrupted "
-                            "download. Likely causes: manual modification, "
-                            "a previous install of a renamed model, or a "
-                            "mismatched mirror. Recover by deleting it:")
-                _safe_print(f"    rm {tmp}")
-                _safe_print("  Or pass --no-resume to overwrite from byte 0.")
-                return 1
-            file_mode = "ab"
-            _safe_print(f"  Resuming from byte {range_start} "
-                        f"({_human_bytes(range_start)} already on disk)")
-    elif not resume and os.path.exists(tmp):
-        try:
-            os.unlink(tmp)
-        except OSError:
-            # best-effort: swallow on failure (caller continues)
-            pass
-
+def _get_into_part(m: Model, tmp: str, chunk: int, started: float, token: Optional[str],
+                   color: bool, range_start: int, file_mode: str, h):
+    """GET the model and write it to the .part: appended from range_start, or
+    afresh when the server ignores Range. Returns (range_start, bytes_seen, h)
+    after the write; None after printing an unexpected answer to Range."""
     bytes_seen = range_start  # for progress
     last_print = 0.0
-    h = hashlib.sha256()
+    req = _build_request(m.download_url, range_start=range_start, token=token)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        status = resp.getcode()
+        # If we sent Range and got 200, server ignored it — restart.
+        if range_start > 0 and status == 200:
+            _print_range_ignored(color)
+            file_mode = "wb"
+            range_start = 0
+            bytes_seen = 0
+            h = hashlib.sha256()
+        elif range_start > 0 and status != 206:
+            _print_unexpected_range_status(status, color)
+            return None
 
-    # If we're resuming, we need to fold the existing .part contents into
-    # the hash before continuing — otherwise the final hexdigest won't
-    # match because we skipped those bytes.
-    if range_start > 0:
-        try:
-            with open(tmp, "rb") as f:
-                while True:
-                    buf = f.read(chunk)
-                    if not buf:
-                        break
-                    h.update(buf)
-        except OSError as e:
-            _safe_print(f"  {RED if color else ''}Cannot read existing "
-                        f".part for hash continuation: {e}"
-                        f"{RESET if color else ''}")
-            return 1
+        total_n = _total_size(resp, status, range_start)
 
+        with open(tmp, file_mode) as f:
+            while True:
+                buf = resp.read(chunk)
+                if not buf:
+                    break
+                f.write(buf)
+                h.update(buf)
+                bytes_seen += len(buf)
+                now = time.monotonic()
+                if now - last_print > 0.25 or (total_n and bytes_seen >= total_n):
+                    last_print = now
+                    _print_progress(bytes_seen, total_n, started, color)
+    return range_start, bytes_seen, h
+
+
+def _download_part(m: Model, target: str, tmp: str, chunk: int, started: float,
+                   token: Optional[str], color: bool, range_start: int, file_mode: str,
+                   h) -> int:
+    """GET the model into the .part file, then check the .part and move it
+    into place. Returns the install's exit code."""
     try:
-        req = _build_request(m.download_url, range_start=range_start, token=token)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            status = resp.getcode()
-            # If we sent Range and got 200, server ignored it — restart.
-            if range_start > 0 and status == 200:
-                _safe_print(f"  {YELL if color else ''}Server ignored "
-                            f"Range header — restarting from byte 0."
-                            f"{RESET if color else ''}")
-                file_mode = "wb"
-                range_start = 0
-                bytes_seen = 0
-                h = hashlib.sha256()
-            elif range_start > 0 and status != 206:
-                _safe_print(f"  {RED if color else ''}Unexpected response "
-                            f"to Range request: HTTP {status}. Aborting."
-                            f"{RESET if color else ''}")
-                return 1
-
-            # Total size — for resume, Content-Length is the REMAINING
-            # bytes; we want absolute total for progress display.
-            cl = resp.headers.get("Content-Length")
-            if status == 206 and cl:
-                total_n = int(cl) + range_start
-            else:
-                total_n = int(cl) if cl else 0
-
-            with open(tmp, file_mode) as f:
-                while True:
-                    buf = resp.read(chunk)
-                    if not buf:
-                        break
-                    f.write(buf)
-                    h.update(buf)
-                    bytes_seen += len(buf)
-                    now = time.monotonic()
-                    if now - last_print > 0.25 or (total_n and bytes_seen >= total_n):
-                        last_print = now
-                        _print_progress(bytes_seen, total_n, started, color)
+        got = _get_into_part(m, tmp, chunk, started, token, color, range_start, file_mode, h)
     except KeyboardInterrupt:
         _safe_print()
         _safe_print(f"  {YELL if color else ''}Interrupted. .part file "
@@ -956,93 +955,40 @@ def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,  # noqa
             # next attempt starts clean.
             return _finalize_complete_part(m, tmp, target, range_start,
                                             h, e, color)
-        if e.code == 401:
-            if token:
-                _safe_print(f"  {RED if color else ''}HTTP 401 even with "
-                            f"HF_TOKEN — your token may not have access "
-                            f"to this repo.{RESET if color else ''}")
-            else:
-                _safe_print(f"  {RED if color else ''}HTTP 401: this repo "
-                            f"is gated.{RESET if color else ''}")
-                _safe_print("  Set the HF_TOKEN env var to a HuggingFace "
-                            "access token with read access:")
-                _safe_print("    export HF_TOKEN='hf_xxxxxxxxxxxxxxxx'")
-                _safe_print(f"    atlas model install {m.name}")
-                _safe_print("  Get one at "
-                            "https://huggingface.co/settings/tokens")
-        else:
-            _safe_print(f"  {RED if color else ''}Download failed: HTTP "
-                        f"{e.code} {e.reason}{RESET if color else ''}")
+        _print_http_error(e, m, token, color)
         # Don't delete .part on auth/HTTP errors — user may fix env and resume.
         return 1
-    except (urllib.error.URLError, OSError) as e:
+    except OSError as e:
         _safe_print()
         _safe_print(f"  {RED if color else ''}Download failed: {e}"
                     f"{RESET if color else ''}")
         # Network errors: keep .part for retry.
         return 1
-
+    if got is None:
+        return 1
+    range_start, bytes_seen, h = got
     _safe_print()
+    return _finish_part(m, target, tmp, started, range_start, bytes_seen, h, color)
 
-    # Final size sanity check.
-    try:
-        actual = os.stat(tmp).st_size
-    except OSError:
-        actual = 0
-    if actual < 100 * 1024 * 1024:
-        _safe_print(f"  {RED if color else ''}Downloaded file is too small "
-                    f"({_human_bytes(actual)}). Aborting and removing "
-                    f".part.{RESET if color else ''}")
-        try:
-            os.unlink(tmp)
-        except OSError:
-            # best-effort: swallow on failure (caller continues)
-            pass
+
+def _stream_download_locked(m: Model, target: str, tmp: str, chunk: int,
+                              started: float, token: Optional[str],
+                              color: bool, resume: bool) -> int:
+    """The actual download logic, factored out so the lock-release in
+    `_stream_download`'s `finally` always runs even on early returns
+    here. No new behavior — just a structural split."""
+    resumed = _resume_point(m, tmp, color, resume)
+    if resumed is None:
+        return 1
+    range_start, file_mode = resumed
+
+    h = hashlib.sha256()
+
+    if not _fold_part_into_hash(tmp, chunk, range_start, h, color):
         return 1
 
-    # SHA256 verification (PC-056.1).
-    if m.sha256:
-        actual_hash = h.hexdigest()
-        if actual_hash != m.sha256:
-            _safe_print(f"  {RED if color else ''}SHA256 mismatch — "
-                        f"download may be corrupted or upstream has "
-                        f"changed.{RESET if color else ''}")
-            _safe_print(f"    expected: {m.sha256}")
-            _safe_print(f"    actual:   {actual_hash}")
-            _safe_print("  Removing .part file. If this happens repeatedly, "
-                        "the registry may be stale or the upstream URL has "
-                        "been re-uploaded — check for a newer ATLAS release.")
-            try:
-                os.unlink(tmp)
-            except OSError:
-                # best-effort: swallow on failure (caller continues)
-                pass
-            return 1
-        _safe_print(f"  {GREEN if color else ''}SHA256 verified.{RESET if color else ''} "
-                    f"({m.sha256[:16]}…)")
-    else:
-        _safe_print(f"  {YELL if color else ''}Note: registry has no "
-                    f"expected SHA256 for this model — download integrity "
-                    f"NOT verified end-to-end.{RESET if color else ''}")
-
-    # Atomic rename .part -> final.
-    try:
-        os.replace(tmp, target)
-    except OSError as e:
-        _safe_print(f"  {RED if color else ''}Failed to move into place: {e}"
-                    f"{RESET if color else ''}")
-        return 1
-
-    elapsed = time.monotonic() - started
-    # rate = bytes pulled in this invocation / time. For a fully-resumed
-    # download with no new bytes the rate is misleading; just skip the
-    # rate column when bytes_seen - range_start is tiny.
-    new_bytes = max(bytes_seen - range_start, 0)
-    rate = new_bytes / elapsed if elapsed > 0 else 0.0
-    _safe_print(f"  {GREEN if color else ''}Done.{RESET if color else ''} "
-                f"{_human_bytes(actual)} in {elapsed:.0f}s "
-                f"({_human_bytes(rate)}/s of new bytes)")
-    return 0
+    return _download_part(m, target, tmp, chunk, started, token, color, range_start,
+                          file_mode, h)
 
 
 def _finalize_complete_part(m: Model, tmp: str, target: str,
@@ -1263,7 +1209,12 @@ def _emit_remove(args: argparse.Namespace, color: bool) -> int:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[List[str]] = None) -> int:
+# The help text of every --models-dir flag.
+_MODELS_DIR_HELP = "override ATLAS_MODELS_DIR"
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """The `atlas model` parser, with one subparser per subcommand."""
     parser = argparse.ArgumentParser(
         prog="atlas model",
         description="Model registry: list, install, remove, recommend (PC-056)")
@@ -1277,7 +1228,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_list.add_argument("--lens-supported", action="store_true",
         help="show only models with trained Lens artifacts")
     p_list.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
+        help=_MODELS_DIR_HELP)
     p_list.add_argument("--json", action="store_true",
         help="machine output")
     p_list.add_argument("--no-color", action="store_true")
@@ -1310,7 +1261,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="ignore any existing .part file and start the download "
              "from byte 0 (default: resume from .part if present)")
     p_inst.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
+        help=_MODELS_DIR_HELP)
     p_inst.add_argument("--no-artifacts", action="store_true",
         help="skip auto-download of Lens + ASA artifacts after the "
              "gguf lands. Useful for air-gapped installs or when you "
@@ -1329,7 +1280,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              "re-downloading the gguf")
     p_artifacts.add_argument("name", help="model name (see `atlas model list`)")
     p_artifacts.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
+        help=_MODELS_DIR_HELP)
     p_artifacts.add_argument("--force-artifacts", action="store_true",
         help="re-download even when files are already present")
     p_artifacts.add_argument("--no-color", action="store_true")
@@ -1341,7 +1292,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="optional: verify only this model. Default: verify all "
              "installed models.")
     p_ver.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
+        help=_MODELS_DIR_HELP)
     p_ver.add_argument("--json", action="store_true")
     p_ver.add_argument("--no-color", action="store_true")
 
@@ -1349,8 +1300,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_rm.add_argument("name", help="model name (see `atlas model list`)")
     p_rm.add_argument("--yes", action="store_true", help="skip confirmation")
     p_rm.add_argument("--models-dir", default=None,
-        help="override ATLAS_MODELS_DIR")
+        help=_MODELS_DIR_HELP)
     p_rm.add_argument("--no-color", action="store_true")
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = _build_parser()
 
     args = parser.parse_args(argv)
     if args.subcommand is None:

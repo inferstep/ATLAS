@@ -72,6 +72,33 @@ type rawChatRequest struct {
 	ChatTemplateKwargs map[string]bool     `json:"chat_template_kwargs"`
 }
 
+// newRawChatRequest builds the streamed /v1/chat/completions request that
+// sends message to the model, with the proxy's credential on it.
+func newRawChatRequest(ctx context.Context, proxyURL, modelID, message string) (*http.Request, error) {
+	body, err := json.Marshal(rawChatRequest{
+		Model:              modelID,
+		Messages:           []map[string]string{{"role": "user", "content": message}},
+		Temperature:        0.3,
+		MaxTokens:          8192,
+		Stream:             true,
+		StreamOptions:      map[string]bool{"include_usage": true},
+		ChatTemplateKwargs: map[string]bool{"enable_thinking": false},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode raw request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(proxyURL, "/")+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build raw request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	setProxyAuth(req)
+	return req, nil
+}
+
 // sendRawChat makes one direct OpenAI-compatible model request. It never uses
 // /v1/agent, so the raw demo pane has no planner, tool loop, candidate search,
 // filesystem access, or other orchestration layer.
@@ -83,27 +110,10 @@ func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
 	promptTokens := len(message) / 4
 	out <- makeChatEvent("llm_call_start", map[string]int{"prompt_tokens": promptTokens})
 
-	body, err := json.Marshal(rawChatRequest{
-		Model:              modelID,
-		Messages:           []map[string]string{{"role": "user", "content": message}},
-		Temperature:        0.3,
-		MaxTokens:          8192,
-		Stream:             true,
-		StreamOptions:      map[string]bool{"include_usage": true},
-		ChatTemplateKwargs: map[string]bool{"enable_thinking": false},
-	})
+	req, err := newRawChatRequest(ctx, proxyURL, modelID, message)
 	if err != nil {
-		return fmt.Errorf("encode raw request: %w", err)
+		return err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(proxyURL, "/")+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build raw request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	setProxyAuth(req)
 
 	started := time.Now()
 	resp, err := (&http.Client{Transport: &http.Transport{
@@ -121,60 +131,9 @@ func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
 
 	var content strings.Builder
 	var reasoning strings.Builder
-	firstToken := true
-	totalTokens := 0
-	completionTokens := 0
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Usage struct {
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
-			} `json:"usage"`
-		}
-		if json.Unmarshal([]byte(payload), &chunk) != nil {
-			continue
-		}
-		if chunk.Usage.TotalTokens > 0 {
-			totalTokens = chunk.Usage.TotalTokens
-			completionTokens = chunk.Usage.CompletionTokens
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		delta := chunk.Choices[0].Delta
-		if firstToken && (delta.Content != "" || delta.ReasoningContent != "") {
-			firstToken = false
-			out <- makeChatEvent("llm_first_token", map[string]int64{
-				"prompt_ms": time.Since(started).Milliseconds(),
-			})
-		}
-		if delta.ReasoningContent != "" {
-			reasoning.WriteString(delta.ReasoningContent)
-			out <- makeChatEvent("reasoning_token", map[string]string{"text": delta.ReasoningContent})
-		}
-		if delta.Content != "" {
-			content.WriteString(delta.Content)
-			out <- makeChatEvent("llm_token", map[string]string{"text": delta.Content})
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read raw model stream: %w", err)
+	totalTokens, completionTokens, err := relayRawChatStream(resp, started, &content, &reasoning, out)
+	if err != nil {
+		return err
 	}
 	if content.Len() == 0 && reasoning.Len() > 0 {
 		content.WriteString(reasoning.String())
@@ -195,6 +154,82 @@ func sendRawChat(ctx context.Context, proxyURL, modelID, message string,
 		out <- makeChatEvent("text", map[string]string{"content": content.String()})
 	}
 	return nil
+}
+
+// relayRawChatStream reads the model's stream from resp until [DONE]. It sends
+// each reasoning and reply token to out as it arrives and adds it to reasoning
+// or content. It returns the total and completion token counts the server
+// reported, or zeros when it reported none.
+func relayRawChatStream(resp *http.Response, started time.Time, content, reasoning *strings.Builder,
+	out chan<- chatEvent) (int, int, error) {
+	firstToken := true
+	totalTokens := 0
+	completionTokens := 0
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta rawChatDelta `json:"delta"`
+			} `json:"choices"`
+			Usage struct {
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal([]byte(payload), &chunk) != nil {
+			continue
+		}
+		if chunk.Usage.TotalTokens > 0 {
+			totalTokens = chunk.Usage.TotalTokens
+			completionTokens = chunk.Usage.CompletionTokens
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		firstToken = relayRawChatDelta(delta, firstToken, started, content, reasoning, out)
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, 0, fmt.Errorf("read raw model stream: %w", err)
+	}
+	return totalTokens, completionTokens, nil
+}
+
+// rawChatDelta is the new text that one chunk of the model's stream carries.
+type rawChatDelta struct {
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content"`
+}
+
+// relayRawChatDelta sends the reasoning and reply text of one delta to out and
+// adds it to reasoning and content. The first delta with text also sends
+// llm_first_token. It returns firstToken, which is false from that delta on.
+func relayRawChatDelta(delta rawChatDelta, firstToken bool, started time.Time,
+	content, reasoning *strings.Builder, out chan<- chatEvent) bool {
+	if firstToken && (delta.Content != "" || delta.ReasoningContent != "") {
+		firstToken = false
+		out <- makeChatEvent("llm_first_token", map[string]int64{
+			"prompt_ms": time.Since(started).Milliseconds(),
+		})
+	}
+	if delta.ReasoningContent != "" {
+		reasoning.WriteString(delta.ReasoningContent)
+		out <- makeChatEvent("reasoning_token", map[string]string{"text": delta.ReasoningContent})
+	}
+	if delta.Content != "" {
+		content.WriteString(delta.Content)
+		out <- makeChatEvent("llm_token", map[string]string{"text": delta.Content})
+	}
+	return firstToken
 }
 
 func makeChatEvent(eventType string, payload interface{}) chatEvent {

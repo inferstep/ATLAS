@@ -2,7 +2,7 @@
 
 # ATLAS Architecture
 
-System architecture for ATLAS V3.1.6. Two-layer design: an outer agent loop handles tool-call orchestration, and an inner V3 pipeline generates diverse code candidates with build verification and energy-based selection.
+System architecture for ATLAS V3.1.7. Two-layer design: an outer agent loop handles tool-call orchestration, and an inner V3 pipeline generates diverse code candidates with build verification and energy-based selection.
 
 ---
 
@@ -92,7 +92,7 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
 | `agent.go` | The agent loop: turn state, LLM calls, plan generation, stuck-loop breakers |
 | `tools.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
-| `gates.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
+| `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
 | `permissions.go` | Permission gate (`/v1/permission`), trust mode, hard-blocked patterns |
@@ -107,7 +107,7 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `obligation_kinds.go` | Defines the closed obligation types, required evidence strength, and how each obligation is satisfied |
 | `obligations.go` | Chooses whether run obligations come from the caller’s declared contract or ATLAS’s legacy inference, and keeps that decision bound to the request |
 | `command_evidence.go` | What a shell command demonstrates: execution, probe, static check or nothing, and whether the command line reports that part's exit status |
-| `guardrails.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
+| `guardrails*.go` | Per-tool steering guards (shrinkage, missing-command/module steers, doctype strip) |
 | `events.go` | Typed-envelope broker (`/events`) and SSE plumbing |
 | `v3_bridge.go` | SSE client for v3-service `/v3/generate` + `/v3/plan` |
 | `types.go` | Shared types, tiers, turn caps |
@@ -131,6 +131,9 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `exploration_budget.go` | Prompts a run to act or answer after repeated read-only calls, according to what the request requires |
 | `feasibility_decision.go` | Assesses whether available evidence producers could satisfy the task before generation and records the assessment without controlling generation |
 | `fenced_framing.go` | Recognizes complete fenced file payloads, extracts their contents, and supplies framing grammar and retry guidance |
+| `file_kind.go` | Answers what a path holds, and reads only a regular file: a named pipe would hold the open until a writer appeared, so the kind of the open handle is judged before anything is read |
+| `file_kind_unix.go` | The non-blocking open flag, so a pipe named the way a reader looks opens at once instead of waiting for a writer |
+| `file_kind_other.go` | The same flag where it has no equivalent, leaving the kind check to decide on its own |
 | `old_str_watch.go` | Stops runaway edit text while it streams when it can no longer match the target file, and supplies recovery guidance |
 | `repair.go` | Tracks syntax repairs left open by session writes, blocks premature completion, and reports unresolved repairs at handoff |
 | `reply_lead_ins.go` | Normalizes introductory phrases so completion checks can recognize replies that merely announce future work |
@@ -145,6 +148,14 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | `verification_evidence.go` | Produces evidence from client-declared command observations and tracks which individual verification obligations they satisfy |
 | `verification_requirements.go` | Validates typed client verification requirements and limits evidence strength according to the declared check and the origin of its test assets |
 | `workspace_observation.go` | Observes file changes made by foreground and background commands and records deliverables and deletions in the session ledger |
+| `confined_dir.go` | Reads one folder through `os.Root`: a name that resolves to something outside the folder is an error, never a read, and a name that holds something other than a regular file is skipped like one that is absent |
+| `json_escape.go` | Decodes a JSON escape in model text, a UTF-16 surrogate pair as one character; `\b` and `\f` stay letters, so no backspace or form feed reaches a terminal |
+| `plan_context.go` | Adds the files a run has read to a revised plan's context, in sorted order of their paths, up to a limit |
+| `sandbox_subdir.go` | Allows a `sandbox_subdir` of ASCII letters, digits, dot, underscore and dash, at most 64 characters, and never `.` or `..` |
+| `server_start.go` | Tells a verification command that failed because it is a long-running server (it hit the time limit, or its port was taken) from one that failed because the code is broken |
+| `service_answer.go` | Reads an answer from a service of the stack (llama-server, the V3 service, the lens, the sandbox) up to 64 MiB, so a service that sends without end cannot fill the proxy's memory |
+| `shell_wrapper.go` | The command policy behind `validateShellCommand`: splits compound commands, looks inside execution wrappers (`sh -c`, `eval`, …) up to 16 layers deep, and refuses catastrophic commands and wrappers it cannot check |
+| `sorted_keys.go` | Gives a map's keys in sorted order, so a text for the model names the same keys on every run |
 
 ### Agent Loop Flow
 
@@ -219,7 +230,7 @@ Three checks keep a broken file from landing as a clean write. Each names the re
 | `replace_lines` | Replace a line range (`start_line`..`end_line`, as `read_file` prints them) with new content. For CHANGING code without reproducing it: the anchor is two asserted lines (first and last of the range, whitespace-insensitive) rather than the whole span, so the verbatim burden is 2 lines instead of N. Capped at 60 lines per call — a whole JavaScript function inside a template is the unit of work, and it does not fit in less | No |
 | `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
 | `delete_file` | Delete file or empty directory (forces loop exit after) | No |
-| `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. The supported path for "reorganize the files" since shell `mv`/`cp` are refused | No |
+| `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. One call for "reorganize the files"; shell `mv`/`cp` through `run_command` also work | No |
 | `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
 | `search_files` | Regex search across file contents (max 200 matches, skips .git/node_modules) | Yes |
 | `list_directory` | List directory contents with type and size | Yes |
@@ -531,8 +542,10 @@ new version with a closed field set and a reader for it — never a redefinition
 version, and never a parser that shrugs at unknown fields.
 
 Clients: the TUI sends `work` for an ordinary message and `question` for a one-shot `/ask <message>`;
-the e2e and reliability harnesses send `work`. The VS Code extension sends no contract yet, so its
-requests get no V3 candidate ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)). `expected_outputs` and `verification` are carried and
+the VS Code extension and the JetBrains plugin send the Work/Question mode the user selected, `work`
+by default; the e2e and reliability harnesses send `work`. Every owned client declares, so a request
+with no contract is a stranger's and gets no V3 candidate
+([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)). `expected_outputs` and `verification` are carried and
 validated but **not yet migrated** — deliverable and verification obligations are still derived the
 old way.
 
@@ -550,9 +563,7 @@ Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in th
 
 The exact config-file list and extension sets live in `proxy/tools.go:classifyFileTier`.
 
-Every content-edit tool enters the pipeline through `runEditPipeline` (`proxy/tools.go`) — `edit_file`, `insert_after`, `replace_lines`, and `structural_edit` and `write_file` via their own V3 paths. Tier classification uses `max(oldTier, newTier)` so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. A tool that skips this produces one greedy sample with no candidates and no lens scoring regardless of tier, which is what the tier system exists to prevent; `tests/contracts/test_write_gate_coverage.py` asserts every write path reaches it.
-
-Every content-edit tool enters the pipeline through `runEditPipeline` (`proxy/tools.go`) — `edit_file`, `insert_after` and `replace_lines` directly, `structural_edit` and `write_file` via their own V3 paths. Tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. A tool that skips this produces one greedy sample with no candidate generation and no lens scoring regardless of tier, which is the thing the tier system exists to prevent; `tests/contracts/test_write_gate_coverage.py` asserts every write path reaches it.
+`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`proxy/tools.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
 
 **T2 (V3 pipeline)** — file qualifies if it's ≥10 lines AND either:
 - `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `proxy/tools.go:hasLogicIndicators`)
@@ -568,7 +579,7 @@ See [PLAN_MODE.md](PLAN_MODE.md) for the full flow, components, tunables, skip c
 
 ### Safety Limits
 
-Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; it runs on every request; no request field turns it off) lives in `proxy/gates.go`. The embedded-script gate lives there too: it parses the JavaScript (and brace-balances the CSS) inside `<script>`/`<style>` blocks — in `.html`/`.htm`/`.jinja`/`.jinja2` files **and inside Python string literals**, the `render_template_string` shape — through v3-service `POST /internal/embedded_script_check`, and refuses a change that newly breaks it. It exists because every other gate is structurally blind to that code: the 2026-08-01 dogfooding session left a stray `)` in a Flask app's inline `<script>`, and the Python compiled, the server started and `curl /` returned 200, so the verification gate passed and `done` was accepted while the page was dead in the browser. Same healthy→broken rule as the syntax gate (a still-broken repair-in-progress is allowed) and the same fail-soft posture: an unreachable service, a missing grammar or an ambiguous block (template statement tags, `<script src>`, a non-JS `type`, an escaped Python string) yields no finding, never a blocked write. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
+Operator-facing limits and the knobs that tune them. Internal steering guards (traceback localization, missing-module/missing-command/broken-inline-script/case-mismatch steers, symbol grounding, no-op/empty-content/syntax gates, doctype strip) live in `proxy/guardrails*.go` and `proxy/agent.go`; the structural gate (refuses a `.py` write that introduces an unresolved direct call — a would-be `NameError` — on `edit_file`, `structural_edit`, and every `write_file` branch; it runs on every request; no request field turns it off) lives in `proxy/gates.go`. The embedded-script gate lives there too: it parses the JavaScript (and brace-balances the CSS) inside `<script>`/`<style>` blocks — in `.html`/`.htm`/`.jinja`/`.jinja2` files **and inside Python string literals**, the `render_template_string` shape — through v3-service `POST /internal/embedded_script_check`, and refuses a change that newly breaks it. It exists because every other gate is structurally blind to that code: the 2026-08-01 dogfooding session left a stray `)` in a Flask app's inline `<script>`, and the Python compiled, the server started and `curl /` returned 200, so the verification gate passed and `done` was accepted while the page was dead in the browser. Same healthy→broken rule as the syntax gate (a still-broken repair-in-progress is allowed) and the same fail-soft posture: an unreachable service, a missing grammar or an ambiguous block (template statement tags, `<script src>`, a non-JS `type`, an escaped Python string) yields no finding, never a blocked write. The missing-command steer fires on `command not found` shell errors: the sandbox is non-root on a read-only base, so absent binaries can never be apt-installed at runtime — the steer says so and points at pip-installable equivalents or the preinstalled toolchains instead of letting the model re-run into the repetition breaker. The broken-inline-script steer fires when a `python -c` verification one-liner fails with a SyntaxError in the `-c` argument itself (a multi-statement `def`/`for` body jammed onto one line): the solution file may be correct while only the verify command is malformed, so it directs the model to move the test into a `.py` file rather than re-run the unparseable one-liner.
 
 **Fast-path writes during active iteration.** V3 fires on the *first* write of a T2+ file (baseline generation). But once the model has written a file and just saw it fail a run, the next write is a targeted fix in an edit-test-fix loop — it skips V3 (still syntax- and structural-gated) and writes directly. V3's full pipeline is multi-minute per call and, on a file mid-debug, frequently completes without a usable result and falls back anyway; paying that latency per iteration throttles the loop to a handful of cycles. The fast-path keys off `SessionWrites[path]` plus a failed most-recent run referencing the file.
 
@@ -581,10 +592,10 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | V3 interactive wall-clock cap | Single V3 pipeline call capped at `ATLAS_V3_TIMEOUT` (default 300s); on timeout the proxy falls back to the model's syntax- and structural-gated content, and the run's final summary names the file (`0` disables) | Keep an interactive session responsive under a long repair stall |
 | Per-turn reasoning budget | Cut the stream after ~6144 reasoning tokens (`ATLAS_REASONING_BUDGET`, 0 disables); recovery extracts an embedded tool_call or re-prompts | Bound reasoning spirals |
 | write_file for existing files | Reject if file > 5 lines; on .py/.html/.htm the per-step grammar gate steers to `structural_edit` | Force surgical (`edit_file`) or whole-node (`structural_edit`) edits |
-| Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
+| Suspicious-shrinkage guard | Reject `structural_edit`/`edit_file` when `oldSize >= 100B` and `newSize < 64B` (`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`) | Catch destructive stub rewrites before they hit disk |
 | structural_edit runaway-content guard | Reject when `content` > 8 KB AND > 4× the file size | Catch reasoning-leak blobs emitted as the replacement node |
 | structural_edit node-size precondition | Reject a replacement ≥5× the node and ≥30 lines larger, when it either duplicates content already in the file or the file holds a ≥20-line module-level string constant (`v3-service` `_replacement_dwarfs_node`) | A blob spliced through a small selector deletes whatever the node held; an observed session left a Flask app with no `@app.route` at all, still parsing |
-| Duplicate-entrypoint guard | Reject a `.py` write that leaves more than one top-level `if __name__ == "__main__":` when it had at most one before (`proxy/gates.go::duplicateMainGuard`) | The signature of a whole-file blob spliced through a node selector; it parses and runs, with everything after the first blocking `app.run()` dead |
+| Duplicate-entrypoint guard | Reject a `.py` write that leaves more than one top-level `if __name__ == "__main__":` when it had at most one before (`proxy/gates_edit_requests.go::duplicateMainGuard`) | The signature of a whole-file blob spliced through a node selector; it parses and runs, with everything after the first blocking `app.run()` dead |
 | Duplicate-lexical-binding guard | Reject an edit that leaves `let`/`const` declaring the same name twice in one scope (`v3-service` `embedded_script_check`) | An early SyntaxError: the browser refuses the whole script, so every handler on the page dies while the server still returns 200. tree-sitter parses it, so the syntax check cannot see it |
 | Stopped-render-loop guard | Reject an edit that leaves a function a repeating timer used to drive scheduled exactly once and never re-armed (`v3-service` `embedded_script_check` with the pre-edit file; `proxy/gates.go::embeddedScriptGate`) | The JavaScript parses, the server starts and the page returns 200, so every other check passes while the page freezes after one frame |
 | V3 out-of-scope-rewrite guard | Discard a V3 candidate that drops a line the caller's edit had left alone, keeping the caller's content (`proxy/gates.go::v3RewroteBeyondTheEdit`) | V3 improves a whole *file*, so on a small file it retypes everything the edit never touched; a live session came back with `#e94562` as `#e94162` and `id="msg"` as `id=" msg"`, neither of which is a syntax error |
@@ -846,9 +857,7 @@ between two different models.
 
 > **Note:** Model weights (.pt, .pkl files) are not committed to the repository — they are built during training and baked into the container image or mounted at runtime. When model files are absent, its scoring endpoints answer `enabled: false` (with placeholder numbers: C(x) 0.0, G(x) `gx_score: 0.5`, `verdict: "unavailable"`). The proxy and V3 treat that answer as a lens that cannot score, and ATLAS refuses requests until the files exist ([ADR 0011](adr/0011-the-lens-is-required.md)). A score the Lens attempted and could not compute is answered `scored: false` with a typed `failure` and no number: a failure of the lens or its model server stops the run, and an input the lens declines (too long, empty, non-finite) is reported unscored. Training data and weights are available on [HuggingFace](https://huggingface.co/datasets/itigges22/ATLAS).
 
-<a id="rag--pageindex-v2"></a><a id="confidence-router--pattern-cache"></a>
-
-> **Removed subsystems.** Earlier releases shipped a RAG/PageIndex project indexer, a BM25 pattern matcher, and a Thompson-Sampling confidence router inside the lens. They were reachable only through lens endpoints nothing in the product called, and were removed in the 2026-08 simplification campaign (see CHANGELOG). The pattern cache, the last of that stack, was removed in 2026-09: it stored the solution of every successful session, evaluation runs included, and injected "lessons" into every later run, which made it a channel from the test set into the product.
+> **Nothing is kept between runs.** The lens keeps nothing of the code it scores: it holds no project index and no store of past sessions, so nothing from one run reaches a later one through it. It serves the health and readiness checks and three `/internal/lens/*` scoring calls (`geometric-lens/main.py`).
 
 ---
 
@@ -860,7 +869,7 @@ Isolated code execution with compilation, testing, and linting.
 graph LR
     subgraph executors["Language Executors"]
         Py["Python\npylint (0-10) + pytest"]
-        JS["JavaScript\nNode.js 20"]
+        JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
         Go["Go 1.22\ngo build + run"]
         Java["Java 21\njavac + java -cp"]

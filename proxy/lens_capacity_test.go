@@ -103,22 +103,27 @@ func TestBuildDimensionsCapacityBelowTheGenerationCeilingIsPartial(t *testing.T)
 	}
 }
 
-func TestBuildDimensionsCapacityCoveringTheCeilingStaysSupported(t *testing.T) {
-	t.Setenv("ATLAS_MAX_TOKENS", "4096")
-	lens := supportedLens()
-	lens.EmbedCapacityTokens = 4096
+// Scoring stays supported when no write can exceed the capacity, or when the
+// capacity is unknown.
+func TestBuildDimensionsCapacityThatCannotCutAWriteStaysSupported(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		maxTokens string
+		capacity  int
+	}{
+		{"capacity covers the ceiling", "4096", 4096},
+		{"capacity unknown", "8192", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ATLAS_MAX_TOKENS", tc.maxTokens)
+			lens := supportedLens()
+			lens.EmbedCapacityTokens = tc.capacity
 
-	d := dimByName(buildDimensions(lens, ASAStatus{Verdict: "supported"}), "lens_scoring")
-	if d.Status != "supported" {
-		t.Fatalf("lens_scoring = %q, want supported (%s)", d.Status, d.Detail)
-	}
-}
-
-func TestBuildDimensionsUnknownCapacityStaysSupported(t *testing.T) {
-	t.Setenv("ATLAS_MAX_TOKENS", "8192")
-	d := dimByName(buildDimensions(supportedLens(), ASAStatus{Verdict: "supported"}), "lens_scoring")
-	if d.Status != "supported" {
-		t.Fatalf("lens_scoring = %q, want supported when capacity is unknown", d.Status)
+			d := dimByName(buildDimensions(lens, ASAStatus{Verdict: "supported"}), "lens_scoring")
+			if d.Status != "supported" {
+				t.Fatalf("lens_scoring = %q, want supported (%s)", d.Status, d.Detail)
+			}
+		})
 	}
 }
 
@@ -140,16 +145,18 @@ func TestBuildDimensionsCapacityDoesNotTouchIntervention(t *testing.T) {
 // encoding/json rejects the token, so the answer never becomes a score.
 func TestScoreContentForAgentRejectsANonFiniteScore(t *testing.T) {
 	for _, token := range []string{"NaN", "Infinity", "-Infinity"} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"enabled":true,"scored":true,"gx_available":true,"n_tokens":3,` +
-				`"aggregate":{"gx_score_min":` + token + `,"gx_score_mean":0.5},` +
-				`"thresholds":{"off_rails":0.3,"low":0.4,"severe":0.2}}`))
-		}))
-		score, scored, _ := scoreContentForAgent(context.Background(), srv.URL, "content")
-		srv.Close()
-		if scored {
-			t.Fatalf("%s was accepted as a score: %+v", token, score)
-		}
+		t.Run(token, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"enabled":true,"scored":true,"gx_available":true,"n_tokens":3,` +
+					`"aggregate":{"gx_score_min":` + token + `,"gx_score_mean":0.5},` +
+					`"thresholds":{"off_rails":0.3,"low":0.4,"severe":0.2}}`))
+			}))
+			defer srv.Close()
+
+			if score, scored, _ := scoreContentForAgent(context.Background(), srv.URL, "content"); scored {
+				t.Fatalf("%s was accepted as a score: %+v", token, score)
+			}
+		})
 	}
 }

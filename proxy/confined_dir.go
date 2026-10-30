@@ -42,12 +42,15 @@ func (c confinedDir) Stat(rel string) (os.FileInfo, error) {
 	return c.root.Stat(rel)
 }
 
-// ReadFile returns the content of rel, a path relative to the folder.
+// ReadFile returns the content of rel, a path relative to the folder. Only a
+// regular file is read, for the reason file_kind.go gives: a name that holds a
+// named pipe would hold the open until a writer appeared, and this folder's
+// own rule is that a name it cannot read is skipped like one that is absent.
 func (c confinedDir) ReadFile(rel string) ([]byte, error) {
 	if c.root == nil {
 		return nil, errConfinedDirClosed
 	}
-	file, err := c.root.Open(rel)
+	file, err := regularFileHandle(c.root.OpenFile(rel, os.O_RDONLY|openNonBlock, 0))
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +113,11 @@ func (c confinedDir) Remove(rel string) error {
 }
 
 // readCapped returns the text of rel, cut to maxBytes. It reports false for
-// a folder, for a file over four times maxBytes, and for anything that
-// cannot be read.
+// a folder, for anything else that is not a regular file, for a file over four
+// times maxBytes, and for anything that cannot be read.
 func (c confinedDir) readCapped(rel string, maxBytes int) (string, bool) {
 	info, err := c.Stat(rel)
-	if err != nil || info.IsDir() || info.Size() > int64(maxBytes)*4 {
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes)*4 {
 		return "", false
 	}
 	data, err := c.ReadFile(rel)

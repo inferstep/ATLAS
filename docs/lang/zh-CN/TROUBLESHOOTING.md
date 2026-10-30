@@ -1,4 +1,4 @@
-<!-- source: docs/TROUBLESHOOTING.md synced-through: 942b533ee0c7a27d4b6b3e69d6bfe8f3d609991f -->
+<!-- source: docs/TROUBLESHOOTING.md synced-through: 175f5a2e58eff2ed27b1fcb332122503a772ab43 -->
 > **[English](../../TROUBLESHOOTING.md)** | **简体中文** | **[日本語](../ja/TROUBLESHOOTING.md)** | **[한국어](../ko/TROUBLESHOOTING.md)**
 
 > ℹ️ **译者注：** 若本译文与英文原版 ([TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)) 有出入，以英文原版为准。
@@ -151,7 +151,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo systemctl restart docker
    ```
 
-2. **RHEL 9 —— 添加 CUDA 仓库 + 安装 open-dkms 模块**（已在 RHEL 9.7 + RTX 5060 Ti 上验证可用）：
+2. **RHEL 9 —— 添加 CUDA 仓库 + 安装 open-dkms 模块**：
    ```bash
    # Add NVIDIA's CUDA repo
    sudo dnf config-manager --add-repo \
@@ -296,8 +296,6 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 
 **重要：不要为 gfx1200/gfx1201 设置 `ATLAS_HSA_OVERRIDE_GFX_VERSION`。** ROCm 7.0+ 原生支持这些目标；在 Docker 内覆盖 GFX 版本会导致编译出的内核与运行时目标不匹配，从而崩溃。保持 `ATLAS_HSA_OVERRIDE_GFX_VERSION` 未设置（默认）。
 
-> 已在 AMD Radeon AI PRO R9700 (gfx1201) + ROCm 7.2、`ATLAS_ROCM_TAG=7.2.3-complete` 上测试。hidden-states 补丁可以干净地应用到固定的 llama.cpp SHA 上。文本生成和嵌入生成的推理均正常，无需任何额外标志。
-
 ### ROCm 容器无法拉取 `rocm/rocm-terminal`
 
 **现象：** `atlas doctor` 的 ROCm 检查在镜像拉取处超时，或 `docker compose -f ... -f docker-compose.rocm.yml pull` 在 `llama-server` 构建上失败。
@@ -436,10 +434,11 @@ chcon -Rt svirt_sandbox_file_t ~/models/
 
 **现象：** 代理健康检查显示 `"sandbox": false`。V3 构建验证失败。
 
-**解决方法：** 确保所有服务在同一个 Docker 网络上。Docker Compose 会自动创建 `atlas` 网络。如果手动运行容器：
+**解决方法：** Sandbox 通过 `sandbox-net` 而不是 `atlas` 访问 —— 它是有意设计为唯一不在 `atlas` 网络上的服务，使执行的代码无法访问栈的其余部分。代理、Lens 和 v3-service 同时接入两个网络。如果手动运行容器：
 ```bash
-docker network create atlas
-# Start all containers with --network atlas
+docker network create sandbox-net
+# sandbox joins ONLY sandbox-net; proxy / lens / v3-service join it too,
+# in addition to the atlas network.
 ```
 
 ### 端口冲突
@@ -494,7 +493,7 @@ curl -s localhost:8080/health                  # {"status":"ok"}
 
 ### 模型在 CPU 而非 GPU 上加载
 
-**现象：** 生成速度约 2 tok/s 而非约 50 tok/s。`nvidia-smi` 未显示 llama-server 使用 GPU。
+**现象：** 生成速度约 2 tok/s。`nvidia-smi` 未显示 llama-server 使用 GPU。
 
 **解决方法：** 确保设置了 `-ngl 99`（`--n-gpu-layers`，将所有层卸载到 GPU）。Docker Compose 中由入口点默认设置。裸机部署时，请检查启动命令：
 ```bash
@@ -769,7 +768,7 @@ except curses.error:
 
 ### 请求被拒：Lens 无法打分
 
-**现象：** 请求立刻以 HTTP 503 `dependency_down` 失败："ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." 或运行以 `lens_unavailable` 停止："Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。代理 `/ready` 显示 `"lens_ready": false` 及 `lens_reason`；`atlas doctor` 的 `status_dimensions` 以 `direct_agent: blocked` 失败。
+**现象：** 请求立刻以 HTTP 503 `dependency_unavailable` 失败："ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." 或运行以 `lens_unavailable` 停止："Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)"。代理 `/ready` 显示 `"lens_ready": false` 及 `lens_reason`；`atlas doctor` 的 `status_dimensions` 以 `direct_agent: blocked` 失败。
 
 **影响：** 在 lens 能打分之前，任何请求都不会运行。这是有意为之：lens 是必需的（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。已停止的运行会说明它在停止前是否改过文件。
 
@@ -918,7 +917,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 2. `-ngl 99`（`--n-gpu-layers`）—— 所有层是否已卸载到 GPU？
 3. NVIDIA Container Toolkit —— 容器运行时是否已配置 GPU 访问？
 
-**预期性能：** 目前没有参考数值；吞吐量取决于模型、量化方式和语法模式。此前约 51 tok/s 的数字来自一个已不存在的配置。
+**预期性能：** 吞吐量取决于模型、量化方式和语法模式。
 
 ### V3 Pipeline 需要几分钟
 

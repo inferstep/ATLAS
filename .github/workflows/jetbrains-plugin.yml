@@ -40,7 +40,7 @@ jobs:
       # The toolchain pins Java 21, so the runner's JDK must be 21 too;
       # IntelliJ Platform Gradle Plugin resolves the IDE against the JDK
       # that runs the build, not against the toolchain.
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
         with:
           distribution: temurin
           java-version: '21'
@@ -49,5 +49,76 @@ jobs:
       # verifyPluginProjectConfiguration checks the sinceBuild/untilBuild
       # pair and the Kotlin API level against the target platform, so it
       # runs before the build rather than after a bad plugin is packaged.
+      #
+      # Dependency locking is on for the configurations this command
+      # resolves (build.gradle.kts), so this step fails when
+      # gradle.lockfile is behind what the build asks for. Measured: with
+      # one locked module's line removed from the lock file, this command
+      # fails with "Resolved 'x' which is not part of the dependency lock
+      # state".
       - name: gate
         run: ./gradlew --no-daemon ktlintCheck test verifyPluginProjectConfiguration buildPlugin
+
+      # The lock file is held against the one command that renews it, so a
+      # lock file that the build would write differently -- a hand-edited
+      # one, or one written by a build that resolved another set of
+      # configurations -- lands here rather than on a maintainer's machine.
+      - name: lock
+        run: |
+          ./gradlew --no-daemon --write-locks ktlintCheck test verifyPluginProjectConfiguration buildPlugin
+          git diff --exit-code -- gradle.lockfile
+
+      # The ZIP is what a user installs, so the release check reads it rather
+      # than the build directory: one main jar, the declared id and version,
+      # the two plugin icons the IDE reads by name from META-INF, the
+      # transport jars present, and no coroutine/stdlib copy, test class or
+      # checkout secret inside.
+      - name: distribution contents
+        run: bash scripts/check-distribution.sh
+
+      - name: upload plugin distribution
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: jetbrains-plugin
+          path: extensions/jetbrains/build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # Plugin Verifier answers the question a sandbox run cannot: does every
+  # class and API the plugin uses exist in this product's binary surface? One
+  # product per job keeps each runner to two IDE downloads (the 2026.1 line it
+  # compiles against and the current 2026.2 line), which fits a standard
+  # runner's disk. The local release check runs all four products at once.
+  verify-plugin:
+    name: verifier (${{ matrix.product }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [idea, pycharm, webstorm, goland]
+    defaults:
+      run:
+        working-directory: extensions/jetbrains
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad  # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: verify ${{ matrix.product }}
+        run: ./gradlew --no-daemon verifyPlugin -PatlasVerifyProducts=${{ matrix.product }}
+
+      - name: upload verifier report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: plugin-verifier-${{ matrix.product }}
+          path: extensions/jetbrains/build/reports/pluginVerifier/**
+          if-no-files-found: warn
+          retention-days: 14

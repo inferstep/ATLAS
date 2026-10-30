@@ -10,8 +10,8 @@ import (
 )
 
 // The safety rules follow what a tool does, not its name. Keyed on names,
-// run_background ran any command without the deny-list or a prompt,
-// search_files read credential files and followed symlinks out of the
+// run_background would run any command without the deny-list or a prompt,
+// search_files would read credential files and follow symlinks out of the
 // workspace, and a credential file could be moved to a readable name.
 
 func commandArgs(cmd string) json.RawMessage {
@@ -65,29 +65,39 @@ func inputFields(tool *ToolDef) map[string]bool {
 }
 
 // Every tool in the registry is under the policy its effect calls for, so a
-// new tool cannot fall outside it by having a new name.
-func TestEveryToolIsUnderThePolicyForWhatItDoes(t *testing.T) {
+// new tool cannot fall outside it by having a new name. A tool that runs
+// commands asks in default mode, and one that takes a command refuses what the
+// policy refuses.
+func TestEveryCommandToolIsUnderTheCommandPolicy(t *testing.T) {
 	ask := &AgentContext{PermissionMode: PermissionDefault}
 	for _, tool := range allTools() {
-		fields := inputFields(tool)
-		switch {
-		case tool.Effect == ToolEffectCommandUnobserved:
-			if !needsPermission(ask, tool.Name, json.RawMessage(`{}`)) {
-				t.Errorf("%s runs commands without asking in default mode", tool.Name)
+		if tool.Effect != ToolEffectCommandUnobserved {
+			continue
+		}
+		if !needsPermission(ask, tool.Name, json.RawMessage(`{}`)) {
+			t.Errorf("%s runs commands without asking in default mode", tool.Name)
+		}
+		if inputFields(tool)["command"] {
+			if deny, _ := shouldDenyToolCall(tool.Name, commandArgs("env rm -rf /")); !deny {
+				t.Errorf("%s runs a command the policy refuses", tool.Name)
 			}
-			if fields["command"] {
-				if deny, _ := shouldDenyToolCall(tool.Name, commandArgs("env rm -rf /")); !deny {
-					t.Errorf("%s runs a command the policy refuses", tool.Name)
-				}
-			}
-		case tool.Effect == ToolEffectDirectMutation && tool.Name != "delete_file" && fields["path"]:
+		}
+	}
+}
+
+// A tool that writes to a path refuses a credential file. delete_file is
+// decided per object instead, and it always asks.
+func TestEveryPathMutatorIsUnderTheWritePolicy(t *testing.T) {
+	for _, tool := range allTools() {
+		if tool.Effect == ToolEffectDirectMutation && tool.Name != "delete_file" && inputFields(tool)["path"] {
 			if deny, _ := shouldDenyToolCall(tool.Name, json.RawMessage(`{"path":"config/.env"}`)); !deny {
 				t.Errorf("%s writes .env", tool.Name)
 			}
 		}
 	}
+	ask := &AgentContext{PermissionMode: PermissionDefault}
 	if !needsPermission(ask, "delete_file", json.RawMessage(`{}`)) {
-		t.Error("delete_file stopped asking")
+		t.Error("delete_file does not ask")
 	}
 }
 
@@ -162,7 +172,7 @@ func TestACredentialFileCannotBeMovedToAReadableName(t *testing.T) {
 }
 
 // Approval is the only per-command control, so the prompt shows the whole
-// command. Cut at 100 bytes, the tail of a chain was never seen.
+// command. Cut short, it would hide the tail of a chain.
 func TestApprovalShowsTheWholeCommand(t *testing.T) {
 	long := "cd tests && python3 -m pytest -q test_api.py test_models.py test_views.py 2>&1 | tail -n 40 && cd .. && rm -rf src/legacy data/ && git checkout -- ."
 	for _, tool := range []string{"run_command", "run_background"} {

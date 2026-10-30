@@ -31,25 +31,20 @@ describe('summarizeToolResult', () => {
 		expect(s.split('\n')).toHaveLength(1);
 	});
 
-	it('says so when a directory is empty rather than rendering nothing', () => {
-		expect(summarizeToolResult('list_directory', payload({ entries: [] }))).toBe('empty directory');
-	});
-
-	it('counts search matches', () => {
-		expect(summarizeToolResult('search_files', payload({ matches: [1, 2, 3] }))).toBe('3 matches');
-		expect(summarizeToolResult('search_files', payload({ matches: [1] }))).toBe('1 match');
-		expect(summarizeToolResult('search_files', payload({ matches: [] }))).toBe('no matches');
-	});
-
-	it('falls back to the generic keys the TUI already uses', () => {
-		expect(summarizeToolResult('run_command', payload({ stdout: 'ok' }))).toBe('ok');
-		expect(summarizeToolResult('read_file', payload({ content: 'a\nb\nc' }))).toBe('3 lines');
-	});
-
-	it('returns undefined for a shape it does not know', () => {
+	it.each([
+		// Says so rather than rendering nothing.
+		['an empty directory', 'empty directory', 'list_directory', payload({ entries: [] })],
+		['three search matches', '3 matches', 'search_files', payload({ matches: [1, 2, 3] })],
+		['one search match', '1 match', 'search_files', payload({ matches: [1] })],
+		['no search matches', 'no matches', 'search_files', payload({ matches: [] })],
+		// The generic keys the TUI already uses.
+		['command output', 'ok', 'run_command', payload({ stdout: 'ok' })],
+		['file content', '3 lines', 'read_file', payload({ content: 'a\nb\nc' })],
 		// Degrades to the old chip rather than inventing a summary.
-		expect(summarizeToolResult('future_tool', payload({ weird: true }))).toBeUndefined();
-		expect(summarizeToolResult('x', undefined)).toBeUndefined();
-		expect(summarizeToolResult('x', payload({ stdout: '   ' }))).toBeUndefined();
+		['a shape it does not know', undefined, 'future_tool', payload({ weird: true })],
+		['no payload', undefined, 'x', undefined],
+		['blank output', undefined, 'x', payload({ stdout: '   ' })],
+	])('summarizes %s as %j', (_case, summary, tool, result) => {
+		expect(summarizeToolResult(tool, result)).toBe(summary);
 	});
 });

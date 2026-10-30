@@ -15,6 +15,8 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 
 /**
@@ -90,6 +92,26 @@ enum class PermissionMode {
 
     @SerialName("yolo")
     YOLO,
+    ;
+
+    /** The wire name, which is also what a settings file stores. */
+    fun wireName(): String =
+        when (this) {
+            DEFAULT -> "default"
+            ACCEPT_EDITS -> "accept-edits"
+            YOLO -> "yolo"
+        }
+
+    companion object {
+        /** Parse a stored wire name. An absent or unknown one means `default`,
+         * the mode the proxy uses when no mode is sent. */
+        fun fromWire(raw: String?): PermissionMode =
+            when (raw?.trim()) {
+                "accept-edits" -> ACCEPT_EDITS
+                "yolo" -> YOLO
+                else -> DEFAULT
+            }
+    }
 }
 
 /** One prior-turn message replayed to the proxy on each `/v1/agent` call.
@@ -101,11 +123,59 @@ data class HistoryMessage(
 )
 
 /**
+ * The content of a replayed assistant history entry.
+ *
+ * An assistant turn is re-wrapped in the `{"type":"text","content":…}`
+ * envelope rather than replayed as bare prose (tui/chat.go). The proxy keeps
+ * one history format for both clients, so this is the client's half of that
+ * convention, and the one place it is written.
+ */
+fun assistantHistoryContent(text: String): String =
+    AtlasJson.encodeToString(
+        JsonObject.serializer(),
+        buildJsonObject {
+            put("type", JsonPrimitive("text"))
+            put("content", JsonPrimitive(text))
+        },
+    )
+
+/** `task_mode` on the task contract, and the only part every owned client
+ * declares. Nothing reads the user's message: the same sentence is `work` or
+ * `question` depending only on which control the user operated. */
+@Serializable
+enum class TaskMode {
+    @SerialName("work")
+    WORK,
+
+    @SerialName("question")
+    QUESTION,
+}
+
+/**
+ * The structured declaration sent with a request (`task_contract`).
+ *
+ * `task_mode` is what the client knows and the proxy would otherwise have to
+ * infer from English: `work` means the workspace should change, `question`
+ * means nothing should. It is not a preference — a `question` that declares
+ * obligations is refused with 400, and the proxy's done-without-action gate
+ * keys off it.
+ *
+ * The obligation lists stay null from this client. A person typing into a chat
+ * box has told the plugin nothing structured about which files must exist or
+ * which command must run, and deriving them from prose is the thing the
+ * contract exists to replace (tui/chat.go says the same of the TUI). A caller
+ * that genuinely knows can fill them in.
+ */
+@Serializable
+data class TaskContract(
+    @SerialName("task_mode") val taskMode: TaskMode,
+    @SerialName("expected_outputs") val expectedOutputs: List<String>? = null,
+    val verification: List<String>? = null,
+)
+
+/**
  * POST /v1/agent request body. Field names match the anonymous struct in
  * proxy/agent.go's handleAgent (see tui/chat.go's agentRequest).
- *
- * `task_contract` is intentionally absent: it is stage 3 material, and the
- * reference VS Code client does not send one yet either.
  */
 @Serializable
 data class AgentRequest(
@@ -118,6 +188,12 @@ data class AgentRequest(
     val history: List<HistoryMessage>? = null,
     /** Tools the user approved for the whole session; re-sent every turn. */
     @SerialName("session_allowed_tools") val sessionAllowedTools: List<String>? = null,
+    /**
+     * The client's structured declaration. Absence is reserved for external
+     * and legacy callers — an owned sender that omits it is indistinguishable
+     * from a stranger's request, so this client always declares a mode.
+     */
+    @SerialName("task_contract") val taskContract: TaskContract? = null,
 )
 
 // ---------------------------------------------------------------------------

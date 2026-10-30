@@ -23,12 +23,6 @@ const sizeRules = (limits: Limits): Linter.RulesRecord => ({
 	[COMPLEXITY]: ['error', { max: limits.complexity, variant: 'modified' }],
 });
 
-/** The limits the lint job sets for one file of the extension. */
-async function limitsOf(file: string): Promise<Limits> {
-	const config = await new ESLint({ cwd: ROOT }).calculateConfigForFile(join(ROOT, file));
-	return { lines: config.rules[LINES][1].max, complexity: config.rules[COMPLEXITY][1].max };
-}
-
 /** The size rules `code` breaks as the file `file`; `limits` replaces the file's own. */
 async function broken(code: string, file = NEW_FILE, limits?: Limits): Promise<string[]> {
 	const eslint = new ESLint({
@@ -54,38 +48,11 @@ function functionOfComplexity(complexity: number): string {
 	return ['export function branchy(value: number): number {', ...ifs, '\treturn value;', '}', ''].join('\n');
 }
 
-function switchOfCases(cases: number): string {
-	const each = Array.from({ length: cases }, (_, i) => `\t\tcase ${i}: return ${i};`);
-	return [
-		'export function chosen(value: number): number {',
-		'\tswitch (value) {',
-		...each,
-		'\t\tdefault: return -1;',
-		'\t}',
-		'}',
-		'',
-	].join('\n');
-}
-
 function sourceFiles(): string[] {
 	return (readdirSync(join(ROOT, 'src'), { recursive: true }) as string[])
 		.filter((name) => name.endsWith('.ts'))
 		.map((name) => join('src', name).replaceAll('\\', '/'))
 		.sort();
-}
-
-/** The listed limits of `file` that could be lower: its code passes one below them. */
-async function looseLimits(file: string): Promise<string[]> {
-	const own = await limitsOf(file);
-	const code = readFileSync(join(ROOT, file), 'utf8');
-	const loose: string[] = [];
-	if (own.lines > LIMITS.lines && !(await broken(code, file, { ...own, lines: own.lines - 1 })).includes(LINES)) {
-		loose.push(`${file}: ${LINES} is ${own.lines}, and no function in the file is that long. Lower the number in eslint.config.mjs.`);
-	}
-	if (own.complexity > LIMITS.complexity && !(await broken(code, file, { ...own, complexity: own.complexity - 1 })).includes(COMPLEXITY)) {
-		loose.push(`${file}: ${COMPLEXITY} is ${own.complexity}, and no function in the file is that complex. Lower the number in eslint.config.mjs.`);
-	}
-	return loose;
 }
 
 describe('size rules, in a file the settings do not list', () => {
@@ -100,15 +67,34 @@ describe('size rules, in a file the settings do not list', () => {
 	});
 
 	it('counts a switch once, however many cases it has', async () => {
-		expect(await broken(switchOfCases(LIMITS.complexity * 2))).toEqual([]);
+		const cases = Array.from({ length: LIMITS.complexity * 2 }, (_, i) => `\t\tcase ${i}: return ${i};`);
+		const code = [
+			'export function chosen(value: number): number {',
+			'\tswitch (value) {',
+			...cases,
+			'\t\tdefault: return -1;',
+			'\t}',
+			'}',
+			'',
+		].join('\n');
+		expect(await broken(code)).toEqual([]);
 	});
 });
 
 describe('size rules, in the files the settings list', () => {
 	it('gives a listed file no more room than its largest function needs', async () => {
+		// A listed limit is loose when the file's code passes one below it.
 		const loose: string[] = [];
 		for (const file of sourceFiles()) {
-			loose.push(...(await looseLimits(file)));
+			const config = await new ESLint({ cwd: ROOT }).calculateConfigForFile(join(ROOT, file));
+			const own: Limits = { lines: config.rules[LINES][1].max, complexity: config.rules[COMPLEXITY][1].max };
+			const code = readFileSync(join(ROOT, file), 'utf8');
+			if (own.lines > LIMITS.lines && !(await broken(code, file, { ...own, lines: own.lines - 1 })).includes(LINES)) {
+				loose.push(`${file}: ${LINES} is ${own.lines}, and no function in the file is that long. Lower the number in eslint.config.mjs.`);
+			}
+			if (own.complexity > LIMITS.complexity && !(await broken(code, file, { ...own, complexity: own.complexity - 1 })).includes(COMPLEXITY)) {
+				loose.push(`${file}: ${COMPLEXITY} is ${own.complexity}, and no function in the file is that complex. Lower the number in eslint.config.mjs.`);
+			}
 		}
 		expect(loose).toEqual([]);
 	});

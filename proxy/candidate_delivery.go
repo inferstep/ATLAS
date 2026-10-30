@@ -11,9 +11,11 @@ import "log"
 // The shape is deliberately narrow. For a request that declared structured
 // obligations, no candidate lands without a grant -- the typed answer is
 // binding, and a typed refusal falls back to the caller's own content rather
-// than to a candidate the envelope happened to like. For a request that
-// declared nothing there is no typed answer to give, so the existing decision
-// stands untouched and byte-for-byte.
+// than to a candidate the envelope happened to like. A request with no
+// contract, or a question, gets no candidate to deliver (candidateDeliverable).
+// For a work request whose call names no usable target there is no typed
+// answer to give, and the candidate policy keeps the model's own bytes
+// (decideCandidatePolicy).
 //
 // Everything between consuming the grant and writing is re-checked against
 // what is on disk right now, because a grant froze a moment and the write
@@ -108,36 +110,9 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	resolved := resolveAgentPath(ctx, path)
 	hash := contentSHA256(code)
 
-	// The identity evidence must bind to, built HERE from the live request and
-	// the workspace as it stands. Never copied off a record being checked.
-	generation, stateHash := workspaceIdentity(ctx)
-	asked := V3EvidenceProvenance{
-		RequestID:           requestIDOf(ctx),
-		InvocationID:        id.InvocationID,
-		CandidateInstanceID: id.CandidateInstanceID,
-		CandidateHash:       hash,
-		WorkspaceGeneration: generation,
-		WorkspaceStateHash:  stateHash,
-		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
-	}
+	asked := liveEvidenceIdentity(ctx, id, hash, resolved)
 	_, witness := baselineWitness(ctx, resolved)
-	// The one question that decides ownership, asked of the obligation owner
-	// rather than inferred from how many obligations came back.
-	declared := outputKnowledgeDeclared(ctx)
-	// The second way a request can be this owner's: the request declared
-	// work and no outputs, and the model's own structured tool call names
-	// exactly this target. Read from the contract's task mode and the scope
-	// derived from the parsed arguments -- never from what anyone wrote. Declared outputs are never widened by a call, so the
-	// structured target is consulted only when there are none.
-	structured := false
-	if !declared {
-		structured, _ = structuredMutationTargetGrounds(ctx, scope, resolved)
-	}
-	obligations := requestObligations(ctx)
-	// Whether the target has any grounding at all. Decided here, once, and
-	// handed to the automatic eligibility so the policy owner's answer and
-	// the mint's cannot disagree about it.
-	targetGrounded := (declared && targetIsAuthorized(obligations, resolved)) || structured
+	declared, structured, obligations, targetGrounded := deliveryOwnership(ctx, scope, resolved)
 	unmet = classifyStructuralUnmet(ctx, resolved, observed, unmet)
 	in := authorizationInput{
 		Obligations:              obligations,
@@ -164,10 +139,10 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	vetoIn := automatic.VetoInput
 	vetoIn.Unmet, vetoIn.Decision = unmet, d
 	vetoes := advisoryVetoes(vetoIn)
-	// Contractless traffic, a question, and a work request whose tool call
-	// named no usable target: there is nothing for a typed answer to be
-	// about, and the existing delivery decision keeps its exact previous
-	// behaviour.
+	// A work request whose tool call named no usable target, or, only under a
+	// capture-only acquisition, contractless traffic or a question: there is
+	// nothing for a typed answer to be about, and the candidate policy keeps
+	// the model's own bytes (decideCandidatePolicy).
 	if !declared && !structured {
 		return deliveryAuthorization{Typed: false, Decision: d, Vetoes: vetoes, Unmet: unmet}
 	}
@@ -182,7 +157,6 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	// identity are both fixed. It reads the same veto list the policy owner
 	// is handed, because two answers about one candidate are two chances to
 	// disagree.
-	basis := grantBasisStrict
 	auth.AutomaticEligible, auth.AutomaticRefusal = automaticDeliveryAllowed(
 		automaticEligibilityInput{
 			Vetoes:              vetoes,
@@ -192,10 +166,91 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 			Scope:               scope,
 			TargetGrounded:      targetGrounded,
 		})
+	basis, holds := grantBasisThatHolds(ctx, &auth, in, d, selectedCandidateID)
+	if !holds {
+		return auth
+	}
+	// THE acquisition boundary. Every candidate grant in this build is minted
+	// on the next line, so suppressing here suppresses all of them -- and a
+	// structural guard pins that there is no second minting site to route
+	// around. Nothing above this point changed: the policy ran, the evidence
+	// ran, the vetoes ran, and their answers are recorded exactly as they were.
+	if candidateCaptureOnly() {
+		auth.CaptureOnly, auth.WouldAuthorize = true, true
+		auth.Refusal = CaptureSuppressedDelivery
+		recordCaptureOnlySuppression(ctx, entry, hash, d)
+		return auth
+	}
+	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID, basis)
+	if !ok {
+		auth.Refusal = why
+		return auth
+	}
+	auth.Grant = g
+	auth.TargetGrounding = g.TargetGrounding
+	return auth
+}
+
+// liveEvidenceIdentity builds the identity that evidence for this candidate
+// must bind to: the live request, the candidate's hash, and the workspace and
+// baseline as they are now.
+func liveEvidenceIdentity(ctx *AgentContext, id candidateEvidenceIdentity,
+	hash, resolved string) V3EvidenceProvenance {
+	// The identity evidence must bind to, built HERE from the live request and
+	// the workspace as it stands. Never copied off a record being checked.
+	generation, stateHash := workspaceIdentity(ctx)
+	asked := V3EvidenceProvenance{
+		RequestID:           requestIDOf(ctx),
+		InvocationID:        id.InvocationID,
+		CandidateInstanceID: id.CandidateInstanceID,
+		CandidateHash:       hash,
+		WorkspaceGeneration: generation,
+		WorkspaceStateHash:  stateHash,
+		BaselineIdentity:    baselineIdentityFor(ctx, resolved),
+	}
+	return asked
+}
+
+// deliveryOwnership says whether the typed path owns this candidate, and how
+// its target is grounded: whether the request declared its outputs; whether
+// the model's structured tool call names exactly this target instead; the
+// request's obligations; and whether the target has any grounding at all.
+func deliveryOwnership(ctx *AgentContext, scope mutationScope, resolved string) (
+	declared, structured bool, obligations []taskObligation, targetGrounded bool) {
+	// The one question that decides ownership, asked of the obligation owner
+	// rather than inferred from how many obligations came back.
+	declared = outputKnowledgeDeclared(ctx)
+	// The second way a request can be this owner's: the request declared
+	// work and no outputs, and the model's own structured tool call names
+	// exactly this target. Read from the contract's task mode and the scope
+	// derived from the parsed arguments -- never from what anyone wrote. Declared outputs are never widened by a call, so the
+	// structured target is consulted only when there are none.
+	if !declared {
+		structured, _ = structuredMutationTargetGrounds(ctx, scope, resolved)
+	}
+	obligations = requestObligations(ctx)
+	// Whether the target has any grounding at all. Decided here, once, and
+	// handed to the automatic eligibility so the policy owner's answer and
+	// the mint's cannot disagree about it.
+	targetGrounded = (declared && targetIsAuthorized(obligations, resolved)) || structured
+	return declared, structured, obligations, targetGrounded
+}
+
+// grantBasisThatHolds picks the rule a grant for this candidate would be
+// minted under, and asks grantFor whether the grant holds under it. The strict
+// basis comes first. The automatic V3 basis is used instead when the decision
+// did not authorize, or when the strict basis cannot hold, and only for a
+// candidate that is automatically eligible. It returns the basis and whether
+// it holds. When it does not, the reason is written to auth.Refusal; once
+// grantFor has answered, the basis it answered for is written to auth.Basis.
+func grantBasisThatHolds(ctx *AgentContext, auth *deliveryAuthorization,
+	in authorizationInput, d AuthorizationDecision,
+	selectedCandidateID string) (grantBasis, bool) {
+	basis := grantBasisStrict
 	if !d.Authorized {
 		if !auth.AutomaticEligible {
 			auth.Refusal = string(d.Reason)
-			return auth
+			return basis, false
 		}
 		// The typed decision could not authorize -- there was no floor to
 		// meet, or no adapter that could measure this class. For the
@@ -221,27 +276,9 @@ func authorizeCandidateDelivery(ctx *AgentContext, entry routeEntry, path, code 
 	auth.Basis = basis
 	if !holds {
 		auth.Refusal = why
-		return auth
+		return basis, false
 	}
-	// THE acquisition boundary. Every candidate grant in this build is minted
-	// on the next line, so suppressing here suppresses all of them -- and a
-	// structural guard pins that there is no second minting site to route
-	// around. Nothing above this point changed: the policy ran, the evidence
-	// ran, the vetoes ran, and their answers are recorded exactly as they were.
-	if candidateCaptureOnly() {
-		auth.CaptureOnly, auth.WouldAuthorize = true, true
-		auth.Refusal = CaptureSuppressedDelivery
-		recordCaptureOnlySuppression(ctx, entry, hash, d)
-		return auth
-	}
-	g, ok, why := mintAuthorizationGrant(ctx, in, d, selectedCandidateID, basis)
-	if !ok {
-		auth.Refusal = why
-		return auth
-	}
-	auth.Grant = g
-	auth.TargetGrounding = g.TargetGrounding
-	return auth
+	return basis, true
 }
 
 // deliveryOutcome is the live result: true only when the exact authorized

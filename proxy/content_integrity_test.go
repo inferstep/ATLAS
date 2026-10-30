@@ -32,7 +32,8 @@ type integrityRun struct {
 	errors   []map[string]interface{}
 	terminal map[string]string
 	fencedN  int
-	prompts  []string // main-loop request bodies, in order: what the model was told
+	prompts  []string   // main-loop request bodies, in order: what the model was told
+	mu       sync.Mutex // guards the fields above while the loop runs
 }
 
 func integrityLoop(t *testing.T, request string, preexisting map[string]string, turns []string,
@@ -55,63 +56,7 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		}
 	}
 	run := &integrityRun{dir: dir, terminal: map[string]string{}}
-	var mu sync.Mutex
-	i := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
-			return
-		case strings.HasSuffix(r.URL.Path, "/execute"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			if strings.Contains(in.Code, ".atlas-mount-probe") {
-				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-				json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": string(b), "exit_code": 0})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": "", "exit_code": 0})
-			return
-		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-			http.NotFound(w, r)
-			return
-		}
-		raw, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "text/event-stream")
-		send := func(s string) {
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}
-		if strings.Contains(string(raw), "single fenced block") {
-			mu.Lock()
-			run.fencedN++
-			mu.Unlock()
-			if fencedReply == nil {
-				send("no block here")
-				return
-			}
-			send(fencedReply(string(raw)))
-			return
-		}
-		mu.Lock()
-		k := i
-		i++
-		run.prompts = append(run.prompts, string(raw))
-		mu.Unlock()
-		if k >= 40 {
-			http.Error(w, "turn ceiling", http.StatusInsufficientStorage)
-			return
-		}
-		if k < len(turns) {
-			send(turns[k])
-			return
-		}
-		send(`{"type":"done","summary":"wrote the file"}`)
-	}))
+	srv := integrityServer(run, turns, fencedReply)
 	t.Cleanup(srv.Close)
 
 	ctx := NewAgentContext(dir, Tier2Medium)
@@ -124,8 +69,8 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		b, _ := json.Marshal(data)
 		var m map[string]interface{}
 		_ = json.Unmarshal(b, &m)
-		mu.Lock()
-		defer mu.Unlock()
+		run.mu.Lock()
+		defer run.mu.Unlock()
 		switch et {
 		case "tool_result":
 			run.results = append(run.results, m)
@@ -146,6 +91,71 @@ func integrityLoopWith(t *testing.T, request string, preexisting map[string]stri
 		t.Fatalf("loop error: %v", err)
 	}
 	return run
+}
+
+// integrityServer stands in for every service the loop calls. The sandbox
+// passes every syntax check and runs every command with no output, except the
+// mount probe, which it answers from run.dir. V3 and the internal services are
+// unavailable, as when they fail. The model plays turns in order, then says it
+// is done; a fenced sub-call gets fencedReply, or a reply with no block when
+// fencedReply is nil.
+func integrityServer(run *integrityRun, turns []string, fencedReply func(prompt string) string) *httptest.Server {
+	i := 0
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(run.dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "stdout": "", "exit_code": 0})
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		send := func(s string) {
+			d, _ := json.Marshal(map[string]interface{}{
+				"choices": []map[string]interface{}{{"delta": map[string]string{"content": s}}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+		}
+		if strings.Contains(string(raw), "single fenced block") {
+			run.mu.Lock()
+			run.fencedN++
+			run.mu.Unlock()
+			if fencedReply == nil {
+				send("no block here")
+				return
+			}
+			send(fencedReply(string(raw)))
+			return
+		}
+		run.mu.Lock()
+		k := i
+		i++
+		run.prompts = append(run.prompts, string(raw))
+		run.mu.Unlock()
+		if k >= 40 {
+			http.Error(w, "turn ceiling", http.StatusInsufficientStorage)
+			return
+		}
+		if k < len(turns) {
+			send(turns[k])
+			return
+		}
+		send(`{"type":"done","summary":"wrote the file"}`)
+	}))
 }
 
 func toolCall(name string, args map[string]interface{}) string {
@@ -236,24 +246,39 @@ func TestInlineWritesLandExactlyTheDecodedBytes(t *testing.T) {
 	cases := append([]struct{ name, path, body string }{}, integrityPayloads...)
 	cases = append(cases, struct{ name, path, body string }{"5000-line file", "long.py", longPayload()})
 	for _, c := range cases {
+		if _, refused := inlineRefused[c.name]; refused {
+			continue // TestAmbiguousInlinePayloadsAreRefusedWithTheReason
+		}
 		t.Run(c.name, func(t *testing.T) {
 			run := integrityLoop(t, writeReq, nil,
 				[]string{toolCall("write_file", map[string]interface{}{"path": c.path, "content": c.body})}, nil)
-			if why, refuse := inlineRefused[c.name]; refuse {
-				if got, ok := run.disk(t, c.path); ok {
-					t.Fatalf("ambiguous inline content was written instead of refused: %q", got)
-				}
-				if !run.told("NOT performed", why, "@fenced") {
-					t.Errorf("the model was not told why and how to resend (%q)", why)
-				}
-				return
-			}
 			got, ok := run.disk(t, c.path)
 			if !ok {
 				t.Fatalf("not written; feedback: %.400s", run.feedback())
 			}
 			if got != c.body {
 				t.Errorf("bytes changed on the way to disk\n want %q\n  got %q", truncateStr(c.body, 300), truncateStr(got, 300))
+			}
+		})
+	}
+}
+
+// The payloads in inlineRefused are refused in the JSON channel, and the model
+// is told why and how to resend them.
+func TestAmbiguousInlinePayloadsAreRefusedWithTheReason(t *testing.T) {
+	for _, c := range integrityPayloads {
+		why, refused := inlineRefused[c.name]
+		if !refused {
+			continue // TestInlineWritesLandExactlyTheDecodedBytes
+		}
+		t.Run(c.name, func(t *testing.T) {
+			run := integrityLoop(t, writeReq, nil,
+				[]string{toolCall("write_file", map[string]interface{}{"path": c.path, "content": c.body})}, nil)
+			if got, ok := run.disk(t, c.path); ok {
+				t.Fatalf("ambiguous inline content was written instead of refused: %q", got)
+			}
+			if !run.told("NOT performed", why, "@fenced") {
+				t.Errorf("the model was not told why and how to resend (%q)", why)
 			}
 		})
 	}
@@ -298,146 +323,162 @@ func TestFencedSubCallWritesLandExactlyTheBody(t *testing.T) {
 	}
 }
 
-// Trailing prose after the closing fence must not truncate a body that
-// contains its own fences.
-func TestFencedBodyWithInteriorFencesSurvivesTrailingProse(t *testing.T) {
-	body := "def f():\n    \"\"\"Example:\n\n    ```python\n    f()\n    ```\n    \"\"\"\n    return 1\n"
-	reply := "```python\n" + body + "```\n\nThat is the complete file."
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "doc.py", "content": "@fenced"})},
-		func(string) string { return reply })
-	if got, _ := run.disk(t, "doc.py"); got != body {
-		t.Errorf("interior fence cut the file\n want %q\n  got %q", body, got)
+// A fenced body lands exactly, interior fences included. A reply that cannot
+// be split into one body without guessing is refused, and nothing lands.
+func TestAFencedBodyLandsExactlyOrIsRefused(t *testing.T) {
+	docstring := "def f():\n    \"\"\"Example:\n\n    ```python\n    f()\n    ```\n    \"\"\"\n    return 1\n"
+	markdown := "# Tool\n\nRun:\n\n```bash\npython app.py\n```\n\nThen open it.\n"
+	inline := "import re\nPAT = re.compile(r\"\\d+\")\nS = \"tab\\there\"\n"
+	for _, tc := range []struct {
+		name    string
+		path    string
+		content string // the write_file content
+		// The reply to the fenced sub-call; empty when the body is inline.
+		fencedReply string
+		// The file on disk; empty when nothing may land.
+		want string
+	}{
+		{
+			name: "interior fences, then prose after the closing fence", path: "doc.py",
+			content: "@fenced", fencedReply: "```python\n" + docstring + "```\n\nThat is the complete file.",
+			want: docstring,
+		},
+		{
+			// Which block is the file? Never merge the prose and the second block into it.
+			name: "two separate blocks", path: "a.py",
+			content: "@fenced", fencedReply: "```python\nprint('a')\n```\n\nRun it with:\n\n```bash\npython a.py\n```\n",
+			want: "",
+		},
+		{
+			// Its own ``` blocks inside a ``` wrapper cannot be split unambiguously.
+			name: "markdown with unwidened interior fences", path: "README.md",
+			content: "@fenced", fencedReply: "```markdown\n" + markdown + "```",
+			want: "",
+		},
+		{
+			name: "body inline after the sentinel", path: "inl.py",
+			content: "@fenced\n```python\n" + inline + "```", fencedReply: "",
+			want: inline,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := integrityLoop(t, writeReq, nil,
+				[]string{toolCall("write_file", map[string]interface{}{"path": tc.path, "content": tc.content})},
+				func(string) string { return tc.fencedReply })
+			got, written := run.disk(t, tc.path)
+			if tc.want == "" && written {
+				t.Errorf("an ambiguous fenced reply was written: %q", got)
+			}
+			if tc.want != "" && got != tc.want {
+				t.Errorf("the body changed on the way to disk\n want %q\n  got %q", tc.want, got)
+			}
+		})
 	}
 }
 
-// Two separate blocks are ambiguous: which one is the file? Refuse, never
-// merge the prose and the second block into the file.
-func TestFencedReplyWithTwoBlocksIsRefusedNotMerged(t *testing.T) {
-	reply := "```python\nprint('a')\n```\n\nRun it with:\n\n```bash\npython a.py\n```\n"
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "a.py", "content": "@fenced"})},
-		func(string) string { return reply })
-	if got, ok := run.disk(t, "a.py"); ok {
-		t.Errorf("an ambiguous two-block reply was written: %q", got)
+// Ambiguous content in the JSON channel is refused, never repaired by
+// guessing, and the model is told why and how to resend it.
+func TestAmbiguousInlineContentIsRefusedWithARetryPath(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		path     string
+		content  string
+		toldThat []string
+	}{
+		{
+			// One long line whose only structure is literal \n, for a
+			// line-structured file, is almost certainly escaped twice. It is
+			// 150 characters long: over the 120-character floor below which a
+			// one-line body with escapes is taken as a plausible single line.
+			name: "body escaped twice", path: "GUIDE.rst",
+			content:  `# Tool\n\nThis tool does things.\n\n## Install\n\nRun pip install tool and then start it with python app.py.\n\nOpen http://127.0.0.1:5000 after.\n`,
+			toldThat: []string{"NOT performed", "escaped once", "@fenced"},
+		},
+		{
+			// A form feed, backspace or CR right before a letter is what an
+			// eaten "\n" looks like, or real content. The fenced path keeps it.
+			name: "control character before a letter", path: "cc.js",
+			content:  "def a():\n    return 1\n\x0cunction b():\n",
+			toldThat: []string{"NOT performed", "form feed", "line 3"},
+		},
+		{
+			name: "prose around a fence", path: "p.py",
+			content:  "Here is the file:\n```python\ndef f():\n    return 1\n```\nIt returns 1.",
+			toldThat: []string{"NOT performed", "only the file's own"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := integrityLoop(t, writeReq, nil,
+				[]string{toolCall("write_file", map[string]interface{}{"path": tc.path, "content": tc.content})}, nil)
+			if got, written := run.disk(t, tc.path); written {
+				t.Errorf("ambiguous content was written instead of refused: %q", got)
+			}
+			if !run.told(tc.toldThat...) {
+				t.Errorf("the model was not told %q: %.300s", tc.toldThat, run.feedback())
+			}
+		})
 	}
 }
 
-// @fenced with an inline fenced body in the same reply.
-func TestInlineFencedBodyLandsExactly(t *testing.T) {
-	body := "import re\nPAT = re.compile(r\"\\d+\")\nS = \"tab\\there\"\n"
-	content := "@fenced\n```python\n" + body + "```"
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "inl.py", "content": content})}, nil)
-	if got, _ := run.disk(t, "inl.py"); got != body {
-		t.Errorf("inline fenced body changed\n want %q\n  got %q", body, got)
-	}
-}
-
-// --- ambiguous JSON-channel content: refused with a retry path ---------------
-
-// A long single line whose only structure is literal \n, arriving through the
-// JSON channel for a line-structured file, is almost certainly double-escaped
-// -- but not certainly. Refuse and say how to resend; never decode it.
-func TestDoubleEscapedBodyIsRefusedNotDecoded(t *testing.T) {
-	// 150 characters: over the 120-character floor below which a one-line
-	// body with escapes is treated as a plausible single line.
-	body := `# Tool\n\nThis tool does things.\n\n## Install\n\nRun pip install tool and then start it with python app.py.\n\nOpen http://127.0.0.1:5000 after.\n`
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "GUIDE.rst", "content": body})}, nil)
-	if got, ok := run.disk(t, "GUIDE.rst"); ok {
-		t.Errorf("a double-escaped body was written instead of refused: %q", got)
-	}
-	if !run.told("NOT performed", "escaped once", "@fenced") {
-		t.Error("the refusal did not reach the model with a retry path")
-	}
-}
-
-// A form feed / backspace / CR directly before a letter, from the JSON
-// channel, is what an eaten "\n" looks like -- or real content. Refuse
-// explicitly rather than rewrite it; the fenced path preserves it.
-func TestJSONChannelControlCharacterBeforeALetterIsRefusedNotRewritten(t *testing.T) {
-	body := "def a():\n    return 1\n\x0cunction b():\n"
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "cc.js", "content": body})}, nil)
-	got, ok := run.disk(t, "cc.js")
-	if ok && got != body {
-		t.Errorf("control character was rewritten instead of refused: %q", got)
-	}
-	if ok {
-		t.Errorf("an eaten-escape shape was written without an explicit refusal")
-	}
-	if !run.told("NOT performed", "form feed", "line 3") {
-		t.Errorf("refusal does not name the problem and where it is: %.300s", run.feedback())
-	}
-}
-
-// Prose around a fence is refused; exactly one wrapping fence is removed and
-// the model is told so in the result.
-func TestAWrapperIsRemovedOnlyWhenExactAndNeverSilently(t *testing.T) {
+// Exactly one wrapping fence is removed, and the result says so.
+func TestAnExactWrappingFenceIsRemovedAndTheModelIsTold(t *testing.T) {
 	body := "def f():\n    return 1\n"
-	wrapped := integrityLoop(t, writeReq, nil,
+	run := integrityLoop(t, writeReq, nil,
 		[]string{toolCall("write_file", map[string]interface{}{"path": "w.py", "content": "```python\n" + body + "```\n"})}, nil)
-	if got, _ := wrapped.disk(t, "w.py"); got != body {
+	if got, _ := run.disk(t, "w.py"); got != body {
 		t.Errorf("exact wrapper: want %q got %q", body, got)
 	}
-	if !strings.Contains(wrapped.feedback(), "only the lines inside the fence were written") {
-		t.Errorf("the wrapper removal was silent: %.400s", wrapped.feedback())
-	}
-
-	prose := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "p.py",
-			"content": "Here is the file:\n```python\n" + body + "```\nIt returns 1."})}, nil)
-	if got, ok := prose.disk(t, "p.py"); ok {
-		t.Errorf("prose around a fence was written: %q", got)
-	}
-	if !prose.told("NOT performed", "only the file's own") {
-		t.Error("prose-wrapped content was not refused with a retry path")
+	if !strings.Contains(run.feedback(), "only the lines inside the fence were written") {
+		t.Errorf("the wrapper removal was silent: %.400s", run.feedback())
 	}
 }
 
-// A markdown file whose own code blocks use ``` inside a ``` wrapper cannot be
-// split unambiguously. It is refused with the four-backtick retry, and nothing
-// partial lands.
-func TestAFencedMarkdownWithUnwidenedInteriorFencesIsRefused(t *testing.T) {
-	body := "# Tool\n\nRun:\n\n```bash\npython app.py\n```\n\nThen open it.\n"
-	run := integrityLoop(t, writeReq, nil,
-		[]string{toolCall("write_file", map[string]interface{}{"path": "README.md", "content": "@fenced"})},
-		func(string) string { return "```markdown\n" + body + "```" })
-	if got, ok := run.disk(t, "README.md"); ok {
-		t.Errorf("an ambiguous fenced reply was written: %q", got)
-	}
-}
-
-// --- truncated and malformed tool calls: refused, never executed -------------
-
-func TestATruncatedWriteFileIsRefusedNotExecuted(t *testing.T) {
-	cut := `{"type":"tool_call","name":"write_file","args":{"path":"cut.py","content":"def f():\n    return [{\"user\": 1`
-	run := integrityLoop(t, writeReq, nil, []string{cut}, nil)
-	if got, ok := run.disk(t, "cut.py"); ok {
-		t.Errorf("a truncated write_file was executed: %q", got)
-	}
-	if len(run.errors) == 0 && !strings.Contains(run.feedback(), "truncat") {
-		t.Errorf("no explicit refusal surfaced: %.300s", run.feedback())
-	}
-}
-
-func TestAMalformedWriteFileIsRefusedNotExecuted(t *testing.T) {
-	// complete JSON shape, invalid escape \d inside the string
-	bad := `{"type":"tool_call","name":"write_file","args":{"path":"bad.py","content":"import re\nP = re.compile(\"\d+\")\n"}}`
-	run := integrityLoop(t, writeReq, nil, []string{bad}, nil)
-	if got, ok := run.disk(t, "bad.py"); ok {
-		t.Errorf("a malformed write_file was executed with guessed unescaping: %q", got)
-	}
-}
-
-func TestATruncatedEditFileIsRefusedNotExecuted(t *testing.T) {
-	orig := "def f():\n    return 1\n"
-	cut := `{"type":"tool_call","name":"edit_file","args":{"path":"e.py","old_str":"return 1","new_str":"return [1, 2`
-	run := integrityLoop(t, writeReq, map[string]string{"e.py": orig},
-		[]string{toolCall("read_file", map[string]interface{}{"path": "e.py"}), cut}, nil)
-	if got, _ := run.disk(t, "e.py"); got != orig {
-		t.Errorf("a truncated edit_file was executed: %q", got)
+// A cut or malformed tool call is refused out loud, never run with guessed
+// content.
+func TestACutOrMalformedToolCallIsRefusedNotExecuted(t *testing.T) {
+	const original = "def f():\n    return 1\n"
+	for _, tc := range []struct {
+		name     string
+		existing map[string]string
+		turns    []string
+		path     string
+		// The file on disk afterwards; empty when it must not exist.
+		want string
+	}{
+		{
+			name:  "write_file cut short",
+			turns: []string{`{"type":"tool_call","name":"write_file","args":{"path":"cut.py","content":"def f():\n    return [{\"user\": 1`},
+			path:  "cut.py", want: "",
+		},
+		{
+			// The JSON shape is complete, but \d inside the string is no valid escape.
+			name:  "write_file with an invalid escape",
+			turns: []string{`{"type":"tool_call","name":"write_file","args":{"path":"bad.py","content":"import re\nP = re.compile(\"\d+\")\n"}}`},
+			path:  "bad.py", want: "",
+		},
+		{
+			name:     "edit_file cut short",
+			existing: map[string]string{"e.py": original},
+			turns: []string{
+				toolCall("read_file", map[string]interface{}{"path": "e.py"}),
+				`{"type":"tool_call","name":"edit_file","args":{"path":"e.py","old_str":"return 1","new_str":"return [1, 2`,
+			},
+			path: "e.py", want: original,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := integrityLoop(t, writeReq, tc.existing, tc.turns, nil)
+			got, written := run.disk(t, tc.path)
+			if tc.want == "" && written {
+				t.Errorf("the call was executed: %q", got)
+			}
+			if tc.want != "" && got != tc.want {
+				t.Errorf("the call was executed: %q", got)
+			}
+			if len(run.errors) == 0 && !strings.Contains(run.feedback(), "truncat") {
+				t.Errorf("no explicit refusal surfaced: %.300s", run.feedback())
+			}
+		})
 	}
 }
 
@@ -464,7 +505,7 @@ func TestEditReplacementIsWrittenAsGiven(t *testing.T) {
 	}
 }
 
-func TestInsertAndReplaceLinesLandExactly(t *testing.T) {
+func TestInsertAfterLandsTheLineExactly(t *testing.T) {
 	orig := "a = 1\nb = 2\nc = 3\n"
 	ins := "\tx = \"ünï \\\\ code\"\n"
 	run := integrityLoop(t, writeReq, map[string]string{"l.py": orig},

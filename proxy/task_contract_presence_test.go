@@ -8,20 +8,16 @@ import (
 
 // Omitted knowledge is not authoritative emptiness.
 //
-// The wire could always tell `"expected_outputs": []` from an omitted key --
-// encoding/json leaves a []string nil for the first and non-nil-empty for the
-// second -- and validateTaskContract threw that away: it built its output by
-// appending, so an explicit [] was STORED as nil, byte-identical to omitted.
+// The wire tells `"expected_outputs": []` from an omitted key: encoding/json
+// leaves the []string non-nil and empty for the first and nil for the second.
+// The validator and storage must keep that distinction, not store an explicit
+// [] as nil.
 //
-// That matters because every owned sender -- the TUI, tests/e2e/conftest.py
-// and scripts/e2e-reliability.py -- sends `{"task_mode": ...}` and nothing
-// else. Reading "a contract is present, so its output list is authoritative"
-// would have turned 100% of owned traffic into "the caller requires no
-// outputs" and dropped the legacy obligation for all of it.
-//
-// So knowledge is stated, not inferred. Nothing below reads policy: this
-// commit only makes the distinction survive the wire, the validator and
-// storage.
+// Every owned sender (the TUI, tests/e2e/conftest.py and
+// scripts/e2e-reliability.py) sends `{"task_mode": ...}` and nothing else.
+// Reading "a contract is present, so its output list is authoritative" would
+// turn all that traffic into "the caller requires no outputs". So knowledge is
+// stated, not inferred.
 
 func decodeContract(t *testing.T, body string) *TaskContract {
 	t.Helper()
@@ -47,55 +43,31 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 		body      string
 		knowledge ObligationKnowledge
 		paths     []string
-		reject    bool
 	}{
 		{"task_mode only", `{"task_contract":{"task_mode":"work"}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		{"outputs omitted", `{"task_contract":{"task_mode":"work","verification":["go test"]}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		{"outputs null", `{"task_contract":{"task_mode":"work","expected_outputs":null}}`,
-			KnowledgeUnspecified, nil, false},
-		// Historical storage could not tell an explicit [] from omitted, so a
-		// legacy [] cannot be promoted to authoritative none.
+			KnowledgeUnspecified, nil},
+		// Without output_knowledge, an explicit [] cannot be told from an
+		// omitted list in stored contracts, so it is not authoritative none.
 		{"legacy empty list", `{"task_contract":{"task_mode":"work","expected_outputs":[]}}`,
-			KnowledgeUnspecified, nil, false},
+			KnowledgeUnspecified, nil},
 		// A legacy non-empty list always meant "these are the outputs".
 		{"legacy non-empty list", `{"task_contract":{"task_mode":"work","expected_outputs":["a.py"]}}`,
-			KnowledgeDeclared, []string{"a.py"}, false},
+			KnowledgeDeclared, []string{"a.py"}},
 		{"declared with paths",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":["a.py","b.py"]}}`,
-			KnowledgeDeclared, []string{"a.py", "b.py"}, false},
+			KnowledgeDeclared, []string{"a.py", "b.py"}},
 		{"declared empty is authoritative none",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":[]}}`,
-			KnowledgeDeclared, []string{}, false},
+			KnowledgeDeclared, []string{}},
 		{"explicit unspecified",
 			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified"}}`,
-			KnowledgeUnspecified, nil, false},
-
-		// rejections
-		{"declared with the list omitted",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"declared"}}`, "", nil, true},
-		{"declared with a null list",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":null}}`, "", nil, true},
-		{"unspecified contradicted by paths",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified","expected_outputs":["a.py"]}}`, "", nil, true},
-		{"unknown knowledge",
-			`{"task_contract":{"task_mode":"work","output_knowledge":"maybe"}}`, "", nil, true},
-		{"question cannot declare outputs",
-			`{"task_contract":{"task_mode":"question","output_knowledge":"declared","expected_outputs":[]}}`, "", nil, true},
-		{"question cannot carry legacy outputs",
-			`{"task_contract":{"task_mode":"question","expected_outputs":["a.py"]}}`, "", nil, true},
+			KnowledgeUnspecified, nil},
 	} {
 		got, err := validate(t, c.body)
-		if c.reject {
-			if err == nil {
-				t.Errorf("%s: accepted, want rejection", c.name)
-			}
-			if got != nil {
-				t.Errorf("%s: stored a contract despite rejecting", c.name)
-			}
-			continue
-		}
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
@@ -108,13 +80,37 @@ func TestOutputKnowledgeTruthTable(t *testing.T) {
 			t.Errorf("%s: paths=%v want %v", c.name, paths, c.paths)
 		}
 		// Presence must survive: declared-empty is not the same as unspecified.
-		if c.knowledge == KnowledgeDeclared && c.paths != nil && len(c.paths) == 0 {
-			if !got.OutputsPresent() {
-				t.Errorf("%s: an authoritative none collapsed into absent", c.name)
-			}
+		declaredEmpty := c.knowledge == KnowledgeDeclared && c.paths != nil && len(c.paths) == 0
+		if declaredEmpty && !got.OutputsPresent() {
+			t.Errorf("%s: an authoritative none collapsed into absent", c.name)
 		}
 		if c.knowledge == KnowledgeUnspecified && got.OutputsPresent() {
 			t.Errorf("%s: unspecified knowledge claims a present list", c.name)
+		}
+	}
+}
+
+func TestOutputKnowledgeTruthTableRejections(t *testing.T) {
+	for _, c := range []struct{ name, body string }{
+		{"declared with the list omitted",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"declared"}}`},
+		{"declared with a null list",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"declared","expected_outputs":null}}`},
+		{"unspecified contradicted by paths",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"unspecified","expected_outputs":["a.py"]}}`},
+		{"unknown knowledge",
+			`{"task_contract":{"task_mode":"work","output_knowledge":"maybe"}}`},
+		{"question cannot declare outputs",
+			`{"task_contract":{"task_mode":"question","output_knowledge":"declared","expected_outputs":[]}}`},
+		{"question cannot carry legacy outputs",
+			`{"task_contract":{"task_mode":"question","expected_outputs":["a.py"]}}`},
+	} {
+		got, err := validate(t, c.body)
+		if err == nil {
+			t.Errorf("%s: accepted, want rejection", c.name)
+		}
+		if got != nil {
+			t.Errorf("%s: stored a contract despite rejecting", c.name)
 		}
 	}
 }
@@ -192,12 +188,11 @@ func TestOutputAndVerificationKnowledgeAreIndependent(t *testing.T) {
 
 // --- owned senders stay unspecified and wire-compatible ---------------------
 
+// The TUI, the e2e conftest and the benchmark harness send task_mode alone.
 func TestEveryOwnedSenderNormalisesToUnspecified(t *testing.T) {
 	for _, c := range []struct{ name, body string }{
-		{"tui work", `{"task_contract":{"task_mode":"work"}}`},
-		{"tui question", `{"task_contract":{"task_mode":"question"}}`},
-		{"e2e conftest", `{"task_contract":{"task_mode":"work"}}`},
-		{"benchmark harness", `{"task_contract":{"task_mode":"work"}}`},
+		{"work", `{"task_contract":{"task_mode":"work"}}`},
+		{"question", `{"task_contract":{"task_mode":"question"}}`},
 	} {
 		got, err := validate(t, c.body)
 		if err != nil {
@@ -297,7 +292,7 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := len(got.OutputPaths()); n != 1 {
-		t.Fatalf("aliases did not dedupe: %v", got.OutputPaths())
+		t.Fatalf("aliases did not dedupe: %v: got %v", got.OutputPaths(), n)
 	}
 }
 
@@ -308,7 +303,13 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 // meant -- and two places deciding is how the contract list and the prose
 // heuristic became a union the first time.
 func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
-	for _, file := range []string{"guardrails.go", "tools.go", "gates.go", "agent.go"} {
+	for _, file := range []string{"guardrails.go", "tools.go", "gates.go",
+		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
+		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
+		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go",
+		"agent.go"} {
 		src := readSourceForTest(t, file)
 		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge"} {
 			// validateTaskContract owns normalisation and lives in agent.go.

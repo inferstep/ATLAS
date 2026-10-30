@@ -1,6 +1,7 @@
 .vscode/**
 .vscode-test/**
 out/**
+coverage/**
 test/**
 node_modules/**
 src/**

@@ -17,8 +17,11 @@ mocked filesystem state:
   - remove on missing model is a no-op success
 """
 
+import dataclasses
 import json
 from typing import Optional
+
+import pytest
 
 from atlas.commands import model, model_registry, tier
 
@@ -183,22 +186,6 @@ def test_install_no_artifacts_refused_without_no_lens_flag(tmp_path, capsys):
     assert "--no-lens" in out
 
 
-def test_install_no_artifacts_with_no_lens_then_blocked_by_hf_token(tmp_path,
-                                                                       monkeypatch,
-                                                                       capsys):
-    """User passes --no-lens for the gated 14B but the upstream
-    requires HF_TOKEN — install must still refuse, with the helpful
-    HF_TOKEN message (PC-056.1)."""
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
-                     "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
-    assert rc == 1
-    out = capsys.readouterr().out
-    assert "HF_TOKEN" in out
-    assert "huggingface.co/settings/tokens" in out
-
-
 def test_install_dry_run_for_supported_model_prints_url(tmp_path, capsys):
     rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--dry-run",
                      "--models-dir", str(tmp_path), "--no-color"])
@@ -222,6 +209,41 @@ def test_install_refuses_overwrite_without_yes(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "already exists" in out
     assert "--yes" in out
+
+
+def test_install_url_makes_an_entry_of_its_own_for_an_unregistered_gguf(tmp_path, capsys):
+    """--url: the file name comes from the URL, the entry carries no SHA pin,
+    and the file goes to --models-dir."""
+    rc = model.main(["install", "--url", "https://models.example.test/org/My-Model-Q4_K_M.gguf",
+                     "--models-dir", str(tmp_path), "--dry-run", "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Unregistered model (--url): no SHA pin" in out
+    assert f"Target: {tmp_path / 'My-Model-Q4_K_M.gguf'}" in out
+    assert "SHA256:" not in out
+
+
+def test_install_url_that_names_no_gguf_is_refused(tmp_path, capsys):
+    rc = model.main(["install", "--url", "https://models.example.test/org/README.md",
+                     "--models-dir", str(tmp_path), "--dry-run", "--no-color"])
+    assert rc == 1
+    assert "Could not infer a .gguf filename from the URL." in capsys.readouterr().out
+
+
+def test_install_refuses_when_the_models_disk_has_no_room(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    monkeypatch.setattr(model.shutil, "disk_usage", lambda _path: SimpleNamespace(
+        total=10 * 1024 ** 3, used=9 * 1024 ** 3, free=1024 ** 3))
+
+    def no_download(*a, **kw):
+        raise AssertionError("the install must stop before it downloads")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_download)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Insufficient disk: 1.0 GB free" in out
 
 
 # ---------------------------------------------------------------------------
@@ -288,14 +310,38 @@ def test_models_dir_flag_overrides_env(tmp_path, monkeypatch, capsys):
 # PC-056.1 — install hardening: HF_TOKEN gate, list rendering with auth
 # ---------------------------------------------------------------------------
 
+def _use_a_registry_of_one_gated_entry(monkeypatch):
+    """No entry of the real registry needs a HuggingFace token today, so the
+    token gate is tested on a stand-in: the 7B entry with a download URL and
+    the token flag. Nothing is downloaded."""
+    entry = dataclasses.replace(
+        model_registry.by_name("Qwen3.5-7B-Q4_K_M"),
+        download_url=("https://huggingface.co/example/gated-GGUF/resolve/"
+                      "0123abcd/Qwen3.5-7B-Q4_K_M.gguf"),
+        sha256="0" * 64, requires_hf_token=True)
+    monkeypatch.setattr(model_registry, "REGISTRY", [entry])
+    return entry
+
+
+def test_install_without_a_download_source_says_so_and_names_url(tmp_path,
+                                                                  capsys):
+    rc = model.main(["install", "Qwen3.5-7B-Q4_K_M", "--no-lens",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "ATLAS has no download source for this model" in out
+    assert "atlas model install --url <url>" in out
+
+
 def test_install_gated_without_hf_token_refuses_with_helpful_msg(tmp_path,
                                                                    monkeypatch,
                                                                    capsys):
     """Gated entries (requires_hf_token=True) refuse early when HF_TOKEN
     is not in the env, with the helpful 'set HF_TOKEN' message."""
+    _use_a_registry_of_one_gated_entry(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+    rc = model.main(["install", "Qwen3.5-7B-Q4_K_M", "--no-lens",
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 1
     out = capsys.readouterr().out
@@ -308,20 +354,22 @@ def test_install_gated_with_hf_token_proceeds_to_dry_run(tmp_path,
                                                           monkeypatch,
                                                           capsys):
     """With HF_TOKEN set, the gated check passes — dry-run prints the URL."""
+    entry = _use_a_registry_of_one_gated_entry(monkeypatch)
     monkeypatch.setenv("HF_TOKEN", "hf_dummy_test_token")
-    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+    rc = model.main(["install", "Qwen3.5-7B-Q4_K_M", "--no-lens",
                      "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "DRY-RUN" in out
-    assert "huggingface.co/unsloth/Qwen3.5-14B-GGUF" in out
+    assert entry.download_url in out
 
 
 def test_install_alt_token_env_var_also_honored(tmp_path, monkeypatch, capsys):
     """HUGGING_FACE_HUB_TOKEN (HF SDK alt spelling) should work too."""
+    _use_a_registry_of_one_gated_entry(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "hf_dummy_alt")
-    rc = model.main(["install", "Qwen3.5-14B-Q5_K_M", "--no-lens",
+    rc = model.main(["install", "Qwen3.5-7B-Q4_K_M", "--no-lens",
                      "--dry-run", "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0
 
@@ -329,6 +377,7 @@ def test_install_alt_token_env_var_also_honored(tmp_path, monkeypatch, capsys):
 def test_list_renders_requires_hf_token_marker_without_token(tmp_path,
                                                               monkeypatch,
                                                               capsys):
+    _use_a_registry_of_one_gated_entry(monkeypatch)
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     rc = model.main(["list", "--tier", "small", "--models-dir", str(tmp_path),
@@ -339,6 +388,7 @@ def test_list_renders_requires_hf_token_marker_without_token(tmp_path,
 
 def test_list_renders_token_present_marker_with_token(tmp_path, monkeypatch,
                                                        capsys):
+    _use_a_registry_of_one_gated_entry(monkeypatch)
     monkeypatch.setenv("HF_TOKEN", "hf_dummy")
     rc = model.main(["list", "--tier", "small", "--models-dir", str(tmp_path),
                      "--no-color"])
@@ -761,11 +811,16 @@ def test_download_server_ignores_range_restarts_cleanly(tmp_path,
     assert "SHA256 verified" in out
 
 
-def test_download_sends_authorization_header_with_hf_token(tmp_path,
-                                                             monkeypatch,
-                                                             capsys):
-    """When HF_TOKEN is set, the Request must carry an Authorization header
-    with Bearer <token>."""
+@pytest.mark.parametrize("download_url, header", [
+    pytest.param(None, "Bearer hf_test_xyz", id="a download from Hugging Face carries the token"),
+    pytest.param("https://models.example.test/Qwen3.5-9B-Q6_K.gguf", None,
+                 id="a --url download from another host carries none"),
+    pytest.param("https://not-huggingface.co/Qwen3.5-9B-Q6_K.gguf", None,
+                 id="a host whose name only ends like Hugging Face's carries none"),
+])
+def test_download_sends_the_hf_token_only_to_hugging_face(tmp_path, monkeypatch, capsys, download_url, header):
+    """With HF_TOKEN set, a download from Hugging Face carries the header
+    Authorization: Bearer <token>, and a download from another host none."""
     monkeypatch.setenv("HF_TOKEN", "hf_test_xyz")
     body = b"z" * (101 * 1024 * 1024)
     expected_sha = hashlib.sha256(body).hexdigest()
@@ -777,7 +832,7 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
         model_file=original.model_file, model_display=original.model_display,
         model_size_gb=0.11,
         lens_status=original.lens_status,
-        download_url=original.download_url, sha256=expected_sha,
+        download_url=download_url or original.download_url, sha256=expected_sha,
         license=original.license, requires_hf_token=False,
         lens_artifact_dir=original.lens_artifact_dir,
         lens_artifact_files=original.lens_artifact_files,
@@ -795,10 +850,8 @@ def test_download_sends_authorization_header_with_hf_token(tmp_path,
                      "--models-dir", str(tmp_path), "--no-color"])
     assert rc == 0, capsys.readouterr().out
     assert len(captured) == 1
-    req = captured[0]
     # Request stores headers with capitalized first letter.
-    assert req.has_header("Authorization")
-    assert req.get_header("Authorization") == "Bearer hf_test_xyz"
+    assert captured[0].get_header("Authorization") == header
 
 
 def test_download_401_keeps_part_for_retry(tmp_path, monkeypatch, capsys):
@@ -1206,6 +1259,58 @@ def test_resume_416_verified_small_part_finalizes(tmp_path, monkeypatch,
     assert "already complete" in out
     assert (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
     assert not p.exists()
+
+
+# ---------------------------------------------------------------------------
+# The download's checks before and after its GET
+# ---------------------------------------------------------------------------
+
+def test_resume_from_a_part_that_cannot_be_read_stops_before_the_download(
+        tmp_path, monkeypatch, capsys):
+    """The .part's bytes cannot be read back into the hash (here the .part
+    is a directory), so the install stops before it asks the server."""
+    _stub_ample_disk(monkeypatch)
+    part = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    part.mkdir()
+    (part / "x").write_text("x")
+
+    def no_download(*a, **kw):
+        raise AssertionError("the install must stop before it downloads")
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_download)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K",
+                     "--models-dir", str(tmp_path), "--no-color"])
+    assert rc == 1
+    assert "Cannot read existing .part for hash continuation" in capsys.readouterr().out
+
+
+def test_resume_answered_with_neither_200_nor_206_keeps_the_part(tmp_path, monkeypatch,
+                                                                    capsys):
+    _patched_9b(monkeypatch, None)
+    _stub_ample_disk(monkeypatch)
+    part = tmp_path / "Qwen3.5-9B-Q6_K.gguf.part"
+    part.write_bytes(b"x" * 1024)
+    _install_with_fake_urlopen(monkeypatch, body=b"y" * 2048, status=302)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--no-color", "--no-artifacts"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Unexpected response to Range request: HTTP 302. Aborting." in out
+    assert part.read_bytes() == b"x" * 1024
+
+
+def test_download_too_small_to_be_a_model_is_removed(tmp_path, monkeypatch, capsys):
+    body = b"z" * 1024
+    _patched_9b(monkeypatch, hashlib.sha256(body).hexdigest())
+    _stub_ample_disk(monkeypatch)
+    _install_with_fake_urlopen(monkeypatch, body=body, status=200)
+    rc = model.main(["install", "Qwen3.5-9B-Q6_K", "--models-dir", str(tmp_path),
+                     "--no-color", "--no-artifacts"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Downloaded file is too small (1.0 KB)" in out
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf.part").exists()
+    assert not (tmp_path / "Qwen3.5-9B-Q6_K.gguf").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Tuple
@@ -474,16 +475,40 @@ def check_containers(services: List[Dict], start_hint: str = "docker compose up 
     return results
 
 
+_LENS_HEALTH_CHECK = "health/lens"
+
+
+def _check_lens_ready(url: str) -> CheckResult:
+    """The lens's strict address: /ready answers 200 only when scoring works,
+    and 503 with the reason when it does not."""
+    try:
+        with urllib.request.urlopen(url, timeout=5):
+            return CheckResult(_LENS_HEALTH_CHECK, "pass", "ready")
+    except urllib.error.HTTPError as e:
+        try:
+            said = json.loads(e.read()).get("detail") or {}
+        except (ValueError, AttributeError):
+            said = {}
+        reason = said.get("reason") or ("llama-server not reachable from the lens"
+                                        if said.get("llama_server") is False else f"HTTP {e.code}")
+        return CheckResult(_LENS_HEALTH_CHECK, "warn", "not ready", str(reason)[:200])
+    except Exception as e:
+        return CheckResult(_LENS_HEALTH_CHECK, "fail", "endpoint unreachable", str(e)[:200])
+
+
 def check_health_endpoints() -> List[CheckResult]:
     endpoints = [
         ("llama",   f"{LLAMA_URL}/health"),
-        ("lens",    f"{LENS_URL}/health"),
+        ("lens",    f"{LENS_URL}/ready"),
         ("v3",      f"{V3_URL}/health"),
         ("sandbox", f"{SANDBOX_URL}/health"),
         ("proxy",   f"{PROXY_URL}/health"),
     ]
     results = []
     for name, url in endpoints:
+        if name == "lens":
+            results.append(_check_lens_ready(url))
+            continue
         ok, body = _http_get(url)
         if not ok:
             detail = body[:200]
@@ -514,75 +539,113 @@ def check_health_endpoints() -> List[CheckResult]:
     return results
 
 
+def _services_cannot_read(path: str) -> Optional[str]:
+    """Why the services cannot read the token file, or None when they can.
+
+    docker-compose.yml runs the lens, V3 and the proxy as ATLAS_PROXY_UID and
+    the sandbox as ATLAS_SANDBOX_UID; `atlas init` sets both to the installing
+    user, whose file (0600, in a 0700 folder) it is. Each service stops when
+    it cannot read the file. Linux only: other hosts map file owners into
+    the containers.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    for key in ("ATLAS_PROXY_UID", "ATLAS_SANDBOX_UID"):
+        uid = int(os.environ.get(key) or _ENV.get(key) or 1000)
+        gid = int(os.environ.get(key.replace("UID", "GID")) or _ENV.get(key.replace("UID", "GID")) or 1000)
+        why = _user_cannot_read(path, key, uid, gid)
+        if why:
+            return why
+    return None
+
+
+def _user_cannot_read(path: str, key: str, uid: int, gid: int) -> Optional[str]:
+    """Why the user (uid, gid) that `key` names cannot read the token file at
+    path, or None when it can: it needs search on the folder, then read on the
+    file, in the mode bits that apply to it."""
+    for place, need in ((os.path.dirname(path), 0o1), (path, 0o4)):
+        st = os.stat(place)
+        shift = _permission_shift(st, uid, gid)
+        if uid != 0 and not (st.st_mode >> shift) & need:
+            return (f"the services run as user {uid} ({key}), but {place} belongs to user {st.st_uid} "
+                    f"with mode {oct(st.st_mode & 0o777)}: they cannot read the token, and each stops")
+    return None
+
+
+def _permission_shift(st: os.stat_result, uid: int, gid: int) -> int:
+    """Where the mode bits that apply to uid and gid sit: the owner's, the
+    group's, or everyone else's."""
+    if st.st_uid == uid:
+        return 6
+    if st.st_gid == gid:
+        return 3
+    return 0
+
+
+def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], tok: str) -> CheckResult:
+    """One request behind the token, made twice: a wrong token must get 401,
+    and the host's token must not."""
+    def status_with(token: str) -> int:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+    check = f"internal_auth/{name}"
+    try:
+        wrong, right = status_with("atlas-doctor-wrong-token"), status_with(tok)
+    except Exception as e:
+        return CheckResult(check, "skip", f"token present; enforcement probe skipped ({type(e).__name__})")
+    if wrong != 401:
+        return CheckResult(check, "warn", f"token file present but the {name} accepts wrong tokens",
+                           f"the {name} container predates the token or lacks the secrets mount — docker compose up -d")
+    if right == 401:
+        return CheckResult(check, "fail", f"host token rejected by the {name} (rotation without restart?)",
+                           "docker compose restart  # services reload the token")
+    return CheckResult(check, "pass", f"enforced (wrong token 401; valid token {right})")
+
+
 def check_internal_auth(atlas_root: str) -> List[CheckResult]:
     """Internal service auth: token file status + live enforcement.
 
-    Three outcomes per the auth design (proxy/auth.go, ADR 0001):
+    Per the auth design (proxy/auth.go, ADR 0001):
       - no token file       -> warn (auth disabled; localhost-only model)
       - token, loose perms  -> fail (the credential is readable by others)
-      - token configured    -> probe one authenticated surface both ways:
-        an unauthenticated POST must 401 and an authenticated GET must
-        not 401 — this catches the two silent failure modes (a service
-        that never loaded the token, and a client/server token mismatch
-        after rotation without restart). Token values never appear in
-        output.
+      - token the services cannot read -> fail (each of them stops)
+      - token configured    -> probe one surface behind the token of each
+        service both ways: a wrong token must 401 and the host's token must
+        not — this catches the two silent failure modes (a service that
+        never loaded the token, and a client/server token mismatch after
+        rotation without restart). Token values never appear in output.
     """
     from atlas import token as token_mod
-    results: List[CheckResult] = []
     ok, detail = token_mod.check_file_permissions(atlas_root)
     tok = token_mod.read_token(atlas_root)
     if not tok:
-        results.append(CheckResult(
+        return [CheckResult(
             "internal_auth", "warn",
             "internal service auth disabled (no secrets/service-token)",
             "run `atlas init` (or `atlas init --rotate-token`) to enable; "
-            "services stay open-localhost until then"))
-        return results
+            "services stay open-localhost until then")]
     if not ok:
-        results.append(CheckResult("internal_auth", "fail", detail))
-        return results
-
-    # Live enforcement probe against the proxy (representative surface;
-    # /health stays open by design so probe /v1/models).
-    probe_url = f"{PROXY_URL}/v1/models"
-    try:
-        req = urllib.request.Request(probe_url, method="GET")
-        req.add_header("Authorization", "Bearer atlas-doctor-wrong-token")
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            enforced = False
-        except urllib.error.HTTPError as e:
-            enforced = (e.code == 401)
-        if not enforced:
-            results.append(CheckResult(
-                "internal_auth", "warn",
-                "token file present but the proxy accepts wrong tokens",
-                "the proxy container predates the token or lacks the "
-                "secrets mount — docker compose up -d atlas-proxy"))
-            return results
-        req2 = urllib.request.Request(probe_url, method="GET")
-        req2.add_header("Authorization", f"Bearer {tok}")
-        try:
-            urllib.request.urlopen(req2, timeout=5)
-            results.append(CheckResult(
-                "internal_auth", "pass",
-                "enabled and enforced (401 without token, 200 with)"))
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                results.append(CheckResult(
-                    "internal_auth", "fail",
-                    "host token rejected by the proxy (rotation without "
-                    "restart?)",
-                    "docker compose restart  # services reload the token"))
-            else:
-                results.append(CheckResult(
-                    "internal_auth", "pass",
-                    f"enforced (wrong token 401; valid token {e.code})"))
-    except Exception as e:
-        results.append(CheckResult(
-            "internal_auth", "skip",
-            f"token present; enforcement probe skipped ({type(e).__name__})"))
-    return results
+        return [CheckResult("internal_auth", "fail", detail)]
+    cannot = _services_cannot_read(token_mod.token_path(atlas_root))
+    if cannot:
+        return [CheckResult("internal_auth", "fail", cannot,
+                            "set ATLAS_PROXY_UID/GID and ATLAS_SANDBOX_UID/GID in .env to the ids of the "
+                            "file's owner (`atlas init` writes them), then docker compose up -d")]
+    # Each request is cheap and changes nothing. The lens's has no valid
+    # body, so with the right token it gets 422 from the route, not 401.
+    probes = [
+        ("proxy", "GET", f"{PROXY_URL}/v1/models", None),
+        ("lens", "POST", f"{LENS_URL}/internal/lens/score-text", {}),
+        ("v3", "POST", f"{V3_URL}/internal/outline", {"path": "doctor.py", "source": ""}),
+        ("sandbox", "GET", f"{SANDBOX_URL}/jobs", None),
+    ]
+    return [_probe_service_auth(name, method, url, body, tok) for name, method, url, body in probes]
 
 
 def check_status_dimensions() -> List[CheckResult]:
@@ -818,81 +881,43 @@ def check_tier_constraints(atlas_root: Optional[str] = None) -> CheckResult:
         f"{p.disk_free_gb:.0f} GB disk)")
 
 
-def check_tier_match() -> CheckResult:
-    """PC-055 cross-check: warn if .env settings overshoot the host's tier.
-
-    Example: a user on tier-small selecting a model above that tier's
-    memory budget may OOM. Doctor flags this as a
-    warning so the user knows to either downgrade the model or upgrade
-    the GPU. We never hard-fail on tier mismatch — sometimes the user
-    knows better than the heuristic (e.g., they pre-allocated VRAM
-    elsewhere and want a smaller-than-recommended model).
-    """
+def _lens_artifacts_warning(rec_model, actual_model: str) -> Optional[CheckResult]:
+    """On an exact tier match: the warning when the tier's model is registered
+    as Lens-supported but its artifact files are missing; None otherwise."""
+    # PC-056.1: even on exact tier match, cross-check that the
+    # claimed Lens artifacts actually exist on disk. Registry can
+    # say "supported" while the .pt files are missing — config
+    # drift that leaves the lens unable to score, which stops agent
+    # work at run time.
     try:
-        from atlas.commands import tier, model_registry
-    except ImportError as e:
-        return CheckResult("tier_match", "skip",
-            "tier module unavailable", str(e))
-    p = tier.probe()
-    if not p.has_gpu:
-        return CheckResult("tier_match", "skip",
-            "no GPU detected (cpu tier)")
-    recommended = tier.classify(p)
-    rec_model = model_registry.for_tier(recommended.tier)
-    actual_model = MODEL_FILE
-    if rec_model is not None and actual_model == rec_model.model_file:
-        # PC-056.1: even on exact tier match, cross-check that the
-        # claimed Lens artifacts actually exist on disk. Registry can
-        # say "supported" while the .pt files are missing — config
-        # drift that leaves the lens unable to score, which stops agent
-        # work at run time.
-        try:
-            from atlas.commands import model_registry
-            atlas_root = _find_atlas_root()
-            artifact_state = model_registry.lens_artifacts_present(
-                rec_model, atlas_root)
-            if not artifact_state["ok"]:
-                return CheckResult("tier_match", "warn",
-                    f"`{actual_model}` registered as Lens-supported but "
-                    f"{len(artifact_state['missing_files'])} artifact "
-                    f"file(s) missing: "
-                    f"{', '.join(artifact_state['missing_files'])}",
-                    f"Expected in {artifact_state['expected_dir']}. "
-                    f"Without these files the lens cannot score, and ATLAS "
-                    f"stops agent work, although the registry says it "
-                    f"should work. Either "
-                    f"download the artifacts (see "
-                    f"geometric-lens/geometric_lens/models/README.md) "
-                    f"or set ATLAS_LENS_MODELS to point at a dir that "
-                    f"has them.")
-        except (ImportError, AttributeError):
-            # best-effort: swallow on failure (caller continues)
-            pass
-        return CheckResult("tier_match", "pass",
-            f"{recommended.tier} tier matches configured model "
-            f"({rec_model.model_display})")
-    # Mismatch — figure out direction. Reverse-lookup which tier owns
-    # the configured model, then compare.
-    actual_tier_name = model_registry.tier_for_model(actual_model)
-    if actual_tier_name is None:
-        return CheckResult("tier_match", "warn",
-            f"configured model `{actual_model}` is not in any tier preset",
-            f"host classified as {recommended.tier}; consider one of the "
-            f"presets: `atlas tier list`")
-    # Warn only when actual > recommended (overshoot risks OOM).
-    # Undershoot (smaller model than tier supports) is fine — just
-    # leaves performance on the table.
-    tiers_order = ["cpu", "small", "medium", "large", "xlarge"]
-    rec_idx = tiers_order.index(recommended.tier)
-    act_idx = tiers_order.index(actual_tier_name)
-    if act_idx > rec_idx:
-        rec_display = (rec_model.model_display if rec_model is not None
-                       else f"the {recommended.tier}-tier preset")
-        return CheckResult("tier_match", "warn",
-            f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
-            f"hardware ({p.vram_gb:.1f} GB VRAM)",
-            f"OOM risk. Recommended for your VRAM: "
-            f"{rec_display}. Run `atlas tier` for detail.")
+        from atlas.commands import model_registry
+        atlas_root = _find_atlas_root()
+        artifact_state = model_registry.lens_artifacts_present(
+            rec_model, atlas_root)
+        if not artifact_state["ok"]:
+            return CheckResult("tier_match", "warn",
+                f"`{actual_model}` registered as Lens-supported but "
+                f"{len(artifact_state['missing_files'])} artifact "
+                f"file(s) missing: "
+                f"{', '.join(artifact_state['missing_files'])}",
+                f"Expected in {artifact_state['expected_dir']}. "
+                f"Without these files the lens cannot score, and ATLAS "
+                f"stops agent work, although the registry says it "
+                f"should work. Either "
+                f"download the artifacts (see "
+                f"geometric-lens/geometric_lens/models/README.md) "
+                f"or set ATLAS_LENS_MODELS to point at a dir that "
+                f"has them.")
+    except (ImportError, AttributeError):
+        # best-effort: swallow on failure (caller continues)
+        pass
+    return None
+
+
+def _undershoot_lens_warning(actual_model: str) -> Optional[CheckResult]:
+    """When the configured model is smaller than the tier supports: the
+    warning when it has no Lens bundle, or claims one whose files are
+    missing; None otherwise."""
     # Undershoot path: smaller model than the tier supports. Normally
     # safe (just leaves perf on the table). PC-056: also warn if the
     # actual model has no Lens artifacts — that means G(x) silently
@@ -937,6 +962,63 @@ def check_tier_match() -> CheckResult:
     except (ImportError, AttributeError):
         # best-effort: swallow on failure (caller continues)
         pass
+    return None
+
+
+def check_tier_match() -> CheckResult:
+    """PC-055 cross-check: warn if .env settings overshoot the host's tier.
+
+    Example: a user on tier-small selecting a model above that tier's
+    memory budget may OOM. Doctor flags this as a
+    warning so the user knows to either downgrade the model or upgrade
+    the GPU. We never hard-fail on tier mismatch — sometimes the user
+    knows better than the heuristic (e.g., they pre-allocated VRAM
+    elsewhere and want a smaller-than-recommended model).
+    """
+    try:
+        from atlas.commands import tier, model_registry
+    except ImportError as e:
+        return CheckResult("tier_match", "skip",
+            "tier module unavailable", str(e))
+    p = tier.probe()
+    if not p.has_gpu:
+        return CheckResult("tier_match", "skip",
+            "no GPU detected (cpu tier)")
+    recommended = tier.classify(p)
+    rec_model = model_registry.for_tier(recommended.tier)
+    actual_model = MODEL_FILE
+    if rec_model is not None and actual_model == rec_model.model_file:
+        warning = _lens_artifacts_warning(rec_model, actual_model)
+        if warning is not None:
+            return warning
+        return CheckResult("tier_match", "pass",
+            f"{recommended.tier} tier matches configured model "
+            f"({rec_model.model_display})")
+    # Mismatch — figure out direction. Reverse-lookup which tier owns
+    # the configured model, then compare.
+    actual_tier_name = model_registry.tier_for_model(actual_model)
+    if actual_tier_name is None:
+        return CheckResult("tier_match", "warn",
+            f"configured model `{actual_model}` is not in any tier preset",
+            f"host classified as {recommended.tier}; consider one of the "
+            f"presets: `atlas tier list`")
+    # Warn only when actual > recommended (overshoot risks OOM).
+    # Undershoot (smaller model than tier supports) is fine — just
+    # leaves performance on the table.
+    tiers_order = ["cpu", "small", "medium", "large", "xlarge"]
+    rec_idx = tiers_order.index(recommended.tier)
+    act_idx = tiers_order.index(actual_tier_name)
+    if act_idx > rec_idx:
+        rec_display = (rec_model.model_display if rec_model is not None
+                       else f"the {recommended.tier}-tier preset")
+        return CheckResult("tier_match", "warn",
+            f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
+            f"hardware ({p.vram_gb:.1f} GB VRAM)",
+            f"OOM risk. Recommended for your VRAM: "
+            f"{rec_display}. Run `atlas tier` for detail.")
+    warning = _undershoot_lens_warning(actual_model)
+    if warning is not None:
+        return warning
     return CheckResult("tier_match", "pass",
         f"running {actual_tier_name}-tier model on {recommended.tier}-tier "
         f"hardware (under-utilized but safe)")
@@ -1192,6 +1274,113 @@ def _emit(results: List[CheckResult], args: argparse.Namespace, color: bool,
     return 1 if n_fail else 0
 
 
+def _check_host_runtime(_add, atlas_root: str) -> None:
+    """Checks 2 to 3.6: compose, the CPU architecture, the GPU runtime, and the
+    Vulkan or Metal path when the backend asks for it. _add records a result."""
+    # 2. Docker compose v2
+    _add(check_compose())
+
+    # 2.5. CPU architecture (#115) — surface aarch64 + the backend
+    # availability matrix for arm64 hosts before the GPU check, so
+    # users see why rocm gets steered to vulkan on DGX Spark / Snapdragon
+    # X Elite / Apple Silicon / Jetson / Pi 5.
+    _add(check_arch())
+
+    # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
+    # AMD: /dev/kfd passthrough). Slow on first run since each vendor
+    # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
+    _add(check_gpu())
+
+    # Resolve which backend the user has configured. Reads shell env
+    # first, then .env in atlas_root. Without the .env fallback, the
+    # macOS hybrid case (#32) misses the metal-native check because
+    # atlas init writes ATLAS_BACKEND into .env and users rarely
+    # source it before running doctor.
+    backend = _resolve_backend(atlas_root)
+
+    # 3.5. Vulkan ICD passthrough (PC-114) — only fires when the user
+    # has explicitly opted into the Vulkan backend. Skipping by default
+    # keeps doctor cheap on CUDA/ROCm hosts where the apt-install-
+    # vulkan-tools step inside the check container would add ~30s for
+    # no signal.
+    if backend == "vulkan":
+        _add(_check_vulkan_via_docker())
+
+    # 3.6. macOS hybrid path (#32) — verify native llama-server binary
+    # exists at the setup-script's install prefix, is executable, and
+    # is listening on ATLAS_LLAMA_PORT (so the socat compose forward
+    # will succeed).
+    # Only fires when backend == metal so it's noise-free on
+    # cuda/rocm/vulkan hosts.
+    if backend == "metal":
+        _add(_check_metal_native(atlas_root))
+
+
+def _check_stack(_add, atlas_root: str) -> List[Dict]:
+    """Checks 4 to 6: the containers and, when one runs, the endpoints, the
+    internal auth and the status dimensions. Returns the compose services."""
+    # 4. Compose stack — pass atlas_root as cwd so compose finds
+    # docker-compose.yml even when doctor is invoked from elsewhere
+    # on the filesystem.
+    services = _compose_ps(atlas_root)
+
+    # 5. Per-container state
+    try:
+        start_hint = compose_config.format_command(atlas_root, ["up", "-d"])
+    except FileNotFoundError as exc:
+        _add(CheckResult("compose/backend", "fail", str(exc)))
+        start_hint = "docker compose up -d"
+    container_results = check_containers(services, start_hint=start_hint)
+    for item in container_results:
+        _add(item)
+
+    # 6. Endpoint health (only if at least one container is running)
+    if any(r.status == "pass" for r in container_results):
+        for item in check_health_endpoints():
+            _add(item)
+        for item in check_internal_auth(atlas_root):
+            _add(item)
+        for item in check_status_dimensions():
+            _add(item)
+    return services
+
+
+def _check_host_files_and_fit(_add, atlas_root: str, services: List[Dict]) -> None:
+    """Checks 7 to 10.6: the model file, the Lens weights, the ASA vector, the
+    grammar mode, the workspace mounts, the image tags and the tier fit."""
+    # 7. Model file (host-side)
+    _add(check_model_file(atlas_root))
+
+    # 8. Lens weights (host-side)
+    _add(check_lens_weights(atlas_root))
+
+    # 8.5. ASA steering vector (BiasBusters #4 — warn-not-fail). Optional
+    # but on by default when present; sits next to lens_weights since both
+    # are host-side artifact checks.
+    _add(check_asa_steering(atlas_root))
+    _add(check_grammar_mode(atlas_root))
+
+    # 9.5. Workspace mount alignment — proxy file tools and sandbox
+    # run_command must see the same host directory as /workspace, or the
+    # agent operates split-brained (reads/writes one dir, runs commands
+    # in another) with every /health still green.
+    _add(check_workspace_mounts(services))
+
+    # 10. Image-tag skew (PC-052)
+    _add(check_image_skew(services))
+
+    # 10.5. Tier match (PC-055) — soft cross-check that .env model
+    # matches host hardware. Warn on overshoot (OOM risk), pass on
+    # match or undershoot.
+    _add(check_tier_match())
+
+    # 10.6. Tier constraints (PC-055.1) — does the host meet the
+    # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
+    # but 8 GB RAM" cases where llama fits but host OOMs under V3.
+    # Pass atlas_root so disk check measures the right partition.
+    _add(check_tier_constraints(atlas_root))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="atlas doctor",
@@ -1233,99 +1422,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "skipped (docker unreachable)"))
         return _emit(results, args, color, already_printed=not args.json)
 
-    # 2. Docker compose v2
-    _add(check_compose())
+    _check_host_runtime(_add, atlas_root)
 
-    # 2.5. CPU architecture (#115) — surface aarch64 + the backend
-    # availability matrix for arm64 hosts before the GPU check, so
-    # users see why rocm gets steered to vulkan on DGX Spark / Snapdragon
-    # X Elite / Apple Silicon / Jetson / Pi 5.
-    _add(check_arch())
+    services = _check_stack(_add, atlas_root)
 
-    # 3. GPU runtime — vendor-aware (NVIDIA: nvidia-container-toolkit;
-    # AMD: /dev/kfd passthrough). Slow on first run since each vendor
-    # branch pulls a small base image (~500 MB CUDA, ~2 GB ROCm).
-    _add(check_gpu())
-
-    # Resolve which backend the user has configured. Reads shell env
-    # first, then .env in atlas_root. Without the .env fallback, the
-    # macOS hybrid case (#32) misses the metal-native check because
-    # atlas init writes ATLAS_BACKEND into .env and users rarely
-    # source it before running doctor.
-    backend = _resolve_backend(atlas_root)
-
-    # 3.5. Vulkan ICD passthrough (PC-114) — only fires when the user
-    # has explicitly opted into the Vulkan backend. Skipping by default
-    # keeps doctor cheap on CUDA/ROCm hosts where the apt-install-
-    # vulkan-tools step inside the check container would add ~30s for
-    # no signal.
-    if backend == "vulkan":
-        _add(_check_vulkan_via_docker())
-
-    # 3.6. macOS hybrid path (#32) — verify native llama-server binary
-    # exists at the setup-script's install prefix, is executable, and
-    # is listening on ATLAS_LLAMA_PORT (so the socat compose forward
-    # will succeed).
-    # Only fires when backend == metal so it's noise-free on
-    # cuda/rocm/vulkan hosts.
-    if backend == "metal":
-        _add(_check_metal_native(atlas_root))
-
-    # 4. Compose stack — pass atlas_root as cwd so compose finds
-    # docker-compose.yml even when doctor is invoked from elsewhere
-    # on the filesystem.
-    services = _compose_ps(atlas_root)
-
-    # 5. Per-container state
-    try:
-        start_hint = compose_config.format_command(atlas_root, ["up", "-d"])
-    except FileNotFoundError as exc:
-        _add(CheckResult("compose/backend", "fail", str(exc)))
-        start_hint = "docker compose up -d"
-    container_results = check_containers(services, start_hint=start_hint)
-    for item in container_results:
-        _add(item)
-
-    # 6. Endpoint health (only if at least one container is running)
-    if any(r.status == "pass" for r in container_results):
-        for item in check_health_endpoints():
-            _add(item)
-        for item in check_internal_auth(atlas_root):
-            _add(item)
-        for item in check_status_dimensions():
-            _add(item)
-
-    # 7. Model file (host-side)
-    _add(check_model_file(atlas_root))
-
-    # 8. Lens weights (host-side)
-    _add(check_lens_weights(atlas_root))
-
-    # 8.5. ASA steering vector (BiasBusters #4 — warn-not-fail). Optional
-    # but on by default when present; sits next to lens_weights since both
-    # are host-side artifact checks.
-    _add(check_asa_steering(atlas_root))
-    _add(check_grammar_mode(atlas_root))
-
-    # 9.5. Workspace mount alignment — proxy file tools and sandbox
-    # run_command must see the same host directory as /workspace, or the
-    # agent operates split-brained (reads/writes one dir, runs commands
-    # in another) with every /health still green.
-    _add(check_workspace_mounts(services))
-
-    # 10. Image-tag skew (PC-052)
-    _add(check_image_skew(services))
-
-    # 10.5. Tier match (PC-055) — soft cross-check that .env model
-    # matches host hardware. Warn on overshoot (OOM risk), pass on
-    # match or undershoot.
-    _add(check_tier_match())
-
-    # 10.6. Tier constraints (PC-055.1) — does the host meet the
-    # recommended tier's CPU/RAM/disk minimums? Catches "16 GB GPU
-    # but 8 GB RAM" cases where llama fits but host OOMs under V3.
-    # Pass atlas_root so disk check measures the right partition.
-    _add(check_tier_constraints(atlas_root))
+    _check_host_files_and_fit(_add, atlas_root, services)
 
     # 11. End-to-end smoke
     if args.quick:

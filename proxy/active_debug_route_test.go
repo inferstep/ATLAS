@@ -11,30 +11,106 @@ import (
 	"testing"
 )
 
-// The active edit-test-fix route: write_file on a file the session already
-// wrote, immediately after a FAILED run that named it. V3 is skipped so the
-// model can iterate at test speed, and this branch runs the gates itself.
+// writeRouteSyntaxErrorMark is the text the stub syntax check calls
+// unparseable. It is content, not a file name, so a baseline or a proposal can
+// carry it.
+const writeRouteSyntaxErrorMark = "def area(radius:"
+
+const writeRouteSyntaxDetail = "SyntaxError: invalid syntax (line 4)"
+
+// writeRouteBaselineMark marks the content on disk, so a case can make the
+// syntax check unavailable for the baseline alone.
+const writeRouteBaselineMark = "# baseline of record"
+
+// writeRouteServices stands in for the sandbox and the V3 service on the
+// write routes. It counts every call and records any endpoint it does not know.
+// The route tables here, in direct_write_route_test.go and in
+// newfile_route_test.go use it.
+type writeRouteServices struct {
+	URL string
+
+	mu              sync.Mutex
+	syntaxCalls     int
+	embeddedCalls   int
+	structuralCalls int
+	v3Calls         int
+	unexpected      []string
+}
+
+// writeRouteCalls is a copy of the counts, taken under the lock.
+type writeRouteCalls struct {
+	syntax, embedded, structural, v3 int
+	unexpected                       []string
+}
+
+func (s *writeRouteServices) calls() writeRouteCalls {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeRouteCalls{s.syntaxCalls, s.embeddedCalls, s.structuralCalls, s.v3Calls, s.unexpected}
+}
+
+// newWriteRouteServices starts the stub. The syntax check fails content that
+// holds writeRouteSyntaxErrorMark and answers 500 for content that holds
+// unavailableFor. The structural check reports `introduces` as unresolved in
+// content that calls it.
+func newWriteRouteServices(t *testing.T, unavailableFor, introduces string) *writeRouteServices {
+	s := &writeRouteServices{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"):
+			s.v3Calls++
+			http.Error(w, "V3 generation reached", http.StatusTeapot)
+		case r.URL.Path == "/internal/cyclomatic_complexity":
+			// Tier refinement asks this; it is not a gate.
+			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+		case r.URL.Path == "/internal/embedded_script_check":
+			s.embeddedCalls++
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
+		case r.URL.Path == "/internal/structural_check":
+			s.structuralCalls++
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			source, _ := body["source"].(string)
+			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+			if introduces != "" && strings.Contains(source, introduces+"(") {
+				out["unresolved"] = []string{introduces}
+			}
+			json.NewEncoder(w).Encode(out)
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			s.syntaxCalls++
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if unavailableFor != "" && strings.Contains(in.Code, unavailableFor) {
+				http.Error(w, "checker unavailable", http.StatusInternalServerError)
+				return
+			}
+			valid := !strings.Contains(in.Code, writeRouteSyntaxErrorMark)
+			out := map[string]interface{}{"valid": valid}
+			if !valid {
+				out["errors"] = []string{writeRouteSyntaxDetail}
+			}
+			json.NewEncoder(w).Encode(out)
+		default:
+			s.unexpected = append(s.unexpected, r.Method+" "+r.URL.Path)
+			http.Error(w, "unexpected endpoint", http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s.URL = srv.URL
+	return s
+}
+
+// The active edit-test-fix route: write_file on a file the session wrote,
+// right after a failed run that names it. V3 is skipped so the model can
+// iterate at test speed, and the route runs the gates itself.
 //
-// Every production fixture below pins the real predicate rather than assuming
-// it: session-owned existing file, most recent tool message a failed
-// run_command whose payload carries "success":false and names the target
-// basename as a whole filename token, Tier2+ content, a non-empty V3URL, and
-// isActiveDebugIteration true. Tier2+ with V3 configured is what makes the
-// routing proof mean something -- the V3 branch's every other condition holds,
-// so the predicate is the ONLY reason generation does not run, and a
-// /v3/generate request fails the test. TestActiveDebugNegativeControl flips
-// the one bit and shows V3 taking over.
+// Every Python fixture here is Tier2 and V3 is configured, so the active-debug
+// predicate is the only thing that keeps V3 off. A /v3/ request fails the
+// test, and TestActiveDebugNegativeControl flips one bit to show V3 taking over.
 
-// debugSyntaxErrorMark is the shape the sandbox stub calls unparseable. It is
-// content, not a filename, so the same fixture can carry it on either side.
-const debugSyntaxErrorMark = "def area(radius:"
-
-// baselineOnlyMark identifies the on-disk content to the stub, so a case can
-// make the checker unavailable for the BASELINE while it still answers for the
-// proposal.
-const baselineOnlyMark = "# baseline of record"
-
-const debugBaselineHealthy = baselineOnlyMark + `
+const debugBaselineHealthy = writeRouteBaselineMark + `
 import math
 
 
@@ -50,11 +126,11 @@ def perimeter(radius):
     return 2 * math.pi * radius
 `
 
-const debugBaselineBroken = baselineOnlyMark + `
+const debugBaselineBroken = writeRouteBaselineMark + `
 import math
 
 
-` + debugSyntaxErrorMark + `
+` + writeRouteSyntaxErrorMark + `
     if radius < 0:
         raise ValueError("negative radius")
     return math.pi * radius * radius
@@ -88,7 +164,7 @@ def diameter(radius):
 const debugProposalBroken = `import math
 
 
-` + debugSyntaxErrorMark + `
+` + writeRouteSyntaxErrorMark + `
     if radius < 0:
         raise ValueError("negative radius")
     return math.pi * radius * radius
@@ -100,7 +176,7 @@ def perimeter(radius):
     return 2 * math.pi * radius
 `
 
-// Parses cleanly and calls a name the file neither imports nor defines.
+// Parses, and calls a name the file neither imports nor defines.
 const debugProposalUnresolved = `import math
 
 
@@ -116,459 +192,8 @@ def perimeter(radius):
     return 2 * math.pi * radius
 `
 
-type debugRouteStub struct {
-	mu             sync.Mutex
-	syntaxCode     []string
-	embeddedCalls  int
-	structuralCode []string
-	v3Calls        int
-	unexpected     []string
-}
-
-func (s *debugRouteStub) syntaxCalls() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.syntaxCode)
-}
-
-func (s *debugRouteStub) checkerCalls() (syntax, embedded, structural int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.syntaxCode), s.embeddedCalls, len(s.structuralCode)
-}
-
-type debugRouteOpts struct {
-	rel      string // path as the model sends it
-	baseline string // content on disk before the write
-	proposal string // incoming content
-
-	noSandbox      bool   // sandbox not configured: the checker cannot run
-	unavailableFor string // content carrying this gets a non-200 from /syntax-check
-	introduces     string // structural_check reports this symbol as newly unresolved
-	passingRun     bool   // negative control: the last run SUCCEEDED
-	absent         bool   // the session owns the path but the file is gone
-	before         func(t *testing.T, dir string)
-}
-
-// runDebugRoute dispatches one write_file through the real tool path and
-// returns the result, the bytes on disk afterwards, and the stub's record.
-func runDebugRoute(t *testing.T, o debugRouteOpts) (*ToolResult, string, *debugRouteStub) {
-	t.Helper()
-	dir := t.TempDir()
-	st := &debugRouteStub{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/v3/"):
-			st.mu.Lock()
-			st.v3Calls++
-			st.mu.Unlock()
-			http.Error(w, "V3 generation reached", http.StatusTeapot)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			// A legitimate call on this path: tier refinement, not a gate.
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/embedded_script_check":
-			// Counted, not rejected: reaching it is a real answer about
-			// applicability, and a fixture that asserts zero must be able to
-			// say so rather than die on an unexpected-endpoint fatal.
-			st.mu.Lock()
-			st.embeddedCalls++
-			st.mu.Unlock()
-			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "findings": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			st.mu.Lock()
-			st.structuralCode = append(st.structuralCode, src)
-			st.mu.Unlock()
-			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
-			if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
-				out["unresolved"] = []string{o.introduces}
-			}
-			json.NewEncoder(w).Encode(out)
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			var in struct{ Code string }
-			json.NewDecoder(r.Body).Decode(&in)
-			st.mu.Lock()
-			st.syntaxCode = append(st.syntaxCode, in.Code)
-			st.mu.Unlock()
-			if o.unavailableFor != "" && strings.Contains(in.Code, o.unavailableFor) {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			valid := !strings.Contains(in.Code, debugSyntaxErrorMark)
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{debugSyntaxDetail}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpected = append(st.unexpected, r.Method+" "+r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
-	defer srv.Close()
-
-	target := filepath.Join(dir, o.rel)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if !o.absent {
-		if err := os.WriteFile(target, []byte(o.baseline), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.PermissionMode = PermissionYolo
-	// Generation runs only where a candidate could be delivered (C2); declared
-	// outputs make this session one, so the fixture still reaches the V3 route.
-	ctx.TaskContract = declaredOutputs(o.rel)
-	ctx.StreamFn = func(string, interface{}) {}
-	ctx.V3URL = srv.URL
-	if !o.noSandbox {
-		ctx.SandboxURL = srv.URL
-	}
-	// Session ownership plus a failing run that names the file: the two halves
-	// of the predicate.
-	ctx.SessionWrites[o.rel] = true
-	base := filepath.Base(o.rel)
-	outcome := `"success":false`
-	if o.passingRun {
-		outcome = `"success":true`
-	}
-	runMsg := `{` + outcome + `,"data":{"stderr":"Traceback (most recent call last):\n  File \"./` +
-		base + `\", line 4\nSyntaxError: invalid syntax"}}`
-	ctx.Messages = []AgentMessage{
-		{Role: "user", Content: "fix the failing module"},
-		{Role: "assistant", Content: "running it again"},
-		{Role: "tool", ToolName: "run_command", Content: runMsg},
-	}
-
-	// --- predicate, pinned rather than assumed ------------------------------
-	if _, err := os.Stat(target); o.absent != os.IsNotExist(err) {
-		t.Fatalf("destination state does not match the fixture (absent=%v): %v", o.absent, err)
-	}
-	if !ctx.SessionWrites[o.rel] {
-		t.Fatal("the session must own the file")
-	}
-	if last := ctx.Messages[len(ctx.Messages)-1]; last.Role != "tool" || last.ToolName != "run_command" {
-		t.Fatalf("the most recent message must be a run_command tool result, got %s/%s",
-			last.Role, last.ToolName)
-	}
-	if !o.passingRun && !strings.Contains(runMsg, `"success":false`) {
-		t.Fatal("the run must carry a literal failure")
-	}
-	if !mentionsFilename(runMsg, base) {
-		t.Fatalf("the run output must name %q as a whole filename token", base)
-	}
-	if tier := classifyFileTier(o.rel, o.proposal); tier < Tier2Medium {
-		t.Fatalf("fixture must be Tier2+ so the predicate is the ONLY thing "+
-			"holding V3 off, got %v", tier)
-	}
-	if ctx.V3URL == "" {
-		t.Fatal("V3 must be configured and unbypassed for the routing proof")
-	}
-	if got := isActiveDebugIteration(ctx, o.rel); got != !o.passingRun {
-		t.Fatalf("isActiveDebugIteration = %v, want %v", got, !o.passingRun)
-	}
-
-	if o.before != nil {
-		o.before(t, dir)
-	}
-	args, _ := json.Marshal(map[string]string{"path": o.rel, "content": o.proposal})
-	res := executeToolCall("write_file", args, ctx)
-
-	if len(st.unexpected) > 0 {
-		t.Fatalf("unexpected endpoints were called: %v", st.unexpected)
-	}
-	if !o.passingRun && st.v3Calls != 0 {
-		t.Fatalf("V3 generation ran (%d calls); this is not the active-debug route", st.v3Calls)
-	}
-	after, _ := os.ReadFile(target)
-	ents, _ := os.ReadDir(filepath.Dir(target))
-	for _, e := range ents {
-		if strings.Contains(e.Name(), ".atlas.tmp") {
-			t.Errorf("temporary artifact survived: %s", e.Name())
-		}
-	}
-	return res, string(after), st
-}
-
-const debugSyntaxDetail = "SyntaxError: invalid syntax (line 4)"
-
-// 1. The proposal parses: the write lands and the route reports what it saw.
-// The baseline is never consulted -- exactly one checker call.
-func TestActiveDebugProposalPasses(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy})
-
-	if !res.Success || disk != debugProposalHealthy {
-		t.Fatalf("write did not land: success=%v", res.Success)
-	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationPassed {
-		t.Errorf("got %q/%q/%q, want applied/syntax/passed",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	if st.syntaxCalls() != 1 {
-		t.Errorf("syntax-check calls = %d, want exactly 1 -- the proposal is "+
-			"evaluated once and a passing proposal never consults the baseline",
-			st.syntaxCalls())
-	}
-}
-
-// 2. The check applied and could not run. Fail-open is unchanged -- the bytes
-// land -- and the result says not_run, never passed.
-func TestActiveDebugCheckerUnavailable(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
-		noSandbox: true})
-
-	if !res.Success || disk != debugProposalHealthy {
-		t.Fatal("fail-open write did not land")
-	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationNotRun {
-		t.Errorf("got %q/%q/%q, want applied/syntax/not_run",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if res.ValidationStatus.Passed() {
-		t.Error("an unavailable checker must never read as passed")
-	}
-	if st.syntaxCalls() != 0 {
-		t.Errorf("syntax-check calls = %d, want 0 with no sandbox configured", st.syntaxCalls())
-	}
-}
-
-// 3. The proposal demonstrably fails and the baseline demonstrably passes:
-// the regression is refused, the bytes on disk are untouched, and the refusal
-// says which check decided it. Both sides are evaluated exactly once.
-func TestActiveDebugFailedProposalOverHealthyBaselineIsRefused(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken})
-
-	if res.Success {
-		t.Fatal("a newly introduced syntax error must be refused")
-	}
-	if disk != debugBaselineHealthy {
-		t.Fatalf("refused write changed the file: %q", disk)
-	}
-	if want := fallbackSyntaxRejection("mod.py", debugProposalBroken, debugSyntaxDetail); res.Error != want {
-		t.Errorf("rejection text changed:\n got %q\nwant %q", res.Error, want)
-	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
-		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if res.MutationStatus.Applied() {
-		t.Error("a refusal must never read as applied")
-	}
-	if res.ValidationDetail != debugSyntaxDetail {
-		t.Errorf("ValidationDetail = %q, want the checker's finding", res.ValidationDetail)
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	if st.syntaxCalls() != 2 {
-		t.Errorf("syntax-check calls = %d, want exactly 2 (proposal, then baseline once)",
-			st.syntaxCalls())
-	}
-}
-
-// 4. Both sides demonstrably fail: the repair-in-progress carveout stands, the
-// bytes land, and the result reports honestly that they do not parse.
-func TestActiveDebugFailedProposalOverBrokenBaselineLands(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalBroken})
-
-	if !res.Success {
-		t.Fatalf("a repair attempt on already-broken content must land: %q", res.Error)
-	}
-	if disk != debugProposalBroken {
-		t.Fatalf("bytes on disk are not the proposal: %q", disk)
-	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
-		t.Errorf("got %q/%q/%q, want applied/syntax/failed -- applied and failed "+
-			"are orthogonal: the file landed AND it does not parse",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if res.ValidationStatus.Passed() {
-		t.Error("landed bytes that do not parse must never read as passed")
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	if st.syntaxCalls() != 2 {
-		t.Errorf("syntax-check calls = %d, want exactly 2 (proposal, then baseline once)",
-			st.syntaxCalls())
-	}
-}
-
-// 5. The proposal demonstrably fails and the baseline evidence is unavailable.
-// Absence of evidence is not evidence of a broken baseline, so the failed
-// proposal is refused -- the same answer a passing baseline gives.
-func TestActiveDebugUnavailableBaselineRefusesFailedProposal(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
-		unavailableFor: baselineOnlyMark})
-
-	if res.Success {
-		t.Fatal("an unverifiable baseline must not unlock the failed proposal")
-	}
-	if disk != debugBaselineHealthy {
-		t.Fatalf("refused write changed the file: %q", disk)
-	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
-		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if st.syntaxCalls() != 2 {
-		t.Errorf("syntax-check calls = %d, want exactly 2", st.syntaxCalls())
-	}
-}
-
-// 6. Negative control. One bit of the predicate flips -- the last run
-// SUCCEEDED -- and the same fixture routes to V3 instead. Without this the
-// other cases could be passing on some unrelated path.
-func TestActiveDebugNegativeControl(t *testing.T) {
-	_, _, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
-		passingRun: true})
-
-	if st.v3Calls == 0 {
-		t.Fatal("with the predicate false the Tier2 write must reach V3 generation; " +
-			"the active-debug cases are therefore held off V3 by the predicate alone")
-	}
-}
-
-// 7. Mutation failure and validation success are orthogonal: bytes that were
-// checked and passed can still fail to land.
-func TestActiveDebugPassedThenWriteFailure(t *testing.T) {
-	res, disk, _ := runDebugRoute(t, debugRouteOpts{
-		rel: "ro/mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
-		before: func(t *testing.T, dir string) {
-			sub := filepath.Join(dir, "ro")
-			if err := os.Chmod(sub, 0o555); err != nil { // temp write must fail
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { os.Chmod(sub, 0o755) })
-		}})
-
-	if res.Success {
-		t.Fatal("a failed temp write must not report success")
-	}
-	if !strings.Contains(res.Error, "cannot write") {
-		t.Fatalf("failure did not occur at the temp write: %q", res.Error)
-	}
-	if disk != debugBaselineHealthy {
-		t.Fatalf("prior bytes changed on a failed write: %q", disk)
-	}
-	if res.MutationStatus != MutationFailed {
-		t.Errorf("MutationStatus = %q, want failed", res.MutationStatus)
-	}
-	if res.ValidationKind != ValidationKindSyntax || res.ValidationStatus != ValidationPassed {
-		t.Errorf("validation = %q/%q, want syntax/passed -- the observation on "+
-			"those exact bytes survives the mutation failure",
-			res.ValidationKind, res.ValidationStatus)
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-}
-
-// 8. Syntax passed on these exact bytes and the structural check refused them,
-// so structural is the decisive outcome. Recording syntax/failed here would
-// assert the opposite of what happened, and the baseline is never consulted.
-func TestActiveDebugStructuralRefusalOutranksPassingSyntax(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalUnresolved,
-		introduces: "missing_helper"})
-
-	if res.Success {
-		t.Fatal("the structural gate did not refuse")
-	}
-	if disk != debugBaselineHealthy {
-		t.Fatalf("refused write changed the file: %q", disk)
-	}
-	if !strings.Contains(res.Error, "missing_helper") {
-		t.Fatalf("refusal came from a different gate: %q", res.Error)
-	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindStructural ||
-		res.ValidationStatus != ValidationFailed {
-		t.Errorf("got %q/%q/%q, want refused/structural/failed",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if !strings.Contains(res.ValidationDetail, "missing_helper") {
-		t.Errorf("ValidationDetail must name the unresolved symbol, got %q", res.ValidationDetail)
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	if st.syntaxCalls() != 1 {
-		t.Errorf("syntax-check calls = %d, want exactly 1 -- a passing proposal "+
-			"never consults the baseline", st.syntaxCalls())
-	}
-}
-
-// 9. Residual case, and the only one that reaches the branch's OWN syntax
-// refusal. With the destination present, the existing-file regression gate
-// upstream decides first (cases 3 and 5); the branch decides only when that
-// gate could not -- here the session owns the path but a failing run removed
-// the file, so there is no baseline to read. readOriginalForGate yields "",
-// the checker finds it healthy, and the regression is refused rather than
-// landing unexamined. Behavior is unchanged; the refusal is now classified.
-func TestActiveDebugRefusesWhenNoBaselineCanBeRead(t *testing.T) {
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
-		absent: true})
-
-	if res.Success {
-		t.Fatal("a demonstrably broken proposal must not land on an unreadable baseline")
-	}
-	if disk != "" {
-		t.Fatalf("a refusal created the file: %q", disk)
-	}
-	if res.MutationStatus != MutationRefused ||
-		res.ValidationKind != ValidationKindSyntax ||
-		res.ValidationStatus != ValidationFailed {
-		t.Errorf("got %q/%q/%q, want refused/syntax/failed",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if res.ValidationDetail != debugSyntaxDetail {
-		t.Errorf("ValidationDetail = %q, want the checker's finding", res.ValidationDetail)
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	if st.syntaxCalls() != 2 {
-		t.Errorf("syntax-check calls = %d, want exactly 2 (proposal, then the "+
-			"empty baseline once)", st.syntaxCalls())
-	}
-}
-
-// 10. Neither check applies. Rust is the fixture because the applicability
-// question has to be answered by the CONTENT TYPE, not by a small file or an
-// absent service: .rs is in neither syntaxGateLanguages (no sandbox checker)
-// nor embeddedScriptExts (it cannot carry a <script> block), while a real
-// module of it classifies Tier2+ on its own logic. The routing premise is
-// therefore intact -- Tier2+, V3 configured, predicate true -- and the answer
-// is not_applicable rather than not_run: nothing here was checkable, which is
-// a different fact from "a checker was unavailable" (case 2).
+// Rust is the "no check applies" fixture: .rs has no sandbox syntax check and
+// cannot carry a <script> block, while a real module of it is Tier2 on its own.
 const debugRustBaseline = `pub fn area(radius: f64) -> f64 {
     if radius < 0.0 {
         panic!("negative radius");
@@ -608,11 +233,34 @@ pub fn describe(radius: f64) -> String {
 }
 `
 
-func TestActiveDebugNoCheckApplies(t *testing.T) {
-	if tier := classifyFileTier("engine.rs", debugRustProposal); tier < Tier2Medium {
-		t.Fatalf("the fixture must classify Tier2+ on its own content, got %v -- "+
-			"a sub-Tier2 file would prove nothing about this route", tier)
+// activeDebugSession is a session that wrote rel and then ran it. The run's
+// output is the last message and names rel. With runSucceeded false the
+// session is in the edit-test-fix loop; with true it is one bit away from it.
+func activeDebugSession(dir, rel, servicesURL string, runSucceeded bool) *AgentContext {
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.PermissionMode = PermissionYolo
+	// Generation runs only where a candidate could be delivered. Declared
+	// outputs make this session one, so V3 would run if the route allowed it.
+	ctx.TaskContract = declaredOutputs(rel)
+	ctx.StreamFn = func(string, interface{}) {}
+	ctx.V3URL = servicesURL
+	ctx.SandboxURL = servicesURL
+	ctx.SessionWrites[rel] = true
+	outcome := `"success":false`
+	if runSucceeded {
+		outcome = `"success":true`
 	}
+	ctx.Messages = []AgentMessage{
+		{Role: "user", Content: "fix the failing module"},
+		{Role: "assistant", Content: "running it again"},
+		{Role: "tool", ToolName: "run_command", Content: `{` + outcome +
+			`,"data":{"stderr":"Traceback (most recent call last):\n  File \"./` + filepath.Base(rel) +
+			`\", line 4\nSyntaxError: invalid syntax"}}`},
+	}
+	return ctx
+}
+
+func TestActiveDebugRoute(t *testing.T) {
 	if _, gated := syntaxGateLanguages[".rs"]; gated {
 		t.Fatal(".rs gained a sandbox checker; pick a type neither check applies to")
 	}
@@ -620,41 +268,243 @@ func TestActiveDebugNoCheckApplies(t *testing.T) {
 		t.Fatal(".rs gained an embedded-script check; pick a type neither check applies to")
 	}
 
-	res, disk, st := runDebugRoute(t, debugRouteOpts{
-		rel: "engine.rs", baseline: debugRustBaseline, proposal: debugRustProposal})
+	// Structural-check calls: a syntax refusal stops before that check,
+	// other writes ask it once, and a structural refusal also asks about the
+	// baseline.
+	for _, tc := range []struct {
+		name     string
+		rel      string // the path as the model sends it
+		baseline string // the file on disk before the write
+		proposal string // the content the model sends
 
-	if !res.Success {
-		t.Fatalf("the write did not land: %q", res.Error)
-	}
-	if disk != debugRustProposal {
-		t.Fatalf("bytes on disk are not the proposal: %q", disk)
-	}
-	if res.MutationStatus != MutationApplied ||
-		res.ValidationKind != ValidationKindNone ||
-		res.ValidationStatus != ValidationNotApplicable {
-		t.Errorf("got %q/%q/%q, want applied/none/not_applicable",
-			res.MutationStatus, res.ValidationKind, res.ValidationStatus)
-	}
-	if res.ValidationStatus.Passed() {
-		t.Error("nothing was checked, so nothing may read as passed")
-	}
-	if !res.Classified() {
-		t.Error("result not fully classified")
-	}
-	syntax, embedded, structural := st.checkerCalls()
-	if syntax != 0 || embedded != 0 {
-		t.Errorf("checker calls = %d syntax / %d embedded, want 0/0 -- "+
-			"applicability is decided locally, before any service question",
-			syntax, embedded)
-	}
-	if structural != 0 {
-		t.Errorf("structural_check calls = %d, want 0 (the gate is .py-scoped)", structural)
+		noSandbox      bool   // no sandbox is configured, so no check can run
+		unavailableFor string // the syntax check answers 500 for content holding this
+		introduces     string // the structural check reports this name as unresolved
+		fileGone       bool   // the session wrote the path, but the file is gone
+		readOnlyDir    bool   // the folder is read-only, so the write itself fails
+
+		wantSuccess         bool
+		wantDisk            string
+		wantMutation        MutationStatus
+		wantKind            ValidationKind
+		wantStatus          ValidationStatus
+		wantSyntaxCalls     int
+		wantStructuralCalls int
+		wantError           string // the exact error, when set
+		errorHas            string // a part of the error, when set
+		wantDetail          string // the exact validation detail, when set
+		detailHas           string // a part of the validation detail, when set
+		warns               bool   // the model is told the landed file does not parse
+	}{
+		// A passing proposal is checked once; the baseline is never asked.
+		{name: "proposal parses",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
+			wantSuccess: true, wantDisk: debugProposalHealthy,
+			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantSyntaxCalls: 1, wantStructuralCalls: 1},
+		// The check applies and cannot run: the write fails open, and the
+		// result says not_run, never passed.
+		{name: "checker unavailable",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
+			noSandbox:   true,
+			wantSuccess: true, wantDisk: debugProposalHealthy,
+			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationNotRun,
+			wantSyntaxCalls: 0, wantStructuralCalls: 1},
+		// Nothing here can be checked, which is a different fact from a
+		// checker that was unavailable. Applicability is decided locally,
+		// before any service is asked.
+		{name: "no check applies",
+			rel: "engine.rs", baseline: debugRustBaseline, proposal: debugRustProposal,
+			wantSuccess: true, wantDisk: debugRustProposal,
+			wantMutation: MutationApplied, wantKind: ValidationKindNone, wantStatus: ValidationNotApplicable,
+			wantSyntaxCalls: 0, wantStructuralCalls: 0},
+		// A repair of a file that already fails may land, and the result
+		// says the landed bytes do not parse.
+		{name: "failed proposal over a broken baseline lands",
+			rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalBroken,
+			wantSuccess: true, wantDisk: debugProposalBroken,
+			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantSyntaxCalls: 2, wantStructuralCalls: 1, warns: true},
+		{name: "parsing proposal over a broken baseline lands",
+			rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalHealthy,
+			wantSuccess: true, wantDisk: debugProposalHealthy,
+			wantMutation: MutationApplied, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantSyntaxCalls: 1, wantStructuralCalls: 1},
+		{name: "failed proposal over a healthy baseline is refused",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
+			wantSuccess: false, wantDisk: debugBaselineHealthy,
+			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantSyntaxCalls: 2, wantStructuralCalls: 0,
+			wantError:  fallbackSyntaxRejection("mod.py", debugProposalBroken, writeRouteSyntaxDetail),
+			wantDetail: writeRouteSyntaxDetail},
+		// No evidence about the baseline is not evidence that it was broken,
+		// so the failed proposal is refused.
+		{name: "unavailable baseline check refuses a failed proposal",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
+			unavailableFor: writeRouteBaselineMark,
+			wantSuccess:    false, wantDisk: debugBaselineHealthy,
+			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantSyntaxCalls: 2, wantStructuralCalls: 0},
+		// The only case that reaches the route's own syntax refusal: a failing
+		// run removed the file, so the baseline reads as "", which parses.
+		{name: "file gone, failed proposal is refused",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalBroken,
+			fileGone:    true,
+			wantSuccess: false, wantDisk: "",
+			wantMutation: MutationRefused, wantKind: ValidationKindSyntax, wantStatus: ValidationFailed,
+			wantSyntaxCalls: 2, wantStructuralCalls: 0, wantDetail: writeRouteSyntaxDetail},
+		// Bytes that were checked and passed can still fail to land.
+		{name: "check passes, then the write fails",
+			rel: "ro/mod.py", baseline: debugBaselineHealthy, proposal: debugProposalHealthy,
+			readOnlyDir: true,
+			wantSuccess: false, wantDisk: debugBaselineHealthy,
+			wantMutation: MutationFailed, wantKind: ValidationKindSyntax, wantStatus: ValidationPassed,
+			wantSyntaxCalls: 1, wantStructuralCalls: 1, errorHas: "cannot write"},
+		// Syntax passed on these bytes and the structural check refused them,
+		// so structural is the deciding verdict.
+		{name: "structural refusal outranks a passing syntax check",
+			rel: "mod.py", baseline: debugBaselineHealthy, proposal: debugProposalUnresolved,
+			introduces:  "missing_helper",
+			wantSuccess: false, wantDisk: debugBaselineHealthy,
+			wantMutation: MutationRefused, wantKind: ValidationKindStructural, wantStatus: ValidationFailed,
+			wantSyntaxCalls: 1, wantStructuralCalls: 2, errorHas: "missing_helper", detailHas: "missing_helper"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			services := newWriteRouteServices(t, tc.unavailableFor, tc.introduces)
+			dir := t.TempDir()
+			target := filepath.Join(dir, tc.rel)
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.fileGone {
+				if err := os.WriteFile(target, []byte(tc.baseline), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := activeDebugSession(dir, tc.rel, services.URL, false)
+			if tc.noSandbox {
+				ctx.SandboxURL = ""
+			}
+			if tc.readOnlyDir {
+				folder := filepath.Dir(target)
+				if err := os.Chmod(folder, 0o555); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(folder, 0o755) })
+			}
+			if tier := classifyFileTier(tc.rel, tc.proposal); tier < Tier2Medium {
+				t.Fatalf("the fixture must be Tier2 so only the predicate keeps V3 off, got %v", tier)
+			}
+			if !isActiveDebugIteration(ctx, tc.rel) {
+				t.Fatal("the fixture is not on the active-debug route")
+			}
+
+			args, _ := json.Marshal(map[string]string{"path": tc.rel, "content": tc.proposal})
+			res := executeToolCall("write_file", args, ctx)
+
+			calls := services.calls()
+			if len(calls.unexpected) > 0 {
+				t.Fatalf("unexpected endpoints were called: %v", calls.unexpected)
+			}
+			if calls.v3 != 0 {
+				t.Fatalf("V3 generation ran (%d calls); this is not the active-debug route", calls.v3)
+			}
+			if res.Success != tc.wantSuccess {
+				t.Fatalf("success = %v, want %v (error %q)", res.Success, tc.wantSuccess, res.Error)
+			}
+			disk, _ := os.ReadFile(target)
+			if string(disk) != tc.wantDisk {
+				t.Errorf("disk holds %q, want %q", disk, tc.wantDisk)
+			}
+			entries, _ := os.ReadDir(filepath.Dir(target))
+			for _, e := range entries {
+				if strings.Contains(e.Name(), ".atlas.tmp") {
+					t.Errorf("a temporary file survived: %s", e.Name())
+				}
+			}
+			if res.MutationStatus != tc.wantMutation ||
+				res.ValidationKind != tc.wantKind ||
+				res.ValidationStatus != tc.wantStatus {
+				t.Errorf("got %q/%q/%q, want %q/%q/%q",
+					res.MutationStatus, res.ValidationKind, res.ValidationStatus,
+					tc.wantMutation, tc.wantKind, tc.wantStatus)
+			}
+			if !res.Classified() {
+				t.Error("result not fully classified")
+			}
+			if calls.syntax != tc.wantSyntaxCalls {
+				t.Errorf("syntax-check calls = %d, want %d", calls.syntax, tc.wantSyntaxCalls)
+			}
+			if calls.structural != tc.wantStructuralCalls {
+				t.Errorf("structural_check calls = %d, want %d", calls.structural, tc.wantStructuralCalls)
+			}
+			// No fixture here is a type that can carry an embedded script.
+			if calls.embedded != 0 {
+				t.Errorf("embedded_script_check calls = %d, want 0", calls.embedded)
+			}
+			if tc.wantError != "" && res.Error != tc.wantError {
+				t.Errorf("error text:\n got %q\nwant %q", res.Error, tc.wantError)
+			}
+			if !strings.Contains(res.Error, tc.errorHas) {
+				t.Errorf("error %q does not name %q", res.Error, tc.errorHas)
+			}
+			if tc.wantDetail != "" && res.ValidationDetail != tc.wantDetail {
+				t.Errorf("validation detail = %q, want %q", res.ValidationDetail, tc.wantDetail)
+			}
+			if !strings.Contains(res.ValidationDetail, tc.detailHas) {
+				t.Errorf("validation detail %q does not name %q", res.ValidationDetail, tc.detailHas)
+			}
+			// The model is told when the bytes it landed do not parse, and is
+			// not warned about bytes that do.
+			if tc.wantSuccess {
+				var out WriteFileOutput
+				if err := json.Unmarshal(res.Data, &out); err != nil {
+					t.Fatalf("write_file output is not WriteFileOutput: %v (%s)", err, res.Data)
+				}
+				if tc.warns && !strings.Contains(out.Warning, "does not parse") {
+					t.Errorf("the model was not told the landed file does not parse: %q", out.Warning)
+				}
+				if !tc.warns && out.Warning != "" {
+					t.Errorf("a write that needs no warning carries one: %q", out.Warning)
+				}
+			}
+		})
 	}
 }
 
-// 11. The policy itself: only a DEMONSTRATED baseline failure unlocks a failed
-// proposal. Passed, not_run, not_applicable and Unknown all refuse -- absence
-// of evidence is not evidence that the file was already broken.
+// With the last run passed, the same write goes to V3. Without this control
+// the route cases could be passing on some unrelated path.
+func TestActiveDebugNegativeControl(t *testing.T) {
+	services := newWriteRouteServices(t, "", "")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mod.py"), []byte(debugBaselineHealthy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := activeDebugSession(dir, "mod.py", services.URL, true)
+	if isActiveDebugIteration(ctx, "mod.py") {
+		t.Fatal("a passed run must not put the session on the active-debug route")
+	}
+
+	args, _ := json.Marshal(map[string]string{"path": "mod.py", "content": debugProposalHealthy})
+	executeToolCall("write_file", args, ctx)
+
+	calls := services.calls()
+	if len(calls.unexpected) > 0 {
+		t.Fatalf("unexpected endpoints were called: %v", calls.unexpected)
+	}
+	if calls.v3 == 0 {
+		t.Fatal("with the predicate false the Tier2 write must reach V3 generation")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".atlas.tmp") {
+			t.Errorf("a temporary file survived: %s", e.Name())
+		}
+	}
+}
+
+// Only a demonstrated baseline failure unlocks a failed proposal. Passed,
+// not_run, not_applicable and unknown all refuse.
 func TestBaselineAllowsRepairOnlyOnDemonstratedFailure(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -672,58 +522,5 @@ func TestBaselineAllowsRepairOnlyOnDemonstratedFailure(t *testing.T) {
 				t.Errorf("baselineAllowsRepair(%q) = %v, want %v", c.in.Status, got, c.want)
 			}
 		})
-	}
-}
-
-// Landing unparseable bytes silently is the same as lying about them.
-//
-// The route above asserts the SERVER-SIDE verdict: applied + syntax + failed.
-// Nothing asserted what the model is handed, and the model is the only party
-// that can act on it. It was handed {"bytes_written":N} and nothing else,
-// which reads as a clean write.
-//
-// Measured on multifile_cli rep2. The model rewrote test_store.py containing
-// `store.add("Buy milk"")`, was told the write succeeded, ran pytest, could
-// not reconcile the failure with a write it had been told was fine, and
-// resent content until the repetition breaker closed the path. The file was
-// still unparseable when the session ended, and the sandbox had been
-// answering valid:false for those exact bytes the whole time.
-func TestLandedUnparseableBytesTellTheModelSo(t *testing.T) {
-	res, disk, _ := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalBroken})
-
-	if !res.Success || disk != debugProposalBroken {
-		t.Fatalf("precondition: the repair attempt must land (success=%v)", res.Success)
-	}
-	var out WriteFileOutput
-	if err := json.Unmarshal(res.Data, &out); err != nil {
-		t.Fatalf("write_file output is not WriteFileOutput: %v (%s)", err, res.Data)
-	}
-	if out.Warning == "" {
-		t.Fatal("the model was told the write succeeded and nothing else, " +
-			"over bytes the checker had just reported as invalid")
-	}
-	if !strings.Contains(out.Warning, "does not parse") {
-		t.Errorf("warning does not say the file is broken: %q", out.Warning)
-	}
-	// The same fact, and it must not disagree with the server-side verdict.
-	if res.ValidationStatus != ValidationFailed {
-		t.Errorf("warned the model but recorded %q", res.ValidationStatus)
-	}
-}
-
-// Negative control: a rewrite that parses must NOT be warned about.
-func TestALandedParsingRewriteCarriesNoWarning(t *testing.T) {
-	res, _, _ := runDebugRoute(t, debugRouteOpts{
-		rel: "mod.py", baseline: debugBaselineBroken, proposal: debugProposalHealthy})
-	if !res.Success {
-		t.Fatalf("a parsing repair must land: %q", res.Error)
-	}
-	var out WriteFileOutput
-	if err := json.Unmarshal(res.Data, &out); err != nil {
-		t.Fatalf("write_file output is not WriteFileOutput: %v (%s)", err, res.Data)
-	}
-	if out.Warning != "" {
-		t.Errorf("a clean rewrite was warned about: %q", out.Warning)
 	}
 }

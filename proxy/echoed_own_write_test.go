@@ -5,93 +5,80 @@ import (
 	"testing"
 )
 
-// add_function rep 2 (smoke run 2026-09-28): the model re-sent the test file
-// it had just written, three times, and was told each time that it did not
-// need to reproduce input data. The test never ran, and passing work ended
-// "stopped". For the session's own file the refusal says what happened and
-// what comes next.
+// A model that re-sends the file it just wrote must be told to run it. Told
+// instead that it need not reproduce input data, it re-sent the file again
+// and the test never ran.
 
-// ownTestFile is long enough (over 200 bytes) to count as an echo.
+// ownTestFile is over 200 bytes, so it counts as an echo for any file.
 const ownTestFile = "from stats import mean, median\n\n\ndef test_mean():\n" +
 	"    assert mean([1, 2, 3]) == 2.0\n    assert mean([1, 2, 3, 4]) == 2.5\n\n\n" +
 	"def test_median():\n    assert median([1, 3, 2]) == 2\n    assert median([1, 2, 3, 4]) == 2.5\n" +
 	"    assert median([1]) == 1\n\n\nif __name__ == '__main__':\n    test_mean()\n    test_median()\n"
 
-func TestAnEchoOfTheSessionsOwnFileSaysRunIt(t *testing.T) {
-	ctx, _ := exactEditWorld(t, "test_stats.py", ownTestFile)
-	ctx.SessionWrites["test_stats.py"] = true
-	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-		"path": "test_stats.py", "content": ownTestFile})
-	if res.Success {
-		t.Fatal("an echoed write was applied")
-	}
-	for _, want := range []string{"already holds exactly this content",
-		"You wrote it earlier in this session", "run it"} {
-		if !strings.Contains(res.Error, want) {
-			t.Errorf("refusal lacks %q:\n%s", want, res.Error)
-		}
-	}
-	if strings.Contains(res.Error, "input or fixture data") {
-		t.Errorf("the session's own file was treated as fixture data:\n%s", res.Error)
-	}
-}
-
-func TestAnEchoOfAFileTheSessionDidNotWriteKeepsTheFixtureWording(t *testing.T) {
-	ctx, _ := exactEditWorld(t, "test_stats.py", ownTestFile)
-	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-		"path": "test_stats.py", "content": ownTestFile})
-	if res.Success || !strings.Contains(res.Error, "input or fixture data") {
-		t.Errorf("want the fixture refusal, got success=%v:\n%s", res.Success, res.Error)
-	}
-}
-
-// offbyone (ccc71fc smoke runs, 2026-09-29): the test file the session wrote,
-// recorded byte for byte from its fenced fetch. It is 76 bytes, under the
-// 200-byte echo floor, so each of five identical re-sends was written again,
-// the file never ran, and passing work ended stopped/repeat_detector.
+// smallOwnTestFile is 76 bytes, under the 200-byte echo floor. The floor
+// applies only to files the session did not write.
 const smallOwnTestFile = "from chunk import chunks\n\nresult = chunks([1, 2, 3, 4, 5], 2)\nprint(result)\n"
 
-func TestASmallReSendOfTheSessionsOwnFileSaysRunIt(t *testing.T) {
-	ctx, path := exactEditWorld(t, "test_chunk.py", smallOwnTestFile)
-	ctx.SessionWrites["test_chunk.py"] = true
-	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-		"path": "test_chunk.py", "content": smallOwnTestFile})
-	if res.Success {
-		t.Fatal("a re-send of the session's own 76-byte file was written again")
-	}
-	for _, want := range []string{"already holds exactly this content",
-		"You wrote it earlier in this session", "run it"} {
-		if !strings.Contains(res.Error, want) {
-			t.Errorf("refusal lacks %q:\n%s", want, res.Error)
-		}
-	}
-	if got := diskBytes(t, path); got != smallOwnTestFile {
-		t.Errorf("the refusal changed the file:\n%q", got)
-	}
-}
+func TestWriteFileOfContentTheFileAlreadyHolds(t *testing.T) {
+	runIt := []string{"already holds exactly this content", "You wrote it earlier in this session", "run it"}
+	changedSmallFile := strings.Replace(smallOwnTestFile, "print(result)", "assert result[-1] == [5]\nprint(result)", 1)
 
-func TestAChangedSmallWriteOfTheSessionsOwnFileLands(t *testing.T) {
-	ctx, path := exactEditWorld(t, "test_chunk.py", smallOwnTestFile)
-	ctx.SessionWrites["test_chunk.py"] = true
-	changed := strings.Replace(smallOwnTestFile, "print(result)", "assert result[-1] == [5]\nprint(result)", 1)
-	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-		"path": "test_chunk.py", "content": changed})
-	if !res.Success {
-		t.Fatalf("a changed write of the session's own file was refused: %s", res.Error)
-	}
-	if got := diskBytes(t, path); got != changed {
-		t.Errorf("disk holds %q, want the changed content", got)
-	}
-}
+	for _, tc := range []struct {
+		name         string
+		path         string
+		onDisk       string
+		sessionWrote bool
+		send         string
+		wantSuccess  bool
+		errorHas     []string
+		errorLacks   string
+	}{
+		{name: "own file re-sent",
+			path: "test_stats.py", onDisk: ownTestFile, sessionWrote: true, send: ownTestFile,
+			errorHas: runIt, errorLacks: "input or fixture data"},
+		{name: "small own file re-sent",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, sessionWrote: true, send: smallOwnTestFile,
+			errorHas: runIt, errorLacks: "input or fixture data"},
+		{name: "changed small own file lands",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, sessionWrote: true, send: changedSmallFile,
+			wantSuccess: true},
+		{name: "file the session did not write gets the fixture wording",
+			path: "test_stats.py", onDisk: ownTestFile, send: ownTestFile,
+			errorHas: []string{"input or fixture data"}},
+		// A short file sent back unchanged proves nothing about retyping a
+		// fixture.
+		{name: "small file the session did not write is not an echo",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, send: smallOwnTestFile,
+			wantSuccess: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, path := exactEditWorld(t, tc.path, tc.onDisk)
+			if tc.sessionWrote {
+				ctx.SessionWrites[tc.path] = true
+			}
 
-func TestASmallFileTheSessionDidNotWriteIsNotRefusedAsAnEcho(t *testing.T) {
-	// The floor stays for files the session did not write: a short file sent
-	// back unchanged proves nothing about retyping a fixture.
-	ctx, _ := exactEditWorld(t, "test_chunk.py", smallOwnTestFile)
-	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-		"path": "test_chunk.py", "content": smallOwnTestFile})
-	if !res.Success && strings.Contains(res.Error, "already holds exactly this content") {
-		t.Errorf("a small file the session did not write was refused as an echo:\n%s", res.Error)
+			res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
+				"path": tc.path, "content": tc.send})
+
+			if res.Success != tc.wantSuccess {
+				t.Fatalf("success = %v, want %v (error %q)", res.Success, tc.wantSuccess, res.Error)
+			}
+			for _, want := range tc.errorHas {
+				if !strings.Contains(res.Error, want) {
+					t.Errorf("refusal lacks %q:\n%s", want, res.Error)
+				}
+			}
+			if tc.errorLacks != "" && strings.Contains(res.Error, tc.errorLacks) {
+				t.Errorf("refusal says %q:\n%s", tc.errorLacks, res.Error)
+			}
+			wantDisk := tc.onDisk
+			if tc.wantSuccess {
+				wantDisk = tc.send
+			}
+			if got := diskBytes(t, path); got != wantDisk {
+				t.Errorf("disk holds %q, want %q", got, wantDisk)
+			}
+		})
 	}
 }
 

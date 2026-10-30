@@ -12,16 +12,10 @@ import (
 )
 
 // A truncated read must say which lines it returned, and must not tell a model
-// reading SOURCE that the part it can see is enough.
-//
-// Measured on smallrung_toml, 0 of 6. executor_server.py is 2026 lines with two
-// routines dispatching on `lang`: normalize_language at 208 (aliases only) and
-// _syntax_check_impl at 1266 (the one the request describes). A default read
-// returns the first 214 lines, so the decoy is visible and the target is not.
-// All six sessions edited the decoy. Two paginated with offset=214 and were
-// told "showing the first 225 of 2026 lines" -- a false label that makes
-// pagination look broken. None called search_files or outline_file, while the
-// notice said the rest was unnecessary.
+// reading SOURCE that the part it can see is enough. In a long source file the
+// routine a request is about can sit far below a similar one near the top: a
+// model told the head is enough edits the wrong one, and a model whose
+// offset read is labelled "the first N lines" thinks pagination is broken.
 func bigSourceFile(t *testing.T, dir, name string, lines int) string {
 	t.Helper()
 	var sb strings.Builder
@@ -91,8 +85,7 @@ func TestATruncatedReadReportsTheWindowItActuallyReturned(t *testing.T) {
 	}
 	if m2[1] != "215" {
 		t.Errorf("offset=214 labelled as starting at line %s, want 215 — "+
-			"this is the false 'showing the first N' that made pagination "+
-			"look broken", m2[1])
+			"a false 'showing the first N' makes pagination look broken", m2[1])
 	}
 	if strings.Contains(body2, "the first") {
 		t.Errorf("offset read still calls itself 'the first': %q", tailOf(body2))
@@ -117,8 +110,8 @@ func TestTruncationAdviceMatchesTheKindOfFile(t *testing.T) {
 		t.Errorf("source read still says the head is enough: %q", tailOf(src))
 	}
 
-	// The data-file advice was measured to help on the AoC tasks and must
-	// survive: there, having the program open the file at runtime IS right.
+	// The data-file advice stays: for a data file, having the program open it
+	// at runtime IS right.
 	data := readWindow(t, ctx, "input.txt", nil)
 	if !strings.Contains(data, "have your") || !strings.Contains(data, "program open it") {
 		t.Errorf("data read lost the runtime-open advice: %q", tailOf(data))

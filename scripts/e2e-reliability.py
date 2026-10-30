@@ -34,7 +34,6 @@ workspace the proxy has mounted at /workspace.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
@@ -45,15 +44,20 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 from code_quality import analyze as analyze_quality
+from reliability_detectors import (h1_protocol, h3_dead_end_steering, h4_gate_escape, h5_corrupt_write,
+                                   h6_service_fault, h7_background_leak, h8_anchored_on_injected_text,
+                                   h9_tier_misapplied, model_output_guards, tui_handled_types)
+from reliability_records import Session, Task
 from reliability_report import (Stopped, log_defects, report, sibling,
                                 stop_on_signals, write_summary)
+from reliability_sandbox import (_extract_script, _file_parses, _function_names, _js_parses, _quality_parser,
+                                 _runtime_argv, _ws_path, evaluator_identity, use_sandbox)
 from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 
 # --------------------------------------------------------------------------
@@ -64,31 +68,6 @@ from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 # without reading the model's prose. `check` sees the workspace and returns
 # (passed, detail) — it must answer "did the requested change land", never
 # "did the model claim it did".
-
-
-@dataclass
-class Task:
-    name: str
-    prompt: str
-    files: dict[str, str]
-    check: Callable[[Path], tuple[bool, str]]
-    # Files the session is expected to leave parseable. Any workspace file is
-    # checked for corruption regardless; this is the subset that must exist.
-    must_exist: tuple[str, ...] = ()
-    # Fixtures that are INPUT DATA and must come back untouched. Not every
-    # fixture qualifies: add_function is handed stats.py precisely so it can
-    # edit it. Only files the task never asks to change belong here, or the
-    # check fails a session for doing exactly what it was told.
-    immutable: tuple[str, ...] = ()
-    # Follow-up messages sent after the first, each carrying the prior
-    # exchange as history. Every task before this was a single message, which
-    # left the way people actually use the tool — correct me, now do this too
-    # — completely unexercised.
-    followups: tuple[str, ...] = ()
-    # A question, not a job. The tiers exist so V3 does not run on everything:
-    # a question should get an answer from the conversational tier, with no
-    # writes and no multi-minute pipeline. Both are checked.
-    conversational: bool = False
 
 
 SNAKE_APP = (REPO / "scripts" / "fixtures" / "snake_app.py")
@@ -333,10 +312,6 @@ TASKS: dict[str, Task] = {
     ),
 }
 
-
-# --------------------------------------------------------------------------
-# Helpers shared by the checks and the corruption detector
-# --------------------------------------------------------------------------
 
 for _n in ("sonar", "course", "slope", "shoal"):
     TASKS[f"aoc_{_n}"] = _aoc_task(_n)
@@ -850,324 +825,12 @@ TASKS["multifile_cli"] = Task(
 )
 
 
-def _extract_script(src: str) -> str | None:
-    # `<script>` bare is the minority spelling. A model writing
-    # `<script type="text/javascript">` or `<SCRIPT>` used to fall straight
-    # through here, and the JS half of the quality score silently scored
-    # nothing — the file read as "no JS" rather than "JS not analysed".
-    m = re.search(r"<script\b[^>]*>(.*?)</script\b[^>]*>", src, re.S | re.I)
-    return m.group(1) if m else None
-
-
-def _js_parses(js: str) -> tuple[bool, str]:
-    node = shutil.which("node")
-    if not node:
-        return True, "node unavailable — skipped"
-    tmp = Path("/tmp/.atlas_reliability_check.js")
-    tmp.write_text(js)
-    try:
-        p = subprocess.run([node, "--check", str(tmp)],
-                           capture_output=True, text=True, timeout=30)
-        return p.returncode == 0, p.stderr.strip().splitlines()[0] if p.stderr else ""
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
-# Set once from --sandbox-container. The sandbox's interpreter is the one that
-# will run the agent's code, and it is not necessarily this script's.
-_SANDBOX_CONTAINER = ""
-# Container-side path of the run workspace, set from --subdir. Empty when no
-# sandbox was configured, which is the only case that falls back to the host.
-_SANDBOX_WORKDIR = ""
-
-
-def _runtime_argv(workdir: str = "") -> list[str]:
-    """Run the agent's code in the interpreter that actually runs it.
-
-    This script's Python is 3.9; the sandbox the agent writes and verifies its
-    code in is 3.13. Judging one with the other is how a working program gets
-    scored as broken. Measured on multifile_cli rep2, which wrote
-
-        print(f"{i}: {status} {todo["text"]}")
-
-    -- nested same-type quotes in an f-string, valid since PEP 701 (3.12+).
-    The sandbox ran the app correctly (3 tests pass, `add` and `list` both
-    work); this script raised SyntaxError and recorded a task failure, while
-    ATLAS had truthfully reported deliverables_demonstrated.
-
-    _sandbox_python_parses already established exactly this reasoning for the
-    parse check -- "this script's own interpreter is not the one the code runs
-    under ... ask the runtime that will execute it". It was never applied to
-    the checks that EXECUTE the code, which is where it matters most.
-    """
-    if _SANDBOX_CONTAINER and _SANDBOX_WORKDIR:
-        argv = ["docker", "exec"]
-        if workdir:
-            argv += ["-w", workdir]
-        return argv + [_SANDBOX_CONTAINER, "python3"]
-    return [sys.executable]
-
-
-def _ws_path(ws: Path) -> str:
-    """The workspace as the interpreter that will run the code sees it."""
-    return _SANDBOX_WORKDIR or str(ws)
-
-
-def _sandbox_python_parses(text: str) -> tuple[Optional[bool], str]:
-    """Parse `text` with the sandbox's Python, the one that will run it.
-
-    Returns (None, "") when the sandbox cannot be reached, so the caller falls
-    back to the local verdict rather than silently passing everything.
-    """
-    container = _SANDBOX_CONTAINER
-    if not container:
-        return None, ""
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "-i", container, "python3", "-c",
-             "import ast,sys\n"
-             "try:\n"
-             "    ast.parse(sys.stdin.read())\n"
-             "    print('OK')\n"
-             "except SyntaxError as e:\n"
-             "    print('ERR', e)\n"],
-            input=text, capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return None, ""
-    out = (proc.stdout or "").strip()
-    if out.startswith("OK"):
-        return True, ""
-    if out.startswith("ERR"):
-        return False, out[4:].strip()
-    return None, ""
-
-
-EVALUATOR_VERSION = "e2e-eval-v2"
-
-
-def _quality_parser():
-    return _target_parse if _SANDBOX_CONTAINER else None
-
-
-def evaluator_identity() -> dict:
-    """Which interpreter judged Python syntax in this run.
-
-    v1 used this script's interpreter for the quality count and three task
-    checks; the dev server host is 3.9 and the sandbox runs 3.13, so code
-    valid where it runs was scored unparseable. v2 asks the sandbox whenever
-    one is configured and names the fallback when it is not.
-    """
-    target = "unavailable"
-    if _SANDBOX_CONTAINER:
-        try:
-            proc = subprocess.run(["docker", "exec", _SANDBOX_CONTAINER, "python3", "-c",
-                                   "import sys; print('%d.%d.%d' % sys.version_info[:3])"],
-                                  capture_output=True, text=True, timeout=20)
-            image = subprocess.run(["docker", "inspect", "-f", "{{.Image}}", _SANDBOX_CONTAINER],
-                                   capture_output=True, text=True, timeout=20)
-            if proc.returncode == 0:
-                target = (f"sandbox {_SANDBOX_CONTAINER} python {proc.stdout.strip()} "
-                          f"image {image.stdout.strip()[:19]}")
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return {"version": EVALUATOR_VERSION, "python_parser": target,
-            "fallback": f"host python {sys.version_info.major}.{sys.version_info.minor}"}
-
-
-def _target_parse(text: str) -> tuple[Optional[bool], str]:
-    return _sandbox_python_parses(text)
-
-
-def _function_names(src: str) -> tuple[set, str]:
-    """Top-level-and-nested def names, judged by the interpreter that runs the
-    code. Returns (names, "") or (set(), error)."""
-    ok, why = _target_parse(src)
-    if ok is False:
-        return set(), why
-    try:
-        tree = ast.parse(src)
-    except SyntaxError as e:
-        if ok is None:
-            return set(), f"{e} (host python {sys.version_info.major}.{sys.version_info.minor}; sandbox unreachable)"
-        names, err = _sandbox_function_names(src)
-        return names, err
-    return {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}, ""
-
-
-def _sandbox_function_names(src: str) -> tuple[set, str]:
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", "-i", _SANDBOX_CONTAINER, "python3", "-c",
-             "import ast,json,sys\n"
-             "t=ast.parse(sys.stdin.read())\n"
-             "print(json.dumps(sorted({n.name for n in ast.walk(t) if isinstance(n, ast.FunctionDef)})))\n"],
-            input=src, capture_output=True, text=True, timeout=20)
-        return set(json.loads(proc.stdout)), ""
-    except (OSError, subprocess.SubprocessError, ValueError) as e:
-        return set(), f"sandbox could not list functions: {e}"
-
-
-def _file_parses(path: Path) -> tuple[bool, str]:
-    """Whole-file parse plus the embedded-script layer, mirroring the gates."""
-    try:
-        text = path.read_text()
-    except (UnicodeDecodeError, OSError):
-        return True, ""  # binary or unreadable: not our concern
-    if path.suffix == ".py":
-        # The interpreter that runs the code decides (evaluator v2). v1
-        # consulted it only after a host 3.9 failure, so a file valid under
-        # 3.9 and invalid under 3.13 would have passed.
-        ok, why = _target_parse(text)
-        if ok is False:
-            return False, f"python: {why}"
-        if ok is None:
-            try:
-                ast.parse(text)
-            except SyntaxError as e:
-                return False, f"python ({sys.version_info.major}.{sys.version_info.minor}): {e}"
-    js = _extract_script(text) if path.suffix in (".py", ".html", ".htm") else None
-    if js:
-        ok, err = _js_parses(js)
-        if not ok:
-            return False, f"embedded js: {err}"
-    return True, ""
-
-
-# --------------------------------------------------------------------------
-# Harness-defect detectors
-# --------------------------------------------------------------------------
-#
-# Each returns a list of human-readable defects. A session with an empty union
-# counts toward the Harness Integrity Rate. These are deliberately conservative:
-# anything ambiguous is NOT counted, so the reported rate is an upper bound on
-# integrity only in the sense that undetected classes exist — never inflated by
-# a false positive.
-
-# insert_after and replace_lines were missing, so a session whose only
-# successful write used one of them scored as "no successful write" — H4 fired
-# on go_offbyone and multifile_cli, both of which had written correctly. The
-# same omission has now been found in the lens breaker, the worked-example
-# generator, the productive-change counter, the write-gate chain, and here:
-# a set of tool names that nobody updates when a tool is added.
-# Terminal outcomes a `done` payload may carry (proxy/types.go owns the
-# vocabulary). Kept literal here because this script runs standalone against a
-# deployed proxy and must not import the CLI package.
-TERMINAL_STATUSES = ("completed", "incomplete", "stopped", "timed_out", "failed")
-
-WRITE_TOOLS = {"write_file", "edit_file", "structural_edit", "delete_file",
-               "move_file", "insert_after", "replace_lines"}
-
-
 def task_contract(task: "Task") -> dict:
     """The task mode this harness declares for a task: question for the
     conversational probes, work for everything else."""
     if task.conversational:
         return {"task_mode": "question"}
     return {"task_mode": "work"}
-
-
-def _tool_payload(result: dict) -> dict:
-    payload = (result.get("data") or {}).get("data")
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except json.JSONDecodeError:
-            return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-@dataclass
-class Session:
-    task: str
-    rep: int
-    events: list[dict]
-    workspace: Path
-    wall_s: float
-    stream_ok: bool
-    defects: list[str] = field(default_factory=list)
-    task_passed: bool = False
-    task_detail: str = ""
-    quality: dict = field(default_factory=dict)
-    # Containers that restarted, were OOM-killed or went away while the
-    # session ran (stack_changes). A measured outcome over an unstable stack
-    # says so.
-    stack_changes: list[str] = field(default_factory=list)
-    # Each permission prompt of the session and what the runner answered.
-    prompts: list[dict] = field(default_factory=list)
-
-    def of_type(self, t: str) -> list[dict]:
-        return [e for e in self.events if e.get("type") == t]
-
-    @property
-    def v3(self) -> dict:
-        """What the V3 pipeline did in this session, read from the stream.
-
-        planner: /v3/plan events. writes: write-tool calls. generated: write
-        calls during which the generation pipeline emitted anything (beyond
-        the planner). delivered: write results whose bytes V3's candidate
-        supplied (v3_used). A run labelled as measuring ATLAS with zero
-        generations measured the agent loop without V3, and says so.
-        """
-        planner = sum(1 for e in self.events if e.get("type") in ("v3_plan", "plan_loaded"))
-        writes = generated = delivered = 0
-        in_write = saw_v3 = False
-        for e in self.events:
-            t = str(e.get("type") or "")
-            d = e.get("data") or {}
-            if t == "tool_call":
-                in_write = d.get("name") in WRITE_TOOLS
-                saw_v3 = False
-                if in_write:
-                    writes += 1
-            elif in_write and t.startswith("v3_") and t != "v3_plan":
-                saw_v3 = True
-            elif t == "tool_result" and in_write:
-                generated += saw_v3
-                delivered += bool(_tool_payload(e).get("v3_used"))
-                in_write = saw_v3 = False
-        return {"planner_events": planner, "write_calls": writes,
-                "generated": generated, "delivered": delivered}
-
-    @property
-    def capped(self) -> bool:
-        """True when this runner stopped reading at --timeout.
-
-        The stream was cut from this side, so the absence of a `done`
-        event says nothing about the proxy's behaviour.
-        """
-        return any("harness cap:" in str(e.get("data", {}).get("error", ""))
-                   for e in self.of_type("error"))
-
-
-def h1_protocol(s: Session, known_types: set[str]) -> list[str]:
-    """Every tool_call answered, stream terminated, every event type known."""
-    out = []
-    calls = len(s.of_type("tool_call"))
-    results = len(s.of_type("tool_result"))
-    # A capped session is cut at an arbitrary point, so the call that was
-    # in flight when we stopped reading has no result yet. More than one
-    # unanswered call is still a real mismatch.
-    allowed_orphans = 1 if s.capped else 0
-    if calls - results > allowed_orphans or results > calls:
-        out.append(f"H1 protocol: {calls} tool_call vs {results} tool_result "
-                   f"(orphaned call)")
-    if s.capped:
-        # This runner stopped reading at --timeout, so there was no
-        # opportunity to send `done` and the socket closed mid-stream.
-        # Charging that to the proxy as two protocol violations counts
-        # our own deadline as its defect. Report the deadline instead.
-        out.append(f"H1 timeout: runner cap cut the session at "
-                   f"{s.wall_s:.0f}s before it finished")
-    else:
-        if not s.of_type("done"):
-            out.append("H1 protocol: stream ended without a done event")
-        if not s.stream_ok:
-            out.append("H1 protocol: stream terminated abnormally")
-    seen = {e.get("type") for e in s.events}
-    unknown = sorted(t for t in seen if t and t not in known_types)
-    if unknown:
-        out.append(f"H1 protocol: event type(s) the TUI cannot render: {unknown}")
-    return out
 
 
 def h2_false_rejection(s: Session) -> list[str]:
@@ -1205,364 +868,17 @@ def h2_false_rejection(s: Session) -> list[str]:
     return out
 
 
-def h3_dead_end_steering(s: Session) -> list[str]:
-    """Steering that names a remedy the very next call is rejected for using.
-
-    The D10 class: a nudge offered an HTML <tag> selector for a .py file, the
-    model complied, and the tool refused it as unsupported.
-    """
-    out = []
-    results = s.of_type("tool_result")
-    calls = s.of_type("tool_call")
-    for i, ev in enumerate(results[:-1]):
-        d = ev.get("data") or {}
-        if d.get("success"):
-            continue
-        advice = str(d.get("error") or "")
-        nxt = (results[i + 1].get("data") or {})
-        if nxt.get("success"):
-            continue
-        nxt_err = str(nxt.get("error") or "")
-        if not re.search(r"unknown selector|unsupported|not supported|HTML-only",
-                         nxt_err, re.I):
-            continue
-        used = ""
-        if i + 1 < len(calls):
-            used = str(((calls[i + 1].get("data") or {}).get("args") or {})
-                       .get("selector") or "")
-        if not used:
-            continue
-        # Match on FORM, not on the literal string. The observed defect was
-        # advice offering `<body>` on a .py file and the model reaching for
-        # `<script>`: a different tag, the same unsupported shape, so an
-        # exact-string check would miss the very case this exists to catch.
-        advised_forms = _selector_forms(advice)
-        if _selector_form(used) in advised_forms:
-            out.append(f"H3 dead-end steering: a rejection recommended a "
-                       f"{_selector_form(used)} selector, and the next call was "
-                       f"refused for using {used!r}")
-    return out
-
-
-def _selector_form(sel: str) -> str:
-    sel = sel.strip()
-    if sel.startswith("<") and sel.endswith(">"):
-        return "<tag>"
-    if sel.startswith("function:"):
-        return "function:NAME"
-    if sel.startswith("class:"):
-        return "class:NAME"
-    return "other"
-
-
-def _selector_forms(text: str) -> set[str]:
-    forms = set()
-    if re.search(r"<[a-zA-Z][\w-]*>", text):
-        forms.add("<tag>")
-    if "function:" in text:
-        forms.add("function:NAME")
-    if "class:" in text:
-        forms.add("class:NAME")
-    return forms
-
-
-def h4_gate_escape(s: Session, task: Task = None) -> list[str]:
-    """An action-intent session that exited having changed nothing, ungated.
-
-    The D11 class: one gate spent the shared bounce budget, so the
-    done-without-action gate never ran.
-    """
-    # A question SHOULD exit without writing. Scoring that as a gate escape
-    # reported a defect on both conversational probes for behaving exactly as
-    # asked — the inverse of the H9 check sitting right below.
-    if task is not None and task.conversational:
-        return []
-    # Read the tool name off the RESULT rather than pairing positionally with
-    # the calls: one unanswered call (a client timeout mid-stream) shifted
-    # every pair after it and silently mis-scored the rest of the session.
-    productive = any((e.get("data") or {}).get("success")
-                     and (e.get("data") or {}).get("tool") in WRITE_TOOLS
-                     for e in s.of_type("tool_result"))
-    if productive:
-        return []
-    if not s.of_type("done"):
-        return []
-    # A classified terminal answers this directly: anything but "completed"
-    # is the run saying it did not finish, which is the opposite of escaping.
-    # Absent or unrecognised falls back to the prose match below rather than
-    # being read as completion.
-    for e in s.of_type("done"):
-        raw = (e.get("data") or {}).get("status")
-        if isinstance(raw, str) and raw in TERMINAL_STATUSES and raw != "completed":
-            return []
-    # The breaker ending honestly is not an escape — it says it stopped.
-    summary = " ".join(str((e.get("data") or {}).get("summary") or "")
-                       for e in s.of_type("done"))
-    texts = " ".join(str((e.get("data") or {}).get("content") or "")
-                     for e in s.of_type("text"))
-    # "Stopped:" is how the repeated-refusal breaker opens its summary, and
-    # "ran out of turns" is how the turn-cap exit does. Matching only
-    # "stopped after" scored both of those as escaping silently while they
-    # were saying exactly what happened.
-    if re.search(r"\bstopped\b|could not|unable to|failed to|ran out of turns|"
-                 r"nothing was written|no changes were made",
-                 summary + texts, re.I):
-        return []
-    return ["H4 gate escape: exited with no successful write on an "
-            "action-intent prompt, without saying it had stopped"]
-
-
-def _reads(p: Path) -> str | None:
-    try:
-        return p.read_text()
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def h5_corrupt_write(s: Session, task: Task) -> list[str]:
-    out = []
-    for p in sorted(s.workspace.rglob("*")):
-        if not p.is_file() or p.suffix not in (".py", ".html", ".htm", ".js"):
-            continue
-        # A file the session never touched cannot be a corrupt WRITE. Measured:
-        # bugfind_tiebreak is seeded with ATLAS's own v3-service/adapters.py,
-        # which contains a regex literal for stripping script tags. The
-        # extractor's own `<script>` pattern matches inside that literal,
-        # pulls out `]*\bsrc=)[^>]*>(.*?)`, hands that to `node --check`, and
-        # reports the pristine fixture as unparseable. Both reps of the task
-        # lost harness integrity over a file they never opened — the sessions
-        # wrote nothing at all (quality.files == 0).
-        #
-        # Seeded bytes are the reference, not an allowlist: the moment the
-        # session changes the file it is checked like anything else, so a
-        # fixture the agent genuinely corrupts is still caught.
-        seeded = task.files.get(p.name)
-        if seeded is not None and _reads(p) == seeded:
-            continue
-        ok, why = _file_parses(p)
-        if not ok:
-            out.append(f"H5 corrupt write: {p.name} left unparseable ({why})")
-    for name in task.must_exist:
-        if not (s.workspace / name).exists():
-            out.append(f"H5 corrupt write: {name} was deleted")
-    return out
-
-
-def _recovered_after(s: Session, idx: int) -> bool:
-    """True when the session kept working after the event at `idx`.
-
-    A successful tool call plus a `done` afterwards means the proxy caught
-    the condition, told the model, and the model carried on.
-    """
-    rest = s.events[idx + 1:]
-    worked = any(e.get("type") == "tool_result"
-                 and (e.get("data") or {}).get("success") for e in rest)
-    finished = any(e.get("type") == "done" for e in rest)
-    return worked and finished
-
-
-def model_output_guards(s: Session) -> list[str]:
-    """The categories of the proxy's model-output guards in a session.
-
-    A guard is the proxy catching the model's own malformed output and telling
-    it: a parse failure, content swallowed by an unescaped quote, or content
-    whose intended bytes were ambiguous. Every such error event carries a
-    "category". The plumbing worked, so these are counted for the summary and
-    never as a harness defect (h6_service_fault).
-    """
-    return [str((ev.get("data") or {}).get("category"))
-            for ev in s.of_type("error") if (ev.get("data") or {}).get("category")]
-
-
-def _ended_on_work_deadline(s: Session) -> bool:
-    for ev in reversed(s.of_type("done")):
-        d = ev.get("data") or {}
-        return d.get("reason") == "work_deadline" or d.get("status") == "timed_out"
-    return False
-
-
-def h6_service_fault(s: Session) -> list[str]:
-    out = []
-    for idx, ev in enumerate(s.events):
-        if ev.get("type") != "error":
-            continue
-        d = ev.get("data") or {}
-        # A model-output guard is not a service fault, recovered or not: see
-        # model_output_guards. Smoke run 2026-09-27 (smallrung_toml): the
-        # swallowed_content guard caught a tool call cut by an unescaped quote,
-        # told the model, and the run still showed "1 harness defect" for it.
-        if d.get("category"):
-            continue
-        # The proxy's error events carry "error" (see the TUI's own case);
-        # "message" is what this harness uses for a stream-level failure it
-        # synthesises. Reading only one of them reported every real error as
-        # the string "None".
-        detail = d.get("error") or d.get("message") or json.dumps(d)[:120]
-        # The cap event is this runner's own, appended when it stops reading
-        # at --timeout. Counting it as a service fault charges our deadline
-        # to the proxy a second time — h1_protocol already reports it as the
-        # timeout it is.
-        if "harness cap:" in str(detail):
-            continue
-        # The session's own work deadline cut an LLM stream in flight. The
-        # terminal status already reports that (timed_out, work_deadline); no
-        # dependency failed. Smoke run 2026-09-28 (multifile_cli rep 2).
-        if ("context deadline exceeded" in str(detail)
-                or "context canceled" in str(detail)) and _ended_on_work_deadline(s):
-            continue
-        # A parse failure the session recovered from is the proxy doing its
-        # job, not a service outage. Measured 2026-08-03 on flask_pause rep2:
-        # the model emitted a 20 KB tool call that ran out of tokens
-        # mid-JSON, the proxy classified it (category=truncated_tool), told
-        # the model, and the session went on to pass the task — and was
-        # scored a harness defect for it. Counting recovered model behaviour
-        # here puts a floor under harness integrity that no amount of
-        # correct proxy behaviour can lift. An unrecovered one still counts:
-        # that is a session the model never got back from.
-        if "parse model response" in str(detail) and _recovered_after(s, idx):
-            continue
-        out.append(f"H6 service fault: error event {str(detail)[:160]!r}")
-    for ev in s.of_type("tool_result"):
-        err = str((ev.get("data") or {}).get("error") or "")
-        if re.search(r"\b5\d\d\b.*(?:proxy|v3|lens|sandbox)|connection refused|"
-                     r"service unavailable|internal server error", err, re.I):
-            out.append(f"H6 service fault: {err[:120]!r}")
-    return out
-
-
-def h9_tier_misapplied(s: Session, task: Task) -> list[str]:
-    """V3 ran, or files were edited, in answer to a question.
-
-    The tiers exist so the heavy pipeline does not run on everything. A
-    question should be answered from the conversational tier: a wrong answer
-    is a model limit, but spending a multi-minute V3 pipeline on "what does
-    this function do" is a product defect that costs the user minutes, and
-    editing code nobody asked to have edited is worse than slow.
-    """
-    if not task.conversational:
-        return []
-    out = []
-    v3 = [e for e in s.events
-          if str(e.get("type") or "").startswith("v3_")]
-    if v3:
-        kinds = sorted({str(e.get("type")) for e in v3})[:4]
-        out.append(f"H9 tier: the V3 pipeline ran on a question ({kinds})")
-    # Same positional-pairing hazard as H4 — read the tool off the result.
-    wrote = [r for r in s.of_type("tool_result")
-             if (r.get("data") or {}).get("tool") in WRITE_TOOLS
-             and (r.get("data") or {}).get("success")]
-    if wrote:
-        names = sorted({(r.get("data") or {}).get("tool") for r in wrote})
-        out.append(f"H9 tier: a question caused file writes ({names})")
-    return out
-
-
-def h8_anchored_on_injected_text(s: Session) -> list[str]:
-    """The model anchored an edit on text ATLAS injected, not on file content.
-
-    read_file appends a call-graph footer to the content it returns, and the
-    loop injects "[system note]:" correctives. Neither is on disk, so an
-    old_str copied from them can never match — the edit fails through no fault
-    of the model's, and it burns a turn (a measured session spent all three of
-    its failures this way and stopped). Attributing that to the model would
-    make the harness understate exactly the defects it exists to find.
-    """
-    markers = ("## Call graph (within this file)", "[system note]:",
-               "--- end of ", "The lines below are ATLAS analysis")
-    out = []
-    for ev in s.of_type("tool_call"):
-        d = ev.get("data") or {}
-        old = str(((d.get("args") or {}).get("old_str")) or "")
-        if not old:
-            continue
-        for m in markers:
-            if m in old:
-                out.append(f"H8 injected-text anchor: {d.get('name')} old_str "
-                           f"copied ATLAS's own {m.strip()!r}, which is not on disk")
-                break
-    return out
-
-
-def h7_background_leak(sandbox: str, s: Session) -> list[str]:
-    """A background job may outlive the session, but not silently.
-
-    Persistence is deliberate: an agent loop is one user message, so killing
-    jobs at its end would break "start the dev server" followed by "now curl
-    it". The defect is a job that keeps its port with nobody told — the next
-    turn then fails on a bound port with no explanation. So this fires only
-    when jobs are running AND the session never said so.
-    """
-    if not sandbox:
-        return []
-    p = subprocess.run(["docker", "exec", sandbox, "sh", "-c",
-                        "ps -eo args | grep -v grep | grep -c 'python app' || true"],
-                       capture_output=True, text=True, timeout=30)
-    n = (p.stdout or "0").strip()
-    if not (n.isdigit() and int(n) > 0):
-        return []
-    announced = any(
-        "still running" in str((e.get("data") or {}).get("summary") or "").lower()
-        or "stop_background" in str((e.get("data") or {}).get("summary") or "")
-        for e in s.of_type("done"))
-    if announced:
-        return []
-    return [f"H7 silent background leak: {n} job(s) still holding ports and the "
-            f"session never said so"]
-
-
-# --------------------------------------------------------------------------
-# TUI coverage
-# --------------------------------------------------------------------------
-
-def tui_handled_types() -> set[str]:
-    """Event types the TUI's dispatcher has a case for.
-
-    Located by content marker rather than filename so a file move does not
-    silently empty the set (the repo's contract-test convention).
-    """
-    out: set[str] = set()
-    for go in sorted((REPO / "tui").glob("*.go")):
-        if go.name.endswith("_test.go"):
-            continue
-        src = go.read_text()
-        if "appendChatEvent" not in src:
-            continue
-        for m in re.finditer(r'^\s*case ((?:"[a-z0-9_]+"(?:,\s*)?)+):',
-                             src, re.M):
-            out.update(re.findall(r'"([a-z0-9_]+)"', m.group(1)))
-    return out
-
-
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
 
-def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
+def run_session(task: Task, rep: int, url: str, workspace: Path,
                 subdir: str, timeout: int, raw_sink=None, prompt_policy: str = "deny") -> Session:
     """`raw_sink`, when given, is an open file the exact SSE lines are written
     to BEFORE anything parses them. A reconstruction bug then stays visible
     instead of overwriting its own evidence -- the parsed events beside it are
     derived, and an unparseable frame is truncated in them but whole here."""
-    # Wipe the workspace, then lay down only this task's fixtures. Resetting
-    # the fixtures alone is not isolation: solve.py from a previous AoC task
-    # survived into the next one, and a session that wrote nothing would have
-    # been scored on the earlier task's program.
-    if workspace.exists():
-        for leftover in sorted(workspace.rglob("*"), reverse=True):
-            try:
-                if leftover.is_file() or leftover.is_symlink():
-                    leftover.unlink()
-                elif leftover.is_dir():
-                    leftover.rmdir()
-            except OSError:
-                # Best-effort teardown. A leftover the harness cannot remove
-                # (busy, permission, vanished under us) must not abort the
-                # run — mkdir below recreates the workspace either way, and a
-                # survivor shows up as a fixture mismatch in the task check.
-                pass
-    workspace.mkdir(parents=True, exist_ok=True)
-    for name, content in task.files.items():
-        (workspace / name).write_text(content)
+    _reset_workspace(task, workspace)
 
     # sandbox_subdir, NOT working_dir. The proxy deliberately overrides the
     # client's working_dir with ATLAS_WORKSPACE_DIR (agent.go): the TUI sends
@@ -1619,6 +935,41 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         take({"type": "error", "data": {"error": f"stream failed: {e}"}})
 
+    _send_followups(task, rep, url, subdir, timeout, events, history, take, t0)
+    wall = time.time() - t0
+
+    s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
+                wall_s=wall, stream_ok=stream_ok, prompts=prompts)
+    return _judge_outcome(task, workspace, s)
+
+
+def _reset_workspace(task: Task, workspace: Path) -> None:
+    """Empty the workspace, then lay down only this task's fixtures."""
+    # Resetting the fixtures alone is not isolation: solve.py from a previous
+    # AoC task survived into the next one, and a session that wrote nothing
+    # would have been scored on the earlier task's program.
+    if workspace.exists():
+        for leftover in sorted(workspace.rglob("*"), reverse=True):
+            try:
+                if leftover.is_file() or leftover.is_symlink():
+                    leftover.unlink()
+                elif leftover.is_dir():
+                    leftover.rmdir()
+            except OSError:
+                # Best-effort teardown. A leftover the harness cannot remove
+                # (busy, permission, vanished under us) must not abort the
+                # run — mkdir below recreates the workspace either way, and a
+                # survivor shows up as a fixture mismatch in the task check.
+                pass
+    workspace.mkdir(parents=True, exist_ok=True)
+    for name, content in task.files.items():
+        (workspace / name).write_text(content)
+
+
+def _send_followups(task: Task, rep: int, url: str, subdir: str, timeout: int, events: list[dict],
+                    history: list[dict], take: Callable[[dict], None], t0: float) -> None:
+    """Send each follow-up message of the task in the same session, with the
+    exchange so far as its history."""
     # Follow-ups: same session, prior exchange replayed as history. The
     # assistant turn is reconstructed from what it actually emitted.
     for follow in task.followups:
@@ -1643,10 +994,11 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,  # noqa: C901
                 read_stream(resp, take, t0 + timeout)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             take({"type": "error", "data": {"error": f"followup failed: {e}"}})
-    wall = time.time() - t0
 
-    s = Session(task=task.name, rep=rep, events=events, workspace=workspace,
-                wall_s=wall, stream_ok=stream_ok, prompts=prompts)
+
+def _judge_outcome(task: Task, workspace: Path, s: Session) -> Session:
+    """Record whether the session did the task, and the quality of what it
+    wrote. A session that changed a fixture it was handed has failed."""
     # Fixture integrity first. A model that rewrites the input it was given is
     # not solving the task, and without this the symptom surfaces as a
     # confusing "wrong answer" — one session overwrote a single-line puzzle
@@ -1969,12 +1321,7 @@ def main() -> int:
     STACK.update(commit=identity["commit"], images=identity["images"],
                  identity_verified=identity["verified"], prompt_policy=args.prompts)
 
-    global _SANDBOX_CONTAINER, _SANDBOX_WORKDIR
-    _SANDBOX_CONTAINER = args.sandbox_container or ""
-    # Where the run workspace appears inside the sandbox. Both halves are
-    # required before any check leaves the host interpreter, so a run without
-    # --sandbox-container behaves exactly as it did before.
-    _SANDBOX_WORKDIR = f"/workspace/{args.subdir}" if args.subdir else ""
+    use_sandbox(args)
     if problems := preflight(args.sandbox_container, args.subdir, args.compose_project):
         for line in problems:
             print(f"error: {line}", file=sys.stderr)

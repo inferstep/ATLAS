@@ -133,7 +133,13 @@ func recoverCutCall(raw string) recoveredCall {
 	if lastArgKey != "" {
 		if _, done := rc.Args[lastArgKey]; !done {
 			rc.CutField = lastArgKey
-			marker := `"` + lastArgKey + `":"`
+			// The key as the raw JSON writes it: a quote or a backslash in it is
+			// escaped, and an HTML character is not.
+			var key strings.Builder
+			enc := json.NewEncoder(&key)
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(lastArgKey) // a string always encodes
+			marker := strings.TrimSuffix(key.String(), "\n") + `:"`
 			if i := strings.LastIndex(raw, marker); i >= 0 {
 				rc.CutLines = strings.Count(raw[i+len(marker):], `\n`) + 1
 			}

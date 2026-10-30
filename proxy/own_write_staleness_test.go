@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,17 +12,12 @@ import (
 )
 
 // An edit to a file this session wrote must not be refused as "modified since
-// last read" when nothing but the session touched it -- and must still be
-// refused when something else did.
+// last read" when nothing but the session touched it, and must still be
+// refused when something else did. A model refused a one-line repair of its
+// own file can deadlock.
 //
-// These drive the real tools through executeToolCall. The earlier fix for this
-// scenario (editViewIsCurrent) was tested only as a helper; the helper passed
-// while edit_file kept refusing at the mtime check immediately after it.
-//
-// Measured: 9 refusals in 5 saved sessions, all on a path whose last toucher
-// was the session's own write_file -- including the multifile_cli-rep2
-// deadlock and aoc_sonar-rep1, where a one-line repair of a traceback the
-// model had just read was refused.
+// These drive the real tools through executeToolCall, so the check runs where
+// the tools make it.
 
 func ownWriteCtx(t *testing.T) (*AgentContext, string) {
 	t.Helper()
@@ -70,6 +67,17 @@ func TestAnEditRightAfterTheSessionsOwnWriteIsNotRefusedAsStale(t *testing.T) {
 
 func TestAStructuralEditRightAfterTheSessionsOwnWriteIsNotRefusedAsStale(t *testing.T) {
 	ctx, dir := ownWriteCtx(t)
+	// structural_edit asks V3 for the transform. Without it the tool refuses
+	// for that reason, and the edit after the staleness check never runs.
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/internal/structural_edit" {
+			serveStructuralEdit(w, req)
+			return
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer v3.Close()
+	ctx.V3URL = v3.URL
 
 	w := callTool(t, ctx, "write_file", map[string]interface{}{
 		"path": "stats.py", "content": "def mean(xs):\n    return 0\n"})
@@ -82,14 +90,7 @@ func TestAStructuralEditRightAfterTheSessionsOwnWriteIsNotRefusedAsStale(t *test
 	if strings.Contains(toolText(s), "modified since last read") {
 		t.Fatalf("structural_edit refused the session's own write as stale: %s", toolText(s))
 	}
-	// Unit tests have no V3 service. structural_edit checks for it only AFTER
-	// the staleness check, so reaching that refusal proves staleness passed.
-	// If that ordering ever changes this branch stops proving anything -- keep
-	// the V3 check downstream of staleness, or give this test a V3 stub.
 	if !s.Success {
-		if strings.Contains(toolText(s), "V3 service URL not configured") {
-			return
-		}
 		t.Fatalf("structural_edit after own write failed for another reason: %s", toolText(s))
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "stats.py"))

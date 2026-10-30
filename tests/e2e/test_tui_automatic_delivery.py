@@ -18,62 +18,49 @@ real v3-service, fake lens, real sandbox executor.
 """
 import pytest
 
+from tests.e2e import test_v3_lens_acceptance
 from tests.e2e.conftest import drive_agent_turn, start_proxy
 from tests.e2e.test_v3_lens_acceptance import (  # fixtures, used by name
     CAND_A,
     _agent_body, _assert_no_human_gate_inside_v3, _payload, _write_result,
-    fake_lens, fake_llama, proxy, v3_service, workspace,
+    fake_lens, fake_llama, v3_service, workspace,
 )
 
-# Exactly what the TUI sends for an ordinary work message: the mode, and
-# nothing about files.
-TUI_CONTRACT = {"task_mode": "work"}
-OLDER_POLICY_SPELLINGS = ["strict", "advisory", "automatic_v3"]
+# The fixtures above start a real proxy and a real sandbox: without a built
+# proxy binary or the sandbox's packages, this file skips as that file does.
+pytestmark = test_v3_lens_acceptance.pytestmark
 
 
-def _assert_the_candidate_landed(events, root):
-    result = _write_result(events)
-    assert result["data"].get("success") is True, result["data"]
-    payload = _payload(result)
-    assert payload.get("v3_used") is True, payload
-    written = (root / "todo_app.py").read_text()
-    assert written == CAND_A, "the selected candidate did not land on the model's own target"
-    # One target, the one the tool call named. Nothing else appeared.
-    assert sorted(p.name for p in root.iterdir()) == ["todo_app.py"]
-    _assert_no_human_gate_inside_v3(events)
-
-
-def test_a_tui_work_request_delivers_to_the_structured_target(proxy, workspace):  # noqa: F811
-    events = drive_agent_turn(
-        proxy, _agent_body(workspace, task_contract=TUI_CONTRACT),
-        deadline_s=180.0)
-    _assert_the_candidate_landed(events, workspace)
-
-
-@pytest.mark.parametrize("policy", OLDER_POLICY_SPELLINGS)
-def test_an_older_clients_policy_changes_nothing(proxy, workspace, policy):  # noqa: F811
-    events = drive_agent_turn(
-        proxy, _agent_body(workspace, task_contract={**TUI_CONTRACT, "candidate_policy": policy}),
-        deadline_s=180.0)
-    _assert_the_candidate_landed(events, workspace)
-
-
-@pytest.fixture()
-def proxy_operator_strict(fake_llama, fake_lens, v3_service, sandbox_executor):  # noqa: F811
+# {"task_mode": "work"} is exactly what the TUI sends for an ordinary work message: the mode, and nothing about files.
+@pytest.mark.parametrize("task_contract, operator_env", [
+    pytest.param({"task_mode": "work"}, {}, id="what-the-tui-sends"),
+    pytest.param({"task_mode": "work", "candidate_policy": "strict"}, {}, id="an-older-client-asks-strict"),
+    pytest.param({"task_mode": "work", "candidate_policy": "advisory"}, {}, id="an-older-client-asks-advisory"),
+    pytest.param({"task_mode": "work", "candidate_policy": "automatic_v3"}, {},
+                 id="an-older-client-asks-automatic_v3"),
+    pytest.param({"task_mode": "work"}, {"ATLAS_CANDIDATE_POLICY": "strict"}, id="the-operator-sets-strict"),
+])
+def test_a_tui_work_request_delivers_to_the_structured_target(fake_llama, fake_lens, v3_service, workspace,  # noqa: F811
+                                                              sandbox_executor, task_contract, operator_env):
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
         "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
         "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
         "ATLAS_V3_URL": f"http://127.0.0.1:{v3_service}",
-        "ATLAS_CANDIDATE_POLICY": "strict",
+        **operator_env,
     })
-    yield port
-    proc.terminate()
-    proc.wait(timeout=10)
+    try:
+        events = drive_agent_turn(port, _agent_body(workspace, task_contract=task_contract), deadline_s=180.0)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
-
-def test_an_operator_policy_changes_nothing(proxy_operator_strict, workspace):  # noqa: F811
-    events = drive_agent_turn(
-        proxy_operator_strict, _agent_body(workspace, task_contract=TUI_CONTRACT),
-        deadline_s=180.0)
-    _assert_the_candidate_landed(events, workspace)
+    result = _write_result(events)
+    assert result["data"].get("success") is True, result["data"]
+    payload = _payload(result)
+    assert payload.get("v3_used") is True, payload
+    written = (workspace / "todo_app.py").read_text()
+    assert written == CAND_A, "the selected candidate did not land on the model's own target"
+    # One target, the one the tool call named. Nothing else appeared.
+    assert sorted(p.name for p in workspace.iterdir()) == ["todo_app.py"]
+    _assert_no_human_gate_inside_v3(events)

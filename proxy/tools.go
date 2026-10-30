@@ -123,6 +123,11 @@ func allTools() []*ToolDef {
 // Nothing here reads Success. Classification is never inferred from it.
 func executeToolCall(name string, args json.RawMessage, ctx *AgentContext) *ToolResult {
 	tool := getTool(name)
+	canonical, rejection := canonicalToolArgs(name, args, ctx) // one reading for every reader below
+	if rejection != "" {
+		return &ToolResult{Success: false, Error: rejection, MutationStatus: MutationNone, ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
+	}
+	args = canonical
 	// What a shell command changes is observed around it (applyShellChanges):
 	// the ledger otherwise sees only paths it already tracked. A background
 	// job's later writes are measured from the walk after the call that
@@ -190,16 +195,13 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 		}
 	}
 
-	// Distinguish "no args field at all" from "malformed args".
-	// The model occasionally emits {"type":"tool_call","name":"read_file"}
-	// with no "args" key, which lands here as nil/empty bytes. Calling
-	// json.Unmarshal on that returns "unexpected end of JSON input" — the
-	// same string a *truncated* response produces — and the old remap
-	// branch below would then tell the model "your output was truncated,
-	// use smaller edit_file calls" which is not just unhelpful, it
-	// actively steers the model away from the read_file/list_directory
-	// it was trying to make. Catch the empty case here and return a
-	// per-tool hint that tells the model exactly what shape to send.
+	// Distinguish "no args field at all" from "malformed args". The model
+	// sometimes emits a tool_call with no args key, which lands here as
+	// nil or empty bytes, and json.Unmarshal on that returns "unexpected
+	// end of JSON input", the same error a truncated response produces,
+	// which says nothing about the shape the call needs. Catch the empty
+	// case here and return a per-tool hint that tells the model exactly
+	// what shape to send.
 	trimmed := strings.TrimSpace(string(args))
 	if trimmed == "" || trimmed == "null" {
 		return &ToolResult{
@@ -210,11 +212,6 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable,
 		}
 	}
-	if reason := validateToolWorkspacePaths(name, args, ctx); reason != "" {
-		return &ToolResult{Success: false, Error: reason,
-			MutationStatus: MutationNone,
-			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
-	}
 	// Safety deny-list — sensitive targets (.env, *.pem, *credentials*,
 	// destructive shell patterns) are refused in every permission mode.
 	if denied, reason := shouldDenyToolCall(name, args); denied {
@@ -222,14 +219,12 @@ func executeToolCallInner(name string, args json.RawMessage, ctx *AgentContext) 
 			MutationStatus: MutationNone,
 			ValidationKind: ValidationKindNone, ValidationStatus: ValidationNotApplicable}
 	}
-	// The user forbade changing anything. Enforced HERE, at the one dispatch
-	// every tool passes through, and keyed on the tool's DECLARED effect --
-	// not on a tool-name list (which has gone stale repeatedly) and not on the
-	// system prompt, which a model can simply not follow. That makes the
-	// guarantee hold for arbitrary shell and background jobs
-	// (ToolEffectCommandUnobserved: `sed -i`, `rm`, a `>` redirect) exactly as
-	// it does for write_file. Measured on the 38eaa0a benchmark: 6 sessions
-	// edited a fixture after the user wrote "do not change any code".
+	// The user forbade changing anything. Enforced here, at the one dispatch
+	// every tool passes through, and keyed on the tool's declared effect, not
+	// on a tool-name list (which goes stale) and not on the system prompt,
+	// which a model can simply not follow. That makes the guarantee hold for
+	// arbitrary shell and background jobs (ToolEffectCommandUnobserved:
+	// `sed -i`, `rm`, a `>` redirect) exactly as it does for write_file.
 	if reason := readOnlyRequestRefusal(tool, ctx); reason != "" {
 		log.Printf("[tools] %s refused: the request forbids changing the workspace", name)
 		return &ToolResult{Success: false, Error: reason,
@@ -325,17 +320,15 @@ func readFileTool() *ToolDef {
 
 			path := resolveAgentPath(ctx, input.Path)
 
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
 
-			// Binary-file guard: reading a compiled binary / image /
-			// archive as text returns garbage the model can't use, after
-			// which it gives up or loops (observed 2026-07-19,
-			// extract-elf: read the ELF as text, never reached for the
-			// analysis tools that were installed). Point it at the right
-			// tools instead of handing back the raw bytes.
+			// Binary-file guard: a compiled binary, image or archive
+			// read as text gives the model bytes it cannot use, and it
+			// then gives up or loops. Point it at the inspection tools
+			// instead of returning the raw bytes.
 			if isBinaryContent(data) {
 				return &ToolResult{
 					Success: false,
@@ -347,76 +340,10 @@ func readFileTool() *ToolDef {
 			lines := strings.Split(string(data), "\n")
 			totalLines := len(lines)
 
-			start := 0
-			if input.Offset != nil {
-				start = *input.Offset
-				if start < 0 {
-					start = 0
-				}
-				if start > totalLines {
-					start = totalLines
-				}
-			}
+			start, end := readFileWindow(input, totalLines)
 
-			end := totalLines
-			if input.Limit != nil {
-				end = start + *input.Limit
-				if end > totalLines {
-					end = totalLines
-				}
-			}
-
-			// Build numbered output (matches Claude Code's cat -n format).
-			//
-			// The "N<tab>" prefix is presentation, and nothing in the payload
-			// said so, so a model reasonably concluded the file itself is
-			// tab-delimited. Observed live: an otherwise correct solution to a
-			// grid puzzle parsed every line as `line.split('\t')[1]`, found no
-			// tabs in the real file, built an empty grid and printed 0. Say it
-			// once, up front, for any read a program might be written against.
-			var sb strings.Builder
-			sb.WriteString("(Line numbers and the tab after them are added by " +
-				"read_file for reference. They are NOT in the file — code that " +
-				"reads this file must not parse them.)\n")
-			for i := start; i < end; i++ {
-				fmt.Fprintf(&sb, "%d\t%s\n", i+1, lines[i])
-			}
-
-			content := sb.String()
-			// Cap the returned BYTES so one huge read can't blow the
-			// model's context window. A model that gunzips a data file
-			// and read_files it (observed 2026-07-19, gcode-to-text: a
-			// decompressed G-code file read with limit:100000 -> 2.26M tokens
-			// -> hard 400 exceed_context_size, which the force-trim retry
-			// can't fix because the single message alone overflows). The cap
-			// is UNCONDITIONAL: a line `limit` does not bound bytes (100k
-			// lines of G-code is enormous), so capping only unbounded reads
-			// left the hole open. Truncate at a line boundary and tell the
-			// model to narrow the range or process the file with a command.
-			truncated := false
-			shownEnd := end // 1-past the last line actually returned
-			if len(content) > maxReadFileBytes {
-				cut := maxReadFileBytes
-				if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
-					cut = nl + 1
-				}
-				// content opens with the one-line "line numbers are added"
-				// header, so its newline count is one MORE than the number of
-				// numbered rows actually returned. Counting the header made
-				// the window label overshoot by a line and made shownEnd
-				// record a line the model never saw.
-				shown := strings.Count(content[:cut], "\n") - 1
-				if shown < 0 {
-					shown = 0
-				}
-				content = content[:cut] + readFileTruncationNotice(
-					start, shown, totalLines, len(data), fileIsSourceCode(input.Path))
-				truncated = true
-				shownEnd = start + shown
-				if shownEnd > totalLines {
-					shownEnd = totalLines
-				}
-			}
+			content := numberedReadFileLines(lines, start, end)
+			content, truncated, shownEnd := capReadFileBytes(content, input, data, start, end, totalLines)
 			// #147 review finding #10: on a truncated read the model only
 			// saw the head, so record ONLY that — otherwise the redundant-read
 			// dedup later asserts the whole file is in context and short-
@@ -428,20 +355,7 @@ func readFileTool() *ToolDef {
 			ctx.RecordFileRead(path, recorded)
 			ctx.RecordBodyRead(path, start+1, shownEnd, totalLines)
 
-			// Call-graph footer (issue #39). The model reads a
-			// file far more often than it outlines one, so attach the
-			// intra-file call edges to a .py read where the localization
-			// decision happens. Fire on any read that starts at the top of
-			// the file (start == 0) — that covers both a whole-file read and
-			// the model's common "offset:0, limit:N" first look; it computes
-			// the graph from the full file on disk regardless of the page
-			// shown, and skips mid-file pages so a model scrolling a big file
-			// doesn't get the footer repeated.
-			if start == 0 && strings.HasSuffix(input.Path, ".py") {
-				if footer := callGraphFooter(ctx, input.Path, string(data)); footer != "" {
-					content += footer
-				}
-			}
+			content = withCallGraphFooter(ctx, input, data, start, content)
 
 			out := ReadFileOutput{
 				Content:    content,
@@ -453,6 +367,108 @@ func readFileTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// readFileWindow is the range of lines a read returns: from the offset, for at
+// most the limit, within the file.
+func readFileWindow(input ReadFileInput, totalLines int) (int, int) {
+	start := 0
+	if input.Offset != nil {
+		start = *input.Offset
+		if start < 0 {
+			start = 0
+		}
+		if start > totalLines {
+			start = totalLines
+		}
+	}
+
+	end := totalLines
+	if input.Limit != nil {
+		end = start + *input.Limit
+		if end > totalLines {
+			end = totalLines
+		}
+	}
+	return start, end
+}
+
+// numberedReadFileLines renders lines start to end in cat -n form, under a
+// header saying the numbers are not in the file.
+func numberedReadFileLines(lines []string, start, end int) string {
+	// Build numbered output (matches Claude Code's cat -n format).
+	//
+	// The "N<tab>" prefix is presentation, and nothing in the payload
+	// said so, so a model reasonably concluded the file itself is
+	// tab-delimited. Observed live: an otherwise correct solution to a
+	// grid puzzle parsed every line as `line.split('\t')[1]`, found no
+	// tabs in the real file, built an empty grid and printed 0. Say it
+	// once, up front, for any read a program might be written against.
+	var sb strings.Builder
+	sb.WriteString("(Line numbers and the tab after them are added by " +
+		"read_file for reference. They are NOT in the file — code that " +
+		"reads this file must not parse them.)\n")
+	for i := start; i < end; i++ {
+		fmt.Fprintf(&sb, "%d\t%s\n", i+1, lines[i])
+	}
+	return sb.String()
+}
+
+// capReadFileBytes cuts a read's text at a line boundary within the byte cap
+// and appends the notice that says so. It returns the text, whether it was
+// cut, and the line after the last one it still shows.
+func capReadFileBytes(content string, input ReadFileInput, data []byte, start, end, totalLines int) (string, bool, int) {
+	// Cap the returned bytes so one huge read cannot blow the model's
+	// context window: a single message that alone overflows the window
+	// is something the force-trim retry cannot fix. The cap is
+	// unconditional, because a line `limit` does not bound bytes (100k
+	// lines of G-code is enormous). Truncate at a line boundary and
+	// append the notice from readFileTruncationNotice.
+	truncated := false
+	shownEnd := end // 1-past the last line actually returned
+	if len(content) > maxReadFileBytes {
+		cut := maxReadFileBytes
+		if nl := strings.LastIndexByte(content[:cut], '\n'); nl > 0 {
+			cut = nl + 1
+		}
+		// content opens with the one-line "line numbers are added"
+		// header, so its newline count is one MORE than the number of
+		// numbered rows actually returned. Counting the header made
+		// the window label overshoot by a line and made shownEnd
+		// record a line the model never saw.
+		shown := strings.Count(content[:cut], "\n") - 1
+		if shown < 0 {
+			shown = 0
+		}
+		content = content[:cut] + readFileTruncationNotice(
+			start, shown, totalLines, len(data), fileIsSourceCode(input.Path))
+		truncated = true
+		shownEnd = start + shown
+		if shownEnd > totalLines {
+			shownEnd = totalLines
+		}
+	}
+	return content, truncated, shownEnd
+}
+
+// withCallGraphFooter appends the file's call graph to a .py read that starts
+// at the top of the file.
+func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, start int, content string) string {
+	// Call-graph footer (issue #39). The model reads a
+	// file far more often than it outlines one, so attach the
+	// intra-file call edges to a .py read where the localization
+	// decision happens. Fire on any read that starts at the top of
+	// the file (start == 0) — that covers both a whole-file read and
+	// the model's common "offset:0, limit:N" first look; it computes
+	// the graph from the full file on disk regardless of the page
+	// shown, and skips mid-file pages so a model scrolling a big file
+	// doesn't get the footer repeated.
+	if start == 0 && strings.HasSuffix(input.Path, ".py") {
+		if footer := callGraphFooter(ctx, input.Path, string(data)); footer != "" {
+			content += footer
+		}
+	}
+	return content
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +507,7 @@ func outlineFileTool() *ToolDef {
 					Error: "outline_file: path cannot be empty. Pass {\"path\":\"<file>\"}."}, nil
 			}
 			path := resolveAgentPath(ctx, input.Path)
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("cannot read %s: %w", input.Path, err)
 			}
@@ -614,7 +630,7 @@ func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool
 		return nil, false, nil
 	}
 	var out OutlineOutput
-	if json.NewDecoder(resp.Body).Decode(&out) != nil || !out.Supported {
+	if json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out) != nil || !out.Supported {
 		return nil, false, nil
 	}
 	return out.Symbols, true, out.EmbeddedRegions
@@ -715,79 +731,8 @@ func searchFilesTool() *ToolDef {
 				return nil, fmt.Errorf("invalid regex: %w", err)
 			}
 
-			var matches []SearchMatch
 			maxMatches := 200
-			skippedCredentials := 0
-
-			err = filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return nil // skip unreadable dirs
-				}
-				if d.IsDir() {
-					base := d.Name()
-					if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				// A symlink can point outside the workspace. read_file refuses
-				// to follow one, and so does search.
-				if d.Type()&fs.ModeSymlink != 0 {
-					return nil
-				}
-
-				// Apply glob filter
-				if input.Glob != "" {
-					matched, _ := filepath.Match(input.Glob, d.Name())
-					if !matched {
-						return nil
-					}
-				}
-
-				// Skip binary/large files
-				info, err := d.Info()
-				if err != nil || info.Size() > 1<<20 { // 1MB max
-					return nil
-				}
-
-				relPath, _ := filepath.Rel(ctx.WorkingDir, path)
-				if relPath == "" {
-					relPath = path
-				}
-				// Credential files stay out of model context whichever tool
-				// asks. search_files read them while read_file refused.
-				if denyReadPathReason(relPath) != "" {
-					skippedCredentials++
-					return nil
-				}
-
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return nil
-				}
-
-				scanner := bufio.NewScanner(strings.NewReader(string(data)))
-				lineNum := 0
-				for scanner.Scan() {
-					lineNum++
-					line := scanner.Text()
-					if re.MatchString(line) {
-						matches = append(matches, SearchMatch{
-							File:    relPath,
-							Line:    lineNum,
-							Content: truncateStr(line, 200),
-						})
-						if len(matches) >= maxMatches {
-							break
-						}
-					}
-				}
-
-				if len(matches) >= maxMatches {
-					return filepath.SkipAll
-				}
-				return nil
-			})
+			matches, skippedCredentials, err := searchFileContents(ctx, input, searchPath, re, maxMatches)
 
 			if err != nil && len(matches) == 0 {
 				return nil, fmt.Errorf("search error: %w", err)
@@ -803,6 +748,106 @@ func searchFilesTool() *ToolDef {
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// searchFileContents walks searchPath and collects the lines that match re, up
+// to maxMatches, from every file the search may read. It also returns how many
+// credential files it left out.
+func searchFileContents(ctx *AgentContext, input SearchFilesInput, searchPath string,
+	re *regexp.Regexp, maxMatches int) ([]SearchMatch, int, error) {
+	var matches []SearchMatch
+	skippedCredentials := 0
+
+	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
+		read, skipDir := searchReadsEntry(input, d, walkErr)
+		if skipDir {
+			return filepath.SkipDir
+		}
+		if !read {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(ctx.WorkingDir, path)
+		if relPath == "" {
+			relPath = path
+		}
+		// Credential files stay out of model context whichever tool
+		// asks. search_files read them while read_file refused.
+		if denyReadPathReason(relPath) != "" {
+			skippedCredentials++
+			return nil
+		}
+
+		matches = appendFileMatches(matches, re, relPath, path, maxMatches)
+
+		if len(matches) >= maxMatches {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return matches, skippedCredentials, err
+}
+
+// searchReadsEntry says whether the search reads an entry of its walk, and
+// whether it passes over the entry's whole folder instead.
+func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (read, skipDir bool) {
+	if walkErr != nil {
+		return false, false // skip unreadable dirs
+	}
+	if d.IsDir() {
+		base := d.Name()
+		if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
+			return false, true
+		}
+		return false, false
+	}
+	// A symlink can point outside the workspace. read_file refuses
+	// to follow one, and so does search.
+	if d.Type()&fs.ModeSymlink != 0 {
+		return false, false
+	}
+
+	// Apply glob filter
+	if input.Glob != "" {
+		matched, _ := filepath.Match(input.Glob, d.Name())
+		if !matched {
+			return false, false
+		}
+	}
+
+	// Skip binary/large files
+	info, err := d.Info()
+	if err != nil || info.Size() > 1<<20 { // 1MB max
+		return false, false
+	}
+	return true, false
+}
+
+// appendFileMatches adds the lines of one file that match re, and stops once
+// there are maxMatches in all. A file it cannot read adds none.
+func appendFileMatches(matches []SearchMatch, re *regexp.Regexp, relPath, path string, maxMatches int) []SearchMatch {
+	data, err := readRegularFile(path)
+	if err != nil {
+		return matches
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		if re.MatchString(line) {
+			matches = append(matches, SearchMatch{
+				File:    relPath,
+				Line:    lineNum,
+				Content: truncateStr(line, 200),
+			})
+			if len(matches) >= maxMatches {
+				break
+			}
+		}
+	}
+	return matches
 }
 
 // ---------------------------------------------------------------------------
@@ -903,30 +948,8 @@ func writeFileTool() *ToolDef {
 				defer func() { noteContentChange(res, wholeFileWrapperNote) }()
 			}
 
-			// Pattern-matching reflex. When the model creates a
-			// NEW file in a non-empty directory of similar files (HTML
-			// alongside HTML, route handler alongside route handlers),
-			// nudge it to read a sibling first instead of generating
-			// content from scratch. Only fires for genuinely-new files
-			// to avoid breaking edits-via-write_file. Soft hint via
-			// tool result, not a hard reject — the model can ignore it
-			// if the content is clearly intentional.
-			if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
-				return refusedNoCheck(hint), nil
-			}
-
-			// Echoed write: the content is the file that is already there.
-			// Reproducing data the session already has is never the task,
-			// and it is where the worst measured failure starts — the model
-			// retyping a 2000-line fixture from memory, degenerating into
-			// repetition, and getting its stream cut mid-JSON.
-			if existing, err := os.ReadFile(path); err == nil {
-				if echoesExistingFile(string(existing), input.Content) ||
-					(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
-					log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
-						logPath(input.Path), len(existing), len(input.Content))
-					return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path])), nil
-				}
+			if refusal := writeFileEarlyRefusal(ctx, input, path); refusal != nil {
+				return refusal, nil
 			}
 
 			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
@@ -942,412 +965,502 @@ func writeFileTool() *ToolDef {
 				}
 			}
 
-			// Per-file tier classification — determines V3 pipeline activation
-			fileTier := classifyFileTier(input.Path, input.Content)
-			// GH #39 point 2: real cyclomatic complexity from tree-sitter
-			// can escalate the regex classifier's verdict. Never downgrades.
-			if cc, ok := cyclomaticComplexity(ctx, input.Path, input.Content); ok {
-				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
-					log.Printf("[write_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
-					fileTier = refined
-				} else {
-					log.Printf("[write_file] %s cc=%d (tier %s unchanged)", input.Path, cc, fileTier)
-				}
-			}
-			log.Printf("[write_file] %s → %s (%d lines)", input.Path, fileTier, strings.Count(input.Content, "\n")+1)
+			fileTier := writeFileTier(ctx, input)
 
-			// V3 pipeline fires on T2+ files when V3 service is available.
-			// V3 takes the model's content as baseline candidate, generates diverse
-			// alternatives via PlanSearch/DivSampling, build-verifies each, and
-			// selects the best. This is the intelligence layer.
+			// V3 pipeline fires on T2+ files when the V3 service is available.
+			// V3 takes the model's content as the baseline candidate, generates
+			// diverse alternatives via PlanSearch/DivSampling, build-verifies
+			// each, and selects the best.
 			//
-			// EXCEPT during an active edit-test-fix loop: once the model has
-			// written this file and just saw it fail a run, the next write is
-			// a targeted fix, and V3's full pipeline (minutes per call, and on
-			// a mid-debug file frequently "completes without result" and falls
-			// back anyway) throttles iteration to a handful of cycles.
-			// Observed 2026-07-19: a polyglot task got ~5 writes in 25 min,
-			// ~4 min of V3 stall each, when it needed 10-15 fast cycles.
-			// Fast-path (direct, still syntax-gated below) so the model can
-			// iterate at run speed. V3 still owns the FIRST write of each
-			// file (the baseline generation where it adds value).
+			// Except during an active edit-test-fix loop: once the model has
+			// written this file and just saw it fail a run, the next write is a
+			// targeted fix, and V3's full pipeline (minutes per call, and on a
+			// mid-debug file it often completes without a result and falls back
+			// anyway) throttles iteration to a handful of cycles. Fast-path it
+			// (direct, still syntax-gated below) so the model can iterate at
+			// run speed. V3 still owns the first write of each file, the
+			// baseline generation where it adds value.
 			iterating := isActiveDebugIteration(ctx, input.Path)
 
-			// Regression protection for existing code, independent of tier
-			// and of whether V3 is configured. The healthy->broken rule
-			// exists to protect WORKING code, but it used to live only
-			// inside branches gated on `fileTier >= Tier2Medium &&
-			// ctx.V3URL != ""` or on an active debug iteration. A small
-			// file, or any file in a session without V3, reached neither and
-			// had valid bytes replaced by invalid ones with no check at all.
-			// Measured black-box through the agent loop: a T1 overwrite
-			// destroyed good bytes whether or not V3 was configured, while
-			// the T2+V3 cell refused the same rewrite.
-			//
-			// Scope is deliberately narrow, so the three intended policies
-			// survive: a NEW file still lands with a warning (nothing on
-			// disk to protect), an already-broken file still accepts a
-			// repair attempt (the baseline demonstrably fails), and a
-			// non-gated language is unaffected (the checker reports
-			// not_applicable off syntaxGateLanguages).
-			//
-			// The observations are KEPT rather than collapsed to a boolean.
-			// The active-debug branch below asks the same question of the same
-			// bytes, and re-asking the checker there costs the fast path a
-			// second sandbox round trip and loses the distinction between
-			// passed, not_run and not_applicable that a route needs in order to
-			// classify its own result. Each side is evaluated at most once per
-			// dispatch; ValidationUnknown means "not evaluated here".
-			proposalCheck := checkOutcome{Status: ValidationUnknown}
-			baselineCheck := checkOutcome{Status: ValidationUnknown}
-			if _, statErr := os.Stat(path); statErr == nil {
-				proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				if proposalCheck.Status == ValidationFailed {
-					synErr := proposalCheck.Detail
-					if prior, priorOK := readOriginalForGate(path); priorOK {
-						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
-						if !baselineAllowsRepair(baselineCheck) {
-							log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
-								logPath(input.Path), safeDiagnosticSummary(synErr))
-							// The check examined input.Content, which is exactly
-							// the content that would have been written, and the
-							// refusal happens before any byte reaches disk.
-							return &ToolResult{
-								Success:          false,
-								Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-								MutationStatus:   MutationRefused,
-								ValidationKind:   ValidationKindSyntax,
-								ValidationStatus: ValidationFailed,
-								ValidationDetail: synErr,
-							}, nil
-						}
-					}
-				}
-			}
-			// Content that does not parse gets the error now, not after the
-			// V3 timeout. V3 improves a working candidate; it does not exist
-			// to guess what a malformed one meant, and the post-V3 fallback
-			// rejects an unparseable baseline anyway — so spending the budget
-			// first only delays the same answer. The fast-path above cannot
-			// cover this: it keys off a SUCCESSFUL write of the file, and a
-			// model failing the syntax gate never records one, so it paid the
-			// full timeout on every attempt. Observed live: a degenerating
-			// model emitted markdown bold inside code (`data = [1, 2, **3**]`)
-			// four times, each costing 180s before it was told anything.
-			// One owner for whether the producer is consulted, and for why
-			// it was not. Identical to the condition it replaces; what is new
-			// is that the skip says which threshold turned it away.
-			// The typed predicate, named at the site that reaches the
-			// producer. The owner below decides WHICH reason applies and in
-			// what order; this is the dependency being visible where the
-			// dispatch happens, so a reader looking at the call that reaches
-			// generation can see that disabling generation reaches it.
-			writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
-			recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
-				fileTier, strings.Count(input.Content, "\n")+1)
-			logBudgetBypass("write_file", input.Path, writeBypass)
-			if writeBypass == bypassNone {
-				// The regression gate above evaluated these exact bytes
-				// whenever the destination exists, so the evaluation here is
-				// for the case it skipped: a file that does not exist yet,
-				// which is this gate's main case.
-				if proposalCheck.Status == ValidationUnknown {
-					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				}
-				if proposalCheck.Status == ValidationFailed {
-					synErr := proposalCheck.Detail
-					// Feeding V3 broken content wastes its whole budget, so
-					// V3 is skipped either way. What happens to the bytes
-					// depends on what is at the path: clobbering an existing
-					// file with garbage is still refused, but a NEW file
-					// lands with a warning so the model can run it and read
-					// the real traceback. See writeNewFileWithWarning.
-					if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-						log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
-							logPath(input.Path), safeDiagnosticSummary(synErr))
-						recordCandidateGenerationBypass(ctx, "write_file",
-							bypassProposalFailedSyntaxGuard, fileTier,
-							strings.Count(input.Content, "\n")+1)
-						return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-					}
-					// The strictness on existing files protects WORKING code.
-					// When what is on disk is itself unparseable, there is
-					// nothing to protect, and rejecting an imperfect fix
-					// guarantees the broken version survives. Same
-					// healthy->broken rule the fast-path below already uses.
-					// Measured twice on the novel benchmark: a broken first
-					// draft landed, the corrective write carried a new syntax
-					// slip, the rejection fed the model a line it could not
-					// act on, and it re-sent byte-identical content until the
-					// repetition breaker ended the session with the ORIGINAL
-					// broken file still on disk.
-					if prior, priorOK := readOriginalForGate(path); priorOK {
-						if baselineCheck.Status == ValidationUnknown {
-							baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
-						}
-						if baselineAllowsRepair(baselineCheck) {
-							log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
-								logPath(input.Path), safeDiagnosticSummary(synErr))
-							recordCandidateGenerationBypass(ctx, "write_file",
-								bypassProposalFailedSyntaxGuard, fileTier,
-								strings.Count(input.Content, "\n")+1)
-							return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
-						}
-					}
-					log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
+			return writeFileByRoute(ctx, input, path, fileTier, iterating)
+		},
+	}
+}
+
+// writeFileEarlyRefusal is the refusal a write meets before it is classified:
+// a new file that should start from its siblings, or bytes that echo the file
+// already there. nil when neither applies.
+func writeFileEarlyRefusal(ctx *AgentContext, input WriteFileInput, path string) *ToolResult {
+	// Pattern-matching reflex. When the model creates a
+	// NEW file in a non-empty directory of similar files (HTML
+	// alongside HTML, route handler alongside route handlers),
+	// nudge it to read a sibling first instead of generating
+	// content from scratch. Only fires for genuinely-new files
+	// to avoid breaking edits-via-write_file. Soft hint via
+	// tool result, not a hard reject — the model can ignore it
+	// if the content is clearly intentional.
+	if hint := patternMatchHint(path, ctx.SnapshotFilesRead()); hint != "" {
+		return refusedNoCheck(hint)
+	}
+
+	// Echoed write: the content is the file that is already there.
+	// Reproducing data the session already has is never the task,
+	// and it is where the worst measured failure starts — the model
+	// retyping a 2000-line fixture from memory, degenerating into
+	// repetition, and getting its stream cut mid-JSON.
+	if existing, err := readRegularFile(path); err == nil {
+		if echoesExistingFile(string(existing), input.Content) ||
+			(ctx.SessionWrites[input.Path] && resendsOwnWrite(string(existing), input.Content)) {
+			log.Printf("[write_file] refusing an echoed write of %s (%d bytes on disk, %d incoming)",
+				logPath(input.Path), len(existing), len(input.Content))
+			return refusedNoCheck(echoedWriteRejection(input.Path, ctx.SessionWrites[input.Path]))
+		}
+	}
+	return nil
+}
+
+// writeFileTier is the tier of the file a write lands in, which the real
+// cyclomatic complexity may raise but never lower.
+func writeFileTier(ctx *AgentContext, input WriteFileInput) Tier {
+	// Per-file tier classification — determines V3 pipeline activation
+	fileTier := classifyFileTier(input.Path, input.Content)
+	// GH #39 point 2: real cyclomatic complexity from tree-sitter
+	// can escalate the regex classifier's verdict. Never downgrades.
+	if cc, ok := cyclomaticComplexity(ctx, input.Path, input.Content); ok {
+		if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
+			log.Printf("[write_file] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
+			fileTier = refined
+		} else {
+			log.Printf("[write_file] %s cc=%d (tier %s unchanged)", input.Path, cc, fileTier)
+		}
+	}
+	log.Printf("[write_file] %s → %s (%d lines)", input.Path, fileTier, strings.Count(input.Content, "\n")+1)
+	return fileTier
+}
+
+// writeFileByRoute applies the regression gate every write meets, then sends
+// the write to the V3 pipeline or down the direct route, as the activation
+// owner decides.
+func writeFileByRoute(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier, iterating bool) (*ToolResult, error) {
+	proposalCheck, baselineCheck, refusal := writeRegressionGate(ctx, input, path)
+	if refusal != nil {
+		return refusal, nil
+	}
+	// Content that does not parse skips V3. V3 improves a working candidate; it
+	// does not exist to guess what a malformed one meant, and the post-V3
+	// fallback rejects an unparseable baseline anyway, so spending the budget
+	// first only delays the same answer. The active-debug fast path cannot
+	// cover this: it keys off a successful write of the file, which a model
+	// failing the syntax gate never records.
+	//
+	// One owner decides whether the producer is consulted and records which
+	// threshold turned it away.
+	//
+	// The typed predicate, named at the site that reaches the producer. The
+	// owner below decides which reason applies and in what order; this is the
+	// dependency being visible where the dispatch happens, so a reader looking
+	// at the call that reaches generation can see that disabling generation
+	// reaches it.
+	writeBypass := writeGenerationBypass(ctx, fileTier, iterating)
+	recordCandidateGenerationBypass(ctx, "write_file", writeBypass,
+		fileTier, strings.Count(input.Content, "\n")+1)
+	logBudgetBypass("write_file", input.Path, writeBypass)
+	if writeBypass == bypassNone {
+		return writeFileThroughV3(ctx, input, path, fileTier, proposalCheck, baselineCheck)
+	}
+	return writeFileDirectRoute(ctx, input, path, iterating, proposalCheck, baselineCheck)
+}
+
+// writeRegressionGate refuses to replace bytes on disk that parse with bytes
+// that do not. It returns what it observed of the proposal and of the bytes on
+// disk, Unknown for a side it did not evaluate, and the refusal if it refused.
+func writeRegressionGate(ctx *AgentContext, input WriteFileInput, path string) (checkOutcome, checkOutcome, *ToolResult) {
+	// Regression protection for existing code, independent of tier
+	// and of whether V3 is configured. The healthy->broken rule
+	// exists to protect WORKING code, but it used to live only
+	// inside branches gated on `fileTier >= Tier2Medium &&
+	// ctx.V3URL != ""` or on an active debug iteration. A small
+	// file, or any file in a session without V3, reached neither and
+	// had valid bytes replaced by invalid ones with no check at all.
+	// Measured black-box through the agent loop: a T1 overwrite
+	// destroyed good bytes whether or not V3 was configured, while
+	// the T2+V3 cell refused the same rewrite.
+	//
+	// Scope is deliberately narrow, so the three intended policies
+	// survive: a NEW file still lands with a warning (nothing on
+	// disk to protect), an already-broken file still accepts a
+	// repair attempt (the baseline demonstrably fails), and a
+	// non-gated language is unaffected (the checker reports
+	// not_applicable off syntaxGateLanguages).
+	//
+	// The observations are KEPT rather than collapsed to a boolean.
+	// The active-debug branch below asks the same question of the same
+	// bytes, and re-asking the checker there costs the fast path a
+	// second sandbox round trip and loses the distinction between
+	// passed, not_run and not_applicable that a route needs in order to
+	// classify its own result. Each side is evaluated at most once per
+	// dispatch; ValidationUnknown means "not evaluated here".
+	proposalCheck := checkOutcome{Status: ValidationUnknown}
+	baselineCheck := checkOutcome{Status: ValidationUnknown}
+	if _, statErr := os.Stat(path); statErr == nil {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+		if proposalCheck.Status == ValidationFailed {
+			synErr := proposalCheck.Detail
+			if prior, priorOK := readOriginalForGate(path); priorOK {
+				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
+				if !baselineAllowsRepair(baselineCheck) {
+					log.Printf("[write_file] %s: refusing to regress valid content to invalid (%s)",
 						logPath(input.Path), safeDiagnosticSummary(synErr))
-					recordCandidateGenerationBypass(ctx, "write_file",
-						bypassProposalFailedSyntaxGuard, fileTier,
-						strings.Count(input.Content, "\n")+1)
-					// Refused before any byte reached disk, on exactly the
-					// content that would have been written. An unreadable
-					// baseline arrives here too: without a baseline there is
-					// no healthy->broken comparison to make, and the
-					// conservative answer is the refusal.
-					return &ToolResult{
+					// The check examined input.Content, which is exactly
+					// the content that would have been written, and the
+					// refusal happens before any byte reaches disk.
+					return proposalCheck, baselineCheck, &ToolResult{
 						Success:          false,
 						Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
 						MutationStatus:   MutationRefused,
 						ValidationKind:   ValidationKindSyntax,
 						ValidationStatus: ValidationFailed,
 						ValidationDetail: synErr,
-					}, nil
-				}
-
-				// proposalCheck now describes input.Content: the BASELINE
-				// handed to the pipeline, not the bytes it may come back with.
-				// A winning candidate is different content and needs its own
-				// observation, and the fallback write inside writeFileWithV3
-				// re-checks the baseline itself. Threading this observation in
-				// there is a separate change: it would start a partial
-				// migration of that function's own state machine, so the
-				// handoff is left explicitly pending rather than stored on the
-				// context or in a package-level value.
-				log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
-				res, err := writeFileWithV3(path, input.Content, ctx)
-				if err == nil && res != nil && res.Success {
-					ctx.SessionWrites[input.Path] = true
-				}
-				return res, err
-			}
-			if iterating {
-				log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
-				// The file already exists this session; read its on-disk
-				// content once and run both gates against it with the
-				// healthy->broken rule edit_file uses — block only a NEWLY
-				// introduced defect, allow a repair-in-progress on
-				// already-broken content. Without the healthy->broken guard
-				// the syntax gate would hard-block content the strict checker
-				// rejects both before AND after (a multi-doc YAML or JSONC
-				// config being iterated), which is exactly why the T0/T1
-				// direct path below carries no syntax gate.
-				original, origOK := readOriginalForGate(path)
-				// The proposal was already evaluated above whenever the
-				// destination exists, which is the normal state of this route:
-				// it fires on a file the session wrote and just watched fail.
-				// Evaluate here only for the residual case where it was not --
-				// the file has been deleted since that write.
-				if proposalCheck.Status == ValidationUnknown {
-					proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				}
-				if proposalCheck.Status == ValidationFailed {
-					// Reaching here with a demonstrably failing proposal means
-					// the gate above did not decide: either the baseline
-					// demonstrably failed (repair-in-progress), or there was
-					// no baseline to read -- the file is gone or unreadable.
-					// That second case is why this gate stays.
-					// readOriginalForGate yields "" for it, which the checker
-					// finds healthy, so the regression is still refused rather
-					// than landing unexamined.
-					if baselineCheck.Status == ValidationUnknown {
-						baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
-					}
-					if !baselineAllowsRepair(baselineCheck) {
-						synErr := proposalCheck.Detail
-						// The check examined input.Content, the exact bytes
-						// that would have been written, and nothing has
-						// reached disk at this point.
-						return &ToolResult{
-							Success:          false,
-							Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindSyntax,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: synErr,
-						}, nil
-					}
-					log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
-				}
-				// #147 review finding #1: the fast-path skips V3 (and its
-				// structural veto), so it needs the same structural gate
-				// edit_file/structural_edit have — otherwise a fast-path rewrite that
-				// introduces render_template lands as verified and 500s. A new
-				// unresolved call vs the on-disk state blocks; an unreadable
-				// original skips the gate (fail open).
-				if origOK {
-					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-						log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						// Syntax ran first and PASSED on these exact bytes; the
-						// structural check is what refused them, so structural
-						// is the decisive outcome.
-						return &ToolResult{Success: false,
-							Error:            structuralWriteRejection(input.Path, introduced),
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindStructural,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: structuralWriteRejection(input.Path, introduced),
-						}, nil
 					}
 				}
 			}
+		}
+	}
+	return proposalCheck, baselineCheck, nil
+}
 
-			// #147: the T0/T1 direct path skipped the structural gate — a
-			// sub-10-line .py calling an unimported name landed as verified,
-			// the same NameError class the edit path blocks. Structural gate
-			// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
-			// here would hard-block legitimate non-parsing T1 content that
-			// this branch exists to handle (JSONC, multi-doc and templated
-			// YAML, scaffold .py templates). An unreadable existing original
-			// skips the gate (fail open) — treating it as empty would count
-			// every pre-existing call as introduced.
-			if !iterating {
-				if original, ok := readOriginalForGate(path); ok {
-					if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
-						log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-						// Structural validation failed before any mutation.
-						// Syntax does NOT run on this route (see the comment
-						// above), so no syntax verdict is implied in either
-						// direction -- the decisive demonstrated fact is the
-						// structural failure.
-						//
-						// editIntroducesUnresolved -> checkStructuralUnresolved
-						// posts to /internal/structural_check (NOT
-						// /internal/symbol_index, a different path in
-						// context.go) and returns
-						// {"ok": bool, "unresolved": []string}. It FAILS OPEN
-						// when ok is absent or false, on transport error,
-						// non-200, parse error or missing tree-sitter, and
-						// needs BOTH the edited- and original-side calls to
-						// succeed before it can refuse. Observing an HTTP
-						// request therefore does not prove the gate ran; only
-						// the refusal does.
-						rejection := structuralWriteRejection(input.Path, introduced)
-						return &ToolResult{
-							Success:          false,
-							Error:            rejection,
-							MutationStatus:   MutationRefused,
-							ValidationKind:   ValidationKindStructural,
-							ValidationStatus: ValidationFailed,
-							ValidationDetail: rejection,
-						}, nil
-					}
-				}
+// writeFileThroughV3 is the route of a write the pipeline sees. Bytes that do
+// not parse never reach the pipeline: they land with a warning as a new file
+// or as a repair of a file already broken, and are refused otherwise.
+func writeFileThroughV3(ctx *AgentContext, input WriteFileInput, path string, fileTier Tier,
+	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+	// The regression gate above evaluated these exact bytes
+	// whenever the destination exists, so the evaluation here is
+	// for the case it skipped: a file that does not exist yet,
+	// which is this gate's main case.
+	if proposalCheck.Status == ValidationUnknown {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+	}
+	if proposalCheck.Status == ValidationFailed {
+		synErr := proposalCheck.Detail
+		// Feeding V3 broken content wastes its whole budget, so
+		// V3 is skipped either way. What happens to the bytes
+		// depends on what is at the path: clobbering an existing
+		// file with garbage is still refused, but a NEW file
+		// lands with a warning so the model can run it and read
+		// the real traceback. See writeNewFileWithWarning.
+		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+			log.Printf("[write_file] new file %s does not parse — writing with a warning, skipping V3 (%s)",
+				logPath(input.Path), safeDiagnosticSummary(synErr))
+			recordCandidateGenerationBypass(ctx, "write_file",
+				bypassProposalFailedSyntaxGuard, fileTier,
+				strings.Count(input.Content, "\n")+1)
+			return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+		}
+		// The strictness on existing files protects WORKING code.
+		// When what is on disk is itself unparseable, there is
+		// nothing to protect, and rejecting an imperfect fix
+		// guarantees the broken version survives. Same
+		// healthy->broken rule the fast-path below already uses.
+		// Measured twice on the novel benchmark: a broken first
+		// draft landed, the corrective write carried a new syntax
+		// slip, the rejection fed the model a line it could not
+		// act on, and it re-sent byte-identical content until the
+		// repetition breaker ended the session with the ORIGINAL
+		// broken file still on disk.
+		if prior, priorOK := readOriginalForGate(path); priorOK {
+			if baselineCheck.Status == ValidationUnknown {
+				baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, prior).aggregate()
 			}
-
-			// A NEW file that does not parse is unambiguously wrong, so the
-			// direct path gates it. The healthy->broken rule the gate uses
-			// elsewhere needs an "before" state; a file being created has
-			// none, which is exactly why this case is decidable.
-			//
-			// This path was ungated because the sandbox's YAML checker
-			// rejected multi-document files — valid YAML, and the shape every
-			// Kubernetes and Compose manifest uses. That checker is fixed
-			// (safe_load_all), so the one reason to skip the gate here is
-			// gone. Observed: a 4-line test_discount.py with an unterminated
-			// string reached disk through this path.
-			// os.Stat, not readOriginalForGate: that helper returns ("", true)
-			// for a MISSING file — its bool means "usable as a baseline", not
-			// "exists" — so testing it here silently skipped the gate.
-			// Destination absence is determined ONCE, and when the file is
-			// new the structured checker is evaluated ONCE. This route owns a
-			// real observation, so it overlays it onto the result afterwards
-			// rather than leaving writeFileDirect's conservative default.
-			_, statErr := os.Stat(path)
-			isNew := os.IsNotExist(statErr)
-			newFileCheck := checkOutcome{Status: ValidationUnknown}
-			if isNew {
-				newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
-				if newFileCheck.Status == ValidationFailed {
-					log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
-						logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
-					return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
-				}
-			}
-
-			// The destination exists and these exact bytes were already
-			// observed not to parse. A healthy baseline was refused outright
-			// above, so reaching here means what is on disk is itself broken
-			// or unreadable — the same case the non-bypassed route lands with
-			// a warning. Land it the same way, and say so.
-			//
-			// Only the SAYING is new. The observation was already overlaid
-			// onto the result below, so the ledger and the completion gate
-			// knew; the model did not. It was handed {"bytes_written":1243}
-			// and nothing else, which reads as a clean write. Measured on
-			// multifile_cli rep2: the model rewrote test_store.py containing
-			// `store.add("Buy milk"")`, was told the write succeeded, ran
-			// pytest, could not reconcile the failure with a write it had
-			// been told was fine, and resent content until the repetition
-			// breaker closed the path — leaving the file unparseable at the
-			// end of the session. The sandbox had answered `valid:false` for
-			// those bytes the whole time.
-			if proposalCheck.Status == ValidationFailed {
-				log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
-					logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
+			if baselineAllowsRepair(baselineCheck) {
+				log.Printf("[write_file] %s already broken on disk — landing the repair attempt with a warning (%s)",
+					logPath(input.Path), safeDiagnosticSummary(synErr))
+				recordCandidateGenerationBypass(ctx, "write_file",
+					bypassProposalFailedSyntaxGuard, fileTier,
+					strings.Count(input.Content, "\n")+1)
 				return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
 			}
-
-			// The two comparative gates the V3 route applies to the bytes it
-			// writes (writeFileWithV3). They are checks on the write, not part
-			// of candidate generation, so a write that does not generate --
-			// small, mid-iteration, or with nothing deliverable -- must not skip
-			// them. Healthy->broken and fail-soft, as there.
-			if original, ok := readOriginalForGate(path); ok {
-				if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
-					log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
-					return &ToolResult{Success: false, Error: msg,
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindStructural,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: msg}, nil
-				}
-				if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
-					log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-					return &ToolResult{Success: false, Error: msg,
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindStructural,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: msg}, nil
-				}
-			}
-
-			logMandatoryChecks(ctx, "write_file", input.Path, "direct")
-			// T1: Direct write — config, data, boilerplate
-			res, err := writeFileRecorded(path, input.Content, ctx)
-			if err == nil && res != nil && res.Success {
-				ctx.SessionWrites[input.Path] = true
-			}
-			// Mutation facts stay as the writer reported them; only the
-			// validation observation is overlaid, and only by a route that
-			// actually made one. Unknown is preserved.
-			switch {
-			case isNew:
-				res, err = applyRouteObservation(res, err, newFileCheck)
-			case proposalCheck.Status != ValidationUnknown:
-				// Every remaining route through this write -- the active-debug
-				// fast path and the ordinary direct write over an existing
-				// file -- already holds an observation of these exact bytes.
-				// The shared regression gate makes it whenever the destination
-				// exists, and the active-debug branch fills it in for the one
-				// case where the destination is gone, so non-Unknown IS the
-				// ownership test. Restating it with a second checker call
-				// would spend a round trip to risk a different answer about
-				// bytes that have not changed since.
-				res, err = applyRouteObservation(res, err, proposalCheck)
-			}
-			return res, err
-		},
+		}
+		log.Printf("[write_file] %s does not parse — rejecting before V3 (%s)",
+			logPath(input.Path), safeDiagnosticSummary(synErr))
+		recordCandidateGenerationBypass(ctx, "write_file",
+			bypassProposalFailedSyntaxGuard, fileTier,
+			strings.Count(input.Content, "\n")+1)
+		// Refused before any byte reached disk, on exactly the
+		// content that would have been written. An unreadable
+		// baseline arrives here too: without a baseline there is
+		// no healthy->broken comparison to make, and the
+		// conservative answer is the refusal.
+		return &ToolResult{
+			Success:          false,
+			Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+			MutationStatus:   MutationRefused,
+			ValidationKind:   ValidationKindSyntax,
+			ValidationStatus: ValidationFailed,
+			ValidationDetail: synErr,
+		}, nil
 	}
+
+	// proposalCheck now describes input.Content: the BASELINE
+	// handed to the pipeline, not the bytes it may come back with.
+	// A winning candidate is different content and needs its own
+	// observation, and the fallback write inside writeFileWithV3
+	// re-checks the baseline itself. Threading this observation in
+	// there is a separate change: it would start a partial
+	// migration of that function's own state machine, so the
+	// handoff is left explicitly pending rather than stored on the
+	// context or in a package-level value.
+	log.Printf("[write_file] V3 pipeline activating for %s", input.Path)
+	res, err := writeFileWithV3(path, input.Content, ctx)
+	if err == nil && res != nil && res.Success {
+		ctx.SessionWrites[input.Path] = true
+	}
+	return res, err
+}
+
+// writeFileDirectRoute is the route of a write the pipeline does not see: the
+// gates of the active-debug fast path, or the structural gate of the direct
+// write, and then the landing.
+func writeFileDirectRoute(ctx *AgentContext, input WriteFileInput, path string, iterating bool,
+	proposalCheck, baselineCheck checkOutcome) (*ToolResult, error) {
+	if iterating {
+		var refusal *ToolResult
+		proposalCheck, refusal = writeFastPathGates(ctx, input, path, proposalCheck, baselineCheck)
+		if refusal != nil {
+			return refusal, nil
+		}
+	}
+
+	// #147: the T0/T1 direct path skipped the structural gate — a
+	// sub-10-line .py calling an unimported name landed as verified,
+	// the same NameError class the edit path blocks. Structural gate
+	// ONLY (.py-scoped, healthy->broken, fail-open): a syntax gate
+	// here would hard-block legitimate non-parsing T1 content that
+	// this branch exists to handle (JSONC, multi-doc and templated
+	// YAML, scaffold .py templates). An unreadable existing original
+	// skips the gate (fail open) — treating it as empty would count
+	// every pre-existing call as introduced.
+	if !iterating {
+		if original, ok := readOriginalForGate(path); ok {
+			if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+				log.Printf("[write_file] direct write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+				// Structural validation failed before any mutation.
+				// Syntax does NOT run on this route (see the comment
+				// above), so no syntax verdict is implied in either
+				// direction -- the decisive demonstrated fact is the
+				// structural failure.
+				//
+				// editIntroducesUnresolved -> checkStructuralUnresolved
+				// posts to /internal/structural_check (NOT
+				// /internal/symbol_index, a different path in
+				// context.go) and returns
+				// {"ok": bool, "unresolved": []string}. It FAILS OPEN
+				// when ok is absent or false, on transport error,
+				// non-200, parse error or missing tree-sitter, and
+				// needs BOTH the edited- and original-side calls to
+				// succeed before it can refuse. Observing an HTTP
+				// request therefore does not prove the gate ran; only
+				// the refusal does.
+				rejection := structuralWriteRejection(input.Path, introduced)
+				return &ToolResult{
+					Success:          false,
+					Error:            rejection,
+					MutationStatus:   MutationRefused,
+					ValidationKind:   ValidationKindStructural,
+					ValidationStatus: ValidationFailed,
+					ValidationDetail: rejection,
+				}, nil
+			}
+		}
+	}
+
+	return landDirectWrite(ctx, input, path, proposalCheck)
+}
+
+// writeFastPathGates are the gates of the active-debug fast path, which skips
+// the pipeline. It returns the observation of the proposal, made here when
+// nothing had made it yet, and the refusal when a gate refused.
+func writeFastPathGates(ctx *AgentContext, input WriteFileInput, path string,
+	proposalCheck, baselineCheck checkOutcome) (checkOutcome, *ToolResult) {
+	log.Printf("[write_file] active edit-test-fix loop on %s — fast-path direct write (V3 skipped)", input.Path)
+	// The file already exists this session; read its on-disk
+	// content once and run both gates against it with the
+	// healthy->broken rule edit_file uses — block only a NEWLY
+	// introduced defect, allow a repair-in-progress on
+	// already-broken content. Without the healthy->broken guard
+	// the syntax gate would hard-block content the strict checker
+	// rejects both before AND after (a multi-doc YAML or JSONC
+	// config being iterated), which is exactly why the T0/T1
+	// direct path below carries no syntax gate.
+	original, origOK := readOriginalForGate(path)
+	// The proposal was already evaluated above whenever the
+	// destination exists, which is the normal state of this route:
+	// it fires on a file the session wrote and just watched fail.
+	// Evaluate here only for the residual case where it was not --
+	// the file has been deleted since that write.
+	if proposalCheck.Status == ValidationUnknown {
+		proposalCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+	}
+	if proposalCheck.Status == ValidationFailed {
+		// Reaching here with a demonstrably failing proposal means
+		// the gate above did not decide: either the baseline
+		// demonstrably failed (repair-in-progress), or there was
+		// no baseline to read -- the file is gone or unreadable.
+		// That second case is why this gate stays.
+		// readOriginalForGate yields "" for it, which the checker
+		// finds healthy, so the regression is still refused rather
+		// than landing unexamined.
+		if baselineCheck.Status == ValidationUnknown {
+			baselineCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, original).aggregate()
+		}
+		if !baselineAllowsRepair(baselineCheck) {
+			synErr := proposalCheck.Detail
+			// The check examined input.Content, the exact bytes
+			// that would have been written, and nothing has
+			// reached disk at this point.
+			return proposalCheck, &ToolResult{
+				Success:          false,
+				Error:            fallbackSyntaxRejection(input.Path, input.Content, synErr),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindSyntax,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: synErr,
+			}
+		}
+		log.Printf("[write_file] %s still unparsable after fast-path write (was already broken) — allowing repair-in-progress", input.Path)
+	}
+	// #147 review finding #1: the fast-path skips V3 (and its
+	// structural veto), so it needs the same structural gate
+	// edit_file/structural_edit have — otherwise a fast-path rewrite that
+	// introduces render_template lands as verified and 500s. A new
+	// unresolved call vs the on-disk state blocks; an unreadable
+	// original skips the gate (fail open).
+	if origOK {
+		if introduced := editIntroducesUnresolved(ctx, path, original, input.Content); len(introduced) > 0 {
+			log.Printf("[write_file] fast-path write introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
+			// Syntax ran first and PASSED on these exact bytes; the
+			// structural check is what refused them, so structural
+			// is the decisive outcome.
+			return proposalCheck, &ToolResult{Success: false,
+				Error:            structuralWriteRejection(input.Path, introduced),
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: structuralWriteRejection(input.Path, introduced),
+			}
+		}
+	}
+	return proposalCheck, nil
+}
+
+// landDirectWrite lands the bytes of a write that does not go through the
+// pipeline: with a warning when a new file, or a file already broken, does not
+// parse, and refused when they break an embedded script or repeat the entry
+// point.
+func landDirectWrite(ctx *AgentContext, input WriteFileInput, path string, proposalCheck checkOutcome) (*ToolResult, error) {
+	// A new file is checked here: a file being created has no "before"
+	// state for the healthy->broken rule, so whether it parses is
+	// decidable, and a new file that does not parse lands with a
+	// warning (writeNewFileWithWarning) so the model can run it and
+	// read the real traceback. os.Stat, not readOriginalForGate: that
+	// helper returns ("", true) for a missing file (its bool means
+	// "usable as a baseline", not "exists"), so testing it here would
+	// skip the check. Destination absence is determined once, and when
+	// the file is new the structured checker is evaluated once. This
+	// route owns a real observation, so it overlays it onto the result
+	// afterwards rather than leaving writeFileDirect's conservative
+	// default.
+	_, statErr := os.Stat(path)
+	isNew := os.IsNotExist(statErr)
+	newFileCheck := checkOutcome{Status: ValidationUnknown}
+	if isNew {
+		newFileCheck = fallbackSyntaxOutcomeFor(ctx, input.Path, input.Content).aggregate()
+		if newFileCheck.Status == ValidationFailed {
+			log.Printf("[write_file] new file %s does not parse — writing with a warning (%s)",
+				logPath(input.Path), truncateStr(newFileCheck.Detail, 80))
+			return writeNewFileWithWarning(path, input.Path, input.Content, newFileCheck.Detail, ctx)
+		}
+	}
+
+	// The destination exists and these exact bytes were already
+	// observed not to parse. A healthy baseline was refused outright
+	// above, so reaching here means what is on disk is itself broken
+	// or unreadable — the same case the non-bypassed route lands with
+	// a warning. Land it the same way, and say so.
+	//
+	// Only the SAYING is new. The observation was already overlaid
+	// onto the result below, so the ledger and the completion gate
+	// knew; the model did not. It was handed {"bytes_written":1243}
+	// and nothing else, which reads as a clean write. Measured on
+	// multifile_cli rep2: the model rewrote test_store.py containing
+	// `store.add("Buy milk"")`, was told the write succeeded, ran
+	// pytest, could not reconcile the failure with a write it had
+	// been told was fine, and resent content until the repetition
+	// breaker closed the path — leaving the file unparseable at the
+	// end of the session. The sandbox had answered `valid:false` for
+	// those bytes the whole time.
+	if proposalCheck.Status == ValidationFailed {
+		log.Printf("[write_file] %s: landing an unparseable rewrite with a warning (%s)",
+			logPath(input.Path), safeDiagnosticSummary(proposalCheck.Detail))
+		return preflightWarnedWrite(path, input.Path, input.Content, proposalCheck, ctx)
+	}
+
+	// The two comparative gates the V3 route applies to the bytes it
+	// writes (writeFileWithV3). They are checks on the write, not part
+	// of candidate generation, so a write that does not generate --
+	// small, mid-iteration, or with nothing deliverable -- must not skip
+	// them. Healthy->broken and fail-soft, as there.
+	if original, ok := readOriginalForGate(path); ok {
+		if msg := embeddedScriptGate(ctx, path, original, input.Content); msg != "" {
+			log.Printf("[write_file] direct write breaks an embedded script in %s — rejecting", logPath(input.Path))
+			return &ToolResult{Success: false, Error: msg,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: msg}, nil
+		}
+		if msg := duplicateMainGuard(path, original, input.Content); msg != "" {
+			log.Printf("[write_file] direct write duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
+			return &ToolResult{Success: false, Error: msg,
+				MutationStatus:   MutationRefused,
+				ValidationKind:   ValidationKindStructural,
+				ValidationStatus: ValidationFailed,
+				ValidationDetail: msg}, nil
+		}
+	}
+
+	return writeDirectAndObserve(ctx, input, path, isNew, newFileCheck, proposalCheck)
+}
+
+// writeDirectAndObserve writes the bytes of a direct write and attaches the
+// observation its route already holds of exactly those bytes.
+func writeDirectAndObserve(ctx *AgentContext, input WriteFileInput, path string, isNew bool,
+	newFileCheck, proposalCheck checkOutcome) (*ToolResult, error) {
+	logMandatoryChecks(ctx, "write_file", input.Path, "direct")
+	// T1: Direct write — config, data, boilerplate
+	res, err := writeFileRecorded(path, input.Content, ctx)
+	if err == nil && res != nil && res.Success {
+		ctx.SessionWrites[input.Path] = true
+	}
+	// Mutation facts stay as the writer reported them; only the
+	// validation observation is overlaid, and only by a route that
+	// actually made one. Unknown is preserved.
+	switch {
+	case isNew:
+		res, err = applyRouteObservation(res, err, newFileCheck)
+	case proposalCheck.Status != ValidationUnknown:
+		// Every remaining route through this write -- the active-debug
+		// fast path and the ordinary direct write over an existing
+		// file -- already holds an observation of these exact bytes.
+		// The shared regression gate makes it whenever the destination
+		// exists, and the active-debug branch fills it in for the one
+		// case where the destination is gone, so non-Unknown IS the
+		// ownership test. Restating it with a second checker call
+		// would spend a round trip to risk a different answer about
+		// bytes that have not changed since.
+		res, err = applyRouteObservation(res, err, proposalCheck)
+	}
+	return res, err
 }
 
 // isActiveDebugIteration reports whether the model is in a tight edit-
@@ -1412,16 +1525,15 @@ func mentionsFilename(text, base string) bool {
 }
 
 // readFileByteCap returns the byte cap for a single read_file result.
-// Derived from the per-slot context so one read can't overflow it — and
-// sized for the WORST-CASE tokenization of ~1 token/char (dense content:
-// G-code, minified JS, base64), not the chars/4 average. A fixed 120 KB
-// cap was safe for prose but not dense content: a gcode-to-text task read a
-// capped 120 KB G-code page that still tokenized to 120k tokens and 400'd
-// the 32k slot. Half the per-slot context in bytes guarantees even
-// 1-token/char content uses at most half the window, leaving room for the
-// system prompt, tools, and reply; the force-trim retry then handles
-// any residual pressure since no single message is huge. Clamped
-// to [2 KB, 200 KB]. Tunable via ATLAS_MAX_READ_BYTES.
+// Derived from the per-slot context so one read cannot overflow it, and
+// sized for the worst-case tokenization of ~1 token/char (dense content:
+// G-code, minified JS, base64), not the chars/4 average: a fixed byte cap
+// that is safe for prose can still overflow the slot with dense content.
+// Half the per-slot context in bytes guarantees even 1-token/char content
+// uses at most half the window, leaving room for the system prompt, tools,
+// and reply; the force-trim retry then handles any residual pressure since
+// no single message is huge. The derived value is clamped to [2 KB, 200
+// KB]. ATLAS_MAX_READ_BYTES overrides it, unclamped.
 func readFileByteCap() int {
 	if v := envOr("ATLAS_MAX_READ_BYTES", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -1458,8 +1570,10 @@ var maxReadFileBytes = readFileByteCap()
 // (UTF-8/ASCII) never contain NUL, while compiled binaries, images, and
 // archives are full of them. Scans a bounded head so a large file is cheap.
 func isBinaryContent(data []byte) bool {
-	// UTF-16/UTF-32 text legitimately contains NUL bytes; a Unicode BOM
-	// identifies it as text, not binary (#147 review finding #7).
+	// UTF-16 and UTF-32 text legitimately contains NUL bytes; a Unicode
+	// BOM identifies it as text, not binary. Checked: the UTF-16 LE/BE
+	// and UTF-8 BOMs (a UTF-32 LE BOM starts with the UTF-16 LE bytes;
+	// UTF-32 BE is not recognized).
 	if len(data) >= 2 {
 		b0, b1 := data[0], data[1]
 		if (b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF) { // UTF-16 LE/BE
@@ -1609,12 +1723,9 @@ func preflightWarnedWrite(path, inputPath, content string, o checkOutcome, ctx *
 // writeFileRecorded is writeFileDirect plus the body-seen record.
 //
 // Content the model authored is content it has seen, and that has to hold
-// whichever write path ran. Recording it only on the T1 direct write left
-// every V3-path write unmarked, so the evidence gate fired on files the
-// model had just created: measured on run 18, 11 of 12 gate firings were
-// solve.py or test_stats.py, each written through writeFileWithV3 moments
-// earlier. Wrapping the single function all four call sites funnel through
-// is what keeps a fifth from reintroducing it.
+// whichever write path ran; otherwise the evidence gate fires on files the
+// model has just created. Every write path reaches writeFileDirect through
+// this one function, so a new path cannot skip the record.
 func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, error) {
 	res, err := writeFileDirect(path, content)
 	if err == nil && res != nil && res.Success && ctx != nil {
@@ -1623,12 +1734,6 @@ func writeFileRecorded(path, content string, ctx *AgentContext) (*ToolResult, er
 	return res, err
 }
 
-// writeFileDirect writes content to disk atomically (write tmp + rename).
-// The proxy is the only thing downstream that touches the filesystem —
-// the TUI is read-only at the workspace level — so this is where any
-// write_file tool call ultimately lands. Without this the file would
-// vanish into the void ("agent says it wrote the file but it isn't
-// there" bug).
 // classifiedError carries mutation/validation facts alongside a real error,
 // so the site that OWNS the evidence can state them without changing the
 // (nil, err) contract callers branch on. The V3 route and every other caller
@@ -1718,10 +1823,10 @@ func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolRes
 	return res, nil
 }
 
-// atomicReplaceFile is the write-then-rename the mutating tools have always
-// used, as one primitive. A reader of the target either sees the old bytes or
-// the new ones, never a partial file, and a failed rename leaves the target
-// untouched with the temp file cleaned up.
+// atomicReplaceFile is the write-then-rename of the mutating tools as one
+// primitive (edit_file and structural_edit still inline it). A reader of the
+// target either sees the old bytes or the new ones, never a partial file, and
+// a failed rename leaves the target untouched with the temp file cleaned up.
 func atomicReplaceFile(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("cannot create parent dir for %s: %w", path, err)
@@ -1737,6 +1842,8 @@ func atomicReplaceFile(path string, content []byte) error {
 	return nil
 }
 
+// writeFileDirect writes content to disk atomically (temp file plus rename, see
+// atomicReplaceFile). This is where any write_file tool call ultimately lands.
 func writeFileDirect(path, content string) (*ToolResult, error) {
 	if err := atomicReplaceFile(path, []byte(content)); err != nil {
 		return nil, failedMutation(path, err)
@@ -1838,13 +1945,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 	}
 
-	// Files this session WROTE are project context too — previously only
-	// files the model had read were included, so written-but-never-read
-	// siblings were invisible to candidate generation (2026-07-18: V3
-	// generated an app.py blind to the session's own templates/index.html
-	// and static/game.js, and the winner inlined its page, orphaning
-	// both). Disk content wins over any stale read snapshot: the on-disk
-	// version is what verification produced.
+	// Files this session wrote are project context too; otherwise
+	// siblings written but never read are invisible to candidate
+	// generation. Disk content wins over any stale read snapshot: the
+	// on-disk version is what verification produced.
 	for rel := range ctx.SessionWrites {
 		if rel == "" {
 			continue
@@ -1853,7 +1957,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if abs == path {
 			continue // the file being generated is the baseline, not context
 		}
-		data, rerr := os.ReadFile(abs)
+		data, rerr := readRegularFile(abs)
 		if rerr != nil {
 			continue
 		}
@@ -1873,15 +1977,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		req.BuildCommand = ctx.Project.BuildCommand
 	}
 
-	// THE production call path for invocation feasibility. It asks, before a
-	// single candidate is generated, whether this task could close at all --
-	// the question the sealed Stage-A run answered 103 times, once per
-	// candidate, after generating each.
+	// The production call path for invocation feasibility: before a single
+	// candidate is generated, record whether this task could close at all. The
+	// answer is recorded only; generation proceeds whatever it concludes.
 	//
-	// It sits ABOVE the "V3 is taking over" message on purpose: under enforce
-	// a skipped invocation must not first tell the user a pipeline is running.
-	// Under observe the answer is recorded and generation proceeds exactly as
-	// it did at e8fefe8, whatever it concludes.
 	// One entry of the candidate-generation route, named before anything is
 	// decided about it. Every record this attempt produces carries it, so a
 	// retry's work can never be mistaken for this one's.
@@ -2106,17 +2205,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// no longer the one to name.
 	ctx.clearV3Unchecked(path)
 
-	// Write the winning candidate (or baseline if V3 didn't improve).
+	// Write the winning candidate, or the baseline if V3 did not improve. The
+	// presence of Code is not authorization: an unverified alternative must
+	// never displace the baseline, and delivery is decided below by the proxy's
+	// policy over evidence it produced about these exact bytes.
 	//
-	// The authorization to replace the caller's content is `Passed`, not the
-	// presence of `Code`. Today Python only fills Code when a candidate
-	// passed, so this held by construction — but that is an invariant on the
-	// far side of a JSON boundary, and the evidence work deliberately
-	// introduces a "best_record" that is the strongest available candidate
-	// while NOT being closure-eligible. Returning its code for diagnostics
-	// would have silently made it the delivered artifact. An unverified
-	// alternative must never displace the baseline.
-	// The structured intent of THIS call: write_file, this canonical target,
+	// The structured intent of this call: write_file, this canonical target,
 	// the caller's own bytes as the proposal. Derived before anything is
 	// decided, from the call rather than from the prose, and consulted only to
 	// narrow what a candidate may touch.
@@ -2171,19 +2265,20 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
 	checkedFor := code
 
-	// THE production call path for the proxy-owned syntax producer. It sits
+	// The production call path for the proxy-owned syntax producer. It sits
 	// here because this is the one moment the bytes are fixed and the gate has
 	// just reported on exactly those bytes: the verdict is handed over, never
-	// recomputed, so no second sandbox call and no second opinion. What it
-	// produces goes to private telemetry and reaches no decision -- the
-	// authorization immediately below is the same one that ran at e8fefe8.
-	// THE live authorization owner. For a request that declared structured
+	// recomputed, so there is no second sandbox call and no second opinion. Its
+	// evidence goes to private telemetry and into the authorization owner
+	// below.
+	//
+	// The live authorization owner. For a request that declared structured
 	// obligations the typed answer is binding: no candidate lands without a
 	// one-time grant, and a refusal keeps the caller's own content rather than
-	// falling through to a candidate the envelope happened to like. For a
-	// request that declared nothing there is no typed answer to give, so
-	// `authorizedV3` stands exactly as it did.
-	// A RETAINED BASELINE IS NOT A CANDIDATE.
+	// falling through to a candidate the envelope happened to like. A request
+	// that declared nothing has no typed answer to give.
+	//
+	// A retained baseline is not a candidate.
 	//
 	// When nothing materially different came back, `code` is the caller's own
 	// content. Staging it, taking an authorization decision over it and minting
@@ -2191,7 +2286,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// happen: the fallback below writes those same bytes directly and the
 	// licence retires unused.
 	//
-	// What a candidate does NOT have to be is service-certified. The service
+	// What a candidate does not have to be is service-certified. The service
 	// ranks; the evidence this machine produces about these exact bytes is what
 	// authorizes, and it cannot be produced without staging the candidate.
 	candidateProposed := proposed
@@ -2731,7 +2826,7 @@ func editFileTool() *ToolDef {
 			}
 
 			// Read current content
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
 			}
@@ -2988,9 +3083,6 @@ func editFileTool() *ToolDef {
 					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."), nil
 			}
 
-			// Route through V3 pipeline when the file warrants it. The
-			// gate now mirrors write_file (file-tier only, no request-tier
-			// AND-gate) — having two separate tier checks meant V3 only
 			// Same pipeline entry every content edit uses; see
 			// runEditPipeline for why it is shared rather than inlined.
 			route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
@@ -3145,7 +3237,7 @@ func structuralEditTool() *ToolDef {
 				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
 			}
 
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
 			}
@@ -3204,14 +3296,12 @@ func structuralEditTool() *ToolDef {
 			}
 
 			// HTML <html>-selector quirk. structural_edit replaces only the
-			// <html>...</html> element, NOT the preceding <!DOCTYPE>
-			// declaration that conventionally precedes it. The model
-			// frequently emits a leading <!DOCTYPE html> at the top of
-			// `content` when selector is <html>, which produces a duplicated
-			// doctype on disk (May 8 2026 flask test: dashboard.html
-			// ended up with two consecutive <!DOCTYPE html> lines after
-			// a successful structural_edit). Detect that shape and strip the
-			// leading doctype line so on-disk output matches intent.
+			// <html>...</html> element, not the <!DOCTYPE> declaration that
+			// conventionally precedes it. The model often emits a leading
+			// <!DOCTYPE html> at the top of `content` when the selector is
+			// <html>, which would leave a duplicated doctype on disk. Detect
+			// that shape and strip the leading doctype line so on-disk
+			// output matches intent.
 			ext := strings.ToLower(filepath.Ext(input.Path))
 			isHTML := ext == ".html" || ext == ".htm"
 			if isHTML && strings.EqualFold(strings.TrimSpace(input.Selector), "<html>") {
@@ -3244,7 +3334,7 @@ func structuralEditTool() *ToolDef {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
 			}
 			defer resp.Body.Close()
-			respBytes, err := io.ReadAll(resp.Body)
+			respBytes, err := io.ReadAll(serviceAnswer(resp.Body))
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: read v3 response: %w", err))
 			}
@@ -3266,43 +3356,32 @@ func structuralEditTool() *ToolDef {
 				return noMutation(astResp.Error + moduleLevelContentNote(ctx, input.Path, input.Content)), nil
 			}
 
-			// Shrinkage guard — catch the May 9 2026 destructive-stub bug
-			// where the model emits only "<!DOCTYPE html>\n" for an entire
-			// <html>-element rewrite. astResp.OldSize is the original
-			// node's bytes; astResp.NewSize is the replacement bytes. If
-			// the replacement is suspiciously small for the original,
-			// reject the write and tell the model to re-emit with the
-			// full body.
+			// Shrinkage guard: catch a destructive stub, such as only
+			// "<!DOCTYPE html>" emitted for a whole <html>-element
+			// rewrite. astResp.OldSize is the original node's bytes;
+			// astResp.NewSize is the replacement bytes. If the replacement
+			// is suspiciously small for the original, reject the write and
+			// tell the model to re-emit with the full body.
 			if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
 				log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
 					input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
 				return refusedNoCheck(rejection), nil
 			}
 
-			// V3 quality-gate routing. History:
-			//   (a) May 10: tier classified on post-edit content only, so a
-			//       destructive structural_edit that shrank a T2+ file into a stub
-			//       classified T1 and skipped V3 — the edits that most need
-			//       checking. Fixed by classifying on max(oldTier, newTier).
-			//   (b) May 10: floor dropped entirely so V3 fired on every
-			//       structural_edit.
-			//   (c) Jun 8: floor restored to Tier2Medium. With (b), every
-			//       one-line structural_edit ran the full PlanSearch pipeline —
-			//       minutes per edit on a reasoning-heavy model, blocking the
-			//       single-threaded v3-service and looking like a hang. But
-			//       structural_edit is ALREADY surgical: the model named the exact
-			//       node and the replacement is its own tree-sitter
-			//       transform. PlanSearch-improving a precise node swap is
-			//       mostly cost. Gate it to T2+ files (same as edit_file /
-			//       write_file): trivial edits apply instantly, V3 still
-			//       engages where the file is genuinely complex. max-tier
-			//       from (a) is preserved, so a destructive edit to a T2+
-			//       original still triggers V3.
+			// V3 routing. The tier is the higher of the pre-edit and post-edit
+			// content, so a destructive edit that shrinks a T2+ file into a
+			// stub still reaches V3: those are the edits that most need
+			// checking. structural_edit is already surgical (the model named
+			// the exact node, and the replacement is its own tree-sitter
+			// transform), so running PlanSearch on every one-line edit is
+			// mostly cost: minutes per edit, which looks like a hang. V3 runs
+			// only when editGenerationBypass allows it: a T2+ file complex
+			// enough for editWarrantsV3, outside an active debug loop.
 			//
-			// Baseline candidate is the structurally edited full file. V3's
-			// alternatives compete against it; if one build-verifies
-			// better, V3 wins; otherwise the structurally edited content passes
-			// through unchanged. Either way the answer is build-verified.
+			// The baseline candidate is the structurally edited full file; a V3
+			// alternative lands only through the protected route below,
+			// otherwise the structurally edited content passes through
+			// unchanged.
 			finalContent := astResp.NewContent
 
 			// No-op guard. A weak model frequently "fixes" a bug by
@@ -3367,12 +3446,12 @@ func structuralEditTool() *ToolDef {
 				v3Out = route.Meta
 			}
 
-			// The healthy->broken rule the other three edit tools share
-			// (#214). The splice service only shows it could re-parse its
-			// own output, and a splice still left a file unparseable
-			// (go_offbyone in the 8b95baa smoke run). A file that already
-			// failed stays editable, which is what makes repair-in-progress
-			// possible, and the check fails open when it cannot run.
+			// The healthy->broken rule the other three edit tools share.
+			// The splice service only shows it could re-parse its own
+			// output, and a splice can still leave a file unparseable. A
+			// file that already failed stays editable, which is what makes
+			// repair-in-progress possible, and the check fails open when it
+			// cannot run.
 			observed, refusal := editSyntaxObservation(ctx, "structural_edit", input.Path, input.Path,
 				source, finalContent, func(detail string) string {
 					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
@@ -3564,47 +3643,15 @@ func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
 }
 
 // There is no service-certification path, and its absence is the point.
-//
-// A contractless request used to deliver on the service's own closure verdict,
-// which is the producer of a candidate certifying that candidate. It read as a
-// compatibility rule and it was a self-certification bypass: no target the
-// client named, no obligation, no floor, and an authority that came from the
-// side being checked. Nothing replaced it, because nothing should. Such a
-// request retains the model's own bytes under strict, and the structured
-// mutation scope its tool call defines is what a calibrated advisory decision
-// would later bound a licence to -- WHERE, never whether.
+// Delivering on the service's own closure verdict would let the producer of a
+// candidate certify that candidate: no target the client named, no obligation,
+// no floor, and an authority that comes from the side being checked. A
+// contractless request keeps the model's own bytes. The structured mutation
+// scope its tool call defines is the most any advisory decision may bound a
+// licence to: WHERE, never whether.
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
-	req := V3GenerateRequest{
-		FilePath:     path,
-		BaselineCode: content,
-		Tier:         int(ctx.Tier),
-		WorkingDir:   ctx.WorkingDir,
-		UserMessage:  latestUserMessage(ctx),
-	}
-	// Exclude the target's own pre-edit snapshot from project context —
-	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
-	cleanTarget := filepath.Clean(path)
-	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
-		req.ProjectContext = make(map[string]string)
-		for p, c := range filesRead {
-			if filepath.Clean(p) == cleanTarget {
-				continue
-			}
-			rel, _ := filepath.Rel(ctx.WorkingDir, p)
-			if rel == "" {
-				rel = p
-			}
-			if len(c) > 4000 {
-				c = c[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[rel] = c
-		}
-	}
-	if ctx.Project != nil {
-		req.Framework = ctx.Project.Framework
-		req.BuildCommand = ctx.Project.BuildCommand
-	}
+	req := v3EditRequest(path, content, ctx)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming
@@ -3615,52 +3662,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		if ctx.StreamFn == nil {
-			return
-		}
-		if stage == "token" {
-			ctx.StreamFn("v3_token", map[string]string{"text": detail})
-			return
-		}
-		// Reasoning deltas from V3's LLM calls (see write_file path's
-		// matching branch). Same purpose: visible thinking stream
-		// during long PlanSearch / repair phases. v3_reasoning_token,
-		// not reasoning_token, so it targets the V3 row not the agent row.
-		if stage == "reasoning_token" {
-			ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
-			return
-		}
-		if stage == "llm_start" {
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			ctx.StreamFn("v3_llm_start", payload)
-			return
-		}
-		if stage == "llm_end" {
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			ctx.StreamFn("v3_llm_end", payload)
-			return
-		}
-		eventName := v3StageToEvent(stage)
-		if eventName == "v3_progress" {
-			ctx.StreamFn("v3_progress", map[string]string{
-				"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
-			})
-			return
-		}
-		payload := map[string]interface{}{
-			"stage":  stage,
-			"detail": detail,
-		}
-		for k, v := range data {
-			payload[k] = v
-		}
-		ctx.StreamFn(eventName, payload)
+		forwardV3EditStage(ctx, stage, detail, data)
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
@@ -3699,11 +3701,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// was handed. V3 regenerates the whole file, so it can reintroduce a
 	// defect the model had already repaired; the write gates downstream would
 	// then reject the edit and quote a line number from a candidate the model
-	// never saw, sending it to hunt a bug that is not in the file (observed
-	// 2026-07-31: an edit rejected for a stray paren V3 reintroduced, then
-	// three dead turns searching a clean file). Drop the candidate here so the
-	// caller keeps the model's own content and the gates below only ever judge
-	// content the model actually wrote.
+	// never saw, sending it to hunt a bug that is not in the file. Drop the
+	// candidate here so the caller keeps the model's own content and the gates
+	// below only ever judge content the model actually wrote.
 	if chosen != content {
 		if reason := v3CandidateRegression(ctx, path, content, chosen); reason != "" {
 			log.Printf("[v3] discarding candidate for %s — %s; keeping the caller's content", logPath(path), reason)
@@ -3718,6 +3718,93 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 		VerificationEvidence: v3Result.VerificationEvidence,
 		Envelope:             envelopeOf(v3Result),
 	}, nil
+}
+
+// v3EditRequest is the V3 request for an edit: the caller's content as the
+// baseline, and the other files this session read as its context.
+func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
+	req := V3GenerateRequest{
+		FilePath:     path,
+		BaselineCode: content,
+		Tier:         int(ctx.Tier),
+		WorkingDir:   ctx.WorkingDir,
+		UserMessage:  latestUserMessage(ctx),
+	}
+	// Exclude the target's own pre-edit snapshot from project context —
+	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	cleanTarget := filepath.Clean(path)
+	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
+		req.ProjectContext = make(map[string]string)
+		for p, c := range filesRead {
+			if filepath.Clean(p) == cleanTarget {
+				continue
+			}
+			rel, _ := filepath.Rel(ctx.WorkingDir, p)
+			if rel == "" {
+				rel = p
+			}
+			if len(c) > 4000 {
+				c = c[:4000] + "\n... (truncated)"
+			}
+			req.ProjectContext[rel] = c
+		}
+	}
+	if ctx.Project != nil {
+		req.Framework = ctx.Project.Framework
+		req.BuildCommand = ctx.Project.BuildCommand
+	}
+	return req
+}
+
+// forwardV3EditStage hands one V3 progress event of an edit to the client, as
+// the event the client renders it with.
+func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
+	if ctx.StreamFn == nil {
+		return
+	}
+	if stage == "token" {
+		ctx.StreamFn("v3_token", map[string]string{"text": detail})
+		return
+	}
+	// Reasoning deltas from V3's LLM calls (see write_file path's
+	// matching branch). Same purpose: visible thinking stream
+	// during long PlanSearch / repair phases. v3_reasoning_token,
+	// not reasoning_token, so it targets the V3 row not the agent row.
+	if stage == "reasoning_token" {
+		ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
+		return
+	}
+	if stage == "llm_start" {
+		payload := map[string]interface{}{"detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.StreamFn("v3_llm_start", payload)
+		return
+	}
+	if stage == "llm_end" {
+		payload := map[string]interface{}{"detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.StreamFn("v3_llm_end", payload)
+		return
+	}
+	eventName := v3StageToEvent(stage)
+	if eventName == "v3_progress" {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
+		})
+		return
+	}
+	payload := map[string]interface{}{
+		"stage":  stage,
+		"detail": detail,
+	}
+	for k, v := range data {
+		payload[k] = v
+	}
+	ctx.StreamFn(eventName, payload)
 }
 
 // findActualString searches for oldStr in content, handling quote normalization.
@@ -3959,94 +4046,108 @@ func insertAfterTool() *ToolDef {
 			if !editViewIsCurrent(ctx, path) {
 				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
-			lines := strings.Split(original, "\n")
-			// A trailing newline yields a final empty element; inserting after
-			// it would append past the end, so treat it as the boundary.
-			limit := len(lines)
-			if limit > 0 && lines[limit-1] == "" {
-				limit--
-			}
-			if in.Line < 0 || in.Line > limit {
-				return noMutation(fmt.Sprintf(
-					"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
-					in.Line, in.Path, limit)), nil
-			}
-			insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-			// Before any pipeline work: an insertion that moves existing
-			// statements into another block is refused outright, however well
-			// the result parses. See insertionReparentsPython.
-			if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
-				return structuralRefusal(msg), nil
-			}
-			merged := append([]string{}, lines[:in.Line]...)
-			merged = append(merged, insert...)
-			merged = append(merged, lines[in.Line:]...)
-			updated := strings.Join(merged, "\n")
-
-			// Healthy->broken only: a file already failing the checker stays
-			// editable, which is what makes repair-in-progress possible.
-			// Every content edit goes through the pipeline — these two were
-			// producing one greedy sample with no candidate generation and no
-			// lens scoring, which is exactly what the tier system exists to
-			// prevent.
-			route := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			updated = route.Content
-
-			observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
-				original, updated, func(detail string) string {
-					return fallbackSyntaxRejection(in.Path, updated, detail)
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-			}
-			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "insert_after", in.Path, "")
-
-			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
-			}
-			ctx.SessionWrites[in.Path] = true
-			ctx.RecordFileRead(path, updated)
-			ctx.RecordBodySeen(path)
-			log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
-			out, _ := json.Marshal(EditFileOutput{
-				OK:          true,
-				DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
-			})
-			result := &ToolResult{Success: true, Data: out,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact, attached by attachV3.
-			overlayValidation(result, observed)
-			return attachV3(result, v3Out), nil
+			return insertLinesAfter(ctx, in, path, original)
 		},
 	}
+}
+
+// insertLinesAfter splices the new lines in after in.Line and sends the result
+// through the edit pipeline. A line out of range, and an insertion that moves
+// statements into another block, are refused.
+func insertLinesAfter(ctx *AgentContext, in InsertAfterInput, path, original string) (*ToolResult, error) {
+	lines := strings.Split(original, "\n")
+	// A trailing newline yields a final empty element; inserting after
+	// it would append past the end, so treat it as the boundary.
+	limit := len(lines)
+	if limit > 0 && lines[limit-1] == "" {
+		limit--
+	}
+	if in.Line < 0 || in.Line > limit {
+		return noMutation(fmt.Sprintf(
+			"insert_after: line %d is out of range for %s, which has %d lines. Use the numbers read_file showed you.",
+			in.Line, in.Path, limit)), nil
+	}
+	insert := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	// Before any pipeline work: an insertion that moves existing
+	// statements into another block is refused outright, however well
+	// the result parses. See insertionReparentsPython.
+	if msg, moved := insertionReparentsPython(path, lines, in.Line, insert); moved {
+		return structuralRefusal(msg), nil
+	}
+	merged := append([]string{}, lines[:in.Line]...)
+	merged = append(merged, insert...)
+	merged = append(merged, lines[in.Line:]...)
+	updated := strings.Join(merged, "\n")
+
+	// Healthy->broken only: a file already failing the checker stays
+	// editable, which is what makes repair-in-progress possible.
+	// Every content edit goes through the pipeline — these two were
+	// producing one greedy sample with no candidate generation and no
+	// lens scoring, which is exactly what the tier system exists to
+	// prevent.
+	route := runEditPipeline(ctx, "insert_after", path, in.Path, original, updated)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	v3Out := route.Meta
+	updated = route.Content
+
+	return writeInsertion(ctx, in, path, original, updated, insert, v3Out)
+}
+
+// writeInsertion runs the gates every content edit shares over the bytes about
+// to land, writes them, and reports the insertion.
+func writeInsertion(ctx *AgentContext, in InsertAfterInput, path, original, updated string,
+	insert []string, v3Out V3EditMetadata) (*ToolResult, error) {
+	observed, refusal := editSyntaxObservation(ctx, "insert_after", in.Path, in.Path,
+		original, updated, func(detail string) string {
+			return fallbackSyntaxRejection(in.Path, updated, detail)
+		})
+	if refusal != nil {
+		return refusal, nil
+	}
+	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
+	}
+	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	if msg := duplicateMainGuard(path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	logMandatoryChecks(ctx, "insert_after", in.Path, "")
+
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		return nil, editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
+	}
+	ctx.SessionWrites[in.Path] = true
+	ctx.RecordFileRead(path, updated)
+	ctx.RecordBodySeen(path)
+	log.Printf("[insert_after] %s +%d lines after line %d", logPath(in.Path), len(insert), in.Line)
+	out, _ := json.Marshal(EditFileOutput{
+		OK:          true,
+		DiffPreview: fmt.Sprintf("+%d lines after line %d", len(insert), in.Line),
+	})
+	result := &ToolResult{Success: true, Data: out,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written --
+	// the tool's own edit, an authorized V3 candidate, or a baseline
+	// restored after revocation, whichever runEditPipeline returned.
+	// Provenance is a separate fact, attached by attachV3.
+	overlayValidation(result, observed)
+	return attachV3(result, v3Out), nil
 }
 
 // replaceLinesMaxSpan bounds a single replace_lines call. Above this the model
@@ -4124,10 +4225,8 @@ func relocateStaleRange(fileLines []string, limit int,
 //
 // The error carries a numbered window around the range, and says where the
 // expected text really is. history is what is known about why the numbers are
-// wrong (lineNumberHistory); without it the error claims no cause. It used to
-// say "The numbers you used are stale" every time. Smoke run 2026-09-27
-// (smallrung_toml): the file had not changed since the model read it; the
-// model had used line 169 for text that is only on lines 1418-1548.
+// wrong (lineNumberHistory); without it the error claims no cause, because
+// numbers can be wrong in a file that has not changed since the model read it.
 func lineAssertionMismatch(expected, actual string, lineNum int, path string, fileLines []string, history string) string {
 	if strings.TrimSpace(expected) == strings.TrimSpace(actual) {
 		return ""
@@ -4250,126 +4349,141 @@ func replaceLinesTool() *ToolDef {
 			if !editViewIsCurrent(ctx, path) {
 				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first so the line numbers are current: %s", in.Path))
 			}
-			data, err := os.ReadFile(path)
+			data, err := readRegularFile(path)
 			if err != nil {
 				return noMutation(fmt.Sprintf("cannot read %s: %v", in.Path, err)), nil
 			}
 			original := string(data)
-			fileLines := strings.Split(original, "\n")
-			limit := len(fileLines)
-			if limit > 0 && fileLines[limit-1] == "" {
-				limit--
-			}
-			if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
-				return noMutation(fmt.Sprintf(
-					"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
-						"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
-					in.StartLine, in.EndLine, in.Path, limit)), nil
-			}
-			if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
-				// A size policy declining a replacement it never formed.
-				return noMutation(fmt.Sprintf(
-					"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
-						"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
-						"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
-						"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
-						"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
-						"host grammar and no selector reaches into it, so there the split is the way.",
-					span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))), nil
-			}
-			// A stale range that simply moved is relocated rather than
-			// refused: the numbers go stale as soon as an earlier edit
-			// changes the file's length, and the model cannot see that.
-			if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
-				strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
-				span := in.EndLine - in.StartLine + 1
-				if moved := relocateStaleRange(fileLines, limit,
-					in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
-					log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
-						in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
-					in.StartLine, in.EndLine = moved, moved+span-1
-				}
-			}
-			// The anchors did not match, so no replacement was ever formed.
-			history := lineNumberHistory(ctx, path, in.Path, original)
-			if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
-				return noMutation(msg), nil
-			}
-			if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
-				return noMutation(msg), nil
-			}
-
-			replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
-			merged := append([]string{}, fileLines[:in.StartLine-1]...)
-			merged = append(merged, replacement...)
-			merged = append(merged, fileLines[in.EndLine:]...)
-			updated := strings.Join(merged, "\n")
-
-			if updated == original {
-				return noMutation("replace_lines: the replacement is identical to what is already on " +
-					"those lines — nothing changed and the bug is still there."), nil
-			}
-
-			// Same gate chain as insert_after and edit_file, healthy->broken
-			// only so a file mid-repair stays editable.
-			// Every content edit goes through the pipeline — these two were
-			// producing one greedy sample with no candidate generation and no
-			// lens scoring, which is exactly what the tier system exists to
-			// prevent.
-			route := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			updated = route.Content
-
-			observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
-				original, updated, func(detail string) string {
-					return fallbackSyntaxRejection(in.Path, updated, detail)
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-			if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
-				return structuralRefusal(structuralRejection(in.Path, introduced)), nil
-			}
-			if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, original, updated); msg != "" {
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "replace_lines", in.Path, "")
-
-			if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
-			}
-			ctx.SessionWrites[in.Path] = true
-			ctx.RecordFileRead(path, updated)
-			ctx.RecordBodySeen(path)
-			replaced := in.EndLine - in.StartLine + 1
-			log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
-			out, _ := json.Marshal(EditFileOutput{
-				OK:          true,
-				DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
-			})
-			result := &ToolResult{Success: true, Data: out,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact, attached by attachV3.
-			overlayValidation(result, observed)
-			return attachV3(result, v3Out), nil
+			return replaceLineRange(ctx, in, path, original)
 		},
 	}
+}
+
+// replaceLineRange replaces in.StartLine to in.EndLine with the new lines and
+// sends the result through the edit pipeline. A range that moved is applied
+// where its lines are now; a range out of bounds, too long, or whose first or
+// last line is not what the call says, is refused.
+func replaceLineRange(ctx *AgentContext, in ReplaceLinesInput, path, original string) (*ToolResult, error) {
+	fileLines := strings.Split(original, "\n")
+	limit := len(fileLines)
+	if limit > 0 && fileLines[limit-1] == "" {
+		limit--
+	}
+	if in.StartLine < 1 || in.EndLine < in.StartLine || in.EndLine > limit {
+		return noMutation(fmt.Sprintf(
+			"replace_lines: range %d-%d is invalid for %s, which has %d lines. Both bounds are 1-based and "+
+				"inclusive, and start_line must not exceed end_line. Use the numbers read_file showed you.",
+			in.StartLine, in.EndLine, in.Path, limit)), nil
+	}
+	if span := in.EndLine - in.StartLine + 1; span > replaceLinesMaxSpan {
+		// A size policy declining a replacement it never formed.
+		return noMutation(fmt.Sprintf(
+			"replace_lines: %d lines is too large a range (limit %d). A replacement that size is a rewrite rather "+
+				"than an edit. Split it into consecutive replace_lines calls of at most %d lines, working from "+
+				"the BOTTOM of the file upward so the earlier line numbers stay valid. For a whole function "+
+				"or class, structural_edit replaces the node in one call (%s) — but only for real nodes: code "+
+				"inside a string literal (a <script> block in an HTML template, say) is one string to the "+
+				"host grammar and no selector reaches into it, so there the split is the way.",
+			span, replaceLinesMaxSpan, replaceLinesMaxSpan, selectorGuidanceOrOutline(in.Path, original))), nil
+	}
+	// A stale range that simply moved is relocated rather than
+	// refused: the numbers go stale as soon as an earlier edit
+	// changes the file's length, and the model cannot see that.
+	if strings.TrimSpace(in.ExpectedFirstLine) != "" &&
+		strings.TrimSpace(fileLines[in.StartLine-1]) != strings.TrimSpace(in.ExpectedFirstLine) {
+		span := in.EndLine - in.StartLine + 1
+		if moved := relocateStaleRange(fileLines, limit,
+			in.ExpectedFirstLine, in.ExpectedLastLine, span); moved > 0 {
+			log.Printf("[replace_lines] %s: range %d-%d is stale; the same block is at %d-%d — relocating",
+				in.Path, in.StartLine, in.EndLine, moved, moved+span-1)
+			in.StartLine, in.EndLine = moved, moved+span-1
+		}
+	}
+	// The anchors did not match, so no replacement was ever formed.
+	history := lineNumberHistory(ctx, path, in.Path, original)
+	if msg := lineAssertionMismatch(in.ExpectedFirstLine, fileLines[in.StartLine-1], in.StartLine, in.Path, fileLines, history); msg != "" {
+		return noMutation(msg), nil
+	}
+	if msg := lineAssertionMismatch(in.ExpectedLastLine, fileLines[in.EndLine-1], in.EndLine, in.Path, fileLines, history); msg != "" {
+		return noMutation(msg), nil
+	}
+
+	replacement := strings.Split(strings.TrimSuffix(in.Content, "\n"), "\n")
+	merged := append([]string{}, fileLines[:in.StartLine-1]...)
+	merged = append(merged, replacement...)
+	merged = append(merged, fileLines[in.EndLine:]...)
+	updated := strings.Join(merged, "\n")
+
+	if updated == original {
+		return noMutation("replace_lines: the replacement is identical to what is already on " +
+			"those lines — nothing changed and the bug is still there."), nil
+	}
+
+	// Same gate chain as insert_after and edit_file, healthy->broken
+	// only so a file mid-repair stays editable.
+	// Every content edit goes through the pipeline — these two were
+	// producing one greedy sample with no candidate generation and no
+	// lens scoring, which is exactly what the tier system exists to
+	// prevent.
+	route := runEditPipeline(ctx, "replace_lines", path, in.Path, original, updated)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	v3Out := route.Meta
+	updated = route.Content
+
+	return writeLineReplacement(ctx, in, path, original, updated, replacement, v3Out)
+}
+
+// writeLineReplacement runs the gates every content edit shares over the bytes
+// about to land, writes them, and reports the lines it replaced.
+func writeLineReplacement(ctx *AgentContext, in ReplaceLinesInput, path, original, updated string,
+	replacement []string, v3Out V3EditMetadata) (*ToolResult, error) {
+	observed, refusal := editSyntaxObservation(ctx, "replace_lines", in.Path, in.Path,
+		original, updated, func(detail string) string {
+			return fallbackSyntaxRejection(in.Path, updated, detail)
+		})
+	if refusal != nil {
+		return refusal, nil
+	}
+	if introduced := editIntroducesUnresolved(ctx, path, original, updated); len(introduced) > 0 {
+		return structuralRefusal(structuralRejection(in.Path, introduced)), nil
+	}
+	if msg := embeddedScriptGate(ctx, path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	if msg := duplicateMainGuard(path, original, updated); msg != "" {
+		return structuralRefusal(msg), nil
+	}
+	logMandatoryChecks(ctx, "replace_lines", in.Path, "")
+
+	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
+		return nil, editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", in.Path, err), observed)
+	}
+	ctx.SessionWrites[in.Path] = true
+	ctx.RecordFileRead(path, updated)
+	ctx.RecordBodySeen(path)
+	replaced := in.EndLine - in.StartLine + 1
+	log.Printf("[replace_lines] %s lines %d-%d: %d -> %d lines", logPath(in.Path), in.StartLine, in.EndLine, replaced, len(replacement))
+	out, _ := json.Marshal(EditFileOutput{
+		OK:          true,
+		DiffPreview: fmt.Sprintf("lines %d-%d replaced (%d -> %d lines)", in.StartLine, in.EndLine, replaced, len(replacement)),
+	})
+	result := &ToolResult{Success: true, Data: out,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written --
+	// the tool's own edit, an authorized V3 candidate, or a baseline
+	// restored after revocation, whichever runEditPipeline returned.
+	// Provenance is a separate fact, attached by attachV3.
+	overlayValidation(result, observed)
+	return attachV3(result, v3Out), nil
 }
 
 func deleteFileTool() *ToolDef {
@@ -4494,12 +4608,9 @@ func deleteFileTool() *ToolDef {
 // ---------------------------------------------------------------------------
 // move_file — relocate / rename a file within the workspace.
 //
-// Added to close the "reorganize the files" gap (observed: a flask task asked
-// to move index.html into templates/; `mv` is refused, there is no move tool,
-// so the model looped on mkdir until the repetition breaker fired). A pure
-// move is not a content change, so it bypasses the V3 / surgical-edit gate —
-// content is preserved verbatim. Refuses to clobber an existing destination
-// file so a relocation can't silently destroy data.
+// A pure move is not a content change, so it bypasses the V3 / surgical-edit
+// gate — content is preserved verbatim. Refuses to clobber an existing
+// destination file so a relocation can't silently destroy data.
 // ---------------------------------------------------------------------------
 
 func moveFileTool() *ToolDef {
@@ -4551,65 +4662,72 @@ func moveFileTool() *ToolDef {
 				return refusedNoCheck(fmt.Sprintf("move_file: destination %s already exists. Pick a different name, or delete_file the destination first if you mean to replace it.", relDest)), nil
 			}
 
-			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-				// The source is untouched, but MkdirAll can leave part of the
-				// tree behind, so this is an attempted mutation that errored.
-				return nil, errFailedMutation(
-					fmt.Errorf("move_file: cannot create destination dir: %w", err),
-					ValidationKindNone, ValidationNotApplicable)
-			}
-
-			// os.Rename is atomic on the same filesystem; fall back to
-			// copy+remove across devices (bind mounts can straddle filesystems).
-			if err := os.Rename(src, dst); err != nil {
-				// Rename is all-or-nothing: a failure leaves the source where
-				// it was and the destination absent.
-				if srcInfo.IsDir() {
-					return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
-				}
-				data, rerr := os.ReadFile(src)
-				if rerr != nil {
-					return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
-				}
-				if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
-					// The destination may hold a partial copy.
-					return nil, errFailedMutation(
-						fmt.Errorf("move_file: cannot write destination: %w", werr),
-						ValidationKindNone, ValidationNotApplicable)
-				}
-				// A failure here leaves BOTH copies on disk. The move still
-				// happened, so it is applied; the ledger sees the surviving
-				// source and declines to tombstone it.
-				os.Remove(src)
-			}
-			log.Printf("[move_file] %s → %s", input.Source, relDest)
-
-			// Keep agent bookkeeping consistent: the file the model just read
-			// now lives at the new path. Re-point the recorded read and the
-			// session-write set so a follow-up edit isn't bounced as blind and
-			// dedup logic tracks the right path.
-			if content, ok := ctx.GetFileRead(src); ok {
-				ctx.RecordFileRead(dst, content)
-				ctx.ForgetFileRead(src)
-			}
-			if ctx.SessionWrites != nil {
-				if ctx.SessionWrites[input.Source] {
-					delete(ctx.SessionWrites, input.Source)
-				}
-				ctx.SessionWrites[relDest] = true
-			}
-
-			out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
-			outBytes, _ := json.Marshal(out)
-			// Relocation demonstrated. A move preserves content exactly, so
-			// this tool checks nothing: any verdict the bytes had was earned
-			// under the old name and does not travel with them.
-			return &ToolResult{Success: true, Data: outBytes,
-				MutationStatus:   MutationApplied,
-				ValidationKind:   ValidationKindNone,
-				ValidationStatus: ValidationNotApplicable}, nil
+			return relocateFile(ctx, input, src, dst, relDest, srcInfo)
 		},
 	}
+}
+
+// relocateFile moves src to dst, by a rename or, across filesystems, by a copy
+// and a removal. It then re-points what the session recorded about the file
+// and reports the move.
+func relocateFile(ctx *AgentContext, input MoveFileInput, src, dst, relDest string, srcInfo os.FileInfo) (*ToolResult, error) {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		// The source is untouched, but MkdirAll can leave part of the
+		// tree behind, so this is an attempted mutation that errored.
+		return nil, errFailedMutation(
+			fmt.Errorf("move_file: cannot create destination dir: %w", err),
+			ValidationKindNone, ValidationNotApplicable)
+	}
+
+	// os.Rename is atomic on the same filesystem; fall back to
+	// copy+remove across devices (bind mounts can straddle filesystems).
+	if err := os.Rename(src, dst); err != nil {
+		// Rename is all-or-nothing: a failure leaves the source where
+		// it was and the destination absent.
+		if srcInfo.IsDir() {
+			return nil, errNoMutation(fmt.Errorf("move_file: cannot move directory across filesystems: %w", err))
+		}
+		data, rerr := readRegularFile(src)
+		if rerr != nil {
+			return nil, errNoMutation(fmt.Errorf("move_file: cannot read source: %w", rerr))
+		}
+		if werr := os.WriteFile(dst, data, srcInfo.Mode().Perm()); werr != nil {
+			// The destination may hold a partial copy.
+			return nil, errFailedMutation(
+				fmt.Errorf("move_file: cannot write destination: %w", werr),
+				ValidationKindNone, ValidationNotApplicable)
+		}
+		// A failure here leaves BOTH copies on disk. The move still
+		// happened, so it is applied; the ledger sees the surviving
+		// source and declines to tombstone it.
+		_ = os.Remove(src)
+	}
+	log.Printf("[move_file] %s → %s", input.Source, relDest)
+
+	// Keep agent bookkeeping consistent: the file the model just read
+	// now lives at the new path. Re-point the recorded read and the
+	// session-write set so a follow-up edit isn't bounced as blind and
+	// dedup logic tracks the right path.
+	if content, ok := ctx.GetFileRead(src); ok {
+		ctx.RecordFileRead(dst, content)
+		ctx.ForgetFileRead(src)
+	}
+	if ctx.SessionWrites != nil {
+		if ctx.SessionWrites[input.Source] {
+			delete(ctx.SessionWrites, input.Source)
+		}
+		ctx.SessionWrites[relDest] = true
+	}
+
+	out := MoveFileOutput{Moved: true, Source: input.Source, Destination: relDest}
+	outBytes, _ := json.Marshal(out)
+	// Relocation demonstrated. A move preserves content exactly, so
+	// this tool checks nothing: any verdict the bytes had was earned
+	// under the old name and does not travel with them.
+	return &ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   MutationApplied,
+		ValidationKind:   ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -4742,24 +4860,6 @@ func runCommandTool() *ToolDef {
 				cwd = resolveAgentPath(ctx, input.Cwd)
 			}
 
-			// Route shell execution through the sandbox container.
-			// The proxy is a slim Go binary with no python/pip/node, so
-			// running locally meant every "verify" command failed with
-			// "command not found". The sandbox has the language matrix
-			// pre-installed AND has /workspace bind-mounted at the same
-			// path the proxy sees, so paths the agent learned via
-			// read_file / list_directory still work. validateShellCommand
-			// upstream is the gate; this is the executor.
-			//
-			// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host
-			// or per-project config), we BYPASS the sandbox and execute
-			// on the host directly. This is the right call for working
-			// codebases that depend on host-side state — the user's
-			// installed venv binaries, system tools, env vars,
-			// running databases, etc. — that the sandbox can't see.
-			// The shell-op safety gate (validateShellCommand) still
-			// fired upstream regardless of target. cwd is translated
-			// to the host path so the command lands in the right dir.
 			// The declared envelope, checked before anything runs. A
 			// deployment whose configured maxima exceed the host is one where
 			// every process can be inside its own limit at the moment the
@@ -4777,66 +4877,10 @@ func runCommandTool() *ToolDef {
 				}, nil
 			}
 
-			var out RunCommandOutput
-			var err error
-			// Host execution requires fully-trusted; otherwise a
-			// host request is downgraded to sandbox so the trust
-			// level can't be silently escalated by ATLAS_VERIFY_IN.
-			useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
-			if useHost {
-				hostCwd := cwd
-				if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
-					hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
-				}
-				out = runLocally(input.Command, hostCwd, time.Duration(timeoutSec)*time.Second)
-			} else {
-				out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
-				if err != nil {
-					log.Printf("[run_command] sandbox unavailable: %v", err)
-					out = RunCommandOutput{
-						Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
-						ExitCode: 1,
-					}
-				}
-			}
+			out := runCommandOutput(ctx, input, cwd, timeoutSec)
 
 			outBytes, _ := json.Marshal(out)
-			var errMsg string
-			if out.TimedOut && out.ExitCode == 0 {
-				// A kill that left a zero status behind. Saying nothing here
-				// would hand the model a silent failure.
-				errMsg = "the command was killed on its timeout"
-			}
-			// A command stopped at a resource ceiling is told apart from one
-			// that failed, in the words the model reads. Left as an exit code
-			// and a MemoryError on stderr, "your test suite is broken" and
-			// "your test suite never finished" are the same message, and only
-			// one of them is actionable.
-			if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
-				executionStoppedByResource(out.Outcome) {
-				errMsg = resourceMsg
-			} else if out.ExitCode != 0 {
-				errMsg = strings.TrimSpace(out.Stderr)
-				if errMsg == "" {
-					if s := strings.TrimSpace(out.Stdout); s != "" {
-						lines := strings.Split(s, "\n")
-						errMsg = lines[len(lines)-1]
-					}
-				}
-				if errMsg == "" {
-					errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
-				}
-				errMsg = truncateStr(errMsg, 400)
-				errMsg += ownBackgroundJobHint(ctx, errMsg)
-				errMsg += shellQuotingHint(input.Command, errMsg)
-			}
-			if errMsg == "" && !executionCompleted(out.Outcome) {
-				// Exit zero from a command that did not reach its own end.
-				// Silence here would read as success.
-				if m := executionOutcomeMessage(out.Outcome); m != "" {
-					errMsg = m
-				}
-			}
+			errMsg := runCommandErrorMessage(ctx, input, out)
 			return &ToolResult{
 				Success: runCommandVerifiable(out),
 				Data:    outBytes,
@@ -4844,6 +4888,103 @@ func runCommandTool() *ToolDef {
 			}, nil
 		},
 	}
+}
+
+// runCommandOutput runs the command where the session may run it: on the host
+// when it is fully trusted and asked for that, and otherwise in the sandbox,
+// whose absence is reported as the command's own failure.
+func runCommandOutput(ctx *AgentContext, input RunCommandInput, cwd string, timeoutSec int) RunCommandOutput {
+	// Route shell execution through the sandbox container.
+	// The proxy is a slim Go binary with no python/pip/node, so
+	// running locally meant every "verify" command failed with
+	// "command not found". The sandbox has the language matrix
+	// pre-installed AND has /workspace bind-mounted at the same
+	// path the proxy sees, so paths the agent learned via
+	// read_file / list_directory still work. validateShellCommand
+	// upstream is the gate; this is the executor.
+	//
+	// When ctx.VerifyOnHost is set (ATLAS_VERIFY_IN=host with
+	// ATLAS_TRUST_MODE=fully-trusted), we BYPASS the sandbox and execute
+	// on the host directly. This is the right call for working
+	// codebases that depend on host-side state — the user's
+	// installed venv binaries, system tools, env vars,
+	// running databases, etc. — that the sandbox can't see.
+	// The shell-op safety gate (validateShellCommand) still
+	// fired upstream regardless of target. cwd is translated
+	// to the host path so the command lands in the right dir.
+	var out RunCommandOutput
+	var err error
+	// Host execution requires fully-trusted; otherwise a
+	// host request is downgraded to sandbox so the trust
+	// level can't be silently escalated by ATLAS_VERIFY_IN.
+	useHost := ctx.VerifyOnHost && ctx.TrustMode.hostExecutionAllowed()
+	if useHost {
+		hostCwd := cwd
+		if ctx.HostWorkingDir != "" && strings.HasPrefix(cwd, ctx.WorkingDir) {
+			hostCwd = ctx.HostWorkingDir + strings.TrimPrefix(cwd, ctx.WorkingDir)
+		}
+		out = runLocally(input.Command, hostCwd, time.Duration(timeoutSec)*time.Second)
+	} else {
+		out, err = runViaSandbox(ctx, input.Command, cwd, timeoutSec)
+		if err != nil {
+			log.Printf("[run_command] sandbox unavailable: %v", err)
+			out = RunCommandOutput{
+				Stderr:   fmt.Sprintf("sandbox unavailable: %v", err),
+				ExitCode: 1,
+			}
+		}
+	}
+	return out
+}
+
+// runCommandErrorMessage is what the model is told went wrong with a command:
+// a kill on the timeout, a stop at a resource ceiling, a failure with its last
+// words, or an end the command did not reach. "" when nothing did.
+func runCommandErrorMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+	var errMsg string
+	if out.TimedOut && out.ExitCode == 0 {
+		// A kill that left a zero status behind. Saying nothing here
+		// would hand the model a silent failure.
+		errMsg = "the command was killed on its timeout"
+	}
+	// A command stopped at a resource ceiling is told apart from one
+	// that failed, in the words the model reads. Left as an exit code
+	// and a MemoryError on stderr, "your test suite is broken" and
+	// "your test suite never finished" are the same message, and only
+	// one of them is actionable.
+	if resourceMsg := executionOutcomeMessage(out.Outcome); resourceMsg != "" &&
+		executionStoppedByResource(out.Outcome) {
+		errMsg = resourceMsg
+	} else if out.ExitCode != 0 {
+		errMsg = nonZeroExitMessage(ctx, input, out)
+	}
+	if errMsg == "" && !executionCompleted(out.Outcome) {
+		// Exit zero from a command that did not reach its own end.
+		// Silence here would read as success.
+		if m := executionOutcomeMessage(out.Outcome); m != "" {
+			errMsg = m
+		}
+	}
+	return errMsg
+}
+
+// nonZeroExitMessage is a failed command's last words: its stderr, else the
+// last line of its stdout, else its exit code, with the hints that apply.
+func nonZeroExitMessage(ctx *AgentContext, input RunCommandInput, out RunCommandOutput) string {
+	errMsg := strings.TrimSpace(out.Stderr)
+	if errMsg == "" {
+		if s := strings.TrimSpace(out.Stdout); s != "" {
+			lines := strings.Split(s, "\n")
+			errMsg = lines[len(lines)-1]
+		}
+	}
+	if errMsg == "" {
+		errMsg = fmt.Sprintf("exit %d (no output)", out.ExitCode)
+	}
+	errMsg = truncateStr(errMsg, 400)
+	errMsg += ownBackgroundJobHint(ctx, errMsg)
+	errMsg += shellQuotingHint(input.Command, errMsg)
+	return errMsg
 }
 
 // runViaSandbox POSTs the command to the sandbox /shell endpoint.
@@ -4883,7 +5024,7 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 		var errBody struct {
 			Detail string `json:"detail"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&errBody)
+		_ = json.NewDecoder(serviceAnswer(resp.Body)).Decode(&errBody)
 		return RunCommandOutput{
 			Stderr:   fmt.Sprintf("sandbox /shell %d: %s", resp.StatusCode, errBody.Detail),
 			ExitCode: 1,
@@ -4913,7 +5054,7 @@ func decodeShellResponse(body io.Reader, out *RunCommandOutput) error {
 		Outcome         string `json:"outcome"`
 		PeakMemoryBytes int    `json:"peak_memory_bytes"`
 	}
-	if err := json.NewDecoder(body).Decode(&sr); err != nil {
+	if err := json.NewDecoder(serviceAnswer(body)).Decode(&sr); err != nil {
 		return fmt.Errorf("decode sandbox response: %w", err)
 	}
 	stdout := truncateStr(sr.Stdout, 8000)
@@ -5142,7 +5283,7 @@ func cyclomaticComplexity(ctx *AgentContext, path, source string) (int, bool) {
 		return 0, false
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(serviceAnswer(resp.Body))
 	if err != nil {
 		return 0, false
 	}
@@ -5501,8 +5642,8 @@ func v3StageToEvent(stage string) string {
 	return "v3_progress"
 }
 
-// truncateStr limits a string to maxLen characters.
-// (truncateStr() already exists in main.go for backward compat)
+// truncateStr limits a string to maxLen bytes and appends "..." when it
+// cuts.
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -5703,7 +5844,7 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		var d struct {
 			Detail string `json:"detail"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&d)
+		_ = json.NewDecoder(serviceAnswer(resp.Body)).Decode(&d)
 		if d.Detail != "" {
 			return "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, d.Detail)
 		}
@@ -5713,7 +5854,7 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 		JobID string `json:"job_id"`
 		PID   int    `json:"pid"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return "", 0, err
 	}
 	return out.JobID, out.PID, nil
@@ -5744,7 +5885,7 @@ func sandboxTailBackground(ctx *AgentContext, jobID string, lines int) (TailBack
 		return TailBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out TailBackgroundOutput
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return TailBackgroundOutput{}, err
 	}
 	return out, nil
@@ -5776,7 +5917,7 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 		return StopBackgroundOutput{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out StopBackgroundOutput
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return StopBackgroundOutput{}, err
 	}
 	return out, nil
@@ -5796,10 +5937,9 @@ func buildToolCallSchema() map[string]interface{} {
 	return buildToolCallSchemaForTools(nil)
 }
 
-// buildToolCallSchemaForTools is the same as buildToolCallSchema, but with
-// the named tools removed from the tool-name enum. Used by callLLMConstrained
-// to ban edit_file/write_file for a single decision step after a write_file
-// rejection on .py/.html (BiasBusters #3, May 2026 research synthesis).
+// buildToolCallSchemaForTools is buildToolCallSchema with the named tools
+// removed from the tool-name enum. Its only caller passes none; the per-step
+// tool ban uses the GBNF grammar (buildGBNFGrammarForTools) instead.
 func buildToolCallSchemaForTools(excluded []string) map[string]interface{} {
 	excludeSet := make(map[string]struct{}, len(excluded))
 	for _, name := range excluded {
@@ -5912,13 +6052,13 @@ func buildResponseFormat() interface{} {
 // ---------------------------------------------------------------------------
 
 // buildGBNFGrammarForTools generates a GBNF grammar string constraining
-// output to the tool_call/text/done union, with the listed tools
-// removed from the tool-name production. May 2026 BiasBusters #2: when
-// the next step must NOT use edit_file (e.g. write_file just got rejected
-// on a .py/.html file >5 lines), llama-server enforces the restriction
-// at the token-decode level via the `grammar` parameter — descriptions
-// and system prompt rules can be ignored by the model, but the grammar
-// physically cannot emit the banned tool name.
+// output to the tool_call/text/done union, with the listed tools removed
+// from the tool-name production. When the next step must NOT use a tool
+// (e.g. edit_file and write_file right after a write_file rejection on an
+// existing .py/.html file over 5 lines), llama-server enforces the
+// restriction at the token-decode level via the `grammar` parameter:
+// descriptions and system prompt rules can be ignored by the model, but
+// the grammar physically cannot emit the banned tool name.
 func buildGBNFGrammarForTools(excluded []string) string {
 	excludeSet := make(map[string]struct{}, len(excluded))
 	for _, name := range excluded {
@@ -6044,11 +6184,12 @@ func generateInputExample(toolName string) string {
 		// toward purely cosmetic edits instead of real bug-fix shapes.
 		return `{"path": "src/main.py", "old_str": "if x == 0:\n        return None", "new_str": "if x is None or x == 0:\n        return None", "replace_all": false}`
 	case "structural_edit":
-		// Whole-function rewrite — the case where edit_file would force
+		// Whole-function rewrite: the case where edit_file would force
 		// the model to copy the entire existing function as old_str and
-		// blow through max_tokens. Selector grammar is intentionally
-		// narrow in v1 (function:NAME, class:NAME, <tag>) to avoid the
-		// raw-tree-sitter hallucination problem (GH #39 measurement).
+		// blow through max_tokens. The selector grammar is
+		// intentionally narrow (function:NAME, class:NAME, type:NAME
+		// for Go, <tag> for HTML) to keep the model from hallucinating
+		// raw tree-sitter queries.
 		return `{"path": "src/main.py", "selector": "function:dashboard", "content": "@app.route('/dashboard')\ndef dashboard():\n    return render_template('dashboard.html')"}`
 	case "delete_file":
 		return `{"path": "old_file.py"}`
@@ -6063,14 +6204,14 @@ func generateInputExample(toolName string) string {
 	}
 }
 
-// editSyntaxObservation is the healthy->broken syntax gate the three
-// content-edit tools share, as one structured observation.
+// editSyntaxObservation is the healthy->broken syntax gate the content-edit
+// tools share, as one structured observation.
 //
 // The bytes about to be written are evaluated ONCE, and the original only when
-// those bytes demonstrably fail -- an edit may not INTRODUCE breakage, but a
-// file already failing the checker stays editable, which is what makes
-// repair-in-progress possible. The three tools had three copies of that rule;
-// they now have one, and each supplies only its own model-facing wording.
+// those bytes demonstrably fail: an edit may not INTRODUCE breakage, but a file
+// already failing the checker stays editable, which is what makes
+// repair-in-progress possible. Each tool supplies only its own model-facing
+// wording.
 //
 // Returns the observation for the proposed bytes, and a classified refusal when
 // the rule declines the edit. The observation describes the exact bytes the
@@ -6321,7 +6462,7 @@ func sandboxListBackground(ctx *AgentContext) ([]sandboxJobState, error) {
 	var out struct {
 		Jobs []sandboxJobState `json:"jobs"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(serviceAnswer(resp.Body)).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out.Jobs, nil

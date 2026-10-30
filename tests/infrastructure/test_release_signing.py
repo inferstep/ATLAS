@@ -28,8 +28,10 @@ def test_verify_tags_workflow_verifies_signature():
     assert wf.exists(), "missing verify-tags workflow"
     text = wf.read_text()
     assert "git verify-tag" in text
-    assert "allowed_signers" in text
-    assert "tags:" in text and "v*.*.*" in text
+    # The command, not only the file's name: the name also stands in the comment at the top of the workflow.
+    assert "git config gpg.ssh.allowedSignersFile .github/allowed_signers" in text
+    assert "tags:" in text
+    assert "v*.*.*" in text
 
 
 def test_release_script_signs_and_does_not_push():

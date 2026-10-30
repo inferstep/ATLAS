@@ -230,10 +230,11 @@ while True:
             f"Error should mention timeout: {error_msg}"
 
     @pytest.mark.slow
-    def test_memory_limit_enforced(self, sandbox_client: httpx.Client):
-        """Memory-intensive code should be limited or handled gracefully."""
-        # This test verifies memory-intensive code doesn't crash the sandbox
-        # The exact behavior depends on system configuration
+    def test_a_program_that_allocates_about_100_mb_gets_an_answer(self, sandbox_client: httpx.Client):
+        """The sandbox answers a program that allocates about 100 MB. Whether a
+        limit stops the program depends on the container's settings, so only
+        the answer is checked; the limits have tests of their own in
+        test_execution_resource_contract.py."""
         code = """
 # Try to allocate memory
 data = []
@@ -251,8 +252,6 @@ print(f"Allocated {len(data)} items")
             timeout=120.0
         )
         assert response.status_code == 200
-        # Just verify the sandbox handles it without crashing
-        # Memory limit enforcement depends on container configuration
 
 
 class TestSandboxResponseFormat:
@@ -714,7 +713,8 @@ class TestWorkingDirectoryContract:
             json={"code": "raise ValueError('boom')\n", "language": "python"},
             timeout=60.0).json()
         assert data["success"] is False
-        assert "ValueError" in data["stderr"] and "boom" in data["stderr"]
+        assert "ValueError" in data["stderr"]
+        assert "boom" in data["stderr"]
 
 
 def test_canary_must_fail():

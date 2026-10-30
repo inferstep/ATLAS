@@ -11,22 +11,18 @@ import (
 	"testing"
 )
 
-// Refusal guidance names selectors that exist, never a placeholder.
-//
-// Captured in stabilization cycle 1 (W1 aoc_slope rep1, relay req-00034 and
-// req-00039): the model's solve.py ended `if __name__ == '__main__'):`. An
-// edit_file miss was refused with "use structural_edit with a selector
-// (`function:NAME` or `class:NAME`)"; the model then sent selector
-// `function:NAME` with the corrected whole file as content, which was refused
-// as a missing symbol, and the session ended stopped/repeated_refusal.
+// Refusal guidance names selectors that exist, never a placeholder. A
+// placeholder such as `function:NAME` gets copied: a model sent that
+// selector, with the corrected whole file as content, was refused for a
+// missing symbol, and the session ended on repeated refusals.
 
-// The file as the session left it (relay req-00034, decoded).
+// A real solve.py as a session left it: it ends `if __name__ == '__main__'):`.
 const capturedSolve = "import sys\n\ndef solve():\n    with open('input.txt', 'r') as f:\n        grid = [line.strip() for line in f]\n\n    height = len(grid)\n    width = max(len(row) for row in grid)\n\n    slopes = [\n        (1, 1),\n        (3, 1),\n        (5, 1),\n        (7, 1),\n        (1, 2)\n    ]\n\n    results = []\n    for dx, dy in slopes:\n        count = 0\n        y = 0\n        while y < height:\n            x = y * dx\n            # The pattern repeats infinitely to the right\n            # So we use modulo to find the character in the original row\n            # However, the row might be shorter than x, so we use modulo width\n            row = grid[y]\n            char_idx = x % len(row)\n            if row[char_idx] == '#':\n                count += 1\n            y += dy\n        results.append(count)\n\n    product = 1\n    for r in results:\n        product *= r\n\n    print(product)\n\nif __name__ == '__main__'):\n    solve()\n"
 
-// The structural_edit content the model sent (relay req-00039, decoded).
+// The structural_edit content the model then sent: the whole corrected file.
 const capturedStructuralContent = "import sys\n\ndef solve():\n    with open('input.txt', 'r') as f:\n        grid = [line.strip() for line in f]\n\n    height = len(grid)\n    width = max(len(row) for row in grid)\n\n    slopes = [\n        (1, 1),\n        (3, 1),\n        (5, 1),\n        (7, 1),\n        (1, 2)\n    ]\n\n    results = []\n    for dx, dy in slopes:\n        count = 0\n        y = 0\n        while y < height:\n            x = y * dx\n            row = grid[y]\n            char_idx = x % len(row)\n            if row[char_idx] == '#':\n                count += 1\n            y += dy\n        results.append(count)\n\n    product = 1\n    for r in results:\n        product *= r\n\n    print(product)\n\nif __name__ == '__main__':\n    solve()\n"
 
-// The v3-service refusal the session received for that call, verbatim.
+// The v3-service refusal for that call, word for word.
 const capturedZeroMatch = "selector 'function:NAME' matched 0 nodes in solve.py — that symbol does not exist in this file. If you are ADDING it, structural_edit is the wrong tool: it replaces a node that is already there. Use insert_after with the line number read_file printed to put the new code in, or edit_file anchored on one unique nearby line. This file defines: function:solve. Use one of these exact selectors, or read the file to confirm."
 
 var placeholderSelector = regexp.MustCompile(`(?:function|class|type):NAME\b|<tag>`)

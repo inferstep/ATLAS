@@ -43,7 +43,6 @@ DEP_LICENSES = {
     "pyyaml": "MIT",
     "requests": "Apache-2.0",
     "ruff": "MIT",
-    "tiktoken": "MIT",
     "torch": "BSD-3-Clause",
     "tree-sitter": "MIT",
     "tree-sitter-go": "MIT",

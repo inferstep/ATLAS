@@ -267,6 +267,32 @@ class AtlasClient(
         }
 
     /**
+     * Probe a route that needs the service token, to tell a rejected token
+     * from an open `/ready`.
+     *
+     * `/workspace` is the cheapest authenticated route: it answers from the
+     * proxy's own environment and does no downstream work. [TokenProbe.Unknown]
+     * covers a proxy too old to have the route and every failure other than
+     * 401, so a caller never turns "can't tell" into "bad token".
+     */
+    suspend fun probeToken(): TokenProbe =
+        try {
+            get(WORKSPACE_PATH) { response ->
+                if (response.status.isSuccess()) {
+                    TokenProbe.Accepted
+                } else if (response.status.value == HttpStatusCode.Unauthorized.value) {
+                    TokenProbe.Rejected
+                } else {
+                    TokenProbe.Unknown
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            TokenProbe.Unknown
+        }
+
+    /**
      * GET /v1/calibration/status — the lens/ASA verdict for the loaded model.
      *
      * Uncached server-side (each call re-probes the lens service), so callers

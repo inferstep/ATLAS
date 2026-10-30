@@ -127,8 +127,13 @@ def _start_and_drop(port: int, marker: int, how: str) -> None:
         s.close()
 
 
+# The marker is a number of this process, so it is no part of a case's name: with several workers at once each
+# process has to collect the same names.
 @needs_proc
-@pytest.mark.parametrize("how,marker", [("rst", MARKER_BASE), ("fin", MARKER_BASE + 1)])
+@pytest.mark.parametrize("how,marker", [
+    pytest.param("rst", MARKER_BASE, id="the caller resets the connection"),
+    pytest.param("fin", MARKER_BASE + 1, id="the caller closes the connection"),
+])
 def test_a_caller_that_goes_away_stops_the_command(executor, how, marker):
     _reap(marker)
     _start_and_drop(executor, marker, how)
@@ -278,7 +283,8 @@ def test_shutdown_drains_within_the_bound(executor):
 
 def test_the_handler_uses_supported_lifecycle_apis():
     """No socket poking, no interpreter-specific hack."""
-    body = open(os.path.join(SANDBOX, "executor_server.py")).read()
+    with open(os.path.join(SANDBOX, "executor_server.py")) as fh:
+        body = fh.read()
     assert "await http.is_disconnected()" in body, (
         "the handler does not ask the framework whether the caller is gone")
     assert "asyncio.to_thread" in body

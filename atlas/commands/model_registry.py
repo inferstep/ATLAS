@@ -189,14 +189,15 @@ class Model:
         return self.requires_hf_token
 
 
-# PC-056.1: pin all unsloth/Qwen3.5-* URLs to this commit so a future
-# upstream re-upload can't silently invalidate our recorded SHA256s.
+# PC-056.1: the unsloth/Qwen3.5-9B-GGUF URLs are pinned to this commit so a
+# future upstream re-upload can't silently invalidate our recorded SHA256s.
+# A commit id belongs to one repo: this one is the 9B repo's.
 # Verified 2026-05-01 via HF HEAD x-repo-commit header.
-_UNSLOTH_QWEN35_COMMIT = "3885219b6810b007914f3a7950a8d1b469d598a5"
+_UNSLOTH_QWEN35_9B_COMMIT = "3885219b6810b007914f3a7950a8d1b469d598a5"
 
-def _unsloth_qwen35_url(repo: str, file: str) -> str:
-    return (f"https://huggingface.co/unsloth/{repo}/resolve/"
-            f"{_UNSLOTH_QWEN35_COMMIT}/{file}")
+def _unsloth_qwen35_9b_url(file: str) -> str:
+    return (f"https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/"
+            f"{_UNSLOTH_QWEN35_9B_COMMIT}/{file}")
 
 
 # Single source of truth. Order: by tier (cpu → xlarge), then by quant.
@@ -210,9 +211,9 @@ def _unsloth_qwen35_url(repo: str, file: str) -> str:
 #     geometric_lens/identity.py), so the Q6_K bundle does not load for
 #     them. Each quant needs its own bundle: `atlas bench`, then
 #     `atlas lens build --from-results`.
-#   - 7B / 14B / 32B: NO-ARTIFACTS. Upstream repos return HTTP 401
-#     (gated). Setting HF_TOKEN may unlock the download path; even then,
-#     no Lens artifacts trained. Listed so users know what's missing.
+#   - 7B / 14B / 32B: NO-ARTIFACTS, and no download source: unsloth has
+#     no public GGUF repo of these sizes. Listed so users know what's
+#     missing.
 #
 # Adding more models / variants = a PC-058 build run + PC-059 PR.
 REGISTRY: List[Model] = [
@@ -223,16 +224,11 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 7B (Q4_K_M)",
         model_size_gb=4.4,
         lens_status="no-artifacts",
-        # PC-056.1: URL populated so HF_TOKEN-authenticated users can
-        # install; sha256 is None (we can't HEAD anonymously to capture).
-        download_url=_unsloth_qwen35_url("Qwen3.5-7B-GGUF",
-                                          "Qwen3.5-7B-Q4_K_M.gguf"),
+        download_url=None,
         sha256=None,
         license="Apache-2.0",
-        requires_hf_token=True,
-        notes="Upstream repo unsloth/Qwen3.5-7B-GGUF is gated "
-              "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. Even with auth, there are no "
+        notes="unsloth has no public repo unsloth/Qwen3.5-7B-GGUF, so "
+              "ATLAS has no download source for this model. There are no "
               "Lens artifacts for this model: the lens cannot score it, "
               "so ATLAS stops agent work on it until you build a bundle "
               "(install with --no-lens, then `atlas bench` and "
@@ -246,8 +242,7 @@ REGISTRY: List[Model] = [
         # PC-056.1 verified 2026-05-01: Content-Length = 5680522464 bytes.
         model_size_gb=5.29,
         lens_status="no-artifacts",
-        download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
-                                          "Qwen3.5-9B-Q4_K_M.gguf"),
+        download_url=_unsloth_qwen35_9b_url("Qwen3.5-9B-Q4_K_M.gguf"),
         sha256="03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
         license="Apache-2.0",
         # PC-061: same-family ASA vector as Q6_K should structurally apply
@@ -277,8 +272,7 @@ REGISTRY: List[Model] = [
         lens_status="supported",
         lens_calibrated=False,
         # PC-056.1: pinned to commit hash (was resolve/main/...).
-        download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
-                                          "Qwen3.5-9B-Q6_K.gguf"),
+        download_url=_unsloth_qwen35_9b_url("Qwen3.5-9B-Q6_K.gguf"),
         # HuggingFace x-linked-etag (content-addressed storage SHA256).
         # Verifies download integrity, not provenance.
         sha256="91898433cf5ce0a8f45516a4cc3e9343b6e01d052d01f684309098c66a326c59",
@@ -330,8 +324,7 @@ REGISTRY: List[Model] = [
         # PC-056.1 verified 2026-05-01: Content-Length = 9527502048 bytes.
         model_size_gb=8.87,
         lens_status="no-artifacts",
-        download_url=_unsloth_qwen35_url("Qwen3.5-9B-GGUF",
-                                          "Qwen3.5-9B-Q8_0.gguf"),
+        download_url=_unsloth_qwen35_9b_url("Qwen3.5-9B-Q8_0.gguf"),
         sha256="809626574d0cb43d4becfa56169980da2bb448f2299270f7be443cb89d0a6ae4",
         license="Apache-2.0",
         # PC-061: see Q4_K_M entry — same family, structurally applicable
@@ -355,18 +348,15 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 14B (Q5_K_M)",
         model_size_gb=10.5,
         lens_status="no-artifacts",
-        download_url=_unsloth_qwen35_url("Qwen3.5-14B-GGUF",
-                                          "Qwen3.5-14B-Q5_K_M.gguf"),
+        download_url=None,
         sha256=None,
         license="Apache-2.0",
-        requires_hf_token=True,
-        notes="Upstream repo unsloth/Qwen3.5-14B-GGUF is gated "
-              "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. Tested in past ATLAS work, "
-              "but its Lens artifacts were removed from the repo, so it "
-              "has no Lens artifacts now: the lens cannot score it, and "
-              "ATLAS stops agent work on it until you build a bundle "
-              "(install with --no-lens, then `atlas bench` and "
+        notes="unsloth has no public repo unsloth/Qwen3.5-14B-GGUF, so "
+              "ATLAS has no download source for this model. Tested in past "
+              "ATLAS work, but its Lens artifacts were removed from the "
+              "repo, so it has no Lens artifacts now: the lens cannot score "
+              "it, and ATLAS stops agent work on it until you build a "
+              "bundle (install with --no-lens, then `atlas bench` and "
               "`atlas lens build --from-results`).",
     ),
     Model(
@@ -376,17 +366,14 @@ REGISTRY: List[Model] = [
         model_display="Qwen3.5 32B (Q5_K_M)",
         model_size_gb=23.0,
         lens_status="no-artifacts",
-        download_url=_unsloth_qwen35_url("Qwen3.5-32B-GGUF",
-                                          "Qwen3.5-32B-Q5_K_M.gguf"),
+        download_url=None,
         sha256=None,
         license="Apache-2.0",
-        requires_hf_token=True,
-        notes="Upstream repo unsloth/Qwen3.5-32B-GGUF is gated "
-              "(HTTP 401 anonymous). Set HF_TOKEN in env to authenticate "
-              "and unlock the download path. No Lens artifacts for this "
-              "model: the lens cannot score it, so ATLAS stops agent "
-              "work on it until you build a bundle (install with "
-              "--no-lens, then `atlas bench` and "
+        notes="unsloth has no public repo unsloth/Qwen3.5-32B-GGUF, so "
+              "ATLAS has no download source for this model. No Lens "
+              "artifacts for this model: the lens cannot score it, so "
+              "ATLAS stops agent work on it until you build a bundle "
+              "(install with --no-lens, then `atlas bench` and "
               "`atlas lens build --from-results`).",
     ),
     Model(

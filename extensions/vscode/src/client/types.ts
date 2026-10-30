@@ -12,6 +12,30 @@ export interface HistoryMessage {
 /** Permission mode for a turn (docs/API.md POST /v1/agent `mode`). */
 export type PermissionMode = 'default' | 'accept-edits' | 'yolo';
 
+/** What the client declares about a request: whether the workspace should
+ * change (`work`) or not (`question`). A control the user operates — nothing
+ * in the extension derives it from the message text. */
+export type TaskMode = 'work' | 'question';
+
+/** The structured declaration sent with a request (`task_contract`). Mirrors
+ * proxy/types.go's TaskContract and tui/chat.go's taskContract.
+ *
+ * `expected_outputs` and `verification` stay unset from this client: someone
+ * typing into a chat box has told the extension nothing structured about
+ * which files must exist or which command must run, and guessing from their
+ * prose is exactly what the contract replaces. A caller that genuinely knows
+ * can fill them in; the proxy grounds a `work` request in the model's own
+ * tool call instead (docs/API.md). */
+export interface TaskContract {
+	/** Required when the object is sent. An unknown mode, or a `question`
+	 * that declares obligations, is refused with HTTP 400. */
+	task_mode: TaskMode;
+	/** Exact workspace paths the request must produce. */
+	expected_outputs?: string[];
+	/** Exact commands that must be run and pass. */
+	verification?: string[];
+}
+
 /** POST /v1/agent request body. Field names MUST match the anonymous
  * struct in proxy/agent.go's handleAgent (see tui/chat.go agentRequest). */
 export interface AgentRequest {
@@ -24,6 +48,10 @@ export interface AgentRequest {
 	history?: HistoryMessage[];
 	/** Tools the user approved for the whole session; re-sent every turn. */
 	session_allowed_tools?: string[];
+	/** The client's structured declaration. Absence is reserved for external
+	 * and legacy callers — an owned sender that omits it is indistinguishable
+	 * from a stranger's request, so every turn sends one. */
+	task_contract?: TaskContract;
 }
 
 /** POST /v1/permission request body. */

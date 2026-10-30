@@ -52,6 +52,7 @@ GOLDEN = {
 
 class TestJsGoldenParity:
     def test_matches_chiasmus(self):
+        # The exact call list also shows that `new Pipeline()` is not a call.
         g = extract_file("pipe.js", JS_FIXTURE)
         got = {
             "defines": sorted([[d.name, d.kind] for d in g.defines]),
@@ -61,15 +62,11 @@ class TestJsGoldenParity:
         for key, expected in GOLDEN.items():
             assert got[key] == sorted(expected), f"{key} diverged from chiasmus"
 
-    def test_new_expression_not_a_call(self):
-        # `new Pipeline()` must not appear as a call edge.
-        g = extract_file("pipe.js", JS_FIXTURE)
-        assert all(c.callee != "Pipeline" for c in g.calls)
-
     def test_method_contains(self):
         g = extract_file("pipe.js", JS_FIXTURE)
         pairs = {(c.parent, c.child) for c in g.contains}
-        assert ("Pipeline", "run") in pairs and ("Pipeline", "load") in pairs
+        assert ("Pipeline", "run") in pairs
+        assert ("Pipeline", "load") in pairs
 
 
 class TestMixedProject:
@@ -85,6 +82,13 @@ class TestMixedProject:
         assert callees(g, "js_fn") == ["helper"]
 
     def test_is_supported(self):
-        assert is_js("x.js") and is_js("x.mjs")
-        assert is_supported("x.py") and is_supported("x.jsx")
+        assert is_js("x.js")
+        assert is_js("x.mjs")
+        assert is_supported("x.py")
+        assert is_supported("x.jsx")
         assert not is_supported("x.md")
+
+
+@pytest.mark.parametrize("path", ["lines.py", "lines.js"])
+def test_a_file_without_a_final_newline_counts_its_last_line(path):
+    assert [f.line_count for f in extract_file(path, "a\nb\nc").files] == [3]

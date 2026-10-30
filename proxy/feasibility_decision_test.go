@@ -10,7 +10,8 @@ import (
 	"testing"
 )
 
-// The observe-only feasibility matrix, and the Stage-A replay it exists for.
+// The observe-only feasibility decision: whether this invocation has a path to
+// closure, from its obligations and the evidence it can produce.
 
 func feasibilityFor(t *testing.T, contract string, files map[string]string) FeasibilityDecision {
 	t.Helper()
@@ -83,6 +84,27 @@ func TestFeasibilityMatrix(t *testing.T) {
 		expectFeasibility(t, "two commands", d, true, FeasibilityClosurePathAvailable)
 	})
 
+	t.Run("declared command on a build without staging", func(t *testing.T) {
+		_, obs := rolesFixture(t,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
+				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
+		d := decideInvocationFeasibility(feasibilityInput{
+			Obligations:       obs,
+			AuthorizedTargets: authorizedTargets(obs),
+			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
+		})
+		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
+		if len(d.Unreachable) != 1 ||
+			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
+			t.Errorf("unreachable %v, want the declared command", d.Unreachable)
+		}
+	})
+}
+
+// An existing baseline owes preservation, which has no producer: it is
+// reachable exactly when the evidence that speaks for the candidate reaches
+// the strength the baseline holds.
+func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 	t.Run("syntax baseline is reachable from what syntax evidence produces", func(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
@@ -137,22 +159,6 @@ func TestFeasibilityMatrix(t *testing.T) {
 			decideInvocationFeasibility(in), true, FeasibilityClosurePathAvailable)
 	})
 
-	t.Run("declared command on a build without staging", func(t *testing.T) {
-		_, obs := rolesFixture(t,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-				`"verification_knowledge":"declared","verification":["pytest -q"]}`, nil)
-		d := decideInvocationFeasibility(feasibilityInput{
-			Obligations:       obs,
-			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        map[string]string{ObligationSyntacticValidity: "syntax"},
-		})
-		expectFeasibility(t, "declared command", d, false, FeasibilityAdapterCannotMeasure)
-		if len(d.Unreachable) != 1 ||
-			!strings.HasPrefix(d.Unreachable[0], ObligationDeclaredCommand+":") {
-			t.Errorf("unreachable %v, want the declared command", d.Unreachable)
-		}
-	})
-
 	t.Run("existing validated baseline", func(t *testing.T) {
 		ctx, _ := rolesFixture(t, "", map[string]string{"solve.py": "print(7)\n"})
 		resolved := resolveAgentPath(ctx, "solve.py")
@@ -170,15 +176,19 @@ func TestFeasibilityMatrix(t *testing.T) {
 			Producible:        producibleStrengths(),
 		})
 		// The floor is the baseline's, and staging can reach it. Preservation
-		// itself is still derived rather than produced -- what changed is that
-		// something producible now gets that high.
+		// itself is derived rather than produced; staging is what reaches that
+		// strength.
 		if d.Floor != "behavioral" {
 			t.Errorf("floor %q, want the baseline's behavioral", d.Floor)
 		}
 		expectFeasibility(t, "behavioral baseline", d, true,
 			FeasibilityClosurePathAvailable)
 	})
+}
 
+// With nothing the invocation can close -- an unsupported obligation, no
+// contract, no target, or a kind with no role -- there is no closure path.
+func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 	t.Run("unsupported obligation", func(t *testing.T) {
 		exists, _ := newTaskObligation(ObligationArtifactExists, "a.py", "", true)
 		unsup, _ := newTaskObligation(ObligationUnsupported, "a thing", "", true)
@@ -243,8 +253,8 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 		AuthorizedTargets: authorizedTargets(obs),
 		Producible:        producibleStrengths(),
 	}
-	now := decideInvocationFeasibility(in)
-	expectFeasibility(t, "with the staging producer wired", now, true,
+	withStaging := decideInvocationFeasibility(in)
+	expectFeasibility(t, "with the staging producer wired", withStaging, true,
 		FeasibilityClosurePathAvailable)
 
 	// The same obligations on a build where the producer is not available. The
@@ -257,30 +267,20 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 	if other.Feasible {
 		t.Error("a declared command with no producer was called feasible")
 	}
-	if !now.Feasible {
+	if !withStaging.Feasible {
 		t.Error("the earlier invocation's answer changed")
 	}
 }
 
-// --- the Stage-A replay ------------------------------------------------------
-
-// TestTheStageARequestShapeHasNoClosurePath replays the shape the sealed
-// acquisition actually sent and reaches the same conclusion it took 103
-// candidate evaluations to reach, without reading a single outcome.
-//
-// The historical evidence is untouched: this constructs the REQUEST shape, not
-// the run, and asserts nothing about what the run produced.
-func TestTheStageARequestShapeHasNoClosurePath(t *testing.T) {
-	// The acquisition's own senders declared task_mode and nothing else --
-	// pinned by the owned-sender tests and by tests/e2e/conftest.py.
+// A contract that declares task_mode and nothing else, as every owned sender
+// sends, has nothing to close, and staging cannot change that: what is
+// missing is the declaration, not the executor. A structured task whose
+// floor is behavioural has a closure path, because staging runs the declared
+// command against the candidate.
+func TestATaskModeOnlyContractHasNoClosurePath(t *testing.T) {
 	d := feasibilityFor(t, `{"task_mode":"work"}`, nil)
-	expectFeasibility(t, "stage-a shape", d, false, FeasibilityUnspecifiedContract)
+	expectFeasibility(t, "task_mode only", d, false, FeasibilityUnspecifiedContract)
 
-	// The counterfactual the run would have needed: a structured Python task
-	// whose closure floor is behavioural. At acquisition time its route could
-	// not reach that floor at all. On this build it can, because staging runs
-	// the declared command against the candidate -- so the same shape that was
-	// unreachable then is feasible now.
 	structured := feasibilityFor(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared","verification":["python3 solve.py"],`+
@@ -292,27 +292,6 @@ func TestTheStageARequestShapeHasNoClosurePath(t *testing.T) {
 	}
 	expectFeasibility(t, "structured behavioural task", structured, true,
 		FeasibilityClosurePathAvailable)
-	// What has NOT changed is the shape Stage A actually sent. A contract that
-	// declared nothing has nothing to close, and staging cannot fix that: the
-	// missing thing is the declaration, not the executor.
-	if d.Feasible {
-		t.Error("the acquisition's own shape gained a closure path")
-	}
-
-	// Quantify what would have been avoided, without changing anything: the
-	// acquisition ran 21 tasks x 3 arms, and the sealed record's own count of
-	// candidate evaluations under the route that could not close is the number
-	// this answer would have skipped had it been consulted.
-	const stageACandidateEvaluations = 103
-	const underTheUnclosableRoute = 100
-	if underTheUnclosableRoute >= stageACandidateEvaluations {
-		t.Fatal("the pinned counts are inconsistent")
-	}
-	t.Logf("observe-only: %d of %d Stage-A candidate evaluations ran under a "+
-		"route that, as sent, had no closure path; consulted, this decision "+
-		"would have avoided them. Nothing was skipped, and the historical "+
-		"record is unchanged.",
-		underTheUnclosableRoute, stageACandidateEvaluations)
 }
 
 // --- inputs are closed -------------------------------------------------------

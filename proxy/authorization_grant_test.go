@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,14 +14,14 @@ import (
 // A grant is the difference between "these bytes were authorized" and "these
 // bytes may land now".
 //
-// Everything here is a way of holding something that looks like permission and
-// being told it is not: the same grant twice, a grant for another candidate, a
-// grant whose workspace moved underneath it, a grant the request already
-// cancelled. Nothing is delivered in this file -- minting and spending are the
-// whole subject, and the delivery owner is pinned separately.
+// Each test here holds something that looks like permission and is told it is
+// not: the same grant twice, a grant for another candidate, a grant whose
+// workspace moved underneath it, a grant the request already cancelled.
+// Nothing is delivered in this file. Minting and spending are the whole
+// subject; delivery is tested in candidate_delivery_test.go.
 
 // grantWorld is an authorized candidate and everything the decision was
-// reached over, kept so a test can perturb exactly one thing.
+// reached over, kept so a test can change exactly one thing.
 type grantWorld struct {
 	*authWorld
 	in       authorizationInput
@@ -32,7 +33,7 @@ func newGrantWorld(t *testing.T, commands ...string) *grantWorld {
 	return newGrantWorldWithCode(t, authPy, commands...)
 }
 
-// newGrantWorldWithCode builds the world around EXACT bytes, so a row that
+// newGrantWorldWithCode builds the world around exact bytes, so a test that
 // cares what lands does not have to swap the candidate out from under evidence
 // that already described something else.
 func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grantWorld {
@@ -49,6 +50,7 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 	evidence := append([]proxyEvidence{ev}, w.stage(evID)...)
 
 	generation, stateHash := workspaceIdentity(w.ctx)
+	_, witness := baselineWitness(w.ctx, w.path)
 	in := authorizationInput{
 		Obligations:   requestObligations(w.ctx),
 		TargetPath:    w.path,
@@ -63,11 +65,11 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 			BaselineIdentity:    baselineIdentityFor(w.ctx, w.path),
 		},
 		Evidence:                evidence,
-		BaselineWitnessCommand:  grantWitness(w.ctx, w.path),
+		BaselineWitnessCommand:  witness,
 		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
-		// The structured intent of the call a licence would be bound to. A
-		// grant is refused without one, so every fixture that expects to mint
-		// carries the scope its route would have derived.
+		// A grant is refused without the structured intent of the call it
+		// would be bound to, so the fixture carries the scope its route
+		// would have derived.
 		Scope:          testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, w.code),
 		CandidateBytes: w.code,
 	}
@@ -75,12 +77,7 @@ func newGrantWorldWithCode(t *testing.T, code string, commands ...string) *grant
 	return &grantWorld{authWorld: w, in: in, decision: d}
 }
 
-func grantWitness(ctx *AgentContext, path string) string {
-	_, witness := baselineWitness(ctx, path)
-	return witness
-}
-
-// claim builds what a consumer presents, from the live state -- the same way
+// claim builds what a consumer presents, from the live state, the same way
 // the delivery owner has to.
 func (w *grantWorld) claim() grantClaim {
 	generation, stateHash := workspaceIdentity(w.ctx)
@@ -147,59 +144,84 @@ func TestAnAuthorizedDecisionMintsABoundGrant(t *testing.T) {
 }
 
 func TestAnUnauthorizedDecisionMintsNothing(t *testing.T) {
-	w := newGrantWorld(t)
-	for name, mut := range map[string]func(*grantWorld){
-		"refused outright": func(w *grantWorld) {
+	for _, tc := range []struct {
+		name     string
+		commands []string
+		change   func(*grantWorld)
+	}{
+		{"refused outright", nil, func(w *grantWorld) {
 			w.decision.Authorized, w.decision.Reason = false, ReasonEvidenceMissing
-		},
-		"authorized with a reason that is not": func(w *grantWorld) {
+		}},
+		{"authorized with a reason that is not", nil, func(w *grantWorld) {
 			w.decision.Reason = ReasonWorkspaceStale
-		},
-		"something still owed": func(w *grantWorld) {
+		}},
+		{"something still owed", nil, func(w *grantWorld) {
 			w.decision.Missing = []string{"declared_command:owed"}
-		},
-		"nothing demonstrated": func(w *grantWorld) { w.decision.Satisfied = nil },
-		"no contract":          func(w *grantWorld) { w.ctx.TaskContract = nil },
-		"no obligations":       func(w *grantWorld) { w.in.Obligations = nil },
-		"undeclared target": func(w *grantWorld) {
+		}},
+		{"nothing demonstrated", nil, func(w *grantWorld) { w.decision.Satisfied = nil }},
+		{"no contract", nil, func(w *grantWorld) { w.ctx.TaskContract = nil }},
+		{"no obligations", nil, func(w *grantWorld) { w.in.Obligations = nil }},
+		{"undeclared target", nil, func(w *grantWorld) {
 			w.in.TargetPath = filepath.Join(w.ctx.WorkingDir, "not-declared.py")
-		},
-		"identity and candidate disagree": func(w *grantWorld) {
+		}},
+		{"identity and candidate disagree", nil, func(w *grantWorld) {
 			w.in.Identity.CandidateHash = contentSHA256("other")
-		},
-		"another request's identity": func(w *grantWorld) {
+		}},
+		{"another request's identity", nil, func(w *grantWorld) {
 			w.in.Identity.RequestID = "req-somebody-else"
-		},
-		"no invocation":         func(w *grantWorld) { w.in.Identity.InvocationID = "" },
-		"no candidate instance": func(w *grantWorld) { w.in.Identity.CandidateInstanceID = "" },
-		"no workspace state":    func(w *grantWorld) { w.in.Identity.WorkspaceStateHash = "" },
+		}},
+		{"no invocation", nil, func(w *grantWorld) { w.in.Identity.InvocationID = "" }},
+		{"no candidate instance", nil, func(w *grantWorld) { w.in.Identity.CandidateInstanceID = "" }},
+		{"no workspace state", nil, func(w *grantWorld) { w.in.Identity.WorkspaceStateHash = "" }},
+		// The decision still says yes. Minting checks coverage again rather
+		// than taking the decision's word.
+		{"declared command without evidence", []string{"pytest -q"}, func(w *grantWorld) {
+			var kept []proxyEvidence
+			for _, e := range w.in.Evidence {
+				if e.Provenance.Source != ProvenanceClientDeclaredVerification {
+					kept = append(kept, e)
+				}
+			}
+			w.in.Evidence = kept
+		}},
+		// With a V3 service record, the strict basis also needs the record to
+		// be readable and its adapter to support the artifact.
+		{"a service record that cannot be read", nil, func(w *grantWorld) {
+			w.in.Envelope = &V3EvidenceEnvelope{Evaluation: V3EvidenceEvaluation{Supported: true}}
+		}},
+		{"an adapter that does not support the artifact", nil, func(w *grantWorld) {
+			w.in.Envelope = &V3EvidenceEnvelope{
+				WireVersion: evidenceWireMajor + ".0",
+				Identity: V3EvidenceIdentity{ContractID: "contract", ContractVersion: "1", ArtifactScope: "file",
+					EvaluationContextHash: "context", CalibrationID: "calibration"},
+				Evaluation: V3EvidenceEvaluation{ExecutionStatus: "ok", EvidenceStrength: "syntax"},
+				Selection:  V3EvidenceSelection{Status: "no_verified_winner"},
+			}
+		}},
+		{"output knowledge not declared", nil, func(w *grantWorld) { w.in.OutputKnowledgeDeclared = false }},
 	} {
-		fresh := newGrantWorld(t)
-		mut(fresh)
-		if _, ok, _ := mintAuthorizationGrant(fresh.ctx, fresh.in, fresh.decision, "s", grantBasisStrict); ok {
-			t.Errorf("%s minted a grant", name)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGrantWorld(t, tc.commands...)
+			if !w.decision.Authorized {
+				t.Fatalf("the fixture is not authorized: %s", w.decision.Reason)
+			}
+			tc.change(w)
+			if _, ok, _ := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); ok {
+				t.Error("a grant was minted")
+			}
+		})
 	}
-	_ = w
 }
 
-func TestADeclaredCommandWithoutEvidenceMintsNothing(t *testing.T) {
-	w := newGrantWorld(t, "pytest -q")
-	if !w.decision.Authorized {
-		t.Fatalf("the staged fixture is not authorized: %s", w.decision.Reason)
-	}
-	// Drop the behavioral record but leave the decision saying yes. Minting
-	// re-checks coverage rather than taking the decision's word.
-	stripped := w.in
-	var kept []proxyEvidence
-	for _, e := range w.in.Evidence {
-		if e.Provenance.Source != ProvenanceClientDeclaredVerification {
-			kept = append(kept, e)
-		}
-	}
-	stripped.Evidence = kept
-	if _, ok, _ := mintAuthorizationGrant(w.ctx, stripped, w.decision, "s", grantBasisStrict); ok {
-		t.Error("a declared command with no trusted evidence minted a grant")
+// On the automatic basis, with no declared outputs, only the model's own
+// structured call can ground the target, and a call of another request
+// grounds nothing.
+func TestTheAutomaticBasisMintsNothingForATargetNoCallOfThisRequestGrounds(t *testing.T) {
+	w := newGrantWorld(t)
+	w.in.OutputKnowledgeDeclared = false
+	w.in.Scope.RequestID = "req-somebody-else"
+	if _, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisAutomaticV3); ok || why != structuredTargetNotThisRequest {
+		t.Errorf("minted %v with %q, want no grant and %q", ok, why, structuredTargetNotThisRequest)
 	}
 }
 
@@ -210,16 +232,15 @@ func TestAliasSpellingsShareOneGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c := w.claim()
 	for _, alias := range []string{rel, "./" + rel, w.path, filepath.Join(w.ctx.WorkingDir, ".", rel)} {
-		c := w.claim()
-		c.TargetPath = alias
 		key := grantKey(c.RequestID, c.InvocationID, c.CandidateInstanceID,
 			resolveAgentPath(w.ctx, alias))
 		if key != g.ID {
 			t.Errorf("%q names a different grant", alias)
 		}
 	}
-	// And minting again under an alias supersedes rather than adding.
+	// Minting again under an alias replaces the grant rather than adding one.
 	aliased := w.in
 	aliased.TargetPath = rel
 	if _, ok, why := mintAuthorizationGrant(w.ctx, aliased, w.decision, "s", grantBasisStrict); !ok {
@@ -246,71 +267,59 @@ func TestALaterDecisionSupersedesTheEarlierGrant(t *testing.T) {
 	if liveGrantCount(w.ctx) != 1 {
 		t.Errorf("%d live grants for one target", liveGrantCount(w.ctx))
 	}
-	// The superseded one cannot be spent.
 	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
 		t.Error("a superseded grant was spent")
 	}
 }
 
-func TestGrantCapacityRefusesBeforeMutating(t *testing.T) {
+// The ledger holds at most grantCapacity live grants. A spent grant stays as a
+// tombstone, so a replay can be told apart from a grant that never existed,
+// but it holds no room: otherwise a long run would stop being able to deliver.
+func TestGrantCapacityCountsOnlyLiveGrants(t *testing.T) {
 	w := newGrantWorld(t)
-	// A runaway backstop, filled directly. Reaching it through declared
-	// targets is not possible -- a contract may declare at most
-	// maxTaskContractEntries outputs and that equals the capacity -- so the
-	// branch is tested where it lives rather than through a shape no client
-	// can send.
+	// Filled directly. A contract may declare at most maxTaskContractEntries
+	// outputs, which equals the capacity, so no client can reach the limit
+	// through declared targets.
 	w.ctx.grantMu.Lock()
 	if w.ctx.grants == nil {
 		w.ctx.grants = map[string]*authorizationGrant{}
 	}
 	for i := 0; i < grantCapacity; i++ {
-		id := contentSHA256("filler-" + string(rune('a'+i%26)) + string(rune('a'+i/26)))
-		w.ctx.grants[id] = &authorizationGrant{ID: id, TargetPath: "/w/filler-" + id}
+		id := contentSHA256(fmt.Sprintf("filler-%d", i))
+		w.ctx.grants[id] = &authorizationGrant{ID: id, TargetPath: "/w/filler-" + id, retired: grantLive}
 	}
 	w.ctx.grantMu.Unlock()
 
-	before := liveGrantCount(w.ctx)
-	if before != grantCapacity {
-		t.Fatalf("%d live grants, want the capacity", before)
+	// Full of live grants: the mint is refused, and the live set is unchanged.
+	if n := liveGrantCount(w.ctx); n != grantCapacity {
+		t.Fatalf("%d live grants before minting, want %d", n, grantCapacity)
 	}
-	_, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
-	if ok {
-		t.Error("capacity did not refuse")
+	_, minted, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
+	if minted {
+		t.Fatalf("minted with the capacity full, want a refusal (%s)", why)
 	}
 	if !strings.Contains(why, "too many") {
 		t.Errorf("refusal %q does not name capacity", why)
 	}
-	if liveGrantCount(w.ctx) != before {
+	if liveGrantCount(w.ctx) != grantCapacity {
 		t.Error("the refused mint changed the live set")
 	}
-}
 
-// TestCapacityIsReleasedWhenAGrantIsSpent pins that a spent grant holds no
-// budget. It is kept as a tombstone so a replay can be told apart from a
-// licence that never existed, and a tombstone that consumed capacity would let
-// a long run stop being able to deliver.
-func TestCapacityIsReleasedWhenAGrantIsSpent(t *testing.T) {
-	w := newGrantWorld(t)
+	// The same grants, spent: they stay as tombstones and hold no room.
 	w.ctx.grantMu.Lock()
-	if w.ctx.grants == nil {
-		w.ctx.grants = map[string]*authorizationGrant{}
-	}
-	for i := 0; i < grantCapacity; i++ {
-		id := contentSHA256("spent-" + string(rune('a'+i%26)) + string(rune('a'+i/26)))
-		w.ctx.grants[id] = &authorizationGrant{
-			ID: id, TargetPath: "/w/spent-" + id, retired: grantConsumed}
+	for _, filler := range w.ctx.grants {
+		filler.retired = grantConsumed
 	}
 	w.ctx.grantMu.Unlock()
-
 	if n := liveGrantCount(w.ctx); n != 0 {
-		t.Fatalf("%d live grants, want none", n)
+		t.Fatalf("%d live grants once all are spent, want 0", n)
 	}
-	if _, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); !ok {
-		t.Errorf("capacity was not released by spending: %s", why)
+	if _, minted, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); !minted {
+		t.Errorf("a ledger full of spent grants refused the mint: %s", why)
 	}
 }
 
-// --- spending ---// --- spending --------------------------------------------------------------------
+// --- spending --------------------------------------------------------------------
 
 func TestAGrantIsSpentExactlyOnce(t *testing.T) {
 	w := newGrantWorld(t)
@@ -368,81 +377,79 @@ func TestConcurrentConsumersGetExactlyOneSuccess(t *testing.T) {
 	}
 }
 
-func TestNoOtherIdentityCanBorrowAGrant(t *testing.T) {
-	// Two kinds of mismatch, and they differ in what they cost.
-	//
-	// Request, invocation, candidate instance and target are the ADDRESS: they
-	// make the key. A claim that changes one of them names a grant that does
-	// not exist, so it is refused and burns nothing -- which is what stops a
-	// wrong or guessed address from reaching past its own candidate and
-	// exhausting somebody else's licence.
-	//
-	// Everything else is what the grant is ABOUT. A claim that addresses this
-	// grant and is wrong about it burns it, because a free near-miss is a
-	// probe.
-	for name, mut := range map[string]func(*grantClaim){
-		"another request":    func(c *grantClaim) { c.RequestID = "req-other" },
-		"another invocation": func(c *grantClaim) { c.InvocationID = "inv-other" },
-		"another candidate":  func(c *grantClaim) { c.CandidateInstanceID = "cand-other" },
-	} {
-		w := newGrantWorld(t)
-		w.mint(t)
-		claim := w.claim()
-		mut(&claim)
-		if _, why := consumeAuthorizationGrant(w.ctx, claim); why == "" {
-			t.Errorf("%s spent a grant that was not about it", name)
-		}
-		if liveGrantCount(w.ctx) != 1 {
-			t.Errorf("%s burned a grant it never addressed", name)
-		}
-		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
-			t.Errorf("%s: the honest claim was refused afterwards (%s)", name, why)
-		}
-	}
-
-	for name, mut := range map[string]func(*grantClaim){
-		"other bytes":          func(c *grantClaim) { c.CandidateHash = contentSHA256("other") },
-		"another workspace":    func(c *grantClaim) { c.WorkspaceStateHash = contentSHA256("moved") },
-		"a later generation":   func(c *grantClaim) { c.WorkspaceGeneration += 1 },
-		"the target moved on":  func(c *grantClaim) { c.BaselineGeneration += 1 },
-		"the target removed":   func(c *grantClaim) { c.BaselineTombstoned = true },
-		"another baseline":     func(c *grantClaim) { c.BaselineIdentity = "syntax:elsewhere" },
-		"other baseline bytes": func(c *grantClaim) { c.BaselineHash = contentSHA256("was something else") },
-		"another obligation set": func(c *grantClaim) {
+// Two kinds of wrong claim, and they differ in what they cost.
+//
+// Request, invocation, candidate instance and target are the address: they make
+// the key. A claim that changes one of them names a grant that does not exist,
+// so it is refused and burns nothing. That stops a wrong or guessed address
+// from exhausting another candidate's grant.
+//
+// Everything else is what the grant is about. A claim that addresses this grant
+// and is wrong about it burns it, because a free near-miss is a probe. The
+// consumer takes the grant before it validates the claim, so the grant is left
+// "attempted", and only a newly minted decision can deliver.
+func TestAWrongClaimCannotSpendAGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(w *grantWorld, c *grantClaim)
+		burns  bool
+	}{
+		{"another request", func(w *grantWorld, c *grantClaim) { c.RequestID = "req-other" }, false},
+		{"another invocation", func(w *grantWorld, c *grantClaim) { c.InvocationID = "inv-other" }, false},
+		{"another candidate", func(w *grantWorld, c *grantClaim) { c.CandidateInstanceID = "cand-other" }, false},
+		{"another path", func(w *grantWorld, c *grantClaim) {
+			c.TargetPath = filepath.Join(w.ctx.WorkingDir, "other.py")
+		}, false},
+		{"other bytes", func(w *grantWorld, c *grantClaim) { c.CandidateHash = contentSHA256("other") }, true},
+		{"another workspace", func(w *grantWorld, c *grantClaim) { c.WorkspaceStateHash = contentSHA256("moved") }, true},
+		{"a later generation", func(w *grantWorld, c *grantClaim) { c.WorkspaceGeneration += 1 }, true},
+		{"the target moved on", func(w *grantWorld, c *grantClaim) { c.BaselineGeneration += 1 }, true},
+		{"the target removed", func(w *grantWorld, c *grantClaim) { c.BaselineTombstoned = true }, true},
+		{"another baseline", func(w *grantWorld, c *grantClaim) { c.BaselineIdentity = "syntax:elsewhere" }, true},
+		{"other baseline bytes", func(w *grantWorld, c *grantClaim) {
+			c.BaselineHash = contentSHA256("was something else")
+		}, true},
+		{"another obligation set", func(w *grantWorld, c *grantClaim) {
 			c.ObligationSetID = contentSHA256("a different task")
-		},
-		"another evidence set": func(c *grantClaim) {
+		}, true},
+		{"another evidence set", func(w *grantWorld, c *grantClaim) {
 			c.EvidenceSetID = contentSHA256("different records")
-		},
+		}, true},
 	} {
-		w := newGrantWorld(t)
-		w.mint(t)
-		claim := w.claim()
-		mut(&claim)
-		if _, why := consumeAuthorizationGrant(w.ctx, claim); why == "" {
-			t.Errorf("%s spent a grant that was not about it", name)
-		}
-		if liveGrantCount(w.ctx) != 0 {
-			t.Errorf("%s left the grant it targeted spendable", name)
-		}
-		// A retry is not a retry. It needs a newly minted decision.
-		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
-			t.Errorf("%s: the honest claim still worked after a mismatch", name)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGrantWorld(t)
+			w.mint(t)
+			wrong := w.claim()
+			tc.change(w, &wrong)
+			if _, why := consumeAuthorizationGrant(w.ctx, wrong); why == "" {
+				t.Fatal("a wrong claim spent the grant")
+			}
+
+			// A burned grant is left "attempted"; an untouched one still spends.
+			wantLive, wantWhy := 1, ""
+			if tc.burns {
+				wantLive, wantWhy = 0, string(grantAttempted)
+			}
+			if live := liveGrantCount(w.ctx); live != wantLive {
+				t.Errorf("%d live grants after the wrong claim, want %d (burns: %v)", live, wantLive, tc.burns)
+			}
+			if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != wantWhy {
+				t.Errorf("the honest claim afterwards got %q, want %q", why, wantWhy)
+			}
+		})
 	}
 }
 
-// TestMismatchesCannotExhaustUnrelatedGrants is the property the address rule
-// exists for: a caller hammering wrong claims can burn only what it can name,
-// and every other candidate's licence is untouched.
+// A caller that sends wrong claims can burn only what it can name, and every
+// other candidate's grant is untouched.
 func TestMismatchesCannotExhaustUnrelatedGrants(t *testing.T) {
 	w := newGrantWorld(t)
 	kept := w.mint(t)
 	for i := 0; i < 50; i++ {
 		guess := w.claim()
-		guess.RequestID = "req-guess-" + string(rune('a'+i%26))
-		guess.InvocationID = "inv-guess-" + string(rune('a'+i%26))
-		guess.CandidateInstanceID = "cand-guess-" + string(rune('a'+i%26))
+		guess.RequestID = fmt.Sprintf("req-guess-%d", i)
+		guess.InvocationID = fmt.Sprintf("inv-guess-%d", i)
+		guess.CandidateInstanceID = fmt.Sprintf("cand-guess-%d", i)
 		guess.CandidateHash = contentSHA256("guess")
 		if _, why := consumeAuthorizationGrant(w.ctx, guess); why == "" {
 			t.Fatal("a guessed claim was accepted")
@@ -460,51 +467,58 @@ func TestMismatchesCannotExhaustUnrelatedGrants(t *testing.T) {
 	}
 }
 
-func TestAnotherPathCannotBorrowAGrant(t *testing.T) {
-	w := newGrantWorld(t)
-	w.mint(t)
-	other := filepath.Join(w.ctx.WorkingDir, "other.py")
-	if err := os.WriteFile(other, []byte("X = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	claim := w.claim()
-	claim.TargetPath = other
-	if _, why := consumeAuthorizationGrant(w.ctx, claim); why == "" {
-		t.Error("a grant for one path delivered another")
-	}
-	// A claim for another path names another key, so it burned nothing: the
-	// grant it did not target is still spendable.
-	if liveGrantCount(w.ctx) != 1 {
-		t.Error("a claim for another path burned the grant it never addressed")
-	}
-	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
-		t.Errorf("the honest claim was refused after an unrelated one: %s", why)
-	}
-}
-
-func TestAStaleWorkspaceCannotSpendAGrant(t *testing.T) {
-	w := newGrantWorld(t)
-	w.mint(t)
-	// The workspace moves after the decision.
-	bumpWorkspace(w.ctx, w.path, contentSHA256("something else happened\n"))
-	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
-		t.Error("a grant survived the workspace moving underneath it")
-	}
-	// Burned: the claim addressed this grant, and it was wrong about it.
-	if liveGrantCount(w.ctx) != 0 {
-		t.Error("a stale claim left the grant it targeted spendable")
+// The claim is built from the live state after something changed, as the
+// delivery owner builds it. The claim addresses this grant and is wrong about
+// it, so the grant is burned.
+func TestAGrantCannotBeSpentAfterItsWorldMoved(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		move func(t *testing.T, w *grantWorld)
+	}{
+		{"the workspace moved", func(t *testing.T, w *grantWorld) {
+			bumpWorkspace(w.ctx, w.path, contentSHA256("something else happened\n"))
+		}},
+		{"the target was rewritten", func(t *testing.T, w *grantWorld) {
+			if err := os.WriteFile(w.path, []byte("REPLACED = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newGrantWorld(t)
+			w.mint(t)
+			tc.move(t, w)
+			if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
+				t.Error("the grant was spent against a world it never saw")
+			}
+			if liveGrantCount(w.ctx) != 0 {
+				t.Error("the refused claim left the grant spendable")
+			}
+		})
 	}
 }
 
-func TestAChangedBaselineCannotSpendAGrant(t *testing.T) {
+// After a burn the way forward is a new decision, reached over whatever the
+// state is now. It is not a retry of the same grant.
+func TestARetryNeedsANewlyMintedDecision(t *testing.T) {
 	w := newGrantWorld(t)
-	w.mint(t)
-	// Somebody rewrote the file the candidate would replace.
-	if err := os.WriteFile(w.path, []byte("REPLACED = 1\n"), 0o644); err != nil {
-		t.Fatal(err)
+	first := w.mint(t)
+	wrong := w.claim()
+	wrong.EvidenceSetID = contentSHA256("stale set")
+	if _, why := consumeAuthorizationGrant(w.ctx, wrong); why == "" {
+		t.Fatal("a wrong claim was accepted")
 	}
-	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
-		t.Error("a grant survived its baseline being rewritten")
+	second, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
+	if !ok {
+		t.Fatalf("a fresh decision could not mint after a burn: %s", why)
+	}
+	if second.DecisionGeneration <= first.DecisionGeneration {
+		t.Error("the replacement grant reuses the burned decision generation")
+	}
+	if spent, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
+		t.Errorf("the newly minted grant would not spend: %s", why)
+	} else if spent.DecisionGeneration != second.DecisionGeneration {
+		t.Error("the old decision generation was spent")
 	}
 }
 
@@ -525,22 +539,24 @@ func TestCancellationRetiresEveryGrant(t *testing.T) {
 	}
 }
 
-func TestRetirementIsFinalAndBlocksFurtherMinting(t *testing.T) {
-	for _, reason := range []grantRetirement{
-		grantTerminal, grantSessionEnd, grantCancelled,
-	} {
-		w := newGrantWorld(t)
-		w.mint(t)
-		if n := retireAuthorizationGrants(w.ctx, reason); n != 1 {
-			t.Errorf("%s retired %d grants, want 1", reason, n)
-		}
-		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(reason) {
-			t.Errorf("refusal %q, want %q", why, reason)
-		}
-		// And nothing new may be minted afterwards.
-		if _, ok, _ := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); ok {
-			t.Errorf("%s: a grant was minted after retirement", reason)
-		}
+func TestRetirementIsFinalIdempotentAndBlocksMinting(t *testing.T) {
+	for _, reason := range []grantRetirement{grantTerminal, grantSessionEnd, grantCancelled} {
+		t.Run(string(reason), func(t *testing.T) {
+			w := newGrantWorld(t)
+			w.mint(t)
+			if n := retireAuthorizationGrants(w.ctx, reason); n != 1 {
+				t.Errorf("retired %d grants, want 1", n)
+			}
+			if n := retireAuthorizationGrants(w.ctx, reason); n != 0 {
+				t.Errorf("retired %d on repeat, want 0", n)
+			}
+			if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(reason) {
+				t.Errorf("refusal %q, want %q", why, reason)
+			}
+			if _, ok, _ := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict); ok {
+				t.Error("a grant was minted after retirement")
+			}
+		})
 	}
 }
 
@@ -561,30 +577,25 @@ func TestUnrelatedSuccessNeitherRetiresNorRefreshesAGrant(t *testing.T) {
 	if still == nil {
 		t.Fatal("an unrelated success deleted the grant")
 	}
-	// Not retired: an unrelated success is not a cancellation, and a
-	// consumer must not be told the request ended because something else
-	// went well.
+	// An unrelated success is not a cancellation. A consumer must not be told
+	// the request ended because something else went well.
 	if still.retired != grantLive {
 		t.Errorf("an unrelated success retired the grant as %q", still.retired)
 	}
-	// Not refreshed either. Nothing about it was re-derived, so it still
-	// describes the moment it was minted -- which is what makes the
-	// workspace check below a real one rather than a tautology.
+	// Nothing about the grant was derived again, so it still describes the
+	// moment it was minted.
 	if still.DecisionGeneration != g.DecisionGeneration ||
 		still.WorkspaceStateHash != g.WorkspaceStateHash ||
 		still.CandidateHash != g.CandidateHash {
 		t.Error("an unrelated success refreshed the grant")
 	}
-	// And the workspace it was about has genuinely moved on, so it can no
-	// longer be spent. That is the conservative answer and the honest one:
-	// the grant froze a moment, and this is no longer that moment.
+	// The workspace it was about has moved on, so it cannot be spent.
 	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
 		t.Error("a grant was spent against a workspace it never saw")
 	}
 }
 
-// TestAGrantIsOneTimeAcrossAnUnrelatedSuccess pins the part that matters most:
-// an unrelated success cannot buy a second consumption of a grant that was
+// An unrelated success cannot buy a second spending of a grant that was
 // already spent.
 func TestAGrantIsOneTimeAcrossAnUnrelatedSuccess(t *testing.T) {
 	w := newGrantWorld(t)
@@ -598,129 +609,61 @@ func TestAGrantIsOneTimeAcrossAnUnrelatedSuccess(t *testing.T) {
 	}
 	observeDeliverable(w.ctx, other, []byte("# notes\n"),
 		ValidationKindNone, ValidationNotApplicable, "")
-	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why == "" {
-		t.Error("an unrelated success bought a second consumption")
+	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(grantConsumed) {
+		t.Errorf("the second spending got %q, want %q", why, grantConsumed)
 	}
 }
 
 // --- what a grant may not carry --------------------------------------------------
 
-func TestAGrantCarriesNoContent(t *testing.T) {
+// The grant must hold the canonical target, because it compares against it.
+// It may not hold content: bytes, command text, source, prose. The telemetry
+// record leaves the process, so it may not hold the path either: a workspace
+// path is content.
+func TestAGrantAndItsTelemetryCarryNoContent(t *testing.T) {
 	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
-	w := newAuthWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest --token=hunter2"]}`,
-		"solve.py", secret, true)
-	ev, evID := w.mustObserve(t)
-	generation, stateHash := workspaceIdentity(w.ctx)
-	in := authorizationInput{
-		Obligations: requestObligations(w.ctx), TargetPath: w.path,
-		CandidateHash: contentSHA256(secret),
-		Identity: V3EvidenceProvenance{
-			RequestID: requestIDOf(w.ctx), InvocationID: evID.InvocationID,
-			CandidateInstanceID: evID.CandidateInstanceID,
-			CandidateHash:       contentSHA256(secret),
-			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
-			BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
-		},
-		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
-		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
-		Scope:                   testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, secret),
-		CandidateBytes:          secret,
-	}
-	d := decideAuthorization(w.ctx, in)
-	g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected", grantBasisStrict)
-	if !ok {
-		t.Fatalf("no grant to inspect: %s", why)
-	}
-	// The canonical target is an identity the grant MUST bind -- a licence
-	// that could not say what it was for would be useless. What it may not
-	// hold is content: bytes, command text, source, prose.
-	blob, err := json.Marshal(g)
+	w := newGrantWorldWithCode(t, secret, "pytest --token=hunter2")
+	content := []string{secret, "hunter2", "TOKEN", "print(7)", "pytest", "--token"}
+
+	// captureShadow installs its own sink, so every record the grant writes
+	// is captured here.
+	var g *authorizationGrant
+	captured := captureShadow(t, func() {
+		g = w.mint(t)
+		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
+			t.Fatalf("the grant would not spend: %s", why)
+		}
+	})
+
+	grant, err := json.Marshal(g)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, needle := range []string{
-		secret, "hunter2", "TOKEN", "print(7)", "pytest", "--token",
-	} {
-		if strings.Contains(string(blob), needle) {
+	for _, needle := range content {
+		if strings.Contains(string(grant), needle) {
 			t.Errorf("the grant carries %q", needle)
 		}
 	}
 	if g.TargetPath != w.path {
 		t.Error("the grant does not name the target it is for")
 	}
-}
 
-// TestGrantTelemetryCarriesNoPathOrContent pins the record that leaves the
-// process. The grant may hold the canonical path because it has to compare
-// against it; an operator log may not, because a workspace path is content.
-func TestGrantTelemetryCarriesNoPathOrContent(t *testing.T) {
-	const secret = "TOKEN = 'hunter2'\nprint(7)\n"
-	w := newAuthWorld(t,
-		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
-			`"verification_knowledge":"declared","verification":["pytest --token=hunter2"]}`,
-		"solve.py", secret, true)
-	ev, evID := w.mustObserve(t)
-	generation, stateHash := workspaceIdentity(w.ctx)
-	in := authorizationInput{
-		Obligations: requestObligations(w.ctx), TargetPath: w.path,
-		CandidateHash: contentSHA256(secret),
-		Identity: V3EvidenceProvenance{
-			RequestID: requestIDOf(w.ctx), InvocationID: evID.InvocationID,
-			CandidateInstanceID: evID.CandidateInstanceID,
-			CandidateHash:       contentSHA256(secret),
-			WorkspaceGeneration: generation, WorkspaceStateHash: stateHash,
-			BaselineIdentity: baselineIdentityFor(w.ctx, w.path),
-		},
-		Evidence:                append([]proxyEvidence{ev}, w.stage(evID)...),
-		OutputKnowledgeDeclared: outputKnowledgeDeclared(w.ctx),
-		Scope:                   testMutationScope(w.ctx, mintRouteEntry(w.ctx), w.path, secret),
-		CandidateBytes:          secret,
+	if len(recordsOfKind(captured, "authorization_grant_event")) == 0 {
+		t.Fatal("minting and spending a grant wrote no telemetry")
 	}
-	d := decideAuthorization(w.ctx, in)
-
-	captured := captureShadow(t, func() {
-		g, ok, why := mintAuthorizationGrant(w.ctx, in, d, "selected", grantBasisStrict)
-		if !ok {
-			t.Fatalf("no grant: %s", why)
-		}
-		claim := grantClaim{
-			RequestID: requestIDOf(w.ctx), InvocationID: g.InvocationID,
-			CandidateInstanceID: g.CandidateInstanceID, CandidateHash: g.CandidateHash,
-			TargetPath: w.path, WorkspaceGeneration: g.WorkspaceGeneration,
-			WorkspaceStateHash: g.WorkspaceStateHash,
-			BaselineIdentity:   g.BaselineIdentity, BaselineHash: g.BaselineHash,
-			BaselineGeneration: g.BaselineGeneration,
-			BaselineTombstoned: g.BaselineTombstoned,
-			ObligationSetID:    g.ObligationSetID, EvidenceSetID: g.EvidenceSetID,
-		}
-		if _, why := consumeAuthorizationGrant(w.ctx, claim); why != "" {
-			t.Fatalf("the grant would not spend: %s", why)
-		}
-	})
-	if len(captured) == 0 {
-		t.Skip("no shadow sink is active in this build")
+	telemetry, err := json.Marshal(captured)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, rec := range captured {
-		blob, err := json.Marshal(rec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, needle := range []string{
-			secret, "hunter2", "TOKEN", "print(7)", "pytest", "solve.py",
-			w.ctx.WorkingDir,
-		} {
-			if strings.Contains(string(blob), needle) {
-				t.Errorf("a grant telemetry record carries %q", needle)
-			}
+	for _, needle := range append(content, "solve.py", w.ctx.WorkingDir) {
+		if strings.Contains(string(telemetry), needle) {
+			t.Errorf("the telemetry carries %q", needle)
 		}
 	}
 }
 
-// TestConsumptionNeverRecomputesTheDecision reads the consumer's own source.
-// A decision recomputed under new state is a different decision wearing the
-// old one's identity, and the whole point of a grant is that it froze one.
+// A decision computed again under new state is a different decision wearing
+// the old one's identity. The point of a grant is that it froze one.
 func TestConsumptionNeverRecomputesTheDecision(t *testing.T) {
 	src, err := os.ReadFile("authorization_grant.go")
 	if err != nil {
@@ -746,17 +689,14 @@ func TestConsumptionNeverRecomputesTheDecision(t *testing.T) {
 	}
 }
 
-// TestSelectionIsNotAuthorization pins the separation the grant records but
-// never acts on: what the pipeline picked has no bearing on whether the
-// client's obligations were met.
+// The grant records what the pipeline picked but never acts on it: selection
+// has no bearing on whether the client's obligations were met.
 func TestSelectionIsNotAuthorization(t *testing.T) {
 	w := newGrantWorld(t)
 	g := w.mint(t)
 	if g.SelectedCandidateID == "" {
 		t.Fatal("the grant does not record what was selected")
 	}
-	// A grant whose selected id says something else spends exactly the same:
-	// the claim never mentions selection, so selection cannot admit or refuse.
 	claim := w.claim()
 	w.ctx.grantMu.Lock()
 	w.ctx.grants[g.ID].SelectedCandidateID = "a completely different winner"
@@ -766,95 +706,17 @@ func TestSelectionIsNotAuthorization(t *testing.T) {
 	}
 }
 
-// --- take before validate ----------------------------------------------------------
-
-// TestTheFirstAttemptOwnsTheGrant is the ordering statement. Validating before
-// spending makes a failed attempt free, and a free failed attempt is a probe.
-func TestTheFirstAttemptOwnsTheGrant(t *testing.T) {
-	w := newGrantWorld(t)
-	w.mint(t)
-	wrong := w.claim()
-	wrong.CandidateHash = contentSHA256("not the candidate\n")
-	if _, why := consumeAuthorizationGrant(w.ctx, wrong); why == "" {
-		t.Fatal("a wrong claim was accepted")
-	}
-	// Spent, and spent as an ATTEMPT rather than as an authorization -- the
-	// two are different answers to a second caller.
-	w.ctx.grantMu.Lock()
-	var held grantRetirement
-	for _, g := range w.ctx.grants {
-		held = g.retired
-	}
-	w.ctx.grantMu.Unlock()
-	if held != grantAttempted {
-		t.Errorf("retired as %q, want %q", held, grantAttempted)
-	}
-	if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(grantAttempted) {
-		t.Errorf("second attempt refused with %q, want %q", why, grantAttempted)
-	}
-}
-
-// TestARetryNeedsANewlyMintedDecision pins the way forward after a burn: not a
-// retry of the same licence, a new decision reached over whatever the state
-// actually is now.
-func TestARetryNeedsANewlyMintedDecision(t *testing.T) {
-	w := newGrantWorld(t)
-	first := w.mint(t)
-	wrong := w.claim()
-	wrong.EvidenceSetID = contentSHA256("stale set")
-	if _, why := consumeAuthorizationGrant(w.ctx, wrong); why == "" {
-		t.Fatal("a wrong claim was accepted")
-	}
-	// The same decision cannot be re-minted into the same grant: minting again
-	// supersedes and issues a NEW decision generation.
-	second, ok, why := mintAuthorizationGrant(w.ctx, w.in, w.decision, "s", grantBasisStrict)
-	if !ok {
-		t.Fatalf("a fresh decision could not mint after a burn: %s", why)
-	}
-	if second.DecisionGeneration <= first.DecisionGeneration {
-		t.Error("the replacement grant reuses the burned decision generation")
-	}
-	if spent, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != "" {
-		t.Errorf("the newly minted grant would not spend: %s", why)
-	} else if spent.DecisionGeneration != second.DecisionGeneration {
-		t.Error("the old decision generation was spent")
-	}
-}
-
 func TestNothingRestoresOrRefreshesASpentGrant(t *testing.T) {
 	src, err := os.ReadFile("authorization_grant.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(src)
-	// The only assignments to `retired` move it AWAY from live. A line that
-	// set it back would be the unspend this design exists to prevent.
-	for _, line := range strings.Split(body, "\n") {
+	// Every assignment to `retired` moves it away from live. A line that set
+	// it back would undo a spending.
+	for _, line := range strings.Split(string(src), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, ".retired = ") {
-			continue
-		}
-		if strings.HasSuffix(trimmed, "= grantLive") {
+		if strings.Contains(trimmed, ".retired = ") && strings.HasSuffix(trimmed, "= grantLive") {
 			t.Errorf("a grant is put back into circulation: %q", trimmed)
-		}
-	}
-}
-
-func TestRetirementStaysIdempotent(t *testing.T) {
-	for _, reason := range []grantRetirement{grantTerminal, grantSessionEnd, grantCancelled} {
-		w := newGrantWorld(t)
-		w.mint(t)
-		if n := retireAuthorizationGrants(w.ctx, reason); n != 1 {
-			t.Errorf("%s retired %d, want 1", reason, n)
-		}
-		// Again, and again: no panic, nothing further retired, same answer.
-		for i := 0; i < 3; i++ {
-			if n := retireAuthorizationGrants(w.ctx, reason); n != 0 {
-				t.Errorf("%s retired %d on repeat, want 0", reason, n)
-			}
-		}
-		if _, why := consumeAuthorizationGrant(w.ctx, w.claim()); why != string(reason) {
-			t.Errorf("refusal %q, want %q", why, reason)
 		}
 	}
 }
@@ -900,10 +762,8 @@ func TestGrantAttemptTelemetryIsAClosedVocabulary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, needle := range []string{
-			"solve.py", w.ctx.WorkingDir, authPy, "print(", "/tmp/",
-		} {
-			if needle != "" && strings.Contains(string(blob), needle) {
+		for _, needle := range []string{"solve.py", w.ctx.WorkingDir, authPy, "print(", "/tmp/"} {
+			if strings.Contains(string(blob), needle) {
 				t.Errorf("a %s record carries %q", event, needle)
 			}
 		}
@@ -916,8 +776,8 @@ func TestGrantAttemptTelemetryIsAClosedVocabulary(t *testing.T) {
 			t.Errorf("no %s record was written", want)
 		}
 	}
-	// not_found writes nothing at all: there is no grant to attribute it to,
-	// and inventing an identity for one would be worse than silence.
+	// not_found writes nothing: there is no grant to attribute it to, and
+	// inventing an identity for one would be worse than silence.
 	if seen[string(grantNotFound)] {
 		t.Error("a not_found attempt named a grant that does not exist")
 	}

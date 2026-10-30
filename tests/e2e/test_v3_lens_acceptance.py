@@ -32,7 +32,6 @@ suites tests/v3-service/test_winner_selection.py and
 tests/v3-service/test_lens_calibration.py.
 """
 
-import hashlib
 import http.client
 import http.server
 import json
@@ -300,7 +299,7 @@ def v3_service(fake_llama, fake_lens, sandbox_executor):
     proc.wait(timeout=10)
 
 
-@pytest.fixture()
+@pytest.fixture
 def workspace(workspace_root):
     ws = workspace_root / f"v3e2e-{uuid.uuid4().hex[:8]}"
     ws.mkdir(parents=True)
@@ -308,7 +307,7 @@ def workspace(workspace_root):
     shutil.rmtree(ws, ignore_errors=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def proxy(fake_llama, fake_lens, v3_service, sandbox_executor):
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
@@ -344,10 +343,6 @@ DECLARED_OUTPUT_CONTRACT = {
 }
 
 
-def _sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _write_result(events):
     return next(e for e in events
                 if e["type"] == "tool_result"
@@ -377,11 +372,17 @@ def _assert_no_human_gate_inside_v3(events):
 # The V3/Lens acceptance test
 # ---------------------------------------------------------------------------
 
-def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
+@pytest.mark.parametrize("contract", [
+    pytest.param(DECLARED_OUTPUT_CONTRACT, id="declared-output"),
+    # An older client that still names a policy gets the same rule: the same
+    # winner lands, byte for byte.
+    pytest.param({**DECLARED_OUTPUT_CONTRACT, "candidate_policy": "strict"},
+                 id="an-older-strict-spelling-changes-nothing"),
+])
+def test_v3_pipeline_with_lens_winner_selection(proxy, workspace, contract):
     _FakeLensHandler.calls.clear()
-    events = drive_agent_turn(
-        proxy, _agent_body(workspace, task_contract=DECLARED_OUTPUT_CONTRACT),
-        deadline_s=180.0)
+    events = drive_agent_turn(proxy, _agent_body(workspace, task_contract=contract),
+                              deadline_s=180.0)
 
     # No stage silently skipped: the v3_* event subsequence of a full
     # pipeline run, in order.
@@ -408,12 +409,7 @@ def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
 
     # V3 was NOT bypassed, tested multiple candidates, and reports the
     # phase + score of the lens-selected winner.
-    result = next(e for e in events
-                  if e["type"] == "tool_result"
-                  and e["data"].get("tool") == "write_file")
-    payload = result["data"]["data"]
-    if isinstance(payload, str):
-        payload = json.loads(payload)
+    payload = _payload(_write_result(events))
     assert payload.get("v3_used") is True, payload
     assert payload.get("phase_solved") == "phase1", payload
     assert payload.get("candidates_tested", 0) >= 2, payload
@@ -430,9 +426,6 @@ def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
 
     # Winner selection picked the candidate the Lens preferred (lowest
     # raw C(x) energy), and the proxy wrote exactly that candidate.
-    written = (workspace / "todo_app.py").read_text()
-    assert "# cand-A" in written, "lens-preferred candidate not written"
-    assert "# cand-B" not in written
     assert abs(payload.get("winning_score", -1) - 0.20) < 1e-6, payload
     # What landed is the selected candidate, byte for byte, terminator
     # included. The one-time authorization the proxy spent is the hash of
@@ -440,8 +433,8 @@ def test_v3_pipeline_with_lens_winner_selection(proxy, workspace):
     # not in the event stream, and the proxy's own tests pin it
     # (TestDeliveryKeepsTheCandidatesTrailingBytes). Here the client-visible
     # facts are the bytes and v3_used.
-    assert written == CAND_A, "disk bytes are not the selected candidate's"
-    assert _sha256(written) == _sha256(CAND_A)
+    assert (workspace / "todo_app.py").read_text() == CAND_A, (
+        "the lens-preferred candidate was not written byte for byte")
     _assert_no_human_gate_inside_v3(events)
 
 
@@ -463,58 +456,16 @@ def test_a_contractless_request_keeps_the_models_bytes(proxy, workspace):
     assert result["data"].get("success") is True
     payload = _payload(result)
     assert payload.get("v3_used") is not True, payload
-    written = (workspace / "todo_app.py").read_text()
-    assert written == T2_CONTENT, "a contractless request did not keep the model's own bytes"
-    assert "# cand-" not in written
+    assert (workspace / "todo_app.py").read_text() == T2_CONTENT, (
+        "a contractless request did not keep the model's own bytes")
     _assert_no_human_gate_inside_v3(events)
-
-
-# An older client that still names a policy gets the same rule: the same
-# winner lands, byte for byte.
-def test_an_older_strict_spelling_changes_nothing(proxy, workspace):
-    events = drive_agent_turn(
-        proxy, _agent_body(workspace, task_contract={
-            **DECLARED_OUTPUT_CONTRACT, "candidate_policy": "strict"}),
-        deadline_s=180.0)
-
-    assert any(e["type"] == "v3_select" for e in events), "V3 never selected"
-    result = _write_result(events)
-    assert result["data"].get("success") is True
-    assert _payload(result).get("v3_used") is True, _payload(result)
-    assert (workspace / "todo_app.py").read_text() == CAND_A
-    _assert_no_human_gate_inside_v3(events)
-
-
-def test_v3_unreachable_falls_back_to_direct_write(fake_llama, fake_lens,
-                                                   sandbox_executor,
-                                                   workspace):
-    port, proc = start_proxy({
-        "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
-        "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
-        "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
-        "ATLAS_V3_URL": "http://127.0.0.1:9",  # unreachable
-    })
-    try:
-        events = drive_agent_turn(port, _agent_body(workspace))
-        result = next(e for e in events
-                      if e["type"] == "tool_result"
-                      and e["data"].get("tool") == "write_file")
-        assert result["data"]["success"] is True
-        payload = result["data"]["data"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        assert not payload.get("v3_used"), (
-            "v3_used claimed despite unreachable V3")
-        # The model's own content landed (visible fallback, not a skip).
-        assert (workspace / "todo_app.py").read_text() == T2_CONTENT
-    finally:
-        proc.terminate()
-        proc.wait(timeout=10)
 
 
 class _MalformedV3Handler(http.server.BaseHTTPRequestHandler):
     """Answers /v3/generate with garbage SSE (no result frame) and
     /internal/cyclomatic_complexity with a valid no-op."""
+    sse = b"data: {\"stage\":\"garbage\"}\n\ndata: [DONE]\n\n"
+    stall_s = 0
 
     def log_message(self, *args):
         pass
@@ -532,58 +483,60 @@ class _MalformedV3Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        self.wfile.write(b"data: {\"stage\":\"garbage\"}\n\ndata: [DONE]\n\n")
+        self.wfile.write(self.sse)
         self.wfile.flush()
+        time.sleep(self.stall_s)
 
 
 class _StallingV3Handler(_MalformedV3Handler):
-    def do_POST(self):
-        if self.path.startswith("/internal/cyclomatic_complexity"):
-            super().do_POST()
-            return
-        length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.end_headers()
-        self.wfile.write(b"data: {\"stage\":\"plan_search\",\"detail\":\"stalling\"}\n\n")
-        self.wfile.flush()
-        time.sleep(20)  # far past the 1s cap the test sets
+    """Starts a /v3/generate stream, then says nothing more."""
+    sse = b"data: {\"stage\":\"plan_search\",\"detail\":\"stalling\"}\n\n"
+    stall_s = 20  # far past the 1s cap the test sets
 
 
-@pytest.mark.parametrize("handler,extra_env", [
-    (_MalformedV3Handler, {}),
-    (_StallingV3Handler, {"ATLAS_V3_TIMEOUT": "1"}),
-], ids=["malformed-response", "timeout"])
-def test_v3_failure_modes_fall_back_visibly(handler, extra_env, fake_llama,
+@pytest.mark.parametrize("v3_handler, extra_env, why", [
+    pytest.param(None, {}, "V3 was unavailable", id="unreachable"),
+    pytest.param(_MalformedV3Handler, {}, "V3 was unavailable", id="malformed-response"),
+    pytest.param(_StallingV3Handler, {"ATLAS_V3_TIMEOUT": "1"}, "V3 ran out of time",
+                 id="timeout"),
+])
+def test_v3_failure_modes_fall_back_visibly(v3_handler, extra_env, why, fake_llama,
                                             fake_lens, sandbox_executor,
                                             workspace):
-    v3_port = free_port()
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", v3_port), handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    """V3 fails soft (docs/adr/0004): the model's own write lands, the result
+    does not claim V3, and the run's summary names the file V3 did not check
+    and why."""
+    v3_url = "http://127.0.0.1:9"  # nothing listens there
+    server = None
+    if v3_handler is not None:
+        v3_port = free_port()
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", v3_port), v3_handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        v3_url = f"http://127.0.0.1:{v3_port}"
     port, proc = start_proxy({
         "ATLAS_INFERENCE_URL": f"http://127.0.0.1:{fake_llama}",
         "ATLAS_LENS_URL": f"http://127.0.0.1:{fake_lens}",
         "ATLAS_SANDBOX_URL": f"http://127.0.0.1:{sandbox_executor}",
-        "ATLAS_V3_URL": f"http://127.0.0.1:{v3_port}",
+        "ATLAS_V3_URL": v3_url,
         **extra_env,
     })
     try:
-        events = drive_agent_turn(port, _agent_body(workspace),
-                                  deadline_s=90.0)
-        result = next(e for e in events
-                      if e["type"] == "tool_result"
-                      and e["data"].get("tool") == "write_file")
+        events = drive_agent_turn(port, _agent_body(workspace), deadline_s=90.0)
+        result = _write_result(events)
         assert result["data"]["success"] is True
-        payload = result["data"]["data"]
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        assert not payload.get("v3_used")
+        assert not _payload(result).get("v3_used"), "v3_used claimed although V3 failed"
+        # The model's own content landed (visible fallback, not a skip).
         assert (workspace / "todo_app.py").read_text() == T2_CONTENT
+        # The summary says why V3 did not check the file. This tells a V3
+        # that failed from one never asked, and the 1 s cap from the stalling
+        # stand-in closing its stream after 20 s.
+        done = next(e for e in events if e["type"] == "done")
+        assert f"todo_app.py ({why})" in done["data"].get("summary", ""), done["data"]
     finally:
         proc.terminate()
         proc.wait(timeout=10)
-        server.shutdown()
+        if server is not None:
+            server.shutdown()
 
 
 def test_an_unreachable_lens_refuses_the_request(fake_llama, sandbox_executor, workspace):

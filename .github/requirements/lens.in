@@ -1,0 +1,12 @@
+# The packages of the lens tests and of the CLI's lens and ASA tests (the
+# geometric-lens/tests and tests/cli subsets of test.yml), from a hashed lock:
+# the CPU-only torch from PyTorch's index, the lens service's requirements, and
+# huggingface_hub, which `atlas lens publish` and `atlas asa publish` take when
+# it is installed. A package that ci.txt also holds keeps its version there,
+# because the job installs ci.txt first.
+# Make lens.txt again with scripts/ci-lock.sh.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+-c ci.txt
+-r ../../geometric-lens/requirements.txt
+huggingface_hub

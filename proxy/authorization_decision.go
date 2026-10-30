@@ -244,12 +244,6 @@ func baselinePreservedBy(o taskObligation, witnessCommand string,
 	return false, "no current evidence reaches the baseline's " + required
 }
 
-// decideAuthorization is THE observe-only authorization owner.
-//
-// The order of the checks is the order in which an answer stops being possible:
-// identity before obligations, obligations before evidence, evidence before
-// strength. A refusal names the first thing that was wrong, so a reader learns
-// what to fix rather than that something was.
 // influencesLiveDecision is the one derivation of the decision's own weight:
 // it reaches a live delivery when the request declared output knowledge, or
 // when automatic_v3 grounded the target in the model's structured call. The
@@ -259,6 +253,12 @@ func (in authorizationInput) influencesLiveDecision() bool {
 	return in.OutputKnowledgeDeclared || in.StructuredTargetGrounded
 }
 
+// decideAuthorization is THE observe-only authorization owner.
+//
+// The order of the checks is the order in which an answer stops being possible:
+// identity before obligations, obligations before evidence, evidence before
+// strength. A refusal names the first thing that was wrong, so a reader learns
+// what to fix rather than that something was.
 func decideAuthorization(ctx *AgentContext, in authorizationInput) AuthorizationDecision {
 	// Whether this answer decides anything is a property of the REQUEST, not
 	// of the answer: a request that STATED what it produces is one this owns,
@@ -267,37 +267,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 		Reason:                 ReasonUnknown,
 		InfluencesLiveDecision: in.influencesLiveDecision(),
 	}
-
-	// No stated output knowledge, so there is nothing to authorize on. This is
-	// not a refusal of the request -- legacy delivery is unchanged and
-	// authoritative -- it is this decision declining to have an opinion.
-	if !in.OutputKnowledgeDeclared {
-		d.Reason = ReasonLegacyRecord
-		return d
-	}
-	// A record produced before provenance existed carries no authority, and a
-	// service record whose envelope is unusable is not evidence about anything.
-	if in.Envelope != nil {
-		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
-			d.Reason = ReasonLegacyRecord
-			return d
-		}
-		if !in.Envelope.Evaluation.Supported {
-			d.Reason = ReasonAdapterUnsupported
-			return d
-		}
-	}
-	// The client must have asked for this artifact. Identity is necessary and
-	// never sufficient: everything below still has to hold.
-	//
-	// A declared-and-empty output set arrives here with no targets at all, and
-	// takes this branch: it authorizes nothing, which is exactly what it says.
-	if !targetIsAuthorized(in.Obligations, in.TargetPath) {
-		d.Reason = ReasonTargetNotDeclared
-		return d
-	}
-	if strings.TrimSpace(in.CandidateHash) == "" {
-		d.Reason = ReasonCandidateMismatch
+	if endsBeforePrerequisites(&d, in) {
 		return d
 	}
 
@@ -305,35 +275,12 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	// Settlement is owed whenever the task states one and the bytes are not
 	// yet confirmed. It never blocks authorization. Without a context there is
 	// nothing to confirm against, so it is owed by definition.
-	settled := false
-	if ctx != nil {
-		settled, _ = settlementIsComplete(ctx, in.Obligations, in.CandidateHash)
-	}
-	if !settled {
-		d.SettlementRequired = len(postDeliverySettlement(in.Obligations)) > 0
-	}
+	noteSettlementRequired(ctx, &d, in)
 
 	// An obligation nobody classified, or one nothing can satisfy, ends the
 	// question before any evidence is looked at.
-	for _, o := range prerequisites {
-		if _, ok := obligationRole(o.Kind); !ok {
-			d.Reason = ReasonObligationUnknown
-			d.Missing = append(d.Missing, o.ID)
-			sort.Strings(d.Missing)
-			return d
-		}
-		if obligationUnsatisfiableKinds[o.Kind] {
-			d.Reason = ReasonObligationUnknown
-			d.Missing = append(d.Missing, o.ID)
-			sort.Strings(d.Missing)
-			return d
-		}
-		if strengthRank(o.RequiredStrength) < 0 {
-			d.Reason = ReasonObligationUnknown
-			d.Missing = append(d.Missing, o.ID)
-			sort.Strings(d.Missing)
-			return d
-		}
+	if endsOnUnclassifiedObligation(&d, prerequisites) {
+		return d
 	}
 
 	// Match evidence to obligations. The first refusal encountered is the one
@@ -342,14 +289,7 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	// What each prerequisite's evidence must name, derived from the client's
 	// own declaration. An obligation absent from this map is one the validated
 	// request does not own, and evidence for it satisfies nothing.
-	wantCommand := map[string]string{}
-	for _, o := range prerequisites {
-		if o.Kind == ObligationDeclaredCommand {
-			wantCommand[o.ID] = contentSHA256(o.Subject)
-			continue
-		}
-		wantCommand[o.ID] = ""
-	}
+	wantCommand := wantedCommandIdentities(prerequisites)
 
 	satisfied := map[string]bool{}
 	var authorizing []proxyEvidence
@@ -379,59 +319,12 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	// Baseline preservation is settled last, because it is derived from what
 	// the rest of the evidence already established rather than observed on its
 	// own.
-	for _, o := range prerequisites {
-		if o.Kind != ObligationBaselinePreserved || satisfied[o.ID] {
-			continue
-		}
-		if ok, _ := baselinePreservedBy(o, in.BaselineWitnessCommand, authorizing); ok {
-			satisfied[o.ID] = true
-		}
-	}
+	markPreservedBaselines(satisfied, in, prerequisites, authorizing)
 
-	for _, o := range prerequisites {
-		if !o.Required {
-			continue
-		}
-		if satisfied[o.ID] {
-			d.Satisfied = append(d.Satisfied, o.ID)
-		} else {
-			d.Missing = append(d.Missing, o.ID)
-		}
-	}
-	sort.Strings(d.Satisfied)
-	sort.Strings(d.Missing)
+	accountForPrerequisites(&d, prerequisites, satisfied)
 
 	if len(d.Missing) > 0 {
-		// A prerequisite nothing spoke for is missing evidence; one something
-		// spoke for badly gets that something's own reason.
-		d.Reason = ReasonEvidenceMissing
-		if firstRefusal != ReasonUnknown {
-			d.Reason = firstRefusal
-		}
-		// And when the caller knows WHY a prerequisite went unmet -- the
-		// producer was down, refused, timed out, or ran and found against the
-		// candidate -- that is the truthful answer. `evidence_missing` for a
-		// sandbox that was never reachable says the candidate had nothing to
-		// show for itself, when in truth nothing was checked.
-		//
-		// Sorted order, so the reported reason does not depend on map order.
-		if len(in.Unmet) > 0 {
-			for _, id := range d.Missing {
-				if why, known := in.Unmet[id]; known && authorizationReasons[why] &&
-					!authorizingReasons[why] {
-					d.Reason = why
-					break
-				}
-			}
-		}
-		// A baseline obligation left unmet is its own fact, and the more
-		// useful one to report.
-		for _, o := range prerequisites {
-			if o.Kind == ObligationBaselinePreserved && !satisfied[o.ID] {
-				d.Reason = ReasonBaselineNotPreserved
-				break
-			}
-		}
+		explainMissingPrerequisites(&d, in, prerequisites, satisfied, firstRefusal)
 		return d
 	}
 	if len(d.Satisfied) == 0 {
@@ -449,6 +342,169 @@ func decideAuthorization(ctx *AgentContext, in authorizationInput) Authorization
 	d.Authorized = true
 	d.Reason = ReasonAuthorized
 	return d
+}
+
+// endsBeforePrerequisites reports whether the decision is over before any
+// prerequisite is read, and sets d.Reason to say why when it is: the request
+// stated no outputs, its service record is unusable or unsupported, the
+// target was never declared, or there is no candidate hash.
+func endsBeforePrerequisites(d *AuthorizationDecision, in authorizationInput) bool {
+	// No stated output knowledge, so there is nothing to authorize on. This is
+	// not a refusal of the request -- legacy delivery is unchanged and
+	// authoritative -- it is this decision declining to have an opinion.
+	if !in.OutputKnowledgeDeclared {
+		d.Reason = ReasonLegacyRecord
+		return true
+	}
+	// A record produced before provenance existed carries no authority, and a
+	// service record whose envelope is unusable is not evidence about anything.
+	if in.Envelope != nil {
+		if availability, _ := in.Envelope.Validate(); availability != EvidenceAvailable {
+			d.Reason = ReasonLegacyRecord
+			return true
+		}
+		if !in.Envelope.Evaluation.Supported {
+			d.Reason = ReasonAdapterUnsupported
+			return true
+		}
+	}
+	// The client must have asked for this artifact. Identity is necessary and
+	// never sufficient: everything below still has to hold.
+	//
+	// A declared-and-empty output set arrives here with no targets at all, and
+	// takes this branch: it authorizes nothing, which is exactly what it says.
+	if !targetIsAuthorized(in.Obligations, in.TargetPath) {
+		d.Reason = ReasonTargetNotDeclared
+		return true
+	}
+	if strings.TrimSpace(in.CandidateHash) == "" {
+		d.Reason = ReasonCandidateMismatch
+		return true
+	}
+	return false
+}
+
+// noteSettlementRequired sets d.SettlementRequired when the task states a
+// post-delivery settlement and these bytes are not yet confirmed.
+func noteSettlementRequired(ctx *AgentContext, d *AuthorizationDecision, in authorizationInput) {
+	settled := false
+	if ctx != nil {
+		settled, _ = settlementIsComplete(ctx, in.Obligations, in.CandidateHash)
+	}
+	if !settled {
+		d.SettlementRequired = len(postDeliverySettlement(in.Obligations)) > 0
+	}
+}
+
+// endsOnUnclassifiedObligation reports whether a prerequisite has no known
+// role, is of a kind nothing can satisfy, or asks for a strength with no rank.
+// It records the first such obligation in d as missing, for the reason
+// obligation_unknown.
+func endsOnUnclassifiedObligation(d *AuthorizationDecision, prerequisites []taskObligation) bool {
+	for _, o := range prerequisites {
+		if _, ok := obligationRole(o.Kind); !ok {
+			d.Reason = ReasonObligationUnknown
+			d.Missing = append(d.Missing, o.ID)
+			sort.Strings(d.Missing)
+			return true
+		}
+		if obligationUnsatisfiableKinds[o.Kind] {
+			d.Reason = ReasonObligationUnknown
+			d.Missing = append(d.Missing, o.ID)
+			sort.Strings(d.Missing)
+			return true
+		}
+		if strengthRank(o.RequiredStrength) < 0 {
+			d.Reason = ReasonObligationUnknown
+			d.Missing = append(d.Missing, o.ID)
+			sort.Strings(d.Missing)
+			return true
+		}
+	}
+	return false
+}
+
+// wantedCommandIdentities maps each prerequisite's id to the command identity
+// its evidence must name: the hash of the declared command's own text for a
+// declared-command obligation, and "" for every other kind.
+func wantedCommandIdentities(prerequisites []taskObligation) map[string]string {
+	wantCommand := map[string]string{}
+	for _, o := range prerequisites {
+		if o.Kind == ObligationDeclaredCommand {
+			wantCommand[o.ID] = contentSHA256(o.Subject)
+			continue
+		}
+		wantCommand[o.ID] = ""
+	}
+	return wantCommand
+}
+
+// markPreservedBaselines adds to satisfied each baseline obligation that the
+// authorizing evidence also shows to be preserved.
+func markPreservedBaselines(satisfied map[string]bool, in authorizationInput,
+	prerequisites []taskObligation, authorizing []proxyEvidence) {
+	for _, o := range prerequisites {
+		if o.Kind != ObligationBaselinePreserved || satisfied[o.ID] {
+			continue
+		}
+		if ok, _ := baselinePreservedBy(o, in.BaselineWitnessCommand, authorizing); ok {
+			satisfied[o.ID] = true
+		}
+	}
+}
+
+// accountForPrerequisites puts each required prerequisite into d.Satisfied or
+// d.Missing, and sorts both lists.
+func accountForPrerequisites(d *AuthorizationDecision, prerequisites []taskObligation,
+	satisfied map[string]bool) {
+	for _, o := range prerequisites {
+		if !o.Required {
+			continue
+		}
+		if satisfied[o.ID] {
+			d.Satisfied = append(d.Satisfied, o.ID)
+		} else {
+			d.Missing = append(d.Missing, o.ID)
+		}
+	}
+	sort.Strings(d.Satisfied)
+	sort.Strings(d.Missing)
+}
+
+// explainMissingPrerequisites sets d.Reason for a decision with missing
+// prerequisites. Each rule below overrides the one before it.
+func explainMissingPrerequisites(d *AuthorizationDecision, in authorizationInput,
+	prerequisites []taskObligation, satisfied map[string]bool, firstRefusal AuthorizationReason) {
+	// A prerequisite nothing spoke for is missing evidence; one something
+	// spoke for badly gets that something's own reason.
+	d.Reason = ReasonEvidenceMissing
+	if firstRefusal != ReasonUnknown {
+		d.Reason = firstRefusal
+	}
+	// And when the caller knows WHY a prerequisite went unmet -- the
+	// producer was down, refused, timed out, or ran and found against the
+	// candidate -- that is the truthful answer. `evidence_missing` for a
+	// sandbox that was never reachable says the candidate had nothing to
+	// show for itself, when in truth nothing was checked.
+	//
+	// Sorted order, so the reported reason does not depend on map order.
+	if len(in.Unmet) > 0 {
+		for _, id := range d.Missing {
+			if why, known := in.Unmet[id]; known && authorizationReasons[why] &&
+				!authorizingReasons[why] {
+				d.Reason = why
+				break
+			}
+		}
+	}
+	// A baseline obligation left unmet is its own fact, and the more
+	// useful one to report.
+	for _, o := range prerequisites {
+		if o.Kind == ObligationBaselinePreserved && !satisfied[o.ID] {
+			d.Reason = ReasonBaselineNotPreserved
+			break
+		}
+	}
 }
 
 // evidenceRefusalFor is why one piece of evidence cannot be relied on, or

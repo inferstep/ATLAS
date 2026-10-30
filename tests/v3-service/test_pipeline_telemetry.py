@@ -18,8 +18,6 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "v3-service"))
@@ -140,12 +138,15 @@ def test_disable_value_turns_telemetry_off(monkeypatch, tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_unwritable_dir_disables_without_breaking_generation(monkeypatch, tmp_path):
+def test_unwritable_dir_disables_without_breaking_generation(monkeypatch, tmp_path, capsys):
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("file, not a directory")
     monkeypatch.setenv("ATLAS_V3_TELEMETRY_DIR", str(blocker / "telemetry"))
     service = _make_service(monkeypatch)
     assert service.telemetry_dir is None
+    # One line at start says so, with the repair that keeps a volume's data.
+    assert (f"docker compose run --rm --no-deps --user root v3-service chown -R {os.getuid()}:{os.getgid()} "
+            f"{blocker / 'telemetry'}") in capsys.readouterr().out
 
     result = service.run("write a real dashboard", task_id="d8-unwritable")
     assert result["phase_solved"] == "none"
@@ -517,7 +518,8 @@ def test_the_byte_cap_never_emits_a_partial_line(monkeypatch, tmp_path):
         json.loads(line)          # every line is a complete record
     assert len(sink.read_bytes()) <= 900
     marker = _of_type(records, "capture_status")
-    assert marker and marker[-1]["limit_reached"] is True
+    assert marker
+    assert marker[-1]["limit_reached"] is True
 
 
 def test_concurrent_writers_append_complete_unique_records(tmp_path):
@@ -749,6 +751,6 @@ def test_no_new_field_reaches_any_public_surface():
     for module in ("contract.py", "adapters.py"):
         text = (v3dir / module).read_text()
         assert "incumbent" not in text, module
-    go = (PROJECT_ROOT / "proxy" / "types.go").read_text()
+    go = "".join((PROJECT_ROOT / "proxy" / name).read_text() for name in ("types.go", "tool_io.go"))
     for leaked in ("incumbent", "Incumbent", "shadow_comparison"):
         assert leaked not in go, leaked

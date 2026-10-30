@@ -4,11 +4,13 @@ A workflow that fails to start shows no check, and a skipped job reports
 success, so both look like a pass. These tests pin what the script expects
 to have run for a change, and that each way of not running is reported.
 """
+import http.server
 import importlib.util
 import json
 import re
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -62,39 +64,41 @@ def test_the_event_gives_the_commit_the_base_and_the_branch(ran):
         ran.change_from_event("push", {})
 
 
-@pytest.mark.parametrize("on", ["pull_request", ["push", "pull_request"], {"pull_request": None}])
+@pytest.mark.parametrize("on", [
+    pytest.param("pull_request", id="a name"),
+    pytest.param(["push", "pull_request"], id="a list"),
+    pytest.param({"pull_request": None}, id="a mapping"),
+])
 def test_every_form_of_the_on_block_is_read(ran, change, on):
     assert ran.starts_on({True: on}, change, ["a.py"]) is True
     assert ran.starts_on({"on": on}, change, ["a.py"]) is True
 
 
-def test_a_workflow_for_another_event_or_action_is_not_expected(ran, change):
-    assert ran.starts_on({True: {"push": {}}}, change, ["a.py"]) is False
-    assert ran.starts_on({True: {"pull_request": {"types": ["labeled"]}}}, change, ["a.py"]) is False
-    assert ran.starts_on({True: {"pull_request": {"types": ["opened", "synchronize"]}}}, change, ["a.py"]) is True
-
-
-def test_branch_filters_decide(ran, change):
-    assert ran.starts_on({True: {"pull_request": {"branches": ["main"]}}}, change, ["a.py"]) is False
-    assert ran.starts_on({True: {"pull_request": {"branches": ["main", "dev"]}}}, change, ["a.py"]) is True
-    assert ran.starts_on({True: {"pull_request": {"branches": ["release/**"]}}}, change, ["a.py"]) is False
-    assert ran.starts_on({True: {"pull_request": {"branches-ignore": ["dev"]}}}, change, ["a.py"]) is False
-
-
-def test_path_filters_decide(ran, change):
-    only_ui = {True: {"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}}}
-    assert ran.starts_on(only_ui, change, ["proxy/agent.go"]) is False
-    assert ran.starts_on(only_ui, change, ["proxy/agent.go", "extensions/vscode/src/a/b.ts"]) is True
-    not_docs = {True: {"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}}
-    assert ran.starts_on(not_docs, change, ["docs/a/b.md", "README.md"]) is False
-    assert ran.starts_on(not_docs, change, ["docs/a.md", "proxy/agent.go"]) is True
+# `change` is a pull request into `dev` that was updated (`synchronize`).
+@pytest.mark.parametrize("on, changed, starts", [
+    pytest.param({"push": {}}, ["a.py"], False, id="another event"),
+    pytest.param({"pull_request": {"types": ["labeled"]}}, ["a.py"], False, id="another action"),
+    pytest.param({"pull_request": {"types": ["opened", "synchronize"]}}, ["a.py"], True, id="an action it lists"),
+    pytest.param({"pull_request": {"branches": ["main"]}}, ["a.py"], False, id="a branch filter without dev"),
+    pytest.param({"pull_request": {"branches": ["main", "dev"]}}, ["a.py"], True, id="a branch filter with dev"),
+    pytest.param({"pull_request": {"branches": ["release/**"]}}, ["a.py"], False, id="a pattern dev does not fit"),
+    pytest.param({"pull_request": {"branches-ignore": ["dev"]}}, ["a.py"], False, id="dev ignored"),
+    pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
+                 ["proxy/agent.go"], False, id="no changed file in its paths"),
+    pytest.param({"pull_request": {"paths": ["extensions/vscode/**", ".github/workflows/ui.yml"]}},
+                 ["proxy/agent.go", "extensions/vscode/src/a/b.ts"], True, id="one changed file in its paths"),
+    pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a/b.md", "README.md"], False,
+                 id="every changed file ignored"),
+    pytest.param({"pull_request": {"paths-ignore": ["docs/**", "*.md"]}}, ["docs/a.md", "proxy/agent.go"], True,
+                 id="one changed file not ignored"),
     # One star stays inside a folder; two stars cross folders.
-    top_level = {True: {"pull_request": {"paths": ["*.md"]}}}
-    assert ran.starts_on(top_level, change, ["docs/a.md"]) is False
-    assert ran.starts_on(top_level, change, ["README.md"]) is True
-    anywhere = {True: {"pull_request": {"paths": ["**/README.md"]}}}
-    assert ran.starts_on(anywhere, change, ["README.md"]) is True
-    assert ran.starts_on(anywhere, change, ["a/b/README.md"]) is True
+    pytest.param({"pull_request": {"paths": ["*.md"]}}, ["docs/a.md"], False, id="one star in another folder"),
+    pytest.param({"pull_request": {"paths": ["*.md"]}}, ["README.md"], True, id="one star at the top"),
+    pytest.param({"pull_request": {"paths": ["**/README.md"]}}, ["README.md"], True, id="two stars at the top"),
+    pytest.param({"pull_request": {"paths": ["**/README.md"]}}, ["a/b/README.md"], True, id="two stars down folders"),
+])
+def test_the_event_the_action_and_the_filters_decide_whether_a_workflow_starts(ran, change, on, changed, starts):
+    assert ran.starts_on({True: on}, change, changed) is starts
 
 
 def test_a_filter_it_cannot_read_is_said_not_guessed(ran, change):
@@ -193,9 +197,9 @@ def test_a_workflow_that_failed_to_start_is_reported_with_its_run(ran, change):
 
 
 @pytest.mark.parametrize("reported, words", [
-    ([], "reported nothing: `lint`"),
-    ([job("lint", "skipped")], "were skipped: `lint`"),
-    ([job("lint", "cancelled")], "were cancelled: `lint`"),
+    pytest.param([], "reported nothing: `lint`", id="absent"),
+    pytest.param([job("lint", "skipped")], "were skipped: `lint`", id="skipped"),
+    pytest.param([job("lint", "cancelled")], "were cancelled: `lint`", id="cancelled"),
 ])
 def test_a_job_with_no_condition_that_did_not_run_is_reported(ran, change, reported, words):
     findings, by_condition, _, _ = ran.check({TESTS: workflow(lint={})}, [TESTS], {TESTS: run(TESTS)},
@@ -213,19 +217,17 @@ def test_the_jobs_of_one_workflow_share_one_finding(ran, change):
     assert "3 job(s)" in findings[0].message
 
 
-def test_a_required_check_that_was_skipped_is_reported_even_when_its_job_has_a_condition(ran, change):
-    workflows = {TESTS: workflow(lint={"name": "lint", "if": "github.event_name == 'push'"})}
-    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("lint", "skipped")],
-                               ["lint"], change)
-    assert "1 required check(s) were skipped: `lint`" in messages(findings)
-    assert "count a skipped job as passed" in messages(findings)
-
-
-def test_a_required_check_that_no_job_reported_is_reported(ran, change):
-    workflows = {TESTS: workflow(lint={"name": "python lint"})}
-    findings, _, _, _ = ran.check(workflows, [TESTS], {TESTS: run(TESTS)}, lambda _: [job("python lint")],
-                               ["lint", "python lint"], change)
-    assert "1 required check(s) were reported by no job: `lint`" in messages(findings)
+@pytest.mark.parametrize("jobs, reported, required, words", [
+    pytest.param({"lint": {"name": "lint", "if": "github.event_name == 'push'"}}, [job("lint", "skipped")], ["lint"],
+                 "1 required check(s) were skipped: `lint`. The rules of `dev` count a skipped job as passed",
+                 id="skipped, even when its job has a condition"),
+    pytest.param({"lint": {"name": "python lint"}}, [job("python lint")], ["lint", "python lint"],
+                 "1 required check(s) were reported by no job: `lint`", id="reported by no job"),
+])
+def test_a_required_check_that_did_not_run_is_reported(ran, change, jobs, reported, required, words):
+    findings, _, _, _ = ran.check({TESTS: workflow(**jobs)}, [TESTS], {TESTS: run(TESTS)}, lambda _: reported,
+                                  required, change)
+    assert words in messages(findings)
 
 
 def test_the_required_names_come_from_the_branch_rules_without_this_check_itself(ran):
@@ -254,12 +256,16 @@ class Clock:
         return self.now
 
 
-def test_it_waits_until_every_expected_run_has_ended(ran):
+def test_it_waits_until_every_expected_run_has_ended_and_logs_each_listing(ran, capsys):
     clock, answers = Clock(), [{}, {TESTS: run(TESTS, None, status="in_progress")}, {TESTS: run(TESTS)}]
     runs, running = ran.settle(lambda: answers.pop(0) if len(answers) > 1 else answers[0], [TESTS], limit=3600,
                                pause=clock.pause, clock=clock)
     assert (runs[TESTS]["status"], running) == ("completed", [])
     assert clock.now == 2 * ran.POLL_SECONDS
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("note listing")]
+    assert lines == ["note listing 1 after 0s: 0 of 1 expected workflow(s) listed, 0 running, 1 not listed",
+                     "note listing 2 after 60s: 1 of 1 expected workflow(s) listed, 1 running, 0 not listed",
+                     "note listing 3 after 120s: 1 of 1 expected workflow(s) listed, 0 running, 0 not listed"]
 
 
 def test_a_workflow_that_never_gets_a_run_ends_the_wait_after_the_grace_time(ran):
@@ -293,16 +299,6 @@ def test_a_new_attempt_of_a_run_is_read_from_the_newest_listing(ran):
     assert seen[TESTS]["status"] == "in_progress"
 
 
-def test_each_listing_is_put_in_the_log(ran, capsys):
-    clock, answers = Clock(), [{}, {TESTS: run(TESTS, None, status="in_progress")}, {TESTS: run(TESTS)}]
-    ran.settle(lambda: answers.pop(0) if len(answers) > 1 else answers[0], [TESTS], limit=3600,
-               pause=clock.pause, clock=clock)
-    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("note listing")]
-    assert lines == ["note listing 1 after 0s: 0 of 1 expected workflow(s) listed, 0 running, 1 not listed",
-                     "note listing 2 after 60s: 1 of 1 expected workflow(s) listed, 1 running, 0 not listed",
-                     "note listing 3 after 120s: 1 of 1 expected workflow(s) listed, 0 running, 0 not listed"]
-
-
 def test_a_run_that_does_not_end_is_named_when_the_time_is_up(ran):
     clock = Clock()
     _, running = ran.settle(lambda: {TESTS: run(TESTS, None, status="in_progress")}, [TESTS], limit=600,
@@ -333,13 +329,9 @@ def test_the_report_prints_each_finding_and_an_annotation(ran, capsys):
     assert "1 check(s) did not run" in out
 
 
-def waiting_run(path, **more):
-    return run(path, conclusion="action_required", **more)
-
-
 def test_a_run_that_waits_for_approval_is_named_as_waiting_and_not_as_a_job_that_reported_nothing(ran, change):
     workflows = {TESTS: workflow(unit={"name": "unit"}), TITLE: workflow(title={"name": "pr title"})}
-    runs = {TESTS: run(TESTS), TITLE: waiting_run(TITLE)}
+    runs = {TESTS: run(TESTS), TITLE: run(TITLE, "action_required")}
     jobs = {TESTS: [job("unit")], TITLE: []}
     findings, waiting, _, ran_to_an_end, _ = ran.judge(workflows, [TESTS, TITLE], runs, [],
                                                     lambda r: jobs[r["path"]], ["unit", "pr title"], change)
@@ -350,24 +342,22 @@ def test_a_run_that_waits_for_approval_is_named_as_waiting_and_not_as_a_job_that
 
 def test_without_the_rule_the_same_run_reads_as_a_job_that_reported_nothing(ran, change):
     workflows = {TITLE: workflow(title={"name": "pr title"})}
-    findings, _, _, _ = ran.check(workflows, [TITLE], {TITLE: waiting_run(TITLE)}, lambda r: [], ["pr title"], change)
+    findings, _, _, _ = ran.check(workflows, [TITLE], {TITLE: run(TITLE, "action_required")}, lambda r: [],
+                                  ["pr title"], change)
     assert "reported nothing: `pr title`" in messages(findings)
 
 
-def test_no_required_check_is_judged_while_a_run_waits(ran, change):
+def test_no_required_check_is_judged_while_a_run_waits(ran, change, monkeypatch):
     workflows = {TESTS: workflow(unit={"name": "unit"}), TITLE: workflow(title={"name": "pr title"})}
-    runs = {TESTS: run(TESTS), TITLE: waiting_run(TITLE)}
+    runs = {TESTS: run(TESTS), TITLE: run(TITLE, "action_required")}
     jobs = {TESTS: [job("unit", "skipped")], TITLE: []}
     asked = []
 
     def required_spy(required, reported, branch, explained=()):
         asked.append(list(required))
         return []
-    original, ran.required_findings = ran.required_findings, required_spy
-    try:
-        ran.judge(workflows, [TESTS, TITLE], runs, [], lambda r: jobs[r["path"]], ["unit", "pr title"], change)
-    finally:
-        ran.required_findings = original
+    monkeypatch.setattr(ran, "required_findings", required_spy)
+    ran.judge(workflows, [TESTS, TITLE], runs, [], lambda r: jobs[r["path"]], ["unit", "pr title"], change)
     assert asked == [[]]
 
 
@@ -393,27 +383,27 @@ def test_the_waiting_message_says_what_each_person_does(ran, capsys):
     assert "reported nothing" not in out
 
 
-def test_the_wait_for_the_other_runs_does_not_wait_for_an_approval(ran):
-    listings = iter([{TITLE: waiting_run(TITLE)}])
-    runs, running = ran.settle(lambda: next(listings), [TITLE], limit=600, pause=lambda s: None, clock=lambda: 0.0)
+# Each listing is given once; asking for one more fails the test.
+@pytest.mark.parametrize("listings, conclusion", [
+    pytest.param([{TITLE: run(TITLE, "action_required")}], "action_required", id="a run that waits for approval"),
+    pytest.param([{TITLE: run(TITLE, status="in_progress", conclusion=None)}, {TITLE: run(TITLE)}], "success",
+                 id="a run that started after its approval"),
+])
+def test_the_wait_does_not_wait_for_an_approval_but_for_a_run_that_started_after_it(ran, listings, conclusion):
+    clock, answers = Clock(), iter(listings)
+    runs, running = ran.settle(lambda: next(answers), [TITLE], limit=600, pause=clock.pause, clock=clock)
     assert running == []
-    assert runs[TITLE]["conclusion"] == "action_required"
-
-
-def test_a_run_that_starts_after_its_approval_is_waited_for_like_any_other(ran):
-    clock = type("Clock", (), {"now": 0.0})()
-    listings = iter([{TITLE: run(TITLE, status="in_progress", conclusion=None)}, {TITLE: run(TITLE)}])
-
-    def pause(seconds):
-        clock.now += seconds
-    runs, running = ran.settle(lambda: next(listings), [TITLE], limit=600, pause=pause, clock=lambda: clock.now)
-    assert running == []
-    assert runs[TITLE]["conclusion"] == "success"
+    assert runs[TITLE]["conclusion"] == conclusion
 
 
 # --- a job that was skipped behind a failed job ----------------------------------------
 
-BEHIND = workflow(a={}, b={"needs": "a"})
+BEHIND = {"a": {}, "b": {"needs": "a"}}
+BEHIND_RUN = [job("a", "failure"), job("b", "skipped")]
+CHAIN = {"a": {}, "b": {"needs": "a"}, "c": {"needs": ["b"]}}
+CHAIN_RUN = [job("a", "failure"), job("b", "skipped"), job("c", "skipped")]
+TWO_ABOVE = {"a": {}, "d": {}, "c": {"needs": ["a", "d"]}}
+TWO_ABOVE_RUN = [job("a", "failure"), job("d", "failure"), job("c", "skipped")]
 
 
 def skips(ran, change, jobs, reported, required=()):
@@ -423,62 +413,39 @@ def skips(ran, change, jobs, reported, required=()):
     return messages(findings), behind, by_condition
 
 
-def test_a_job_that_is_not_required_and_was_skipped_behind_a_failed_job_is_a_note(ran, change):
-    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")])
-    assert found == ""
-    assert behind == {"b": ["a"]}
-    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")], required=["a"])
-    assert (found, behind) == ("", {"b": ["a"]})
+@pytest.mark.parametrize("jobs, reported, required, behind", [
+    pytest.param(BEHIND, BEHIND_RUN, [], {"b": ["a"]}, id="no check required"),
+    pytest.param(BEHIND, BEHIND_RUN, ["a"], {"b": ["a"]}, id="the failed job required"),
+    pytest.param(BEHIND, BEHIND_RUN, ["a", "b"], {"b": ["a"]}, id="the failed job and the skipped one required"),
+    pytest.param(CHAIN, CHAIN_RUN, [], {"b": ["a"], "c": ["a"]}, id="a chain, explained by the failed job at its root"),
+    pytest.param(CHAIN, CHAIN_RUN, ["a", "c"], {"b": ["a"], "c": ["a"]}, id="a chain whose failed root is required"),
+    pytest.param(TWO_ABOVE, TWO_ABOVE_RUN, ["c", "d"], {"c": ["a", "d"]}, id="two failed above, one of them required"),
+])
+def test_a_job_skipped_behind_a_failed_job_is_a_note(ran, change, jobs, reported, required, behind):
+    found, skipped_behind, _ = skips(ran, change, jobs, reported, required)
+    assert (found, skipped_behind) == ("", behind)
 
 
 @pytest.mark.parametrize("needed", ["success", "cancelled", "skipped"])
 def test_a_job_skipped_with_no_failed_job_above_it_is_a_finding(ran, change, needed):
-    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", needed), job("b", "skipped")])
+    found, behind, _ = skips(ran, change, BEHIND, [job("a", needed), job("b", "skipped")])
     assert "were skipped: `b`" in found or "were skipped: `a`, `b`" in found
     assert "No failed job that it `needs` explains the skip" in found
     assert behind == {}
 
 
-def test_a_required_check_skipped_behind_a_failed_job_that_is_not_required_is_a_finding(ran, change):
-    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")], required=["b"])
-    assert "1 job(s) in .github/workflows/tests.yml were skipped: `b`" in found
-    assert "1 required check(s) were skipped: `b`" in found
-    assert behind == {}
-
-
-def test_a_required_check_skipped_behind_a_failed_required_check_is_a_note(ran, change):
-    found, behind, _ = skips(ran, change, BEHIND["jobs"], [job("a", "failure"), job("b", "skipped")],
-                             required=["a", "b"])
-    assert found == ""
-    assert behind == {"b": ["a"]}
-
-
-CHAIN = {"a": {}, "b": {"needs": "a"}, "c": {"needs": ["b"]}}
-CHAIN_RUN = [job("a", "failure"), job("b", "skipped"), job("c", "skipped")]
-
-
-def test_a_chain_of_skipped_jobs_is_explained_by_the_job_that_failed_at_its_root(ran, change):
-    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN)
-    assert found == ""
-    assert behind == {"b": ["a"], "c": ["a"]}
-
-
-def test_a_required_check_down_a_chain_is_a_finding_unless_the_root_that_failed_is_required(ran, change):
-    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN, required=["c"])
-    assert "were skipped: `c`" in found and "1 required check(s) were skipped: `c`" in found
-    assert behind == {"b": ["a"]}
-    found, behind, _ = skips(ran, change, CHAIN, CHAIN_RUN, required=["a", "c"])
-    assert (found, behind) == ("", {"b": ["a"], "c": ["a"]})
-
-
-def test_with_two_failed_jobs_above_a_required_check_one_required_one_is_enough(ran, change):
-    jobs = {"a": {}, "d": {}, "c": {"needs": ["a", "d"]}}
-    reported = [job("a", "failure"), job("d", "failure"), job("c", "skipped")]
-    found, behind, _ = skips(ran, change, jobs, reported, required=["c", "d"])
-    assert (found, behind) == ("", {"c": ["a", "d"]})
-    found, behind, _ = skips(ran, change, jobs, reported, required=["c"])
-    assert "1 required check(s) were skipped: `c`" in found
-    assert behind == {}
+# The rules count a skipped required check as passed, and a failed job that is not required holds no merge.
+@pytest.mark.parametrize("jobs, reported, check, behind", [
+    pytest.param(BEHIND, BEHIND_RUN, "b", {}, id="behind a failed job"),
+    pytest.param(CHAIN, CHAIN_RUN, "c", {"b": ["a"]}, id="down a chain"),
+    pytest.param(TWO_ABOVE, TWO_ABOVE_RUN, "c", {}, id="behind two failed jobs"),
+])
+def test_a_required_check_skipped_behind_failed_jobs_that_are_not_required_is_a_finding(ran, change, jobs, reported,
+                                                                                       check, behind):
+    found, skipped_behind, _ = skips(ran, change, jobs, reported, [check])
+    assert f"1 job(s) in {TESTS} were skipped: `{check}`" in found
+    assert f"1 required check(s) were skipped: `{check}`" in found
+    assert skipped_behind == behind
 
 
 def test_a_job_behind_one_that_its_own_condition_skipped_is_not_explained_by_a_failure(ran, change):
@@ -529,3 +496,71 @@ def test_the_gates_page_names_the_jobs_this_check_does_not_judge(ran):
         "number in the text above it.")
     count = sum(len(jobs) for jobs in with_a_condition.values())
     assert f"- {count} job definitions have an `if:` of their own" in " ".join(section.split())
+
+
+class _GitHub(http.server.BaseHTTPRequestHandler):
+    """A stand-in for GitHub's API. It answers each request with the next status of `statuses`: a page for 200, and
+    a short message for any other. "silent" ends the connection with no answer; "broken" begins the page and ends
+    the connection in its middle."""
+
+    statuses = []
+
+    def do_GET(self):
+        status = self.statuses.pop(0)
+        if status == "silent":
+            return
+        if status == "broken":
+            self.send_response(200)
+            self.send_header("Content-Length", "100")
+            self.end_headers()
+            self.wfile.write(b'{"total_')
+            return
+        body = json.dumps({"total_count": 0} if status == 200 else {"message": "a planted answer"}).encode()
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def test_a_short_outage_of_github_is_waited_out_and_an_answer_that_says_no_is_not_asked_again(ran, monkeypatch):
+    server = http.server.HTTPServer(("127.0.0.1", 0), _GitHub)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    slept = []
+    monkeypatch.setattr(ran, "API", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setattr(ran.time, "sleep", slept.append)
+    try:
+        # Two answers 5xx, then the answer: three tries, with a wait that grows.
+        monkeypatch.setattr(_GitHub, "statuses", [502, 503, 200])
+        assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
+        # A connection that ends with no answer, and an answer that breaks off in its middle, are asked again too.
+        monkeypatch.setattr(_GitHub, "statuses", ["silent", "broken", 200])
+        slept[:] = []
+        assert ran.api("repos/o/r/actions/runs", "a-token") == [{"total_count": 0}]
+        assert slept == [10, 30]
+        assert _GitHub.statuses == []
+        # An answer that says no is not asked again, and the words say what GitHub answered.
+        monkeypatch.setattr(_GitHub, "statuses", [404])
+        slept[:] = []
+        with pytest.raises(RuntimeError, match=r"^GitHub answered \S+ with 404 Not Found$"):
+            ran.api("repos/o/r/actions/runs", "a-token")
+        assert slept == []
+        assert _GitHub.statuses == []
+        # A longer outage: five tries, almost four minutes, and the words say that GitHub did not answer.
+        monkeypatch.setattr(_GitHub, "statuses", [502] * 5)
+        with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: HTTP Error 502: Bad Gateway$"):
+            ran.api("repos/o/r/actions/runs", "a-token")
+        assert slept == [10, 30, 60, 120]
+        assert _GitHub.statuses == []
+    finally:
+        server.shutdown()
+        server.server_close()
+    # GitHub cannot be reached at all: the same tries, and the same words.
+    slept[:] = []
+    with pytest.raises(RuntimeError, match=r"^GitHub did not answer \S+ in 5 tries over 220 s: <urlopen error"):
+        ran.api("repos/o/r/actions/runs", "a-token")
+    assert slept == [10, 30, 60, 120]

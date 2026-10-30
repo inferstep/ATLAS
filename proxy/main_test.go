@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -150,7 +151,7 @@ func TestPassthroughPreservesRequestURI(t *testing.T) {
 	t.Cleanup(upstream.Close)
 	withInferenceURL(t, upstream.URL)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?stream=true&n=2", strings.NewReader("payload"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?stream=true&n=2", strings.NewReader(`{"max_tokens":512}`))
 	req.Header.Set("X-Client", "atlas-test")
 	rec := httptest.NewRecorder()
 
@@ -165,7 +166,7 @@ func TestPassthroughPreservesRequestURI(t *testing.T) {
 	if gotRequestURI != "/v1/chat/completions?stream=true&n=2" {
 		t.Fatalf("request URI = %q", gotRequestURI)
 	}
-	if gotBody != "payload" {
+	if gotBody != `{"max_tokens":512}` {
 		t.Fatalf("body = %q", gotBody)
 	}
 	if rec.Header().Get("X-Upstream") != "seen" {
@@ -193,6 +194,103 @@ func TestPassthroughRejectsOversizedBody(t *testing.T) {
 	}
 	if upstreamCalled {
 		t.Fatalf("oversized request reached upstream")
+	}
+}
+
+// The proxy cannot bound a generation body that it cannot read, so such a body
+// is refused and not sent on: one that is not JSON, and one nested deeper than
+// encoding/json reads (10,000 levels).
+func TestAGenerationBodyThatIsNotOneJSONObjectIsRefused(t *testing.T) {
+	upstreamCalled := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+
+	deep := strings.Repeat(`{"a":`, 10001) + "1" + strings.Repeat("}", 10001)
+	for _, body := range []string{`not json`, deep} {
+		rec := httptest.NewRecorder()
+		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("a body of %d bytes got %d, want %d", len(body), rec.Code, http.StatusBadRequest)
+		}
+	}
+	if upstreamCalled {
+		t.Fatalf("a refused body reached upstream")
+	}
+}
+
+// The handler as the server runs it, from the function that main uses: a
+// request with no token is refused before its route, and a body over the limit
+// is refused before it is passed on.
+func TestTheServersHandlerChecksTheTokenAndTheSizeOfTheBody(t *testing.T) {
+	defer withToken(t, "atlas-st-testfixture")()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+	for _, c := range []struct {
+		name, token, body string
+		want              int
+	}{
+		{"no token", "", "{}", http.StatusUnauthorized},
+		{"a body over the limit", "atlas-st-testfixture", strings.Repeat("x", maxRequestBodyBytes+1), http.StatusRequestEntityTooLarge},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			if c.token != "" {
+				req.Header.Set("Authorization", "Bearer "+c.token)
+			}
+			rec := httptest.NewRecorder()
+			newServerHandler().ServeHTTP(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, c.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// The clients send each POST as application/json and no Origin header, as in
+// the first row; the server refuses a POST of another type, and a request
+// from a web page unless the operator put its origin on the list.
+func TestTheServerTakesOnlyRequestsOfTheFormItsClientsSend(t *testing.T) {
+	defer withToken(t, "")()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	withInferenceURL(t, upstream.URL)
+	for _, c := range []struct {
+		name, method, path, contentType, origin, allowedOrigins string
+		want                                                    int
+	}{
+		{"a POST as the clients send it", http.MethodPost, "/v1/chat/completions", "application/json", "", "", http.StatusOK},
+		{"JSON with a charset", http.MethodPost, "/v1/chat/completions", "application/json; charset=utf-8", "", "", http.StatusOK},
+		{"a GET with no type", http.MethodGet, "/version", "", "", "", http.StatusOK},
+		{"a POST of plain text", http.MethodPost, "/v1/chat/completions", "text/plain", "", "", http.StatusUnsupportedMediaType},
+		{"a POST with no type", http.MethodPost, "/v1/chat/completions", "", "", "", http.StatusUnsupportedMediaType},
+		{"an origin, with the list empty as by default", http.MethodPost, "/v1/chat/completions", "application/json", "http://localhost:3000", "", http.StatusForbidden},
+		{"an origin on the list", http.MethodPost, "/v1/chat/completions", "application/json", "http://localhost:3000", "http://other.test, http://localhost:3000", http.StatusOK},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("ATLAS_ALLOWED_ORIGINS", c.allowedOrigins)
+			req := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+			if c.contentType != "" {
+				req.Header.Set("Content-Type", c.contentType)
+			}
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			rec := httptest.NewRecorder()
+			newServerHandler().ServeHTTP(rec, req)
+			if rec.Code != c.want {
+				t.Fatalf("status = %d, want %d; body=%q", rec.Code, c.want, rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -272,10 +370,6 @@ func TestRequireServiceToken(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("missing token got %d, want 401", rec.Code)
 		}
-		// The response must never echo token material.
-		if got := rec.Body.String(); strings.Contains(got, "testfixture") {
-			t.Fatalf("401 body leaks token material: %q", got)
-		}
 	})
 
 	t.Run("wrong token rejected", func(t *testing.T) {
@@ -316,6 +410,20 @@ func TestRequireServiceToken(t *testing.T) {
 	})
 }
 
+// The refusal of a request that carries no token never echoes token material.
+func TestRequireServiceTokenRefusalDoesNotEchoTheToken(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	defer withToken(t, "atlas-st-testfixture")()
+	h := requireServiceToken(inner)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/agent", nil))
+	if got := rec.Body.String(); strings.Contains(got, "testfixture") {
+		t.Fatalf("401 body leaks token material: %q", got)
+	}
+}
+
 func TestTokenTransportInjection(t *testing.T) {
 	defer withToken(t, "atlas-st-inject")()
 	var gotAuth string
@@ -324,6 +432,7 @@ func TestTokenTransportInjection(t *testing.T) {
 			gotAuth = r.Header.Get("Authorization")
 		}))
 	defer srv.Close()
+	withInferenceURL(t, srv.URL)
 
 	client := &http.Client{Transport: &tokenTransport{}}
 
@@ -351,6 +460,44 @@ func TestTokenTransportInjection(t *testing.T) {
 			t.Fatalf("caller header overridden: %q", gotAuth)
 		}
 	})
+}
+
+func TestTokenTransportSendsTheTokenOnlyToAnAddressOfTheStack(t *testing.T) {
+	defer withToken(t, "atlas-st-inject")()
+	got := map[string]string{} // the Authorization that each stand-in got, by stand-in and path
+	other := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got["other"+r.URL.Path] = r.Header.Get("Authorization")
+		}))
+	defer other.Close()
+	stack := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got["stack"+r.URL.Path] = r.Header.Get("Authorization")
+			if r.URL.Path == "/moved" {
+				http.Redirect(w, r, other.URL+"/after-the-redirect", http.StatusFound)
+			}
+		}))
+	defer stack.Close()
+	// Only the stand-in "stack" is an address of the stack. The other one is on the same host, on another port.
+	withInferenceURL(t, stack.URL)
+
+	client := &http.Client{Transport: &tokenTransport{}}
+	for _, address := range []string{stack.URL + "/asked", other.URL + "/asked", stack.URL + "/moved"} {
+		resp, err := client.Get(address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	want := map[string]string{
+		"stack/asked":              "Bearer atlas-st-inject",
+		"other/asked":              "",
+		"stack/moved":              "Bearer atlas-st-inject",
+		"other/after-the-redirect": "",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the token went to\n%v\nwant\n%v", got, want)
+	}
 }
 
 func TestWithRequestIDGenerates(t *testing.T) {
@@ -382,6 +529,32 @@ func TestWithRequestIDHonorsClientID(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if seen != "req-client-supplied" {
 		t.Fatalf("client id not honored: %q", seen)
+	}
+}
+
+func TestReadServiceTokenStopsOnAFileThatIsThereButCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	if token, err := readServiceToken(filepath.Join(dir, "not-there")); token != "" || err != nil {
+		t.Fatalf("a file that is not there: %q, %v; want no token and no error", token, err)
+	}
+	readable := filepath.Join(dir, "readable")
+	if err := os.WriteFile(readable, []byte("atlas-st-inject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := readServiceToken(readable); token != "atlas-st-inject" || err != nil {
+		t.Fatalf("a file that can be read: %q, %v; want its token", token, err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file of mode 000, so the case of a file that cannot be read needs a user that is not root")
+	}
+	unreadable := filepath.Join(dir, "service-token")
+	if err := os.WriteFile(unreadable, []byte("atlas-st-inject\n"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readServiceToken(unreadable)
+	want := "the service token file " + unreadable + " cannot be read"
+	if err == nil || !strings.Contains(err.Error(), want) || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("a file that cannot be read: %v; want an error that says %q", err, want)
 	}
 }
 
@@ -504,7 +677,10 @@ func TestFilterPrivateValuesCorpus(t *testing.T) {
 			t.Errorf("%s: no placeholder in output: %q", c.Name, got)
 		}
 	}
-	for _, c := range corpus.NegativeCases {
+}
+
+func TestFilterPrivateValuesLeavesTheNegativeCorpusUnchanged(t *testing.T) {
+	for _, c := range loadCorpus(t).NegativeCases {
 		if got := filterPrivateValues(c.Input); got != c.Input {
 			t.Errorf("%s: benign input modified: %q -> %q",
 				c.Name, c.Input, got)
@@ -541,139 +717,103 @@ func TestClampGenerationBody(t *testing.T) {
 		return v, ok
 	}
 
-	t.Run("missing max_tokens gets the default ceiling", func(t *testing.T) {
-		out := clampGenerationBody("/v1/chat/completions",
-			[]byte(`{"messages":[{"role":"user","content":"hi"}]}`))
-		if v, ok := get(out, "max_tokens"); !ok || v != 8192 {
-			t.Fatalf("want max_tokens=8192, got %v (present=%v)", v, ok)
-		}
-	})
+	// Each of these bodies leaves with the bound set to the default ceiling.
+	for _, c := range []struct{ name, path, body, key string }{
+		{"missing max_tokens gets the default ceiling", "/v1/chat/completions",
+			`{"messages":[{"role":"user","content":"hi"}]}`, "max_tokens"},
+		{"unlimited sentinel -1 is clamped", "/v1/completions", `{"max_tokens":-1}`, "max_tokens"},
+		{"above-ceiling value is clamped", "/v1/chat/completions", `{"max_tokens":900000}`, "max_tokens"},
+		{"llama-native endpoints use n_predict", "/completion", `{"prompt":"x"}`, "n_predict"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, _ := clampGenerationBody(c.path, []byte(c.body))
+			if v, ok := get(out, c.key); !ok || v != 8192 {
+				t.Fatalf("want %s=8192, got %v (present=%v)", c.key, v, ok)
+			}
+		})
+	}
 
 	t.Run("in-range value passes through untouched", func(t *testing.T) {
 		in := []byte(`{"max_tokens":512}`)
-		out := clampGenerationBody("/v1/chat/completions", in)
+		out, _ := clampGenerationBody("/v1/chat/completions", in)
 		if string(out) != string(in) {
 			t.Fatalf("in-range body modified: %s", out)
 		}
 	})
 
-	t.Run("unlimited sentinel -1 is clamped", func(t *testing.T) {
-		out := clampGenerationBody("/v1/completions", []byte(`{"max_tokens":-1}`))
-		if v, _ := get(out, "max_tokens"); v != 8192 {
-			t.Fatalf("want clamp to 8192, got %v", v)
-		}
-	})
-
-	t.Run("above-ceiling value is clamped", func(t *testing.T) {
-		out := clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":900000}`))
-		if v, _ := get(out, "max_tokens"); v != 8192 {
-			t.Fatalf("want clamp to 8192, got %v", v)
-		}
-	})
-
-	t.Run("llama-native endpoints use n_predict", func(t *testing.T) {
-		out := clampGenerationBody("/completion", []byte(`{"prompt":"x"}`))
-		if v, ok := get(out, "n_predict"); !ok || v != 8192 {
-			t.Fatalf("want n_predict=8192, got %v (present=%v)", v, ok)
-		}
-	})
-
 	t.Run("env override sets the ceiling", func(t *testing.T) {
 		t.Setenv("ATLAS_MAX_COMPLETION_TOKENS", "1024")
-		out := clampGenerationBody("/v1/chat/completions", []byte(`{}`))
+		out, _ := clampGenerationBody("/v1/chat/completions", []byte(`{}`))
 		if v, _ := get(out, "max_tokens"); v != 1024 {
 			t.Fatalf("want max_tokens=1024, got %v", v)
 		}
-		out = clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":2048}`))
+		out, _ = clampGenerationBody("/v1/chat/completions", []byte(`{"max_tokens":2048}`))
 		if v, _ := get(out, "max_tokens"); v != 1024 {
 			t.Fatalf("want clamp to 1024, got %v", v)
 		}
 	})
 
-	t.Run("non-generation paths and bad JSON pass through", func(t *testing.T) {
-		for _, c := range []struct{ path, body string }{
-			{"/health", `{}`},
-			{"/slots", `{"max_tokens":-1}`},
-			{"/v1/chat/completions", `not json`},
-		} {
-			out := clampGenerationBody(c.path, []byte(c.body))
-			if string(out) != c.body {
-				t.Fatalf("%s: body modified: %s", c.path, out)
-			}
+	t.Run("an object with a number too large for a float64 gets max_tokens", func(t *testing.T) {
+		huge := "1" + strings.Repeat("0", 400)
+		clamped, _ := clampGenerationBody("/v1/chat/completions", []byte(`{"seed":`+huge+`}`))
+		out := string(clamped)
+		if !strings.Contains(out, `"max_tokens":8192`) || !strings.Contains(out, `"seed":`+huge) {
+			t.Fatalf("want max_tokens=8192 and the number as written, got %s", out)
 		}
 	})
 }
 
+// A body sent to a path that does not generate passes through untouched.
+func TestClampGenerationBodyPassesNonGenerationPathsThrough(t *testing.T) {
+	for _, c := range []struct{ path, body string }{
+		{"/health", `{}`},
+		{"/slots", `{"max_tokens":-1}`},
+		{"/slots", `not json`},
+	} {
+		out, ok := clampGenerationBody(c.path, []byte(c.body))
+		if !ok || string(out) != c.body {
+			t.Fatalf("%s: body modified: %s", c.path, out)
+		}
+	}
+}
+
 // --- The structured task contract --------------------------------------------
 //
-// ATLAS infers obligations from English today: which verbs the user used
+// Without it, ATLAS infers obligations from English: which verbs the user used
 // decides whether work was demanded, which filenames near a write verb become
-// deliverables, which phrases demand verification. This is the first piece of
-// the replacement -- the client saying, in typed fields, what it already knows.
+// deliverables, which phrases demand verification. The contract is the client
+// saying, in typed fields, what it already knows.
 //
-// It decides nothing yet. This commit adds the shape, validates it, and stores
-// it; a guard proves no production decision reads it.
+// Production decisions read it, among them the action demand, the verification
+// demand and the obligations. A guard limits which files may take it from the
+// request context (TestTaskContractHasNoDecisionConsumer).
 
 func TestTaskContractWireShape(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
 
 	for _, c := range []struct {
-		name    string
-		body    string
-		present bool
-		valid   bool
-		mode    TaskMode
-		outputs []string
-		verify  []string
+		name     string
+		contract string
+		mode     TaskMode
+		outputs  []string
+		verify   []string
 	}{
-		{"absent contract", `{}`, false, false, "", nil, nil},
 		{"work with outputs and verification",
-			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}}`,
-			true, true, TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
-		{"question", `{"task_contract":{"task_mode":"question"}}`,
-			true, true, TaskModeQuestion, nil, nil},
-		{"unknown mode", `{"task_contract":{"task_mode":"explore"}}`, true, false, "", nil, nil},
-		{"empty mode", `{"task_contract":{"task_mode":""}}`, true, false, "", nil, nil},
-		{"one bad path rejects the whole contract",
-			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","../../etc/passwd"]}}`,
-			true, false, "", nil, nil},
-		{"workspace escape", `{"task_contract":{"task_mode":"work","expected_outputs":["../x.py"]}}`,
-			true, false, "", nil, nil},
-		{"empty output entry", `{"task_contract":{"task_mode":"work","expected_outputs":[""]}}`,
-			true, false, "", nil, nil},
-		{"empty verification entry",
-			`{"task_contract":{"task_mode":"work","verification":["  "]}}`, true, false, "", nil, nil},
+			`{"task_mode":"work","expected_outputs":["app.py"],"verification":["go test ./..."]}`,
+			TaskModeWork, []string{"app.py"}, []string{"go test ./..."}},
+		{"question", `{"task_mode":"question"}`,
+			TaskModeQuestion, nil, nil},
 		{"aliases deduplicate canonically",
-			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","./app.py"]}}`,
-			true, true, TaskModeWork, []string{"app.py"}, nil},
+			`{"task_mode":"work","expected_outputs":["app.py","./app.py"]}`,
+			TaskModeWork, []string{"app.py"}, nil},
 		{"duplicate verification deduplicates",
-			`{"task_contract":{"task_mode":"work","verification":["go test ./...","go test ./..."]}}`,
-			true, true, TaskModeWork, nil, []string{"go test ./..."}},
+			`{"task_mode":"work","verification":["go test ./...","go test ./..."]}`,
+			TaskModeWork, nil, []string{"go test ./..."}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var wire struct {
-				TaskContract *TaskContract `json:"task_contract,omitempty"`
-			}
-			if err := json.Unmarshal([]byte(c.body), &wire); err != nil {
-				t.Fatalf("decode: %v", err)
-			}
-			if (wire.TaskContract != nil) != c.present {
-				t.Fatalf("present=%v want %v", wire.TaskContract != nil, c.present)
-			}
-			if !c.present {
-				return
-			}
-			got, err := validateTaskContract(wire.TaskContract, dir)
-			if (err == nil) != c.valid {
-				t.Fatalf("valid=%v (err=%v) want %v", err == nil, err, c.valid)
-			}
-			if !c.valid {
-				if got != nil {
-					t.Error("an invalid contract produced a stored value; it must be all or nothing")
-				}
-				return
-			}
+			// Decoded from the wire body, present, and valid, or the case stops here.
+			got := mustContract(t, dir, c.contract)
 			if got.TaskMode != c.mode {
 				t.Errorf("mode=%q want %q", got.TaskMode, c.mode)
 			}
@@ -682,6 +822,43 @@ func TestTaskContractWireShape(t *testing.T) {
 			}
 			if strings.Join(got.VerificationCommands(), "|") != strings.Join(c.verify, "|") {
 				t.Errorf("verification=%v want %v", got.VerificationCommands(), c.verify)
+			}
+		})
+	}
+}
+
+// A contract that breaks any one rule is refused whole: nothing of it is stored.
+// A body with no contract at all is TestLegacyRequestWithoutContractIsAccepted.
+func TestTaskContractWireShapeRefusesAnInvalidContractWhole(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "app.py"), []byte("A = 1\n"), 0o644)
+
+	for _, c := range []struct{ name, body string }{
+		{"unknown mode", `{"task_contract":{"task_mode":"explore"}}`},
+		{"empty mode", `{"task_contract":{"task_mode":""}}`},
+		{"one bad path rejects the whole contract",
+			`{"task_contract":{"task_mode":"work","expected_outputs":["app.py","../../etc/passwd"]}}`},
+		{"workspace escape", `{"task_contract":{"task_mode":"work","expected_outputs":["../x.py"]}}`},
+		{"empty output entry", `{"task_contract":{"task_mode":"work","expected_outputs":[""]}}`},
+		{"empty verification entry",
+			`{"task_contract":{"task_mode":"work","verification":["  "]}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var wire struct {
+				TaskContract *TaskContract `json:"task_contract,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(c.body), &wire); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if wire.TaskContract == nil {
+				t.Fatalf("present=%v want %v", false, true)
+			}
+			got, err := validateTaskContract(wire.TaskContract, dir)
+			if err == nil {
+				t.Fatalf("valid=%v (err=%v) want %v", true, err, false)
+			}
+			if got != nil {
+				t.Error("an invalid contract produced a stored value; it must be all or nothing")
 			}
 		})
 	}
@@ -763,41 +940,21 @@ func TestTaskContractRoundTrip(t *testing.T) {
 	}
 }
 
-// The contract decides nothing. One definition, one validator, no consumer.
+// One definition, one validator, and only the files listed below may take the
+// contract from the request context (a .TaskContract read).
 func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fset := token.NewFileSet()
-	var defs, validators, readers []string
-	for _, e := range entries {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, n, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", n, err)
-		}
-		ast.Inspect(f, func(node ast.Node) bool {
-			switch v := node.(type) {
-			case *ast.TypeSpec:
-				if v.Name != nil && v.Name.Name == "TaskContract" {
-					defs = append(defs, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
-				}
-			case *ast.FuncDecl:
-				if v.Name != nil && v.Name.Name == "validateTaskContract" {
-					validators = append(validators, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
-				}
-			case *ast.SelectorExpr:
-				if v.Sel != nil && v.Sel.Name == "TaskContract" {
-					readers = append(readers, fmt.Sprintf("%s:%d", n, fset.Position(v.Pos()).Line))
-				}
-			}
-			return true
-		})
-	}
+	defs := astSites(t, func(n ast.Node) bool {
+		v, ok := n.(*ast.TypeSpec)
+		return ok && v.Name != nil && v.Name.Name == "TaskContract"
+	})
+	validators := astSites(t, func(n ast.Node) bool {
+		v, ok := n.(*ast.FuncDecl)
+		return ok && v.Name != nil && v.Name.Name == "validateTaskContract"
+	})
+	readers := astSites(t, func(n ast.Node) bool {
+		v, ok := n.(*ast.SelectorExpr)
+		return ok && v.Sel != nil && v.Sel.Name == "TaskContract"
+	})
 	t.Logf("definitions=%v validators=%v reads=%v", defs, validators, readers)
 	if len(defs) != 1 {
 		t.Errorf("%d TaskContract definitions, want exactly one: %v", len(defs), defs)
@@ -841,24 +998,65 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		}
 		return false
 	}
+	// No owner outside the request boundary and the obligation owner touches
+	// it at all.
 	for _, r := range readers {
 		if !readerAllowed(r) {
 			t.Errorf("%s reads the task contract outside the request boundary", r)
 		}
 	}
-	// Step 1 pinned that NOTHING consulted the contract, because Step 1 added
-	// no decision. That premise is superseded twice over. The task-mode
-	// migration gave the contract one live consumer; this slice gives it a
-	// second, the work-contract verification demand. What still has to hold,
-	// and is what this now pins, is that BOTH decisions are owned by
-	// guardrails.go and that no other subsystem reads the contract to decide
-	// anything.
-	//
-	// finalizeCompletion is off this list for that reason: it does not read a
-	// contract field to reach its own conclusion, it hands the contract to the
-	// policy owner and uses the answer. The check below pins that shape
-	// exactly, so a future edit that starts inspecting TaskMode inline still
-	// fails.
+}
+
+// astSites lists, as "file:line" and in file order, every node of the
+// package's non-test files that match says yes to.
+func astSites(t *testing.T, match func(ast.Node) bool) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	var out []string
+	for _, name := range nonTestGoFiles(t) {
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if match(n) {
+				out = append(out, fmt.Sprintf("%s:%d", name, fset.Position(n.Pos()).Line))
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// nonTestGoFiles names the package's .go files that are not tests, sorted.
+func nonTestGoFiles(t *testing.T) []string {
+	t.Helper()
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, n := range names {
+		if !strings.HasSuffix(n, "_test.go") {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Step 1 pinned that NOTHING consulted the contract, because Step 1 added
+// no decision. That premise is superseded twice over. The task-mode
+// migration gave the contract one live consumer; this slice gives it a
+// second, the work-contract verification demand. What still has to hold,
+// and is what this now pins, is that BOTH decisions are owned by
+// guardrails.go and that no other subsystem reads the contract to decide
+// anything.
+//
+// finalizeCompletion is off the reader list for that reason: it does not read a
+// contract field to reach its own conclusion, it hands the contract to the
+// policy owner and uses the answer. This pins that shape exactly, so a
+// future edit that starts inspecting TaskMode inline still fails.
+func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
 	body, _ := os.ReadFile("agent.go")
 	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
 	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
@@ -877,22 +1075,36 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 		t.Errorf("finalizeCompletion reads the contract %d times; exactly two are "+
 			"allowed: the delegation and the text-exit scope", n)
 	}
-	for _, fn := range []string{"classifyAgentTier", "terminalCompletionAllowed",
-		"blockingTombstone", "needsPermission", "honestTerminalSummary",
-		"buildSystemPrompt", "buildToolDescriptionsExcluding"} {
-		i := strings.Index(string(body), "func "+fn)
+}
+
+// The agent loop's other decisions do not consult the contract at all.
+func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
+	// Each function is read from the file that holds it. A name that is not
+	// there is an error: its check would otherwise pass without reading it.
+	for _, c := range []struct{ file, fn string }{
+		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
+		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
+		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
+		{"tools.go", "buildToolDescriptionsExcluding"},
+	} {
+		text := readSourceForTest(t, c.file)
+		i := strings.Index(text, "func "+c.fn)
 		if i < 0 {
+			t.Errorf("%s holds no func %s, so its check reads nothing; name the file that holds it", c.file, c.fn)
 			continue
 		}
-		end := strings.Index(string(body)[i+1:], "\nfunc ")
+		end := strings.Index(text[i+1:], "\nfunc ")
 		if end < 0 {
-			end = len(body) - i - 1
+			end = len(text) - i - 1
 		}
-		if strings.Contains(string(body)[i:i+1+end], "TaskContract") {
-			t.Errorf("%s consults the task contract; only the action-demand policy owner may", fn)
+		if strings.Contains(text[i:i+1+end], "TaskContract") {
+			t.Errorf("%s consults the task contract; only the action-demand policy owner may", c.fn)
 		}
 	}
-	// guardrails.go owns the decision, and only through the one helper.
+}
+
+// guardrails.go owns the decision, and only through the one helper.
+func TestGuardrailsOwnsTheTaskContractDecisions(t *testing.T) {
 	guard, _ := os.ReadFile("guardrails.go")
 	gs := string(guard)
 	if !strings.Contains(gs, "func decideVerificationDemand") {
@@ -904,6 +1116,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	for _, fn := range []string{"wantsStateChange", "isActionIntentMessage", "isReadOnlyRequest"} {
 		i := strings.Index(gs, "func "+fn)
 		if i < 0 {
+			t.Errorf("guardrails.go holds no func %s, so its check reads nothing; name the file that holds it", fn)
 			continue
 		}
 		end := strings.Index(gs[i+1:], "\nfunc ")
@@ -914,15 +1127,12 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 			t.Errorf("%s consults the task contract; the heuristic must stay contract-blind", fn)
 		}
 	}
-	// No owner outside the request boundary and the obligation owner touches
-	// it at all.
-	for _, r := range readers {
-		if !readerAllowed(r) {
-			t.Errorf("%s reads the task contract outside the request boundary and policy owner", r)
-		}
-	}
-	// And the obligation owner reads the contract ONLY through the validated
-	// request-bound context -- never a shadow copy, never a second decode.
+}
+
+// The obligation owner reads the contract ONLY through the validated
+// request-bound context -- never a shadow copy, never a second decode.
+func TestTheObligationOwnerReadsOnlyTheValidatedContract(t *testing.T) {
+	fset := token.NewFileSet()
 	obTree, err := parser.ParseFile(fset, "obligations.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -963,147 +1173,17 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 // may legitimately move. What did not change is the direction -- every
 // permitted move is strictly toward incomplete, and no contract may move a
 // terminal toward completed -- or the blast radius: a class the caller said
-// nothing about behaves exactly as it did with no contract at all.
+// nothing about behaves exactly as it did with no contract at all
+// (TestEquivalentTaskContractsRunAlike).
 //
 // Contracts here are built through validateTaskContract, not as struct
 // literals, because the knowledge normalisation is part of what is under test:
 // a struct built by hand carries no stated knowledge and must fall back to
-// legacy, which the unspecified rows below pin.
+// legacy, which the unspecified rows of TestEquivalentTaskContractsRunAlike pin.
 func TestTaskContractChangesOnlyWhatItDeclares(t *testing.T) {
-	run := func(t *testing.T, contract *TaskContract, prompt string,
-		plan func(i int) map[string]interface{}) (string, string, []string) {
-		t.Helper()
-		dir := t.TempDir()
-		turns := 0
-		var mu sync.Mutex
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-				json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
-				return
-			case strings.HasSuffix(r.URL.Path, "/execute"):
-				var in struct{ Code string }
-				json.NewDecoder(r.Body).Decode(&in)
-				if strings.Contains(in.Code, ".atlas-mount-probe") {
-					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"success": true, "stdout": string(b), "exit_code": 0})
-					return
-				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": "", "exit_code": 0})
-				return
-			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-				http.NotFound(w, r)
-				return
-			}
-			io.ReadAll(r.Body)
-			w.Header().Set("Content-Type", "text/event-stream")
-			mu.Lock()
-			i := turns
-			turns++
-			mu.Unlock()
-			call, _ := json.Marshal(plan(i))
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{
-					{"delta": map[string]string{"content": string(call)}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}))
-		defer srv.Close()
-
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-		ctx.PermissionMode = PermissionYolo
-		ctx.TrustMode = trustFullyTrusted
-		ctx.VerifyOnHost = true
-		ctx.MaxTurns = 0
-		ctx.TaskContract = contract // the only difference between the two runs
-		var events []string
-		terminal := map[string]string{}
-		ctx.StreamFn = func(et string, data interface{}) {
-			b, _ := json.Marshal(data)
-			mu.Lock()
-			defer mu.Unlock()
-			// Timings differ run to run; everything else is compared.
-			line := et + "|" + string(b)
-			var m map[string]interface{}
-			if json.Unmarshal(b, &m) == nil {
-				for _, k := range []string{"elapsed", "prompt_ms", "elapsed_ms",
-					"duration_ms", "wall_s", "ms"} {
-					delete(m, k)
-				}
-				c, _ := json.Marshal(m)
-				line = et + "|" + string(c)
-			}
-			events = append(events, line)
-			if et == "done" {
-				var m map[string]string
-				json.Unmarshal(b, &m)
-				for k, v := range m {
-					terminal[k] = v
-				}
-			}
-		}
-		runAgentLoop(ctx, prompt)
-		var disk []string
-		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(dir, p)
-			if !strings.HasPrefix(rel, ".") {
-				b, _ := os.ReadFile(p)
-				disk = append(disk, rel+"="+hashBytes(b)[:12])
-			}
-			return nil
-		})
-		sort.Strings(disk)
-		return strings.Join(events, "\n"),
-			terminal["status"] + "/" + terminal["reason"], disk
-	}
-
-	// The case bodies below are contracts, so they are wrapped in the request
-	// envelope and taken through the same decoder a request uses. A contract
-	// that decodes to nil would make every row below compare a run against
-	// itself, so it is a failure here rather than a silent pass.
-	mustValidate := func(t *testing.T, contract string) *TaskContract {
-		t.Helper()
-		body := `{"task_contract":` + contract + `}`
-		var req struct {
-			TaskContract *TaskContract `json:"task_contract,omitempty"`
-		}
-		if err := json.Unmarshal([]byte(body), &req); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if req.TaskContract == nil {
-			t.Fatalf("%s decoded to no contract", body)
-		}
-		tc, err := validateTaskContract(req.TaskContract, t.TempDir())
-		if err != nil {
-			t.Fatalf("validate %s: %v", body, err)
-		}
-		if tc == nil {
-			t.Fatalf("%s validated to no contract", body)
-		}
-		return tc
-	}
-
-	writesApp := func(i int) map[string]interface{} {
-		if i == 0 {
-			return map[string]interface{}{"type": "tool_call", "name": "write_file",
-				"args": map[string]string{"path": "app.py", "content": "A = 1\n"}}
-		}
-		return map[string]interface{}{"type": "done", "summary": "wrote app.py"}
-	}
-	saysNothing := func(i int) map[string]interface{} {
-		return map[string]interface{}{"type": "text", "content": "here is what I would do"}
-	}
+	writesApp := script(stepWrite("app.py", "A = 1\n"), stepDone("wrote app.py"))
 
 	const (
-		actionUnmet       = "incomplete/action_demanded_unmet"
 		verificationUnmet = "incomplete/verification_demanded_unmet"
 		deliverablesUnmet = "incomplete/deliverables_not_demonstrated"
 	)
@@ -1112,48 +1192,15 @@ func TestTaskContractChangesOnlyWhatItDeclares(t *testing.T) {
 	// baseline is how the same intent was expressed before this migration --
 	// usually the legacy contract with no knowledge stated -- so a row asks
 	// what stating knowledge changed, not what having a contract changed.
-	// An empty baseline means no contract at all.
 	for _, c := range []struct {
 		name     string
 		baseline string
 		body     string
 		// want: the exact terminal the request under test must produce.
-		// Empty means it must equal the baseline's terminal event for event.
 		want   string
 		prompt string
 		plan   func(i int) map[string]interface{}
 	}{
-		// --- stating "unspecified" is the same as not stating anything -----
-		{"explicit unspecified equals omitted", `{"task_mode":"work"}`,
-			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
-			"", "Create app.py.", writesApp},
-		{"explicit unspecified equals omitted, prose only", `{"task_mode":"work"}`,
-			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
-			"", "Create app.py.", saysNothing},
-		{"explicit unspecified equals omitted, question", `{"task_mode":"question"}`,
-			`{"task_mode":"question","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
-			"", "What does this repository do?", saysNothing},
-
-		// --- a legacy list keeps the meaning it already had ----------------
-		{"legacy outputs equal declared outputs",
-			`{"task_mode":"work","expected_outputs":["app.py"]}`,
-			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`,
-			"", "Create app.py.", writesApp},
-		{"legacy verification equals declared verification",
-			`{"task_mode":"work","verification":["go test ./..."]}`,
-			`{"task_mode":"work","verification_knowledge":"declared","verification":["go test ./..."]}`,
-			"", "Create app.py.", writesApp},
-
-		// --- an empty legacy list was never authoritative none -------------
-		{"legacy empty outputs equal unspecified",
-			`{"task_mode":"work"}`,
-			`{"task_mode":"work","expected_outputs":[]}`,
-			"", "Create app.py.", writesApp},
-		{"legacy empty verification equals unspecified",
-			`{"task_mode":"work"}`,
-			`{"task_mode":"work","verification":[]}`,
-			"", "Create app.py.", writesApp},
-
 		// --- a declared output the run never produced is named as missing --
 		{"declared output never written",
 			`{"task_mode":"work"}`,
@@ -1180,12 +1227,8 @@ func TestTaskContractChangesOnlyWhatItDeclares(t *testing.T) {
 			verificationUnmet, "Create app.py.", writesApp},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var baseline *TaskContract
-			if c.baseline != "" {
-				baseline = mustValidate(t, c.baseline)
-			}
-			evA, termA, diskA := run(t, baseline, c.prompt, c.plan)
-			evB, termB, diskB := run(t, mustValidate(t, c.body), c.prompt, c.plan)
+			_, termA, diskA := contractRun(t, mustValidateContract(t, c.baseline), c.prompt, c.plan)
+			_, termB, diskB := contractRun(t, mustValidateContract(t, c.body), c.prompt, c.plan)
 			t.Logf("%s: terminal baseline=%q under test=%q", c.name, termA, termB)
 
 			if strings.Join(diskA, ",") != strings.Join(diskB, ",") {
@@ -1196,34 +1239,247 @@ func TestTaskContractChangesOnlyWhatItDeclares(t *testing.T) {
 				t.Errorf("stating knowledge moved a terminal toward completed: %q -> %q",
 					termA, termB)
 			}
-			if c.want == "" {
-				if termA != termB {
-					t.Errorf("stating knowledge moved the terminal: %q -> %q", termA, termB)
-				}
-				if evA != evB {
-					a, b := strings.Split(evA, "\n"), strings.Split(evB, "\n")
-					for i := 0; i < len(a) || i < len(b); i++ {
-						var x, y string
-						if i < len(a) {
-							x = a[i]
-						}
-						if i < len(b) {
-							y = b[i]
-						}
-						if x != y {
-							t.Errorf("stating knowledge changed the stream at event %d:"+
-								"\n  baseline:   %.180s\n  under test: %.180s", i, x, y)
-							break
-						}
-					}
-				}
-				return
-			}
 			if termB != c.want {
 				t.Errorf("terminal %q, want %q (baseline was %q)", termB, c.want, termA)
 			}
 		})
 	}
+}
+
+// Two ways of stating the same knowledge run alike: stating "unspecified" is
+// the same as stating nothing, a legacy list keeps the meaning it already had,
+// and an empty legacy list was never an authoritative none. Each row runs a
+// baseline request and the request under test, and the request under test must
+// produce the baseline's terminal, event for event.
+func TestEquivalentTaskContractsRunAlike(t *testing.T) {
+	writesApp := script(stepWrite("app.py", "A = 1\n"), stepDone("wrote app.py"))
+	saysNothing := script(map[string]interface{}{"type": "text", "content": "here is what I would do"})
+
+	for _, c := range []struct {
+		name     string
+		baseline string
+		body     string
+		prompt   string
+		plan     func(i int) map[string]interface{}
+	}{
+		// --- stating "unspecified" is the same as not stating anything -----
+		{"explicit unspecified equals omitted", `{"task_mode":"work"}`,
+			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"Create app.py.", writesApp},
+		{"explicit unspecified equals omitted, prose only", `{"task_mode":"work"}`,
+			`{"task_mode":"work","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"Create app.py.", saysNothing},
+		{"explicit unspecified equals omitted, question", `{"task_mode":"question"}`,
+			`{"task_mode":"question","output_knowledge":"unspecified","verification_knowledge":"unspecified"}`,
+			"What does this repository do?", saysNothing},
+
+		// --- a legacy list keeps the meaning it already had ----------------
+		{"legacy outputs equal declared outputs",
+			`{"task_mode":"work","expected_outputs":["app.py"]}`,
+			`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["app.py"]}`,
+			"Create app.py.", writesApp},
+		{"legacy verification equals declared verification",
+			`{"task_mode":"work","verification":["go test ./..."]}`,
+			`{"task_mode":"work","verification_knowledge":"declared","verification":["go test ./..."]}`,
+			"Create app.py.", writesApp},
+
+		// --- an empty legacy list was never authoritative none -------------
+		{"legacy empty outputs equal unspecified",
+			`{"task_mode":"work"}`,
+			`{"task_mode":"work","expected_outputs":[]}`,
+			"Create app.py.", writesApp},
+		{"legacy empty verification equals unspecified",
+			`{"task_mode":"work"}`,
+			`{"task_mode":"work","verification":[]}`,
+			"Create app.py.", writesApp},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			evA, termA, diskA := contractRun(t, mustValidateContract(t, c.baseline), c.prompt, c.plan)
+			evB, termB, diskB := contractRun(t, mustValidateContract(t, c.body), c.prompt, c.plan)
+			t.Logf("%s: terminal baseline=%q under test=%q", c.name, termA, termB)
+
+			if strings.Join(diskA, ",") != strings.Join(diskB, ",") {
+				t.Errorf("disk differs:\n  %v\n  %v", diskA, diskB)
+			}
+			// Stating knowledge may narrow a claim. It may never widen one.
+			if strings.HasPrefix(termB, "completed") && !strings.HasPrefix(termA, "completed") {
+				t.Errorf("stating knowledge moved a terminal toward completed: %q -> %q",
+					termA, termB)
+			}
+			if termA != termB {
+				t.Errorf("stating knowledge moved the terminal: %q -> %q", termA, termB)
+			}
+			if i, x, y, differ := firstDifferentLine(evA, evB); differ {
+				t.Errorf("stating knowledge changed the stream at event %d:"+
+					"\n  baseline:   %.180s\n  under test: %.180s", i, x, y)
+			}
+		})
+	}
+}
+
+// contractRun drives one scripted request through the real agent loop with the
+// given contract and returns its event stream, its terminal as "status/reason"
+// and a digest of the files it left. V3 is unavailable, the syntax check
+// accepts everything and every command succeeds.
+func contractRun(t *testing.T, contract *TaskContract, prompt string,
+	plan func(i int) map[string]interface{}) (string, string, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	turns := 0
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			json.NewEncoder(w).Encode(map[string]interface{}{"valid": true})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			if strings.Contains(in.Code, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.NotFound(w, r)
+			return
+		}
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.VerifyOnHost = true
+	ctx.MaxTurns = 0
+	ctx.TaskContract = contract // the only difference between the two runs
+	stream := newLoopStream()
+	ctx.StreamFn = stream.record
+	runAgentLoop(ctx, prompt)
+	return strings.Join(stream.events, "\n"),
+		stream.terminal["status"] + "/" + stream.terminal["reason"], workspaceDigest(dir)
+}
+
+// mustValidateContract wraps a contract body in the request envelope and takes
+// it through the same decoder a request uses. A contract that decodes to nil
+// would make a comparison of two runs compare a run against itself, so it is a
+// failure here rather than a silent pass.
+func mustValidateContract(t *testing.T, contract string) *TaskContract {
+	t.Helper()
+	body := `{"task_contract":` + contract + `}`
+	var req struct {
+		TaskContract *TaskContract `json:"task_contract,omitempty"`
+	}
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if req.TaskContract == nil {
+		t.Fatalf("%s decoded to no contract", body)
+	}
+	tc, err := validateTaskContract(req.TaskContract, t.TempDir())
+	if err != nil {
+		t.Fatalf("validate %s: %v", body, err)
+	}
+	if tc == nil {
+		t.Fatalf("%s validated to no contract", body)
+	}
+	return tc
+}
+
+// loopStream keeps what a test run of the agent loop streamed: each event as
+// "type|payload", without the timing fields that differ run to run, and the
+// fields of the done event.
+type loopStream struct {
+	mu       sync.Mutex
+	events   []string
+	terminal map[string]string
+}
+
+func newLoopStream() *loopStream {
+	return &loopStream{terminal: map[string]string{}}
+}
+
+// record is the run's StreamFn.
+func (s *loopStream) record(et string, data interface{}) {
+	b, _ := json.Marshal(data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Timings differ run to run; everything else is compared.
+	line := et + "|" + string(b)
+	var m map[string]interface{}
+	if json.Unmarshal(b, &m) == nil {
+		for _, k := range []string{"elapsed", "prompt_ms", "elapsed_ms",
+			"duration_ms", "wall_s", "ms"} {
+			delete(m, k)
+		}
+		c, _ := json.Marshal(m)
+		line = et + "|" + string(c)
+	}
+	s.events = append(s.events, line)
+	if et == "done" {
+		var m map[string]string
+		json.Unmarshal(b, &m)
+		for k, v := range m {
+			s.terminal[k] = v
+		}
+	}
+}
+
+// workspaceDigest lists each file under dir whose relative path does not start
+// with a dot, as "path=<first 12 hex digits of its sha256>", sorted.
+func workspaceDigest(dir string) []string {
+	var disk []string
+	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		// An entry the walk cannot read is left out, and the walk goes on.
+		if err == nil && !info.IsDir() {
+			rel, _ := filepath.Rel(dir, p)
+			if !strings.HasPrefix(rel, ".") {
+				b, _ := os.ReadFile(p)
+				disk = append(disk, rel+"="+hashBytes(b)[:12])
+			}
+		}
+		return nil
+	})
+	sort.Strings(disk)
+	return disk
+}
+
+// firstDifferentLine splits two texts into lines and returns the first line
+// number at which they differ, with each side's line ("" past its end).
+func firstDifferentLine(a, b string) (int, string, string, bool) {
+	la, lb := strings.Split(a, "\n"), strings.Split(b, "\n")
+	for i := 0; i < len(la) || i < len(lb); i++ {
+		var x, y string
+		if i < len(la) {
+			x = la[i]
+		}
+		if i < len(lb) {
+			y = lb[i]
+		}
+		if x != y {
+			return i, x, y, true
+		}
+	}
+	return 0, "", "", false
 }
 
 // Action demand stays pinned: a declared work contract may demand action where
@@ -1275,42 +1531,34 @@ func TestLegacyRequestWithoutContractIsAccepted(t *testing.T) {
 // cleanup had anywhere to run. A diagnostic sink that must drain and write a
 // footer needs that landing site to exist.
 
+// setShutdownEnv sets the shutdown variables a case names; an empty value leaves
+// that variable as the environment has it.
+func setShutdownEnv(t *testing.T, sessionSec, graceSec string) {
+	t.Helper()
+	if sessionSec != "" {
+		t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", sessionSec)
+	}
+	if graceSec != "" {
+		t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", graceSec)
+	}
+}
+
 func TestShutdownBudgetArithmetic(t *testing.T) {
 	for _, c := range []struct {
 		name       string
 		sessionSec string
 		graceSec   string
-		wantErr    bool
 	}{
-		{"defaults", "", "", false}, // 600 + 10 = 610 < 650
-		{"explicit shipped values", "600", "650", false},
-		{"session raised without grace", "3600", "650", true},
-		{"session raised with grace", "3600", "3700", false},
-		{"grace exactly equal to need", "600", "610", true}, // strict <
-		{"grace one second above need", "600", "611", false},
-		{"malformed grace", "", "abc", true},
-		{"zero grace", "", "0", true},
-		{"negative grace", "", "-5", true},
+		{"defaults", "", ""}, // 600 + 10 = 610 < 650
+		{"explicit shipped values", "600", "650"},
+		{"session raised with grace", "3600", "3700"},
+		{"grace one second above need", "600", "611"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.sessionSec != "" {
-				t.Setenv("ATLAS_AGENT_SESSION_TIMEOUT_SEC", c.sessionSec)
-			}
-			if c.graceSec != "" {
-				t.Setenv("ATLAS_SHUTDOWN_GRACE_SEC", c.graceSec)
-			}
+			setShutdownEnv(t, c.sessionSec, c.graceSec)
 			budget, err := shutdownBudget()
-			if (err != nil) != c.wantErr {
-				t.Fatalf("err=%v, wantErr=%v", err, c.wantErr)
-			}
 			if err != nil {
-				// The refusal must show the whole sum, not just complain.
-				for _, want := range []string{"ATLAS_SHUTDOWN_GRACE_SEC"} {
-					if !strings.Contains(err.Error(), want) {
-						t.Errorf("error does not name %s: %v", want, err)
-					}
-				}
-				return
+				t.Fatalf("err=%v, wantErr=%v", err, false)
 			}
 			total, _ := sessionBudget()
 			if budget.drain != total {
@@ -1318,6 +1566,33 @@ func TestShutdownBudgetArithmetic(t *testing.T) {
 			}
 			if budget.hookMargin != shutdownHookMargin {
 				t.Errorf("hookMargin=%v", budget.hookMargin)
+			}
+		})
+	}
+}
+
+// A grace period that cannot cover the session and the close hooks is refused.
+func TestShutdownBudgetRefusesAGraceThatCannotCoverTheSession(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		sessionSec string
+		graceSec   string
+	}{
+		{"session raised without grace", "3600", "650"},
+		{"grace exactly equal to need", "600", "610"}, // strict <
+		{"malformed grace", "", "abc"},
+		{"zero grace", "", "0"},
+		{"negative grace", "", "-5"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setShutdownEnv(t, c.sessionSec, c.graceSec)
+			_, err := shutdownBudget()
+			if err == nil {
+				t.Fatalf("err=%v, wantErr=%v", err, true)
+			}
+			// The refusal must show the whole sum, not just complain.
+			if !strings.Contains(err.Error(), "ATLAS_SHUTDOWN_GRACE_SEC") {
+				t.Errorf("error does not name %s: %v", "ATLAS_SHUTDOWN_GRACE_SEC", err)
 			}
 		})
 	}
@@ -1498,6 +1773,10 @@ func TestRunServerStartupFailureReturns(t *testing.T) {
 // A hook that hangs is cut off by its own margin, and a failing hook is
 // reported without hanging the process.
 func TestCloseHooksAreBounded(t *testing.T) {
+	prev := defaultBroker
+	defaultBroker = &broker{subscribers: map[chan Envelope]struct{}{}}
+	defer func() { defaultBroker = prev }()
+
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	srv := &http.Server{Handler: http.NewServeMux()}
 	signals := make(chan os.Signal, 1)
@@ -1582,6 +1861,25 @@ func TestShadowSinkDisabledByDefault(t *testing.T) {
 
 // Initialization refuses anything it cannot own: an existing destination, or
 // one outside the capture root.
+// The capture records how ATLAS judged the requests of each session, so only
+// its owner may read it.
+func TestShadowCaptureFileIsReadableByItsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	shadowEnv(t, dir, "mode.jsonl")
+	sink, err := openShadowSink()
+	if err != nil {
+		t.Fatalf("sink: %v", err)
+	}
+	t.Cleanup(func() { _ = sink.close(context.Background(), time.Second) })
+	info, err := os.Stat(filepath.Join(dir, "mode.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("the capture file has mode %o, want 600", info.Mode().Perm())
+	}
+}
+
 func TestShadowSinkInitializationRefusals(t *testing.T) {
 	t.Run("existing destination", func(t *testing.T) {
 		dir := t.TempDir()
@@ -1920,9 +2218,7 @@ func shadowLoopDrive(t *testing.T, requestID string, contract *TaskContract, pro
 	dir := t.TempDir()
 	turns := 0
 	var mu sync.Mutex
-	var events []string
 	var modelBodies []string
-	terminal := map[string]string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
@@ -1976,33 +2272,13 @@ func shadowLoopDrive(t *testing.T, requestID string, contract *TaskContract, pro
 	ctx.VerifyOnHost = true
 	ctx.MaxTurns = 0
 	ctx.TaskContract = contract
-	ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		mu.Lock()
-		defer mu.Unlock()
-		var m map[string]interface{}
-		line := et + "|" + string(b)
-		if json.Unmarshal(b, &m) == nil {
-			for _, k := range []string{"elapsed", "prompt_ms", "ms", "elapsed_ms",
-				"duration_ms", "wall_s"} {
-				delete(m, k)
-			}
-			c, _ := json.Marshal(m)
-			line = et + "|" + string(c)
-		}
-		events = append(events, line)
-		if et == "done" {
-			var mm map[string]string
-			json.Unmarshal(b, &mm)
-			for k, v := range mm {
-				terminal[k] = v
-			}
-		}
-	}
+	stream := newLoopStream()
+	ctx.StreamFn = stream.record
 	runAgentLoop(ctx, prompt)
 
 	// Each run gets its own TempDir, so the workspace path is not a property of
 	// the run; canonicalise it before anything compares two runs.
+	events := stream.events
 	for i, e := range events {
 		events[i] = strings.ReplaceAll(e, dir, "<ws>")
 	}
@@ -2010,25 +2286,11 @@ func shadowLoopDrive(t *testing.T, requestID string, contract *TaskContract, pro
 		modelBodies[i] = strings.ReplaceAll(b, dir, "<ws>")
 	}
 
-	var disk []string
-	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		rel, _ := filepath.Rel(dir, p)
-		if !strings.HasPrefix(rel, ".") {
-			b, _ := os.ReadFile(p)
-			disk = append(disk, rel+"="+hashBytes(b)[:12])
-		}
-		return nil
-	})
-	sort.Strings(disk)
-
 	// The model request bodies are returned verbatim. Nothing normalises tool
 	// ordering any more: allTools() fixes it, so two runs of the same request
 	// are byte-identical and any difference is a real one.
-	return nil, strings.Join(events, "\n"), disk,
-		terminal["status"] + "/" + terminal["reason"], modelBodies
+	return nil, strings.Join(events, "\n"), workspaceDigest(dir),
+		stream.terminal["status"] + "/" + stream.terminal["reason"], modelBodies
 }
 
 // testStubSyntaxValid controls what the fixture sandbox says about written
@@ -2053,18 +2315,13 @@ func TestShadowRecordsCaptureBothGateSites(t *testing.T) {
 	recs, _, _, term, _ := shadowLoopRun(t, true, contract, "Create app.py.", shadowWorkPlan)
 	t.Logf("terminal=%s records=%d", term, len(recs))
 
-	var snapshots, gates []map[string]interface{}
+	snapshots := recordsOfKind(recs, "task_contract_shadow_request")
+	gates := recordsOfKind(recs, "task_contract_shadow_gate")
 	sites := map[string]bool{}
 	seqs := map[float64]bool{}
-	for _, r := range recs {
-		switch r["record_kind"] {
-		case "task_contract_shadow_request":
-			snapshots = append(snapshots, r)
-		case "task_contract_shadow_gate":
-			gates = append(gates, r)
-			sites[r["call_site"].(string)] = true
-			seqs[r["gate_seq"].(float64)] = true
-		}
+	for _, r := range gates {
+		sites[r["call_site"].(string)] = true
+		seqs[r["gate_seq"].(float64)] = true
 	}
 	if len(snapshots) != 1 {
 		t.Fatalf("%d request snapshots, want exactly one", len(snapshots))
@@ -2225,59 +2482,40 @@ func TestShadowCaptureIsCausallyInert(t *testing.T) {
 	}
 	for i := range promptOff {
 		if promptOff[i] != promptOn[i] {
-			k := 0
-			for k < len(promptOff[i]) && k < len(promptOn[i]) && promptOff[i][k] == promptOn[i][k] {
-				k++
-			}
-			lo := k - 60
-			if lo < 0 {
-				lo = 0
-			}
-			clip := func(v string) string {
-				hi := k + 100
-				if hi > len(v) {
-					hi = len(v)
-				}
-				return v[lo:hi]
-			}
+			k := firstDifferentByte(promptOff[i], promptOn[i])
 			t.Fatalf("model prompt bytes differ on turn %d at byte %d:\n  off: %s\n  on:  %s",
-				i, k, clip(promptOff[i]), clip(promptOn[i]))
+				i, k, excerpt(promptOff[i], k-60, k+100), excerpt(promptOn[i], k-60, k+100))
 		}
 	}
-	if evOff != evOn {
-		a, b := strings.Split(evOff, "\n"), strings.Split(evOn, "\n")
-		for i := 0; i < len(a) || i < len(b); i++ {
-			var x, y string
-			if i < len(a) {
-				x = a[i]
-			}
-			if i < len(b) {
-				y = b[i]
-			}
-			if x != y {
-				j := 0
-				for j < len(x) && j < len(y) && x[j] == y[j] {
-					j++
-				}
-				lo := j - 80
-				if lo < 0 {
-					lo = 0
-				}
-				clip := func(v string) string {
-					hi := j + 120
-					if hi > len(v) {
-						hi = len(v)
-					}
-					if lo > len(v) {
-						return "<short>"
-					}
-					return v[lo:hi]
-				}
-				t.Fatalf("event/model stream differs at entry %d byte %d:\n  off: %s\n  on:  %s",
-					i, j, clip(x), clip(y))
-			}
-		}
+	if i, x, y, differ := firstDifferentLine(evOff, evOn); differ {
+		j := firstDifferentByte(x, y)
+		t.Fatalf("event/model stream differs at entry %d byte %d:\n  off: %s\n  on:  %s",
+			i, j, excerpt(x, j-80, j+120), excerpt(y, j-80, j+120))
 	}
+}
+
+// firstDifferentByte is the index of the first byte at which x and y differ,
+// or the length of the shorter one when it is a prefix of the other.
+func firstDifferentByte(x, y string) int {
+	k := 0
+	for k < len(x) && k < len(y) && x[k] == y[k] {
+		k++
+	}
+	return k
+}
+
+// excerpt is v[lo:hi] with both ends kept inside v, for a failure message.
+func excerpt(v string, lo, hi int) string {
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(v) {
+		hi = len(v)
+	}
+	if lo > len(v) {
+		return "<short>"
+	}
+	return v[lo:hi]
 }
 
 // Capture off costs a run nothing: no sink, no goroutine, no allocation on the
@@ -2336,20 +2574,18 @@ func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
 	noInspect := func(i int) map[string]interface{} {
 		return map[string]interface{}{"type": "done", "summary": "nothing to do"}
 	}
-	report := func(recs []map[string]interface{}) []string {
+	// report checks the gate records of one run, each of which must say that
+	// production consumed live, and describes them.
+	report := func(recs []map[string]interface{}, run string, live bool) []string {
 		var out []string
-		for _, r := range recs {
-			if r["record_kind"] != "task_contract_shadow_gate" {
-				continue
-			}
-			out = append(out, fmt.Sprintf("%v/live=%v/insp=%v/%v",
+		for _, r := range recordsOfKind(recs, "task_contract_shadow_gate") {
+			e := fmt.Sprintf("%v/live=%v/insp=%v/%v",
 				r["gate_seq"], r["legacy_wants_state_change"], r["inspected_workspace"],
-				r["comparison"]))
+				r["comparison"])
+			out = append(out, e)
 			// The comparison is derived from the value production consumed.
-			want := shadowContractWorkLegacyQuestion
-			if r["legacy_wants_state_change"].(bool) {
-				want = shadowAgreeWork
-			}
+			want := map[bool]string{false: shadowContractWorkLegacyQuestion,
+				true: shadowAgreeWork}[r["legacy_wants_state_change"].(bool)]
 			if r["comparison"] != want {
 				t.Errorf("live=%v recorded comparison %q, want %q",
 					r["legacy_wants_state_change"], r["comparison"], want)
@@ -2360,6 +2596,9 @@ func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
 				t.Errorf("live=%v with inspected=%v on a neutral request",
 					r["legacy_wants_state_change"], r["inspected_workspace"])
 			}
+			if !strings.Contains(e, fmt.Sprintf("live=%v", live)) {
+				t.Errorf("an %s run recorded %s", run, e)
+			}
 		}
 		if len(out) == 0 {
 			t.Fatal("no gate records")
@@ -2369,19 +2608,9 @@ func TestShadowGateFollowsInspectionNotRequestText(t *testing.T) {
 	contract := &TaskContract{TaskMode: TaskModeWork}
 	cold, _, _, termCold, _ := shadowLoopRun(t, true, contract, neutral, noInspect)
 	warm, _, _, termWarm, _ := shadowLoopRun(t, true, contract, neutral, shadowWorkPlan)
-	coldSeq, warmSeq := report(cold), report(warm)
+	coldSeq, warmSeq := report(cold, "uninspected", false), report(warm, "inspected", true)
 	t.Logf("uninspected %s: %v", termCold, coldSeq)
 	t.Logf("inspected   %s: %v", termWarm, warmSeq)
-	for _, e := range coldSeq {
-		if !strings.Contains(e, "live=false") {
-			t.Errorf("an uninspected run recorded %s", e)
-		}
-	}
-	for _, e := range warmSeq {
-		if !strings.Contains(e, "live=true") {
-			t.Errorf("an inspected run recorded %s", e)
-		}
-	}
 }
 
 // A request rejected at the boundary never produces a snapshot claiming a
@@ -2422,111 +2651,77 @@ func TestShadowRejectedContractProducesNoSnapshot(t *testing.T) {
 //
 // Three properties, each read off the syntax tree rather than trusted:
 //   - observeActionDemand returns the decision it was handed, unchanged, and
-//     never assigns to it, so instrumenting a gate cannot change its value.
+//     never assigns to it, so instrumenting a gate cannot change its value
+//     (TestShadowObserverReturnsTheDecisionItWasHanded,
+//     TestShadowObserverNeverAssignsToTheDecision).
 //   - wantsStateChange is called exactly once per live site, and each call is
 //     produced by decideActionDemand, so the recorded value is the
-//     value production consumed and the heuristic runs once.
+//     value production consumed and the heuristic runs once
+//     (TestTheLegacyHeuristicRunsOnceInsideTheCentralHelper).
 //   - outside the shadow implementation itself, no shadow identifier appears
-//     anywhere in production code, so no shadow state can be branched on.
+//     anywhere in production code, so no shadow state can be branched on
+//     (this test).
 func TestShadowHasNoPathIntoPolicy(t *testing.T) {
-	fset := token.NewFileSet()
-	files := map[string]*ast.File{}
-	entries, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
+	for _, v := range shadowGuardViolations(proxyFiles(t)) {
+		t.Error(v)
 	}
-	for _, name := range entries {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		files[name] = f
-	}
+}
 
-	// 1. the observer returns the decision it was handed, unchanged
-	var observer *ast.FuncDecl
-	for _, f := range files {
-		for _, d := range f.Decls {
-			if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "observeActionDemand" {
-				observer = fd
-			}
-		}
-	}
+func TestShadowObserverReturnsTheDecisionItWasHanded(t *testing.T) {
+	observer := funcDecl(proxyFiles(t), "observeActionDemand")
 	if observer == nil {
 		t.Fatal("observeActionDemand is gone")
 	}
 	returns := 0
 	ast.Inspect(observer.Body, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.ReturnStmt:
-			returns++
-			if len(v.Results) != 1 {
-				t.Errorf("a return yields %d values", len(v.Results))
-				return true
-			}
-			sel, ok := v.Results[0].(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Required" {
-				t.Errorf("a return does not yield the decision: %T", v.Results[0])
-				return true
-			}
-			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "d" {
-				t.Error("a return yields something other than the decision argument")
-			}
-		case *ast.AssignStmt:
-			for _, lhs := range v.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok && id.Name == "d" {
-					t.Error("the observer assigns to the decision")
-				}
-			}
+		v, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		returns++
+		if len(v.Results) != 1 {
+			t.Errorf("a return yields %d values", len(v.Results))
+			return true
+		}
+		sel, ok := v.Results[0].(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Required" {
+			t.Errorf("a return does not yield the decision: %T", v.Results[0])
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "d" {
+			t.Error("a return yields something other than the decision argument")
 		}
 		return true
 	})
 	if returns == 0 {
 		t.Error("the observer never returns")
 	}
+}
 
-	// 2. the heuristic is evaluated exactly once, inside the central helper,
-	//    and every live action-demand site goes through that helper.
-	legacyCalls := map[string]int{}
-	decideCalls := 0
-	observeWrapsDecide := 0
-	for name, f := range files {
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				id, ok := call.Fun.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				switch id.Name {
-				case "wantsStateChange":
-					legacyCalls[name+":"+fd.Name.Name]++
-				case "decideActionDemand":
-					decideCalls++
-				case "observeActionDemand":
-					for _, a := range call.Args {
-						if c, ok := a.(*ast.CallExpr); ok {
-							if ci, ok := c.Fun.(*ast.Ident); ok &&
-								ci.Name == "decideActionDemand" {
-								observeWrapsDecide++
-							}
-						}
-					}
-				}
-				return true
-			})
-		}
+func TestShadowObserverNeverAssignsToTheDecision(t *testing.T) {
+	observer := funcDecl(proxyFiles(t), "observeActionDemand")
+	if observer == nil {
+		t.Fatal("observeActionDemand is gone")
 	}
+	ast.Inspect(observer.Body, func(n ast.Node) bool {
+		v, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range v.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == "d" {
+				t.Error("the observer assigns to the decision")
+			}
+		}
+		return true
+	})
+}
+
+// The heuristic is evaluated exactly once, inside the central helper, and
+// every live action-demand site goes through that helper.
+func TestTheLegacyHeuristicRunsOnceInsideTheCentralHelper(t *testing.T) {
+	files := proxyFiles(t)
+	legacyCalls := callSites(files, "wantsStateChange")
 	if len(legacyCalls) != 1 {
 		t.Errorf("wantsStateChange is called from %d production functions, want only "+
 			"decideActionDemand: %v", len(legacyCalls), legacyCalls)
@@ -2539,15 +2734,59 @@ func TestShadowHasNoPathIntoPolicy(t *testing.T) {
 			t.Errorf("%s evaluates the heuristic %d times, want exactly once", k, n)
 		}
 	}
+	decideCalls := len(callsIn(files, "decideActionDemand"))
+	observeWrapsDecide := 0
+	for _, call := range callsIn(files, "observeActionDemand") {
+		for _, a := range call.Args {
+			if c, ok := a.(*ast.CallExpr); ok && isCallTo(c, "decideActionDemand") {
+				observeWrapsDecide++
+			}
+		}
+	}
 	if decideCalls != 2 || observeWrapsDecide != 2 {
 		t.Errorf("%d decideActionDemand calls and %d wrapped in observeActionDemand, "+
 			"want 2 and 2 (the two live action-demand sites)", decideCalls, observeWrapsDecide)
 	}
+}
 
-	// 3. shadow symbols stay inside the shadow implementation
-	for _, v := range shadowGuardViolations(files) {
-		t.Error(v)
+// funcDecl is the declaration of the function of that name among files, or nil.
+func funcDecl(files map[string]*ast.File, name string) *ast.FuncDecl {
+	var found *ast.FuncDecl
+	for _, f := range files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == name {
+				found = fd
+			}
+		}
 	}
+	return found
+}
+
+// callsIn lists every call to the function of that name in the function
+// bodies of files.
+func callsIn(files map[string]*ast.File, name string) []*ast.CallExpr {
+	var out []*ast.CallExpr
+	for _, f := range files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && isCallTo(call, name) {
+					out = append(out, call)
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// isCallTo reports whether call calls the function of that name directly.
+func isCallTo(call *ast.CallExpr, name string) bool {
+	id, ok := call.Fun.(*ast.Ident)
+	return ok && id.Name == name
 }
 
 // shadowProductionSymbols is the explicit inventory of every production symbol
@@ -2660,28 +2899,37 @@ func shadowGuardViolations(files map[string]*ast.File) []string {
 			if shadowGuardOwners[owner] {
 				continue
 			}
-			// The signature is walked as well as the body. Taking a shadow
-			// value as a parameter is how a non-owner would read a counter
-			// without ever naming an inventory symbol in its body -- the
-			// unauthorized-read fixture below is exactly that shape.
-			for _, node := range []ast.Node{fd.Type, fd.Body} {
-				ast.Inspect(node, func(n ast.Node) bool {
-					id, ok := n.(*ast.Ident)
-					if !ok || !shadowProductionSymbols[id.Name] {
-						return true
-					}
-					if shadowGuardEntryPoints[id.Name] {
-						return true
-					}
-					out = append(out, fmt.Sprintf(
-						"%s: %s reads shadow state %q outside the shadow path",
-						name, owner, id.Name))
-					return true
-				})
-			}
+			out = append(out, shadowReadsIn(name, owner, fd)...)
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// shadowReadsIn reports each shadow symbol other than an entry point that the
+// function fd, of file name, names.
+//
+// The signature is walked as well as the body. Taking a shadow value as a
+// parameter is how a non-owner would read a counter without ever naming an
+// inventory symbol in its body -- the unauthorized-read fixture below is
+// exactly that shape.
+func shadowReadsIn(name, owner string, fd *ast.FuncDecl) []string {
+	var out []string
+	for _, node := range []ast.Node{fd.Type, fd.Body} {
+		ast.Inspect(node, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok || !shadowProductionSymbols[id.Name] {
+				return true
+			}
+			if shadowGuardEntryPoints[id.Name] {
+				return true
+			}
+			out = append(out, fmt.Sprintf(
+				"%s: %s reads shadow state %q outside the shadow path",
+				name, owner, id.Name))
+			return true
+		})
+	}
 	return out
 }
 
@@ -2951,6 +3199,8 @@ func modeTerminal(t *testing.T, contract *TaskContract, prompt string,
 
 // 1. Neutral prose, contract work, model quits immediately. The legacy
 // heuristic reads this as a question; the contract says work.
+//
+// 5. The same run shows that no inspection cannot turn work into a question.
 func TestContractWorkDemandsActionOnNeutralProse(t *testing.T) {
 	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
 		"app.py numbers", modePlanDoneNow)
@@ -2983,15 +3233,6 @@ func TestInspectionCannotFlipAQuestionContract(t *testing.T) {
 		"app.py numbers", modePlanInspectThenDone)
 	if got == "incomplete/action_demanded_unmet" {
 		t.Errorf("inspection flipped a question contract into work: %q", got)
-	}
-}
-
-// 5. No inspection cannot turn work into a question.
-func TestNoInspectionCannotFlipAWorkContract(t *testing.T) {
-	got := modeTerminal(t, &TaskContract{TaskMode: TaskModeWork},
-		"app.py numbers", modePlanDoneNow)
-	if got != "incomplete/action_demanded_unmet" {
-		t.Errorf("terminal %q, want incomplete/action_demanded_unmet", got)
 	}
 }
 
@@ -3243,92 +3484,6 @@ func TestTaskModePolicyIsIndependentOfShadowCapture(t *testing.T) {
 	}
 }
 
-// Replay of the sealed Step 3B evidence through the new decision helper.
-//
-// No model is called and the evidence is never written to. Each captured gate
-// record carries what governed at the time (the legacy value), the contract
-// mode, and the inspection state, which is everything the helper needs. The
-// point is to say exactly which live decisions this migration changes, and to
-// prove it changes none for contractless requests.
-func TestSealedStep3BEvidenceReplaysThroughTheNewPolicy(t *testing.T) {
-	path := "../redteam/step3b-freeze/evidence/diag_gemma_04/diagnostics/" +
-		"step3b_diag_gemma_04.jsonl"
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("sealed evidence not present: %v", err)
-	}
-	type counts struct{ gates, contract, contractless, changed, workFN, questionFP int }
-	var c counts
-	changedRequests := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var rec map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("malformed sealed record: %v", err)
-		}
-		if rec["record_kind"] != "task_contract_shadow_gate" {
-			continue
-		}
-		c.gates++
-		legacy, _ := rec["legacy_wants_state_change"].(bool)
-		mode, _ := rec["contract_task_mode"].(string)
-		rid, _ := rec["request_id"].(string)
-
-		var tc *TaskContract
-		if mode != "" {
-			tc = &TaskContract{TaskMode: TaskMode(mode)}
-			c.contract++
-		} else {
-			c.contractless++
-		}
-		// Replay: the helper is pure, so the recorded legacy value stands in
-		// for the heuristic it would compute from the same inputs.
-		var want bool
-		var wantSource actionDemandSource
-		switch {
-		case tc == nil:
-			want, wantSource = legacy, actionDemandLegacy
-		case tc.TaskMode == TaskModeWork:
-			want, wantSource = true, actionDemandContractWork
-		default:
-			want, wantSource = false, actionDemandContractQuestion
-		}
-		if tc == nil {
-			// Contractless MUST reproduce the recorded legacy behaviour.
-			if want != legacy {
-				t.Errorf("%s: a contractless replay changed the live decision", rid)
-			}
-			continue
-		}
-		if want == legacy {
-			continue
-		}
-		c.changed++
-		changedRequests[rid] = true
-		if tc.TaskMode == TaskModeWork {
-			c.workFN++
-		} else {
-			c.questionFP++
-		}
-		if wantSource != actionDemandContractWork && wantSource != actionDemandContractQuestion {
-			t.Errorf("%s: unexpected source %q", rid, wantSource)
-		}
-	}
-	if c.gates == 0 {
-		t.Fatal("no gate records in the sealed capture")
-	}
-	t.Logf("replayed %d gate records: %d contract-present, %d contractless",
-		c.gates, c.contract, c.contractless)
-	t.Logf("live action-demand decisions that change: %d gate records across %d requests",
-		c.changed, len(changedRequests))
-	t.Logf("  work false-negative corrections     : %d", c.workFN)
-	t.Logf("  question false-positive corrections : %d", c.questionFP)
-	if c.contractless == 0 {
-		t.Log("note: this capture carried a contract on every gate record")
-	}
-	// The invariant that matters: nothing contractless moved.
-	t.Log("contractless decisions changed: 0 (asserted per record above)")
-}
-
 // --- Shadow record schema versions are per record kind -----------------------
 //
 // c783e3e added live_action_demand and action_demand_source to the gate record
@@ -3439,32 +3594,37 @@ func TestGateRecordsDeclareTheirOwnSchemaVersion(t *testing.T) {
 		"app.py numbers", modePlanDoneNow)
 	sink.close(context.Background(), 5*time.Second)
 
-	var gates, snaps, footers int
-	for _, rec := range readShadowRecords(t, filepath.Join(dir, "schema.jsonl")) {
-		switch rec["record_kind"] {
-		case "task_contract_shadow_gate":
-			gates++
-			if v := int(rec["schema_version"].(float64)); v != 2 {
-				t.Errorf("gate record claims schema version %d, want 2 now that it "+
-					"carries the policy fields", v)
-			}
-			if bad := validateGateRecord(rec); bad != nil {
-				t.Errorf("gate record invalid: %v", bad)
-			}
-		case "task_contract_shadow_request":
-			snaps++
-			if v := int(rec["schema_version"].(float64)); v != 1 {
-				t.Errorf("request snapshot version %d, want 1 (its schema did not change)", v)
-			}
-		case "task_contract_shadow_footer":
-			footers++
-			if v := int(rec["schema_version"].(float64)); v != 1 {
-				t.Errorf("footer version %d, want 1 (its schema did not change)", v)
-			}
+	recs := readShadowRecords(t, filepath.Join(dir, "schema.jsonl"))
+	gates := recordsOfKind(recs, "task_contract_shadow_gate")
+	snaps := recordsOfKind(recs, "task_contract_shadow_request")
+	footers := recordsOfKind(recs, "task_contract_shadow_footer")
+	for _, rec := range gates {
+		if v := int(rec["schema_version"].(float64)); v != 2 {
+			t.Errorf("gate record claims schema version %d, want 2 now that it "+
+				"carries the policy fields", v)
+		}
+		if bad := validateGateRecord(rec); bad != nil {
+			t.Errorf("gate record invalid: %v", bad)
 		}
 	}
-	if gates == 0 || snaps != 1 || footers != 1 {
-		t.Fatalf("gates=%d snapshots=%d footers=%d", gates, snaps, footers)
+	for _, rec := range snaps {
+		if v := int(rec["schema_version"].(float64)); v != 1 {
+			t.Errorf("request snapshot version %d, want 1 (its schema did not change)", v)
+		}
+	}
+	for _, rec := range footers {
+		if v := int(rec["schema_version"].(float64)); v != 1 {
+			t.Errorf("footer version %d, want 1 (its schema did not change)", v)
+		}
+	}
+	if len(gates) == 0 {
+		t.Error("no gate record was written")
+	}
+	if len(snaps) != 1 {
+		t.Errorf("%d request snapshots, want 1", len(snaps))
+	}
+	if len(footers) != 1 {
+		t.Errorf("%d footers, want 1", len(footers))
 	}
 }
 
@@ -3479,28 +3639,14 @@ func TestGateRecordValidationMatrix(t *testing.T) {
 			"legacy_wants_state_change": false, "contract_task_mode": "work",
 			"comparison": "contract_work_legacy_question", "influences_live_decision": false,
 		}
-		for k, v := range over {
-			if v == nil {
-				delete(r, k)
-				continue
-			}
-			r[k] = v
-		}
-		return r
+		return withFields(r, over)
 	}
 	v2 := func(over map[string]interface{}) map[string]interface{} {
 		r := v1(nil)
 		r["schema_version"] = 2.0
 		r["live_action_demand"] = true
 		r["action_demand_source"] = "contract_work"
-		for k, v := range over {
-			if v == nil {
-				delete(r, k)
-				continue
-			}
-			r[k] = v
-		}
-		return r
+		return withFields(r, over)
 	}
 	cases := []struct {
 		name   string
@@ -3554,88 +3700,27 @@ func TestGateRecordValidationMatrix(t *testing.T) {
 	}
 }
 
-// The sealed capture stays valid v1 under the same checker, unmodified.
-func TestSealedEvidenceRemainsValidV1(t *testing.T) {
-	path := "../redteam/step3b-freeze/evidence/diag_gemma_04/diagnostics/" +
-		"step3b_diag_gemma_04.jsonl"
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("sealed evidence not present: %v", err)
-	}
-	before := hashBytes(raw)
-	gates, snaps, footers := 0, 0, 0
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		var rec map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("sealed record does not parse: %v", err)
-		}
-		switch rec["record_kind"] {
-		case "task_contract_shadow_gate":
-			gates++
-			if v := int(rec["schema_version"].(float64)); v != 1 {
-				t.Fatalf("a sealed gate record is version %d, expected 1", v)
-			}
-			if bad := validateGateRecord(rec); bad != nil {
-				t.Errorf("sealed v1 gate record no longer validates: %v", bad)
-			}
-			for _, f := range []string{"live_action_demand", "action_demand_source"} {
-				if _, present := rec[f]; present {
-					t.Errorf("a sealed v1 record carries %q", f)
-				}
-			}
-		case "task_contract_shadow_request":
-			snaps++
-		case "task_contract_shadow_footer":
-			footers++
-		}
-	}
-	if hashBytes(raw) != before {
-		t.Fatal("the sealed capture changed while being read")
-	}
-	t.Logf("sealed v1 capture: %d gates, %d snapshots, %d footers, all valid v1",
-		gates, snaps, footers)
-}
-
-// Structural: one gate producer, per-record-kind versions, and the new fields
-// stay out of every public surface.
-func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	gateProducers, sharedConst := 0, 0
-	for _, n := range names {
-		if strings.HasSuffix(n, "_test.go") {
+// withFields sets each field of over on rec, or removes it where its value is
+// nil, and returns rec.
+func withFields(rec, over map[string]interface{}) map[string]interface{} {
+	for k, v := range over {
+		if v == nil {
+			delete(rec, k)
 			continue
 		}
-		b, err := os.ReadFile(n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		src := string(b)
+		rec[k] = v
+	}
+	return rec
+}
+
+// Structural: one gate producer and per-record-kind versions.
+func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
+	gateProducers, sharedConst := 0, 0
+	for _, n := range nonTestGoFiles(t) {
+		src := fileText(t, n)
 		gateProducers += strings.Count(src, `"record_kind":               "task_contract_shadow_gate"`)
 		if strings.Contains(src, "shadowSchemaVersion =") {
 			sharedConst++
-		}
-		// The policy fields must not leak into any public producer.
-		for _, f := range []string{"live_action_demand", "action_demand_source"} {
-			for _, public := range []string{"ctx.Stream(", "SSEEvent{", "writeError("} {
-				idx := strings.Index(src, public)
-				for idx >= 0 {
-					end := idx + 400
-					if end > len(src) {
-						end = len(src)
-					}
-					if strings.Contains(src[idx:end], f) {
-						t.Errorf("%s: %q appears in a public payload near %s", n, f, public)
-					}
-					next := strings.Index(src[idx+1:], public)
-					if next < 0 {
-						break
-					}
-					idx = idx + 1 + next
-				}
-			}
 		}
 	}
 	if gateProducers != 1 {
@@ -3651,16 +3736,59 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 			t.Errorf("%s is missing", want)
 		}
 	}
-	// The prompt never sees them.
+}
+
+// The policy fields must not leak into any public producer.
+func TestThePolicyFieldsStayOutOfEveryPublicPayload(t *testing.T) {
+	for _, n := range nonTestGoFiles(t) {
+		src := fileText(t, n)
+		for _, f := range []string{"live_action_demand", "action_demand_source"} {
+			for _, public := range []string{"ctx.Stream(", "SSEEvent{", "writeError("} {
+				for _, near := range textsFrom(src, public, 400) {
+					if strings.Contains(near, f) {
+						t.Errorf("%s: %q appears in a public payload near %s", n, f, public)
+					}
+				}
+			}
+		}
+	}
+}
+
+// textsFrom returns, for each place marker occurs in src, the width bytes of
+// src that start there (fewer where src ends first).
+func textsFrom(src, marker string, width int) []string {
+	var out []string
+	idx := strings.Index(src, marker)
+	for idx >= 0 {
+		end := idx + width
+		if end > len(src) {
+			end = len(src)
+		}
+		out = append(out, src[idx:end])
+		next := strings.Index(src[idx+1:], marker)
+		if next < 0 {
+			break
+		}
+		idx = idx + 1 + next
+	}
+	return out
+}
+
+// The prompt never sees them.
+func TestTheSystemPromptNeverReadsThePolicyFields(t *testing.T) {
 	prompt, _ := os.ReadFile("agent.go")
 	i := strings.Index(string(prompt), "func buildSystemPrompt")
-	if i >= 0 {
-		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
-		body := string(prompt)[i : i+1+end]
-		for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
-			if strings.Contains(body, f) {
-				t.Errorf("buildSystemPrompt reads %q", f)
-			}
+	if i < 0 {
+		t.Fatal("agent.go holds no func buildSystemPrompt, so the prompt check reads nothing; name the file that holds it")
+	}
+	end := strings.Index(string(prompt)[i+1:], "\nfunc ")
+	if end < 0 {
+		end = len(prompt) - i - 1
+	}
+	body := string(prompt)[i : i+1+end]
+	for _, f := range []string{"live_action_demand", "action_demand_source", "TaskContract"} {
+		if strings.Contains(body, f) {
+			t.Errorf("buildSystemPrompt reads %q", f)
 		}
 	}
 }
@@ -3684,108 +3812,6 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 	const good = "print('1 alpha')\n"
 	const broken = "def f(:\n"
 
-	run := func(t *testing.T, contract *TaskContract, plan func(i int) map[string]interface{}) (string, []string) {
-		t.Helper()
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("1 alpha\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		var mu sync.Mutex
-		turns := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-				var in struct{ Code string }
-				json.NewDecoder(r.Body).Decode(&in)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"valid": !strings.Contains(in.Code, "def f(:"), "errors": []string{"SyntaxError"}})
-				return
-			case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
-				var in struct {
-					Code    string
-					Command string
-				}
-				json.NewDecoder(r.Body).Decode(&in)
-				text := in.Code + " " + in.Command
-				if strings.Contains(text, ".atlas-mount-probe") {
-					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"success": true, "stdout": string(b), "exit_code": 0})
-					return
-				}
-				fail := strings.Contains(text, "FAILING")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": !fail, "stdout": "1 alpha\n", "exit_code": map[bool]int{true: 1, false: 0}[fail],
-					"error": map[bool]string{true: "boom", false: ""}[fail]})
-				return
-			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			}
-			io.ReadAll(r.Body)
-			w.Header().Set("Content-Type", "text/event-stream")
-			mu.Lock()
-			i := turns
-			turns++
-			mu.Unlock()
-			call, _ := json.Marshal(plan(i))
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}))
-		defer srv.Close()
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-		ctx.PermissionMode = PermissionYolo
-		ctx.TrustMode = trustFullyTrusted
-		ctx.MaxTurns = 0
-		ctx.TaskContract = contract
-		terminal := map[string]string{}
-		terminals, calls, results := 0, 0, 0
-		ctx.StreamFn = func(et string, data interface{}) {
-			b, _ := json.Marshal(data)
-			mu.Lock()
-			defer mu.Unlock()
-			switch et {
-			case "done":
-				terminals++
-				var m map[string]string
-				json.Unmarshal(b, &m)
-				for k, v := range m {
-					terminal[k] = v
-				}
-			case "tool_call":
-				calls++
-			case "tool_result":
-				results++
-			}
-		}
-		runAgentLoop(ctx, prompt)
-		if terminals != 1 {
-			t.Fatalf("%d terminals, want one", terminals)
-		}
-		if calls != results {
-			t.Fatalf("%d calls vs %d results", calls, results)
-		}
-		var disk []string
-		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(dir, p)
-			if !strings.HasPrefix(rel, ".") {
-				b, _ := os.ReadFile(p)
-				disk = append(disk, rel+"="+hashBytes(b)[:12])
-			}
-			return nil
-		})
-		sort.Strings(disk)
-		return terminal["status"] + "/" + terminal["reason"], disk
-	}
-
 	write := func(path, body string) map[string]interface{} {
 		return map[string]interface{}{"type": "tool_call", "name": "write_file",
 			"args": map[string]string{"path": path, "content": body}}
@@ -3796,19 +3822,12 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 	}
 	done := map[string]interface{}{"type": "done", "summary": "wrote solve.py"}
 	prose := map[string]interface{}{"type": "text", "content": "Please provide the content for solve.py."}
-	seq := func(steps ...map[string]interface{}) func(int) map[string]interface{} {
-		return func(i int) map[string]interface{} {
-			if i < len(steps) {
-				return steps[i]
-			}
-			return done
-		}
-	}
-	work := func(outputs []string, verify []string) *TaskContract {
+	work := func(outputs, verify []string) *TaskContract {
 		return &TaskContract{TaskMode: TaskModeWork,
 			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
+	// Each plan's turns end with done, which the model repeats on any later turn.
 	for _, c := range []struct {
 		name     string
 		contract *TaskContract
@@ -3817,39 +3836,39 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 		wantNot  string
 	}{
 		{"valid code, done, no command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), done), "incomplete/verification_demanded_unmet", ""},
+			script(write("solve.py", good), done), "incomplete/verification_demanded_unmet", ""},
 		{"valid code, prose, no command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), prose), "", "completed"},
+			script(write("solve.py", good), prose, done), "", "completed"},
 		{"valid code, unrelated successful command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), cmd("echo ok"), done),
+			script(write("solve.py", good), cmd("echo ok"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"relevant command then mutation", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), cmd("python3 solve.py"), write("solve.py", good+"# more\n"), done),
+			script(write("solve.py", good), cmd("python3 solve.py"), write("solve.py", good+"# more\n"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"failed relevant command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), cmd("python3 solve.py FAILING"), done), "", "completed"},
+			script(write("solve.py", good), cmd("python3 solve.py FAILING"), done), "", "completed"},
 		{"two outputs, only one verified", work([]string{"solve.py", "other.py"}, nil),
-			seq(write("solve.py", good), write("other.py", good), cmd("python3 solve.py"), done),
+			script(write("solve.py", good), write("other.py", good), cmd("python3 solve.py"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"relevant command after the final write", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			script(write("solve.py", good), cmd("python3 solve.py"), done),
 			"completed/deliverables_demonstrated", ""},
 		{"exact contract command satisfied", work([]string{"solve.py"}, []string{"python3 solve.py"}),
-			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			script(write("solve.py", good), cmd("python3 solve.py"), done),
 			"completed/deliverables_demonstrated", ""},
 		{"contract command spelling differs", work([]string{"solve.py"}, []string{"python3 solve.py"}),
-			seq(write("solve.py", good), cmd("python3  solve.py"), done),
+			script(write("solve.py", good), cmd("python3  solve.py"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"verification before the final write", work([]string{"solve.py"}, nil),
-			seq(cmd("python3 solve.py"), write("solve.py", good), done),
+			script(cmd("python3 solve.py"), write("solve.py", good), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"alias spelling shares canonical identity", work([]string{"./solve.py"}, nil),
-			seq(write("solve.py", good), cmd("python3 solve.py"), done),
+			script(write("solve.py", good), cmd("python3 solve.py"), done),
 			"completed/deliverables_demonstrated", ""},
 		{"invalid code with a green command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", broken), cmd("python3 solve.py"), done), "", "completed"},
+			script(write("solve.py", broken), cmd("python3 solve.py"), done), "", "completed"},
 		{"question mode raises no verification demand", work(nil, nil),
-			seq(map[string]interface{}{"type": "done", "summary": "it reads input.txt"}),
+			script(map[string]interface{}{"type": "done", "summary": "it reads input.txt"}, done),
 			"", "verification"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -3857,7 +3876,7 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 			if c.name == "question mode unchanged" {
 				contract = &TaskContract{TaskMode: TaskModeQuestion}
 			}
-			got, disk := run(t, contract, c.plan)
+			got, disk := verificationDemandRun(t, prompt, contract, c.plan)
 			if c.want != "" && got != c.want {
 				t.Fatalf("terminal = %q, want %q", got, c.want)
 			}
@@ -3869,6 +3888,104 @@ func TestWorkContractVerificationDemandUsesBoundEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// verificationDemandRun drives one scripted request through the real agent
+// loop in a workspace that holds input.txt, and returns its terminal as
+// "status/reason" and a digest of the files it left. It fails the test unless
+// the run ends once and every tool call has its result. V3 is unavailable, the
+// syntax check refuses "def f(:", and a command fails when it names FAILING.
+func verificationDemandRun(t *testing.T, prompt string, contract *TaskContract,
+	plan func(i int) map[string]interface{}) (string, []string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("1 alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	turns := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/slots/"):
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": !strings.Contains(in.Code, "def f(:"), "errors": []string{"SyntaxError"}})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
+			var in struct {
+				Code    string
+				Command string
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			text := in.Code + " " + in.Command
+			if strings.Contains(text, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			fail := strings.Contains(text, "FAILING")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": !fail, "stdout": "1 alpha\n", "exit_code": map[bool]int{true: 1, false: 0}[fail],
+				"error": map[bool]string{true: "boom", false: ""}[fail]})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	ctx.TaskContract = contract
+	terminal := map[string]string{}
+	terminals, calls, results := 0, 0, 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		switch et {
+		case "done":
+			terminals++
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		case "tool_call":
+			calls++
+		case "tool_result":
+			results++
+		}
+	}
+	runAgentLoop(ctx, prompt)
+	if terminals != 1 {
+		t.Fatalf("%d terminals, want one", terminals)
+	}
+	if calls != results {
+		t.Fatalf("%d calls vs %d results", calls, results)
+	}
+	return terminal["status"] + "/" + terminal["reason"], workspaceDigest(dir)
 }
 
 func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
@@ -3925,101 +4042,6 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 	const goodYAML = "a: 1\n"
 	const goodXML = "<?xml version=\"1.0\"?><r><a/></r>\n"
 
-	run := func(t *testing.T, contract *TaskContract, plan func(i int) map[string]interface{}) (string, []string, int, int) {
-		t.Helper()
-		dir := t.TempDir()
-		var mu sync.Mutex
-		turns := 0
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-				var in struct{ Code string }
-				json.NewDecoder(r.Body).Decode(&in)
-				bad := strings.Contains(in.Code, "def f(:") || strings.Contains(in.Code, "unclosed")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"valid": !bad, "errors": []string{"SyntaxError"}})
-				return
-			case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
-				var in struct {
-					Code    string
-					Command string
-				}
-				json.NewDecoder(r.Body).Decode(&in)
-				text := in.Code + " " + in.Command
-				if strings.Contains(text, ".atlas-mount-probe") {
-					b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"success": true, "stdout": string(b), "exit_code": 0})
-					return
-				}
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"success": true, "stdout": "ok\n", "exit_code": 0})
-				return
-			case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-				http.Error(w, "unavailable", http.StatusServiceUnavailable)
-				return
-			}
-			io.ReadAll(r.Body)
-			w.Header().Set("Content-Type", "text/event-stream")
-			mu.Lock()
-			i := turns
-			turns++
-			mu.Unlock()
-			call, _ := json.Marshal(plan(i))
-			d, _ := json.Marshal(map[string]interface{}{
-				"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
-			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
-		}))
-		defer srv.Close()
-		ctx := NewAgentContext(dir, Tier2Medium)
-		ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
-		ctx.PermissionMode = PermissionYolo
-		ctx.TrustMode = trustFullyTrusted
-		ctx.MaxTurns = 0
-		ctx.TaskContract = contract
-		terminal := map[string]string{}
-		terminals, calls, results := 0, 0, 0
-		ctx.StreamFn = func(et string, data interface{}) {
-			b, _ := json.Marshal(data)
-			mu.Lock()
-			defer mu.Unlock()
-			switch et {
-			case "done":
-				terminals++
-				var m map[string]string
-				json.Unmarshal(b, &m)
-				for k, v := range m {
-					terminal[k] = v
-				}
-			case "tool_call":
-				calls++
-			case "tool_result":
-				results++
-			}
-		}
-		runAgentLoop(ctx, prompt)
-		if terminals != 1 {
-			t.Fatalf("%d terminals, want one", terminals)
-		}
-		var disk []string
-		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(dir, p)
-			if !strings.HasPrefix(rel, ".") {
-				b, _ := os.ReadFile(p)
-				disk = append(disk, rel+"="+hashBytes(b)[:12])
-			}
-			return nil
-		})
-		sort.Strings(disk)
-		return terminal["status"] + "/" + terminal["reason"], disk, calls, results
-	}
-
 	write := func(path, body string) map[string]interface{} {
 		return map[string]interface{}{"type": "tool_call", "name": "write_file",
 			"args": map[string]string{"path": path, "content": body}}
@@ -4029,19 +4051,12 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 			"args": map[string]string{"command": c}}
 	}
 	done := map[string]interface{}{"type": "done", "summary": "wrote the files"}
-	seq := func(steps ...map[string]interface{}) func(int) map[string]interface{} {
-		return func(i int) map[string]interface{} {
-			if i < len(steps) {
-				return steps[i]
-			}
-			return done
-		}
-	}
 	work := func(outputs, verify []string) *TaskContract {
 		return &TaskContract{TaskMode: TaskModeWork,
 			ExpectedOutputs: strsPtr(outputs...), Verification: strsPtr(verify...)}
 	}
 
+	// Each plan's turns end with done, which the model repeats on any later turn.
 	for _, c := range []struct {
 		name     string
 		contract *TaskContract
@@ -4052,56 +4067,56 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 		// A page is not demanded a run, and nothing loaded it either: the
 		// completion stands and its reason says it rests on a parse.
 		{"static html, no command", work([]string{"index.html"}, nil),
-			seq(write("index.html", goodHTML), done), "completed/deliverables_parse_only", ""},
+			script(write("index.html", goodHTML), done), "completed/deliverables_parse_only", ""},
 		{"json config, no command", work([]string{"config.json"}, nil),
-			seq(write("config.json", goodJSON), done), "completed/deliverables_demonstrated", ""},
+			script(write("config.json", goodJSON), done), "completed/deliverables_demonstrated", ""},
 		{"yaml config, no command", work([]string{"config.yaml"}, nil),
-			seq(write("config.yaml", goodYAML), done), "completed/deliverables_demonstrated", ""},
+			script(write("config.yaml", goodYAML), done), "completed/deliverables_demonstrated", ""},
 		{"xml document, no command", work([]string{"data.xml"}, nil),
-			seq(write("data.xml", goodXML), done), "completed/deliverables_demonstrated", ""},
+			script(write("data.xml", goodXML), done), "completed/deliverables_demonstrated", ""},
 		{"invalid html stays incomplete", work([]string{"index.html"}, nil),
-			seq(write("index.html", brokenHTML), done), "", "completed"},
+			script(write("index.html", brokenHTML), done), "", "completed"},
 		{"python without a relevant command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", goodPy), done), "incomplete/verification_demanded_unmet", ""},
+			script(write("solve.py", goodPy), done), "incomplete/verification_demanded_unmet", ""},
 		{"python with echo ok", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", goodPy), cmd("echo ok"), done),
+			script(write("solve.py", goodPy), cmd("echo ok"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"python with a relevant command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", goodPy), cmd("python3 solve.py"), done),
+			script(write("solve.py", goodPy), cmd("python3 solve.py"), done),
 			"completed/deliverables_demonstrated", ""},
 		{"relevant command then mutation", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", goodPy), cmd("python3 solve.py"),
+			script(write("solve.py", goodPy), cmd("python3 solve.py"),
 				write("solve.py", goodPy+"# more\n"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"two executables, one exercised", work([]string{"a.py", "b.py"}, nil),
-			seq(write("a.py", goodPy), write("b.py", goodPy), cmd("python3 a.py"), done),
+			script(write("a.py", goodPy), write("b.py", goodPy), cmd("python3 a.py"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"mixed: static asset plus exercised code", work([]string{"index.html", "app.py"}, nil),
-			seq(write("index.html", goodHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
+			script(write("index.html", goodHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
 			"completed/deliverables_parse_only", ""},
 		{"mixed: static asset plus unexercised code", work([]string{"index.html", "app.py"}, nil),
-			seq(write("index.html", goodHTML), write("app.py", goodPy), done),
+			script(write("index.html", goodHTML), write("app.py", goodPy), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"mixed: static asset invalid, code exercised", work([]string{"index.html", "app.py"}, nil),
-			seq(write("index.html", brokenHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
+			script(write("index.html", brokenHTML), write("app.py", goodPy), cmd("python3 app.py"), done),
 			"", "completed"},
 		{"declared command still required on a static deliverable",
 			work([]string{"index.html"}, []string{"htmlhint index.html"}),
-			seq(write("index.html", goodHTML), done),
+			script(write("index.html", goodHTML), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"declared command satisfied on a static deliverable",
 			work([]string{"index.html"}, []string{"htmlhint index.html"}),
-			seq(write("index.html", goodHTML), cmd("htmlhint index.html"), done),
+			script(write("index.html", goodHTML), cmd("htmlhint index.html"), done),
 			"completed/deliverables_parse_only", ""},
 		{"declared command mismatched spelling",
 			work([]string{"index.html"}, []string{"htmlhint index.html"}),
-			seq(write("index.html", goodHTML), cmd("htmlhint  index.html"), done),
+			script(write("index.html", goodHTML), cmd("htmlhint  index.html"), done),
 			"incomplete/verification_demanded_unmet", ""},
 		{"invalid python with a green command", work([]string{"solve.py"}, nil),
-			seq(write("solve.py", brokenPy), cmd("python3 solve.py"), done), "", "completed"},
+			script(write("solve.py", brokenPy), cmd("python3 solve.py"), done), "", "completed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, disk, calls, results := run(t, c.contract, c.plan)
+			got, disk, calls, results := deliverablesRun(t, prompt, c.contract, c.plan)
 			if c.want != "" && got != c.want {
 				t.Fatalf("terminal = %q, want %q (disk %v)", got, c.want, disk)
 			}
@@ -4116,6 +4131,97 @@ func TestExecutableDeliverablesDemandExecutionDeclarativeDoNot(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deliverablesRun drives one scripted request through the real agent loop and
+// returns its terminal as "status/reason", a digest of the files it left, and
+// how many tool calls and tool results it streamed. It fails the test unless
+// the run ends once. V3 is unavailable, the syntax check refuses "def f(:" and
+// "unclosed", and every command succeeds.
+func deliverablesRun(t *testing.T, prompt string, contract *TaskContract,
+	plan func(i int) map[string]interface{}) (string, []string, int, int) {
+	t.Helper()
+	dir := t.TempDir()
+	var mu sync.Mutex
+	turns := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/slots/"):
+			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
+			return
+		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+			var in struct{ Code string }
+			json.NewDecoder(r.Body).Decode(&in)
+			bad := strings.Contains(in.Code, "def f(:") || strings.Contains(in.Code, "unclosed")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"valid": !bad, "errors": []string{"SyntaxError"}})
+			return
+		case strings.HasSuffix(r.URL.Path, "/execute"), strings.HasSuffix(r.URL.Path, "/shell"):
+			var in struct {
+				Code    string
+				Command string
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			text := in.Code + " " + in.Command
+			if strings.Contains(text, ".atlas-mount-probe") {
+				b, _ := os.ReadFile(filepath.Join(dir, ".atlas-mount-probe"))
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": true, "stdout": string(b), "exit_code": 0})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true, "stdout": "ok\n", "exit_code": 0})
+			return
+		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		i := turns
+		turns++
+		mu.Unlock()
+		call, _ := json.Marshal(plan(i))
+		d, _ := json.Marshal(map[string]interface{}{
+			"choices": []map[string]interface{}{{"delta": map[string]string{"content": string(call)}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
+	}))
+	defer srv.Close()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL, ctx.V3URL = srv.URL, srv.URL, srv.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	ctx.TaskContract = contract
+	terminal := map[string]string{}
+	terminals, calls, results := 0, 0, 0
+	ctx.StreamFn = func(et string, data interface{}) {
+		b, _ := json.Marshal(data)
+		mu.Lock()
+		defer mu.Unlock()
+		switch et {
+		case "done":
+			terminals++
+			var m map[string]string
+			json.Unmarshal(b, &m)
+			for k, v := range m {
+				terminal[k] = v
+			}
+		case "tool_call":
+			calls++
+		case "tool_result":
+			results++
+		}
+	}
+	runAgentLoop(ctx, prompt)
+	if terminals != 1 {
+		t.Fatalf("%d terminals, want one", terminals)
+	}
+	return terminal["status"] + "/" + terminal["reason"], workspaceDigest(dir), calls, results
 }
 
 // A future declarative language must not acquire an execution obligation just
@@ -4270,49 +4376,6 @@ func TestHandleWorkspace(t *testing.T) {
 		}
 	})
 
-	t.Run("containerized tracks the runtime markers", func(t *testing.T) {
-		dir := t.TempDir()
-		docker, podman := filepath.Join(dir, ".dockerenv"), filepath.Join(dir, ".containerenv")
-		prev := containerMarkers
-		containerMarkers = []string{docker, podman}
-		t.Cleanup(func() { containerMarkers = prev })
-		t.Setenv("KUBERNETES_SERVICE_HOST", "")
-
-		containerized := func() any {
-			rec := httptest.NewRecorder()
-			newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
-			var res map[string]any
-			_ = json.Unmarshal(rec.Body.Bytes(), &res)
-			return res["containerized"]
-		}
-
-		// No marker and no Kubernetes variable: bare host.
-		if got := containerized(); got != false {
-			t.Fatalf("bare host: got containerized %v, want false", got)
-		}
-		// Podman writes /run/.containerenv, not /.dockerenv.
-		if err := os.WriteFile(podman, nil, 0o600); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
-		if got := containerized(); got != true {
-			t.Errorf("podman marker: got containerized %v, want true", got)
-		}
-		_ = os.Remove(podman)
-		// Docker writes /.dockerenv.
-		if err := os.WriteFile(docker, nil, 0o600); err != nil {
-			t.Fatalf("write marker: %v", err)
-		}
-		if got := containerized(); got != true {
-			t.Errorf("docker marker: got containerized %v, want true", got)
-		}
-		_ = os.Remove(docker)
-		// A K3s pod under containerd has no marker file, only the variable.
-		t.Setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
-		if got := containerized(); got != true {
-			t.Errorf("kubernetes pod: got containerized %v, want true", got)
-		}
-	})
-
 	t.Run("non-GET rejected", func(t *testing.T) {
 		t.Setenv("ATLAS_PROJECT_DIR", "/temp/anything")
 		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
@@ -4323,29 +4386,74 @@ func TestHandleWorkspace(t *testing.T) {
 			t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, rec.Code)
 		}
 	})
+}
 
-	t.Run("route registered, not passthrough", func(t *testing.T) {
-		t.Setenv("ATLAS_PROJECT_DIR", "/temp/anything")
-		t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+// /workspace says whether the proxy runs in a container, from the runtime markers.
+func TestHandleWorkspaceTracksTheContainerMarkers(t *testing.T) {
+	dir := t.TempDir()
+	docker, podman := filepath.Join(dir, ".dockerenv"), filepath.Join(dir, ".containerenv")
+	prev := containerMarkers
+	containerMarkers = []string{docker, podman}
+	t.Cleanup(func() { containerMarkers = prev })
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+
+	containerized := func() any {
 		rec := httptest.NewRecorder()
 		newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
+		var res map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &res)
+		return res["containerized"]
+	}
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expect 200, got %d", rec.Code)
-		}
+	// No marker and no Kubernetes variable: bare host.
+	if got := containerized(); got != false {
+		t.Fatalf("bare host: got containerized %v, want false", got)
+	}
+	// Podman writes /run/.containerenv, not /.dockerenv.
+	if err := os.WriteFile(podman, nil, 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if got := containerized(); got != true {
+		t.Errorf("podman marker: got containerized %v, want true", got)
+	}
+	_ = os.Remove(podman)
+	// Docker writes /.dockerenv.
+	if err := os.WriteFile(docker, nil, 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	if got := containerized(); got != true {
+		t.Errorf("docker marker: got containerized %v, want true", got)
+	}
+	_ = os.Remove(docker)
+	// A K3s pod under containerd has no marker file, only the variable.
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+	if got := containerized(); got != true {
+		t.Errorf("kubernetes pod: got containerized %v, want true", got)
+	}
+}
 
-		var response struct {
-			ProjectDir    string `json:"project_dir"`
-			WorkingDir    string `json:"working_dir"`
-			Containerized bool   `json:"containerized"`
-		}
+// /workspace has its own handler: it is not passed through to inference.
+func TestHandleWorkspaceIsRegisteredNotPassedThrough(t *testing.T) {
+	t.Setenv("ATLAS_PROJECT_DIR", "/temp/anything")
+	t.Setenv("ATLAS_WORKSPACE_DIR", "/workspace")
+	rec := httptest.NewRecorder()
+	newProxyMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/workspace", nil))
 
-		dec := json.NewDecoder(rec.Body)
-		dec.DisallowUnknownFields()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expect 200, got %d", rec.Code)
+	}
 
-		if err := dec.Decode(&response); err != nil {
-			t.Errorf(`JSON schema mismatch or extra fields found, i.e.
+	var response struct {
+		ProjectDir    string `json:"project_dir"`
+		WorkingDir    string `json:"working_dir"`
+		Containerized bool   `json:"containerized"`
+	}
+
+	dec := json.NewDecoder(rec.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&response); err != nil {
+		t.Errorf(`JSON schema mismatch or extra fields found, i.e.
 			routing to handlePassthrough instead of handleWorkspace: %v`, err)
-		}
-	})
+	}
 }

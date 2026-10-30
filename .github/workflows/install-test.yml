@@ -81,6 +81,8 @@ jobs:
               # baseline; pip + lspci come from the bootstrap path.
               if command -v apt-get &>/dev/null; then
                 export DEBIAN_FRONTEND=noninteractive
+                # apt tries a failed download 3 more times, here and in the bootstrap.
+                echo "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/80-retries
                 apt-get update -qq
                 apt-get install -y -qq --no-install-recommends \
                   curl ca-certificates git python3 python3-pip python3-venv \
@@ -192,6 +194,8 @@ jobs:
             bash -c '
               set -euo pipefail
               export DEBIAN_FRONTEND=noninteractive
+              # apt tries a failed download 3 more times, here and in the bootstrap.
+              echo "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/80-retries
               apt-get update -qq
               apt-get install -y -qq --no-install-recommends \
                 curl ca-certificates git python3 python3-pip python3-venv \

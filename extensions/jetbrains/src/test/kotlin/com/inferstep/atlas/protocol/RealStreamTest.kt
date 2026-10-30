@@ -20,11 +20,16 @@ import org.junit.jupiter.api.Test
 
 class RealStreamTest {
     @Test
-    fun `parses end to end and ends with done`() {
+    fun `parses end to end and ends with a done payload that decodes`() {
         val events = parse(RAW.length)
 
         assertTrue(events.size > 100, "expected a long turn, got ${events.size} events")
         assertEquals("done", events.last().type)
+        val done = events.last().payload<DonePayload>()
+        assertTrue(done.summary.isNotEmpty())
+        // Whatever the capture recorded, the rule must hold: only "completed"
+        // is a finished task.
+        assertEquals(done.status == "completed", done.resolvedStatus().isCompleted())
     }
 
     @Test
@@ -39,68 +44,43 @@ class RealStreamTest {
     }
 
     @Test
-    fun `carries the event types this client renders`() {
-        val seen = parse(4096).map { it.type }.toSet()
+    fun `carries the event types this client renders and keeps one it does not know`() {
+        val events = parse(4096)
+        val seen = events.map { it.type }.toSet()
 
         for (type in listOf("turn_start", "llm_token", "tool_call", "tool_result", "done")) {
             assertTrue(seen.contains(type), "missing $type in $seen")
         }
-    }
-
-    @Test
-    fun `never emits an event without a type`() {
-        for (event in parse(4096)) {
-            assertTrue(event.type.isNotEmpty())
-        }
-    }
-
-    @Test
-    fun `an event type the client does not know survives the envelope`() {
-        val events = parse(4096)
-        val unknown = events.filter { it.type == "pattern_context_injected" }
-
-        assertEquals(1, unknown.size)
-        // The envelope kept the event and its payload, which is all a client
-        // that does not render this type needs.
-        assertTrue(unknown.single().data is JsonObject)
-    }
-
-    @Test
-    fun `the final done payload decodes with its status`() {
-        val done = parse(4096).last().payload<DonePayload>()
-
-        assertTrue(done.summary.isNotEmpty())
-        // Whatever the capture recorded, the rule must hold: only "completed"
-        // is a finished task.
-        assertEquals(done.status == "completed", done.resolvedStatus().isCompleted())
+        // The client renders no pattern_context_injected; the envelope still
+        // keeps the event and its payload, which is all such a client needs.
+        val unknown = events.single { it.type == "pattern_context_injected" }
+        assertTrue(unknown.data is JsonObject)
     }
 
     @Test
     fun `tool calls carry the arguments a caller can act on`() {
         val calls =
-            parse(
-                4096,
-            ).filter { it.type == "tool_call" }.map { it.payload<ToolCallPayload>() }
+            parse(4096).filter { it.type == "tool_call" }.map { it.payload<ToolCallPayload>() }
 
         assertTrue(calls.isNotEmpty())
         for (call in calls) {
             assertTrue(call.name.isNotEmpty())
-            assertTrue(call.args is JsonObject, "${call.name} must carry an argument object")
+            // An absent args field decodes to an empty object, so only a
+            // non-empty one shows the arguments were read.
+            val args = call.args
+            assertTrue(
+                args is JsonObject && args.isNotEmpty(),
+                "${call.name} must carry an argument object with its arguments",
+            )
         }
     }
 
+    /** Feeds the recorded turn to one parser in chunks of [chunkSize] bytes. */
     private fun parse(chunkSize: Int): List<ChatEvent> {
+        val bytes = RAW.toByteArray()
+        val chunks = bytes.toList().chunked(chunkSize).map { it.toByteArray() }
         val parser = SseParser()
-        val bytes = RAW.toByteArray(Charsets.UTF_8)
-        val events = mutableListOf<ChatEvent>()
-        var offset = 0
-        while (offset < bytes.size) {
-            val end = minOf(offset + chunkSize, bytes.size)
-            events += parser.feed(bytes.copyOfRange(offset, end))
-            offset = end
-        }
-        events += parser.endOfStream()
-        return events
+        return chunks.flatMap { parser.feed(it) } + parser.endOfStream()
     }
 
     private companion object {

@@ -19,7 +19,7 @@ The hybrid keeps the rest of ATLAS unchanged from the Linux + CUDA/ROCm path whi
 | Xcode Command Line Tools | cmake, git, metal-cpp headers | `xcode-select --install` |
 | Homebrew | brew package manager | https://brew.sh |
 | pipx | install atlas CLI in an isolated venv (Homebrew Python enforces PEP 668, plain `pip install` is blocked) | `brew install pipx` (the setup script handles this automatically) |
-| Go 1.26.6+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
+| Go 1.26.10+ | build the atlas-tui binary (Bubbletea TUI client invoked by `atlas`) | `brew install go` (the setup script handles this automatically) |
 | Docker Desktop | runs the 4 non-inference services | https://docker.com/products/docker-desktop |
 
 Notes:

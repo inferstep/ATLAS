@@ -59,24 +59,22 @@ elif args[0] == "fix":
             text = text.replace(old, new)
         if text != f.read_text():
             f.write_text(text)
+elif args[0] == "test":
+    with open(home / "tested.log", "a") as log:
+        log.write(json.dumps({{"in": Path.cwd().name, "holds": sorted(set(w for f in files for w in f.read_text().split() if w.startswith("new_")))}}) + "\n")
+    count = home / ("failed-%s.count" % Path.cwd().name)
+    before = int(count.read_text()) if count.exists() else 0
+    failed = ("TestMarks" if holds("NOTEST") else "TestMarks%d" % before if holds("OTHERTEST")
+              else "TestMarks" if holds("FLAKYTEST") and before == 0 else "")
+    if failed:
+        count.write_text(str(before + 1))
+        # As go test prints it: the lines that the tests log, the failed test far above the end, then more lines.
+        print("\n".join(["2026/10/08 08:52:47 [info] a line that a test logged"] * 3 + ["--- FAIL: %s (0.00s)" % failed,
+              "    marks_test.go:3: said by the test, with @someone and #1 in it"] + ["2026/10/08 08:52:48 [info] a line that a later test logged"] * 30
+              + ["FAIL", "FAIL\texample/%s\t0.01s" % Path.cwd().name, "FAIL"]))
+        sys.exit(1)
 else:
-    mark = {{"build": "NOBUILD", "vet": "NOVET", "test": "NOTEST"}}[args[0]]
-    if args[0] == "test":
-        with open(home / "tested.log", "a") as log:
-            log.write(json.dumps({{"in": Path.cwd().name, "holds": sorted(set(w for f in files for w in f.read_text().split() if w.startswith("new_")))}}) + "\n")
-    if args[0] == "test":
-        count = home / ("failed-%s.count" % Path.cwd().name)
-        before = int(count.read_text()) if count.exists() else 0
-        failed = ("TestMarks" if holds("NOTEST") else "TestMarks%d" % before if holds("OTHERTEST")
-                  else "TestMarks" if holds("FLAKYTEST") and before == 0 else "")
-        if failed:
-            count.write_text(str(before + 1))
-            # As go test prints it: the lines that the tests log, the failed test far above the end, then more lines.
-            print("\n".join(["2026/10/08 08:52:47 [info] a line that a test logged"] * 3 + ["--- FAIL: %s (0.00s)" % failed,
-                  "    marks_test.go:3: said by the test, with @someone and #1 in it"] + ["2026/10/08 08:52:48 [info] a line that a later test logged"] * 30
-                  + ["FAIL", "FAIL\texample/%s\t0.01s" % Path.cwd().name, "FAIL"]))
-            sys.exit(1)
-        sys.exit(0)
+    mark = {{"build": "NOBUILD", "vet": "NOVET"}}[args[0]]
     if holds(mark):
         print("%s: ./%s:3:9: said by the tool, with @someone and #1 in it" % (args[0], holds(mark)[0]))
         sys.exit(1)
@@ -101,20 +99,10 @@ ON_DEV = {
 }
 
 
-def load():
-    spec = importlib.util.spec_from_file_location("atlas_weekly_cleanup", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-THE_SCRIPT = load()
-
-
-@pytest.fixture
-def cleanup():
-    return THE_SCRIPT
+spec = importlib.util.spec_from_file_location("atlas_weekly_cleanup", SCRIPT)
+cleanup = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = cleanup
+spec.loader.exec_module(cleanup)
 
 
 @pytest.fixture(autouse=True)
@@ -135,16 +123,15 @@ def git(where, *args):
 class Made:
     """A repository made for the test, the stand-ins on the path, and what `make` did with it."""
 
-    def __init__(self, cleanup, tmp_path, monkeypatch, capsys, files=None, fixers=None, tools=("go", "gofmt"), run=A_FEW):
-        self.cleanup, self.tmp, self.capsys = cleanup, tmp_path, capsys
+    def __init__(self, tmp_path, monkeypatch, capsys, files=None, fixers=None, tools=("go", "gofmt"), run=A_FEW):
+        self.tmp, self.capsys = tmp_path, capsys
         monkeypatch.setattr(cleanup, "GO_FIXERS", run or cleanup.GO_FIXERS)
         self.repo, self.out, self.page = tmp_path / "repo", tmp_path / "out", tmp_path / "page.md"
         self.repo.mkdir()
         (tmp_path / "bin").mkdir()
         for name, text in {**ON_DEV, **(files or {})}.items():
-            if text is not None:
-                (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
-                (self.repo / name).write_text(text)
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text(text)
         subprocess.run(["git", "init", "--quiet", "--initial-branch", "dev", str(self.repo)], check=True, timeout=60, env={**os.environ, **GIT})
         git(self.repo, "add", "--all")
         git(self.repo, "commit", "--quiet", "-m", "the files of dev")
@@ -155,7 +142,6 @@ class Made:
                 (tmp_path / "bin" / name).write_text(ON_THE_PATH.format(python=shlex.quote(sys.executable), code=shlex.quote(str(tmp_path / f"{name}.py"))))
                 (tmp_path / "bin" / name).chmod(0o755)
         (tmp_path / "fixers.json").write_text(json.dumps(sorted([*cleanup.GO_FIXERS, *cleanup.GO_NOT_RUN]) if fixers is None else fixers))
-        self.every_fixer = sorted([*cleanup.GO_FIXERS, *cleanup.GO_NOT_RUN])
         # Only the stand-ins and git are on the path: the real go of this machine cannot be reached.
         (tmp_path / "bin" / "git").symlink_to(shutil.which("git"))
         monkeypatch.setenv("PATH", str(tmp_path / "bin"))
@@ -164,7 +150,7 @@ class Made:
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(self.page))
 
     def make(self, *more):
-        self.status = self.cleanup.main(["make", "--root", str(self.repo), "--out", str(self.out), *more])
+        self.status = cleanup.main(["make", "--root", str(self.repo), "--out", str(self.out), *more])
         printed = self.capsys.readouterr()
         self.printed = printed.out + printed.err
         return self
@@ -195,8 +181,8 @@ class Made:
 
 
 @pytest.fixture
-def made(cleanup, tmp_path, monkeypatch, capsys):
-    return lambda **how: Made(cleanup, tmp_path, monkeypatch, capsys, **how)
+def made(tmp_path, monkeypatch, capsys):
+    return lambda **how: Made(tmp_path, monkeypatch, capsys, **how)
 
 
 def states(result):
@@ -205,10 +191,10 @@ def states(result):
 
 def applies_alone(run, name):
     """Whether the patch of a piece applies to the commit with no other piece. Gives the files it changes."""
-    fresh = run.tmp / ("fresh-" + name.replace("/", "-"))
+    fresh, patch = run.tmp / ("fresh-" + name.replace("/", "-")), run.out / "pieces" / (name.replace("/", "-") + ".patch")
     subprocess.run(["git", "clone", "--quiet", str(run.repo), str(fresh)], check=True, timeout=60)
-    git(fresh, "apply", "--check", str(run.out / "pieces" / (name.replace("/", "-") + ".patch")))
-    git(fresh, "apply", str(run.out / "pieces" / (name.replace("/", "-") + ".patch")))
+    git(fresh, "apply", "--check", str(patch))
+    git(fresh, "apply", str(patch))
     return sorted(name for name in git(fresh, "diff", "--name-only", "-z").split("\0") if name)
 
 
@@ -266,10 +252,9 @@ def test_for_each_piece_the_files_looked_at_are_the_changed_the_unchanged_and_th
 
 # --- which fixers run ----------------------------------------------------------------------------------------------
 
-def test_only_the_fixers_on_the_list_run_and_each_runs_on_each_module(made, cleanup):
+def test_only_the_fixers_on_the_list_run_and_each_runs_on_each_module(made):
     whole_list = cleanup.GO_FIXERS
     run = made(run=None).make()
-    assert cleanup.GO_FIXERS == whole_list
     ran = {(call["in"], call["args"][1][1:]) for call in run.calls("fix")}
     assert ran == {(module, fixer) for module in cleanup.MODULES for fixer in whole_list}
     assert not {fixer for _module, fixer in ran} & set(cleanup.GO_NOT_RUN)
@@ -277,16 +262,12 @@ def test_only_the_fixers_on_the_list_run_and_each_runs_on_each_module(made, clea
         assert call["args"] == ["fix", call["args"][1], "./..."]
 
 
-def test_a_fixer_that_this_go_has_and_that_is_on_no_list_is_named_and_not_run(made, cleanup):
+def test_a_fixer_that_this_go_has_and_that_is_on_no_list_is_named_and_not_run(made):
     run = made(fixers=[*A_FEW, *cleanup.GO_NOT_RUN, "brandnew", "another"]).make()
     assert run.status == 0, run.printed
     assert run.result["unlisted"] == ["another", "brandnew"]
     assert "This Go has fixers that are on no list of the job, so they were not run: `another`, `brandnew`." in run.text
     assert not [call for call in run.calls("fix") if call["args"][1] in ("-brandnew", "-another")]
-
-
-def test_with_every_fixer_on_a_list_the_text_names_none(made):
-    assert "on no list" not in made().make().text
 
 
 def test_a_list_of_fixers_that_cannot_be_read_is_not_judged(made):
@@ -297,7 +278,6 @@ def test_a_list_of_fixers_that_cannot_be_read_is_not_judged(made):
 
 
 def test_the_lists_of_fixers_do_not_overlap_and_the_three_that_never_run_have_their_reason():
-    cleanup = load()
     assert not set(cleanup.GO_FIXERS) & set(cleanup.GO_NOT_RUN)
     assert set(cleanup.GO_NOT_RUN) == {"omitzero", "hostport", "buildtag"}
     assert len(set(cleanup.GO_FIXERS)) == len(cleanup.GO_FIXERS) == 19
@@ -311,28 +291,38 @@ def test_a_fixer_runs_until_its_result_stays_the_same(made):
     run = made(files={"tui/view.go": "package main\n// twice_minmax\n"}).make()
     assert "+// new_minmax" in run.patch("go/tui/minmax")
     assert run.piece("go/tui/minmax")["checks"] == {"gofmt": "passed", "build": "passed", "vet": "passed", "tests": "passed"}
-    assert len([call for call in run.calls("fix", "-minmax") if call["in"] == "tui"]) >= 3
+    # Three runs: two change the file and the third changes nothing. The test run of the module makes the piece again.
+    assert len([call for call in run.calls("fix", "-minmax") if call["in"] == "tui"]) == 2 * 3
 
 
-def test_a_fixer_that_does_not_come_to_an_end_is_left_out_and_named(made, cleanup):
-    run = made(files={"tui/view.go": "package main\n// grow_minmax\n"}).make()
+@pytest.mark.parametrize("mark, why, said, runs", [
+    pytest.param("breakfix_minmax", "the fixer fails on its own result",
+                 ["`go fix -minmax` ended with status 1 on its own result:", "fix: ./view.go:1:1: this does not compile"], 2,
+                 id="fails on its own result"),
+    # The first run and three more: then the script stops asking.
+    pytest.param("grow_minmax", "the fixer did not come to an end",
+                 [f"`go fix -minmax` still changes files after {cleanup.PASSES} runs"], cleanup.PASSES + 1,
+                 id="does not come to an end"),
+])
+def test_a_fixer_that_fails_on_its_own_result_or_does_not_come_to_an_end_is_left_out_and_named(made, mark, why, said, runs):
+    run = made(files={"tui/view.go": f"package main\n// {mark}\n"}).make()
     piece = run.piece("go/tui/minmax")
     assert piece["state"] == "left out"
+    assert piece["checks"] == {"fix": "failed"}
     assert piece["changed"] == []
-    assert piece["left_out"] == {"tui/view.go": "the fixer did not come to an end"}
-    assert piece["said"] == [f"`go fix -minmax` still changes files after {cleanup.PASSES} runs"]
+    assert piece["left_out"] == {"tui/view.go": why}
+    assert piece["said"] == said
     assert not (run.out / "pieces" / "go-tui-minmax.patch").exists()
-    # The first run and three more: then the script stops asking.
-    assert len([call for call in run.calls("fix", "-minmax") if call["in"] == "tui"]) == cleanup.PASSES + 1
+    assert len([call for call in run.calls("fix", "-minmax") if call["in"] == "tui"]) == runs
 
 
 @pytest.mark.parametrize("mark, check, checks", [
-    ("unformat", "gofmt", {"gofmt": "failed", "build": "not run", "vet": "not run"}),
-    ("breakbuild", "build", {"gofmt": "passed", "build": "failed", "vet": "not run"}),
-    ("breakvet", "vet", {"gofmt": "passed", "build": "passed", "vet": "failed"}),
+    pytest.param("unformat", "gofmt", {"gofmt": "failed", "build": "not run", "vet": "not run"}, id="gofmt fails"),
+    pytest.param("breakbuild", "build", {"gofmt": "passed", "build": "failed", "vet": "not run"}, id="build fails"),
+    pytest.param("breakvet", "vet", {"gofmt": "passed", "build": "passed", "vet": "failed"}, id="vet fails"),
 ])
 def test_a_piece_that_fails_a_check_is_left_out_with_what_the_tool_said_and_the_others_are_not(made, mark, check, checks):
-    run = made(files={"proxy/tools.go": f"package main\n// old_any {mark}_stringscut\n"}).make()
+    run = made(files={"proxy/tools.go": f"package main\n// old_any old_stringscut {mark}_stringscut\n"}).make()
     assert run.status == 0, run.printed
     piece = run.piece("go/proxy/stringscut")
     assert piece["state"] == "left out"
@@ -344,28 +334,14 @@ def test_a_piece_that_fails_a_check_is_left_out_with_what_the_tool_said_and_the_
     assert states(run.result)["go/proxy/any"] == "held"
     assert run.piece("go/proxy/any")["checks"]["tests"] == "passed"
     assert "go/proxy/stringscut:\n  proxy/tools.go: the piece fails a check\n  | " in run.text
+    # The tests of each module ran once, with the pieces that passed: new_stringscut is not in them.
+    assert run.tested() == [{"in": "proxy", "holds": ["new_any", "new_rangeint"]}, {"in": "tui", "holds": ["new_minmax"]}]
 
 
 def test_a_file_that_gofmt_named_before_is_no_fault_of_a_piece(made):
     run = made(files={"proxy/quiet.go": "package main\n// UNFORMATTED on dev as it is\n"}).make()
     assert run.piece("go/proxy/any")["checks"]["gofmt"] == "passed"
     assert states(run.result)["go/proxy/any"] == "held"
-
-
-def test_a_fixer_that_fails_on_its_own_result_is_left_out(made):
-    run = made(files={"tui/view.go": "package main\n// breakfix_minmax\n"}).make()
-    piece = run.piece("go/tui/minmax")
-    assert piece["state"] == "left out"
-    assert piece["checks"] == {"fix": "failed"}
-    assert piece["left_out"] == {"tui/view.go": "the fixer fails on its own result"}
-    assert piece["said"][0] == "`go fix -minmax` ended with status 1 on its own result:"
-    assert "this does not compile" in piece["said"][1]
-
-
-def test_the_tests_of_a_module_run_once_with_its_pieces_that_passed_and_not_with_one_that_failed(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any old_stringscut breakvet_stringscut\n"}).make()
-    assert run.piece("go/proxy/stringscut")["state"] == "left out"
-    assert run.tested() == [{"in": "proxy", "holds": ["new_any", "new_rangeint"]}, {"in": "tui", "holds": ["new_minmax"]}]
 
 
 def test_the_text_is_made_from_a_checkout_of_one_commit_with_no_branch_as_a_job_has_it(made):
@@ -399,7 +375,7 @@ def test_when_the_tests_fail_with_the_pieces_together_none_of_the_module_is_offe
     assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], [], ["new_any", "new_rangeint"]]
 
 
-def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, cleanup):
+def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made):
     run = made().make()
     assert [["go", *call["args"]] for call in run.calls("test")] == [cleanup.GO_TEST, cleanup.GO_TEST]
     gates = (ROOT / "scripts" / "production-readiness.py").read_text(encoding="utf-8")
@@ -408,18 +384,16 @@ def test_the_tests_of_a_module_run_with_the_flags_of_the_go_test_jobs(made, clea
     assert "-count=1" in cleanup.GO_TEST
 
 
-LATER = "2026/10/08 08:52:48 [info] a line that a later test logged"
-
-
 def test_of_a_test_run_that_failed_twice_the_text_names_the_failed_test_and_files_of_the_run_hold_the_whole_output(made):
     run = made(files={"proxy/tools.go": "package main\n// old_any breaktest_forvar\n"}).make()
     assert run.status == 0, run.printed
+    later = "2026/10/08 08:52:48 [info] a line that a later test logged"
     assert run.piece("go/proxy/any")["said"] == [
         "`go test` failed twice with the pieces of the module together, with the same tests both times, and passed on the files as they are:",
         "--- FAIL: TestMarks (0.00s)",
         "    marks_test.go:3: said by the test, with @someone and #1 in it",
         "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
-        "The last lines of the output:", *[LATER] * 5, "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
+        "The last lines of the output:", *[later] * 5, "FAIL", "FAIL\texample/proxy\t0.01s", "FAIL",
         "The whole output of both runs is in the files `tests-proxy.txt` and `tests-proxy-second-run.txt` of the run.",
         "Which piece is the cause is not looked for here. `--piece` runs the tests with one piece alone."]
     # The lines of the tool stand once in the text, under the first piece of the module.
@@ -428,11 +402,10 @@ def test_of_a_test_run_that_failed_twice_the_text_names_the_failed_test_and_file
     assert run.text.count("--- FAIL: TestMarks (0.00s)") == 1
     for name in ("tests-proxy.txt", "tests-proxy-second-run.txt"):
         whole = (run.out / name).read_text()
-        assert whole.count(LATER) == 30, name
+        assert whole.count(later) == 30, name
         assert "--- FAIL: TestMarks (0.00s)" in whole, name
     assert not (run.out / "tests-tui.txt").exists()
-    plain = outside_code(run.cleanup, run.text)
-    assert "@" not in plain
+    assert "@" not in outside_code(run.text)
 
 
 def test_with_one_piece_the_text_does_not_send_the_reader_to_the_one_piece_command(made):
@@ -443,58 +416,59 @@ def test_with_one_piece_the_text_does_not_send_the_reader_to_the_one_piece_comma
     assert said[-1] == "The whole output of both runs is in the files `tests-proxy.txt` and `tests-proxy-second-run.txt` of the run."
 
 
-def test_tests_that_fail_with_the_pieces_once_and_pass_the_second_time_are_not_judged_and_no_piece_is_called_at_fault(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any flaky_forvar\n"}).make()
+@pytest.mark.parametrize("mark, runs", [
+    pytest.param("flaky_forvar", "The first run failed: TestMarks\nThe second run passed\n", id="failed once and then passed"),
+    pytest.param("othertest_forvar", "The first run failed: TestMarks0\nThe second run failed: TestMarks1\n", id="failed twice with other tests"),
+])
+def test_tests_that_do_not_fail_the_same_way_twice_with_the_pieces_are_not_judged_and_no_piece_is_called_at_fault(made, mark, runs):
+    run = made(files={"proxy/tools.go": f"package main\n// old_any {mark}\n"}).make()
     assert run.status == 2
     assert ("weekly cleanup: not judged: the tests of `proxy` did not give the same result twice with the pieces of the module "
             "together. They pass on the files as they are.") in run.printed
-    assert "The first run failed: TestMarks\nThe second run passed\n" in run.printed
+    assert runs in run.printed
     assert "Fix: a test that fails only sometimes is a fault of the tests of `proxy`, also for its test job" in run.printed
     assert "left out" not in run.printed
     assert not (run.out / "issue.md").exists()
     assert [entry["holds"] for entry in run.tested() if entry["in"] == "proxy"] == [["new_any", "new_rangeint"], [], ["new_any", "new_rangeint"]]
     assert run.page.read_text().splitlines()[2].startswith("**Not judged.**")
-    assert "@" not in outside_code(run.cleanup, run.page.read_text())
-
-
-def test_tests_that_fail_twice_with_the_pieces_but_not_with_the_same_tests_are_not_judged(made):
-    run = made(files={"proxy/tools.go": "package main\n// old_any othertest_forvar\n"}).make()
-    assert run.status == 2
-    assert "did not give the same result twice with the pieces of the module together" in run.printed
-    assert "The first run failed: TestMarks0\nThe second run failed: TestMarks1\n" in run.printed
-    assert not (run.out / "issue.md").exists()
+    assert "@" not in outside_code(run.page.read_text())
 
 
 @pytest.mark.parametrize("printed, names", [
-    ("log\n--- FAIL: TestB (0.01s)\n    b_test.go:3: no\n--- FAIL: TestA (1.20s)\nFAIL\nFAIL\tm\t1.2s\n", ["TestA", "TestB"]),
-    ("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n--- FAIL: TestA (0.02s)\n", ["TestA", "TestA/part"]),
+    pytest.param("log\n--- FAIL: TestB (0.01s)\n    b_test.go:3: no\n--- FAIL: TestA (1.20s)\nFAIL\nFAIL\tm\t1.2s\n", ["TestA", "TestB"],
+                 id="two tests"),
+    pytest.param("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n--- FAIL: TestA (0.02s)\n", ["TestA", "TestA/part"],
+                 id="a subtest and a name twice"),
     # No test is named: the build failed, or the run did not end. Then the module's own line stands for a name, without its time.
-    ("# m [m.test]\n./a_test.go:3:1: undefined: x\nFAIL\tm [build failed]\nFAIL\n", ["FAIL", "FAIL m"]),
-    ("panic: test timed out after 20m0s\nFAIL\tm\t1200.01s\n", ["FAIL m"]),
-    ("ok  \tm\t1.2s\n", []),
-    ("no end after 2400 s", []),
+    pytest.param("# m [m.test]\n./a_test.go:3:1: undefined: x\nFAIL\tm [build failed]\nFAIL\n", ["FAIL", "FAIL m"], id="the build failed"),
+    pytest.param("panic: test timed out after 20m0s\nFAIL\tm\t1200.01s\n", ["FAIL m"], id="the tests timed out"),
+    pytest.param("ok  \tm\t1.2s\n", [], id="all passed"),
+    pytest.param("no end after 2400 s", [], id="stopped at the time limit"),
 ])
-def test_the_names_of_the_tests_that_failed_are_read_from_what_go_test_printed(cleanup, printed, names):
+def test_the_names_of_the_tests_that_failed_are_read_from_what_go_test_printed(printed, names):
     assert cleanup.failed_tests(printed) == names
 
 
 @pytest.mark.parametrize("printed, kept", [
-    ("log\n--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nlog\nFAIL\nFAIL\tm\t1.2s\n",
-     "--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nFAIL\nFAIL\tm\t1.2s"),
-    ("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no\nok\n", "--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no"),
-    ("log\nWARNING: DATA RACE\nlog\npanic: boom\nlog\nFAIL\tm\t0.1s\n", "WARNING: DATA RACE\npanic: boom\nFAIL\tm\t0.1s"),
-    ("--- FAIL: TestA (0.01s)\n--- PASS: TestB (0.00s)\n    b_test.go:1: a note\n", "--- FAIL: TestA (0.01s)"),
+    pytest.param("log\n--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nlog\nFAIL\nFAIL\tm\t1.2s\n",
+                 "--- FAIL: TestA (0.01s)\n    a_test.go:3: got 1, want 2\n    a_test.go:4: and more\nFAIL\nFAIL\tm\t1.2s", id="a test and its lines"),
+    pytest.param("--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no\nok\n",
+                 "--- FAIL: TestA (0.01s)\n    --- FAIL: TestA/part (0.00s)\n        a_test.go:9: no", id="a subtest"),
+    pytest.param("log\nWARNING: DATA RACE\nlog\npanic: boom\nlog\nFAIL\tm\t0.1s\n", "WARNING: DATA RACE\npanic: boom\nFAIL\tm\t0.1s",
+                 id="a data race and a panic"),
+    pytest.param("--- FAIL: TestA (0.01s)\n--- PASS: TestB (0.00s)\n    b_test.go:1: a note\n", "--- FAIL: TestA (0.01s)",
+                 id="not the lines of a test that passed"),
 ])
-def test_of_what_go_test_printed_the_lines_about_failed_tests_come_first_and_then_its_last_lines(cleanup, printed, kept):
+def test_of_what_go_test_printed_the_lines_about_failed_tests_come_first_and_then_its_last_lines(printed, kept):
     tail = "\n".join(printed.strip().splitlines()[-8:])
     assert cleanup.of_failed_tests(printed) == f"{kept}\nThe last lines of the output:\n{tail}"
 
 
-def test_when_nothing_names_a_failed_test_the_end_of_the_output_is_what_is_kept(cleanup):
+def test_when_nothing_names_a_failed_test_the_end_of_the_output_is_what_is_kept():
     assert cleanup.of_failed_tests("one\ntwo\nexit status 2\n") == "one\ntwo\nexit status 2"
 
 
-def test_very_many_lines_about_failed_tests_are_cut_with_a_word(cleanup):
+def test_very_many_lines_about_failed_tests_are_cut_with_a_word():
     printed = "\n".join(f"--- FAIL: Test{n} (0.00s)" for n in range(75))
     kept = cleanup.of_failed_tests(printed).splitlines()
     assert len(kept) == 60 + 1 + 1 + 8
@@ -508,9 +482,9 @@ def test_a_module_with_nothing_to_change_gets_no_test_run(made):
 
 
 @pytest.mark.parametrize("files, says", [
-    ({"proxy/quiet.go": "package main\n// NOTEST\n"}, "the tests of proxy on the files as they are: status 1."),
-    ({"proxy/quiet.go": "package main\n// NOVET\n"}, "go vet on proxy as it is: status 1."),
-    ({"proxy/quiet.go": "package main\n// NOFIX\n"}, "`go fix -any` on `proxy` as it is: status 1."),
+    pytest.param({"proxy/quiet.go": "package main\n// NOTEST\n"}, "the tests of proxy on the files as they are: status 1.", id="tests fail"),
+    pytest.param({"proxy/quiet.go": "package main\n// NOVET\n"}, "go vet on proxy as it is: status 1.", id="vet fails"),
+    pytest.param({"proxy/quiet.go": "package main\n// NOFIX\n"}, "`go fix -any` on `proxy` as it is: status 1.", id="a fixer fails"),
 ])
 def test_a_tool_that_fails_on_the_files_as_they_are_is_not_judged_and_no_text_is_made(made, files, says):
     run = made(files=files).make()
@@ -551,7 +525,7 @@ def test_a_fix_that_changes_the_syntax_tree_is_left_out_and_the_file_is_named(ma
     assert "| `python/F401` | 3 | 0 | 2 | 1 | +0 -0 | tree and comments: read in each file | left out |" in run.text
 
 
-def test_a_fix_that_takes_a_comment_away_is_left_out_though_the_syntax_tree_is_the_same(made, cleanup, monkeypatch):
+def test_a_fix_that_takes_a_comment_away_is_left_out_though_the_syntax_tree_is_the_same(made, monkeypatch):
     # The fix of this rule removes a `noqa` mark that the rule set of the run does not need. Another check may need it.
     monkeypatch.setattr(cleanup, "PYTHON_RULES", ("RUF100",))
     run = made(files={"pkg/marked.py": "import os  # noqa: E402\n\nprint(os.sep)\n"}).make("--piece", "python/RUF100")
@@ -561,19 +535,20 @@ def test_a_fix_that_takes_a_comment_away_is_left_out_though_the_syntax_tree_is_t
 
 
 @pytest.mark.parametrize("old, new, why", [
-    ("x = 1   \n", "x = 1\n", ""),
-    ("x = 1", "x = 1\n", ""),
-    ("x = 1  # a note   \n", "x = 1  # a note\n", ""),
-    ("x = (1,\n     2)\n", "x = (1, 2)\n", ""),
-    ("import os\nx = 1\n", "x = 1\n", "the syntax tree is not the same after the fix"),
-    ("x = f'a'\n", "x = 'a'\n", "the syntax tree is not the same after the fix"),
-    ("x = 1  # noqa: E402\n", "x = 1\n", "a comment is not the same after the fix"),
-    ("x = 1  # type: ignore\n", "x = 1  # type: ignore[assignment]\n", "a comment is not the same after the fix"),
-    ("# one\n# two\nx = 1\n", "# two\n# one\nx = 1\n", "a comment is not the same after the fix"),
-    ("x = 1\n", "x = = 1\n", "this Python cannot read the file before or after the fix"),
-    ("print 'x'   \n", "print 'x'\n", "this Python cannot read the file before or after the fix"),
+    pytest.param("x = 1   \n", "x = 1\n", "", id="spaces at the end of a line"),
+    pytest.param("x = 1", "x = 1\n", "", id="a newline at the end"),
+    pytest.param("x = 1  # a note   \n", "x = 1  # a note\n", "", id="spaces at the end of a comment"),
+    pytest.param("x = (1,\n     2)\n", "x = (1, 2)\n", "", id="two lines made one"),
+    pytest.param("import os\nx = 1\n", "x = 1\n", "the syntax tree is not the same after the fix", id="an import taken away"),
+    pytest.param("x = f'a'\n", "x = 'a'\n", "the syntax tree is not the same after the fix", id="an f-string made plain"),
+    pytest.param("x = 1  # noqa: E402\n", "x = 1\n", "a comment is not the same after the fix", id="a noqa mark taken away"),
+    pytest.param("x = 1  # type: ignore\n", "x = 1  # type: ignore[assignment]\n", "a comment is not the same after the fix",
+                 id="a type comment changed"),
+    pytest.param("# one\n# two\nx = 1\n", "# two\n# one\nx = 1\n", "a comment is not the same after the fix", id="two comments swapped"),
+    pytest.param("x = 1\n", "x = = 1\n", "this Python cannot read the file before or after the fix", id="no Python after the fix"),
+    pytest.param("print 'x'   \n", "print 'x'\n", "this Python cannot read the file before or after the fix", id="no Python before the fix"),
 ])
-def test_a_fix_is_taken_only_when_the_syntax_tree_and_the_comments_are_the_same(cleanup, old, new, why):
+def test_a_fix_is_taken_only_when_the_syntax_tree_and_the_comments_are_the_same(old, new, why):
     assert cleanup.differs(old.encode(), new.encode()) == why
 
 
@@ -587,15 +562,13 @@ def test_a_file_whose_name_holds_spaces_and_marks_is_fixed_and_named_like_any_ot
 
 # --- held ----------------------------------------------------------------------------------------------------------
 
-def test_the_go_pieces_are_held_with_these_words_and_no_others(cleanup):
-    assert cleanup.HELD == {"go": "Held by a maintainer: open work is written against these Go files as they are, and a rewrite "
-                                  "of the same files now would make it not apply."}
-
-
-def test_a_held_piece_is_listed_with_its_numbers_and_checks_and_is_not_among_the_patches(made, cleanup):
+def test_the_go_pieces_are_held_with_these_words_and_listed_with_their_numbers_and_checks_and_not_among_the_patches(made):
+    held = ("Held by a maintainer: open work is written against these Go files as they are, and a rewrite "
+            "of the same files now would make it not apply.")
+    assert cleanup.HELD == {"go": held}
     run = made().make()
     assert "| `go/proxy/any` | 3 | 2 | 1 | 0 | +2 -2 | gofmt: passed, build: passed, vet: passed, tests: passed | held |" in run.text
-    assert cleanup.HELD["go"] in run.text.splitlines()
+    assert held in run.text.splitlines()
     patches = run.text.split("## The patches", 1)[1]
     assert "### `python/W291`" in patches
     assert "go/" not in patches
@@ -604,7 +577,7 @@ def test_a_held_piece_is_listed_with_its_numbers_and_checks_and_is_not_among_the
     assert "new_any" in run.patch("go/proxy/any")
 
 
-def test_with_the_hold_taken_off_the_list_the_go_pieces_are_offered(made, cleanup, monkeypatch):
+def test_with_the_hold_taken_off_the_list_the_go_pieces_are_offered(made, monkeypatch):
     monkeypatch.setattr(cleanup, "HELD", {})
     run = made().make()
     assert states(run.result) == {"go/proxy/any": "offered", "go/proxy/rangeint": "offered", "go/tui/minmax": "offered", "python/W291": "offered"}
@@ -645,7 +618,7 @@ def test_a_folder_that_holds_files_of_another_run_is_not_written_into(made):
     assert run.calls() == []
 
 
-def test_an_error_of_the_script_itself_is_not_judged_and_never_a_finding(made, cleanup, monkeypatch):
+def test_an_error_of_the_script_itself_is_not_judged_and_never_a_finding(made, monkeypatch):
     def broken(*_args):
         raise TypeError("a fault of the script")
 
@@ -656,9 +629,15 @@ def test_an_error_of_the_script_itself_is_not_judged_and_never_a_finding(made, c
     assert run.page.read_text().splitlines()[2].startswith("**Not judged.**")
 
 
-@pytest.mark.parametrize("name", ["go/proxy/omitzero", "go/sandbox/any", "python/E501", "rangeint", ""])
+@pytest.mark.parametrize("name", [
+    pytest.param("go/proxy/omitzero", id="a fixer that never runs"),
+    pytest.param("go/sandbox/any", id="a part with no Go module"),
+    pytest.param("python/E501", id="a rule that is on no list"),
+    pytest.param("rangeint", id="a fixer without its part"),
+    pytest.param("none", id="a word"),
+])
 def test_a_name_that_is_no_piece_is_refused_with_the_names_that_are(made, name):
-    run = made().make(f"--piece={name}") if name else made().make("--piece", "none")
+    run = made().make("--piece", name)
     assert run.status == 2
     assert "is no piece. Fix: give one of: go/proxy/any, " in run.printed
     assert run.calls() == []
@@ -666,7 +645,7 @@ def test_a_name_that_is_no_piece_is_refused_with_the_names_that_are(made, name):
 
 # --- the text ------------------------------------------------------------------------------------------------------
 
-def test_the_text_starts_with_the_mark_and_says_who_applies_a_piece_and_how_to_stop_it(made, cleanup):
+def test_the_text_starts_with_the_mark_and_says_who_applies_a_piece_and_how_to_stop_it(made):
     run = made().make()
     lines = run.text.splitlines()
     assert lines[0] == cleanup.MARK
@@ -681,9 +660,11 @@ def test_the_text_starts_with_the_mark_and_says_who_applies_a_piece_and_how_to_s
     assert "python3 scripts/weekly_cleanup.py make --piece <piece> --out <folder>" in lines
     assert ("Nothing to change: `go/proxy/forvar`, `go/proxy/minmax`, `go/proxy/stringscut`, `go/tui/any`, `go/tui/forvar`, "
             "`go/tui/rangeint`, `go/tui/stringscut`, `python/W292`, `python/W293`, `python/W391`, `python/F401`.") in lines
+    # Each fixer that this Go has is on a list of the job.
+    assert "on no list" not in run.text
 
 
-def test_in_a_job_the_text_names_the_runs_of_the_workflow_and_only_at_githubs_usual_address(made, cleanup, monkeypatch):
+def test_in_a_job_the_text_names_the_runs_of_the_workflow_and_only_at_githubs_usual_address(made, monkeypatch):
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
     monkeypatch.setenv("GITHUB_REPOSITORY", "inferstep/ATLAS")
     run = made().make()
@@ -706,13 +687,13 @@ def test_a_week_with_nothing_to_clean_says_so_with_the_date(made):
     assert list((run.out / "pieces").iterdir()) == []
 
 
-def outside_code(cleanup, text):
+def outside_code(text):
     plain = cleanup.plain_part(text)
     assert "a fenced block is not closed" not in plain
     return plain
 
 
-def test_nothing_from_a_file_or_a_tool_can_be_read_as_a_mention_or_a_link_to_an_issue(made, cleanup, monkeypatch):
+def test_nothing_from_a_file_or_a_tool_can_be_read_as_a_mention_or_a_link_to_an_issue(made, monkeypatch):
     monkeypatch.setattr(cleanup, "HELD", {})
     files = {"pkg/a file @someone #1.py": "x = 1   \n", "pkg/unused @other #2.py": "import os\n",
              "pkg/text.py": "x = '''\n## A heading @here   \nCloses #5\n``````\n'''   \n",
@@ -723,7 +704,7 @@ def test_nothing_from_a_file_or_a_tool_can_be_read_as_a_mention_or_a_link_to_an_
     for part in ("pkg/a file @someone #1.py", "pkg/unused @other #2.py", "said by the tool, with @someone and #1 in it", "@inthecode #7",
                  "## A heading @here", "Closes #5", "``````"):
         assert part in run.text, part
-    plain = outside_code(cleanup, run.text)
+    plain = outside_code(run.text)
     assert "@" not in plain
     assert not re.search(r"#\d", plain)
     assert "Closes" not in plain
@@ -731,13 +712,17 @@ def test_nothing_from_a_file_or_a_tool_can_be_read_as_a_mention_or_a_link_to_an_
     assert offered == ["go/proxy/any", "go/proxy/rangeint", "go/tui/minmax", "python/W291"]
     assert [line for line in plain.splitlines() if line.startswith("#")] == ["## The pieces", "## To make one piece", "## Left out, and why",
                                                                               "## The patches"] + ["### "] * len(offered)
-    page = outside_code(cleanup, run.page.read_text())
+    page = outside_code(run.page.read_text())
     assert "@" not in page
     assert not re.search(r"#\d", page)
 
 
-@pytest.mark.parametrize("text, fence", [("no marks", "```"), ("three ``` in it", "````"), ("a line\n``````\nof six", "```````")])
-def test_the_fence_of_a_block_is_longer_than_any_run_of_marks_in_it(cleanup, text, fence):
+@pytest.mark.parametrize("text, fence", [
+    pytest.param("no marks", "```", id="no marks"),
+    pytest.param("three ``` in it", "````", id="a run of three"),
+    pytest.param("a line\n``````\nof six", "```````", id="a line of six"),
+])
+def test_the_fence_of_a_block_is_longer_than_any_run_of_marks_in_it(text, fence):
     block = cleanup.fenced(text)
     assert block.splitlines()[0] == fence + "text"
     assert block.splitlines()[-1] == fence
@@ -745,33 +730,33 @@ def test_the_fence_of_a_block_is_longer_than_any_run_of_marks_in_it(cleanup, tex
 
 
 @pytest.mark.parametrize("line, plain", [
-    ("words `in marks` and after", "words  and after"),
-    ("`one` and `two`", " and "),
-    ("``two ` marks inside`` after", " after"),
+    pytest.param("words `in marks` and after", "words  and after", id="code in a line"),
+    pytest.param("`one` and `two`", " and ", id="two pieces of code"),
+    pytest.param("``two ` marks inside`` after", " after", id="one mark inside two"),
     # A run of another length does not end the code: only the next run of the same length does.
-    ("`@a`` @b`", ""),
-    ("``@a` @b", "``@a` @b"),
-    ("an open `@someone", "an open `@someone"),
-    ("`closed` then open `@someone", " then open `@someone"),
-    ("no marks, #12", "no marks, #12"),
-    ("", ""),
+    pytest.param("`@a`` @b`", "", id="two marks inside one"),
+    pytest.param("``@a` @b", "``@a` @b", id="two marks that are not closed"),
+    pytest.param("an open `@someone", "an open `@someone", id="a mark that is not closed"),
+    pytest.param("`closed` then open `@someone", " then open `@someone", id="closed code, then a mark that is not closed"),
+    pytest.param("no marks, #12", "no marks, #12", id="no marks"),
+    pytest.param("", "", id="an empty line"),
 ])
-def test_what_stands_in_code_marks_is_taken_out_of_a_line_and_an_open_mark_hides_nothing(cleanup, line, plain):
+def test_what_stands_in_code_marks_is_taken_out_of_a_line_and_an_open_mark_hides_nothing(line, plain):
     assert cleanup.outside_marks(line) == plain
 
 
-def test_a_block_that_is_not_closed_does_not_read_as_plain_text_with_nothing_in_it(cleanup):
+def test_a_block_that_is_not_closed_does_not_read_as_plain_text_with_nothing_in_it():
     assert "@" in cleanup.plain_part("words\n```text\n@someone\n")
 
 
-def pieces_with(cleanup, sizes):
+def pieces_with(sizes):
     return [cleanup.Piece(f"python/{rule}", looked_at=9, changed=["a.py"], added=1, removed=1, checks={"tree and comments": "read in each file"},
                           patch=f"diff --git a/a.py b/a.py\n+{rule} " + "x" * size + "\n")
             for rule, size in zip(cleanup.PYTHON_RULES, sizes)]
 
 
-def test_whole_patches_go_into_the_text_as_many_as_fit_and_each_other_piece_is_named(cleanup):
-    pieces = pieces_with(cleanup, [2000, 30000, 2000, 30000, 2000])
+def test_whole_patches_go_into_the_text_as_many_as_fit_and_each_other_piece_is_named():
+    pieces = pieces_with([2000, 30000, 2000, 30000, 2000])
     text = cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces, limit=40000)
     assert len(text) <= 40000
     for piece in pieces:
@@ -782,9 +767,11 @@ def test_whole_patches_go_into_the_text_as_many_as_fit_and_each_other_piece_is_n
     assert text.count("| offered |") == 5
 
 
-def test_no_patch_is_cut_and_the_text_is_never_over_the_limit(cleanup):
+def test_no_patch_is_cut_and_the_text_is_never_over_the_limit():
+    # GitHub takes a text of 65,536 characters at most.
+    assert cleanup.LIMIT < 65536
     for limit in (3000, 5000, 9000, 20000, 70000):
-        pieces = pieces_with(cleanup, [1500, 1500, 1500, 1500, 1500])
+        pieces = pieces_with([1500, 1500, 1500, 1500, 1500])
         text = cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces, limit=limit)
         assert len(text) <= limit
         inside = sum(1 for piece in pieces if piece.patch.strip("\n") in text)
@@ -793,16 +780,13 @@ def test_no_patch_is_cut_and_the_text_is_never_over_the_limit(cleanup):
         assert not re.search(r"x{10,}(?<!x{1500})\n", text), "a patch was cut"
 
 
-def test_a_text_that_cannot_be_made_short_enough_is_not_judged(cleanup):
+def test_a_text_that_cannot_be_made_short_enough_is_not_judged():
+    pieces = pieces_with([10, 10, 10, 10, 10])
     with pytest.raises(cleanup.NotJudged, match="the text of the issue has \\d+ characters, and the limit is 500"):
-        cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces_with(cleanup, [10, 10, 10, 10, 10]), limit=500)
+        cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, pieces, limit=500)
 
 
-def test_the_limit_of_the_script_is_under_the_limit_of_github(cleanup):
-    assert cleanup.LIMIT < 65536
-
-
-def test_a_long_list_of_what_is_left_out_is_cut_with_a_word_and_the_file_of_the_run_holds_all_of_it(made, cleanup):
+def test_a_long_list_of_what_is_left_out_is_cut_with_a_word_and_the_file_of_the_run_holds_all_of_it(made):
     files = {f"pkg/unused_{n:03}.py": "import os\n" for n in range(cleanup.LEFT_OUT_LINES + 30)}
     run = made(files=files).make()
     assert run.status == 0, run.printed
@@ -815,7 +799,7 @@ def test_a_long_list_of_what_is_left_out_is_cut_with_a_word_and_the_file_of_the_
     assert f"pkg/unused_{cleanup.LEFT_OUT_LINES + 29:03}.py" not in run.text
 
 
-def test_a_long_line_of_a_tool_is_cut_with_a_word(cleanup):
+def test_a_long_line_of_a_tool_is_cut_with_a_word():
     piece = cleanup.Piece("go/proxy/any", looked_at=1, left_out={"a.go": "the piece fails a check"}, said=["y" * 1000])
     text = cleanup.issue_text({"date": "2026-10-12", "commit": "c" * 40}, [piece])
     (line,) = [line for line in text.splitlines() if "yyy" in line]
@@ -835,7 +819,7 @@ def test_the_page_of_the_run_says_what_was_made_and_holds_the_text(made):
 # --- the one issue -------------------------------------------------------------------------------------------------
 
 def issue(number, state="open", login="github-actions[bot]", body=None, **more):
-    return {"number": number, "state": state, "user": {"login": login, "type": "Bot"}, "body": THE_SCRIPT.MARK + "\nan older text\n" if body is None else body, **more}
+    return {"number": number, "state": state, "user": {"login": login, "type": "Bot"}, "body": cleanup.MARK + "\nan older text\n" if body is None else body, **more}
 
 
 # What the script asks first, and the second page of that list.
@@ -854,6 +838,7 @@ class GitHub(http.server.BaseHTTPRequestHandler):
     issues: list = []
     fails: dict = {}
     pages = 1
+    next_page = ""
 
     def answer(self, status, body, link="", location=""):
         data = json.dumps(body).encode()
@@ -879,8 +864,6 @@ class GitHub(http.server.BaseHTTPRequestHandler):
             more = f'<http://127.0.0.1:{self.server.server_port}{SECOND_PAGE}>; rel="next"' if page < GitHub.pages else ""
             return self.answer(200, share, GitHub.next_page or more)
         return self.answer(201 if method == "POST" else 200, {"number": 77})
-
-    next_page = ""
 
     def do_GET(self):
         self.handle_call("GET")
@@ -917,7 +900,7 @@ def github():
 class Written:
     """A folder as `make` leaves it, and what `write` did with it."""
 
-    def __init__(self, cleanup, tmp_path, monkeypatch, capsys, api, anything=True, text=None, one_piece=False, token=TOKEN, repo="o/r"):
+    def __init__(self, tmp_path, monkeypatch, capsys, api, anything=True, text=None, one_piece=False, token=TOKEN, repo="o/r"):
         self.folder, self.page = tmp_path / "made", tmp_path / "page.md"
         self.folder.mkdir()
         self.text = cleanup.MARK + "\nMade on 2026-10-12 for commit `cccccccccccc`.\n\n```diff\n+@someone #1\n```\n" if text is None else text
@@ -939,13 +922,18 @@ class Written:
 
 
 @pytest.fixture
-def written(cleanup, tmp_path, monkeypatch, capsys, github):
-    return lambda **how: Written(cleanup, tmp_path, monkeypatch, capsys, how.pop("api", github), **how)
+def written(tmp_path, monkeypatch, capsys, github):
+    return lambda **how: Written(tmp_path, monkeypatch, capsys, how.pop("api", github), **how)
 
 
-def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_changed(written):
-    GitHub.issues = [issue(12)]
-    done = written()
+@pytest.mark.parametrize("issues, anything", [
+    pytest.param([issue(12)], True, id="one open issue"),
+    pytest.param([issue(12)], False, id="a week with nothing to clean"),
+    pytest.param([issue(30, state="closed"), issue(12)], True, id="a closed and an open issue"),
+])
+def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_changed(written, issues, anything, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", issues)
+    done = written(anything=anything)
     assert done.status == 0, done.printed
     assert [(method, path, token) for method, path, token, _body in GitHub.seen] == [("GET", LIST, f"Bearer {TOKEN}"), ("PATCH", "/repos/o/r/issues/12", f"Bearer {TOKEN}")]
     assert done.writes == [("PATCH", "/repos/o/r/issues/12", {"body": done.text})]
@@ -953,7 +941,7 @@ def test_the_text_of_the_one_open_issue_is_replaced_and_nothing_else_of_it_is_ch
     assert done.said.splitlines()[2] == "**Made.** The text of issue 12 was replaced."
 
 
-def test_with_no_issue_and_something_to_clean_one_issue_is_made_with_the_title_and_the_text_only(written, cleanup):
+def test_with_no_issue_and_something_to_clean_one_issue_is_made_with_the_title_and_the_text_only(written):
     done = written()
     assert done.status == 0, done.printed
     assert done.writes == [("POST", "/repos/o/r/issues", {"title": cleanup.TITLE, "body": done.text})]
@@ -967,15 +955,9 @@ def test_with_no_issue_and_nothing_to_clean_none_is_made(written):
     assert "There is nothing to clean and no issue with the mark, so none was made." in done.said
 
 
-def test_in_a_week_with_nothing_to_clean_the_text_of_the_open_issue_is_replaced_all_the_same(written):
-    GitHub.issues = [issue(12)]
-    done = written(anything=False)
-    assert done.writes == [("PATCH", "/repos/o/r/issues/12", {"body": done.text})]
-
-
-@pytest.mark.parametrize("anything", [True, False])
-def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(written, anything):
-    GitHub.issues = [issue(12, state="closed")]
+@pytest.mark.parametrize("anything", [pytest.param(True, id="something to clean"), pytest.param(False, id="nothing to clean")])
+def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(written, anything, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12, state="closed")])
     done = written(anything=anything)
     assert done.status == 0, done.printed
     assert done.writes == []
@@ -983,14 +965,8 @@ def test_a_closed_issue_stays_closed_and_nothing_is_written_and_the_run_says_so(
                                          "open it again to start it.")
 
 
-def test_with_an_open_and_a_closed_issue_the_open_one_gets_the_text(written):
-    GitHub.issues = [issue(12, state="closed"), issue(30)]
-    done = written()
-    assert done.writes == [("PATCH", "/repos/o/r/issues/30", {"body": done.text})]
-
-
-def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(written, cleanup):
-    GitHub.issues = [issue(12), issue(30)]
+def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12), issue(30)])
     done = written()
     assert done.status == 1
     assert done.writes == []
@@ -1001,31 +977,34 @@ def test_two_open_issues_with_the_mark_are_a_finding_and_nothing_is_written(writ
 
 
 @pytest.mark.parametrize("other", [
-    issue(5, login="a-stranger"),
-    issue(5, login="inferstep-atlas-bot[bot]"),
-    issue(5, pull_request={"url": "x"}),
-    issue(5, body="some words\n<!-- weekly-cleanup: a job writes this text each week; a change by hand is lost -->\n"),
-    issue(5, body=""),
-    {**issue(5), "body": None},
-    {**issue(5), "user": None},
+    pytest.param(issue(5, login="a-stranger"), id="made by a person"),
+    pytest.param(issue(5, login="inferstep-atlas-bot[bot]"), id="made by another app"),
+    pytest.param(issue(5, pull_request={"url": "x"}), id="a pull request"),
+    pytest.param(issue(5, body="some words\n<!-- weekly-cleanup: a job writes this text each week; a change by hand is lost -->\n"),
+                 id="the mark after the first line"),
+    pytest.param(issue(5, body=""), id="an empty text"),
+    pytest.param({**issue(5), "body": None}, id="no text"),
+    pytest.param({**issue(5), "user": None}, id="no author"),
 ])
-def test_only_an_issue_that_the_jobs_own_account_made_and_that_starts_with_the_mark_counts(written, cleanup, other):
+def test_only_an_issue_that_the_jobs_own_account_made_and_that_starts_with_the_mark_counts(written, other, monkeypatch):
     # GitHub is asked for the issues of that account only. The script does not rely on that: it reads who made each.
-    GitHub.issues = [other]
+    monkeypatch.setattr(GitHub, "issues", [other])
     done = written()
     assert done.status == 0, done.printed
     assert done.writes == [("POST", "/repos/o/r/issues", {"title": cleanup.TITLE, "body": done.text})]
 
 
-def test_every_page_of_the_list_is_read(written):
-    GitHub.issues, GitHub.pages = [issue(5, login="a-stranger"), issue(41)], 2
+def test_every_page_of_the_list_is_read(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(5, login="a-stranger"), issue(41)])
+    monkeypatch.setattr(GitHub, "pages", 2)
     done = written()
     assert [path for method, path, _token, _body in GitHub.seen if method == "GET"] == [LIST, SECOND_PAGE]
     assert done.writes == [("PATCH", "/repos/o/r/issues/41", {"body": done.text})]
 
 
-def test_a_next_page_at_another_address_is_not_followed_with_the_token(written):
-    GitHub.issues, GitHub.next_page = [issue(12)], '<http://127.0.0.1:9/repos/o/r/issues?page=2>; rel="next"'
+def test_a_next_page_at_another_address_is_not_followed_with_the_token(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "next_page", '<http://127.0.0.1:9/repos/o/r/issues?page=2>; rel="next"')
     done = written()
     assert done.status == 2
     assert "GitHub named a next page at another address" in done.printed
@@ -1033,10 +1012,15 @@ def test_a_next_page_at_another_address_is_not_followed_with_the_token(written):
     assert done.writes == []
 
 
-@pytest.mark.parametrize("fails, says", [({"GET": 403}, "GitHub answered 403 to GET"), ({"GET": 500}, "GitHub answered 500 to GET"),
-                                         ({"PATCH": 403}, "GitHub answered 403 to PATCH"), ({"PATCH": 422}, "GitHub answered 422 to PATCH")])
-def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, fails, says):
-    GitHub.issues, GitHub.fails = [issue(12)], fails
+@pytest.mark.parametrize("fails, says", [
+    pytest.param({"GET": 403}, "GitHub answered 403 to GET", id="403 to GET"),
+    pytest.param({"GET": 500}, "GitHub answered 500 to GET", id="500 to GET"),
+    pytest.param({"PATCH": 403}, "GitHub answered 403 to PATCH", id="403 to PATCH"),
+    pytest.param({"PATCH": 422}, "GitHub answered 422 to PATCH", id="422 to PATCH"),
+])
+def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, fails, says, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "fails", fails)
     done = written()
     assert done.status == 2
     assert f"weekly cleanup: not judged: {says}" in done.printed
@@ -1044,17 +1028,23 @@ def test_when_github_refuses_nothing_is_judged_and_that_is_not_a_pass(written, f
     assert TOKEN not in done.printed + done.said
 
 
-def test_an_answer_that_points_to_another_address_is_not_followed_with_the_token(written):
-    GitHub.issues, GitHub.fails = [issue(12)], {"GET": 302}
+def test_an_answer_that_points_to_another_address_is_not_followed_with_the_token(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    monkeypatch.setattr(GitHub, "fails", {"GET": 302})
     done = written()
     assert done.status == 2
     assert "GitHub answered 302 to GET" in done.printed
     assert [path for _method, path, _token, _body in GitHub.seen] == [LIST]
 
 
-@pytest.mark.parametrize("number", ["12/../../pulls/3", "12?state=closed", None, [12]])
-def test_a_number_of_an_issue_that_is_no_number_is_not_put_into_an_address(written, number):
-    GitHub.issues = [issue(number)]
+@pytest.mark.parametrize("number", [
+    pytest.param("12/../../pulls/3", id="a path"),
+    pytest.param("12?state=closed", id="a query"),
+    pytest.param(None, id="none"),
+    pytest.param([12], id="a list"),
+])
+def test_a_number_of_an_issue_that_is_no_number_is_not_put_into_an_address(written, number, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(number)])
     done = written()
     assert done.status == 2
     assert done.writes == []
@@ -1067,7 +1057,6 @@ def test_when_github_gives_no_answer_nothing_is_judged(written):
 
 
 def test_the_script_names_one_address_for_the_token_and_takes_no_option_for_another(tmp_path, capsys):
-    cleanup = load()
     assert cleanup.GITHUB_API == "https://api.github.com"
     source = SCRIPT.read_text()
     # The two addresses of the script: where the token goes, and the usual form of the address of the runs.
@@ -1077,7 +1066,6 @@ def test_the_script_names_one_address_for_the_token_and_takes_no_option_for_anot
         cleanup.main(["write", "--from", str(tmp_path), "--api", "https://api.github.example"])
     assert stopped.value.code == 2
     assert "unrecognized arguments: --api" in capsys.readouterr().err
-    assert GitHub.seen == []
 
 
 def test_a_test_does_not_see_the_names_that_a_runner_gives_its_jobs():
@@ -1085,7 +1073,12 @@ def test_a_test_does_not_see_the_names_that_a_runner_gives_its_jobs():
     assert [name for name in os.environ if name.startswith("GITHUB_") or name == "CI"] == []
 
 
-@pytest.mark.parametrize("token, repo", [("", "o/r"), (TOKEN, ""), (TOKEN, "o/r/../x"), (TOKEN, "o r")])
+@pytest.mark.parametrize("token, repo", [
+    pytest.param("", "o/r", id="no token"),
+    pytest.param(TOKEN, "", id="no repository"),
+    pytest.param(TOKEN, "o/r/../x", id="a repository with a path"),
+    pytest.param(TOKEN, "o r", id="a repository with a space"),
+])
 def test_without_the_token_or_the_name_of_the_repository_nothing_is_asked(written, token, repo):
     done = written(token=token, repo=repo)
     assert done.status == 2
@@ -1093,24 +1086,26 @@ def test_without_the_token_or_the_name_of_the_repository_nothing_is_asked(writte
     assert GitHub.seen == []
 
 
-def test_a_text_for_one_piece_is_never_written_into_the_issue(written):
-    GitHub.issues = [issue(12)]
-    done = written(one_piece=True)
+@pytest.mark.parametrize("how", [
+    pytest.param({"one_piece": True}, id="a text for one piece"),
+    pytest.param({"text": "Made on 2026-10-12.\n"}, id="no mark"),
+    pytest.param({"text": cleanup.MARK + "\n" + "x" * 70000}, id="over the limit"),
+])
+def test_a_text_for_one_piece_or_with_no_mark_or_over_the_limit_is_never_written_into_the_issue(written, how, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
+    done = written(**how)
     assert done.status == 2
     assert "the text in the folder is not the weekly text" in done.printed
     assert GitHub.seen == []
 
 
-@pytest.mark.parametrize("text", ["Made on 2026-10-12.\n", "x" * 70000])
-def test_a_text_with_no_mark_or_over_the_limit_is_not_written(written, cleanup, text):
-    done = written(text=text if text.startswith("Made") else cleanup.MARK + "\n" + text)
-    assert done.status == 2
-    assert GitHub.seen == []
-
-
-@pytest.mark.parametrize("more", ["\n@someone look here\n", "\nSee #12.\n", "\n```text\nnot closed @someone\n"])
-def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written(written, cleanup, more):
-    GitHub.issues = [issue(12)]
+@pytest.mark.parametrize("more", [
+    pytest.param("\n@someone look here\n", id="a mention"),
+    pytest.param("\nSee #12.\n", id="a link to an issue"),
+    pytest.param("\n```text\nnot closed @someone\n", id="in a block that is not closed"),
+])
+def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written(written, more, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
     done = written(text=cleanup.MARK + "\nMade on 2026-10-12.\n" + more)
     assert done.status == 2
     assert "holds an `@` or a `#` with a number outside code marks and fenced blocks" in done.printed
@@ -1118,14 +1113,14 @@ def test_a_text_with_a_mention_or_a_link_to_an_issue_outside_code_is_not_written
     assert GitHub.seen == []
 
 
-def test_the_same_marks_inside_code_are_written(written, cleanup):
-    GitHub.issues = [issue(12)]
+def test_the_same_marks_inside_code_are_written(written, monkeypatch):
+    monkeypatch.setattr(GitHub, "issues", [issue(12)])
     done = written(text=cleanup.MARK + "\nMade on 2026-10-12.\n\n`@someone #12`\n\n````diff\n+@someone\n```\n+Closes #5\n````\n")
     assert done.status == 0, done.printed
     assert len(done.writes) == 1
 
 
-def test_no_call_changes_a_state_a_title_a_label_or_writes_a_comment(written, cleanup):
+def test_no_call_changes_a_state_a_title_a_label_or_writes_a_comment():
     source = SCRIPT.read_text()
     # The two places that send: the new text of the issue, and a new issue with the title and the text.
     assert re.findall(r'github\("(?:POST|PATCH|PUT|DELETE)",[^\n]*', source) == [
@@ -1144,7 +1139,6 @@ def test_the_script_is_on_the_list_of_scripts_that_run_with_a_credential_that_ca
 
 
 def test_the_gates_page_names_each_fixer_and_what_is_left_out():
-    cleanup = load()
     page = (ROOT / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     section = page.split("\n## The weekly cleanup\n", 1)[1]
     row = {line.split("|")[1].strip(): line for line in section.splitlines() if line.startswith("| ")}

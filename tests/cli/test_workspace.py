@@ -31,73 +31,61 @@ def binds(monkeypatch):
     return state
 
 
-def test_a_subdirectory_of_the_bind_counts_as_aligned(binds, tmp_path, capsys):
-    """The rule that makes one broad mount serve many folders: cwd inside the
-    bind needs no recreate. _align_workspace uses the same test."""
-    binds["proxy"] = binds["sandbox"] = str(tmp_path)
-    sub = tmp_path / "project"
-    sub.mkdir()
+@pytest.mark.parametrize("under_docker, expected_text", [
+    # The rule that makes one broad mount serve many folders: a directory
+    # inside the bind needs no recreate. _align_workspace uses the same test.
+    pytest.param(True, "aligned", id="directory-inside-the-bind"),
+    # A local (non-Docker) proxy works in its own cwd: there is no bind to
+    # align, and saying so beats reporting a failure.
+    pytest.param(False, "not running under Docker", id="no-docker"),
+])
+def test_nothing_to_align_is_a_success(binds, tmp_path, capsys, under_docker,
+                                       expected_text):
+    project = tmp_path / "project"
+    project.mkdir()
+    if under_docker:
+        binds["proxy"] = binds["sandbox"] = str(tmp_path)  # project's parent
 
-    assert workspace.main(["show", "--dir", str(sub)]) == 0
-    assert "aligned" in capsys.readouterr().out
-    assert workspace.main(["align", "--dir", str(sub)]) == 0
-    assert binds["recreated"] == [], "a covered directory must not recreate"
+    assert workspace.main(["show", "--dir", str(project)]) == 0
+    assert expected_text in capsys.readouterr().out
+    assert workspace.main(["align", "--dir", str(project)]) == 0
+    assert binds["recreated"] == [], "nothing to align must not recreate"
 
 
-def test_an_unrelated_directory_reports_not_aligned(binds, tmp_path, capsys):
-    other = tmp_path / "elsewhere"
-    other.mkdir()
-    binds["proxy"] = binds["sandbox"] = str(other)
-    target = tmp_path / "here"
-    target.mkdir()
+@pytest.mark.parametrize("proxy, sandbox, expected_text", [
+    pytest.param("elsewhere", "elsewhere", "NOT aligned", id="both-binds-elsewhere"),
+    pytest.param("here", "elsewhere", "SPLIT", id="the-binds-differ"),
+])
+def test_show_fails_when_atlas_works_somewhere_else(binds, tmp_path, capsys,
+                                                     proxy, sandbox, expected_text):
+    here = tmp_path / "here"
+    here.mkdir()
+    binds["proxy"], binds["sandbox"] = str(tmp_path / proxy), str(tmp_path / sandbox)
 
-    assert workspace.main(["show", "--dir", str(target)]) == 1
-    assert "NOT aligned" in capsys.readouterr().out
+    assert workspace.main(["show", "--dir", str(here)]) == 1
+    assert expected_text in capsys.readouterr().out
 
 
 def test_align_moves_both_binds_together(binds, tmp_path):
     """Recreating one alone is the split-brain bug: file tools read one tree
     while run_command uses the other, with every health check green."""
-    old = tmp_path / "old"
-    old.mkdir()
-    binds["proxy"] = binds["sandbox"] = str(old)
-    target = tmp_path / "new"
-    target.mkdir()
+    binds["proxy"] = binds["sandbox"] = str(tmp_path / "old")
+    new = tmp_path / "new"
+    new.mkdir()
 
-    assert workspace.main(["align", "--dir", str(target)]) == 0
-    assert binds["recreated"] == [os.path.realpath(str(target))]
+    assert workspace.main(["align", "--dir", str(new)]) == 0
+    assert binds["recreated"] == [os.path.realpath(str(new))]
     assert binds["proxy"] == binds["sandbox"]
 
 
-def test_a_split_bind_is_reported_as_a_split(binds, tmp_path, capsys):
-    a, b = tmp_path / "a", tmp_path / "b"
-    a.mkdir()
-    b.mkdir()
-    binds["proxy"], binds["sandbox"] = str(a), str(b)
-
-    assert workspace.main(["show", "--dir", str(a)]) == 1
-    assert "SPLIT" in capsys.readouterr().out
-
-
-def test_no_docker_is_not_an_error(binds, tmp_path, capsys):
-    """A local (non-Docker) proxy works in its own cwd — there is no bind to
-    align, and saying so beats reporting a failure."""
-    assert workspace.main(["show", "--dir", str(tmp_path)]) == 0
-    assert workspace.main(["align", "--dir", str(tmp_path)]) == 0
-    assert binds["recreated"] == []
-    assert "not running under Docker" in capsys.readouterr().out
-
-
 def test_a_failed_recreate_is_reported(binds, tmp_path, monkeypatch, capsys):
-    old = tmp_path / "old"
-    old.mkdir()
-    binds["proxy"] = binds["sandbox"] = str(old)
+    binds["proxy"] = binds["sandbox"] = str(tmp_path / "old")
     monkeypatch.setattr(workspace.runtime, "_recreate_docker_proxy",
                         lambda *a: False)
-    target = tmp_path / "new"
-    target.mkdir()
+    new = tmp_path / "new"
+    new.mkdir()
 
-    assert workspace.main(["align", "--dir", str(target)]) == 1
+    assert workspace.main(["align", "--dir", str(new)]) == 1
     assert "alignment failed" in capsys.readouterr().err
 
 

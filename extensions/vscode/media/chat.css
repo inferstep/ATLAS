@@ -282,6 +282,43 @@ details.plan-card summary {
 	border-top: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
 }
 
+/* The Work/Question declaration. A visible control, so which one the next
+   turn will send is never something the user has to remember. */
+#task-mode {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 0.9em;
+}
+
+#task-label {
+	opacity: 0.8;
+	margin-right: 2px;
+}
+
+#task-mode button {
+	background: transparent;
+	color: var(--vscode-foreground);
+	border: 1px solid var(--vscode-widget-border, var(--vscode-input-border, transparent));
+	border-radius: 10px;
+	padding: 2px 10px;
+	font-size: 0.95em;
+}
+
+#task-mode button:hover {
+	background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+#task-mode button[aria-pressed='true'] {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border-color: transparent;
+}
+
+#task-mode button[aria-pressed='true']:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
 #input {
 	resize: vertical;
 	font-family: var(--vscode-font-family);

@@ -25,6 +25,10 @@ REPLIES = ("written", "captured")
 #                         long as the machine makes it. The prompt itself is
 #                         compared in full, as the request to the model.
 VARIES_IN_EVENTS = ("elapsed", "elapsed_ms", "ms", "prompt_ms", "first_frame_ms", "total_duration_ms", "prompt_tokens")
+# An event that the proxy sends on a clock of its own: every 100 ms while the model has given no first piece of its
+# reply. How many there are depends on how long the model takes, so they are not kept and not compared. It is the
+# same rule as for the requests that the proxy sends on its own clock (CLOCKED in tests/replay/stage.py).
+ON_A_CLOCK = ("llm_prompt_progress",)
 
 
 def load(name: str) -> dict:
@@ -61,6 +65,8 @@ def plain_events(events: list[dict], st: stage.Stage) -> list[dict]:
     """The events without what differs from run to run, as they are kept in a recording."""
     out = []
     for event in events:
+        if event.get("type") in ON_A_CLOCK:
+            continue
         data = event.get("data")
         if isinstance(data, dict):
             event = {**event, "data": {key: value for key, value in data.items() if key not in VARIES_IN_EVENTS}}
@@ -94,7 +100,7 @@ def run(recording: dict, binary: Path, root: Path, upstreams=None, accept=False,
         process.communicate(timeout=20)
         st.stop()
     return {"exchanges": st.exchanges, "events": plain_events(events, st), "files": files_of(workspace),
-            "mismatch": st.mismatch, "not_asked": st.not_asked(), "accepted": st.accepted}
+            "mismatch": st.mismatch, "not_asked": st.not_asked(), "accepted": st.accepted, "text_note": st.text_note}
 
 
 def first_difference(expected: str, got: str) -> str:

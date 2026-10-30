@@ -33,8 +33,7 @@ def test_replacement_carrying_neighbours_is_refused():
         "victim.py", FILE, "function:a",
         "def a():\n    return 99\n\n\ndef b():\n    return 2\n\n\ndef c():\n    return 3\n")
     assert not res.get("success"), res
-    assert "twice" in res["error"]
-    assert "b" in res["error"] and "c" in res["error"]
+    assert "would define b, c twice" in res["error"]
 
 
 def test_ordinary_single_node_replacement_still_works():

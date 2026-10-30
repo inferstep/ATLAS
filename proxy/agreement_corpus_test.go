@@ -167,12 +167,6 @@ type corpusRun struct {
 	LandedWinner   bool   `json:"landed_winner"`
 	Disk           string `json:"disk_sha"`
 	LedgerHash     string `json:"ledger_hash"`
-	V3Used         bool   `json:"v3_used"`
-	Authorization  string `json:"authorization_hash"`
-	Success        bool   `json:"success"`
-	Mutation       string `json:"mutation"`
-	Validation     string `json:"validation"`
-	Terminal       string `json:"terminal_reason"`
 }
 
 func runCorpusCase(t *testing.T, c corpusCase) corpusRun {
@@ -189,16 +183,8 @@ func runCorpusCase(t *testing.T, c corpusCase) corpusRun {
 		bumpWorkspace(w.ctx, w.dir+"/unrelated.py", contentSHA256("moved on\n"))
 	}
 
-	var decision FeasibilityDecision
 	recs := captureShadow(t, func() {
-		res, err := writeFileWithV3(w.path, c.body, w.ctx)
-		if err != nil && res == nil {
-			return
-		}
-		if res != nil {
-			decision.Reason = FeasibilityReason("")
-			_ = res
-		}
+		writeFileWithV3(w.path, c.body, w.ctx)
 	})
 	out := corpusRun{Name: c.name, Generations: w.generateCalls()}
 	for _, r := range recordsOfKind(recs, "shadow_invocation_feasibility") {
@@ -231,26 +217,12 @@ func TestFeasibilityAgreementCorpus(t *testing.T) {
 		t.Fatalf("corpus has %d cases, the floor is 100", len(cases))
 	}
 
-	observed := make(map[string]corpusRun, len(cases))
 	var falseNegatives []string
 	var feasibleUnrealized []string
 	strictGrants := 0
 
 	for _, c := range cases {
 		run := runCorpusCase(t, c)
-		observed[c.name] = run
-		// Generation always proceeds, whatever feasibility concluded -- except
-		// where the request itself ended first. Cancellation has its own owner and its
-		// own reason to skip; attributing it to feasibility would credit this
-		// decision with something it did not do.
-		wantGenerations := 1
-		if strings.HasSuffix(c.name, "/cancelled") {
-			wantGenerations = 0
-		}
-		if run.Generations != wantGenerations {
-			t.Errorf("%s: %d generation calls, want %d",
-				c.name, run.Generations, wantGenerations)
-		}
 		strictGrants += run.StrictConsumed
 		// The one-sided rule.
 		if !run.Feasible && run.StrictConsumed > 0 {
@@ -276,6 +248,30 @@ func TestFeasibilityAgreementCorpus(t *testing.T) {
 	}
 	t.Logf("corpus: %d cases, %d false negatives, %d feasible-but-unrealized",
 		len(cases), len(falseNegatives), len(feasibleUnrealized))
+}
+
+// The same corpus again: whatever feasibility concluded, generation runs, and
+// the corpus's own records carry no content.
+func TestEveryCorpusInvocationGeneratesAndLeaksNoContent(t *testing.T) {
+	cases := corpus()
+	observed := make(map[string]corpusRun, len(cases))
+
+	for _, c := range cases {
+		run := runCorpusCase(t, c)
+		observed[c.name] = run
+		// Generation always proceeds, whatever feasibility concluded -- except
+		// where the request itself ended first. Cancellation has its own owner and its
+		// own reason to skip; attributing it to feasibility would credit this
+		// decision with something it did not do.
+		wantGenerations := 1
+		if strings.HasSuffix(c.name, "/cancelled") {
+			wantGenerations = 0
+		}
+		if run.Generations != wantGenerations {
+			t.Errorf("%s: %d generation calls, want %d",
+				c.name, run.Generations, wantGenerations)
+		}
+	}
 
 	// No content leaks anywhere in the corpus's own records.
 	blob, err := json.Marshal(observed)

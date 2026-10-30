@@ -30,7 +30,6 @@ from geometric_lens import service
 # owns the one app client a process can boot.
 
 DIM = 4
-NON_FINITE = [float("nan"), float("inf"), float("-inf")]
 CX_CFG = {"midpoint": 0.5, "steepness": 4.0}
 THRESHOLDS = {"off_rails": 0.3, "low": 0.4, "severe": 0.2}
 
@@ -90,27 +89,27 @@ def _assert_unscored_combined(out):
     assert out["failure"]["kind"] == ec.KIND_NONFINITE
     for key in ("cx_energy", "cx_normalized", "gx_score"):
         assert out[key] is None, key
-    assert out["cx_calibrated"] is False and out["gx_available"] is False
+    assert out["cx_calibrated"] is False
+    assert out["gx_available"] is False
     assert out["verdict"] == "unscored"
-    json.dumps(out, allow_nan=False)
-
-
-def _assert_unscored_per_step(out):
-    assert out["scored"] is False
-    assert out["failure"]["kind"] == ec.KIND_NONFINITE
-    assert out["per_step"] == [] and out["aggregate"] == {}
-    assert out["n_tokens"] == 0
     json.dumps(out, allow_nan=False)
 
 
 # --- the service --------------------------------------------------------------------
 
-@pytest.mark.parametrize("value", NON_FINITE)
-def test_nonfinite_raw_energy_is_unscored(monkeypatch, value):
-    _weights(monkeypatch, _ConstField(value), _ConstGx(0.8))
+@pytest.mark.parametrize("energy, p_correct, failed_field", [
+    pytest.param(float("nan"), 0.8, "cx_energy", id="energy-nan"),
+    pytest.param(float("inf"), 0.8, "cx_energy", id="energy-inf"),
+    pytest.param(float("-inf"), 0.8, "cx_energy", id="energy-minus-inf"),
+    pytest.param(0.25, float("nan"), "gx_score", id="gx-nan"),
+    pytest.param(0.25, float("inf"), "gx_score", id="gx-inf"),
+    pytest.param(0.25, float("-inf"), "gx_score", id="gx-minus-inf"),
+])
+def test_a_nonfinite_energy_or_gx_score_is_unscored(monkeypatch, energy, p_correct, failed_field):
+    _weights(monkeypatch, _ConstField(energy), _ConstGx(p_correct))
     out = service.evaluate_combined("def f(): pass")
     _assert_unscored_combined(out)
-    assert out["failure"]["field"] == "cx_energy"
+    assert out["failure"]["field"] == failed_field
 
 
 def test_nonfinite_normalized_energy_is_unscored(monkeypatch):
@@ -122,26 +121,28 @@ def test_nonfinite_normalized_energy_is_unscored(monkeypatch):
     assert out["failure"]["field"] == "cx_normalized"
 
 
-@pytest.mark.parametrize("value", NON_FINITE)
-def test_nonfinite_gx_score_is_unscored(monkeypatch, value):
-    _weights(monkeypatch, _ConstField(0.25), _ConstGx(value))
-    out = service.evaluate_combined("def f(): pass")
-    _assert_unscored_combined(out)
-    assert out["failure"]["field"] == "gx_score"
+@pytest.mark.parametrize("token_energies, p_correct", [
+    pytest.param([0.1, float("nan"), 0.3], 0.8, id="one-token-energy-nan"),
+    pytest.param([0.1, float("inf"), 0.3], 0.8, id="one-token-energy-inf"),
+    pytest.param([0.1, float("-inf"), 0.3], 0.8, id="one-token-energy-minus-inf"),
+    pytest.param(0.25, float("nan"), id="every-token-gx-nan"),
+])
+def test_a_nonfinite_per_step_score_unscores_the_answer(monkeypatch, token_energies, p_correct):
+    _weights(monkeypatch, _ConstField(token_energies), _ConstGx(p_correct))
+    out = service.evaluate_per_step("def f(): pass")
+    assert out["scored"] is False
+    assert out["failure"]["kind"] == ec.KIND_NONFINITE
+    assert out["per_step"] == []
+    assert out["aggregate"] == {}
+    assert out["n_tokens"] == 0
+    json.dumps(out, allow_nan=False)
 
 
-@pytest.mark.parametrize("value", NON_FINITE)
-def test_one_nonfinite_token_unscores_the_per_step_answer(monkeypatch, value):
-    _weights(monkeypatch, _ConstField([0.1, value, 0.3]), _ConstGx(0.8))
-    _assert_unscored_per_step(service.evaluate_per_step("def f(): pass"))
-
-
-def test_nonfinite_per_step_gx_is_unscored(monkeypatch):
-    _weights(monkeypatch, _ConstField(0.25), _ConstGx(float("nan")))
-    _assert_unscored_per_step(service.evaluate_per_step("def f(): pass"))
-
-
-@pytest.mark.parametrize("value", [np.float16(0.125), np.float32(0.625), np.float64(-0.25)])
+@pytest.mark.parametrize("value", [
+    pytest.param(np.float16(0.125), id="numpy-float16"),
+    pytest.param(np.float32(0.625), id="numpy-float32"),
+    pytest.param(np.float64(-0.25), id="numpy-float64"),
+])
 def test_finite_numpy_scalars_are_builtin_scores(value):
     out = ec.finite(value, "gx_score")
     assert type(out) is float
@@ -161,31 +162,36 @@ def test_numpy_float32_xgboost_probability_stays_scored(monkeypatch):
     assert out["gx_score"] == pytest.approx(0.8)
 
 
-@pytest.mark.parametrize(
-    "value",
-    [np.float16(float("nan")), np.float32(float("inf")), np.float64(float("-inf"))],
-)
-def test_nonfinite_numpy_scalars_are_rejected(value):
+@pytest.mark.parametrize("value", [
+    pytest.param(np.float16(float("nan")), id="numpy-float16-nan"),
+    pytest.param(np.float32(float("inf")), id="numpy-float32-inf"),
+    pytest.param(np.float64(float("-inf")), id="numpy-float64-minus-inf"),
+    pytest.param(True, id="a-bool"),
+    pytest.param("0.5", id="a-string"),
+    pytest.param(None, id="none"),
+])
+def test_nonfinite_and_nonnumeric_values_are_not_scores(value):
     with pytest.raises(ec.NonFiniteScoreError) as exc:
         ec.finite(value, "gx_score")
     assert exc.value.field == "gx_score"
 
 
-@pytest.mark.parametrize("value", [True, "0.5", None])
-def test_bool_and_nonnumeric_values_are_not_scores(value):
-    with pytest.raises(ec.NonFiniteScoreError):
-        ec.finite(value, "gx_score")
-
-
-@pytest.mark.parametrize("value", [-2.5, 0.0, -0.0, 1e30])
+@pytest.mark.parametrize("value", [
+    pytest.param(-2.5, id="negative"),
+    pytest.param(0.0, id="zero"),
+    pytest.param(-0.0, id="minus-zero"),
+    pytest.param(1e30, id="huge"),
+])
 def test_finite_energies_including_negative_and_zero_stay_scores(monkeypatch, value):
     _weights(monkeypatch, _ConstField(value), _ConstGx(0.8))
     out = service.evaluate_combined("def f(): pass")
-    assert out["scored"] is True and out.get("failure") is None
+    assert out["scored"] is True
+    assert out.get("failure") is None
     assert out["cx_energy"] == pytest.approx(value, rel=1e-6)  # float32 forward
     assert math.isfinite(out["cx_normalized"])
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["scored"] is True and per_step["n_tokens"] == 3
+    assert per_step["scored"] is True
+    assert per_step["n_tokens"] == 3
     assert per_step["aggregate"]["cx_energy_min"] == pytest.approx(value, rel=1e-6)
 
 
@@ -194,9 +200,11 @@ def test_the_lens_has_no_off_switch(monkeypatch):
     old .env changes nothing, and the lens still scores."""
     monkeypatch.setenv("GEOMETRIC_LENS_ENABLED", "false")
     out = service.evaluate_combined("def f(): pass")
-    assert out["enabled"] is True and out["scored"] is True
+    assert out["enabled"] is True
+    assert out["scored"] is True
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["scored"] is True and per_step["n_tokens"] == 3
+    assert per_step["scored"] is True
+    assert per_step["n_tokens"] == 3
 
 
 def test_a_lens_without_models_is_unchanged(monkeypatch):
@@ -206,10 +214,12 @@ def test_a_lens_without_models_is_unchanged(monkeypatch):
     _weights(monkeypatch, _ConstField(float("nan")))
     monkeypatch.setattr(service, "_ensure_models_loaded", lambda: False)
     out = service.evaluate_combined("def f(): pass")
-    assert out["enabled"] is False and out["cx_energy"] == 0.0
+    assert out["enabled"] is False
+    assert out["cx_energy"] == 0.0
     assert "failure" not in out
     per_step = service.evaluate_per_step("def f(): pass")
-    assert per_step["enabled"] is False and per_step["n_tokens"] == 0
+    assert per_step["enabled"] is False
+    assert per_step["n_tokens"] == 0
 
 
 def test_nonfinite_failure_is_its_own_kind():

@@ -5,7 +5,9 @@ The replay job compares each request that the proxy sends with a recorded one,
 in full. So a change to text that the model reads turns replay red until the
 recordings are made again, and "a recording changed" marks such a change.
 
-This check reads the recordings of the base and of the change. In each it
+This check reads the recordings of the base and of the change as it would
+land: the merge of the pull request into its base (`--texts`), so that a
+branch made on an older base is judged by its own change only. In each it
 takes the first request to the model, and of it the part that every request
 carries: the system prompt (with the tool descriptions), the grammar, and the
 schema of the reply. When such a part has other values than on the base and
@@ -43,8 +45,10 @@ the text in its situation, and the replay job holds it.
 A status that comes later does not start this check again. The person who
 waits for it starts the job again by hand ("Re-run jobs").
 
-Usage: smoke_result.py --base <commit> --head <commit>   (the text of the pull request in PR_BODY, and a
-                                                          token that can read statuses in GITHUB_TOKEN)
+Usage: smoke_result.py --base <commit> --head <commit> [--texts <commit>]
+                                    (the text of the pull request in PR_BODY, and a token that can read
+                                    statuses in GITHUB_TOKEN; the recordings of --texts are judged, those of
+                                    --head without it, and the statuses are read on --head)
        smoke_result.py --mark <commit>                   (prints the mark of that commit's text)
 
 Exit status: 0 when nothing is asked, or the status of the server is green,
@@ -238,7 +242,8 @@ def judge(base: dict, head: dict, text: str, statuses) -> tuple:
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--base", help="the commit to compare with")
-    parser.add_argument("--head", help="the head commit of the pull request")
+    parser.add_argument("--head", help="the head commit of the pull request, whose statuses are read")
+    parser.add_argument("--texts", help="the commit whose recordings are judged: what would land (default: --head)")
     parser.add_argument("--mark", help="print the mark of this commit's text, and nothing else")
     args = parser.parse_args(argv)
     try:
@@ -247,9 +252,9 @@ def main(argv: list | None = None) -> int:
             return 0
         if not args.base or not args.head:
             parser.error("--base and --head are needed (or --mark)")
-        head = texts_at(args.head, must_have_recordings=True)
+        texts = texts_at(args.texts or args.head, must_have_recordings=True)
         commit = git("rev-parse", "--verify", f"{args.head}^{{commit}}").strip()
-        passed, why = judge(texts_at(args.base), head, os.environ.get("PR_BODY", ""), lambda: statuses_of(commit))
+        passed, why = judge(texts_at(args.base), texts, os.environ.get("PR_BODY", ""), lambda: statuses_of(commit))
     except Unreadable as error:
         print(f"::error title=smoke result::{error.of} cannot be read, so nothing was judged: {error}. Fix: "
               f"{error.fix}.", file=sys.stderr)

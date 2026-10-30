@@ -498,183 +498,225 @@ func demoTick(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return demoTickMsg(t) })
 }
 
+// Update is the demo's message loop. Each type of message goes to its own
+// handler below.
 func (m *demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		widthChanged := msg.Width != m.width
-		m.width = msg.Width
-		m.height = msg.Height
-		// Forward a half-width sizing to each child so glamour wraps to
-		// the per-pane column. The chat-pane wrapper takes ~4 columns
-		// for borders + padding.
-		colW := (msg.Width - 4) / 2
-		m.rawChild.width = colW
-		m.rawChild.height = msg.Height - 4
-		m.v3Child.width = colW
-		m.v3Child.height = msg.Height - 4
-		if widthChanged {
-			// Rebuild each child's glamour renderer at the pane's inner
-			// content width (renderChatPane is called with colW-4) so
-			// markdown wraps to the actual column, not the default.
-			style := os.Getenv("GLAMOUR_STYLE")
-			if style == "" {
-				style = "dark"
-			}
-			wrap := colW - 4
-			if wrap < 20 {
-				wrap = 20
-			}
-			for _, child := range []*tuiModel{m.rawChild, m.v3Child} {
-				if r, err := glamour.NewTermRenderer(
-					glamour.WithStandardStyle(style),
-					glamour.WithWordWrap(wrap),
-				); err == nil {
-					child.chatRenderer = r
-				}
-			}
-		}
-		return m, nil
+		return m.handleWindowSize(msg)
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			m.cancel()
-			return m, tea.Quit
-		case "tab", "shift+tab":
-			// Which pane scroll keys target; in output review this is
-			// also the side file-cycling keys apply to.
-			if m.activePane == "raw" {
-				m.activePane = "v3"
-			} else {
-				m.activePane = "raw"
-			}
-			return m, nil
-		case "pgup":
-			m.scrollActive(10)
-			return m, nil
-		case "pgdown":
-			m.scrollActive(-10)
-			return m, nil
-		case "ctrl+home":
-			m.scrollActive(1 << 30)
-			return m, nil
-		case "ctrl+end":
-			m.scrollActiveToEnd()
-			return m, nil
-		case "up", "down":
-			// Line-step scrolling only in output review — during
-			// streaming the panes follow the live output.
-			if m.outputMode {
-				if msg.String() == "up" {
-					m.scrollActive(1)
-				} else {
-					m.scrollActive(-1)
-				}
-				return m, nil
-			}
-		}
-		if m.outputMode {
-			m.handleOutputKey(msg.String())
-			return m, nil
-		}
+		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		// Wheel scrolls the pane under the cursor; focus follows so
-		// subsequent keys target the same side.
-		if msg.Action == tea.MouseActionPress {
-			var delta int
-			switch msg.Button {
-			case tea.MouseButtonWheelUp:
-				delta = 3
-			case tea.MouseButtonWheelDown:
-				delta = -3
-			default:
-				return m, nil
-			}
-			if msg.X < m.width/2 {
-				m.activePane = "raw"
-			} else {
-				m.activePane = "v3"
-			}
-			m.scrollActive(delta)
-		}
-		return m, nil
+		return m.handleMouse(msg)
 
 	case demoBatchMsg:
-		// Apply every event in this batch before returning so View only
-		// renders once. Stream events first, then done flags.
-		for _, s := range msg.stream {
-			// Sticky generation flag: any token-bearing event flips
-			// this side's "ever streamed" bit so the header doesn't
-			// flop back to "processing prompt" on subsequent turns.
-			switch s.evt.Type {
-			case "llm_token", "reasoning_token", "v3_token", "v3_reasoning_token":
-				if s.side == "raw" {
-					m.rawEverStreamed = true
-				} else {
-					m.v3EverStreamed = true
-				}
-			}
-			if s.side == "raw" {
-				if s.evt.Type == "text" {
-					var payload struct {
-						Content string `json:"content"`
-					}
-					if json.Unmarshal(s.evt.Data, &payload) == nil && payload.Content != "" {
-						m.rawChild.chat = append(m.rawChild.chat, chatMessage{
-							Role: roleAssistant, Meta: "raw model", Body: payload.Content,
-						})
-					}
-				} else {
-					m.rawChild.appendChatEvent(s.evt)
-				}
-			} else {
-				m.v3Child.appendChatEvent(s.evt)
-			}
-		}
-		for _, d := range msg.dones {
-			switch d.side {
-			case "raw":
-				m.rawDone = true
-				m.rawErr = d.err
-			case "v3":
-				m.v3Done = true
-				m.v3Err = d.err
-			}
-		}
-		if m.rawDone && m.v3Done && m.finishedAt.IsZero() {
-			m.finishedAt = time.Now()
-			m.enterOutputMode()
-		}
-		return m, m.drainEvents()
+		return m.handleBatch(msg)
 
 	case demoTickMsg:
-		m.spinnerFrame++
-		// promptShown counts runes, not bytes, so a multi-byte character
-		// (em dash, box drawing) is revealed whole instead of split
-		// mid-sequence.
-		promptLen := len([]rune(m.prompt.Prompt))
-		if !m.outputMode && m.promptShown < promptLen {
-			m.promptShown++
-		}
-		// Fire the streams exactly once, the tick after the prompt
-		// animation finishes. The trailing tick on promptLen == promptShown
-		// gives one frame of "complete prompt with no caret" before the
-		// status flips to processing-prompt — small thing but reads
-		// noticeably cleaner on camera.
-		if !m.streamsFired && !m.outputMode && m.promptShown >= promptLen {
-			m.streamsFired = true
-			return m, tea.Batch(
-				m.startStreams(),
-				demoTick(80*time.Millisecond),
-			)
-		}
-		// In output mode the user explores at their own pace — no auto-quit.
-		// Pre-output mode the tick is just driving the prompt-typing animation.
-		return m, demoTick(80 * time.Millisecond)
+		return m.handleTick()
 	}
 
 	return m, nil
+}
+
+// handleWindowSize takes the terminal's new size and gives each pane half of
+// the width. When the width changed, it builds each pane's markdown renderer
+// again for the new column.
+func (m *demoModel) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	widthChanged := msg.Width != m.width
+	m.width = msg.Width
+	m.height = msg.Height
+	// Forward a half-width sizing to each child so glamour wraps to
+	// the per-pane column. The chat-pane wrapper takes ~4 columns
+	// for borders + padding.
+	colW := (msg.Width - 4) / 2
+	m.rawChild.width = colW
+	m.rawChild.height = msg.Height - 4
+	m.v3Child.width = colW
+	m.v3Child.height = msg.Height - 4
+	if widthChanged {
+		// Rebuild each child's glamour renderer at the pane's inner
+		// content width (renderChatPane is called with colW-4) so
+		// markdown wraps to the actual column, not the default.
+		style := os.Getenv("GLAMOUR_STYLE")
+		if style == "" {
+			style = "dark"
+		}
+		wrap := colW - 4
+		if wrap < 20 {
+			wrap = 20
+		}
+		for _, child := range []*tuiModel{m.rawChild, m.v3Child} {
+			if r, err := glamour.NewTermRenderer(
+				glamour.WithStandardStyle(style),
+				glamour.WithWordWrap(wrap),
+			); err == nil {
+				child.chatRenderer = r
+			}
+		}
+	}
+	return m, nil
+}
+
+// handleKey answers a key: it quits, moves the focus to the other pane,
+// scrolls the focused pane or, in the output review, picks a file.
+func (m *demoModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q", "esc":
+		m.cancel()
+		return m, tea.Quit
+	case "tab", "shift+tab":
+		// Which pane scroll keys target; in output review this is
+		// also the side file-cycling keys apply to.
+		if m.activePane == "raw" {
+			m.activePane = "v3"
+		} else {
+			m.activePane = "raw"
+		}
+		return m, nil
+	case "pgup":
+		m.scrollActive(10)
+		return m, nil
+	case "pgdown":
+		m.scrollActive(-10)
+		return m, nil
+	case "ctrl+home":
+		m.scrollActive(1 << 30)
+		return m, nil
+	case "ctrl+end":
+		m.scrollActiveToEnd()
+		return m, nil
+	case "up", "down":
+		// Line-step scrolling only in output review — during
+		// streaming the panes follow the live output.
+		if m.outputMode {
+			if msg.String() == "up" {
+				m.scrollActive(1)
+			} else {
+				m.scrollActive(-1)
+			}
+			return m, nil
+		}
+	}
+	if m.outputMode {
+		m.handleOutputKey(msg.String())
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleMouse answers the wheel: it focuses the pane under the cursor and
+// scrolls it.
+func (m *demoModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Wheel scrolls the pane under the cursor; focus follows so
+	// subsequent keys target the same side.
+	if msg.Action == tea.MouseActionPress {
+		var delta int
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			delta = 3
+		case tea.MouseButtonWheelDown:
+			delta = -3
+		default:
+			return m, nil
+		}
+		if msg.X < m.width/2 {
+			m.activePane = "raw"
+		} else {
+			m.activePane = "v3"
+		}
+		m.scrollActive(delta)
+	}
+	return m, nil
+}
+
+// handleBatch applies a batch of stream events and then the done flags, so
+// the view renders once per batch. When both sides are done, it opens the
+// output review. Then it waits for the next batch.
+func (m *demoModel) handleBatch(msg demoBatchMsg) (tea.Model, tea.Cmd) {
+	// Apply every event in this batch before returning so View only
+	// renders once. Stream events first, then done flags.
+	for _, s := range msg.stream {
+		m.applyStreamEvent(s)
+	}
+	for _, d := range msg.dones {
+		switch d.side {
+		case "raw":
+			m.rawDone = true
+			m.rawErr = d.err
+		case "v3":
+			m.v3Done = true
+			m.v3Err = d.err
+		}
+	}
+	if m.rawDone && m.v3Done && m.finishedAt.IsZero() {
+		m.finishedAt = time.Now()
+		m.enterOutputMode()
+	}
+	return m, m.drainEvents()
+}
+
+// applyStreamEvent applies one stream event to its side's pane. A token marks
+// the side as streaming; the raw side's text becomes its model response, and
+// every other event goes into the pane's chat as in a normal session.
+func (m *demoModel) applyStreamEvent(s demoStreamMsg) {
+	// Sticky generation flag: any token-bearing event flips
+	// this side's "ever streamed" bit so the header doesn't
+	// flop back to "processing prompt" on subsequent turns.
+	switch s.evt.Type {
+	case "llm_token", "reasoning_token", "v3_token", "v3_reasoning_token":
+		if s.side == "raw" {
+			m.rawEverStreamed = true
+		} else {
+			m.v3EverStreamed = true
+		}
+	}
+	if s.side == "raw" {
+		if s.evt.Type == "text" {
+			var payload struct {
+				Content string `json:"content"`
+			}
+			if json.Unmarshal(s.evt.Data, &payload) == nil && payload.Content != "" {
+				m.rawChild.chat = append(m.rawChild.chat, chatMessage{
+					Role: roleAssistant, Meta: "raw model", Body: payload.Content,
+				})
+			}
+		} else {
+			m.rawChild.appendChatEvent(s.evt)
+		}
+	} else {
+		m.v3Child.appendChatEvent(s.evt)
+	}
+}
+
+// handleTick moves the spinner and the prompt's type-out on, and fires the two
+// streams once, on the tick after the prompt is fully shown.
+func (m *demoModel) handleTick() (tea.Model, tea.Cmd) {
+	m.spinnerFrame++
+	// promptShown counts runes, not bytes, so a multi-byte character
+	// (em dash, box drawing) is revealed whole instead of split
+	// mid-sequence.
+	promptLen := len([]rune(m.prompt.Prompt))
+	if !m.outputMode && m.promptShown < promptLen {
+		m.promptShown++
+	}
+	// Fire the streams exactly once, the tick after the prompt
+	// animation finishes. The trailing tick on promptLen == promptShown
+	// gives one frame of "complete prompt with no caret" before the
+	// status flips to processing-prompt — small thing but reads
+	// noticeably cleaner on camera.
+	if !m.streamsFired && !m.outputMode && m.promptShown >= promptLen {
+		m.streamsFired = true
+		return m, tea.Batch(
+			m.startStreams(),
+			demoTick(80*time.Millisecond),
+		)
+	}
+	// In output mode the user explores at their own pace — no auto-quit.
+	// Pre-output mode the tick is just driving the prompt-typing animation.
+	return m, demoTick(80 * time.Millisecond)
 }
 
 var (
@@ -1071,7 +1113,7 @@ func readFileForDisplay(path string, maxLines, maxCols, offset int) (string, int
 		if maxCols > 0 && len(line) > maxCols {
 			line = line[:maxCols-1] + "…"
 		}
-		lines = append(lines, line)
+		lines = append(lines, visibleControls(line))
 	}
 	total := len(lines)
 

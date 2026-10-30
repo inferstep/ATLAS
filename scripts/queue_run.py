@@ -20,6 +20,7 @@ Usage: queue_run.py --commit SHA [--wait-minutes 30] [--plain]
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -29,6 +30,11 @@ import urllib.request
 from typing import Callable
 
 API = "https://api.github.com"
+# A short outage of GitHub is waited out. After an answer 5xx, no answer in time, a connection that ends with no
+# answer, or an answer that breaks off in its middle, the question is asked again
+# after 10, 30, 60 and 120 seconds: the last try comes almost four minutes after the first. An answer that says no
+# (4xx) is not asked again, because it would say the same.
+WAITS = (10, 30, 60, 120)
 
 WORKFLOW = "test.yml"
 # The jobs of that workflow whose reports the coverage upload takes: it sends
@@ -42,20 +48,33 @@ class NoRun(Exception):
     """The commit has no run to take results from, or the run did not end in time."""
 
 
+# The same function is in scripts/checks_ran.py; keep the two alike. They are two copies because checks-ran.yml
+# runs the base's copy of checks_ran.py alone, with no other file of the tree beside it.
+def answer_of(request: urllib.request.Request, what: str):
+    """GitHub's answer to one request, decoded, and its Link header. Tried again after WAITS when GitHub does not
+    answer; an answer that says no ends it at once."""
+    for wait in (*WAITS, None):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response), response.headers.get("Link", "")
+        except urllib.error.HTTPError as error:
+            if error.code < 500:
+                raise RuntimeError(f"GitHub answered {what} with {error.code} {error.reason}") from error
+            last = error
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+            last = error
+        if wait is not None:
+            time.sleep(wait)
+    raise RuntimeError(f"GitHub did not answer {what} in {len(WAITS) + 1} tries over {sum(WAITS)} s: {last}") from last
+
+
 def api(path: str, token: str) -> list:
     """One page of a GitHub API answer, decoded, in a list. The questions asked here have one page: a commit has
     a few runs, and a run of this workflow has fewer than 100 jobs."""
     request = urllib.request.Request(f"{API}/{path}", headers={
         "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "Authorization": f"Bearer {token}"})
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return [json.load(response)]
-        except (urllib.error.URLError, TimeoutError) as error:
-            if attempt == 2 or (isinstance(error, urllib.error.HTTPError) and error.code < 500):
-                raise RuntimeError(f"GitHub did not answer {path}: {error}") from error
-            time.sleep(10)
-    return []
+    page, _link = answer_of(request, path)
+    return [page]
 
 
 def queue_run(read: Callable[[str], list], repo: str, commit: str) -> dict:

@@ -8,20 +8,14 @@ import (
 	"testing"
 )
 
-// An investigation answers for what it opened.
-//
-// Measured (stabilization cycle 3, family S): asked to walk through how the
-// pricing cache works across five modules and why the hit rate was low, the run
-// read three of them, answered with one function pair in one file, and was
-// finalized completed / text_reply. Nothing was written, nothing was deferred,
-// no question was asked and no unread file was cited, so every existing gate
-// passed.
-//
-// The rule added: for a READ-ONLY run whose request names several files, an
-// answer that accounts for fewer than two of the files the run actually opened
-// goes back once, and if it does not improve, the run says so. The evidence is
-// the user's own words and the run's own reads — no plan, no task name, no
-// judgement of whether the answer is right.
+// An investigation answers for what it opened. For a read-only run whose
+// request names several files, an answer that accounts for fewer than two of
+// the files the run opened goes back once; if it does not improve, the run
+// ends incomplete. The evidence is the user's own words and the run's own
+// reads: no plan, no task name, no judgement of whether the answer is right.
+
+// The start of the message that sends a partial answer back.
+const scopeBounce = "The request asks about how several files behave together"
 
 const spanRequest = "walk me through how the pricing cache works across these files and tell me why we " +
 	"might be seeing a lower hit rate than expected. dont change anything yet"
@@ -55,7 +49,7 @@ func TestAPartialInvestigationDoesNotCompleteOnOneFact(t *testing.T) {
 		"and read_key uses the tier, so lookups miss.")
 	turns := append(spanReadThree(), thin, thin, thin, thin, thin)
 	run := integrityLoop(t, spanRequest, spanWorld(t), turns, nil)
-	if !run.told("The request asks about how several files behave together") {
+	if !run.told(scopeBounce) {
 		t.Error("the model was never sent back for the coverage the request asked for")
 	}
 	if !run.told("cache.py, keys.py, pricing.py") {
@@ -71,17 +65,44 @@ func TestAPartialInvestigationDoesNotCompleteOnOneFact(t *testing.T) {
 	}
 }
 
-// The same run, answering across the files it read, completes on the first try.
-func TestAnAnswerThatSpansTheFilesItReadCompletes(t *testing.T) {
-	full := spanText("`pricing.py` looks the price up in `cache.py` before computing it, and builds both keys " +
-		"through `keys.py`. The write path stores under write_key (the customer id) and the read path looks up " +
-		"read_key (the customer tier), so the two never agree and cache.py almost always misses.")
-	run := integrityLoop(t, spanRequest, spanWorld(t), append(spanReadThree(), full), nil)
-	if run.told("The request asks about how several files behave together") {
-		t.Error("a cross-file answer was sent back anyway")
-	}
-	if run.terminal["status"] != "completed" || run.terminal["reason"] != "text_reply" {
-		t.Errorf("terminal %s / %s, want completed / text_reply", run.terminal["status"], run.terminal["reason"])
+// An answer that accounts for the files the run read completes on the first
+// try. The guard counts the files an answer accounts for, not whether it is
+// right, so naming every file without the relationship also passes:
+// correctness cannot be decided from the workspace.
+func TestAnAnswerThatAccountsForTheFilesItReadCompletes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer string
+	}{
+		{
+			name: "names the files and how they work together",
+			answer: "`pricing.py` looks the price up in `cache.py` before computing it, and builds both keys " +
+				"through `keys.py`. The write path stores under write_key (the customer id) and the read path looks up " +
+				"read_key (the customer tier), so the two never agree and cache.py almost always misses.",
+		},
+		{
+			// Names one file, but explains the relationship through the
+			// symbols of the others it read.
+			name: "explains through the symbols it read",
+			answer: "The price lookup calls read_key to build the cache key, but the value was stored " +
+				"under write_key — read_key uses the customer tier where write_key used the id, so get() never finds " +
+				"what put() wrote, and every lookup in keys.py misses.",
+		},
+		{
+			name: "names the files without the relationship",
+			answer: "I looked at cache.py, keys.py and pricing.py. They are all part of the pricing path. " +
+				"Something in there is causing the misses.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := integrityLoop(t, spanRequest, spanWorld(t), append(spanReadThree(), spanText(tc.answer)), nil)
+			if run.told(scopeBounce) {
+				t.Error("the answer was sent back")
+			}
+			if run.terminal["status"] != "completed" || run.terminal["reason"] != "text_reply" {
+				t.Errorf("terminal %s / %s, want completed / text_reply", run.terminal["status"], run.terminal["reason"])
+			}
+		})
 	}
 }
 
@@ -137,7 +158,7 @@ func TestAWriteRunIsNotJudgedByHowManyFilesItMentions(t *testing.T) {
 			"old_str": "return f\"{sku}:{customer.tier}\"", "new_str": "return f\"{sku}:{customer.id}\""}),
 		`{"type":"done","summary":"read_key now builds the same key as write_key."}`,
 	}, nil)
-	if run.told("The request asks about how several files behave together") {
+	if run.told(scopeBounce) {
 		t.Error("the scope gate fired on a run that changed files")
 	}
 	want := "def write_key(sku, customer):\n    return f\"{sku}:{customer.id}\"\n\n\ndef read_key(sku, customer):\n    return f\"{sku}:{customer.id}\"\n"
@@ -146,8 +167,8 @@ func TestAWriteRunIsNotJudgedByHowManyFilesItMentions(t *testing.T) {
 	}
 }
 
-// Nothing here reaches the model: the bounce names the files the run opened and
-// asks for coverage, and says nothing about what is in them.
+// The bounce names the files the run opened and asks for coverage. It says
+// nothing about what is in them.
 func TestTheScopeMessageCarriesNoAnswer(t *testing.T) {
 	msg := investigationScopeMessage([]string{"cache.py", "keys.py", "pricing.py"}, []string{"keys.py"})
 	for _, leak := range []string{"mismatch", "customer", "tier", "hit rate", "write_key", "read_key"} {
@@ -182,16 +203,15 @@ func TestTheScopeGateWritesNothing(t *testing.T) {
 	}
 }
 
-// The captured answer from the exposed run (stabilization3/E/sessions/02-S),
-// byte for byte, against the workspace it was given: the rule must catch the
-// real reply, not only a paraphrase of it.
-func TestTheCapturedSAnswerIsCaughtByTheRule(t *testing.T) {
+// A real partial answer, byte for byte, against the workspace it was given:
+// the rule must catch the real reply, not only a paraphrase of it.
+func TestARecordedRealPartialAnswerIsCaughtByTheRule(t *testing.T) {
 	answer, err := os.ReadFile("testdata/s_answer.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	// The frozen v3.1 fixture, byte for byte, so the symbols are the real ones.
+	// The real workspace, byte for byte, so the symbols are the real ones.
 	for _, name := range []string{"cache.py", "catalog.py", "keys.py", "orders.py", "pricing.py"} {
 		body, err := os.ReadFile(filepath.Join("testdata", "s_fixture", name))
 		if err != nil {
@@ -202,7 +222,7 @@ func TestTheCapturedSAnswerIsCaughtByTheRule(t *testing.T) {
 		}
 	}
 	ctx := NewAgentContext(dir, Tier1Simple)
-	// What that run actually opened: three of the five modules.
+	// What that run opened: three of the five modules.
 	for _, name := range []string{"cache.py", "pricing.py", "keys.py"} {
 		full := filepath.Join(dir, name)
 		body, _ := os.ReadFile(full)
@@ -218,36 +238,16 @@ func TestTheCapturedSAnswerIsCaughtByTheRule(t *testing.T) {
 	}
 }
 
-// --- audit of the guard's limits (stabilization cycle 5) --------------------
-
-// What the guard cannot do: it counts files the answer accounts for, not
-// whether the answer is right. An answer that names every file the run read
-// and states no relationship between them passes it. Recorded, not fixed by
-// counting more: correctness is not decidable from the workspace.
-func TestNamingTheFilesWithoutTheRelationshipStillPasses(t *testing.T) {
-	padded := spanText("I looked at cache.py, keys.py and pricing.py. They are all part of the pricing path. " +
-		"Something in there is causing the misses.")
-	run := integrityLoop(t, spanRequest, spanWorld(t), append(spanReadThree(), padded), nil)
-	if run.told("The request asks about how several files behave together") {
-		t.Error("precondition changed: this answer is no longer passed by the guard")
-	}
-	if run.terminal["status"] != "completed" {
-		t.Errorf("terminal %s / %s", run.terminal["status"], run.terminal["reason"])
-	}
-}
-
-// The direction that matters for delivery: an answer that explains the
-// relationship through the symbols it read, naming one file, must not be sent
-// back as a partial investigation.
-func TestAnAnswerThatExplainsViaSymbolsIsNotBounced(t *testing.T) {
-	bySymbols := spanText("The price lookup calls read_key to build the cache key, but the value was stored " +
-		"under write_key — read_key uses the customer tier where write_key used the id, so get() never finds " +
-		"what put() wrote, and every lookup in keys.py misses.")
-	run := integrityLoop(t, spanRequest, spanWorld(t), append(spanReadThree(), bySymbols), nil)
-	if run.told("The request asks about how several files behave together") {
-		t.Error("an answer that explains the relationship through its symbols was bounced")
-	}
-	if run.terminal["status"] != "completed" {
-		t.Errorf("terminal %s / %s, want completed", run.terminal["status"], run.terminal["reason"])
+// Two files of one base name were read. An answer through the symbols of
+// either one is credited every time: map order must not decide it.
+func TestASymbolOfEitherOfTwoFilesWithOneNameIsCreditedEachTime(t *testing.T) {
+	dir := t.TempDir()
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.RecordFileRead(filepath.Join(dir, "client", "keys.py"), "def read_key(customer):\n    return customer.tier\n")
+	ctx.RecordFileRead(filepath.Join(dir, "server", "keys.py"), "def write_key(customer):\n    return customer.id\n")
+	for try := 1; try <= 100; try++ {
+		if !answerNamesSymbolFrom(ctx, "keys.py", "The value was stored under write_key, by the id.") {
+			t.Fatalf("try %d: an answer through the symbol of one of the two files was not credited", try)
+		}
 	}
 }

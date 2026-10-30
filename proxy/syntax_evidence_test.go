@@ -119,31 +119,20 @@ func TestAnExactCandidateSyntaxPassProducesOneBoundRecord(t *testing.T) {
 	}
 }
 
-// TestTheProducerReusesTheLiveGate pins that there is no second checker: the
-// verdict comes from the same function every write goes through.
-func TestTheProducerReusesTheLiveGate(t *testing.T) {
+// --- a negative observation is bound, and authorizes nothing -----------------
+
+// There is no second checker: the verdict is the one the live gate reached,
+// through the same function every write goes through.
+func TestASyntaxFailureIsBoundAndCarriesNoAuthority(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, false, nil))
 	const code = "def(\n"
 	live := fallbackSyntaxOutcomeFor(ctx, "solve.py", code).aggregate()
 	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", code))
 	if !ok {
-		t.Fatal("an attempted check produced no evidence")
-	}
-	if ev.Outcome != live.Status {
-		t.Errorf("producer said %q, the live gate said %q", ev.Outcome, live.Status)
-	}
-}
-
-// --- a negative observation is bound, and authorizes nothing -----------------
-
-func TestASyntaxFailureIsBoundAndCarriesNoAuthority(t *testing.T) {
-	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, false, nil))
-	ev, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "def(\n"))
-	if !ok {
 		t.Fatal("a demonstrated failure produced no observation at all")
 	}
-	if ev.Outcome != ValidationFailed {
-		t.Errorf("outcome %q, want failed", ev.Outcome)
+	if ev.Outcome != ValidationFailed || live.Status != ValidationFailed {
+		t.Errorf("producer said %q and the live gate %q, want both failed", ev.Outcome, live.Status)
 	}
 	if ev.Provenance.CandidateHash == "" || ev.Provenance.ObligationID == "" {
 		t.Error("a negative observation must still say what it is about")
@@ -175,9 +164,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			http.Error(w, "no", http.StatusForbidden)
 		}))
 		defer srv.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL = srv.URL
-		ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
+		ctx := syntaxEvidenceCtx(t, srv)
 		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("a refused check produced evidence")
 		}
@@ -187,9 +174,7 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			w.Write([]byte("not json"))
 		}))
 		defer srv.Close()
-		ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-		ctx.SandboxURL = srv.URL
-		ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-fixture")
+		ctx := syntaxEvidenceCtx(t, srv)
 		if _, ok := produceSyntaxEvidence(ctx, syntaxRequest(t, ctx, "solve.py", "A = 1\n")); ok {
 			t.Error("an unparseable verdict produced evidence")
 		}
@@ -204,6 +189,9 @@ func TestTheProducerDeclinesWhenTheGateDidNotEvaluateTheseBytes(t *testing.T) {
 			t.Error("a cancelled run produced evidence")
 		}
 	})
+}
+
+func TestTheProducerDeclinesWithoutAnIdentityToBindTo(t *testing.T) {
 	t.Run("no request identity", func(t *testing.T) {
 		ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
 		ctx.Ctx = context.Background()
@@ -244,18 +232,22 @@ func TestAMovedHashFailsClosed(t *testing.T) {
 
 func TestASyntaxPassMayDescribeOnlyASyntaxObligation(t *testing.T) {
 	ctx := syntaxEvidenceCtx(t, syntaxSandbox(t, true, nil))
-	for _, kind := range []string{
-		ObligationDeclaredCommand, ObligationDeclaredExample,
-		ObligationArtifactExists, ObligationUnsupported,
+	for _, c := range []struct{ kind, strength string }{
+		// A declared command needs a strength; syntax is the one a syntax
+		// pass could be mistaken for.
+		{ObligationDeclaredCommand, "syntax"},
+		{ObligationDeclaredExample, ""},
+		{ObligationArtifactExists, ""},
+		{ObligationUnsupported, ""},
 	} {
-		o, ok := newTaskObligation(kind, "solve.py", "", true)
+		o, ok := newTaskObligation(c.kind, "solve.py", c.strength, true)
 		if !ok {
-			continue
+			t.Fatalf("a %s obligation for solve.py was refused, so nothing is checked for it", c.kind)
 		}
 		req := syntaxRequest(t, ctx, "solve.py", "A = 1\n")
 		req.Obligation = o
 		if _, ok := produceSyntaxEvidence(ctx, req); ok {
-			t.Errorf("a syntax pass described a %s obligation", kind)
+			t.Errorf("a syntax pass described a %s obligation", c.kind)
 		}
 	}
 }

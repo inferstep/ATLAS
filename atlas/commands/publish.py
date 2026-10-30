@@ -39,23 +39,15 @@ from atlas.commands.asa import (
     _configured_vector_path, _host_resolve_vector_path,
 )
 
+# The lens's C(x) file: checked, hashed and listed in the registry entry.
+COST_FIELD_FILE = "cost_field.pt"
 
-def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:  # noqa: C901
+
+def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:
     atlas_root = cli_env.atlas_root()
 
     # Resolve the model once, the same way the component flows do.
-    matched = publishing.resolve_model_arg(args.model)
-    model_label = matched.name if matched else (args.model or "")
-    if not model_label:
-        try:
-            from atlas.commands import fit as fit_module
-            mp = fit_module._default_model_path()
-            if mp:
-                model_label = os.path.splitext(os.path.basename(mp))[0]
-        except Exception:  # noqa: S110
-            # Model autodetection is optional here; the explicit validation
-            # below tells the publisher to pass a model when it fails.
-            pass
+    model_label = _resolve_model_label(args)
     if not model_label:
         _safe_print(f"  {RED if color else ''}No model resolved — pass one "
                     f"or set ATLAS_MODEL_FILE in .env.{RESET if color else ''}")
@@ -64,62 +56,23 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:  # noqa: C9
     # Pre-flight both artifact sets BEFORE uploading anything: a combined
     # publish should not half-succeed on a missing vector.
     check = lens_module._check_model(args.model, atlas_root)
-    if check.verdict == "incompatible" or not check.artifact_dir:
-        _safe_print(f"  {RED if color else ''}Lens pre-flight failed: "
-                    f"{check.reason}{RESET if color else ''}")
-        return 1
+    rc = _check_lens_ready(check, color)
+    if rc is not None:
+        return rc
     artifact_dir = check.artifact_dir
-    missing = [f for f in ("cost_field.pt", "gx_xgboost.json")
+    missing = [f for f in (COST_FIELD_FILE, "gx_xgboost.json")
                if not os.path.isfile(os.path.join(artifact_dir, f))]
     vpath = _host_resolve_vector_path(_configured_vector_path(atlas_root),
                                       atlas_root)
     if not os.path.isfile(vpath):
         missing.append(os.path.basename(vpath))
-    if missing:
-        _safe_print(f"  {RED if color else ''}Missing artifacts: "
-                    f"{', '.join(missing)}.{RESET if color else ''}")
-        _safe_print("  Run `atlas lens build` / `atlas asa build` first, or "
-                    "publish one component: --lens-only / --asa-only.")
-        return 1
-
-    # Upload each component through its own flow, deferring the PR.
-    _safe_print(f"{GREEN if color else ''}── Lens artifacts ──"
-                f"{RESET if color else ''}")
-    lens_args = ["publish", "--skip-pr"]
-    if args.lens_repo:
-        lens_args += ["--repo", args.lens_repo]
-    if args.model:
-        lens_args.insert(1, args.model)
-    if args.license:
-        lens_args += ["--license", args.license]
-    if args.dry_run:
-        lens_args.append("--dry-run")
-    if getattr(args, "no_color", False):
-        lens_args.append("--no-color")
-    rc = lens_module.main(lens_args)
-    if rc != 0:
-        _safe_print(f"  {RED if color else ''}Lens upload failed (rc={rc}) — "
-                    f"stopping before the ASA upload.{RESET if color else ''}")
+    rc = _refuse_missing_artifacts(missing, color)
+    if rc is not None:
         return rc
 
-    _safe_print(f"{GREEN if color else ''}── ASA vector ──"
-                f"{RESET if color else ''}")
-    asa_args = ["publish", "--skip-pr"]
-    if args.asa_repo:
-        asa_args += ["--repo", args.asa_repo]
-    if args.model:
-        asa_args.insert(1, args.model)
-    if args.license:
-        asa_args += ["--license", args.license]
-    if args.dry_run:
-        asa_args.append("--dry-run")
-    if getattr(args, "no_color", False):
-        asa_args.append("--no-color")
-    rc = asa_module.main(asa_args)
+    # Upload each component through its own flow, deferring the PR.
+    rc = _upload_components(args, color)
     if rc != 0:
-        _safe_print(f"  {RED if color else ''}ASA upload failed (rc={rc}). "
-                    f"Lens artifacts are uploaded; fix and re-run (uploads "
-                    f"are idempotent).{RESET if color else ''}")
         return rc
 
     if args.dry_run:
@@ -132,22 +85,121 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:  # noqa: C9
         return 0
 
     # One registry PR carrying the complete entry: lens + ASA fields.
+    return _open_combined_registry_pr(args, color, atlas_root, model_label,
+                                      artifact_dir, vpath)
+
+
+def _resolve_model_label(args: argparse.Namespace) -> str:
+    """The model label to publish under: the registry name or the model
+    argument, else the configured model; "" when none is found."""
+    matched = publishing.resolve_model_arg(args.model)
+    model_label = matched.name if matched else (args.model or "")
+    if not model_label:
+        try:
+            from atlas.commands import fit as fit_module
+            mp = fit_module._default_model_path()
+            if mp:
+                model_label = os.path.splitext(os.path.basename(mp))[0]
+        except Exception:  # noqa: S110
+            # Model autodetection is optional here; the explicit validation
+            # in the caller tells the publisher to pass a model when it fails.
+            pass
+    return model_label
+
+
+def _check_lens_ready(check, color: bool) -> Optional[int]:
+    """Refuse a lens pre-flight that failed. Returns 1 then, else None."""
+    if check.verdict == "incompatible" or not check.artifact_dir:
+        _safe_print(f"  {RED if color else ''}Lens pre-flight failed: "
+                    f"{check.reason}{RESET if color else ''}")
+        return 1
+    return None
+
+
+def _refuse_missing_artifacts(missing: List[str], color: bool) -> Optional[int]:
+    """Name the missing artifacts and how to build them. Returns 1 when any
+    is missing, else None."""
+    if missing:
+        _safe_print(f"  {RED if color else ''}Missing artifacts: "
+                    f"{', '.join(missing)}.{RESET if color else ''}")
+        _safe_print("  Run `atlas lens build` / `atlas asa build` first, or "
+                    "publish one component: --lens-only / --asa-only.")
+        return 1
+    return None
+
+
+def _upload_components(args: argparse.Namespace, color: bool) -> int:
+    """Upload the lens artifacts, then the ASA vector, each through its own
+    flow with the PR left out. Returns the first failing exit code, else 0."""
+    _safe_print(f"{GREEN if color else ''}── Lens artifacts ──"
+                f"{RESET if color else ''}")
+    lens_args = _lens_upload_args(args)
+    rc = lens_module.main(lens_args)
+    if rc != 0:
+        _safe_print(f"  {RED if color else ''}Lens upload failed (rc={rc}) — "
+                    f"stopping before the ASA upload.{RESET if color else ''}")
+        return rc
+
+    _safe_print(f"{GREEN if color else ''}── ASA vector ──"
+                f"{RESET if color else ''}")
+    asa_args = _asa_upload_args(args)
+    rc = asa_module.main(asa_args)
+    if rc != 0:
+        _safe_print(f"  {RED if color else ''}ASA upload failed (rc={rc}). "
+                    f"Lens artifacts are uploaded; fix and re-run (uploads "
+                    f"are idempotent).{RESET if color else ''}")
+        return rc
+    return 0
+
+
+def _lens_upload_args(args: argparse.Namespace) -> List[str]:
+    """The `atlas lens publish` arguments for the lens upload; the PR is
+    left to the combined flow (--skip-pr)."""
+    lens_args = ["publish", "--skip-pr"]
+    if args.lens_repo:
+        lens_args += ["--repo", args.lens_repo]
+    if args.model:
+        lens_args.insert(1, args.model)
+    if args.license:
+        lens_args += ["--license", args.license]
+    if args.dry_run:
+        lens_args.append("--dry-run")
+    if getattr(args, "no_color", False):
+        lens_args.append("--no-color")
+    return lens_args
+
+
+def _asa_upload_args(args: argparse.Namespace) -> List[str]:
+    """The `atlas asa publish` arguments for the vector upload; the PR is
+    left to the combined flow (--skip-pr)."""
+    asa_args = ["publish", "--skip-pr"]
+    if args.asa_repo:
+        asa_args += ["--repo", args.asa_repo]
+    if args.model:
+        asa_args.insert(1, args.model)
+    if args.license:
+        asa_args += ["--license", args.license]
+    if args.dry_run:
+        asa_args.append("--dry-run")
+    if getattr(args, "no_color", False):
+        asa_args.append("--no-color")
+    return asa_args
+
+
+def _open_combined_registry_pr(args: argparse.Namespace, color: bool,
+                               atlas_root: str, model_label: str,
+                               artifact_dir: str, vpath: str) -> int:
+    """Open one registry PR whose entry carries both the lens and the ASA
+    fields; print the PR body when the PR cannot be opened."""
     _safe_print(f"{GREEN if color else ''}── Registry PR ──"
                 f"{RESET if color else ''}")
     inspection = lens_module._inspect_cost_field(artifact_dir)
     dim = inspection.dim or 0
-    cost_path = os.path.join(artifact_dir, "cost_field.pt")
+    cost_path = os.path.join(artifact_dir, COST_FIELD_FILE)
     lens_sha = publishing.sha256_file(cost_path)
     license_id = args.license or "apache-2.0"
 
-    lens_files = ["cost_field.pt"]
-    st = os.path.join(artifact_dir, "cost_field.safetensors")
-    if (os.path.isfile(st)
-            and os.path.getmtime(st) >= os.path.getmtime(cost_path)):
-        lens_files.append("cost_field.safetensors")
-    for opt in ("gx_xgboost.json", "gx_weights.json"):
-        if os.path.isfile(os.path.join(artifact_dir, opt)):
-            lens_files.append(opt)
+    lens_files = _lens_artifact_files(artifact_dir, cost_path)
 
     vec_meta = _read_cvector_meta(vpath)
     vec_sha = publishing.sha256_file(vpath)
@@ -203,6 +255,26 @@ def _emit_publish_all(args: argparse.Namespace, color: bool) -> int:  # noqa: C9
         _safe_print(f"  {GREEN if color else ''}PR opened: "
                     f"{pr_url}{RESET if color else ''}")
         return 0
+    return _report_pr_not_opened(body, color)
+
+
+def _lens_artifact_files(artifact_dir: str, cost_path: str) -> List[str]:
+    """The lens files the registry entry lists: cost_field.pt, the
+    safetensors copy when it is current, and the G(x) files present."""
+    lens_files = [COST_FIELD_FILE]
+    st = os.path.join(artifact_dir, "cost_field.safetensors")
+    if (os.path.isfile(st)
+            and os.path.getmtime(st) >= os.path.getmtime(cost_path)):
+        lens_files.append("cost_field.safetensors")
+    for opt in ("gx_xgboost.json", "gx_weights.json"):
+        if os.path.isfile(os.path.join(artifact_dir, opt)):
+            lens_files.append(opt)
+    return lens_files
+
+
+def _report_pr_not_opened(body: str, color: bool) -> int:
+    """Print the PR bodies and the per-component commands when the PR could
+    not be opened. The uploads are done, so the publish still exits 0."""
     _safe_print(f"  {YELL if color else ''}Could not open the PR "
                 f"automatically (already registered upstream?) — bodies "
                 f"printed above; or use `atlas lens publish` / `atlas asa "

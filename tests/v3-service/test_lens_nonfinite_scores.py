@@ -36,13 +36,8 @@ PER_STEP = {"enabled": True, "scored": True, "gx_available": True,
                           "gx_score_mean": 0.7, "cx_norm_max": 0.4,
                           "cx_norm_mean": 0.3}}
 
-
-class _Response(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
+UNSCORED = {"cx_energy": None, "cx_normalized": None, "cx_calibrated": False,
+            "gx_score": None, "gx_available": False, "verdict": "unscored"}
 
 
 def _answer(monkeypatch, payload):
@@ -50,43 +45,41 @@ def _answer(monkeypatch, payload):
     (json.dumps emits NaN / Infinity), a str is served verbatim."""
     body = payload if isinstance(payload, str) else json.dumps(payload)
     monkeypatch.setattr(scoring.urllib.request, "urlopen",
-                        lambda req, timeout=None: _Response(body.encode()))
-
-
-def _assert_unscored(out):
-    for key in ("cx_energy", "cx_normalized", "gx_score"):
-        assert out[key] is None, key
-    assert out["verdict"] == "unscored"
-    assert out["cx_calibrated"] is False and out["gx_available"] is False
-    assert out["failure"]["kind"] == NONFINITE_SCORE
+                        lambda req, timeout=None: io.BytesIO(body.encode()))
 
 
 @pytest.mark.parametrize("field", ["cx_energy", "cx_normalized", "gx_score"])
-@pytest.mark.parametrize("value", NON_FINITE)
+@pytest.mark.parametrize("value", NON_FINITE, ids=["NaN", "Infinity", "-Infinity"])
 def test_nonfinite_score_field_is_unscored(monkeypatch, field, value):
     _answer(monkeypatch, {**SCORED, field: value})
+
     out = scoring.score_candidate_combined("code")
-    _assert_unscored(out)
-    assert out["failure"]["field"] == field
+    failure = out.pop("failure")
+    assert out == UNSCORED
+    assert failure["kind"] == NONFINITE_SCORE
+    assert failure["field"] == field
+
     scored = scoring.score_candidate("code")
     assert scored == (None, None, False)
     assert scored.failure["kind"] == NONFINITE_SCORE
 
 
-def test_overflowing_literal_is_unscored(monkeypatch):
-    _answer(monkeypatch, '{"enabled": true, "scored": true, "cx_energy": 1e999, '
-                         '"cx_normalized": 0.5, "cx_calibrated": true, '
-                         '"gx_score": 0.5, "gx_available": false, '
-                         '"verdict": "unavailable"}')
-    _assert_unscored(scoring.score_candidate_combined("code"))
+@pytest.mark.parametrize("payload", [
+    pytest.param('{"enabled": true, "scored": true, "cx_energy": 1e999, "cx_normalized": 0.5, '
+                 '"cx_calibrated": true, "gx_score": 0.5, "gx_available": false, "verdict": "unavailable"}',
+                 id="an overflowing literal"),
+    pytest.param({**SCORED, "cx_normalized": "0.3"}, id="a normalized energy sent as text"),
+])
+def test_a_score_that_is_not_a_number_is_unscored(monkeypatch, payload):
+    _answer(monkeypatch, payload)
+
+    out = scoring.score_candidate_combined("code")
+    failure = out.pop("failure")
+    assert out == UNSCORED
+    assert failure["kind"] == NONFINITE_SCORE
 
 
-def test_nonnumeric_normalized_energy_is_unscored(monkeypatch):
-    _answer(monkeypatch, {**SCORED, "cx_normalized": "0.3"})
-    _assert_unscored(scoring.score_candidate_combined("code"))
-
-
-@pytest.mark.parametrize("value", NON_FINITE)
+@pytest.mark.parametrize("value", NON_FINITE, ids=["NaN", "Infinity", "-Infinity"])
 def test_nonfinite_per_step_aggregate_is_unscored(monkeypatch, value):
     _answer(monkeypatch, {**PER_STEP,
                           "aggregate": {**PER_STEP["aggregate"], "gx_score_min": value}})
@@ -99,7 +92,8 @@ def test_nonfinite_per_step_aggregate_is_unscored(monkeypatch, value):
 def test_finite_energies_including_negative_and_zero_survive(monkeypatch, energy):
     _answer(monkeypatch, {**SCORED, "cx_energy": energy})
     out = scoring.score_candidate_combined("code")
-    assert out["cx_energy"] == energy and out["verdict"] == "likely_correct"
+    assert out["cx_energy"] == energy
+    assert out["verdict"] == "likely_correct"
     assert "failure" not in out
     assert scoring.score_candidate("code") == (energy, 0.3, True)
 
@@ -115,4 +109,5 @@ def test_a_disabled_lens_is_unavailable_not_neutral(monkeypatch):
 def test_per_step_finite_answer_survives(monkeypatch):
     _answer(monkeypatch, PER_STEP)
     out = scoring.score_candidate_per_step("code")
-    assert out["gx_score_min"] == 0.6 and math.isfinite(out["cx_norm_max"])
+    assert out["gx_score_min"] == 0.6
+    assert math.isfinite(out["cx_norm_max"])

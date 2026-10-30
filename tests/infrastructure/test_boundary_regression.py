@@ -19,11 +19,15 @@ SANDBOX_DIR = Path(__file__).resolve().parents[2] / "sandbox"
 
 
 @pytest.fixture(scope="module")
-def executor(tmp_path_factory):
+def executor(tmp_path_factory, request):
     """Import executor_server with WORKSPACE_ROOT pointed at a temp dir."""
     root = tmp_path_factory.mktemp("ws-root")
-    os.environ["ATLAS_SANDBOX_WORKSPACE_ROOT"] = str(root)
-    sys.path.insert(0, str(SANDBOX_DIR))
+    # Put the environment and sys.path back after the module, also when the
+    # import fails.
+    env = pytest.MonkeyPatch()
+    request.addfinalizer(env.undo)
+    env.setenv("ATLAS_SANDBOX_WORKSPACE_ROOT", str(root))
+    env.syspath_prepend(str(SANDBOX_DIR))
     spec = importlib.util.spec_from_file_location(
         "executor_server_bt", SANDBOX_DIR / "executor_server.py")
     mod = importlib.util.module_from_spec(spec)
@@ -172,6 +176,38 @@ def test_cwd_rejects_nonexistent(executor):
         executor._resolve_shell_cwd("does-not-exist", root)
 
 
+# --- Workspace snapshot and contained paths --------------------------------
+
+def test_snapshot_keeps_a_link_inside_the_workspace_and_drops_one_out_of_it(executor, tmp_path):
+    workspace, snapshot = tmp_path / "workspace", tmp_path / "snapshot"
+    workspace.mkdir()
+    (workspace / "inside.txt").write_text("inside")
+    (tmp_path / "outside.txt").write_text("outside")
+    (workspace / "link_in").symlink_to("inside.txt")
+    (workspace / "link_out").symlink_to("../outside.txt")
+
+    executor._copy_workspace_snapshot(workspace, snapshot)
+
+    assert (snapshot / "link_in").is_symlink()
+    assert not (snapshot / "link_out").is_symlink()
+
+
+@pytest.mark.parametrize("parts, refused", [
+    (("src", "app.py"), False),
+    (("..", "escape.py"), True),
+    # A sibling folder whose name starts with the base's name.
+    (("..", "ws-sibling", "app.py"), True),
+])
+def test_contained_path_refuses_a_path_out_of_its_base(executor, tmp_path, parts, refused):
+    base = tmp_path / "ws"
+    base.mkdir()
+    if refused:
+        with pytest.raises(_http_exc(executor)):
+            executor._contained_path(base, *parts)
+    else:
+        assert executor._contained_path(base, *parts) == base.joinpath(*parts)
+
+
 # --- Limit configuration --------------------------------------------------
 
 def test_execution_time_cap_is_bounded(executor):
@@ -184,3 +220,17 @@ def test_snapshot_caps_are_positive(executor):
     assert executor.SHELL_SNAPSHOT_MAX_FILES > 0
     assert executor.SHELL_SNAPSHOT_MAX_BYTES > 0
     assert executor.SHELL_SNAPSHOT_MAX_FILE_BYTES > 0
+
+
+def test_snapshot_stops_above_its_file_count_cap(executor, tmp_path, monkeypatch):
+    monkeypatch.setattr(executor, "SHELL_SNAPSHOT_MAX_FILES", 2)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("a")
+    (workspace / "b.txt").write_text("b")
+    executor._copy_workspace_snapshot(workspace, tmp_path / "snapshot-at-the-cap")
+
+    (workspace / "c.txt").write_text("c")
+    with pytest.raises(_http_exc(executor)) as refused:
+        executor._copy_workspace_snapshot(workspace, tmp_path / "snapshot-over-the-cap")
+    assert refused.value.status_code == 413

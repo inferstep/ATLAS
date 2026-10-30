@@ -17,7 +17,6 @@ import time
 import pytest
 
 import adapters
-from adapters import LLMAdapter
 from stages.plan_search import PlanSearch
 
 
@@ -88,7 +87,7 @@ def test_the_backend_bound_is_a_semaphore_not_a_mutex():
 
     def worker():
         nonlocal peak, live
-        with LLMAdapter._slots:
+        with adapters.LLMAdapter._slots:
             with guard:
                 live += 1
                 peak = max(peak, live)
@@ -110,11 +109,11 @@ def test_counters_survive_concurrent_calls():
     """call_count/total_tokens are read-modify-write and now run under
     concurrency; unguarded they lose increments and the reported token
     total drifts below the real spend."""
-    a = LLMAdapter()
+    a = adapters.LLMAdapter()
     n = 200
 
     def bump():
-        with LLMAdapter._counter_lock:
+        with adapters.LLMAdapter._counter_lock:
             a.call_count += 1
             a.total_tokens += 10
 

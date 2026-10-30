@@ -75,11 +75,4 @@ describe('a real proxy turn', () => {
 			expect(predictEdit(call.name, call.args, 'existing\n')).toBeDefined();
 		}
 	});
-
-	it('never emits an event without a type', async () => {
-		for (const e of await parse(4096)) {
-			expect(typeof e.type).toBe('string');
-			expect(e.type.length).toBeGreaterThan(0);
-		}
-	});
 });

@@ -42,6 +42,9 @@ services:
       - ./v3-service/adapters.py:/app/adapters.py
       - ./v3-service/scoring.py:/app/scoring.py
       - ./v3-service/symbols.py:/app/symbols.py
+      - ./v3-service/grammars.py:/app/grammars.py
+      - ./v3-service/edit_checks.py:/app/edit_checks.py
+      - ./v3-service/embedded_script.py:/app/embedded_script.py
       - ./v3-service/planning.py:/app/planning.py
       - ./v3-service/pipeline.py:/app/pipeline.py
       - ./v3-service/stages:/app/stages

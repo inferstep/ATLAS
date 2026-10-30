@@ -12,12 +12,14 @@ Coverage strategy:
 
 import json
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
 from atlas import publishing
-from atlas.commands import lens, lens_card
+from atlas.commands import lens, lens_card, lens_publish
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,25 @@ def test_inspect_cost_field_dim_inferred(tmp_path):
     }
     torch.save(state, tmp_path / "cost_field.pt")
     assert lens._inspect_cost_field(str(tmp_path)).dim == DIM
+
+
+def test_inspect_cost_field_loads_only_in_the_restricted_mode(tmp_path, monkeypatch):
+    (tmp_path / "cost_field.pt").write_bytes(b"a file that the restricted mode refuses")
+    modes = []
+
+    def load(path, map_location=None, weights_only=False):
+        modes.append(weights_only)
+        if weights_only:
+            raise RuntimeError("the restricted mode refuses this file")
+        return {}
+
+    # A stand-in for torch, so that the test runs in every job, also where torch is not installed.
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(load=load))
+    result = lens._inspect_cost_field(str(tmp_path))
+    assert modes == [True]
+    assert (result.present, result.dim) == (True, None)
+    assert result.error.startswith("cost_field.pt cannot be read in torch's restricted mode, so the lens service "
+                                   "would refuse it too; rebuild it with `atlas lens build`")
 
 
 def test_inspect_cost_field_dim_missing_file(tmp_path):
@@ -230,6 +251,24 @@ def test_check_compat_warns_when_pc202_patch_missing(monkeypatch, tmp_path):
     assert v.verdict == "compat"
     assert "PC-202" in v.reason
     assert "G(x)" in v.reason
+
+
+def test_check_without_torch_on_the_host_still_asks_for_the_calibration_files(
+        monkeypatch, tmp_path):
+    """cost_field.pt is there, but the host has no torch to read its dim: the
+    verdict then rests on the other runtime artifacts, and none are there."""
+    (tmp_path / "cost_field.pt").write_bytes(b"weights")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setattr(lens, "_inspect_cost_field", lambda d: lens.ArtifactInspection(
+        present=True, dim=None, torch_available=False, error="torch not installed on host"))
+
+    v = lens._check_model(None, str(tmp_path))
+
+    assert v.verdict == "needs-build"
+    assert v.artifact_dir == str(tmp_path)
+    assert ("Lens weights are incomplete or uncalibrated; missing model_identity.json"
+            in v.reason)
 
 
 def test_activate_bundle_replaces_complete_set_and_removes_legacy(tmp_path):
@@ -395,6 +434,89 @@ def test_build_compat_with_no_force_is_noop(monkeypatch, tmp_path, capsys):
     assert "--force" in out
 
 
+def test_build_from_results_hands_its_dir_to_the_cache_and_the_banked_embeddings(
+        monkeypatch, tmp_path, capsys):
+    """--from-results reads the per-task JSONs of a bench run. The embedding
+    cache sits beside them, and the embeddings the run banked are merged in,
+    except the one that repeats an extracted sample."""
+    pytest.importorskip("numpy")
+    per_task = tmp_path / "run" / "v3_lcb" / "per_task"
+    per_task.mkdir(parents=True)
+    for i in range(60):
+        (per_task / f"t{i}.json").write_text(json.dumps({"code": f"def f{i}(): pass",
+                                                          "passed": i % 2 == 0}))
+    (tmp_path / "run" / "telemetry").mkdir()
+    (tmp_path / "run" / "telemetry" / "embeddings.emb").write_bytes(b"")
+    cache_paths = []
+
+    def fake_extract(samples, llama_url, color, cache_path=None, expect_dim=0):
+        cache_paths.append(cache_path)
+        return {"embeddings": [[float(i), 0.0] for i in range(len(samples))],
+                "labels": [s["label"] for s in samples]}
+
+    banked = [{"embedding": [0.0, 0.0], "label": 1}, {"embedding": [100.0, 5.0], "label": 0}]
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe(embedding_dim=2))
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "lens"))
+    monkeypatch.setattr(lens, "_extract_training_embeddings", fake_extract)
+    monkeypatch.setattr(lens, "_load_telemetry_embeddings", lambda path, dim: (banked, 0))
+
+    rc = lens.main(["build", "--from-results", str(per_task), "--dry-run", "--no-color"])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert cache_paths == [str(tmp_path / "run" / "v3_lcb" / "embeddings_cache.jsonl")]
+    assert ("Merged 1 banked candidate embeddings from embeddings.emb "
+            "(1 duplicates of extracted samples)") in out
+    assert "Training set: 61 samples (PASS=30, FAIL=31)" in out
+
+
+def test_build_from_a_run_root_points_at_its_per_task_dir(monkeypatch, tmp_path, capsys):
+    (tmp_path / "v3_lcb" / "per_task").mkdir(parents=True)
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "lens"))
+
+    rc = lens.main(["build", "--from-results", str(tmp_path), "--no-color"])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert f"No usable samples in {tmp_path}" in out
+    assert f"Did you mean: --from-results {tmp_path / 'v3_lcb' / 'per_task'}" in out
+
+
+def test_build_stops_when_no_embedding_comes_back(monkeypatch, tmp_path, capsys):
+    samples_path = tmp_path / "samples.json"
+    samples_path.write_text(json.dumps([{"text": f"sample {i}", "label": i % 2}
+                                        for i in range(60)]))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "lens"))
+    monkeypatch.setattr(lens, "_extract_training_embeddings",
+                        lambda *a, **kw: {"embeddings": [], "labels": []})
+
+    rc = lens.main(["build", "--samples", str(samples_path), "--no-color"])
+
+    assert rc == 1
+    assert "No embeddings extracted" in capsys.readouterr().out
+
+
+def test_build_without_the_training_module_says_what_the_host_needs(
+        monkeypatch, tmp_path, capsys):
+    samples_path = tmp_path / "samples.json"
+    samples_path.write_text(json.dumps([{"text": f"sample {i}", "label": i % 2}
+                                        for i in range(60)]))
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe())
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path / "lens"))
+    monkeypatch.setattr(lens, "_extract_training_embeddings", lambda samples, *a, **kw: {
+        "embeddings": [[0.1, 0.2]] * len(samples), "labels": [s["label"] for s in samples]})
+    monkeypatch.setitem(sys.modules, "geometric_lens.training", None)
+
+    rc = lens.main(["build", "--samples", str(samples_path), "--no-color"])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Could not import training module" in out
+    assert "must point at an ATLAS checkout containing geometric-lens/" in out
+
+
 # ---------------------------------------------------------------------------
 # Main dispatcher
 # ---------------------------------------------------------------------------
@@ -403,7 +525,9 @@ def test_main_with_no_subcommand_shows_help(capsys):
     rc = lens.main([])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "check" in out and "build" in out and "publish" in out
+    assert "check" in out
+    assert "build" in out
+    assert "publish" in out
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +648,33 @@ def test_publish_requires_hf_token_when_uploading(monkeypatch, tmp_path, capsys)
     assert rc == 1
     assert "HF_TOKEN" in out
     assert "huggingface.co/settings/tokens" in out
+
+
+def test_publish_stops_when_an_upload_fails(monkeypatch, tmp_path, capsys):
+    if not publishing.huggingface_hub_available():
+        pytest.skip("huggingface_hub not installed on this host")
+    (tmp_path / "cost_field.pt").write_bytes(b"fake")
+    _write_complete_runtime_artifacts(tmp_path, "Qwen3.5-9B-Q6_K")
+    monkeypatch.setenv("ATLAS_LENS_MODELS", str(tmp_path))
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_for_test")
+    monkeypatch.setattr(
+        lens, "_inspect_cost_field",
+        lambda d: lens.ArtifactInspection(present=True, dim=4096))
+    from huggingface_hub import HfApi
+
+    def upload_file(self, path_or_fileobj, path_in_repo, repo_id):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(HfApi, "create_repo", lambda self, **kw: None)
+    monkeypatch.setattr(HfApi, "upload_file", upload_file)
+
+    rc = lens.main(["publish", "Qwen3.5-9B-Q6_K",
+                    "--repo", "alice/atlas-lens-test", "--no-color"])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "upload of cost_field.pt failed: connection reset" in out
+    assert "Rendering registry-PR body" not in out
 
 
 def test_publish_skip_pr_writes_body_without_gh(monkeypatch, tmp_path, capsys):
@@ -789,7 +940,9 @@ def test_a_built_bundle_carries_a_fingerprint_scored_the_service_way(lens_drift,
     # The boot check accepts the same stack and reports a drifted one.
     assert lens_drift.check_fingerprint(str(tmp_path), score) == (True, True, "")
     present, ok, detail = lens_drift.check_fingerprint(str(tmp_path), lambda t: score(t) * 3 + 50)
-    assert present and not ok and "drift" in detail
+    assert present
+    assert not ok
+    assert "drift" in detail
 
 
 def test_a_reference_that_cannot_be_scored_leaves_no_fingerprint(lens_drift, tmp_path):
@@ -800,7 +953,8 @@ def test_a_reference_that_cannot_be_scored_leaves_no_fingerprint(lens_drift, tmp
 
     warning = lens._write_bundle_fingerprint(str(tmp_path), _tiny_cost_field(torch),
                                              embed=unreachable)
-    assert warning and "not written" in warning
+    assert warning
+    assert "not written" in warning
     assert not (tmp_path / "drift_fingerprint.json").exists()
     # With no fingerprint the boot check enforces nothing: never a drift verdict.
     assert lens_drift.check_fingerprint(str(tmp_path), lambda t: 1.0) == (False, True, "")
@@ -822,7 +976,8 @@ def test_the_build_points_the_service_embedder_at_the_server_it_reached(
     assert lens._write_bundle_fingerprint(str(tmp_path), _tiny_cost_field(torch),
                                           llama_url="http://localhost:8080") is None
     # Not the compose service name, which a host cannot resolve.
-    assert seen and set(seen) == {"http://localhost:8080"}
+    assert seen
+    assert set(seen) == {"http://localhost:8080"}
     assert "LLAMA_EMBED_URL" not in os.environ
 
 
@@ -862,7 +1017,7 @@ def test_lens_build_activates_a_bundle_that_carries_its_fingerprint(
     activated bundle has a fingerprint, and the provenance manifest hashes
     it. G(x) training (XGBoost + scikit-learn) and the model server are
     stand-ins."""
-    torch = pytest.importorskip("torch")
+    pytest.importorskip("torch")
     import geometric_lens.embedding_extractor as ee
     import geometric_lens.training as training
 
@@ -894,9 +1049,99 @@ def test_lens_build_activates_a_bundle_that_carries_its_fingerprint(
                     "--force", "--epochs", "3", "--no-color"])
     assert rc == 0
     fp = lens_drift.load_fingerprint(str(live))
-    assert fp is not None and len(fp["references"]) == len(lens_drift.REFERENCE_TEXTS)
+    assert fp is not None
+    assert len(fp["references"]) == len(lens_drift.REFERENCE_TEXTS)
     manifest = (live / "provenance.json").read_text()
     assert "drift_fingerprint.json" in manifest
+
+
+def test_a_build_whose_c_x_does_not_generalize_says_more_data_is_the_fix(
+        lens_drift, tmp_path, monkeypatch, capsys):
+    """Test AUC under 0.70 with a train AUC of 0.95 or more is overfitting:
+    the advice is more samples, not more epochs. The bundle is still built."""
+    torch = pytest.importorskip("torch")
+    import geometric_lens.embedding_extractor as ee
+    import geometric_lens.training as training
+
+    samples_path = tmp_path / "samples.json"
+    samples_path.write_text(json.dumps([{"text": f"sample {i}", "label": i % 2}
+                                        for i in range(60)]))
+
+    def save_gx(_result, save_dir=None):
+        (Path(save_dir) / "gx_xgboost.json").write_text("{}")
+        (Path(save_dir) / "gx_weights.json").write_text("{}")
+        (Path(save_dir) / "gx_thresholds.json").write_text(
+            json.dumps({"severe": 0.1, "off_rails": 0.2, "low": 0.3}))
+
+    monkeypatch.setattr(lens, "probe_llama", lambda *a, **kw: _probe(embedding_dim=4))
+    monkeypatch.setattr(lens, "_extract_training_embeddings", lambda samples, *a, **kw: {
+        "embeddings": [[0.1, 0.2, 0.3, 0.4]] * len(samples),
+        "labels": [s["label"] for s in samples]})
+    monkeypatch.setattr(training, "train_cost_field", lambda data, epochs, lr, margin: {
+        "model": _tiny_cost_field(torch), "best_test_auc": 0.6, "final_train_auc": 0.99,
+        "pass_energy_mean": 1.0, "fail_energy_mean": 9.0})
+    monkeypatch.setattr(training, "train_gx", lambda data: {"cv_auc_mean": 0.9})
+    monkeypatch.setattr(training, "save_gx", save_gx)
+    monkeypatch.setattr(ee, "observe_embedding_convention", lambda: None)
+    monkeypatch.setattr(ee, "extract_embedding", lambda text: [0.1, 0.2, 0.3, 0.4])
+
+    rc = lens.main(["build", "--samples", str(samples_path), "--artifact-dir",
+                    str(tmp_path / "live"), "--force", "--no-color"])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Test AUC < 0.70 with train AUC 0.99 — overfit on too few samples" in out
+    assert (tmp_path / "live" / "cost_field.pt").exists()
+
+
+@pytest.mark.parametrize("gx_error, loaded_model, thresholds, words", [
+    pytest.param(ValueError("one class only"), "test-model.gguf",
+                 {"severe": 0.1, "off_rails": 0.2, "low": 0.3},
+                 "G(x) training skipped: one class only", id="G(x) cannot be trained"),
+    pytest.param(None, "", {"severe": 0.1, "off_rails": 0.2, "low": 0.3},
+                 "Could not identify the loaded model", id="the loaded model has no name"),
+    pytest.param(None, "test-model.gguf", {"severe": 0.3, "off_rails": 0.2, "low": 0.1},
+                 "Could not activate the complete Lens bundle", id="the staged bundle is invalid"),
+])
+def test_a_build_that_cannot_complete_its_bundle_activates_nothing(
+        lens_drift, tmp_path, monkeypatch, capsys, gx_error, loaded_model, thresholds, words):
+    torch = pytest.importorskip("torch")
+    import geometric_lens.embedding_extractor as ee
+    import geometric_lens.training as training
+
+    samples_path = tmp_path / "samples.json"
+    samples_path.write_text(json.dumps([{"text": f"sample {i}", "label": i % 2}
+                                        for i in range(60)]))
+
+    def train_gx(data):
+        if gx_error is not None:
+            raise gx_error
+        return {"cv_auc_mean": 0.9}
+
+    def save_gx(_result, save_dir=None):
+        (Path(save_dir) / "gx_xgboost.json").write_text("{}")
+        (Path(save_dir) / "gx_weights.json").write_text("{}")
+        (Path(save_dir) / "gx_thresholds.json").write_text(json.dumps(thresholds))
+
+    monkeypatch.setattr(lens, "probe_llama",
+                        lambda *a, **kw: _probe(embedding_dim=4, model_name=loaded_model))
+    monkeypatch.setattr(lens, "_extract_training_embeddings", lambda samples, *a, **kw: {
+        "embeddings": [[0.1, 0.2, 0.3, 0.4]] * len(samples),
+        "labels": [s["label"] for s in samples]})
+    monkeypatch.setattr(training, "train_cost_field", lambda data, epochs, lr, margin: {
+        "model": _tiny_cost_field(torch), "best_test_auc": 0.9, "final_train_auc": 0.9,
+        "pass_energy_mean": 1.0, "fail_energy_mean": 9.0})
+    monkeypatch.setattr(training, "train_gx", train_gx)
+    monkeypatch.setattr(training, "save_gx", save_gx)
+    monkeypatch.setattr(ee, "observe_embedding_convention", lambda: None)
+    monkeypatch.setattr(ee, "extract_embedding", lambda text: [0.1, 0.2, 0.3, 0.4])
+
+    rc = lens.main(["build", "--samples", str(samples_path), "--artifact-dir",
+                    str(tmp_path / "live"), "--force", "--no-color"])
+
+    assert rc == 1
+    assert words in capsys.readouterr().out
+    assert not (tmp_path / "live" / "cost_field.pt").exists()
 
 
 def test_publish_ships_the_drift_fingerprint(monkeypatch, tmp_path, capsys):
@@ -952,12 +1197,13 @@ def test_model_card_provenance_names_the_loss_the_bundle_was_trained_with(tmp_pa
     legacy.mkdir()
     for d in (legacy, tmp_path / "missing"):
         text = lens_card.model_card_provenance(str(d), "test-model", 4096)
-        assert "class-weighted" in text and "MSE" in text
+        assert "class-weighted" in text
+        assert "MSE" in text
         assert "Trained locally via `atlas lens build`" not in text
 
 
 def test_model_card_embeds_the_provenance_paragraph():
-    card = lens._render_model_card_md(
+    card = lens_publish._render_model_card_md(
         "test-model", "test-model", 4096, "0" * 64, 1024, "apache-2.0",
         ["cost_field.pt"], provenance="PROVENANCE PARAGRAPH")
     assert "## Provenance\n\nPROVENANCE PARAGRAPH\n\n## License" in card

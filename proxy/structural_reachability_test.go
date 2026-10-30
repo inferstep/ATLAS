@@ -12,24 +12,18 @@ import (
 	"testing"
 )
 
-// Reachability proof for the T0/T1 direct-path structural gate.
-//
-// Three earlier attempts to exercise this branch failed on unverified
-// premises: the wrong guard location, a routing premise that disabled the
-// gate, and the wrong endpoint. This fixture pins the real contract instead:
+// The T0/T1 direct-path structural gate is reachable, and it refuses. The
+// fixture pins the real contract:
 //
 //	POST {V3URL}/internal/structural_check
 //	  request  {"path": <abs>, "source": <content>, "project_context": {...}}
-//	  response {"unresolved": []string}
+//	  response {"ok": bool, "unresolved": []string}
 //
-// editIntroducesUnresolved calls it TWICE -- edited side first, then original
-// side -- and refuses only when both succeed and the edited side names
-// something the original did not. The gate FAILS OPEN otherwise, which is
-// exactly how a previous fixture let the write land while appearing to test
-// the gate.
-//
-// This task proves reachability ONLY. Classification is expected to remain
-// Unknown here; restoring it is a separate change with its own RED evidence.
+// editIntroducesUnresolved calls it TWICE, edited side first, then original
+// side, and refuses only when both succeed and the edited side names
+// something the original did not. Otherwise the gate FAILS OPEN, so a fixture
+// that misses the contract lets the write land while seeming to test the
+// gate.
 
 type structuralStub struct {
 	mu       sync.Mutex
@@ -48,9 +42,7 @@ func newStructuralStub(t *testing.T, introduced string) (*httptest.Server, *stru
 	st := &structuralStub{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The write path also consults /internal/cyclomatic_complexity. That
-		// is a legitimate call here, so it is answered benignly rather than
-		// treated as a violation -- the strict stub caught it on the first
-		// run, which is what a strict stub is for.
+		// is a legitimate call here, so it is answered benignly.
 		if r.URL.Path == "/internal/cyclomatic_complexity" {
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
 			return
@@ -72,10 +64,8 @@ func newStructuralStub(t *testing.T, introduced string) (*httptest.Server, *stru
 		}
 		st.record(body)
 		src, _ := body["source"].(string)
-		// The response schema is {"ok": bool, "unresolved": []string}. The
-		// client fails open on !ok, so omitting it silently disables the gate
-		// -- diagnosed by calling checkStructuralUnresolved directly and
-		// seeing ok=false against a correct-looking unresolved list.
+		// The client fails open on !ok, so leaving "ok" out would silently
+		// disable the gate.
 		out := map[string]interface{}{"ok": true, "unresolved": []string{}}
 		if strings.Contains(src, introduced+"(") {
 			out["unresolved"] = []string{introduced}
@@ -151,11 +141,8 @@ func TestT0T1StructuralBranchIsReachable(t *testing.T) {
 	if sha256.Sum256(after) != priorHash {
 		t.Fatalf("target bytes changed on a refusal: %q", string(after))
 	}
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if strings.Contains(e.Name(), ".atlas.tmp") {
-			t.Errorf("temporary artifact left behind: %s", e.Name())
-		}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, "*.atlas.tmp*")); len(leftovers) > 0 {
+		t.Errorf("temporary artifacts left behind: %v", leftovers)
 	}
 
 	// --- classification ---------------------------------------------------
@@ -163,9 +150,6 @@ func TestT0T1StructuralBranchIsReachable(t *testing.T) {
 	// on this route, so no syntax verdict is implied in either direction.
 	if res.MutationStatus != MutationRefused {
 		t.Errorf("MutationStatus = %q, want refused", res.MutationStatus)
-	}
-	if res.MutationStatus.Applied() {
-		t.Error("a structural refusal must never read as applied")
 	}
 	if res.ValidationKind != ValidationKindStructural {
 		t.Errorf("ValidationKind = %q, want structural", res.ValidationKind)

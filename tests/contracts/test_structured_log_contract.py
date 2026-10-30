@@ -5,8 +5,10 @@ puts a copy under contract, and test_no_unregistered_copies (in
 test_private_value_filtering.py) fails if a copy exists without being in it.
 """
 
+import asyncio
 import hashlib
 import importlib.util
+import json
 import logging
 
 from tests.contracts import COPY_NOTICE_MARKER, STRUCTURED_LOG_COPIES as COPIES
@@ -49,11 +51,11 @@ def test_json_formatter_shape():
     m = _load(COPIES[0])
     m.set_request_id("req-json")
     rec = logging.LogRecord("n", logging.INFO, "f", 1, "hello", None, None)
-    out = m.JsonFormatter("svc").format(rec)
-    import json
-    d = json.loads(out)
-    assert d["service"] == "svc" and d["level"] == "INFO"
-    assert d["msg"] == "hello" and d["request_id"] == "req-json"
+    d = json.loads(m.JsonFormatter("svc").format(rec))
+    assert d["service"] == "svc"
+    assert d["level"] == "INFO"
+    assert d["msg"] == "hello"
+    assert d["request_id"] == "req-json"
     m.set_request_id("")
 
 
@@ -61,7 +63,6 @@ def test_request_id_isolated_across_async_tasks():
     """Concurrent async tasks must not see each other's request id — the
     reason this uses contextvars, not threading.local (which would bleed
     between interleaved requests on one event-loop thread)."""
-    import asyncio
     m = _load(COPIES[0])
     seen = {}
 

@@ -134,6 +134,38 @@ func (w *integrationWorld) assertProductionWorkspaceUntouched(t *testing.T) {
 
 // --- one command, every way it can end ------------------------------------------
 
+func TestRealExecutorStagesTheExactCandidateForACleanPass(t *testing.T) {
+	url, workspace := stagingIntegrationEnv(t)
+	w := newIntegrationWorld(t, url, workspace, integrationCode)
+	w.req.Budget.PerCommandTimeoutSec = 5
+	w.req.Budget.TotalTimeoutSec = 20
+	w.declare(`python3 -c "import ast;ast.parse(open('solve.py').read())"`)
+
+	res, ok := stageCandidate(w.ctx, w.req)
+	if !ok {
+		t.Fatal("staging refused a well-formed request")
+	}
+	if valid, why := res.validateAgainst(w.req); !valid {
+		t.Fatalf("the real executor produced an invalid result: %s", why)
+	}
+	got := res.Commands[0]
+	if got.Outcome != stagingExitedZero {
+		t.Errorf("outcome %q, want %q (exit %d)", got.Outcome, stagingExitedZero, got.ExitStatus)
+	}
+	if got.TargetHashBefore != contentSHA256(integrationCode) {
+		t.Error("the real executor did not stage the exact candidate")
+	}
+	if len(res.authorizingOutcomes()) != 1 {
+		t.Error("a clean pass authorized nothing")
+	}
+	if !res.WorkspaceDestroyed {
+		t.Error("the overlay was not reported destroyed")
+	}
+	w.assertProductionWorkspaceUntouched(t)
+}
+
+// Every other way one command can end is classified, and none of them
+// authorizes its obligation.
 func TestRealExecutorClassifiesEveryStagedOutcome(t *testing.T) {
 	url, workspace := stagingIntegrationEnv(t)
 	for _, c := range []struct {
@@ -141,7 +173,6 @@ func TestRealExecutorClassifiesEveryStagedOutcome(t *testing.T) {
 		command string
 		want    stagingCommandOutcome
 	}{
-		{"exact command pass", `python3 -c "import ast;ast.parse(open('solve.py').read())"`, stagingExitedZero},
 		{"nonzero exit", `python3 -c "import sys;sys.exit(3)"`, stagingExitedNonZero},
 		{"timeout", "sleep 120", stagingTimedOut},
 		{"target mutation", "echo 'print(8)' > solve.py", stagingMutatedTarget},
@@ -166,14 +197,7 @@ func TestRealExecutorClassifiesEveryStagedOutcome(t *testing.T) {
 			if got.Outcome != c.want {
 				t.Errorf("outcome %q, want %q (exit %d)", got.Outcome, c.want, got.ExitStatus)
 			}
-			if c.want == stagingExitedZero {
-				if got.TargetHashBefore != contentSHA256(integrationCode) {
-					t.Error("the real executor did not stage the exact candidate")
-				}
-				if len(res.authorizingOutcomes()) != 1 {
-					t.Error("a clean pass authorized nothing")
-				}
-			} else if len(res.authorizingOutcomes()) != 0 {
+			if len(res.authorizingOutcomes()) != 0 {
 				t.Errorf("%s authorized its obligation", c.name)
 			}
 			if !res.WorkspaceDestroyed {

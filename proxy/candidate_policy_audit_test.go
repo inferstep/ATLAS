@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Configuration, telemetry and provenance, audited as facts about the build
+// Configuration, telemetry and provenance, checked as facts about the build
 // rather than as intentions.
 
 // Neither the model nor the service can reach the mode, and no route reads a
@@ -103,8 +103,11 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	if got.Delivers {
 		t.Error("capture-only left the licence in place")
 	}
-	// Delivery is set in exactly one place in the policy owner, and it is the
-	// strict branch. A confirmation cannot reach it.
+}
+
+// In the source: the policy owner sets Delivers in exactly one place, only two
+// decisions deliver, and the owner never authorizes for itself.
+func TestThePolicyOwnerSetsDeliversInOnePlace(t *testing.T) {
 	src, err := os.ReadFile("advisory_policy.go")
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +141,7 @@ func TestAutomaticDeliversOnlyWhatTheOwnerAuthorized(t *testing.T) {
 	}
 	// Automatic never decides its own eligibility here.
 	if !strings.Contains(decide, "in.AutomaticEligible") {
-		t.Error("the automatic branch no longer reads the owner's answer")
+		t.Error("the automatic branch does not read the owner's answer")
 	}
 	for _, banned := range []string{"automaticDeliveryAllowed", "mintAuthorizationGrant"} {
 		if strings.Contains(decide, banned) {
@@ -183,48 +186,43 @@ func TestPolicyTelemetryCarriesNoContent(t *testing.T) {
 	}
 }
 
-// With the capture off the policy still decides, writes nothing, and allocates
-// nothing for a record it is not going to make.
+// With the capture off (no sink is set in a test) the route still delivers,
+// and the record writers build nothing for a record they will not make.
 func TestCaptureDisabledIsInert(t *testing.T) {
 	w := newRouteWorldWithClosure(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"]}`,
 		nil, false)
-	before, err := os.ReadFile(w.path)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
-	}
 	res, err := w.write(t)
 	if err != nil {
 		t.Fatalf("write failed with the sink off: %v", err)
 	}
 	if res == nil || !res.Success {
-		t.Fatalf("the route stopped delivering with the sink off: %+v", res)
+		t.Fatalf("the route did not deliver with the sink off: %+v", res)
 	}
-	_ = before
-	// The record writers return before building anything when the sink is off.
-	for _, fn := range []string{"recordCandidatePolicyDecision", "recordMutationScope"} {
-		src, err := os.ReadFile(map[string]string{
-			"recordCandidatePolicyDecision": "candidate_policy.go",
-			"recordMutationScope":           "mutation_scope.go",
-		}[fn])
+	// In the source: each record writer returns before building anything when
+	// the sink is off.
+	for _, writer := range []struct{ fn, file string }{
+		{"recordCandidatePolicyDecision", "candidate_policy.go"},
+		{"recordMutationScope", "mutation_scope.go"},
+	} {
+		src, err := os.ReadFile(writer.file)
 		if err != nil {
 			t.Fatal(err)
 		}
 		body := string(src)
-		f := body[strings.Index(body, "func "+fn+"("):]
+		f := body[strings.Index(body, "func "+writer.fn+"("):]
 		f = f[:strings.Index(f, "\n}")]
 		guard := strings.Index(f, "if !sink.enabled() {")
 		submit := strings.Index(f, "sink.submit(")
 		if guard < 0 || submit < 0 || guard > submit {
-			t.Errorf("%s builds its record before checking the sink", fn)
+			t.Errorf("%s builds its record before checking the sink", writer.fn)
 		}
 	}
 }
 
-// Provenance describes the bytes that are on disk, and neither the model nor
-// the service can set it.
-func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
-	// The field is not on any wire type the model or the service fills.
+// Neither the model nor the service can set the delivered provenance: the
+// field is not on any wire type they fill.
+func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
 	types, err := os.ReadFile("types.go")
 	if err != nil {
 		t.Fatal(err)
@@ -234,6 +232,7 @@ func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 		"type WriteFileOutput struct", "type modelFacingResult struct"} {
 		start := strings.Index(body, typeName)
 		if start < 0 {
+			t.Errorf("types.go holds no %q, so its check reads nothing; name the file that holds it", typeName)
 			continue
 		}
 		decl := body[start : start+strings.Index(body[start:], "\n}")]
@@ -242,7 +241,11 @@ func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 			t.Errorf("%s carries the provenance", typeName)
 		}
 	}
-	// It is set only beside a delivery that happened, from the policy outcome.
+}
+
+// Neither the model nor the service can set the delivered provenance: it is set
+// only beside a delivery that happened, from the policy outcome.
+func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -266,7 +269,10 @@ func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
 			}
 		}
 	}
-	// And what it says matches what landed.
+}
+
+// The delivered provenance describes the bytes that are on disk.
+func TestDeliveredProvenanceMatchesWhatLanded(t *testing.T) {
 	w := newRouteWorldWithClosure(t,
 		`{"task_mode":"work","output_knowledge":"declared","expected_outputs":["solve.py"],`+
 			`"verification_knowledge":"declared",`+

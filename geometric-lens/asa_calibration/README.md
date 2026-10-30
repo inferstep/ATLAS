@@ -1,43 +1,36 @@
 # ASA steering vectors — structural_edit vs edit_file bias
 
-May 2026 BiasBusters #4. Complements the grammar-level enforcement
-(items #2/#3 in `proxy/agent.go`) by shifting the proposal distribution
+The vector complements the grammar-level enforcement (the per-step tool
+restriction in `proxy/agent.go`) by shifting the proposal distribution
 upstream: even before grammar can ban `edit_file`, the residual stream
 is already biased toward `structural_edit` for whole-function/class/element
 swaps.
 
-## Published vectors predate the tool rename
+## Building a vector from the current prompts
 
-The tool this vector biases toward was named `ast_edit` when the currently
-published vectors were built, and the contrast prompts in
-`generate_pairs.py` embedded that literal string. The prompt templates now
-say `structural_edit`; the published `.gguf` artifacts do not.
+The vector file is named `ast_edit_steering.gguf`, after the tool's former
+name. `atlas/commands/model_registry.py` lists each published vector by that
+file name (`asa_artifact_files`) with its SHA256 (`asa_artifact_sha256`), and
+the installer downloads it by that name, so the name stays.
 
-The artifacts keep the filename `ast_edit_steering.gguf`, because
-`atlas/cli/commands/model_registry.py` pins them by name and SHA256 against
-the HuggingFace dataset — renaming the file would 404 every download.
-
-A published vector still encodes the underlying decision (replace a whole
-named node vs. patch a line), which is what the contrast was built to
-capture. Whether it still helps, or harms tool calling, under the new tool
-name has not been measured. To rebuild against the current prompts, per
-model:
+The published vectors come from contrast prompts that name the tool
+`ast_edit` (CHANGELOG, "Renamed: ast_edit is now structural_edit"); the
+templates in `generate_pairs.py` name it `structural_edit`. To build a vector
+from the current templates, per model:
 
 ```
-# regenerates contrast_pairs.jsonl from the current templates, then
+# generates contrast_pairs.jsonl from the templates when it is absent, then
 # extracts residuals in the lens container
 atlas asa build <registry-model-name>
 atlas asa check
 atlas asa publish <registry-model-name>
 ```
 
-`asa build` regenerates `contrast_pairs.jsonl` on demand when `--pairs` is
-omitted, so it picks up the renamed templates in `generate_pairs.py` with no
-extra step. After publishing, update the pinned SHA256 in
-`model_registry.py`.
-
-This is independent of the Geometric Lens retrain, which is the one that
-consumes `atlas bench` results.
+Without `--pairs`, `asa build` reads `contrast_pairs.jsonl` in this folder and
+generates it from `generate_pairs.py` (1,000 pairs, seed 42) only when the file
+does not exist (`atlas/commands/asa.py`); delete an old file to pick up changed
+templates. The pull request that `asa publish` opens names the vector's
+SHA256: set it as the entry's `asa_artifact_sha256` in `model_registry.py`.
 
 ## Pipeline
 
@@ -117,10 +110,9 @@ contrast_pairs.jsonl  →  build_cvector_prompts.py  →  positive.txt + negativ
    - `ATLAS_CONTROL_VECTOR_SCALE=1.0` (default `0.5` — conservative; bump to 1.0–1.5 if behavior change is too subtle, drop toward 0.2 if other tasks degrade)
    - `ATLAS_CONTROL_VECTOR_LAYER_RANGE="24 30"` (default: all layers)
 
-5. **Validate** by re-running the May 7 flask-app test that surfaced
-   the bias. Expected outcome: model proposes `structural_edit` on first
-   attempt for whole-function rewrites, without needing the grammar
-   trigger to fire.
+5. **Validate** with a task that rewrites a whole function. Expected
+   outcome: the model proposes `structural_edit` on its first attempt,
+   without needing the grammar trigger to fire.
 
 ## Layer scope (optional)
 

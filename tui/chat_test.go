@@ -8,147 +8,109 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
-
-// fakeAgentServer returns an httptest server that, on POST /v1/agent,
-// streams the given canned events then closes with [DONE]. Captures
-// the request body for the test to inspect.
-func fakeAgentServer(t *testing.T, events []chatEvent,
-	gotBody *agentRequest) *httptest.Server {
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/agent", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
-		body, _ := io.ReadAll(r.Body)
-		if gotBody != nil {
-			_ = json.Unmarshal(body, gotBody)
-		}
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			t.Fatal("test server: no flusher")
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
-		for _, ev := range events {
-			b, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
-		}
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
-	})
-	mux.HandleFunc("/cancel", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
-	})
-	return httptest.NewServer(mux)
-}
 
 func mkChatEvent(typ string, data interface{}) chatEvent {
 	b, _ := json.Marshal(data)
 	return chatEvent{Type: typ, Data: b}
 }
 
+// sendChatOpts posts the request to /v1/agent, with the tools the user allowed
+// for the session (so the proxy does not ask again), and forwards the
+// streamed events in order.
 func TestSendChatPostsRequestBodyAndStreamsEvents(t *testing.T) {
-	want := []chatEvent{
-		mkChatEvent("text", map[string]string{"content": "hi"}),
-		mkChatEvent("tool_call", map[string]interface{}{
-			"name": "read_file", "args": map[string]string{"path": "x.go"},
-		}),
-		mkChatEvent("done", map[string]string{"summary": "ok"}),
-	}
-	var gotReq agentRequest
-	srv := fakeAgentServer(t, want, &gotReq)
+	var got agentRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/v1/agent" {
+			http.Error(w, "want POST /v1/agent", http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"text","data":{"content":"hi"}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"tool_call","data":{"name":"read_file","args":{"path":"x.go"}}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"done","data":{"summary":"ok"}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
 	defer srv.Close()
 
 	out := make(chan chatEvent, 16)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := sendChatOpts(ctx, srv.URL, "fix bug", "/work", "default",
-		"sess-1", nil, demoOpts{}, out); err != nil {
+	err := sendChatOpts(ctx, srv.URL, "fix bug", "/work", "default", "sess-1", nil,
+		demoOpts{allowedTools: []string{"run_command", "write_file"}}, out)
+	if err != nil {
 		t.Fatalf("sendChatOpts: %v", err)
 	}
 	close(out)
 
-	if gotReq.Message != "fix bug" {
-		t.Errorf("Message = %q", gotReq.Message)
+	if got.Message != "fix bug" || got.WorkingDir != "/work" || got.Mode != "default" || got.SessionID != "sess-1" {
+		t.Errorf("request = %+v, want the message, working dir, mode and session id as given", got)
 	}
-	if gotReq.WorkingDir != "/work" {
-		t.Errorf("WorkingDir = %q", gotReq.WorkingDir)
+	if strings.Join(got.SessionAllowedTools, ",") != "run_command,write_file" {
+		t.Errorf("session_allowed_tools = %v, want [run_command write_file]", got.SessionAllowedTools)
 	}
-	if gotReq.Mode != "default" {
-		t.Errorf("Mode = %q", gotReq.Mode)
-	}
-	if gotReq.SessionID != "sess-1" {
-		t.Errorf("SessionID = %q", gotReq.SessionID)
-	}
-
-	got := []chatEvent{}
+	var types []string
 	for ev := range out {
-		got = append(got, ev)
+		types = append(types, ev.Type)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d events, want 3", len(got))
-	}
-	if got[0].Type != "text" || got[1].Type != "tool_call" || got[2].Type != "done" {
-		t.Errorf("event order = %v", []string{got[0].Type, got[1].Type, got[2].Type})
+	if strings.Join(types, ",") != "text,tool_call,done" {
+		t.Errorf("events = %v, want text, tool_call, done", types)
 	}
 }
 
+// The demo's raw side is one direct request to the model, carrying only the
+// user's message: no agent endpoint and no orchestration guidance. The body
+// is JSON, and the request asks for an event stream.
 func TestDemoRawSideUsesOneDirectModelRequest(t *testing.T) {
 	var got rawChatRequest
-	var gotPath string
+	var gotPath, gotContentType, gotAccept string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		gotAccept = r.Header.Get("Accept")
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"answer"}}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
-	out := make(chan chatEvent, 8)
 
+	out := make(chan chatEvent, 8)
 	if err := sendRawChat(context.Background(), srv.URL, "configured-model", "build it", out); err != nil {
 		t.Fatalf("sendRawChat: %v", err)
 	}
+	close(out)
 	if gotPath != "/v1/chat/completions" {
-		t.Fatalf("path = %q, want raw chat completions endpoint", gotPath)
+		t.Errorf("path = %q, want the raw chat completions endpoint", gotPath)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotAccept != "text/event-stream" {
+		t.Errorf("Accept = %q, want text/event-stream", gotAccept)
 	}
 	if !got.Stream || got.Model != "configured-model" {
-		t.Fatalf("request = %#v", got)
+		t.Errorf("request = %#v, want a stream from the configured model", got)
 	}
 	if len(got.Messages) != 1 || got.Messages[0]["content"] != "build it" {
-		t.Fatalf("messages = %#v", got.Messages)
+		t.Errorf("messages = %#v, want only the user's message", got.Messages)
 	}
-	for _, message := range got.Messages {
-		if strings.Contains(message["content"], "plan_tasks") {
-			t.Fatalf("raw request contains orchestration tool guidance: %#v", got.Messages)
-		}
-	}
-	close(out)
 	var types []string
 	for event := range out {
 		types = append(types, event.Type)
 	}
 	if strings.Join(types, ",") != "llm_call_start,llm_first_token,llm_token,llm_call_end,text" {
-		t.Fatalf("events = %v", types)
+		t.Errorf("events = %v", types)
 	}
 }
 
@@ -159,25 +121,20 @@ func TestSendChatHandlesNon200Status(t *testing.T) {
 	defer srv.Close()
 	out := make(chan chatEvent, 1)
 	err := sendChatOpts(context.Background(), srv.URL, "hi", "/", "default", "s", nil, demoOpts{}, out)
-	if err == nil {
-		t.Fatal("sendChatOpts should return error on 503")
-	}
-	if !strings.Contains(err.Error(), "503") {
+	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Errorf("error = %v, want one mentioning 503", err)
 	}
 }
 
+// Cancelling the context stops the stream early and returns an error, so a
+// cut-off turn never passes for a finished one.
 func TestSendChatContextCancelStopsStream(t *testing.T) {
-	// Server drips events forever — sendChatOpts should return when ctx cancels.
+	// The server drips 100 events over two seconds unless the client goes away.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
 		for i := 0; i < 100; i++ {
-			b, _ := json.Marshal(mkChatEvent("text",
-				map[string]string{"content": "drip"}))
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			flusher.Flush()
+			fmt.Fprint(w, `data: {"type":"text","data":{"content":"drip"}}`+"\n\n")
+			w.(http.Flusher).Flush()
 			select {
 			case <-r.Context().Done():
 				return
@@ -187,142 +144,133 @@ func TestSendChatContextCancelStopsStream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out := make(chan chatEvent, 32)
+	// Room for every event, so a client that ignores the cancel cannot block.
+	out := make(chan chatEvent, 100)
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(80 * time.Millisecond)
-		cancel()
-	}()
+	time.AfterFunc(80*time.Millisecond, cancel)
 	err := sendChatOpts(ctx, srv.URL, "hi", "/", "default", "s", nil, demoOpts{}, out)
 	if err == nil {
-		// context cancellation on read returns ctx.Err() or io.EOF;
-		// either is acceptable. nil means the stream completed before
-		// cancel fired — which is also fine but unexpected.
-		t.Log("sendChatOpts returned nil — server may have closed first")
+		t.Error("a cancelled stream returned no error")
+	}
+	if len(out) == 100 {
+		t.Error("all 100 events arrived: the cancel did not stop the stream")
 	}
 }
 
-func TestCancelTurnPosts(t *testing.T) {
-	got := make(chan map[string]string, 1)
+// cancelTurn posts the turn's session id to /cancel. Without an id it refuses
+// and posts nothing.
+func TestCancelTurnPostsTheSessionID(t *testing.T) {
+	var posted []string // the path and session id of each request the proxy got
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/cancel" {
-			http.Error(w, "wrong path", 404)
-			return
-		}
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		got <- body
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": true})
+		posted = append(posted, r.URL.Path+" "+body["session_id"])
 	}))
 	defer srv.Close()
 
+	if err := cancelTurn(srv.URL, ""); err == nil {
+		t.Error("an empty session id was not refused")
+	}
 	if err := cancelTurn(srv.URL, "sess-9"); err != nil {
 		t.Fatalf("cancelTurn: %v", err)
 	}
-	body := <-got
-	if body["session_id"] != "sess-9" {
-		t.Errorf("session_id = %q", body["session_id"])
+	if strings.Join(posted, ", ") != "/cancel sess-9" {
+		t.Errorf("the proxy got %q, want only /cancel for sess-9", posted)
 	}
 }
 
-func TestCancelTurnEmptyIDIsError(t *testing.T) {
-	if err := cancelTurn("http://localhost:0", ""); err == nil {
-		t.Errorf("expected error for empty session id")
-	}
-}
-
+// Comment lines (": ...") are not events, and [DONE] ends the turn: nothing
+// after it is read.
 func TestParseChatSSESkipsCommentsAndDONE(t *testing.T) {
-	stream := strings.Join([]string{
-		": connected",
-		"",
-		"data: " + mustJSON(mkChatEvent("text", map[string]string{"content": "a"})),
-		"",
-		": heartbeat",
-		"",
-		"data: " + mustJSON(mkChatEvent("text", map[string]string{"content": "b"})),
-		"",
-		"data: [DONE]",
-		"",
-	}, "\n")
+	stream := ": connected\n\n" +
+		`data: {"type":"text","data":{"content":"a"}}` + "\n\n" +
+		": heartbeat\n\n" +
+		`data: {"type":"text","data":{"content":"b"}}` + "\n\n" +
+		"data: [DONE]\n\n" +
+		`data: {"type":"text","data":{"content":"after the end"}}` + "\n\n"
 	out := make(chan chatEvent, 4)
 	if err := parseChatSSE(context.Background(), strings.NewReader(stream), out); err != nil {
 		t.Fatalf("parseChatSSE: %v", err)
 	}
-	close(out)
-	got := []chatEvent{}
-	for ev := range out {
-		got = append(got, ev)
-	}
-	if len(got) != 2 {
-		t.Errorf("got %d events, want 2 (comments + [DONE] should be skipped)", len(got))
+	if len(out) != 2 {
+		t.Errorf("got %d events, want 2 (comments are skipped, nothing after [DONE] is read)", len(out))
 	}
 }
 
-func mustJSON(v interface{}) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
+// The token comes from the api-keys file in any of its three shapes; with no
+// file there is no token.
+func TestLoadBearerToken(t *testing.T) {
+	cases := []struct {
+		name string
+		file string // the content of the api-keys file; "" means there is no file
+		want string
+	}{
+		{"no file", "", ""},
+		{"api_key field", `{"api_key": "abc123"}`, "abc123"},
+		{"grouped keys", `{"keys": {"tui": "tok-1"}}`, "tok-1"},
+		// `atlas init` writes token strings keyed to metadata; the first in
+		// sorted order wins.
+		{"atlas init shape", `{"sk-atlas-zzz": {"user": "local", "created_by": "atlas init"},
+			"sk-atlas-aaa": {"user": "local", "created_by": "atlas init"}}`, "sk-atlas-aaa"},
 	}
-	return string(b)
-}
-
-func TestLoadBearerTokenMissingFileReturnsEmpty(t *testing.T) {
-	t.Setenv("ATLAS_API_KEYS_PATH", "/nonexistent/path/api-keys.json")
-	if got := loadBearerToken(); got != "" {
-		t.Errorf("loadBearerToken with missing file = %q, want empty", got)
-	}
-}
-
-func TestLoadBearerTokenReadsAPIKey(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/api-keys.json"
-	if err := writeJSON(path, map[string]string{"api_key": "abc123"}); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ATLAS_API_KEYS_PATH", path)
-	if got := loadBearerToken(); got != "abc123" {
-		t.Errorf("loadBearerToken = %q, want abc123", got)
-	}
-}
-
-// `atlas init` writes {"sk-…": {"user": …}} — token strings keyed to
-// metadata objects. The loader picks the lexicographically first token.
-func TestLoadBearerTokenReadsAtlasInitShape(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/api-keys.json"
-	body := map[string]interface{}{
-		"sk-atlas-zzz": map[string]string{"user": "local", "created_by": "atlas init"},
-		"sk-atlas-aaa": map[string]string{"user": "local", "created_by": "atlas init"},
-	}
-	if err := writeJSON(path, body); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ATLAS_API_KEYS_PATH", path)
-	if got := loadBearerToken(); got != "sk-atlas-aaa" {
-		t.Errorf("loadBearerToken = %q, want sk-atlas-aaa", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "api-keys.json")
+			if c.file != "" {
+				if err := os.WriteFile(path, []byte(c.file), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("ATLAS_API_KEYS_PATH", path)
+			if got := loadBearerToken(); got != c.want {
+				t.Errorf("loadBearerToken = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
-func TestLoadBearerTokenReadsGroupedKeys(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/api-keys.json"
-	body := map[string]interface{}{"keys": map[string]string{"tui": "tok-1"}}
-	if err := writeJSON(path, body); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("ATLAS_API_KEYS_PATH", path)
-	if got := loadBearerToken(); got != "tok-1" {
-		t.Errorf("loadBearerToken = %q, want tok-1", got)
-	}
-}
+// The wrapper on the default transport adds the service token to a request
+// that has no Authorization header, keeps the header a request already has,
+// and adds nothing when there is no service token.
+func TestTokenTransportAddsTheServiceTokenOnlyWhenMissing(t *testing.T) {
+	saved := serviceToken
+	t.Cleanup(func() { serviceToken = saved })
+	var gotAuth string // the Authorization header the server got
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+	}))
+	defer srv.Close()
 
-func writeJSON(path string, v interface{}) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
+	cases := []struct {
+		name  string
+		token string // the service token; "" means there is none
+		auth  string // the request's own Authorization header; "" means it has none
+		want  string
+	}{
+		{"a request without the header gets the token", "svc-secret", "", "Bearer svc-secret"},
+		{"a request's own header is kept", "svc-secret", "Bearer own", "Bearer own"},
+		{"no token adds nothing", "", "", ""},
 	}
-	return os.WriteFile(path, b, 0o600)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			serviceToken = c.token
+			req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.auth != "" {
+				req.Header.Set("Authorization", c.auth)
+			}
+			resp, err := (&tokenTransport{base: http.DefaultTransport}).RoundTrip(req)
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			resp.Body.Close()
+			if gotAuth != c.want {
+				t.Errorf("the server got Authorization %q, want %q", gotAuth, c.want)
+			}
+		})
+	}
 }
 
 // --- The structured task contract, sent by the client ------------------------
@@ -361,48 +309,45 @@ func contractOf(t *testing.T, body map[string]interface{}) map[string]interface{
 	return tc
 }
 
-// 1/2: an ordinary message is work; the explicit control sends question.
+// The contract's task_mode is the client's selection, and an unselected
+// caller declares work. The message is sent as typed, and the TUI invents no
+// expected outputs or verification: it knows none.
 func TestTaskContractModeIsClientSelected(t *testing.T) {
-	work := captureContract(t, taskModeWork, "What does this repository do?")
-	if got := contractOf(t, work)["task_mode"]; got != "work" {
-		t.Errorf("ordinary send task_mode=%v, want work", got)
+	cases := []struct {
+		name    string
+		mode    taskMode
+		message string
+		want    string
+	}{
+		{"no selection is work", "", "hi", "work"},
+		{"an ordinary message is work", taskModeWork, "What does this repository do?", "work"},
+		{"the question control sends question", taskModeQuestion, "Create app.py.", "question"},
+		// The same sentence goes either way; only the selection differs.
+		{"a sentence sent as work", taskModeWork, "Fix the failing test.", "work"},
+		{"the same sentence sent as a question", taskModeQuestion, "Fix the failing test.", "question"},
+		{"work that names files", taskModeWork, "Write four files.", "work"},
 	}
-	question := captureContract(t, taskModeQuestion, "Create app.py.")
-	if got := contractOf(t, question)["task_mode"]; got != "question" {
-		t.Errorf("explicit question task_mode=%v, want question", got)
-	}
-	// 5/6: identical prose, opposite modes, chosen only by the client.
-	same := "Fix the failing test."
-	a := contractOf(t, captureContract(t, taskModeWork, same))["task_mode"]
-	b := contractOf(t, captureContract(t, taskModeQuestion, same))["task_mode"]
-	if a != "work" || b != "question" {
-		t.Errorf("the same sentence gave %v and %v; selection is not client-owned", a, b)
-	}
-}
-
-// 4: the control never edits the user's message.
-func TestQuestionSelectionLeavesTheMessageAlone(t *testing.T) {
-	const msg = "Is app.py valid?"
-	for _, mode := range []taskMode{taskModeWork, taskModeQuestion} {
-		body := captureContract(t, mode, msg)
-		if body["message"] != msg {
-			t.Errorf("mode %q changed the message to %q", mode, body["message"])
-		}
-	}
-}
-
-// 7: no obligation is invented when the client knows none.
-func TestTaskContractSendsNoFabricatedObligations(t *testing.T) {
-	tc := contractOf(t, captureContract(t, taskModeWork, "Write four files."))
-	if _, ok := tc["expected_outputs"]; ok {
-		t.Errorf("the TUI invented expected_outputs: %v", tc["expected_outputs"])
-	}
-	if _, ok := tc["verification"]; ok {
-		t.Errorf("the TUI invented verification: %v", tc["verification"])
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := captureContract(t, c.mode, c.message)
+			contract := contractOf(t, body)
+			if contract["task_mode"] != c.want {
+				t.Errorf("task_mode = %v, want %s", contract["task_mode"], c.want)
+			}
+			if body["message"] != c.message {
+				t.Errorf("message = %q, want it unchanged", body["message"])
+			}
+			if _, ok := contract["expected_outputs"]; ok {
+				t.Errorf("the TUI invented expected_outputs: %v", contract["expected_outputs"])
+			}
+			if _, ok := contract["verification"]; ok {
+				t.Errorf("the TUI invented verification: %v", contract["verification"])
+			}
+		})
 	}
 }
 
-// 3: question mode is one-shot -- the next ordinary message is work again.
+// Question mode is one-shot: the next ordinary message is work again.
 func TestQuestionModeIsOneShot(t *testing.T) {
 	m := &tuiModel{}
 	if got := m.takeTaskMode(); got != taskModeWork {
@@ -414,38 +359,6 @@ func TestQuestionModeIsOneShot(t *testing.T) {
 	}
 	if got := m.takeTaskMode(); got != taskModeWork {
 		t.Errorf("question mode persisted into the next turn: %q — it must be one-shot", got)
-	}
-}
-
-// A default caller declares work. Absence is reserved for the one legacy
-// fixture: an owned sender that omits the contract is indistinguishable from a
-// stranger's request.
-func TestDefaultCallerDeclaresWork(t *testing.T) {
-	var got map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewDecoder(r.Body).Decode(&got)
-		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"type\":\"done\",\"summary\":\"ok\"}\n\ndata: [DONE]\n\n")
-	}))
-	defer srv.Close()
-	out := make(chan chatEvent, 16)
-	// demoOpts{} is the default caller: no explicit mode selected.
-	if err := sendChatOpts(context.Background(), srv.URL, "hi", t.TempDir(),
-		"default", "s", nil, demoOpts{}, out); err != nil {
-		t.Fatal(err)
-	}
-	tc, ok := got["task_contract"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("a default owned caller sent no task_contract: %v", got)
-	}
-	if tc["task_mode"] != "work" {
-		t.Errorf("task_mode=%v, want work", tc["task_mode"])
-	}
-	if _, ok := tc["expected_outputs"]; ok {
-		t.Error("the default caller fabricated expected_outputs")
-	}
-	if _, ok := tc["verification"]; ok {
-		t.Error("the default caller fabricated verification")
 	}
 }
 

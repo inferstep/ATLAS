@@ -239,7 +239,7 @@ def registry_set_asa(content: str, model_label: str, hf_repo: str,
     return content.replace(block, new_block)
 
 
-def open_registry_pr_via_api(model_label: str, title: str, body: str,  # noqa: C901
+def open_registry_pr_via_api(model_label: str, title: str, body: str,
                              edit_fn) -> Optional[str]:
     """Open a registry PR through the GitHub API — no local git checkout.
 
@@ -299,92 +299,8 @@ def open_registry_pr_via_api(model_label: str, title: str, body: str,  # noqa: C
         # The edit doesn't apply to the base branch. Common cause: a prior
         # `atlas * publish` PR holding this model's entry is still open —
         # stack this edit onto that PR's branch instead of failing.
-        slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
-        ok, prs, _ = gh_api(
-            [f"repos/{upstream}/pulls?state=open&base={base}"])
-        for pr in (prs if ok and isinstance(prs, list) else []):
-            head_ref = pr.get("head", {}).get("ref", "")
-            if not (head_ref.startswith("atlas-publish/")
-                    and slug in head_ref):
-                continue
-            head_repo = pr.get("head", {}).get("repo", {}).get("full_name")
-            if not head_repo:
-                continue
-            ok, pr_blob, err = gh_api(
-                [f"repos/{head_repo}/contents/{REGISTRY_PATH}"
-                 f"?ref={head_ref}"])
-            if not ok:
-                continue
-            pr_content = base64.b64decode(pr_blob["content"]).decode("utf-8")
-            stacked = edit_fn(pr_content)
-            if stacked is None:
-                continue
-            pr_num = pr.get("number")
-            if head_repo == upstream:
-                # The pending branch lives upstream — open a SEPARATE PR
-                # based on it. Its diff shows only this edit; when the
-                # earlier PR merges (delete its branch), GitHub retargets
-                # this one to the base branch automatically.
-                ok, head_br, err = gh_api(
-                    [f"repos/{upstream}/branches/{head_ref}"])
-                if not ok:
-                    continue
-                new_branch = f"{head_ref}-next-{int(time.time())}"
-                ok, _, err = gh_api(
-                    [f"repos/{upstream}/git/refs", "-X", "POST"],
-                    payload={"ref": f"refs/heads/{new_branch}",
-                             "sha": head_br["commit"]["sha"]})
-                if not ok:
-                    _safe_print(f"  branch off PR #{pr_num} failed: {err}")
-                    continue
-                ok, _, err = gh_api(
-                    [f"repos/{upstream}/contents/{REGISTRY_PATH}",
-                     "-X", "PUT"],
-                    payload={"message": title,
-                             "content": base64.b64encode(
-                                 stacked.encode("utf-8")).decode("ascii"),
-                             "sha": pr_blob["sha"],
-                             "branch": new_branch})
-                if not ok:
-                    _safe_print(f"  commit failed: {err}")
-                    continue
-                note = (f"\n\n---\n*Stacked on #{pr_num} (this model's "
-                        f"entry lands there). Merge #{pr_num} with branch "
-                        f"deletion and GitHub retargets this PR to `{base}` "
-                        f"automatically — its diff shows only this change.*")
-                ok, pr2, err = gh_api(
-                    [f"repos/{upstream}/pulls", "-X", "POST"],
-                    payload={"title": title, "body": body + note,
-                             "head": new_branch, "base": head_ref})
-                if not ok:
-                    _safe_print(f"  open stacked PR failed: {err}")
-                    continue
-                _safe_print(f"  Entry is pending in open PR #{pr_num} — "
-                            f"opened a separate PR stacked on it (diff "
-                            f"shows only this change).")
-                return pr2.get("html_url")
-            # Fork case: a PR's base must be an upstream branch, so a
-            # separate stacked PR isn't expressible — commit onto the
-            # pending PR's branch instead (one PR, both changes).
-            ok, _, err = gh_api(
-                [f"repos/{head_repo}/contents/{REGISTRY_PATH}", "-X", "PUT"],
-                payload={"message": title,
-                         "content": base64.b64encode(
-                             stacked.encode("utf-8")).decode("ascii"),
-                         "sha": pr_blob["sha"],
-                         "branch": head_ref})
-            if not ok:
-                _safe_print(f"  stacking onto PR #{pr_num} failed: {err}")
-                continue
-            _safe_print(f"  Entry is pending in open PR #{pr_num} — this "
-                        f"edit was committed onto its branch (forks can't "
-                        f"host a separate stacked PR; one PR, both "
-                        f"changes).")
-            return pr.get("html_url")
-        _safe_print("  registry edit not applicable (entry state differs "
-                    "upstream, and no open publish PR holds it) — falling "
-                    "back to the printed body.")
-        return None
+        return _stack_on_pending_pr(model_label, title, body, edit_fn,
+                                    upstream, base)
 
     slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
     branch = f"atlas-publish/{slug}-{int(time.time())}"
@@ -406,6 +322,131 @@ def open_registry_pr_via_api(model_label: str, title: str, body: str,  # noqa: C
         _safe_print(f"  commit failed: {err}")
         return None
 
+    return _open_pull_request(upstream, target, login, branch, base, title,
+                              body)
+
+
+def _stack_on_pending_pr(model_label: str, title: str, body: str, edit_fn,
+                         upstream: str, base: str) -> Optional[str]:
+    """Apply the registry edit on top of an open `atlas-publish/` PR that
+    holds this model's entry. Returns the PR URL, or None."""
+    import base64
+
+    slug = "".join(c if c.isalnum() else "-" for c in model_label.lower())
+    for pr, head_ref, head_repo, pr_blob, stacked in _stackable_prs(
+            upstream, base, slug, edit_fn):
+        pr_num = pr.get("number")
+        if head_repo == upstream:
+            # The pending branch lives upstream — open a SEPARATE PR
+            # based on it. Its diff shows only this edit; when the
+            # earlier PR merges (delete its branch), GitHub retargets
+            # this one to the base branch automatically.
+            ok, pr2 = _open_stacked_pr(upstream, head_ref, pr_num, base, title,
+                                       body, stacked, pr_blob)
+            if not ok:
+                continue
+            _safe_print(f"  Entry is pending in open PR #{pr_num} — "
+                        f"opened a separate PR stacked on it (diff "
+                        f"shows only this change).")
+            return pr2.get("html_url")
+        # Fork case: a PR's base must be an upstream branch, so a
+        # separate stacked PR isn't expressible — commit onto the
+        # pending PR's branch instead (one PR, both changes).
+        ok, _, err = gh_api(
+            [f"repos/{head_repo}/contents/{REGISTRY_PATH}", "-X", "PUT"],
+            payload={"message": title,
+                     "content": base64.b64encode(
+                         stacked.encode("utf-8")).decode("ascii"),
+                     "sha": pr_blob["sha"],
+                     "branch": head_ref})
+        if not ok:
+            _safe_print(f"  stacking onto PR #{pr_num} failed: {err}")
+            continue
+        _safe_print(f"  Entry is pending in open PR #{pr_num} — this "
+                    f"edit was committed onto its branch (forks can't "
+                    f"host a separate stacked PR; one PR, both "
+                    f"changes).")
+        return pr.get("html_url")
+    _safe_print("  registry edit not applicable (entry state differs "
+                "upstream, and no open publish PR holds it) — falling "
+                "back to the printed body.")
+    return None
+
+
+def _stackable_prs(upstream: str, base: str, slug: str, edit_fn):
+    """The open `atlas-publish/` PRs of this model whose registry file the
+    edit applies to, one at a time: (pr, head_ref, head_repo, pr_blob, stacked)."""
+    import base64
+
+    ok, prs, _ = gh_api(
+        [f"repos/{upstream}/pulls?state=open&base={base}"])
+    for pr in (prs if ok and isinstance(prs, list) else []):
+        head_ref = pr.get("head", {}).get("ref", "")
+        if not (head_ref.startswith("atlas-publish/")
+                and slug in head_ref):
+            continue
+        head_repo = pr.get("head", {}).get("repo", {}).get("full_name")
+        if not head_repo:
+            continue
+        ok, pr_blob, _ = gh_api(
+            [f"repos/{head_repo}/contents/{REGISTRY_PATH}"
+             f"?ref={head_ref}"])
+        if not ok:
+            continue
+        pr_content = base64.b64decode(pr_blob["content"]).decode("utf-8")
+        stacked = edit_fn(pr_content)
+        if stacked is None:
+            continue
+        yield pr, head_ref, head_repo, pr_blob, stacked
+
+
+def _open_stacked_pr(upstream: str, head_ref: str, pr_num, base: str,
+                     title: str, body: str, stacked: str, pr_blob):
+    """Open a separate PR on a new branch off the pending upstream PR's
+    branch, with the edit committed there. Returns (ok, the PR's data)."""
+    import base64
+
+    ok, head_br, err = gh_api(
+        [f"repos/{upstream}/branches/{head_ref}"])
+    if not ok:
+        return False, None
+    new_branch = f"{head_ref}-next-{int(time.time())}"
+    ok, _, err = gh_api(
+        [f"repos/{upstream}/git/refs", "-X", "POST"],
+        payload={"ref": f"refs/heads/{new_branch}",
+                 "sha": head_br["commit"]["sha"]})
+    if not ok:
+        _safe_print(f"  branch off PR #{pr_num} failed: {err}")
+        return False, None
+    ok, _, err = gh_api(
+        [f"repos/{upstream}/contents/{REGISTRY_PATH}",
+         "-X", "PUT"],
+        payload={"message": title,
+                 "content": base64.b64encode(
+                     stacked.encode("utf-8")).decode("ascii"),
+                 "sha": pr_blob["sha"],
+                 "branch": new_branch})
+    if not ok:
+        _safe_print(f"  commit failed: {err}")
+        return False, None
+    note = (f"\n\n---\n*Stacked on #{pr_num} (this model's "
+            f"entry lands there). Merge #{pr_num} with branch "
+            f"deletion and GitHub retargets this PR to `{base}` "
+            f"automatically — its diff shows only this change.*")
+    ok, pr2, err = gh_api(
+        [f"repos/{upstream}/pulls", "-X", "POST"],
+        payload={"title": title, "body": body + note,
+                 "head": new_branch, "base": head_ref})
+    if not ok:
+        _safe_print(f"  open stacked PR failed: {err}")
+        return False, None
+    return True, pr2
+
+
+def _open_pull_request(upstream: str, target: str, login: str, branch: str,
+                       base: str, title: str, body: str) -> Optional[str]:
+    """Open the PR from the new branch (on the fork when target is one)
+    against the upstream base. Returns its URL, or None."""
     head = branch if target == upstream else f"{login}:{branch}"
     ok, pr, err = gh_api([f"repos/{upstream}/pulls", "-X", "POST"],
                          payload={"title": title, "body": body,

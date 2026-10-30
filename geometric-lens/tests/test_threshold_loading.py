@@ -6,8 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from geometric_lens import service
 
 
-def test_missing_cx_calibration_returns_neutral_score(tmp_path):
-    service._cx_normalization = {"midpoint": 100.0, "steepness": 1.0}
+def test_missing_cx_calibration_returns_neutral_score(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "_cx_normalization", {"midpoint": 100.0, "steepness": 1.0})
     service._load_cx_normalization(str(tmp_path))
     assert service._cx_normalization is None
     assert service._normalize_cx_energy(-500.0) == 0.5
@@ -28,8 +28,8 @@ def test_invalid_cx_calibration_is_disabled(tmp_path):
     assert service._cx_normalization is None
 
 
-def test_missing_threshold_file_disables_calibrated_verdicts(tmp_path):
-    service._gx_thresholds = {"off_rails": 0.9, "low": 0.9, "severe": 0.9}
+def test_missing_threshold_file_disables_calibrated_verdicts(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "_gx_thresholds", {"off_rails": 0.9, "low": 0.9, "severe": 0.9})
     service._load_gx_thresholds(str(tmp_path))
     assert service._gx_thresholds is None
 

@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // Inline code that touches no file the session changed ran nothing the work is
-// made of. `python -c "print(1)"` used to pass the fix-intent gate and to clear
+// made of. `python -c "print(1)"` must not pass the fix-intent gate or clear
 // an earlier red run of the real program.
 
 func TestInlineCodeThatTouchesNothingDoesNotClearAFailure(t *testing.T) {

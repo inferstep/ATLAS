@@ -22,7 +22,7 @@ import (
 // their order around /v3/generate rather than collapsing them into one.
 //
 // Cancellation is NOT this branch: the turn was aborted, nothing lands, and no
-// fallback check runs. Its classification is a later slice.
+// fallback check runs.
 
 const fbSyntaxDetail = "SyntaxError: invalid syntax (line 4)"
 
@@ -61,6 +61,11 @@ type fallbackStub struct {
 	events   []string // "syntax" / "structural" / "v3", in arrival order
 	unexpect []string
 	target   string // absolute destination, for diagnostics the route builds from it
+
+	// What the stub server answers with, and the request it may cancel.
+	opts       fallbackOpts
+	cancel     context.CancelFunc
+	syntaxSeen int
 }
 
 func (s *fallbackStub) record(kind string) {
@@ -93,66 +98,71 @@ type fallbackOpts struct {
 	before           func(t *testing.T, dir string)
 }
 
+// serve is the stub server of runFallback: generation fails as a service
+// error (after it aborts the request when opts.cancelOnGenerate), the
+// structural check reports opts.introduces, and the syntax check answers
+// opts.syntaxVerdicts in order, or a non-200 when opts.syntaxDown. Any other
+// endpoint is recorded as unexpected.
+func (st *fallbackStub) serve(w http.ResponseWriter, r *http.Request) {
+	o := st.opts
+	switch {
+	case r.URL.Path == "/v3/generate":
+		st.record("v3")
+		if o.cancelOnGenerate {
+			st.cancel()
+		}
+		// A non-200 is the ordinary service-error case: generation was
+		// entered and failed, which is exactly this branch's trigger.
+		http.Error(w, "V3 service error", http.StatusBadGateway)
+	case r.URL.Path == "/internal/cyclomatic_complexity":
+		json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
+	case r.URL.Path == "/internal/structural_check":
+		st.record("structural")
+		var body map[string]interface{}
+		json.NewDecoder(r.Body).Decode(&body)
+		src, _ := body["source"].(string)
+		out := map[string]interface{}{"ok": true, "unresolved": []string{}}
+		if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
+			out["unresolved"] = []string{o.introduces}
+		}
+		json.NewEncoder(w).Encode(out)
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		st.record("syntax")
+		if o.syntaxDown {
+			http.Error(w, "checker unavailable", http.StatusInternalServerError)
+			return
+		}
+		st.mu.Lock()
+		i := st.syntaxSeen
+		st.syntaxSeen++
+		st.mu.Unlock()
+		valid := true
+		if len(o.syntaxVerdicts) > 0 {
+			if i >= len(o.syntaxVerdicts) {
+				i = len(o.syntaxVerdicts) - 1
+			}
+			valid = o.syntaxVerdicts[i]
+		}
+		out := map[string]interface{}{"valid": valid}
+		if !valid {
+			out["errors"] = []string{fbSyntaxDetail}
+		}
+		json.NewEncoder(w).Encode(out)
+	default:
+		st.mu.Lock()
+		st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
+		st.mu.Unlock()
+		http.Error(w, "unexpected endpoint", http.StatusTeapot)
+	}
+}
+
 func runFallback(t *testing.T, o fallbackOpts) (*ToolResult, string, *fallbackStub, []string) {
 	t.Helper()
 	dir := t.TempDir()
-	st := &fallbackStub{}
 	reqCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var syntaxSeen int
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v3/generate":
-			st.record("v3")
-			if o.cancelOnGenerate {
-				cancel()
-			}
-			// A non-200 is the ordinary service-error case: generation was
-			// entered and failed, which is exactly this branch's trigger.
-			http.Error(w, "V3 service error", http.StatusBadGateway)
-		case r.URL.Path == "/internal/cyclomatic_complexity":
-			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
-		case r.URL.Path == "/internal/structural_check":
-			st.record("structural")
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			src, _ := body["source"].(string)
-			out := map[string]interface{}{"ok": true, "unresolved": []string{}}
-			if o.introduces != "" && strings.Contains(src, o.introduces+"(") {
-				out["unresolved"] = []string{o.introduces}
-			}
-			json.NewEncoder(w).Encode(out)
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			st.record("syntax")
-			if o.syntaxDown {
-				http.Error(w, "checker unavailable", http.StatusInternalServerError)
-				return
-			}
-			mu.Lock()
-			i := syntaxSeen
-			syntaxSeen++
-			mu.Unlock()
-			valid := true
-			if len(o.syntaxVerdicts) > 0 {
-				if i >= len(o.syntaxVerdicts) {
-					i = len(o.syntaxVerdicts) - 1
-				}
-				valid = o.syntaxVerdicts[i]
-			}
-			out := map[string]interface{}{"valid": valid}
-			if !valid {
-				out["errors"] = []string{fbSyntaxDetail}
-			}
-			json.NewEncoder(w).Encode(out)
-		default:
-			st.mu.Lock()
-			st.unexpect = append(st.unexpect, r.Method+" "+r.URL.Path)
-			st.mu.Unlock()
-			http.Error(w, "unexpected endpoint", http.StatusTeapot)
-		}
-	}))
+	st := &fallbackStub{opts: o, cancel: cancel}
+	srv := httptest.NewServer(http.HandlerFunc(st.serve))
 	defer srv.Close()
 
 	target := filepath.Join(dir, o.rel)
@@ -169,8 +179,8 @@ func runFallback(t *testing.T, o fallbackOpts) (*ToolResult, string, *fallbackSt
 	var events []string
 	ctx := NewAgentContext(dir, Tier2Medium)
 	ctx.PermissionMode = PermissionYolo
-	// Generation runs only where a candidate could be delivered (C2); declared
-	// outputs make this session one, so the fixture still reaches the V3 route.
+	// Generation runs only where a candidate could be delivered; declared
+	// outputs make this session one, so the fixture reaches the V3 route.
 	ctx.TaskContract = declaredOutputs(o.rel)
 	ctx.StreamFn = func(event string, _ interface{}) { events = append(events, event) }
 	ctx.Ctx = reqCtx
@@ -261,15 +271,15 @@ func TestFallbackPassesAndWritesBaseline(t *testing.T) {
 	assertNoV3Provenance(t, res)
 	// Preflight, generation, the FRESH check, then the structural gate.
 	assertSeq(t, st, "syntax", "v3", "syntax", "structural")
-	// Existing projections: the pipeline announces itself before generation,
+	// The SSE projections: the pipeline announces itself before generation,
 	// and the fallback announces that it is writing the model's version.
 	if len(events) != 2 || events[0] != "v3_progress" || events[1] != "text" {
 		t.Errorf("SSE projections = %v, want [v3_progress text]", events)
 	}
 }
 
-// 2. The fresh check applies and cannot run. Fail-open is unchanged: the bytes
-// land, and not_run is reported rather than the stronger claim.
+// 2. The fresh check applies and cannot run. It fails open: the bytes land,
+// and not_run is reported rather than the stronger claim.
 func TestFallbackCheckerUnavailableStillWrites(t *testing.T) {
 	res, disk, st, _ := runFallback(t, fallbackOpts{
 		rel: "solve.py", proposal: fbTier2Python, syntaxDown: true})
@@ -426,9 +436,8 @@ func TestFallbackPassedThenWriteFailure(t *testing.T) {
 }
 
 // 7. Cancellation is not a fallback. The turn was aborted, so no fresh check
-// runs, nothing lands, and the model is told plainly. Classification of this
-// path is deliberately left as it is: aborting a turn is a different fact from
-// a gate refusing, and it gets its own slice.
+// runs, nothing lands, and the model is told plainly. Its classification is
+// not checked here: aborting a turn is a different fact from a gate refusing.
 func TestFallbackCancellationChecksNothingAndWritesNothing(t *testing.T) {
 	res, disk, st, _ := runFallback(t, fallbackOpts{
 		rel: "solve.py", proposal: fbTier2Python, cancelOnGenerate: true})

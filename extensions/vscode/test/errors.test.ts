@@ -1,5 +1,6 @@
 // Unit tests for renderError: known-code mapping, unknown-code passthrough,
-// AbortError exclusion (handled upstream), and network-failure rendering.
+// network-failure rendering and the localhost/IPv6 hint; and for
+// describeForLog.
 
 import { describe, expect, it } from 'vitest';
 import { AtlasApiError } from '../src/client/atlasClient';
@@ -18,34 +19,25 @@ describe('renderError', () => {
 		expect(rendered.message).toContain('missing bearer token');
 	});
 
-	it('maps dependency_unavailable to a prominent message without action', () => {
-		const rendered = renderError(apiError('dependency_unavailable', 'lens service down', 503));
+	it.each([
+		['dependency_unavailable', true],
+		['invalid_input', false],
+		['unsupported_operation', false],
+		['permission_denied', false],
+		['timeout', false],
+		['cancelled', false],
+		['incompatible_artifact', false],
+		['resource_limit', false],
+		['sandbox_policy_rejected', false],
+		['model_failure', false],
+		['internal_error', false],
+	])('renders %s with a friendly prefix, the detail and no action (prominent: %s)', (code, prominent) => {
+		const rendered = renderError(apiError(code, 'detail text'));
+		// Friendly prefix, not the raw code alone.
+		expect(rendered.message).not.toMatch(new RegExp(`^${code}:`));
+		expect(rendered.message).toContain('detail text');
 		expect(rendered.action).toBe('none');
-		expect(rendered.prominent).toBe(true);
-		expect(rendered.message).toContain('lens service down');
-	});
-
-	it('renders every closed-set code with a friendly prefix', () => {
-		const codes = [
-			'invalid_input',
-			'unsupported_operation',
-			'permission_denied',
-			'timeout',
-			'cancelled',
-			'incompatible_artifact',
-			'resource_limit',
-			'sandbox_policy_rejected',
-			'model_failure',
-			'internal_error',
-		];
-		for (const code of codes) {
-			const rendered = renderError(apiError(code, 'detail text'));
-			// Friendly prefix, not the raw code alone.
-			expect(rendered.message).not.toMatch(new RegExp(`^${code}:`));
-			expect(rendered.message).toContain('detail text');
-			expect(rendered.action).toBe('none');
-			expect(rendered.prominent).toBe(false);
-		}
+		expect(rendered.prominent).toBe(prominent);
 	});
 
 	it('omits the duplicate detail when it matches the code', () => {
@@ -118,12 +110,12 @@ describe('describeForLog', () => {
 });
 
 describe('the localhost/IPv6 connect timeout', () => {
-	/** Shape undici produces: TypeError with a cause carrying code + address. */
-	function connectTimeout(address: string): Error {
+	/** The shape undici gives a failed connect: a TypeError with a cause carrying the code and the address. */
+	function connectFailure(code: string, address: string): Error {
 		const e = new TypeError('fetch failed');
 		(e as { cause?: unknown }).cause = Object.assign(
 			new Error(`Connect Timeout Error (attempted address: ${address}, timeout: 10000ms)`),
-			{ code: 'UND_ERR_CONNECT_TIMEOUT' },
+			{ code },
 		);
 		return e;
 	}
@@ -131,23 +123,19 @@ describe('the localhost/IPv6 connect timeout', () => {
 	it('names the fix instead of repeating "fetch failed"', () => {
 		// The live failure: proxy up and healthy on 127.0.0.1:8090, extension
 		// pointed at localhost:8090, request hung the full 10s.
-		const r = renderError(connectTimeout('localhost:8090'));
+		const r = renderError(connectFailure('UND_ERR_CONNECT_TIMEOUT', 'localhost:8090'));
 		expect(r.message).toContain('127.0.0.1');
 		expect(r.message).toContain('::1');
 	});
 
-	it('does not blame IPv6 when the address is already IPv4', () => {
+	it.each([
 		// A timeout against 127.0.0.1 is a different problem; sending the user
 		// to change a setting they already have right wastes their time.
-		const r = renderError(connectTimeout('127.0.0.1:8090'));
-		expect(r.message).not.toContain('Set atlas.proxyUrl');
-	});
-
-	it('leaves a refused connection alone', () => {
-		// ECONNREFUSED means the proxy is down — a completely different fix.
-		const e = new TypeError('fetch failed');
-		(e as { cause?: unknown }).cause = Object.assign(
-			new Error('connect ECONNREFUSED 127.0.0.1:8090'), { code: 'ECONNREFUSED' });
-		expect(renderError(e).message).not.toContain('Set atlas.proxyUrl');
+		['does not blame IPv6 when the address is already IPv4', 'UND_ERR_CONNECT_TIMEOUT', '127.0.0.1:8090'],
+		// ECONNREFUSED means the proxy is down: a completely different fix. The
+		// address is localhost, as in the live failure, so only the code differs.
+		['leaves a refused connection alone', 'ECONNREFUSED', 'localhost:8090'],
+	])('%s', (_name, code, address) => {
+		expect(renderError(connectFailure(code, address)).message).not.toContain('Set atlas.proxyUrl');
 	});
 });

@@ -4,6 +4,7 @@ Each rule gets a change that must be reported and a near miss that must not.
 """
 import importlib.util
 import json
+import posixpath
 import re
 import subprocess
 import sys
@@ -11,12 +12,14 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "integrity_check.py"
 TASKS = {"flask_pause", "offbyone"}
 # Comment markers are built here, so that this file has no line that looks
 # like the comments it describes.
 HASH, SLASHES = "#", "//"
+CONFIGURES = "change to a file that configures the checks"
 
 
 @pytest.fixture(scope="module")
@@ -100,38 +103,6 @@ def test_a_removed_test_is_reported_unless_it_moved(ic, path, line, name):
     assert whats(ic, moved) == []
 
 
-@pytest.mark.parametrize("path, line, reason", [
-    ("proxy/gates_test.go", '\tt.Skip("flaky on a slow disk")', "flaky on a slow disk"),
-    ("proxy/gates_test.go", "\tt.Skip(objectHoldSkipReason)", "objectHoldSkipReason"),
-    ("tests/cli/test_doctor.py", "@pytest.mark.skip(reason='needs a GPU')", "needs a GPU"),
-    ("tests/cli/test_doctor.py", f"    pytest.skip()  {HASH} the fixture needs Docker", "the fixture needs Docker"),
-])
-def test_a_new_skip_with_a_reason_needs_approval_and_quotes_it(ic, path, line, reason):
-    findings = ic.check(diff(path, added=[line]), TASKS)
-    assert [(f.level, f.what) for f in findings] == \
-        [("approval", f"new skip or todo marker in a test, with its reason: {reason}")]
-
-
-@pytest.mark.parametrize("path, line", [
-    ("proxy/gates_test.go", "\tt.SkipNow()"),
-    ("proxy/gates_test.go", "\tt.Skip()"),
-    ("proxy/gates_test.go", '\tt.Skip("")'),
-    ("tests/cli/test_doctor.py", "@pytest.mark.xfail"),
-    ("tests/cli/test_doctor.py", "@pytest.mark.skip(reason='')"),
-    ("extensions/vscode/test/sse.test.ts", "  it.skip('parses a frame', () => {"),
-])
-def test_a_new_skip_with_no_reason_needs_action(ic, path, line):
-    findings = ic.check(diff(path, added=[line]), TASKS)
-    assert [(f.level, f.what) for f in findings] == [("warning", "new skip or todo marker in a test")]
-
-
-def test_the_reason_of_a_skip_is_read_from_the_lines_of_its_call(ic):
-    lines = ["pytestmark = pytest.mark.skipif(", "    not getattr(main, 'AVAILABLE', False),",
-             '    reason="tree-sitter is not installed here",', ")"]
-    assert whats(ic, diff("tests/v3-service/test_edit.py", added=lines)) == \
-        ["new `pytestmark`: every test of this file stops running, with its reason: tree-sitter is not installed here"]
-
-
 def test_a_comment_is_a_reason_only_on_the_line_of_the_skip_or_directly_above_it(ic):
     path = "proxy/gates_test.go"
     above = [f"\t{SLASHES} The runner has no loop device.", "\tt.SkipNow()"]
@@ -146,11 +117,6 @@ def test_a_comment_on_an_unchanged_line_above_a_new_skip_is_read_from_the_file(i
     source = "\n" * 8 + f"\t{SLASHES} The runner has no loop device.\n\tt.SkipNow()\n"
     assert whats(ic, diff(path, added=["\tt.SkipNow()"]), tree=Files({path: source})) == \
         ["new skip or todo marker in a test, with its reason: The runner has no loop device."]
-
-
-def test_skip_words_inside_a_string_are_not_a_skip(ic):
-    line = """    ("proxy/gates_test.go", 't.Skip("flaky")'),"""
-    assert whats(ic, diff("tests/infrastructure/test_x.py", added=[line])) == []
 
 
 def test_fewer_assertions_are_reported(ic):
@@ -180,7 +146,8 @@ def test_history_in_a_new_comment_is_reported(ic, comment, label):
 
 def test_the_same_text_outside_a_comment_or_in_a_document_is_not_history(ic):
     assert whats(ic, diff("proxy/retry.go", added=['\tday := "2026-09-30"'])) == []
-    assert whats(ic, diff("CHANGELOG.md", added=["Fixed on 2026-09-30 in 3f75f62."])) == []
+    # A Markdown heading starts with the same sign as a Python comment.
+    assert whats(ic, diff("CHANGELOG.md", added=[f"{HASH}{HASH} Fixed on 2026-09-30 in 3f75f62."])) == []
 
 
 def test_an_evaluation_task_named_in_product_code_is_reported(ic):
@@ -196,27 +163,6 @@ def test_a_new_document_needs_approval_outside_the_allowed_folders(ic):
     assert whats(ic, diff("docs/NOTES.md", added=["x"], status="added")) == ["new documentation file"]
     assert whats(ic, diff(".github/ISSUE_TEMPLATE/bug.md", added=["x"], status="added")) == []
     assert whats(ic, diff("docs/SETUP.md", added=["x"])) == []
-
-
-def test_a_change_to_a_gate_file_needs_approval(ic):
-    for path in (".github/workflows/test.yml", ".github/code-health-baseline.json",
-                 "scripts/integrity_check.py", "scripts/checks_ran.py", "codecov.yml"):
-        assert whats(ic, diff(path, added=["x: 1"])) == ["change to a file that configures the checks"], path
-    assert whats(ic, diff(".github/requirements/ci.txt", added=["pytest==9.0.0"])) == []
-
-
-@pytest.mark.parametrize("path, line", [
-    ("proxy/retry.go", f"\tcall() {SLASHES}nolint:errcheck"),
-    ("atlas/cli.py", f"import os  {HASH} noqa: F401"),
-    ("extensions/vscode/src/sse.ts", f"  {SLASHES} @ts-ignore"),
-])
-def test_a_new_suppression_needs_approval(ic, path, line):
-    findings = [f for f in ic.check(diff(path, added=[line]), TASKS)]
-    assert [(f.level, f.what) for f in findings] == [("approval", "new suppression marker")]
-
-
-def test_a_suppression_word_in_code_is_not_a_suppression(ic):
-    assert whats(ic, diff("atlas/cli.py", added=['MARKERS = ("noqa", "nolint")'])) == []
 
 
 def test_new_dependencies_are_listed_as_notes(ic):
@@ -285,17 +231,17 @@ def test_a_base_that_looks_like_an_option_is_not_one(ic, tmp_path):
 
 # --- a test whose name line changed and whose body stayed ---
 
-def test_a_test_renamed_in_place_is_a_note(ic):
-    for path, old, new, was, now in [
-        ("tests/cli/test_doctor.py", "def test_doctor_reports():", "def test_doctor_names_each_fault():",
-         "test_doctor_reports", "test_doctor_names_each_fault"),
-        ("proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "func TestGateRefusesAWrite(t *testing.T) {",
-         "TestGateRefuses", "TestGateRefusesAWrite"),
-        ("extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "  it('parses one frame', () => {",
-         "parses a frame", "parses one frame"),
-    ]:
-        findings = ic.check(diff(path, removed=[old], added=[new]), TASKS)
-        assert [(f.level, f.what) for f in findings] == [("note", f"test renamed: {was} -> {now}")], path
+@pytest.mark.parametrize("path, old, new, renamed", [
+    pytest.param("tests/cli/test_doctor.py", "def test_doctor_reports():", "def test_doctor_names_each_fault():",
+                 "test_doctor_reports -> test_doctor_names_each_fault", id="python"),
+    pytest.param("proxy/gates_test.go", "func TestGateRefuses(t *testing.T) {", "func TestGateRefusesAWrite(t *testing.T) {",
+                 "TestGateRefuses -> TestGateRefusesAWrite", id="go"),
+    pytest.param("extensions/vscode/test/sse.test.ts", "  it('parses a frame', () => {", "  it('parses one frame', () => {",
+                 "parses a frame -> parses one frame", id="typescript"),
+])
+def test_a_test_renamed_in_place_is_a_note(ic, path, old, new, renamed):
+    findings = ic.check(diff(path, removed=[old], added=[new]), TASKS)
+    assert [(f.level, f.what) for f in findings] == [("note", f"test renamed: {renamed}")]
 
 
 def test_a_renamed_test_that_loses_a_decorator_is_removed(ic):
@@ -311,11 +257,11 @@ def test_a_renamed_test_that_loses_a_decorator_is_removed(ic):
     assert whats(ic, other) == ["test removed: test_doctor_reports"]
 
 
-def test_a_test_renamed_to_a_name_the_runner_does_not_collect_is_removed(ic):
-    for new in ("def _test_doctor_reports():", "def doctor_reports():", "def xtest_doctor_reports():"):
-        change = diff("tests/cli/test_doctor.py", removed=["def test_doctor_reports():"], added=[new])
-        findings = ic.check(change, TASKS, Files({"tests/cli/test_doctor.py": new + "\n    assert True\n"}))
-        assert [(f.level, f.what) for f in findings] == [("warning", "test removed: test_doctor_reports")], new
+@pytest.mark.parametrize("new", ["def _test_doctor_reports():", "def doctor_reports():", "def xtest_doctor_reports():"])
+def test_a_test_renamed_to_a_name_the_runner_does_not_collect_is_removed(ic, new):
+    change = diff("tests/cli/test_doctor.py", removed=["def test_doctor_reports():"], added=[new])
+    findings = ic.check(change, TASKS, Files({"tests/cli/test_doctor.py": new + "\n    assert True\n"}))
+    assert [(f.level, f.what) for f in findings] == [("warning", "test removed: test_doctor_reports")]
 
 
 def test_a_test_removed_with_its_body_is_removed_though_another_is_written(ic):
@@ -342,28 +288,22 @@ def _unused():
 """
 
 
-def helper_change(*more):
+@pytest.mark.parametrize("second_hunk, source, found", [
+    pytest.param((6, [], 8, ["def test_a_record_ties_its_result(tmp_path):", "    code = _run_with(FakeHost())",
+                             "    assert code == 0"]), HELPER_SOURCE,
+                 ("note", "test turned into a helper: test_a_run_records_each_session is now _run_with, "
+                          "which 1 test(s) call"),
+                 id="a test of the change calls the helper"),
+    pytest.param((9, [], 13, ["def _unused():", "    return _run_with(None)"]), HELPER_SOURCE,
+                 ("warning", "test removed: test_a_run_records_each_session"), id="no test of the change calls it"),
+    pytest.param((6, [], 8, ["def test_a_record_ties_its_result(tmp_path):", "    code = _run_with(FakeHost())"]), None,
+                 ("warning", "test removed: test_a_run_records_each_session"), id="the file cannot be read"),
+])
+def test_a_test_turned_into_a_helper_is_a_note_only_when_a_test_of_the_change_calls_it(ic, second_hunk, source, found):
     path = "tests/e2e/test_driver.py"
-    return path, hunks(path, (4, ["def test_a_run_records_each_session(tmp_path):"], 4, ["def _run_with(host):"]), *more)
-
-
-def test_a_test_turned_into_a_helper_that_a_test_of_the_change_calls_is_a_note(ic):
-    path, change = helper_change((6, [], 8, ["def test_a_record_ties_its_result(tmp_path):",
-                                             "    code = _run_with(FakeHost())", "    assert code == 0"]))
-    findings = ic.check(change, TASKS, Files({path: HELPER_SOURCE}))
-    assert [(f.level, f.what) for f in findings] == [
-        ("note", "test turned into a helper: test_a_run_records_each_session is now _run_with, which 1 test(s) call")]
-
-
-def test_a_helper_that_no_test_of_the_change_calls_leaves_the_test_removed(ic):
-    path, change = helper_change((9, [], 13, ["def _unused():", "    return _run_with(None)"]))
-    assert whats(ic, change, tree=Files({path: HELPER_SOURCE})) == ["test removed: test_a_run_records_each_session"]
-
-
-def test_a_helper_in_a_file_that_cannot_be_read_leaves_the_test_removed(ic):
-    _, change = helper_change((6, [], 8, ["def test_a_record_ties_its_result(tmp_path):",
-                                          "    code = _run_with(FakeHost())"]))
-    assert whats(ic, change) == ["test removed: test_a_run_records_each_session"]
+    change = hunks(path, (4, ["def test_a_run_records_each_session(tmp_path):"], 4, ["def _run_with(host):"]), second_hunk)
+    findings = ic.check(change, TASKS, Files({path: source}))
+    assert [(f.level, f.what) for f in findings] == [found]
 
 
 # --- a function that skips the test that calls it ---
@@ -387,24 +327,19 @@ func skipsWithoutSaying(t *testing.T) {
 """
 
 
-def test_calls_to_a_skip_helper_are_one_finding_with_their_number_and_the_reason(ic):
-    tree = Files({"proxy/object_hold_test.go": SKIP_HELPER, "proxy/permissions_test.go": ""})
-    change = diff("proxy/permissions_test.go",
-                  added=["\tneedsObjectHold(t)", "\tneedsObjectHold(t)", "\tneedsNothing(t)", "\tneedsObjectHold(t)"])
-    findings = ic.check(change, TASKS, tree)
-    assert [(f.level, f.line, f.what) for f in findings] == [
-        ("approval", 10, "3 new call(s) to the skip helper needsObjectHold, with its reason: objectHoldSkipReason")]
-
-
-def test_a_skip_helper_that_gives_no_reason_needs_action(ic):
-    tree = Files({"proxy/object_hold_test.go": SKIP_HELPER})
-    findings = ic.check(diff("proxy/permissions_test.go", added=["\tskipsWithoutSaying(t)"]), TASKS, tree)
-    assert [(f.level, f.what) for f in findings] == [("warning", "1 new call(s) to the skip helper skipsWithoutSaying")]
-
-
-def test_a_skip_helper_is_looked_for_beside_the_test_and_nowhere_else(ic):
-    tree = Files({"tui/object_hold_test.go": SKIP_HELPER})
-    assert whats(ic, diff("proxy/permissions_test.go", added=["\tneedsObjectHold(t)"]), tree=tree) == []
+@pytest.mark.parametrize("helper_file, added, found", [
+    pytest.param("proxy/object_hold_test.go",
+                 ["\tneedsObjectHold(t)", "\tneedsObjectHold(t)", "\tneedsNothing(t)", "\tneedsObjectHold(t)"],
+                 [("approval", 10, "3 new call(s) to the skip helper needsObjectHold, "
+                                   "with its reason: objectHoldSkipReason")],
+                 id="the calls are one finding with their number and the reason"),
+    pytest.param("proxy/object_hold_test.go", ["\tskipsWithoutSaying(t)"],
+                 [("warning", 10, "1 new call(s) to the skip helper skipsWithoutSaying")], id="a helper with no reason"),
+    pytest.param("tui/object_hold_test.go", ["\tneedsObjectHold(t)"], [], id="a helper in another folder is not seen"),
+])
+def test_a_call_to_a_skip_helper_beside_the_test_is_named_with_its_reason(ic, helper_file, added, found):
+    findings = ic.check(diff("proxy/permissions_test.go", added=added), TASKS, Files({helper_file: SKIP_HELPER}))
+    assert [(f.level, f.line, f.what) for f in findings] == found
 
 
 # --- suppression markers, by kind of file ---
@@ -439,8 +374,9 @@ MARKED = [
 
 @pytest.mark.parametrize("path, line", MARKED)
 def test_a_marker_in_a_file_of_its_kind_needs_approval(ic, path, line):
-    findings = [f for f in ic.check(diff(path, added=[line]), TASKS) if f.what == "new suppression marker"]
-    assert [(f.level, f.path) for f in findings] == [("approval", path)]
+    # Some of these files also configure the checks: that finding is left out here.
+    findings = [f for f in ic.check(diff(path, added=[line]), TASKS) if f.what != CONFIGURES]
+    assert [(f.level, f.path, f.what) for f in findings] == [("approval", path, "new suppression marker")]
 
 
 @pytest.mark.parametrize("path, line", [
@@ -458,8 +394,9 @@ def test_a_marker_in_a_file_of_its_kind_needs_approval(ic, path, line):
     ("sandbox/Dockerfile", f"{HASH} noqa"),
     ("docker-compose.yml", f"  {HASH} zizmor: ignore[artipacked]"),
     ("docs/SETUP.md", f"{HASH} hadolint ignore=DL3008"),
+    pytest.param("atlas/cli.py", 'MARKERS = ("noqa", "nolint")', id="the words in code, not in a comment"),
 ])
-def test_the_marker_of_another_kind_of_file_is_text(ic, path, line):
+def test_a_marker_of_another_kind_of_file_or_outside_a_comment_is_text(ic, path, line):
     assert "new suppression marker" not in whats(ic, diff(path, added=[line]))
 
 
@@ -481,45 +418,36 @@ IMPORT = f"import main  {HASH} noqa: E402"
 AFTER_PATH = "import sys\n\nsys.path.insert(0, 'v3-service')\n\n" + IMPORT + "\n"
 
 
-def test_an_import_after_the_line_that_sets_the_import_path_is_not_a_suppression(ic):
-    path = "tests/v3-service/test_edit.py"
-    change = hunks(path, (4, [], 5, [IMPORT]))
-    assert whats(ic, change, tree=Files({path: AFTER_PATH})) == []
-
-
-@pytest.mark.parametrize("line, source", [
-    (IMPORT, "import sys\n\n\n\n" + IMPORT + "\n"),
-    (IMPORT, None),
-    (f"import main  {HASH} noqa: E402,F401", AFTER_PATH),
-    (f"import main  {HASH} noqa", AFTER_PATH),
-    (f"main = load()  {HASH} noqa: E402", AFTER_PATH),
+@pytest.mark.parametrize("line, source, found", [
+    pytest.param(IMPORT, AFTER_PATH, [], id="after the line that sets the import path"),
+    pytest.param(IMPORT, "import sys\n\n\n\n" + IMPORT + "\n", ["new suppression marker"], id="no line sets the path"),
+    pytest.param(IMPORT, None, ["new suppression marker"], id="the file cannot be read"),
+    pytest.param(f"import main  {HASH} noqa: E402,F401", AFTER_PATH, ["new suppression marker"], id="one more code"),
+    pytest.param(f"import main  {HASH} noqa", AFTER_PATH, ["new suppression marker"], id="no code"),
+    pytest.param(f"main = load()  {HASH} noqa: E402", AFTER_PATH, ["new suppression marker"], id="not an import"),
 ])
-def test_any_other_marked_import_is_a_suppression(ic, line, source):
+def test_a_marked_import_is_a_suppression_unless_it_follows_the_line_that_sets_the_import_path(ic, line, source, found):
     path = "tests/v3-service/test_edit.py"
-    tree = Files({path: source}) if source else None
-    assert whats(ic, hunks(path, (4, [], 5, [line])), tree=tree) == ["new suppression marker"]
+    assert whats(ic, hunks(path, (4, [], 5, [line])), tree=Files({path: source})) == found
 
 
 # --- workflow settings that turn a guard off ---
 
-@pytest.mark.parametrize("line, setting", [
-    ("        continue-on-error: true", "continue-on-error: true"),
-    ("    continue-on-error: true  " + HASH + " the upload must not fail the job", "continue-on-error: true"),
-    ("          persist-credentials: true", "persist-credentials: true"),
+@pytest.mark.parametrize("path, line, found", [
+    pytest.param(".github/workflows/test.yml", "        continue-on-error: true",
+                 [("approval", "new workflow setting: continue-on-error: true")], id="continue-on-error"),
+    pytest.param(".github/workflows/test.yml", f"    continue-on-error: true  {HASH} the upload must not fail the job",
+                 [("approval", "new workflow setting: continue-on-error: true")], id="continue-on-error with a comment"),
+    pytest.param(".github/workflows/test.yml", "          persist-credentials: true",
+                 [("approval", "new workflow setting: persist-credentials: true")], id="persist-credentials"),
+    pytest.param(".github/workflows/test.yml", "          persist-credentials: false", [], id="persist-credentials false"),
+    pytest.param(".github/workflows/test.yml", "        continue-on-error: false", [], id="continue-on-error false"),
+    pytest.param(".github/workflows/test.yml", "          run: make lint || true", [], id="a command that cannot fail"),
+    pytest.param("docker-compose.yml", "    continue-on-error: true", [], id="not a workflow"),
 ])
-def test_a_workflow_setting_that_turns_a_guard_off_needs_approval(ic, line, setting):
-    findings = ic.check(diff(".github/workflows/test.yml", added=[line]), TASKS)
-    assert ("approval", f"new workflow setting: {setting}") in [(f.level, f.what) for f in findings]
-
-
-@pytest.mark.parametrize("path, line", [
-    (".github/workflows/test.yml", "          persist-credentials: false"),
-    (".github/workflows/test.yml", "        continue-on-error: false"),
-    (".github/workflows/test.yml", "          run: make lint || true"),
-    ("docker-compose.yml", "    continue-on-error: true"),
-])
-def test_other_lines_are_not_such_a_setting(ic, path, line):
-    assert not [w for w in whats(ic, diff(path, added=[line])) if w.startswith("new workflow setting")]
+def test_a_workflow_setting_that_turns_a_guard_off_needs_approval(ic, path, line, found):
+    findings = ic.check(diff(path, added=[line]), TASKS)
+    assert [(f.level, f.what) for f in findings if f.what.startswith("new workflow setting")] == found
 
 
 # --- the size baseline ---
@@ -545,46 +473,51 @@ def test_a_size_baseline_that_only_goes_down_is_a_note(ic):
 
 
 @pytest.mark.parametrize("after", [
-    {"functions": {"a.py:f": 301}},
-    {"functions": {"a.py:f": 301, "b.py:g": 110}},
-    {"functions": {"a.py:f": 300, "new.py:n": 150}},
-    {"functions": {"a.py:f": 250, "new.py:n": 150}},
-    {"functions": {"a.py:f": 300}, "files": {"proxy/agent.go": 9930}},
-    {"functions": {"a.py:f": 300}, "limits": {"function_lines": 120, "file_lines": 1500}},
-    {"functions": {"a.py:f": 300}, "limits": {"file_lines": 1500}},
-    {"functions": {"b.py:g": 120, "a.py:f": 300}},
+    pytest.param({"functions": {"a.py:f": 301}}, id="a number goes up"),
+    pytest.param({"functions": {"a.py:f": 301, "b.py:g": 110}}, id="one number up and one down"),
+    pytest.param({"functions": {"a.py:f": 300, "new.py:n": 150}}, id="a new entry"),
+    pytest.param({"functions": {"a.py:f": 250, "new.py:n": 150}}, id="a new entry and a lower number"),
+    pytest.param({"functions": {"a.py:f": 300}, "files": {"proxy/agent.go": 9930}}, id="a file's number goes up"),
+    pytest.param({"functions": {"a.py:f": 300}, "limits": {"function_lines": 120, "file_lines": 1500}},
+                 id="a limit goes up"),
+    pytest.param({"functions": {"a.py:f": 300}, "limits": {"file_lines": 1500}}, id="a limit is removed"),
+    pytest.param({"functions": {"b.py:g": 120, "a.py:f": 300}}, id="the same numbers in another order"),
 ])
 def test_any_other_change_to_the_size_baseline_needs_approval(ic, after):
     changed = baseline(after["functions"], after.get("files"), after.get("limits"))
-    assert baseline_findings(ic, baseline({"a.py:f": 300, "b.py:g": 120}), changed) == \
-        [("approval", "change to a file that configures the checks")]
+    assert baseline_findings(ic, baseline({"a.py:f": 300, "b.py:g": 120}), changed) == [("approval", CONFIGURES)]
 
 
 def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
-    assert baseline_findings(ic, None, None) == [("approval", "change to a file that configures the checks")]
+    assert baseline_findings(ic, None, None) == [("approval", CONFIGURES)]
     path = ".github/code-health-baseline.json"
     broken = Files({path: "{not json"}, {path: baseline({"a.py:f": 300})})
-    assert whats(ic, diff(path, added=["x"]), tree=broken) == ["change to a file that configures the checks"]
+    assert whats(ic, diff(path, added=["x"]), tree=broken) == [CONFIGURES]
 
 
 # --- the lists of files that need approval ---
 
 @pytest.mark.parametrize("path, what", [
-    ("tests/replay/recordings/normal_edit.json", "change to a file that configures the checks"),
-    ("tests/infrastructure/gradle_wrapper_jar_sums.txt", "change to a file that configures the checks"),
-    (".github/canary.json", "change to a file that configures the checks"),
-    ("scripts/verify.py", "change to a file that configures the checks"),
-    ("scripts/change_base.py", "change to a file that configures the checks"),
-    ("scripts/queue_run.py", "change to a file that configures the checks"),
-    ("scripts/go_test_build.py", "change to a file that configures the checks"),
-    (".github/actions/upload-coverage/action.yml", "change to a file that configures the checks"),
-    ("scripts/fix_tests.py", "change to a file that configures the checks"),
-    ("scripts/dockerfile_lint.py", "change to a file that configures the checks"),
-    ("scripts/setup/rulesets.sh", "change to a file that configures the checks"),
-    (".hadolint.yaml", "change to a file that configures the checks"),
-    (".github/codeql/config.yml", "change to a file that configures the checks"),
-    (".github/codeql-config.yml", "change to a file that configures the checks"),
-    (".github/dependency-review-config.yml", "change to a file that configures the checks"),
+    (".github/workflows/test.yml", CONFIGURES),
+    (".github/code-health-baseline.json", CONFIGURES),
+    ("scripts/integrity_check.py", CONFIGURES),
+    ("scripts/checks_ran.py", CONFIGURES),
+    ("codecov.yml", CONFIGURES),
+    ("tests/replay/recordings/normal_edit.json", CONFIGURES),
+    ("tests/infrastructure/gradle_wrapper_jar_sums.txt", CONFIGURES),
+    (".github/canary.json", CONFIGURES),
+    ("scripts/verify.py", CONFIGURES),
+    ("scripts/change_base.py", CONFIGURES),
+    ("scripts/queue_run.py", CONFIGURES),
+    ("scripts/go_test_build.py", CONFIGURES),
+    (".github/actions/upload-coverage/action.yml", CONFIGURES),
+    ("scripts/fix_tests.py", CONFIGURES),
+    ("scripts/dockerfile_lint.py", CONFIGURES),
+    ("scripts/setup/rulesets.sh", CONFIGURES),
+    (".hadolint.yaml", CONFIGURES),
+    (".github/codeql/config.yml", CONFIGURES),
+    (".github/codeql-config.yml", CONFIGURES),
+    (".github/dependency-review-config.yml", CONFIGURES),
     ("scripts/bot/atlas_bot.py", "change to a script that runs with a credential that can write"),
     ("scripts/star-history-chart.py", "change to a script that runs with a credential that can write"),
 ])
@@ -593,12 +526,68 @@ def test_a_listed_file_needs_approval_for_its_own_reason(ic, path, what):
     assert [(f.level, f.what) for f in findings] == [("approval", what)]
 
 
-@pytest.mark.parametrize("path", ["scripts/atlas-bootstrap.sh", "tests/replay/stage.py", "tests/replay/record.py"])
-def test_a_script_under_test_and_the_replay_harness_are_ordinary_files(ic, path):
+@pytest.mark.parametrize("path", [
+    "scripts/atlas-bootstrap.sh", "tests/replay/stage.py", "tests/replay/record.py",
+    pytest.param(".github/requirements/ci.txt", id="a lock file in a folder of files that configure the checks"),
+])
+def test_a_script_under_test_the_replay_harness_and_a_lock_file_are_ordinary_files(ic, path):
     assert whats(ic, diff(path, added=["x=1"])) == []
 
 
-SCRIPT_NAME = re.compile(r"scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
+# Leading folders are part of the name: extensions/jetbrains/scripts/x.sh is not scripts/x.sh.
+SCRIPT_NAME = re.compile(r"(?:[A-Za-z0-9_.-]+/)*scripts/[A-Za-z0-9_./-]+\.(?:py|sh)")
+
+
+def strings_in(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from strings_in(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from strings_in(value)
+
+
+def scripts_a_workflow_names(text):
+    """The scripts a workflow names, each by its path from the repository's root.
+
+    A step's run command names a script from the step's working directory: its own, else
+    its job's defaults.run.working-directory, else the workflow's. Any other text of the
+    workflow, such as an input or a path filter, names it from the root.
+    """
+    workflow = yaml.safe_load(text)
+
+    def default_directory(node):
+        return ((node.get("defaults") or {}).get("run") or {}).get("working-directory", "")
+
+    runs = []  # (working directory, command)
+    for job in (workflow.get("jobs") or {}).values():
+        job_directory = default_directory(job) or default_directory(workflow)
+        for step in job.get("steps") or []:
+            if "run" in step:
+                runs.append((step.get("working-directory") or job_directory, step["run"]))
+    named = {posixpath.normpath(posixpath.join(directory, name))
+             for directory, command in runs for name in SCRIPT_NAME.findall(command)}
+    commands = {command for _, command in runs}
+    named |= {posixpath.normpath(name) for text in strings_in(workflow) if text not in commands
+              for name in SCRIPT_NAME.findall(text)}
+    return named
+
+
+@pytest.mark.parametrize("job, named", [
+    ({"steps": [{"run": "python scripts/verify.py"}]}, "scripts/verify.py"),
+    ({"steps": [{"working-directory": "extensions/jetbrains", "run": "bash scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"defaults": {"run": {"working-directory": "extensions/jetbrains"}},
+      "steps": [{"run": "bash scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+    ({"steps": [{"run": "bash extensions/jetbrains/scripts/check-distribution.sh"}]},
+     "extensions/jetbrains/scripts/check-distribution.sh"),
+], ids=["a root script", "named from the step's working directory", "named from the job's working directory",
+        "named by its full path"])
+def test_a_workflow_names_a_script_by_its_path_from_the_root(job, named):
+    assert scripts_a_workflow_names(yaml.safe_dump({"jobs": {"a": job}})) == {named}
 
 
 def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
@@ -610,7 +599,7 @@ def test_every_script_a_workflow_names_is_on_one_of_the_lists(ic):
     """
     root = SCRIPT.parents[1]
     named = {name for workflow in sorted((root / ".github" / "workflows").glob("*.yml"))
-             for name in SCRIPT_NAME.findall(workflow.read_text(encoding="utf-8"))}
+             for name in scripts_a_workflow_names(workflow.read_text(encoding="utf-8"))}
     gate_scripts = [name for name in sorted(named) if name.startswith(ic.GATE_FILES) and (root / name).is_file()]
     named |= {name for script in gate_scripts for name in SCRIPT_NAME.findall((root / script).read_text(encoding="utf-8"))
               if (root / name).is_file()}
@@ -678,6 +667,7 @@ STOPPED = [
     (PY, "@pytest.mark.skip", ONE),
     (PY, "@pytest.mark.skipif(sys.platform == 'darwin')", ONE),
     (PY, "@pytest.mark.xfail", ONE),
+    (PY, "@pytest.mark.skip(reason='')", ONE),  # an empty reason is no reason
     (PY, "    pytest.skip()", ONE),
     (PY, "    pytest.xfail()", ONE),
     (PY, "    pytest.param(2, marks=pytest.mark.skip),", ONE),
@@ -710,6 +700,7 @@ STOPPED = [
     (PY, "        raise SkipTest()", ONE),
     (PY, "raise unittest.SkipTest", f"new `raise unittest.SkipTest`: {FILE}"),
     (GO, "\tt.Skip()", ONE),
+    (GO, '\tt.Skip("")', ONE),
     (GO, "\tt.SkipNow()", ONE),
     (GO, "\ttb.Skip()", ONE),
     (GO, "//go:build ignore", f"new `//go:build ignore`: {FILE}"),
@@ -776,26 +767,53 @@ def test_every_row_of_the_table_of_forms_has_a_test(ic):
     ("docs/SETUP.md", "@pytest.mark.skip"),
 ])
 def test_the_same_words_where_they_stop_no_test_are_not_a_finding(ic, path, line):
-    assert not [w for w in whats(ic, diff(path, added=[line])) if "skip" in w or "stops running" in w or "left out" in w]
+    assert whats(ic, diff(path, added=[line])) == []
 
 
-@pytest.mark.parametrize("path, lines, reason", [
-    (PY, [f"{HASH} The suite needs a GPU.", "pytestmark = pytest.mark.skipif(not GPU)"], "The suite needs a GPU."),
-    (PY, ["yaml = pytest.importorskip('yaml', reason='the contract needs PyYAML')"], "'the contract needs PyYAML'"),
-    (PY, ["        self.skipTest('needs a terminal')"], "needs a terminal"),
-    (PY, ["        raise unittest.SkipTest('needs a terminal')"], "needs a terminal"),
-    (PY, ["pytest.skip('the suite needs a GPU', allow_module_level=True)"], "the suite needs a GPU"),
-    (PY, ["pytest.skip(allow_module_level=True, reason='the suite needs a GPU')"], "the suite needs a GPU"),
-    ("tests/conftest.py", [f"{HASH} These files need the model server.", "collect_ignore = ['test_live.py']"],
-     "These files need the model server."),
-    (GO, [f"{SLASHES} The object hold exists on Linux only.", "//go:build linux"], "The object hold exists on Linux only."),
-    (TS, [f"  {SLASHES} One test while the parser is rewritten.", "  it.only('parses a frame', () => {"],
-     "One test while the parser is rewritten."),
+@pytest.mark.parametrize("path, lines, what", [
+    pytest.param(GO, ['\tt.Skip("flaky on a slow disk")'], f"{ONE}, with its reason: flaky on a slow disk",
+                 id="the message of a skip"),
+    pytest.param(GO, ["\tt.Skip(objectHoldSkipReason)"], f"{ONE}, with its reason: objectHoldSkipReason",
+                 id="a name, with no file to read its text from"),
+    pytest.param(PY, ["@pytest.mark.skip(reason='needs a GPU')"], f"{ONE}, with its reason: needs a GPU", id="reason="),
+    pytest.param(PY, [f"    pytest.skip()  {HASH} the fixture needs Docker"],
+                 f"{ONE}, with its reason: the fixture needs Docker", id="a comment on the line"),
+    pytest.param("tests/v3-service/test_edit.py",
+                 ["pytestmark = pytest.mark.skipif(", "    not getattr(main, 'AVAILABLE', False),",
+                  '    reason="tree-sitter is not installed here",', ")"],
+                 f"new `pytestmark`: {FILE}, with its reason: tree-sitter is not installed here",
+                 id="reason= on a later line of the call"),
+    pytest.param(PY, [f"{HASH} The suite needs a GPU.", "pytestmark = pytest.mark.skipif(not GPU)"],
+                 f"new `pytestmark`: {FILE}, with its reason: The suite needs a GPU.", id="a comment above"),
+    pytest.param(PY, ["yaml = pytest.importorskip('yaml', reason='the contract needs PyYAML')"],
+                 f"new `pytest.importorskip`: {FILE}, with its reason: the contract needs PyYAML",
+                 id="importorskip with reason="),
+    pytest.param(PY, ["def test_a_file_of_two_documents_parses(tmp_path):", f"    {HASH} safe_load rejects such a file.",
+                      "    pytest.importorskip('yaml.nodes')"],
+                 f"{IN_A_TEST}, with its reason: needs the module yaml.nodes",
+                 id="a comment above importorskip is about the test, not its reason"),
+    pytest.param(PY, ["        self.skipTest('needs a terminal')"], f"{ONE}, with its reason: needs a terminal",
+                 id="skipTest"),
+    pytest.param(PY, ["        raise unittest.SkipTest('needs a terminal')"], f"{ONE}, with its reason: needs a terminal",
+                 id="raise SkipTest"),
+    pytest.param(PY, ["pytest.skip('the suite needs a GPU', allow_module_level=True)"],
+                 f"new `pytest.skip`: {FILE}, with its reason: the suite needs a GPU",
+                 id="the message of a skip of the file"),
+    pytest.param(PY, ["pytest.skip(allow_module_level=True, reason='the suite needs a GPU')"],
+                 f"new `pytest.skip`: {FILE}, with its reason: the suite needs a GPU", id="reason= after another keyword"),
+    pytest.param("tests/conftest.py", [f"{HASH} These files need the model server.", "collect_ignore = ['test_live.py']"],
+                 "new `collect_ignore`: whole test files are left out, with its reason: These files need the model server.",
+                 id="collect_ignore"),
+    pytest.param(GO, [f"{SLASHES} The object hold exists on Linux only.", "//go:build linux"],
+                 f"new `//go:build linux`: {FILE}, with its reason: The object hold exists on Linux only.",
+                 id="a build tag"),
+    pytest.param(TS, [f"  {SLASHES} One test while the parser is rewritten.", "  it.only('parses a frame', () => {"],
+                 ("new `it.only`: every other test of this file stops running, with its reason: One test while the parser "
+                  "is rewritten."), id="it.only"),
 ])
-def test_a_form_with_its_reason_asks_for_approval_and_quotes_it(ic, path, lines, reason):
+def test_a_form_with_its_reason_asks_for_approval_and_quotes_it(ic, path, lines, what):
     findings = ic.check(diff(path, added=lines), TASKS)
-    assert [f.level for f in findings] == ["approval"]
-    assert findings[0].what.endswith(f", with its reason: {reason.strip(chr(39))}")
+    assert [(f.level, f.what) for f in findings] == [("approval", what)]
 
 
 MARK_FILE = "import pytest\n\nneeds_proc = pytest.mark.skipif(not PROC, reason='the sandbox reads /proc')\nbare = pytest.mark.skip\n"
@@ -813,14 +831,6 @@ def test_the_uses_of_a_named_skip_mark_are_one_finding_with_their_number_and_the
         ("approval", 10, "3 new use(s) of the skip marker needs_proc, with its reason: the sandbox reads /proc")]
 
 
-def test_a_named_skip_mark_from_an_imported_module_in_another_folder_is_found(ic):
-    path = "tests/cli/test_doctor.py"
-    tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE,
-                  path: "from tests.infrastructure.proc_files import needs_proc\n"})
-    assert whats(ic, diff(path, added=["@needs_proc"]), tree=tree) == [
-        "1 new use(s) of the skip marker needs_proc, with its reason: the sandbox reads /proc"]
-
-
 def test_a_named_skip_mark_with_no_reason_needs_action_and_one_on_the_whole_file_says_so(ic):
     path = "tests/infrastructure/test_x.py"
     tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: TAKES_BOTH})
@@ -829,12 +839,6 @@ def test_a_named_skip_mark_with_no_reason_needs_action_and_one_on_the_whole_file
         ("warning", "1 new use(s) of the skip marker bare"),
         ("approval", ("new `pytestmark` with the skip marker needs_proc: every test of this file stops running, "
                       "with its reason: the sandbox reads /proc"))]
-
-
-def test_a_comment_above_importorskip_is_about_the_test_and_is_not_its_reason(ic):
-    lines = ["def test_a_file_of_two_documents_parses(tmp_path):", f"    {HASH} safe_load rejects such a file.",
-             "    pytest.importorskip('yaml.nodes')"]
-    assert whats(ic, diff(PY, added=lines)) == [IN_A_TEST + ", with its reason: needs the module yaml.nodes"]
 
 
 def test_the_calls_to_importorskip_in_the_tests_of_a_file_are_one_finding_for_each_module(ic):
@@ -916,11 +920,6 @@ def test_when_the_file_cannot_be_read_as_python_every_line_counts_as_code(ic):
     assert stops == [4, 6, 8, 12]
     assert ic.text_lines(path, None) == set()
     assert ic.text_lines("proxy/gates_test.go", "x := `\nt.Skip()\n`\n") == set()
-
-
-def test_a_keyword_of_a_skip_call_is_not_its_reason(ic):
-    findings = ic.check(diff(PY, added=["pytest.skip(allow_module_level=True)"]), TASKS)
-    assert [(f.level, f.what) for f in findings] == [("warning", f"new `pytest.skip`: {FILE}")]
 
 
 CLASS_FILE = """from tests.infrastructure.proc_files import needs_proc
@@ -1007,15 +1006,21 @@ def test_a_pytest_mark_of_the_same_name_is_not_a_use_of_a_name_of_the_file(ic):
             "new `pytestmark` with the skip marker slow: every test of this file stops running, with its reason: takes an hour"]
 
 
-@pytest.mark.parametrize("taken, use", [
-    ("from tests.infrastructure.proc_files import needs_proc as np", "@np"),
-    ("from .proc_files import needs_proc", "@needs_proc"),
-    ("from . import proc_files", "@proc_files.needs_proc"),
-    ("import tests.infrastructure.proc_files as pf", "@pf.needs_proc"),
-    ("import tests.infrastructure.proc_files", "@tests.infrastructure.proc_files.needs_proc"),
+@pytest.mark.parametrize("path, taken, use", [
+    pytest.param("tests/cli/test_doctor.py", "from tests.infrastructure.proc_files import needs_proc", "@needs_proc",
+                 id="from a module in another folder"),
+    pytest.param("tests/infrastructure/test_x.py", "from tests.infrastructure.proc_files import needs_proc as np", "@np",
+                 id="under another name"),
+    pytest.param("tests/infrastructure/test_x.py", "from .proc_files import needs_proc", "@needs_proc",
+                 id="by a relative import"),
+    pytest.param("tests/infrastructure/test_x.py", "from . import proc_files", "@proc_files.needs_proc",
+                 id="through its module, by a relative import"),
+    pytest.param("tests/infrastructure/test_x.py", "import tests.infrastructure.proc_files as pf", "@pf.needs_proc",
+                 id="through its module under another name"),
+    pytest.param("tests/infrastructure/test_x.py", "import tests.infrastructure.proc_files",
+                 "@tests.infrastructure.proc_files.needs_proc", id="through its module by its full name"),
 ])
-def test_a_named_skip_mark_is_followed_through_each_form_of_import(ic, taken, use):
-    path = "tests/infrastructure/test_x.py"
+def test_a_named_skip_mark_is_followed_through_each_form_of_import(ic, path, taken, use):
     tree = Files({"tests/infrastructure/proc_files.py": MARK_FILE, path: taken + "\n"})
     name = use.lstrip("@")
     assert whats(ic, diff(path, added=[use]), tree=tree) == [
@@ -1058,7 +1063,6 @@ def test_a_reason_by_name_on_the_skip_itself_shows_the_text_and_a_quoted_reason_
         ONE + ", with its reason: WHY"]
 
 
-
 # --- tests that leave the plain test jobs through a mark the runner's settings leave out ---
 
 SETTINGS = '[tool.pytest.ini_options]\ntestpaths = ["tests"]\naddopts = "-m \'not integration\'"\n'
@@ -1082,51 +1086,54 @@ def left(ic, path, now, before=None, status="modified", more_now=None, more_befo
     ("addopts = \"-q --strict-markers\"", ()),
     ("addopts = \"-m 'integration'\"", ()),
     ("testpaths = [\"tests\"]", ()),
-])
+], ids=["one mark", "two marks", "options as a list", "no -m", "a mark chosen, none left out", "no addopts"])
 def test_the_marks_a_plain_run_leaves_out_are_read_from_the_runners_settings(ic, line, marks):
     assert ic.left_out_marks(f"[tool.pytest.ini_options]\n{line}\n") == marks
     assert ic.left_out_marks(None) == ()
 
 
-def test_a_test_that_was_there_and_gets_the_mark_leaves_the_plain_jobs(ic):
-    now = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
-    assert left(ic, LEFT, now, TWO_TESTS) == [
-        ("warning", 4, "1 test(s) leave the plain test jobs through the mark `integration`: test_a")]
+CLASS_OF_TWO = ("import pytest\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n\n"
+                "    def test_b(self):\n        pass\n")
+# A file that gives the mark a name of its own: `live`.
+NAMED = "import pytest\n\nlive = pytest.mark.integration\n\n\ndef test_a():\n    pass\n\n\ndef test_b():\n    pass\n"
+NAMED_CLASS = "import pytest\n\nlive = pytest.mark.integration\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n"
+ONE_LEAVES = "1 test(s) leave the plain test jobs through the mark `integration`: test_a"
+FILE_LEAVES = "new `pytestmark` with the mark `integration`: every test of this file leaves the plain test jobs"
 
 
-def test_a_comment_beside_the_mark_is_its_reason_and_asks_for_approval(ic):
-    now = TWO_TESTS.replace("def test_a", f"{HASH} Needs a running sandbox; the e2e job runs it.\n"
-                                          "@pytest.mark.integration\ndef test_a")
-    assert left(ic, LEFT, now, TWO_TESTS) == [
-        ("approval", 5, "1 test(s) leave the plain test jobs through the mark `integration`: test_a, with its reason: "
-                        "Needs a running sandbox; the e2e job runs it.")]
-
-
-def test_the_tests_that_leave_are_one_finding_for_each_reason_with_their_names(ic):
-    now = (TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
-           .replace("def test_b", "@pytest.mark.integration\ndef test_b"))
-    assert left(ic, LEFT, now, TWO_TESTS) == [
-        ("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: test_a, test_b")]
-
-
-def test_a_mark_on_a_class_reaches_every_test_of_the_class(ic):
-    before = "import pytest\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n\n    def test_b(self):\n        pass\n"
-    now = before.replace("class TestLive", "@pytest.mark.integration\nclass TestLive")
-    assert left(ic, LEFT, now, before) == [
-        ("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: TestLive::test_a, "
-                       "TestLive::test_b")]
-
-
-def test_a_test_that_is_new_with_the_mark_is_listed_for_information(ic):
-    now = TWO_TESTS + "\n\n@pytest.mark.integration\ndef test_c():\n    pass\n"
-    assert left(ic, LEFT, now, TWO_TESTS) == [
-        ("note", 12, "1 new test(s) with the mark `integration`: they do not run in the plain test jobs")]
+@pytest.mark.parametrize("now, before, found", [
+    pytest.param(TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a"), TWO_TESTS,
+                 [("warning", 4, ONE_LEAVES)], id="a test that was there gets the mark"),
+    pytest.param(TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a"), None,
+                 [("warning", 4, ONE_LEAVES)], id="with no copy of the base, a marked test counts as one that was there"),
+    pytest.param(TWO_TESTS.replace("def test_a", f"{HASH} Needs a running sandbox; the e2e job runs it.\n"
+                                                 "@pytest.mark.integration\ndef test_a"), TWO_TESTS,
+                 [("approval", 5, f"{ONE_LEAVES}, with its reason: Needs a running sandbox; the e2e job runs it.")],
+                 id="a comment beside the mark is its reason"),
+    pytest.param(TWO_TESTS.replace("def test_", "@pytest.mark.integration\ndef test_"), TWO_TESTS,
+                 [("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: test_a, test_b")],
+                 id="the tests that leave are one finding with their names"),
+    pytest.param(CLASS_OF_TWO.replace("class TestLive", "@pytest.mark.integration\nclass TestLive"), CLASS_OF_TWO,
+                 [("warning", 4, "2 test(s) leave the plain test jobs through the mark `integration`: TestLive::test_a, "
+                                 "TestLive::test_b")], id="a mark on a class reaches every test of the class"),
+    pytest.param(TWO_TESTS + "\n\n@pytest.mark.integration\ndef test_c():\n    pass\n", TWO_TESTS,
+                 [("note", 12, "1 new test(s) with the mark `integration`: they do not run in the plain test jobs")],
+                 id="a new test with the mark is listed for information"),
+    pytest.param(NAMED.replace("def test_a", "@live\ndef test_a"), NAMED, [("warning", 6, ONE_LEAVES)],
+                 id="a name for the mark, on a test"),
+    pytest.param(NAMED.replace("\n\n\ndef test_a", "\npytestmark = [live]\n\n\ndef test_a"), NAMED,
+                 [("warning", 4, FILE_LEAVES)], id="a name for the mark, in pytestmark"),
+    pytest.param(NAMED_CLASS.replace("class TestLive", "@live\nclass TestLive"), NAMED_CLASS,
+                 [("warning", 6, "1 test(s) leave the plain test jobs through the mark `integration`: TestLive::test_a")],
+                 id="a name for the mark, on a class"),
+])
+def test_a_test_that_gets_the_left_out_mark_is_named(ic, now, before, found):
+    assert left(ic, LEFT, now, before) == found
 
 
 def test_a_pytestmark_with_the_mark_takes_the_whole_file_out(ic):
     now = TWO_TESTS.replace("import pytest\n", "import pytest\n\npytestmark = [pytest.mark.integration]\n")
-    assert left(ic, LEFT, now, TWO_TESTS) == [
-        ("warning", 3, "new `pytestmark` with the mark `integration`: every test of this file leaves the plain test jobs")]
+    assert left(ic, LEFT, now, TWO_TESTS) == [("warning", 3, FILE_LEAVES)]
     assert left(ic, LEFT, now, status="added") == [
         ("note", 3, "new test file with the mark `integration` on every test: they do not run in the plain test jobs")]
 
@@ -1145,12 +1152,6 @@ def test_a_mark_that_the_settings_do_not_leave_out_is_not_named(ic):
     marked = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
     no_settings = Files({LEFT: marked}, {LEFT: TWO_TESTS})
     assert [f.what for f in ic.check(diff(LEFT, added=["x"]), TASKS, no_settings) if "plain test jobs" in f.what] == []
-
-
-def test_with_no_copy_of_the_base_every_marked_test_counts_as_one_that_was_there(ic):
-    now = TWO_TESTS.replace("def test_a", "@pytest.mark.integration\ndef test_a")
-    assert left(ic, LEFT, now) == [
-        ("warning", 4, "1 test(s) leave the plain test jobs through the mark `integration`: test_a")]
 
 
 HOOK = '''import pytest
@@ -1225,23 +1226,11 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)
     assert "/tests/integration/" in targets
     files = sorted(target for target in targets if target.endswith(".py"))
-    assert files and all((root / target.lstrip("/")).is_file() for target in files)
+    assert files
+    assert all((root / target.lstrip("/")).is_file() for target in files)
     # The gates page lists each of these files, so that the page and the hook say the same.
     page = (root / "docs" / "quality" / "gates.md").read_text(encoding="utf-8")
     assert [target for target in files if f"`{target.lstrip('/')}`" not in page] == []
-
-
-NAMED = "import pytest\n\nlive = pytest.mark.integration\n\n\ndef test_a():\n    pass\n\n\ndef test_b():\n    pass\n"
-ONE_LEAVES = "1 test(s) leave the plain test jobs through the mark `integration`: test_a"
-
-
-def test_a_name_that_stands_for_the_mark_takes_a_test_out_as_the_mark_does(ic):
-    assert left(ic, LEFT, NAMED.replace("def test_a", "@live\ndef test_a"), NAMED) == [("warning", 6, ONE_LEAVES)]
-    assert left(ic, LEFT, NAMED.replace("\n\n\ndef test_a", "\npytestmark = [live]\n\n\ndef test_a"), NAMED) == [
-        ("warning", 4, "new `pytestmark` with the mark `integration`: every test of this file leaves the plain test jobs")]
-    in_a_class = "import pytest\n\nlive = pytest.mark.integration\n\n\nclass TestLive:\n    def test_a(self):\n        pass\n"
-    assert left(ic, LEFT, in_a_class.replace("class TestLive", "@live\nclass TestLive"), in_a_class) == [
-        ("warning", 6, ONE_LEAVES.replace("test_a", "TestLive::test_a"))]
 
 
 @pytest.mark.parametrize("taken, use", [

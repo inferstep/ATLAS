@@ -67,7 +67,8 @@ def test_permission_requires_its_identifiers():
     assert status == 400
     assert body.get("error") == "invalid_input"
     detail = body.get("detail", "")
-    assert "session_id" in detail and "tool_call_id" in detail
+    assert "session_id" in detail
+    assert "tool_call_id" in detail
 
 
 def test_control_plane_errors_carry_the_api_version():

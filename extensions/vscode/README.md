@@ -15,6 +15,7 @@ A VS Code client for the [ATLAS](https://github.com/inferstep/ATLAS) agent proxy
 The extension is a thin SSE client over the proxy HTTP API (see `docs/API.md`):
 
 * `POST /v1/agent` — streams a turn (text tokens, tool calls/results, permission requests) as server-sent events
+* `task_contract` — every turn declares `work` or `question` from the composer's **Task** control, so the proxy gates a request on what the user chose rather than on its wording (the TUI's `/ask` makes the same declaration for one message). `expected_outputs` and `verification` stay absent: a chat box knows nothing structured about them, and the proxy grounds a `work` request in the model's own tool call instead.
 * `POST /v1/permission` — answers permission requests raised mid-turn
 * `POST /cancel` — cancels the in-flight turn
 * `GET /ready` — status bar connectivity polling
@@ -27,6 +28,8 @@ The TUI (`tui/`) is the reference client; the extension mirrors its session conv
 * `atlas.serviceToken` — dev-override bearer token (prefer the `ATLAS: Set Service Token` command, which stores it in SecretStorage instead of plaintext settings)
 * `atlas.permissionMode` — `default` / `accept-edits` / `yolo`
 * `atlas.statusBar.enabled`, `atlas.statusBar.pollIntervalSec` — status bar connectivity polling
+
+`atlas.proxyUrl`, `atlas.serviceToken` and `atlas.permissionMode` are machine-wide: a workspace or folder setting cannot change them, as in the JetBrains plugin, which keeps them at the application level. So every folder uses the same proxy address.
 
 ## Commands
 
@@ -59,6 +62,6 @@ src/
 ├── ui/               # chat webview, status bar, diff provider
 ├── workspace/        # workspace-mismatch heuristic
 └── util/             # error-envelope mapping
-media/                # webview assets
+media/                # webview assets, the Activity Bar glyph and the manifest icon
 test/                 # vitest unit tests + mock proxy fixture
 ```

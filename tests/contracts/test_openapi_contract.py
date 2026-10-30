@@ -49,8 +49,8 @@ def test_spec_version_matches_go_constant():
     spec = yaml.safe_load(SPEC.read_text())
     go = go_source("proxy", "const APIVersion")
     m = re.search(r'const APIVersion = "([\d.]+)"', go)
-    assert m and spec["info"]["version"] == m.group(1), (
-        "OpenAPI info.version must match the Go APIVersion constant")
+    assert m, "OpenAPI info.version must match the Go APIVersion constant"
+    assert spec["info"]["version"] == m.group(1), "OpenAPI info.version must match the Go APIVersion constant"
 
 
 def test_error_response_references_envelope_schema():

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// Repair in progress (#214): a file this session left unparseable stays open
+// Repair in progress: a file this session left unparseable stays open
 // until it parses, every tool result names it, a done is sent back while it is
 // open, and a session that ends with it open hands it to the user with what
 // was tried.

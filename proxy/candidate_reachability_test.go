@@ -13,33 +13,30 @@ import (
 
 // A mutation the producer never saw has to say so.
 //
-// These reproduce the corrected eligibility pilot's own shapes. Nine of its
-// twenty-four families mutated the workspace and produced not one production
-// record about the candidate route, because every predicate that turns a
-// mutation away returns before a route entry exists. Each case below is one
-// of those families, reduced to the file that silenced it.
+// Every predicate that turns a mutation away returns before a route entry
+// exists, so without a bypass record such a mutation leaves no production
+// record about the candidate route at all. Each case below is one such
+// shape, reduced to a single small file.
 
 // bypassWorld drives a real edit or write with a producer that is configured
 // and must not be called. If generation runs, the fixture fails: these are
 // skips, and a skip that reaches the pipeline is not the case under test.
 type bypassWorld struct {
-	ctx  *AgentContext
-	dir  string
-	v3   *int
-	sand *int
+	ctx *AgentContext
+	dir string
+	v3  *int
 }
 
 func newBypassWorld(t *testing.T) *bypassWorld {
 	t.Helper()
 	dir := t.TempDir()
-	v3Calls, sandCalls := 0, 0
+	v3Calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/v3/"):
 			v3Calls++
 			http.Error(w, "the producer must not be consulted here", http.StatusTeapot)
 		case r.URL.Path == "/internal/cyclomatic_complexity":
-			sandCalls++
 			json.NewEncoder(w).Encode(map[string]interface{}{"functions": []interface{}{}})
 		case r.URL.Path == "/internal/structural_check":
 			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": []string{}})
@@ -54,28 +51,27 @@ func newBypassWorld(t *testing.T) *bypassWorld {
 	ctx.PermissionMode = PermissionYolo
 	ctx.Ctx = context.WithValue(context.Background(), requestIDKey, "req-bypass")
 	ctx.V3URL, ctx.SandboxURL = srv.URL, srv.URL
-	return &bypassWorld{ctx: ctx, dir: dir, v3: &v3Calls, sand: &sandCalls}
+	return &bypassWorld{ctx: ctx, dir: dir, v3: &v3Calls}
 }
 
 func bypassRecords(recs []map[string]interface{}) []map[string]interface{} {
 	return recordsOfKind(recs, "candidate_generation_bypass")
 }
 
-// The pilot's own repair fixtures: a few lines of Python or Go, edited in
-// place, and never seen by the producer. Nothing in production said why.
+// A few lines of Python or Go, edited in place and never seen by the
+// producer, record why the producer was skipped.
 func TestAnEditTheProducerNeverSawSaysWhyItWasSkipped(t *testing.T) {
 	cases := []struct {
 		name, file, original, edited, want string
 	}{{
-		// pilot_case_insensitive_repair: registry.py, six lines.
+		// Six lines of Python.
 		name:     "a file below the tier floor",
 		file:     "registry.py",
 		original: "REG = {}\n\n\ndef find(name):\n    return REG.get(name)\n",
 		edited:   "REG = {}\n\n\ndef find(name):\n    return REG.get(name.lower())\n",
 		want:     string(bypassTierBelowThreshold),
 	}, {
-		// pilot_go_dedupe_repair: slices.go, eighteen lines — over the tier
-		// floor, under the edit floor.
+		// Eighteen lines of Go: over the tier floor, under the edit floor.
 		name:     "a file over the tier floor and under the edit floor",
 		file:     "slices.go",
 		original: "package main\n\nimport \"fmt\"\n\nfunc Dedupe(in []string) []string {\n\tseen := map[string]bool{}\n\tout := []string{}\n\tfor _, v := range in {\n\t\tif seen[v] {\n\t\t\tcontinue\n\t\t}\n\t\tout = append(out, v)\n\t}\n\treturn out\n}\n\nfunc main() {\n\tfmt.Println(Dedupe(nil))\n}\n",
@@ -117,8 +113,8 @@ func TestAnEditTheProducerNeverSawSaysWhyItWasSkipped(t *testing.T) {
 	}
 }
 
-// pilot_router_and_handlers: two new Python files of seven and nine lines,
-// written through write_file, neither of which reached the producer.
+// A new Python file of a few lines, written through write_file, never reaches
+// the producer and records why.
 func TestANewFileBelowTheTierFloorSaysWhyItWasSkipped(t *testing.T) {
 	w := newBypassWorld(t)
 	const body = "def route(p):\n    if p == \"/\":\n        return home\n    return miss\n"
@@ -151,26 +147,31 @@ func TestANewFileBelowTheTierFloorSaysWhyItWasSkipped(t *testing.T) {
 func TestTheBypassOwnersAreTheRoutingRules(t *testing.T) {
 	dir := t.TempDir()
 	for _, tier := range []Tier{Tier0Conversational, Tier1Simple, Tier2Medium, Tier3Hard} {
-		for _, url := range []string{"", "http://producer"} {
-			for _, iterating := range []bool{false, true} {
-				for _, warrants := range []bool{false, true} {
-					ctx := NewAgentContext(dir, Tier2Medium)
-					ctx.V3URL = url
-					// A session where a candidate could be delivered and no
-					// deadline limits generation; the budget-ownership
-					// reasons are pinned in budget_ownership_test.go.
-					ctx.TaskContract = declaredOutputs("mod.py")
-					wantWrite := tier >= Tier2Medium && ctx.V3URL != "" && !iterating
-					if got := writeGenerationBypass(ctx, tier, iterating); (got == bypassNone) != wantWrite {
-						t.Errorf("write tier=%v url=%q iter=%v: %q, want generation %v",
-							tier, url, iterating, got, wantWrite)
-					}
-					wantEdit := tier >= Tier2Medium && warrants && ctx.V3URL != "" && !iterating
-					if got := editGenerationBypass(ctx, tier, warrants, iterating); (got == bypassNone) != wantEdit {
-						t.Errorf("edit tier=%v url=%q iter=%v warrants=%v: %q, want generation %v",
-							tier, url, iterating, warrants, got, wantEdit)
-					}
-				}
+		// Every combination of a producer address, an iterating session and
+		// an edit that warrants the pipeline.
+		for _, c := range []struct {
+			url                 string
+			iterating, warrants bool
+		}{
+			{"", false, false}, {"", false, true}, {"", true, false}, {"", true, true},
+			{"http://producer", false, false}, {"http://producer", false, true},
+			{"http://producer", true, false}, {"http://producer", true, true},
+		} {
+			ctx := NewAgentContext(dir, Tier2Medium)
+			ctx.V3URL = c.url
+			// A session where a candidate could be delivered and no
+			// deadline limits generation; the budget-ownership
+			// reasons are pinned in budget_ownership_test.go.
+			ctx.TaskContract = declaredOutputs("mod.py")
+			wantWrite := tier >= Tier2Medium && ctx.V3URL != "" && !c.iterating
+			if got := writeGenerationBypass(ctx, tier, c.iterating); (got == bypassNone) != wantWrite {
+				t.Errorf("write tier=%v url=%q iter=%v: %q, want generation %v",
+					tier, c.url, c.iterating, got, wantWrite)
+			}
+			wantEdit := tier >= Tier2Medium && c.warrants && ctx.V3URL != "" && !c.iterating
+			if got := editGenerationBypass(ctx, tier, c.warrants, c.iterating); (got == bypassNone) != wantEdit {
+				t.Errorf("edit tier=%v url=%q iter=%v warrants=%v: %q, want generation %v",
+					tier, c.url, c.iterating, c.warrants, got, wantEdit)
 			}
 		}
 	}
@@ -250,10 +251,10 @@ func TestTheBypassRecordCarriesNoContent(t *testing.T) {
 	}
 }
 
-// Every byte-producing route decides activation through the owners, and
-// nowhere else. A future route that re-inlines the condition would be
-// unobservable again, and no behavioural test would notice.
-func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
+// No byte-producing route decides activation for itself. A future route that
+// re-inlines the condition would be unobservable again, and no behavioural
+// test would notice.
+func TestNoRouteDecidesGenerationForItself(t *testing.T) {
 	body := map[string]string{}
 	for _, f := range []string{"tools.go", "edit_route_delivery.go", "candidate_reachability.go"} {
 		src, err := os.ReadFile(f)
@@ -278,7 +279,6 @@ func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
 	}
 	// No site reads a switch to decide whether to generate: there is none, and
 	// the owners decide from the routing rules alone.
-	owner := body["candidate_reachability.go"]
 	for _, f := range []string{"tools.go", "edit_route_delivery.go", "candidate_reachability.go"} {
 		for _, removed := range []string{"V3GenerationEnabled", "generationPermitted"} {
 			if strings.Contains(body[f], removed) {
@@ -286,6 +286,21 @@ func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Every byte-producing route decides activation through the owners: they
+// exist, the write route consults both, and every reason is emitted by
+// somebody.
+func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
+	body := map[string]string{}
+	for _, f := range []string{"tools.go", "candidate_reachability.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body[f] = codeWithoutComments(string(src))
+	}
+	owner := body["candidate_reachability.go"]
 	if !strings.Contains(owner, "func writeGenerationBypass(") ||
 		!strings.Contains(owner, "func editGenerationBypass(") {
 		t.Error("the owners are gone; repoint this test at their replacement")
@@ -307,33 +322,13 @@ func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
 	}
 }
 
-// A new byte-producing route cannot ship without reachability instrumentation.
-//
-// The registry is the inventory of every route that may carry service-authored
-// bytes toward disk. Each one decides whether to ask the producer, and a route
-// that decides silently is invisible to exactly the analysis this file exists
-// to support. Keyed off the registry rather than a hand-written list, so adding
-// a route to one and not the other fails here.
+// Every consultation of an activation owner is recorded. A caller that asked
+// whether to skip and then said nothing about the answer is the silent branch.
 func TestEveryByteProducingRouteRecordsItsSkips(t *testing.T) {
 	production := map[string]string{}
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
+	for name, src := range proxySources(t) {
+		production[name] = codeWithoutComments(src)
 	}
-	for _, e := range entries {
-		n := e.Name()
-		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		production[n] = codeWithoutComments(string(src))
-	}
-
-	// Every consultation of an owner is recorded. A caller that asked whether
-	// to skip and then said nothing about the answer is the silent branch.
 	consultations := 0
 	for name, body := range production {
 		if name == "candidate_reachability.go" {
@@ -357,10 +352,52 @@ func TestEveryByteProducingRouteRecordsItsSkips(t *testing.T) {
 		t.Errorf("%d activation consultations; want the write route and both "+
 			"edit entry points", consultations)
 	}
+}
 
-	// And every registered route is reached from a file that consults one.
-	// The shared delivery owner is reached FROM a route and decides no
-	// activation of its own, so it owes nothing here.
+// A new byte-producing route cannot ship without reachability instrumentation.
+//
+// The registry is the inventory of every route that may carry service-authored
+// bytes toward disk. Each one decides whether to ask the producer, and a route
+// that decides silently is invisible to exactly the analysis this file exists
+// to support. Keyed off the registry rather than a hand-written list, so adding
+// a route to one and not the other fails here.
+//
+// Every registered route is reached from a file that consults an owner. The
+// shared delivery owner is reached FROM a route and decides no activation of
+// its own, so it owes nothing here.
+func TestEveryRegisteredRouteIsReachedThroughAnOwner(t *testing.T) {
+	production := map[string]string{}
+	for name, src := range proxySources(t) {
+		production[name] = codeWithoutComments(src)
+	}
+	const sharedOwner = "candidate_delivery.go:deliverAuthorizedCandidate"
+	for site := range v3DeliveryRoutes {
+		if site == sharedOwner {
+			continue
+		}
+		file, fn, _ := strings.Cut(site, ":")
+		reached := false
+		for name, other := range production {
+			consultsAnOwner := strings.Contains(other, "writeGenerationBypass(") ||
+				strings.Contains(other, "editGenerationBypass(")
+			if consultsAnOwner && (name == file || strings.Contains(other, fn+"(")) {
+				reached = true
+				break
+			}
+		}
+		if !reached {
+			t.Errorf("%s can be entered without any activation owner deciding", site)
+		}
+	}
+}
+
+// Every registered route, except the shared delivery owner, names a production
+// file and a function that file defines.
+func TestTheDeliveryRegistryNamesProductionFunctions(t *testing.T) {
+	production := map[string]string{}
+	for name, src := range proxySources(t) {
+		production[name] = codeWithoutComments(src)
+	}
 	const sharedOwner = "candidate_delivery.go:deliverAuthorizedCandidate"
 	for site := range v3DeliveryRoutes {
 		if site == sharedOwner {
@@ -374,26 +411,17 @@ func TestEveryByteProducingRouteRecordsItsSkips(t *testing.T) {
 		}
 		if !strings.Contains(body, "func "+fn+"(") {
 			t.Errorf("%s: the registry names a function this file does not define", site)
-			continue
-		}
-		reached := false
-		for name, other := range production {
-			if !strings.Contains(other, "writeGenerationBypass(") &&
-				!strings.Contains(other, "editGenerationBypass(") {
-				continue
-			}
-			if name == file || strings.Contains(other, fn+"(") {
-				reached = true
-				break
-			}
-		}
-		if !reached {
-			t.Errorf("%s can be entered without any activation owner deciding", site)
 		}
 	}
+}
 
-	// The owners themselves still exist and still fail closed.
-	owner := production["candidate_reachability.go"]
+// The activation owners themselves still exist and still fail closed.
+func TestTheActivationOwnersStillExist(t *testing.T) {
+	src, err := os.ReadFile("candidate_reachability.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := codeWithoutComments(string(src))
 	for _, required := range []string{"func writeGenerationBypass(", "func editGenerationBypass(",
 		"func recordCandidateGenerationBypass(", "func knownCandidateBypassReason("} {
 		if !strings.Contains(owner, required) {

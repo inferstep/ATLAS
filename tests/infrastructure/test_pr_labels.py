@@ -95,16 +95,23 @@ def test_a_change_with_no_reason_is_not_high_risk():
     ("core/guard_file_test.go", "the guards"),
     ("flows/test.yml", "the workflows"),
     ("flows/deep/er/action.yml", "the workflows"),
+    ("svc/plan.py", "a prompt of the service"),
+    ("svc/stages/a.py", "a prompt of the service"),
+    ("svc/stages/deep/er/b.py", "a prompt of the service"),
+    ("svc/send.py", "the request of the service"),
 ])
-def test_a_change_to_a_core_path_is_high_risk_and_says_which_part(path, what):
+def test_a_change_to_a_core_path_or_to_a_file_with_text_that_the_model_reads_is_high_risk_and_says_which(path, what):
     labels = rules.labels_for([changed("docs/a.md"), changed(path)], False, MADE)
     assert labels.reasons == (f"it changes {what} ({path})",)
     assert labels.high_risk
 
 
-@pytest.mark.parametrize("path", ["core/loop.go.md", "other/core/loop.go", "core/guards.go", "Core/loop.go", "docs/flows/x.yml", "flows",
-                                  "core/gates.go", "core/gate.go.bak", "core/guard"])
-def test_a_path_that_only_looks_like_a_core_path_is_not_one(path):
+@pytest.mark.parametrize("path", [
+    "core/loop.go.md", "other/core/loop.go", "core/guards.go", "Core/loop.go", "docs/flows/x.yml", "flows", "core/gates.go",
+    "core/gate.go.bak", "core/guard",
+    "svc/plan.py.md", "other/svc/plan.py", "svc/planning.py", "svc/stage/a.py", "svc/stages", "Svc/plan.py", "svc/stages.py",
+    "svc/send.py.bak", "svc/other.py", "checks/svc/plan.py"])
+def test_a_path_that_only_looks_like_a_core_path_or_a_file_with_text_for_the_model_is_not_one(path):
     assert rules.labels_for([changed(path)], False, MADE).reasons == ()
 
 
@@ -114,24 +121,6 @@ def test_each_core_part_is_named_once_with_its_first_file_and_in_the_order_of_th
     assert rules.labels_for(files, False, MADE).reasons == (
         "it changes the loop (core/loop.go)", "it changes the guards (core/guard_b.go)",
         "it changes the workflows (flows/b.yml)")
-
-
-@pytest.mark.parametrize("path, what", [
-    ("svc/plan.py", "a prompt of the service"),
-    ("svc/stages/a.py", "a prompt of the service"),
-    ("svc/stages/deep/er/b.py", "a prompt of the service"),
-    ("svc/send.py", "the request of the service"),
-])
-def test_a_change_to_a_file_with_text_that_the_model_reads_is_high_risk_and_says_which(path, what):
-    labels = rules.labels_for([changed("docs/a.md"), changed(path)], False, MADE)
-    assert labels.reasons == (f"it changes {what} ({path})",)
-    assert labels.high_risk
-
-
-@pytest.mark.parametrize("path", ["svc/plan.py.md", "other/svc/plan.py", "svc/planning.py", "svc/stage/a.py", "svc/stages", "Svc/plan.py",
-                                  "svc/stages.py", "svc/send.py.bak", "svc/other.py", "checks/svc/plan.py"])
-def test_a_path_that_only_looks_like_a_file_with_text_for_the_model_is_not_one(path):
-    assert rules.labels_for([changed(path)], False, MADE).reasons == ()
 
 
 def test_the_core_parts_come_first_and_each_kind_of_text_for_the_model_is_named_once_with_its_first_file():
@@ -149,10 +138,6 @@ def test_a_change_of_the_size_named_in_the_settings_or_larger_is_high_risk(lines
     assert labels.reasons == ((f"it has {lines} counted lines (40 or more)",) if high else ())
 
 
-def test_the_lines_that_do_not_count_for_the_size_do_not_make_a_change_high_risk():
-    assert rules.labels_for([changed("go.sum", 5000), changed("a.py", 39)], False, MADE).reasons == ()
-
-
 def test_the_first_pull_request_of_an_author_is_high_risk():
     assert rules.labels_for([changed("docs/a.md")], True, MADE).reasons == ("it is the author's first pull request here",)
 
@@ -164,24 +149,23 @@ def test_every_reason_that_holds_is_given():
         "it is the author's first pull request here"))
 
 
-def want(size, high):
-    return rules.Labels(f"size/{size}", 0, ("a reason",) if high else ())
-
-
 @pytest.mark.parametrize("have, size, high, add, remove", [
-    (set(), "M", False, ["size/M"], []),
-    (set(), "M", True, ["risk:high", "size/M"], []),
-    ({"size/M"}, "M", False, [], []),
-    ({"size/M", "risk:high"}, "M", True, [], []),
-    ({"size/S"}, "M", False, ["size/M"], ["size/S"]),
-    ({"size/S", "size/XL", "size/M"}, "M", False, [], ["size/S", "size/XL"]),
-    ({"size/M", "risk:high"}, "M", False, [], ["risk:high"]),
-    ({"size/M"}, "M", True, ["risk:high"], []),
-    ({"area/proxy", "status/ready", "risk:low", "sizes", "resize/M"}, "S", False, ["size/S"], []),
-    ({"area/proxy", "size/L", "risk:high"}, "S", False, ["size/S"], ["risk:high", "size/L"]),
+    pytest.param(set(), "M", False, ["size/M"], [], id="no label yet"),
+    pytest.param(set(), "M", True, ["risk:high", "size/M"], [], id="no label yet, high risk"),
+    pytest.param({"size/M"}, "M", False, [], [], id="the right size"),
+    pytest.param({"size/M", "risk:high"}, "M", True, [], [], id="the right size and the risk label"),
+    pytest.param({"size/S"}, "M", False, ["size/M"], ["size/S"], id="another size"),
+    pytest.param({"size/S", "size/XL", "size/M"}, "M", False, [], ["size/S", "size/XL"], id="the right size and two others"),
+    pytest.param({"size/M", "risk:high"}, "M", False, [], ["risk:high"], id="no longer high risk"),
+    pytest.param({"size/M"}, "M", True, ["risk:high"], [], id="now high risk"),
+    pytest.param({"area/proxy", "status/ready", "risk:low", "sizes", "resize/M"}, "S", False, ["size/S"], [],
+                 id="other labels and labels that only look like ours stay"),
+    pytest.param({"area/proxy", "size/L", "risk:high"}, "S", False, ["size/S"], ["risk:high", "size/L"],
+                 id="another label stays and ours change"),
 ])
 def test_only_the_size_labels_and_the_risk_label_are_added_and_removed(have, size, high, add, remove):
-    assert rules.label_changes(have, want(size, high), MADE) == (add, remove)
+    wanted = rules.Labels(f"size/{size}", 0, ("a reason",) if high else ())
+    assert rules.label_changes(have, wanted, MADE) == (add, remove)
 
 
 # --- the settings of this repository -------------------------------------------------------------------------

@@ -28,13 +28,15 @@ def test_launcher_accepts_disabled_asa_on_macos_bash(tmp_path):
         "ATLAS_CONTROL_VECTOR": str(tmp_path / "missing-vector.gguf"),
         "ATLAS_CTX_SIZE": "4096",
         "ATLAS_PARALLEL_SLOTS": "2",
-        "PARALLEL_SLOTS": "9",
+        "PARALLEL_SLOTS": "9",  # each older name loses to its ATLAS_ name
         "ATLAS_KV_TYPE_K": "q8_0",
         "KV_CACHE_TYPE_K": "f16",
         "ATLAS_KV_TYPE_V": "q4_0",
         "KV_CACHE_TYPE_V": "f16",
         "ATLAS_BATCH": "512",
         "ATLAS_UBATCH": "256",
+        # The launcher keeps its slots in $TMPDIR/atlas-slots.
+        "TMPDIR": str(tmp_path),
     })
     result = subprocess.run(
         ["/bin/bash", str(LAUNCHER)],
@@ -45,5 +47,5 @@ def test_launcher_accepts_disabled_asa_on_macos_bash(tmp_path):
     assert "ASA steering:         disabled" in result.stdout
     assert "Parallel slots:       2" in result.stdout
     assert "KV cache K / V:       q8_0 / q4_0" in result.stdout
-    assert "Batch / micro-batch:  256 / 256" in result.stdout
+    assert "Batch / micro-batch:  256 / 256" in result.stdout  # 512 capped
     assert "--control-vector-scaled" not in result.stdout

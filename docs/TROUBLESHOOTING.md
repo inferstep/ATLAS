@@ -152,7 +152,7 @@ libnvidia-ml.so.1: cannot open shared object file: no such file or directory
    sudo systemctl restart docker
    ```
 
-2. **RHEL 9 — add CUDA repo + install open-dkms module** (verified working on RHEL 9.7 with RTX 5060 Ti):
+2. **RHEL 9 — add CUDA repo + install open-dkms module:**
    ```bash
    # Add NVIDIA's CUDA repo
    sudo dnf config-manager --add-repo \
@@ -285,7 +285,7 @@ If this works for you on a previously-unsupported card, please leave a note on [
 ```env
 # Add to your .env
 ATLAS_ROCM_TAG=7.2.3-complete
-ATLAS_GFX_TARGET=gfx1201   # gfx1200 for RX 9070, gfx1201 for RX 9070 XT
+ATLAS_GFX_TARGET=gfx1201   # gfx1201 for RX 9070 / 9070 XT, gfx1200 for RX 9060 XT
 ```
 
 Then rebuild and bring up the stack:
@@ -296,8 +296,6 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
 ```
 
 **Important: do NOT set `ATLAS_HSA_OVERRIDE_GFX_VERSION` for gfx1200/gfx1201.** ROCm 7.0+ supports these targets natively; overriding the GFX version inside Docker causes a mismatch between the compiled kernels and the runtime target, which results in crashes. Leave `ATLAS_HSA_OVERRIDE_GFX_VERSION` unset (the default).
-
-> Tested on AMD Radeon AI PRO R9700 (gfx1201) with ROCm 7.2, `ATLAS_ROCM_TAG=7.2.3-complete`. The hidden-states patch applies cleanly to the pinned llama.cpp SHA. Inference runs correctly across text generation and embedding generation without any additional flags.
 
 ### ROCm container can't pull `rocm/rocm-terminal`
 
@@ -515,7 +513,7 @@ an issue with `nvidia-smi` output and the first 50 llama-server log lines.
 
 ### Model Loading on CPU Instead of GPU
 
-**Symptom:** Generation at ~2 tok/s instead of ~50 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
+**Symptom:** Generation at ~2 tok/s. `nvidia-smi` doesn't show llama-server using the GPU.
 
 **Fix:** Ensure `-ngl 99` (`--n-gpu-layers`) is set (offloads all layers to GPU). In Docker Compose the entrypoint sets it by default. For bare metal, check the command:
 ```bash
@@ -815,7 +813,7 @@ A message is conversational only when it is under 12 characters (`hi`, `thanks`,
 
 ### Requests Refused: the Lens Cannot Score
 
-**Symptom:** A request fails at once with HTTP 503 `dependency_down`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
+**Symptom:** A request fails at once with HTTP 503 `dependency_unavailable`: "ATLAS needs the geometric lens for every request, and it ... Run `atlas doctor`." Or a run stops with `lens_unavailable`: "Stopped: ATLAS needs the geometric lens for every request, and it stopped answering (...)". Proxy `/ready` shows `"lens_ready": false` with a `lens_reason`; `atlas doctor` fails `status_dimensions` with `direct_agent: blocked`.
 
 **Impact:** No request runs until the lens can score. This is deliberate: the lens is required ([ADR 0011](adr/0011-the-lens-is-required.md)). A run that stopped says whether it changed files before it stopped.
 
@@ -847,7 +845,7 @@ The proxy caches the lens answer for 5 seconds, so a fixed lens is accepted with
 
 **Symptom:** Everything reports healthy — pods `Ready`, `/health` 200, `gx-score` returns in-range-looking `gx_score` with a `likely_correct` verdict — but `cx_energy` is orders of magnitude off its calibrated range (e.g. ~600 when the model's pass/fail means are ~20-30). A gated benchmark launched in this state produces a complete, plausible, entirely invalid result.
 
-**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — typically per-token instead of pooled, or unnormalized instead of L2-normalized (‖v‖≈60 instead of ~1). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after rebuilding the serving stack without `--pooling mean` (llama-server has no `--embd-normalize` server flag; the lens requests L2 normalization per-call via `embd_normalize` in the `/embedding` body).
+**Cause:** The embed server is serving a different `/embedding` convention than the one the Geometric Lens `C(x)`/`G(x)` artifacts were trained on — a vector pooled another way, or L2-normalized instead of raw (‖v‖≈1 instead of ≈137). Same dimensionality, wrong distribution; the cost-field MLP extrapolates to a huge energy and `cx_normalized` saturates. This happens after the serving stack's convention changes: `ATLAS_EMBED_POOLING` set to a pooling other than `none` (the default) or `mean`, such as `cls` or `last`; or a server that pools and normalizes despite `embd_normalize: -1`, which returns a flat vector with ‖v‖≈1 (per-token rows that come back normalized are refused by the lens with an error instead). llama-server has no `--embd-normalize` server flag; the lens asks for raw vectors per call, `embd_normalize: -1` in the `/embedding` body, and mean-pools per-token rows itself.
 
 **Verify:** where a `drift_fingerprint.json` sits next to the artifacts (see step 3 below), the lens re-scores it in its self-test (at boot, and again from `/ready` after a retryable failure). Check `/ready` and `/health`:
 ```bash
@@ -868,7 +866,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
    nothing. Compare against `pass_energy_mean` in `cx_normalization.json`:
    served energies should span that band, not sit on one value.
 2. Set `ATLAS_EMBED_POOLING=none` (the default; see [CONFIGURATION.md](CONFIGURATION.md)) and recreate the llama-server container so the entrypoint pins the flags. `--pooling` is server-global, and only `none` serves both the whole-text and per-step paths; pooling and scale are handled client-side.
-3. After the server serves the correct convention, the boot self-test passes and `/ready` returns 200. A rebuild (`atlas lens build`) stamps the `embedding_contract` into `model_identity.json`. It does not write a drift fingerprint: `geometric_lens.drift.write_fingerprint` exists, but no command calls it yet, so the fingerprint check runs only where a `drift_fingerprint.json` was written by hand.
+3. After the server serves the correct convention, the boot self-test passes and `/ready` returns 200. A rebuild (`atlas lens build`) stamps the `embedding_contract` into `model_identity.json` and writes `drift_fingerprint.json` into the artifact dir, so the boot self-test re-checks the convention. When the reference texts cannot be scored, it skips the fingerprint with a warning, and the drift check then enforces nothing for that bundle.
 
 ### Embedding Extraction Fails
 
@@ -980,7 +978,7 @@ The model is running on CPU instead of GPU. Check:
 2. `-ngl 99` (`--n-gpu-layers`) — are all layers offloaded?
 3. NVIDIA Container Toolkit — is the container runtime configured for GPU access?
 
-**Expected performance:** there is no current reference figure; throughput depends on the model, quantization and grammar mode. An earlier ~51 tok/s figure came from a configuration that no longer exists.
+**Expected performance:** throughput depends on the model, quantization and grammar mode.
 
 ### V3 Pipeline Takes Several Minutes
 
