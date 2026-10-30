@@ -1,7 +1,7 @@
 # ATLAS Documentation
 
-Task-oriented index for everything under `docs/`. For a directory-by-directory
-map of the repository itself, see [MAP.md](MAP.md).
+Task-oriented index for everything under `docs/`. The
+[repository map](#repository-map) at the end says what each top-level folder owns.
 
 > 翻訳 / 번역 / 翻译: [简体中文](lang/zh-CN/README.md) ·
 > [日本語](lang/ja/README.md) · [한국어](lang/ko/README.md)
@@ -46,11 +46,10 @@ map of the repository itself, see [MAP.md](MAP.md).
   v3-service, geometric-lens, sandbox, llama-server).
 - [PROTOCOL.md](PROTOCOL.md) — the typed SSE event envelope shared by
   proxy, v3-service, and clients.
-- [EVIDENCE_WIRE.md](EVIDENCE_WIRE.md) — the versioned evidence envelope
-  between v3-service and the proxy, and the rule that authorizes delivery.
 - [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) — typed
-  obligations, evidence provenance, candidate staging, and the observe-only
-  authorization and feasibility decisions.
+  obligations, evidence provenance, the evidence wire between v3-service and
+  the proxy, candidate staging, and the observe-only authorization and
+  feasibility decisions.
 - [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) — the one delivery rule for
   V3 candidates: what can honestly be decided without an oracle.
 - [schemas/](schemas/) — machine-readable contracts:
@@ -110,7 +109,7 @@ map of the repository itself, see [MAP.md](MAP.md).
   [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md)
 - READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
   are not listed one-by-one here: they live in the tree next to what they
-  describe (see [MAP.md](MAP.md) for the per-directory layout), and
+  describe (see the [repository map](#repository-map)), and
   third-party notices live at the repository root.
 
 ---
@@ -121,7 +120,7 @@ map of the repository itself, see [MAP.md](MAP.md).
 whole first hour; keep [TROUBLESHOOTING.md](TROUBLESHOOTING.md) open in a tab.
 
 **Know what you need.** Use the section index above, or
-[MAP.md](MAP.md) if you're looking for code rather than docs.
+the [repository map](#repository-map) if you're looking for code rather than docs.
 
 **Something's broken.**
 [TROUBLESHOOTING.md § Quick Diagnostics](TROUBLESHOOTING.md#quick-diagnostics)
@@ -180,3 +179,30 @@ In order, each building on the last:
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
+
+---
+
+## Repository map
+
+What each top-level folder owns. For how the pieces work together see
+[ARCHITECTURE.md](ARCHITECTURE.md); for the full API surface see [API.md](API.md).
+
+| Directory | Owns | More |
+|---|---|---|
+| `proxy/` | Go agent loop: `/v1/agent`, grammar-constrained tool calls, gates, V3 routing, OpenAI passthrough | [proxy/README.md](../proxy/README.md) |
+| `tui/` | Bubbletea terminal client — the canonical chat front-end, consumes proxy SSE streams | — |
+| `extensions/` | IDE clients over the proxy HTTP API; `extensions/vscode/` is the VS Code extension (chat sidebar, permission flow, diff review) and `extensions/jetbrains/` the JetBrains plugin (chat and permission cards in the tool window, diff review for predicted and applied file changes, the workspace-mismatch checks, a proxy status bar, model/V3 progress, notifications, actions and settings with the token in the IDE credential store; verified by Plugin Verifier on IDEA, PyCharm, WebStorm and GoLand) | [extensions/vscode/README.md](../extensions/vscode/README.md), [extensions/jetbrains/README.md](../extensions/jetbrains/README.md) |
+| `atlas/` | Python CLI package: `atlas` subcommand dispatch (init, doctor, tier, model, onboard, lens, asa, publish, bench, compose, tui, upgrade, rollback, diagnostics, artifact, config); `atlas/bench/` is the benchmark harness | [atlas/bench/README.md](../atlas/bench/README.md) |
+| `v3-service/` | Python HTTP service for the V3 generation pipeline (`stages/` holds the pipeline stage modules, `graph/` the call-graph layer) and the tree-sitter structural tooling | — |
+| `geometric-lens/` | Scoring (C(x)/G(x)), ASA control-vector build | [asa_calibration/README.md](../geometric-lens/asa_calibration/README.md) |
+| `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
+| `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
+| `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
+| `scripts/` | Install, deploy, K3s, and CI/release automation | — |
+| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates | — |
+| `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
+| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `integration/`, `perf/`, `v3/`, `v3-service/` | — |
+
+Root also holds the Docker Compose stack (`docker-compose.yml` plus the rocm /
+vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
+(the `atlas` CLI entry point), and the standard `.env.example`.

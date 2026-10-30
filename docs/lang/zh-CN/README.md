@@ -181,7 +181,7 @@ ATLAS 以开源方式开发，欢迎贡献者和核心维护者加入。修复 b
 
 发现 bug 或者被卡住了？**[提交一个 issue](https://github.com/inferstep/ATLAS/issues)** - 你不需要附上修复。bug 报告和反馈与代码同样有价值。
 
-贡献指南见 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**，代码库布局概览见[仓库地图](../../MAP.md)。
+贡献指南见 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**，代码库布局概览见[仓库地图](../../README.md#repository-map)。
 
 ---
 

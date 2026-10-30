@@ -6,7 +6,7 @@ issue.
 
 **Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
 [Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
-[ARCHITECTURE](docs/ARCHITECTURE.md) · [MAP](docs/MAP.md) ·
+[ARCHITECTURE](docs/ARCHITECTURE.md) · [MAP](docs/README.md#repository-map) ·
 [Development workflow](#development-workflow) · [GOVERNANCE](GOVERNANCE.md) ·
 [Security reports](SECURITY.md)
 
@@ -16,7 +16,7 @@ ATLAS is a local coding agent made of a few services: the Go agent loop
 (`proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
 the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
-[MAP.md](docs/MAP.md) says what every directory owns, and
+[The repository map](docs/README.md#repository-map) says what every directory owns, and
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces work
 together.
 
