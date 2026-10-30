@@ -23,11 +23,11 @@
 # - atlas-proxy is intentionally NOT overridden here. The runtime image
 #   is alpine-based with no Go toolchain, so bind-mounting source won't
 #   recompile inside the container. For Go iteration, run the proxy on
-#   the host instead — see docs/DEVELOPMENT.md for the host workflow.
+#   the host instead — see CONTRIBUTING.md (Development workflow).
 # - llama-server, sandbox not overridden — they don't change
 #   during typical dev work.
 #
-# See: docs/DEVELOPMENT.md, ISSUES.md PC-030.
+# See: CONTRIBUTING.md (Development workflow), ISSUES.md PC-030.
 
 services:
   geometric-lens:

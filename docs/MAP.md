@@ -45,7 +45,7 @@ vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
 | [SETUP_MACOS.md](SETUP_MACOS.md) | macOS hybrid install: native Metal llama-server + Docker stack |
 | [OPERATIONS.md](OPERATIONS.md) | Day-2 operations: health, logs, runbooks, upgrades, rollback, backup |
 | [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) | How the service images are built: runtime accounts, writable paths, dependency pinning |
-| [DEVELOPMENT.md](DEVELOPMENT.md) | Dev workflow: targeted rebuilds, host-side proxy, tests |
+| [CONTRIBUTING.md § Development workflow](../CONTRIBUTING.md#development-workflow) | Dev workflow: targeted rebuilds, host-side proxy, tests |
 | [PUBLISHING.md](PUBLISHING.md) | HuggingFace + GitHub publish flow for Lens / ASA artifacts |
 | [RELEASE.md](RELEASE.md) | Release contract: capability status, service contracts, and verification levels |
 | [PLAN_MODE.md](PLAN_MODE.md) | Plan mode: per-turn pre-flight planning and adherence constants |

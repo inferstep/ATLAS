@@ -89,7 +89,7 @@ map of the repository itself, see [MAP.md](MAP.md).
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — from finding an issue and
   `/claim` to review and release; style, tests, and the developer quality
   gate (`scripts/production-readiness.py`).
-- [DEVELOPMENT.md](DEVELOPMENT.md) — dev mode, targeted rebuilds,
+- [CONTRIBUTING.md § Development workflow](../CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
   `scripts/code_health.py` enforces on new code and refactors.
@@ -100,7 +100,7 @@ map of the repository itself, see [MAP.md](MAP.md).
   measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
-- [TRIAGE.md](TRIAGE.md) — how new issues become Ready work.
+- [GOVERNANCE.md § Triage](../GOVERNANCE.md#triage) — how new issues become Ready work.
 - [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) — what to do when a key
   leaks, a release is bad, or automation misbehaves.
 - [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — image accounts,
@@ -176,7 +176,7 @@ In order, each building on the last:
 12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
 13. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
 14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
-15. [DEVELOPMENT.md](DEVELOPMENT.md), [../CONTRIBUTING.md](../CONTRIBUTING.md),
+15. [../CONTRIBUTING.md](../CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
