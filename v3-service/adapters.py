@@ -405,6 +405,9 @@ class LLMAdapter:
             # cancellation rather than as whatever the next check happens to
             # be. Registration is where cancellation is decided.
             headers = self._inference_headers()
+            # http.client does not go through the urllib opener that adds the token.
+            if SERVICE_TOKEN:
+                headers["Authorization"] = f"Bearer {SERVICE_TOKEN}"
             path = (parsed.path or "") + "/v1/chat/completions"
             conn.request("POST", path, body=payload, headers=headers)
             resp = conn.getresponse()
