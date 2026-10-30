@@ -1065,7 +1065,8 @@ migrate_legacy_ghcr_owner() {
 # A group's number on this host, or its name when the host has no such group.
 # A name given to Docker resolves in the image, not on the host.
 host_gid() {
-    getent group "$1" | cut -d: -f3 | grep . || echo "$1"
+    local name="$1"
+    getent group "$name" | cut -d: -f3 | grep . || echo "$name"
 }
 
 # Set (or append) key=value in ./.env.
@@ -1132,27 +1133,25 @@ persist_backend_selection() {
     #   none + /dev/dri  -> vulkan (docker-compose.vulkan.yml)
     #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
     # An explicit ATLAS_BACKEND already present in .env is respected.
-    local existing
-    existing=$(env_file_value ATLAS_BACKEND)
-    if [[ -n "$existing" ]]; then
-        log_ok "Backend already set in .env: ATLAS_BACKEND=$existing"
-        return
-    fi
-
     local backend
-    case "$GPU_VENDOR" in
-        amd)    backend="rocm" ;;
-        nvidia) backend="cuda" ;;
-        *)
-            if [[ -e /dev/dri ]]; then
-                backend="vulkan"
-            else
-                backend="cpu"
-            fi
-            ;;
-    esac
-    set_env_file_value ATLAS_BACKEND "$backend"
-    log_ok "Recorded ATLAS_BACKEND=$backend so later lifecycle commands pick the matching compose overlays"
+    backend=$(env_file_value ATLAS_BACKEND)
+    if [[ -n "$backend" ]]; then
+        log_ok "Backend already set in .env: ATLAS_BACKEND=$backend"
+    else
+        case "$GPU_VENDOR" in
+            amd)    backend="rocm" ;;
+            nvidia) backend="cuda" ;;
+            *)
+                if [[ -e /dev/dri ]]; then
+                    backend="vulkan"
+                else
+                    backend="cpu"
+                fi
+                ;;
+        esac
+        set_env_file_value ATLAS_BACKEND "$backend"
+        log_ok "Recorded ATLAS_BACKEND=$backend so later lifecycle commands pick the matching compose overlays"
+    fi
     if [[ "$backend" == "rocm" || "$backend" == "vulkan" ]]; then
         set_env_file_value ATLAS_VIDEO_GID "$(host_gid video)"
         set_env_file_value ATLAS_RENDER_GID "$(host_gid render)"

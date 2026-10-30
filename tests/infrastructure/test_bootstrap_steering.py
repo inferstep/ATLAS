@@ -8,6 +8,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = ROOT / "scripts" / "atlas-bootstrap.sh"
+needs_getent = pytest.mark.skipif(shutil.which("getent") is None, reason="the bootstrap runs on Linux")
+
+
+def shell_function(name):
+    return re.search(rf"^{name}\(\) \{{.*?^\}}", BOOTSTRAP.read_text(), re.M | re.S).group()
 
 
 def test_the_steering_build_runs_as_the_target_user():
@@ -18,11 +23,23 @@ def test_the_steering_build_runs_as_the_target_user():
     assert '--user "$(id -u "$TARGET_USER"):$(id -g "$TARGET_USER")"' in run
 
 
-@pytest.mark.skipif(shutil.which("getent") is None, reason="the bootstrap runs on Linux")
+@needs_getent
 def test_host_gid_gives_the_number_or_else_the_name():
-    function = re.search(r"^host_gid\(\) \{.*?^\}", BOOTSTRAP.read_text(), re.M | re.S).group()
-
-    done = subprocess.run(["bash", "-c", f"{function}\nhost_gid root; host_gid no-such-group"],
+    done = subprocess.run(["bash", "-c", f"{shell_function('host_gid')}\nhost_gid root; host_gid no-such-group"],
                           capture_output=True, text=True)
 
     assert done.stdout.split() == ["0", "no-such-group"]
+
+
+@needs_getent
+def test_an_env_that_already_names_a_backend_still_gets_the_group_numbers(tmp_path):
+    (tmp_path / ".env").write_text("ATLAS_BACKEND=rocm\n")
+    functions = "\n".join(shell_function(name) for name in (
+        "env_file_value", "set_env_file_value", "host_gid", "persist_backend_selection"))
+
+    subprocess.run(["bash", "-c", f"log_ok() {{ :; }}\n{functions}\npersist_backend_selection"],
+                   cwd=tmp_path, check=True)
+
+    body = (tmp_path / ".env").read_text()
+    assert "ATLAS_VIDEO_GID=" in body
+    assert "ATLAS_RENDER_GID=" in body

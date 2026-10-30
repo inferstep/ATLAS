@@ -42,8 +42,11 @@ import gguf
 import numpy as np
 
 sys.path.insert(0, "/app")
+from geometric_lens.auth_token import install_urllib_opener
 from geometric_lens.embedding_extractor import extract_per_layer_per_token
 from geometric_lens.model_transport import model_request
+
+install_urllib_opener()  # keeps the token off a redirect to another address
 
 
 _SYSTEM_PROMPT = (
