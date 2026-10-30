@@ -94,6 +94,20 @@ def test_the_gpu_overlays_take_the_host_group_numbers(overlay):
     assert "- ${ATLAS_VIDEO_GID:-video}\n      - ${ATLAS_RENDER_GID:-render}\n" in text
 
 
+@pytest.mark.parametrize("overlay", ["compose/docker-compose.rocm.yml", "compose/docker-compose.vulkan.yml"])
+def test_the_gpu_overlays_keep_root_until_the_user_is_written(overlay):
+    # A .env from before 3.2.0 has no group numbers, and a non-root account
+    # would lose the GPU.
+    assert 'user: "${ATLAS_LLAMA_USER:-0:0}"' in (ROOT / overlay).read_text()
+
+
+def test_the_cpu_stack_runs_as_the_installing_user():
+    # It layers on the Vulkan overlay. A !reset would leave no user, and the
+    # image declares none, so this must name the account.
+    text = (ROOT / "compose" / "docker-compose.cpu.yml").read_text()
+    assert 'user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"' in text
+
+
 @pytest.mark.parametrize("service", ["geometric-lens", "v3-service"])
 def test_the_lens_and_v3_have_a_home_that_their_user_can_write(service):
     # The images' HOME belongs to their own user (1001); /tmp is 1777.

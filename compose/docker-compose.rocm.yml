@@ -70,6 +70,9 @@ services:
     # on the host so /dev/kfd and /dev/dri are accessible. Most distros
     # ship these groups by default; if missing, add them with:
     #   sudo groupadd -f render && sudo groupadd -f video
+    # Root until `atlas init` or the bootstrap writes the host's numbers below:
+    # a .env from before 3.2.0 has none, and a non-root account would lose the GPU.
+    user: "${ATLAS_LLAMA_USER:-0:0}"
     # A name here resolves in the image, whose numbers need not match the
     # host's device nodes, so `atlas init` writes the host's numbers.
     group_add:

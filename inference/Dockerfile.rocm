@@ -138,7 +138,8 @@ RUN chmod +x /entrypoint.sh
 # groups on the host for /dev/kfd + /dev/dri access. The compose
 # override (compose/docker-compose.rocm.yml) handles the device passthrough +
 # group_add.
-USER atlas
+# No USER here: compose sets the account. A compose file from before 3.2.0 sets
+# none, and there the server must stay able to read the service token.
 ENV HOME=/home/atlas
 
 # The entrypoint's default listen port (PORT env) is 8080; the compose

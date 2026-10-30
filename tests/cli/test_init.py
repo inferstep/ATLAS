@@ -388,6 +388,7 @@ def test_the_host_group_numbers_go_into_env_for_a_gpu_overlay(atlas_root, monkey
 
     body = (atlas_root / ".env").read_text()
     assert ("ATLAS_VIDEO_GID=44\nATLAS_RENDER_GID=992\n" in body) is written
+    assert (f"ATLAS_LLAMA_USER={os.getuid()}:{os.getgid()}\n" in body) is written
 
 
 def test_a_group_the_host_does_not_have_stays_out_of_the_group_numbers(monkeypatch):

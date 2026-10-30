@@ -33,7 +33,8 @@ RUN groupadd --gid 1001 atlas && \
     chown -R atlas:atlas /models
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-USER atlas
+# No USER here: compose sets the account. A compose file from before 3.2.0 sets
+# none, and there the server must stay able to read the service token.
 ENV HOME=/home/atlas
 # The entrypoint's default listen port (PORT env) is 8080.
 EXPOSE 8080

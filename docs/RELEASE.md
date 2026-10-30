@@ -142,12 +142,14 @@ hash status, backend, context size, and service image digests.
 
 ### Checks for 3.2.0 on ROCm and Vulkan
 
-The inference images run as a non-root account since this cycle, and this
-has not run on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
+llama-server runs as the installing user since this cycle, and this has not run
+on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
 
-- `atlas init` writes `ATLAS_VIDEO_GID` and `ATLAS_RENDER_GID`, and
-  llama-server, as the installing user, reaches the GPU through them.
-- An install upgraded from 3.1.7 reaches the GPU after `atlas init
+- `atlas init` writes `ATLAS_VIDEO_GID`, `ATLAS_RENDER_GID` and
+  `ATLAS_LLAMA_USER`, and llama-server, as the installing user, reaches the GPU
+  through them.
+- An install upgraded from 3.1.7, by `git pull` then `atlas upgrade`, keeps the
+  GPU as root, and still reaches it as the installing user after `atlas init
   --reconfigure`.
 - On ROCm, the bootstrap's steering build writes its vector to the models
   folder as the installing user.

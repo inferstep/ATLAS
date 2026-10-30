@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Upgrading to 3.2.0: run `git pull` first
+
+`atlas upgrade` replaces images only. Compose files, the entrypoint and the CLI
+come from your checkout, so run `git pull` first.
+
+- llama-server now runs as the installing user. The inference images declare no
+  `USER`: compose sets the account, and a bare `docker run` is root. Without
+  `git pull`, the new images run as root under the old compose files, as 3.1.7
+  did, with internal auth on.
+- On ROCm and Vulkan, your `.env` keeps llama-server as root, so it keeps the
+  GPU. Run `atlas init --reconfigure` to move it to the installing user with the
+  host's group numbers. This path has not run on an AMD or a Vulkan GPU.
+
 ### Changed: the Compose overlays moved to `compose/`
 
 `docker-compose.{cpu,macos,rocm,vulkan}.yml` and

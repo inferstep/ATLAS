@@ -37,9 +37,10 @@ def test_an_env_that_already_names_a_backend_still_gets_the_group_numbers(tmp_pa
     functions = "\n".join(shell_function(name) for name in (
         "env_file_value", "set_env_file_value", "host_gid", "persist_backend_selection"))
 
-    subprocess.run(["bash", "-c", f"log_ok() {{ :; }}\n{functions}\npersist_backend_selection"],
+    subprocess.run(["bash", "-c", f"TARGET_USER=root\nlog_ok() {{ :; }}\n{functions}\npersist_backend_selection"],
                    cwd=tmp_path, check=True)
 
     body = (tmp_path / ".env").read_text()
     assert "ATLAS_VIDEO_GID=" in body
     assert "ATLAS_RENDER_GID=" in body
+    assert "ATLAS_LLAMA_USER=0:0" in body

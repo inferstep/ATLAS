@@ -624,6 +624,7 @@ def _render_env(m: model_registry.Model, profile: tier.TierProfile,
     }
     if backend_id in ("rocm", "vulkan"):
         keys.update(_host_group_ids())
+        keys["ATLAS_LLAMA_USER"] = f"{sandbox_uid}:{sandbox_gid}"
 
     gpu_descr = (f"{selected_gpu.name} ({selected_gpu.vram_gb:.1f} GB VRAM)"
                  if selected_gpu else "none")

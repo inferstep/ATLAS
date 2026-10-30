@@ -133,6 +133,7 @@ SCHEMA: Dict[str, Field] = {
     "ATLAS_PROXY_GID": Field("int", min=0),
     "ATLAS_VIDEO_GID": Field("str"),
     "ATLAS_RENDER_GID": Field("str"),
+    "ATLAS_LLAMA_USER": Field("str"),
     # ASA control-vector path (entrypoint-v3.1.sh + `atlas asa`); the
     # _SCALE/_LAYER_RANGE/_ALLOW_UNVERIFIED tuning knobs are above.
     "ATLAS_CONTROL_VECTOR": Field("str"),

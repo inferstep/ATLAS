@@ -1155,6 +1155,7 @@ persist_backend_selection() {
     if [[ "$backend" == "rocm" || "$backend" == "vulkan" ]]; then
         set_env_file_value ATLAS_VIDEO_GID "$(host_gid video)"
         set_env_file_value ATLAS_RENDER_GID "$(host_gid render)"
+        set_env_file_value ATLAS_LLAMA_USER "$(id -u "$TARGET_USER"):$(id -g "$TARGET_USER")"
     fi
 }
 
