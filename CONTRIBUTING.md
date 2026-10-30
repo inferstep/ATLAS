@@ -452,11 +452,11 @@ bind-mounting your working tree into the container.
 ### Enabling dev mode (Python services)
 
 Compose merges `docker-compose.override.yml` automatically if the
-file exists. The repo ships `docker-compose.override.yml.example` as
+file exists. The repo ships `compose/docker-compose.override.yml.example` as
 a template:
 
 ```bash
-cp docker-compose.override.yml.example docker-compose.override.yml
+cp compose/docker-compose.override.yml.example docker-compose.override.yml
 docker compose up -d
 ```
 

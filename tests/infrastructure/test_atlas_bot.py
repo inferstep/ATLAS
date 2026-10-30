@@ -573,7 +573,7 @@ def test_area_labels_from_changed_paths(api, cfg):
     api.cards.clear()
     api.pulls = [{"number": 40, "labels": [{"name": "area/tui"}], "author_association": "CONTRIBUTOR",
                   "created_at": stamp(1), "user": {"login": "bob"}}]
-    api.files[40] = ["proxy/agent.go", "tui/main.go", "docs/SETUP.md", "docker-compose.rocm.yml"]
+    api.files[40] = ["proxy/agent.go", "tui/main.go", "docs/SETUP.md", "compose/docker-compose.rocm.yml"]
     run(api, cfg).sync()
     assert api.log[0] == ("add_labels", 40, ("area/docs", "area/install", "area/proxy"))
 

@@ -199,11 +199,11 @@ What each top-level folder owns. For how the pieces work together see
 | `sandbox/` | Isolated multi-language code execution and shell, with workspace containment | — |
 | `inference/` | llama-server Docker builds (CUDA / ROCm / Vulkan) and model-neutral entrypoints | — |
 | `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
+| `compose/` | Docker Compose overlays (rocm, vulkan, cpu, macos) layered on the root `docker-compose.yml`, and the dev-mode override example | — |
 | `scripts/` | Install, deploy, K3s, and CI/release automation | — |
 | `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `integration/`, `perf/`, `v3/`, `v3-service/` | — |
 
-Root also holds the Docker Compose stack (`docker-compose.yml` plus the rocm /
-vulkan / cpu / macos overlays), `atlas.conf.example` (K3s), `pyproject.toml`
+Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`
 (the `atlas` CLI entry point), and the standard `.env.example`.

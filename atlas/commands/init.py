@@ -650,14 +650,14 @@ def _append_backend_note(lines: List[str], backend_id: str) -> None:
             "# NOTE (ROCm): bring the stack up with the ROCm override:")
         lines.append(
             "#   docker compose -f docker-compose.yml "
-            "-f docker-compose.rocm.yml up -d")
+            "-f compose/docker-compose.rocm.yml up -d")
         lines.append("")
     elif backend_id == "vulkan":
         lines.append(
             "# NOTE (Vulkan, PC-114): bring the stack up with the Vulkan override:")
         lines.append(
             "#   docker compose -f docker-compose.yml "
-            "-f docker-compose.vulkan.yml up -d")
+            "-f compose/docker-compose.vulkan.yml up -d")
         lines.append(
             "# Vulkan is the universal fallback (~20-40% slower than tuned "
             "native backends) — works on AMD/Intel/Snapdragon/Apple-via-MoltenVK/CPU.")
@@ -673,7 +673,7 @@ def _append_backend_note(lines: List[str], backend_id: str) -> None:
             "(uses Metal, 5-10x faster than MoltenVK)")
         lines.append(
             "#   2. docker compose -f docker-compose.yml "
-            "-f docker-compose.macos.yml up -d   # proxy + v3 + lens + sandbox")
+            "-f compose/docker-compose.macos.yml up -d   # proxy + v3 + lens + sandbox")
         lines.append(
             "# Run ./scripts/atlas-setup-macos.sh first if you haven't already "
             "(installs brew deps + builds llama.cpp with Metal). See "
@@ -1019,7 +1019,7 @@ def _print_next_steps(backend_id: str, color: bool) -> None:
         _safe_print("  2. ./scripts/atlas-llama-macos.sh    "
                     "# starts native llama-server (run in its own terminal)")
         _safe_print("  3. docker compose -f docker-compose.yml "
-                    "-f docker-compose.macos.yml up -d   "
+                    "-f compose/docker-compose.macos.yml up -d   "
                     "# proxy + v3 + lens + sandbox")
         _safe_print("  4. atlas doctor               # verify install health")
         _safe_print("  5. atlas                      # start using ATLAS")
@@ -1030,10 +1030,10 @@ def _print_next_steps(backend_id: str, color: bool) -> None:
                     "this model + GPU (tier presets are VRAM-band defaults)")
         if backend_id == "rocm":
             _safe_print("  2. docker compose -f docker-compose.yml "
-                        "-f docker-compose.rocm.yml up -d   # bring up the ROCm stack")
+                        "-f compose/docker-compose.rocm.yml up -d   # bring up the ROCm stack")
         elif backend_id == "vulkan":
             _safe_print("  2. docker compose -f docker-compose.yml "
-                        "-f docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
+                        "-f compose/docker-compose.vulkan.yml up -d   # bring up the Vulkan stack")
         else:
             _safe_print("  2. docker compose up -d        # bring up the stack")
         _safe_print("  3. atlas doctor               # verify install health")

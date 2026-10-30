@@ -36,7 +36,8 @@ def test_help_flag_prints_usage_and_exits_0(monkeypatch, capsys):
 def test_compose_subcommand_passes_through_to_docker_compose(
         monkeypatch, tmp_path):
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
+    (tmp_path / "compose").mkdir()
+    (tmp_path / "compose/docker-compose.macos.yml").write_text("services: {}\n")
     (tmp_path / ".env").write_text("ATLAS_BACKEND=metal\n")
     calls = []
 
@@ -49,7 +50,7 @@ def test_compose_subcommand_passes_through_to_docker_compose(
     assert exc.value.code == 0
     assert calls[0][:2] == ["docker", "compose"]
     # The metal backend's overlay set is honored, args pass through.
-    assert "docker-compose.macos.yml" in calls[0]
+    assert "compose/docker-compose.macos.yml" in calls[0]
     assert calls[0][-1] == "ps"
 
 

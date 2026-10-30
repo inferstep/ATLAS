@@ -1,7 +1,7 @@
 # ATLAS docker-compose override for the macOS hybrid path (#32).
 #
 # Bring up the stack with both files:
-#   docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d
 #
 # Why hybrid: on Apple Silicon, llama.cpp under MoltenVK + Docker
 # Desktop is 5-10x slower than native Metal. We run llama-server

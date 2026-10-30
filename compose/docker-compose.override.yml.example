@@ -1,4 +1,4 @@
-# docker-compose.override.yml.example — dev iteration mode
+# compose/docker-compose.override.yml.example — dev iteration mode
 #
 # Compose automatically merges `docker-compose.override.yml` on top of
 # `docker-compose.yml` if it exists. This file shows the override we use
@@ -7,7 +7,7 @@
 #
 # Activate by copying:
 #
-#     cp docker-compose.override.yml.example docker-compose.override.yml
+#     cp compose/docker-compose.override.yml.example docker-compose.override.yml
 #     docker compose up -d
 #
 # Deactivate by deleting (or renaming) `docker-compose.override.yml`,

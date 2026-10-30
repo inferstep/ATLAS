@@ -18,7 +18,7 @@ READER_GLOBS = [
     "sandbox/*.py",
     "scripts/*.sh", "scripts/**/*.sh", "scripts/*.py",
     "inference/*.sh", "inference/Dockerfile*",
-    "templates/*.tmpl", "docker-compose*.yml",
+    "templates/*.tmpl", "docker-compose*.yml", "compose/*.yml",
 ]
 
 
@@ -63,7 +63,7 @@ def test_compose_interpolations_are_documented():
     doc = (REPO / "docs" / "CONFIGURATION.md").read_text()
     example = (REPO / ".env.example").read_text()
     undocumented = set()
-    for compose in REPO.glob("docker-compose*.yml"):
+    for compose in [*REPO.glob("docker-compose*.yml"), *REPO.glob("compose/*.yml")]:
         for var in re.findall(r"\$\{(ATLAS_[A-Z0-9_]+)", compose.read_text()):
             if f"`{var}`" not in doc and var not in example:
                 undocumented.add(var)

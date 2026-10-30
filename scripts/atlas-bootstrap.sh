@@ -17,7 +17,7 @@
 #   5. Copies .env.example to .env if missing.
 #   6. Downloads model GGUFs and Lens weights from HuggingFace.
 #   7. `docker compose up -d` and waits for all services healthy.
-#      (ROCm hosts: brings up with -f docker-compose.rocm.yml override.)
+#      (ROCm hosts: brings up with -f compose/docker-compose.rocm.yml override.)
 #   8. Prints a green "ATLAS ready" banner and the next-step command.
 #
 # Idempotent — safe to re-run. Each step checks "already done" before acting.
@@ -712,7 +712,7 @@ install_nvidia_toolkit() {
 # ROCm path is structurally simpler than NVIDIA because Docker doesn't
 # need a separate container runtime (no rocm-container-toolkit). It just
 # needs /dev/kfd + /dev/dri passed through with appropriate group
-# membership, which our docker-compose.rocm.yml handles. Host-side prereqs:
+# membership, which our compose/docker-compose.rocm.yml handles. Host-side prereqs:
 #   1. AMDGPU kernel driver loaded → /dev/kfd exists
 #   2. `render` and `video` groups exist on the host
 #   3. The user running docker is a member of those groups
@@ -762,7 +762,7 @@ install_rocm_setup() {
     done
 
     # 3. Add docker-running user to render + video so containers can
-    # read /dev/kfd and /dev/dri/* via group_add in docker-compose.rocm.yml.
+    # read /dev/kfd and /dev/dri/* via group_add in compose/docker-compose.rocm.yml.
     local target_user="$TARGET_USER"
     if [[ "$target_user" != "root" ]]; then
         local missing_groups=""
@@ -834,7 +834,7 @@ install_gpu_runtime() {
 compose_files_args() {
     case "$GPU_VENDOR" in
         amd)
-            echo "-f docker-compose.yml -f docker-compose.rocm.yml"
+            echo "-f docker-compose.yml -f compose/docker-compose.rocm.yml"
             ;;
         nvidia)
             # Empty = compose uses its default discovery, which is the
@@ -843,9 +843,9 @@ compose_files_args() {
             ;;
         *)
             if [[ -e /dev/dri ]]; then
-                echo "-f docker-compose.yml -f docker-compose.vulkan.yml"
+                echo "-f docker-compose.yml -f compose/docker-compose.vulkan.yml"
             else
-                echo "-f docker-compose.yml -f docker-compose.vulkan.yml -f docker-compose.cpu.yml"
+                echo "-f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml"
             fi
             ;;
     esac
@@ -1128,9 +1128,9 @@ persist_backend_selection() {
     # compose.py all read ATLAS_BACKEND; without it they fall back to the base
     # CUDA file and fail on GPU-less hosts with "could not select device
     # driver nvidia". Keys mirror compose_files_args + _OVERLAY_BY_BACKEND:
-    #   amd    -> rocm   (docker-compose.rocm.yml)
+    #   amd    -> rocm   (compose/docker-compose.rocm.yml)
     #   nvidia -> cuda   (base file only)
-    #   none + /dev/dri  -> vulkan (docker-compose.vulkan.yml)
+    #   none + /dev/dri  -> vulkan (compose/docker-compose.vulkan.yml)
     #   none, no /dev/dri -> cpu   (vulkan + cpu overlays, lavapipe)
     # An explicit ATLAS_BACKEND already present in .env is respected.
     local backend
@@ -1434,12 +1434,12 @@ start_compose() {
         log_warn "Using sudo for docker compose (user not in docker group yet — log out/in to fix)"
     fi
     if [[ "$GPU_VENDOR" == "amd" ]]; then
-        log_info "Using ROCm compose override (docker-compose.rocm.yml)"
+        log_info "Using ROCm compose override (compose/docker-compose.rocm.yml)"
     elif [[ -z "$GPU_VENDOR" ]]; then
         if [[ -e /dev/dri ]]; then
-            log_info "No GPU vendor detected — using Vulkan overlay (docker-compose.vulkan.yml)"
+            log_info "No GPU vendor detected — using Vulkan overlay (compose/docker-compose.vulkan.yml)"
         else
-            log_warn "No GPU and no /dev/dri — using the CPU override (docker-compose.cpu.yml, lavapipe)."
+            log_warn "No GPU and no /dev/dri — using the CPU override (compose/docker-compose.cpu.yml, lavapipe)."
             log_warn "Inference will be very slow."
         fi
     fi

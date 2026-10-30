@@ -2,7 +2,7 @@
 # ATLAS macOS setup (#32 hybrid path) — installs the native llama-server
 # build with Metal acceleration plus the brew deps the rest of the
 # install needs. Docker still runs the other 4 ATLAS services (proxy,
-# v3, lens, sandbox) via docker-compose.macos.yml.
+# v3, lens, sandbox) via compose/docker-compose.macos.yml.
 #
 # Why hybrid: Apple Silicon under MoltenVK in Docker Desktop is 5-10x
 # slower than native Metal. Running ONLY llama-server natively gets us
@@ -404,7 +404,7 @@ Next steps:
   1. atlas init                                       # wizard writes .env (picks Metal hybrid)
   2. ATLAS_MACOS_PREFIX="$PREFIX" ./scripts/atlas-llama-macos.sh  # start native llama-server
   3. docker compose -f docker-compose.yml \\
-                    -f docker-compose.macos.yml up -d # start proxy + v3 + lens + sandbox
+                    -f compose/docker-compose.macos.yml up -d # start proxy + v3 + lens + sandbox
   4. atlas doctor                                     # verify install health
   5. atlas                                            # start using ATLAS
 

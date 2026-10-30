@@ -13,7 +13,8 @@ from atlas import runtime
 def _metal_root(tmp_path):
     """A checkout on the Metal backend, so compose needs the macOS overlay."""
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
-    (tmp_path / "docker-compose.macos.yml").write_text("services: {}\n")
+    (tmp_path / "compose").mkdir()
+    (tmp_path / "compose/docker-compose.macos.yml").write_text("services: {}\n")
     (tmp_path / ".env").write_text("ATLAS_BACKEND=metal\n")
     return str(tmp_path)
 
@@ -31,7 +32,7 @@ def test_workspace_recreate_keeps_macos_overlay(monkeypatch, tmp_path):
     assert runtime._recreate_docker_proxy(root, str(tmp_path / "project")) is True
     assert calls[0][:6] == [
         "docker", "compose", "-f", "docker-compose.yml", "-f",
-        "docker-compose.macos.yml",
+        "compose/docker-compose.macos.yml",
     ]
     assert "llama-server" not in calls[0]
 
@@ -47,7 +48,7 @@ def test_compose_ownership_check_keeps_macos_overlay(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(runtime.subprocess, "run", capture)
     assert runtime._docker_compose_owns_proxy(root) is True
-    assert "docker-compose.macos.yml" in calls[0]
+    assert "compose/docker-compose.macos.yml" in calls[0]
 
 
 @pytest.mark.parametrize(
@@ -107,7 +108,7 @@ def test_compose_proxy_rebuild_uses_checkout_source_and_overlay(monkeypatch, tmp
     command, kwargs = calls[0]
     assert command[:6] == [
         "docker", "compose", "-f", "docker-compose.yml", "-f",
-        "docker-compose.macos.yml",
+        "compose/docker-compose.macos.yml",
     ]
     assert "--build" in command
     assert command[-1] == "atlas-proxy"

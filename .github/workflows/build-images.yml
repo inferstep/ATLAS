@@ -38,7 +38,7 @@
 #     Community-tested (SUPPORT_MATRIX.md), CI has no AMD GPU to smoke-test
 #     the result on, and the default fat build covers five gfx targets — a
 #     hosted-runner job would publish an unexercised image (and a multi-GB
-#     registry buildcache) on every push. docker-compose.rocm.yml declares
+#     registry buildcache) on every push. compose/docker-compose.rocm.yml declares
 #     `pull_policy: build` for llama-server, so `docker compose pull` skips
 #     it and `up` builds it from source on the AMD host instead. Publishing
 #     it belongs with a CI runner that has an AMD card attached.

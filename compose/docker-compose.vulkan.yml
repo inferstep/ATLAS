@@ -1,7 +1,7 @@
 # ATLAS docker-compose override for the Vulkan universal backend (#114).
 #
 # Bring up the stack with both files:
-#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml up -d
 #
 # Only llama-server differs between backends (it's the only GPU-using
 # service). geometric-lens, v3-service, sandbox, and atlas-proxy are
@@ -28,7 +28,7 @@
 #   * For CPU lavapipe: nothing extra; the lavapipe ICD ships in
 #     mesa-vulkan-drivers inside the image
 #
-# Verify with: docker compose -f docker-compose.yml -f docker-compose.vulkan.yml \
+# Verify with: docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml \
 #                exec llama-server vulkaninfo --summary
 
 services:
@@ -61,7 +61,7 @@ services:
       # the toolkit already mounts in libGLX_nvidia separately.
       # NOTE: the device node must EXIST on the host or the container
       # fails to create. On hosts without /dev/dri (headless VMs, pure
-      # CPU boxes) layer docker-compose.cpu.yml on top — it clears this
+      # CPU boxes) layer compose/docker-compose.cpu.yml on top — it clears this
       # requirement and Vulkan falls back to the lavapipe CPU ICD.
       - /dev/dri
     # Group membership for /dev/dri access. `video` + `render` are

@@ -1,7 +1,7 @@
 # ATLAS docker-compose override for AMD ROCm / HIP backend.
 #
 # Bring up the stack with both files:
-#   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up -d
+#   docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d
 #
 # Only llama-server differs between backends (it's the only GPU-using
 # service). The geometric-lens, v3-service, sandbox, and atlas-proxy

@@ -341,7 +341,7 @@ def test_apple_silicon_gets_the_hybrid_metal_env(
     assert "ATLAS_BACKEND=metal" in body
     # The .env header explains the two-step start: native launcher, then Docker.
     assert "atlas-llama-macos.sh" in body
-    assert "docker-compose.macos.yml" in body
+    assert "compose/docker-compose.macos.yml" in body
 
 
 def test_apple_silicon_declining_the_metal_setup_writes_nothing(
@@ -376,7 +376,7 @@ def test_backend_vulkan_flag_wins_over_the_gpu_vendor(atlas_root, monkeypatch, c
     assert "ATLAS_BACKEND=vulkan" in body
     # Without the override file in the header, an operator could start the
     # stack with the base file alone, which runs the CUDA image.
-    assert "docker-compose.vulkan.yml" in body
+    assert "compose/docker-compose.vulkan.yml" in body
 
 
 @pytest.mark.parametrize("backend_args, written", [(["--backend", "vulkan"], True), ([], False)],
