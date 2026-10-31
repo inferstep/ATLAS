@@ -91,7 +91,7 @@ if [ ${#stale[@]} -gt 0 ]; then
     if slots=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat secrets/service-token 2>/dev/null)" \
                | curl -sf --max-time 5 -K - http://localhost:8080/slots 2>/dev/null); then
         busy=$(grep -o '"is_processing":true' <<<"$slots" | wc -l)
-        if [ "$busy" -gt 0 ]; then
+        if [[ "$busy" -gt 0 ]]; then
             echo "  !! llama-server has ${busy} slot(s) processing — something is mid-turn."
         fi
     else
