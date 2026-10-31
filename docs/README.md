@@ -108,10 +108,10 @@ Task-oriented index for everything under `docs/`. The
 - [GOVERNANCE.md](GOVERNANCE.md), [MAINTAINERS.md](MAINTAINERS.md),
   [../.github/SECURITY.md](../.github/SECURITY.md),
   [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
-- READMEs beside code and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-  are not listed one-by-one here: they live in the tree next to what they
-  describe (see the [repository map](#repository-map)), and
-  third-party notices live at the repository root.
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — the third-party work
+  ATLAS uses and its licenses.
+- READMEs beside code are not listed one-by-one here: they live in the tree
+  next to what they describe (see the [repository map](#repository-map)).
 
 ---
 
@@ -202,7 +202,7 @@ What each top-level folder owns. For how the pieces work together see
 | `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
 | `compose/` | Docker Compose overlays (rocm, vulkan, cpu, macos) layered on the root `docker-compose.yml`, and the dev-mode override example | — |
 | `scripts/` | Install, deploy, K3s, and CI/release automation | — |
-| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates | — |
+| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, the contributor guide (`CONTRIBUTING.md`) and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
 | `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/` | — |
 
