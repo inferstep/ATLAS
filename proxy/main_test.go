@@ -1085,7 +1085,7 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
 		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
 		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
-		{"tools.go", "buildToolDescriptionsExcluding"},
+		{"tool_schema.go", "buildToolDescriptionsExcluding"},
 	} {
 		text := readSourceForTest(t, c.file)
 		i := strings.Index(text, "func "+c.fn)

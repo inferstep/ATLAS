@@ -611,7 +611,7 @@ func TestNoDecisionOwnerReadsTheAttribution(t *testing.T) {
 		}
 	}
 	// The two routes only hand facts in; nothing reads the facts back.
-	for _, f := range []string{"edit_route_delivery.go", "tools.go", "route_disposition.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "route_disposition.go"}, toolFiles...) {
 		body, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -650,8 +650,8 @@ func TestAttributionMethodsReturnNothingToTheRoutes(t *testing.T) {
 // No route reads a delivery mode: there is one rule, and nothing a client or
 // an operator sends selects another.
 func TestNoRouteReadsADeliveryMode(t *testing.T) {
-	for _, f := range []string{"edit_route_delivery.go", "tools.go", "candidate_delivery.go",
-		"advisory_policy.go", "automatic_delivery.go", "structured_mutation_target.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "candidate_delivery.go",
+		"advisory_policy.go", "automatic_delivery.go", "structured_mutation_target.go"}, toolFiles...) {
 		body, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

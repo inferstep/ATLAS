@@ -455,23 +455,21 @@ func TestOutlineIsNotSoldAsACheaperRead(t *testing.T) {
 // the funnel rather than the call sites, since the bug was a call site
 // nobody updated.
 func TestEveryWritePathRunsThroughTheRecorder(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, line := range strings.Split(string(src), "\n") {
-		if !strings.Contains(line, "writeFileDirect(") {
-			continue
+	for _, file := range toolFiles {
+		for i, line := range strings.Split(readSourceForTest(t, file), "\n") {
+			if !strings.Contains(line, "writeFileDirect(") {
+				continue
+			}
+			// Its definition and the one call inside the recorder are the only
+			// legitimate mentions.
+			if strings.Contains(line, "func writeFileDirect") ||
+				strings.Contains(line, "res, err := writeFileDirect(path, content)") {
+				continue
+			}
+			t.Errorf("%s:%d calls writeFileDirect directly, so a write there "+
+				"never records the body and the evidence gate will fire on a file "+
+				"the model just wrote: %s", file, i+1, strings.TrimSpace(line))
 		}
-		// Its definition and the one call inside the recorder are the only
-		// legitimate mentions.
-		if strings.Contains(line, "func writeFileDirect") ||
-			strings.Contains(line, "res, err := writeFileDirect(path, content)") {
-			continue
-		}
-		t.Errorf("tools.go:%d calls writeFileDirect directly, so a write there "+
-			"never records the body and the evidence gate will fire on a file "+
-			"the model just wrote: %s", i+1, strings.TrimSpace(line))
 	}
 }
 

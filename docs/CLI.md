@@ -304,7 +304,7 @@ Cycle with `Ctrl+T`:
 
 The exact gate is `needsPermission` in `proxy/agent.go`: `delete_file`
 always asks; outside yolo, every tool that runs a command asks; otherwise
-`Destructive: true` on the tool definition in `proxy/tools.go` decides, and
+`Destructive: true` on the tool definition decides, and
 `accept-edits` additionally auto-approves `write_file`, `edit_file`,
 `structural_edit`, and `move_file`.
 

@@ -13,12 +13,12 @@ import (
 // Neither the model nor the service can reach the mode, and no route reads a
 // mode off anything they produce.
 func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
-	files := []string{"candidate_policy.go", "advisory_policy.go", "tools.go",
-		"edit_route_delivery.go", "agent.go"}
+	files := append([]string{"candidate_policy.go", "advisory_policy.go",
+		"edit_route_delivery.go", "agent.go"}, toolFiles...)
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
-			continue
+			t.Fatal(err)
 		}
 		body := codeWithoutComments(string(src))
 		for _, banned := range []string{
@@ -246,7 +246,7 @@ func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
 // Neither the model nor the service can set the delivered provenance: it is set
 // only beside a delivery that happened, from the policy outcome.
 func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
-	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go"}, toolFiles...) {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

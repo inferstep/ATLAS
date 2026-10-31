@@ -2,9 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,29 +280,7 @@ func TestDirectWriteRoute(t *testing.T) {
 // None is in the final direct-write block. Growth beyond this means a route
 // recomputed an observation it already held.
 func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "tools.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var structured, legacy int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		id, ok := call.Fun.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		switch id.Name {
-		case "fallbackSyntaxOutcomeFor":
-			structured++
-		case "checkFallbackSyntax":
-			legacy++
-		}
-		return true
-	})
+	structured, legacy := syntaxCallCounts(t)
 	// 17 since structural_edit moved onto the shared edit gate (#214). It
 	// had one site of its own, after the write, to observe the bytes it
 	// spliced (before that it recorded not_run, and a file it edited carried

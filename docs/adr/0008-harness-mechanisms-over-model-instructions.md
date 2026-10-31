@@ -71,7 +71,7 @@ Three changes follow from it directly, all model-agnostic:
    app whose UI is one template would name `function:index` and nothing
    else. The outline names the `<script>` region, its line range, and the
    functions inside it, together with the fact that no selector reaches
-   them (`embeddedRegionNote` in `proxy/tools.go`).
+   them (`embeddedRegionNote` in `proxy/tool_read.go`).
 
 `done` is not made ungrammatical. That needs strict schema-GBNF, and the
 gemma entry runs with `ATLAS_GRAMMAR_MODE=loose` (its `grammar_mode` in

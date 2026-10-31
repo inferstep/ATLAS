@@ -121,10 +121,10 @@ func TestTheRouteEntryNeverReachesTheModel(t *testing.T) {
 	// Model-visible text is built from prompts, tool schemas and tool results.
 	// None of them may mention the identity: a model that could read it could
 	// echo it, and an identity the model can supply is not an identity.
-	for _, file := range []string{"prompts.go", "tools.go", "agent.go"} {
+	for _, file := range append([]string{"agent.go"}, toolFiles...) {
 		body, err := os.ReadFile(file)
 		if err != nil {
-			continue
+			t.Fatal(err)
 		}
 		for _, line := range strings.Split(string(body), "\n") {
 			if !strings.Contains(line, "entry.ID") && !strings.Contains(line, "routeEntry") {
@@ -160,7 +160,7 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 	if mints != 1 {
 		t.Fatalf("mintRouteEntry declared %d times", mints)
 	}
-	for _, file := range []string{"types.go", "tool_io.go", "agent.go", "tools.go"} {
+	for _, file := range append([]string{"types.go", "tool_io.go", "agent.go"}, toolFiles...) {
 		body := readSourceForTest(t, file)
 		if strings.Contains(body, `json:"route_entry_id"`) ||
 			strings.Contains(body, `json:"route_entry"`) {

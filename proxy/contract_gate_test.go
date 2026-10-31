@@ -640,7 +640,7 @@ func TestPassedNoLongerAuthorizesDelivery(t *testing.T) {
 	// There is no service-certification helper at all any more: a request that
 	// declared nothing retains its own bytes rather than delivering on the
 	// producer's opinion of them.
-	if strings.Contains(string(tools), "func serviceCertifiedCandidate(") {
+	if strings.Contains(toolSources(t), "func serviceCertifiedCandidate(") {
 		t.Error("the self-certification path is back")
 	}
 	// And the proposal boundary reads no verdict at all: it compares bytes.

@@ -229,10 +229,10 @@ func TestProvenancePresenceDoesNotChangeAuthorization(t *testing.T) {
 }
 
 func TestNoProductionCallerConsultsProvenanceYet(t *testing.T) {
-	for _, file := range []string{"v3_bridge.go", "tools.go", "agent.go", "gates.go",
+	for _, file := range append([]string{"v3_bridge.go", "agent.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
-		"gates_syntax_rejection.go", "gates_workspace_alignment.go"} {
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go"}, toolFiles...) {
 		src := readSourceForTest(t, file)
 		for _, fn := range []string{"MayAuthorize(", "BindsTo("} {
 			if strings.Contains(src, fn) {

@@ -91,7 +91,7 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
 | `agent.go` | The agent loop: turn state, LLM calls, plan generation, stuck-loop breakers |
-| `tools.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
+| `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
@@ -451,7 +451,7 @@ Four model-independent defenses compose in the proxy:
    warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
-2. **Conditional GBNF grammar** (`proxy/tools.go`,
+2. **Conditional GBNF grammar** (`proxy/tool_schema.go`,
    `proxy/agent.go:stepExclusions`). When a write_file is rejected on
    an existing .py/.html/.htm file >5 lines, the next LLM call is
    constrained by a GBNF grammar that bans edit_file and write_file

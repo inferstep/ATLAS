@@ -316,11 +316,7 @@ func TestCoverageAndDemandReadTheSameIdentity(t *testing.T) {
 // The session-write map keeps its meaning for its other readers: no edit tool
 // branch gained or lost an assignment, and write_file's own stay as they were.
 func TestTheSessionWriteMapIsUnchangedForItsOtherReaders(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := toolSources(t)
 	if n := strings.Count(body, "ctx.SessionWrites[input.Path] = true"); n != 2 {
 		t.Errorf("write_file's own registrations changed: %d, want 2", n)
 	}

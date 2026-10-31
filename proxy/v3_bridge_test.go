@@ -540,11 +540,7 @@ func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
 // safety condition is how half of it goes stale, which is exactly what
 // happened when write_file was fixed and improveContentWithV3 was not.
 func TestBothDeliveryPathsUseTheSharedAuthorization(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := toolSources(t)
 	if strings.Count(body, "proposedV3Candidate(") < 3 {
 		t.Fatal("expected the proposal boundary plus both call sites")
 	}

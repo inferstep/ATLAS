@@ -348,7 +348,7 @@ OpenAI-compatible chat completions, kept for SDK compatibility. The proxy forwar
 
 ### Tools available to the agent loop
 
-Defined in `proxy/tools.go`. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
+Defined in `proxy/tools.go` and the `proxy/tool_*.go` files beside it. Used by the model when responding `{"type":"tool_call","name":"<tool>","args":{...}}`.
 
 | Tool | Purpose |
 |------|---------|

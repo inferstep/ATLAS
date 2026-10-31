@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -2302,11 +2304,7 @@ func TestEditToolsReportTheDecisiveStructuralRefusal(t *testing.T) {
 // producer, and the remaining legacy wrapper calls are named rather than
 // counted, so a reintroduction has to edit this list.
 func TestLegacyCheckerWrapperInventory(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := toolSources(t)
 
 	span := func(from, to string) string {
 		i := strings.Index(body, from)
@@ -2950,4 +2948,48 @@ func TestRunBackgroundRefusesBeforeItStarts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// toolFiles are the files that hold the tools. A guard over the tools reads
+// them all, so code that moves between them stays under the guard.
+var toolFiles = []string{"tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go"}
+
+func toolSources(t *testing.T) string {
+	t.Helper()
+	var all strings.Builder
+	for _, file := range toolFiles {
+		all.WriteString(readSourceForTest(t, file))
+	}
+	return all.String()
+}
+
+// syntaxCallCounts counts the calls of the structured syntax checker and of
+// the legacy wrapper across toolFiles.
+func syntaxCallCounts(t *testing.T) (structured, legacy int) {
+	t.Helper()
+	fset := token.NewFileSet()
+	for _, file := range toolFiles {
+		f, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch id.Name {
+			case "fallbackSyntaxOutcomeFor":
+				structured++
+			case "checkFallbackSyntax":
+				legacy++
+			}
+			return true
+		})
+	}
+	return structured, legacy
 }

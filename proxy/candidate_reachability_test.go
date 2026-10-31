@@ -260,7 +260,7 @@ func TestTheBypassRecordCarriesNoContent(t *testing.T) {
 // test would notice.
 func TestNoRouteDecidesGenerationForItself(t *testing.T) {
 	body := map[string]string{}
-	for _, f := range []string{"tools.go", "edit_route_delivery.go", "candidate_reachability.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "candidate_reachability.go"}, toolFiles...) {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -270,7 +270,7 @@ func TestNoRouteDecidesGenerationForItself(t *testing.T) {
 	// No route may re-inline the activation decision. The two shapes below
 	// are the conditions the owners replaced, and finding either one back in
 	// a route file means a mutation can be turned away silently again.
-	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go"}, toolFiles...) {
 		for _, inlined := range []string{
 			"fileTier >= Tier2Medium && ctx.V3URL",
 			"fileTier < Tier2Medium || !editWarrantsV3",
@@ -283,7 +283,7 @@ func TestNoRouteDecidesGenerationForItself(t *testing.T) {
 	}
 	// No site reads a switch to decide whether to generate: there is none, and
 	// the owners decide from the routing rules alone.
-	for _, f := range []string{"tools.go", "edit_route_delivery.go", "candidate_reachability.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "candidate_reachability.go"}, toolFiles...) {
 		for _, removed := range []string{"V3GenerationEnabled", "generationPermitted"} {
 			if strings.Contains(body[f], removed) {
 				t.Errorf("%s still reads %s", f, removed)

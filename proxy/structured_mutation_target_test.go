@@ -311,8 +311,8 @@ func TestTheStructuredTargetFeedsNoObligationPermissionOrDeletion(t *testing.T) 
 			}
 		}
 	}
-	// The delete tool region of tools.go consults no scope and no grounding.
-	tools := readSourceForTest(t, "tools.go")
+	// The delete tool region consults no scope and no grounding.
+	tools := readSourceForTest(t, "tool_files.go")
 	del := tools[strings.Index(tools, "func deleteFileTool()"):]
 	del = del[:strings.Index(del, "\nfunc moveFileTool()")]
 	for _, banned := range []string{"mutationScope", "structuredMutationTarget", "TargetGrounding", "deriveMutationScope"} {

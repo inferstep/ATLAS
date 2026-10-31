@@ -880,7 +880,7 @@ func TestTheDeleteConfirmationPathConsultsNoLanguageHelper(t *testing.T) {
 // revalidation is the identity comparison; the take happens earlier, on
 // purpose, so that every attempt spends the approval.
 func TestTheDeleteApprovalIsSpentFirstAndRevalidatedAtTheRemoval(t *testing.T) {
-	tools := readSourceForTest(t, "tools.go")
+	tools := readSourceForTest(t, "tool_files.go")
 	reval := strings.Index(tools, "approved.identityMatches(now)")
 	rm := strings.Index(tools, "if rmErr := os.Remove(path)")
 	if reval < 0 || rm < 0 || reval > rm || rm-reval > 1600 {
@@ -1495,7 +1495,7 @@ func TestTheDeletionGrantIsWrittenInOnePlace(t *testing.T) {
 		if n != "permissions.go" {
 			for _, sym := range []string{"grantDeleteApproval(", "noteDeletionAttempt(",
 				"reserveDeletionSlot("} {
-				if strings.Contains(s, sym) && n != "tools.go" {
+				if strings.Contains(s, sym) && n != "tool_files.go" {
 					t.Errorf("%s writes deletion authority via %s", n, sym)
 				}
 			}

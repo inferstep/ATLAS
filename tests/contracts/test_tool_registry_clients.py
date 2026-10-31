@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-TOOLS_GO = REPO / "proxy" / "tools.go"
+TOOL_FILES = [REPO / "proxy" / name for name in
+              ("tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go")]
 EXT_PREVIEW = REPO / "extensions" / "vscode" / "src" / "session" / "editPreview.ts"
 EXT_MISMATCH = REPO / "extensions" / "vscode" / "src" / "workspace" / "mismatch.ts"
 
@@ -30,7 +31,7 @@ MUTATING_NO_DIFF = {"delete_file", "move_file"}
 
 def _registered_tools() -> set[str]:
     """Every name in the proxy's tool registry."""
-    src = TOOLS_GO.read_text()
+    src = "".join(path.read_text() for path in TOOL_FILES)
     return set(re.findall(r'Name:\s*"([a-z_]+)"', src))
 
 

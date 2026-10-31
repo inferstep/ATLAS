@@ -92,7 +92,7 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 |---|---|
 | `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
 | `agent.go` | エージェントループ: ターン状態、LLM 呼び出し、プラン生成、スタックループのブレーカー |
-| `tools.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
+| `tools.go`, `tool_*.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
 | `gates*.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ、アセットリント |
 | `detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
 | `context.go` | コンテキストの拡充: シンボルインデックス、プロジェクトスキャン、ワークスペース封じ込め、セッションファイルマニフェスト |
@@ -316,7 +316,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 計測を行ったリファレンスデプロイでは、`structural_edit` が正しい場合でも `structural_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
 
 1. **説明文の書き換え**（`proxy/tools.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
-2. **条件付き GBNF 文法**（`proxy/tools.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
+2. **条件付き GBNF 文法**（`proxy/tool_schema.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
