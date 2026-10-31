@@ -416,17 +416,17 @@ made twice.
   check in its line.
 - To add a rule: one line, in plain words, with the number of the pull
   request or issue that showed the need for it. A rule that the
-  [contributor guide](../../CONTRIBUTING.md) states already is not written
+  [contributor guide](../../.github/CONTRIBUTING.md) states already is not written
   again: its line points to the guide.
 
 ### Tests
 
 | Rule | From | Held by |
 |---|---|---|
-| The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
-| The guide's rule for a skip: it has its reason ([Testing](../../CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
+| The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../.github/CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
+| The guide's rule for a skip: it has its reason ([Testing](../../.github/CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
 | A test that stops running in the plain jobs (a skip, a mark, a move to another folder) is named in the change that does it | #391, #397, #404 | `integrity check` |
-| The guide's rule for a test gate that ran no test ([section 4](../../CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
+| The guide's rule for a test gate that ran no test ([section 4](../../.github/CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
 | A Go test gate does not take a result from the cache | #382 | `scripts/production-readiness.py` |
 | A test writes under the test runner's own folder, never into a folder of the user | #305 | review |
 | A test claims only what the code under test promises | #355 | review |
@@ -441,7 +441,7 @@ made twice.
 | The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
 | A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/test_change_base.py` |
 | Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
-| The guide's rule for a checkout step and for a value from the event ([Code style](../../CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
+| The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
 | A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/test_workflow_concurrency.py` |
 | A push to `dev` runs no test again: it sends what the merge queue's run of the commit kept | #402 | `tests/infrastructure/test_dev_results.py` |
 | The message of a check says what failed, why it matters, and how to fix it | #300 | review |

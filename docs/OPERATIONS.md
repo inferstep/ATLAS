@@ -142,7 +142,7 @@ analysed. In particular:
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
 | Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
-| Bad/revoked artifact | SECURITY.md § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
+| Bad/revoked artifact | [SECURITY.md](../.github/SECURITY.md) § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
 | Full reset (keep models) | `docker compose down -v && docker compose up -d` — **destructive**: wipes the stack's named volumes (`v3-telemetry`), keeps models/config. Last resort |
 
 ## Resource tuning

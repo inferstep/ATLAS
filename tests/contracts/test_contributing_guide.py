@@ -3,7 +3,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-GUIDE = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+GUIDE_PATH = ROOT / ".github" / "CONTRIBUTING.md"
+GUIDE = GUIDE_PATH.read_text(encoding="utf-8")
 
 
 def anchor(heading: str) -> str:
@@ -28,7 +29,7 @@ def test_every_link_of_the_guide_to_a_place_in_the_guide_leads_to_a_heading():
 
 def test_every_file_that_the_guide_links_to_is_there():
     linked = {target.split("#")[0] for target in re.findall(r"\]\(([^)#:]+(?:#[^)]*)?)\)", GUIDE)}
-    gone = sorted(target for target in linked if target and not (ROOT / target).exists())
+    gone = sorted(target for target in linked if target and not (GUIDE_PATH.parent / target).exists())
     assert not gone, f"CONTRIBUTING.md links to {gone}, and they are not in the repository."
 
 

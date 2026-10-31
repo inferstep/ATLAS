@@ -1,6 +1,6 @@
 # Review ownership by subsystem. Single-maintainer project today —
 # every path resolves to @itigges22 — but the map documents subsystem
-# boundaries for future co-maintainers (see MAINTAINERS.md open seats),
+# boundaries for future co-maintainers (see docs/MAINTAINERS.md open seats),
 # and the security/release-critical paths are listed explicitly so
 # branch protection can require review on them.
 
@@ -8,7 +8,7 @@
 
 # Security- and release-critical (require review even with more owners)
 /.github/workflows/     @itigges22
-/SECURITY.md            @itigges22
+/.github/SECURITY.md    @itigges22
 /sandbox/               @itigges22
 /scripts/               @itigges22
 /atlas/commands/model_registry.py  @itigges22
