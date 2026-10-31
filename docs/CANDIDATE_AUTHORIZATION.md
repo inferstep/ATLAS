@@ -431,7 +431,7 @@ which bytes are a candidate at all; the grant decides whether that candidate may
 replace the caller's content. A typed refusal keeps the caller's own content and
 never falls through to the winner the envelope liked.
 
-`proxy/evidence_inertness_test.go` pins that exactly one function reaches the
+`proxy/evidence_wiring_test.go` pins that exactly one function reaches the
 decision, exactly one spends the grant, and each is called from exactly one
 place.
 

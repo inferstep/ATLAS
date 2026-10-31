@@ -189,7 +189,7 @@ func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
 	// alternative to duplicating it. The evidence producer asks the owner
 	// whether the client declared a command precisely so it does not re-derive
 	// that answer from the raw contract -- and it reaches no live policy, which
-	// evidence_inertness_test.go proves separately.
+	// evidence_wiring_test.go proves separately.
 	readers := map[string]bool{
 		"verification_evidence.go:requestDeclaredCommand": true,
 		// The typed-declaration reader. It is inside the obligation owner and

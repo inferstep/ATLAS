@@ -2324,6 +2324,25 @@ func TestRepeatDetectorFiresOnIdenticalCalls(t *testing.T) {
 }
 
 // Calls that differ only in ways the signature ignores are one call repeated.
+func checkFiresOnTheThirdCall(t *testing.T, tool string, calls [3]string, wantInMessage []string) {
+	t.Helper()
+	ctx := &AgentContext{}
+	for i, call := range calls[:2] {
+		if _, _, fired := recordToolCall(ctx, tool, json.RawMessage(call)); fired {
+			t.Fatalf("fired on call %d, want the third", i+1)
+		}
+	}
+	msg, _, fired := recordToolCall(ctx, tool, json.RawMessage(calls[2]))
+	if !fired {
+		t.Fatal("the third same call did not fire")
+	}
+	for _, want := range wantInMessage {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg)
+		}
+	}
+}
+
 func TestRepeatDetectorFiresOnTheThirdSameCall(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -2379,21 +2398,7 @@ func TestRepeatDetectorFiresOnTheThirdSameCall(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &AgentContext{}
-			for i, call := range tc.calls[:2] {
-				if _, _, fired := recordToolCall(ctx, tc.tool, json.RawMessage(call)); fired {
-					t.Fatalf("fired on call %d, want the third", i+1)
-				}
-			}
-			msg, _, fired := recordToolCall(ctx, tc.tool, json.RawMessage(tc.calls[2]))
-			if !fired {
-				t.Fatal("the third same call did not fire")
-			}
-			for _, want := range tc.wantInMessage {
-				if !strings.Contains(msg, want) {
-					t.Errorf("message lacks %q:\n%s", want, msg)
-				}
-			}
+			checkFiresOnTheThirdCall(t, tc.tool, tc.calls, tc.wantInMessage)
 		})
 	}
 }
