@@ -666,9 +666,9 @@ in one place.
 
 | File | Tests | What it needs | The job that runs it |
 |---|---|---|---|
-| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | the job `sandbox tests (containerized)` |
-| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the job `sandbox tests (containerized)` |
-| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox.py` | 38 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the job `sandbox tests (containerized)` |
 | `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |

@@ -27,8 +27,8 @@ from tests.infrastructure.bounded_commands import (OWN_LIMIT, REACHED_OWN_LIMIT,
                                                    with_an_address_space_limit)
 from tests.infrastructure.proc_files import needs_proc, sleeping
 
-SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "sandbox")
+SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))), "sandbox")
 sys.path.insert(0, SANDBOX)
 
 import resource_contract as rc

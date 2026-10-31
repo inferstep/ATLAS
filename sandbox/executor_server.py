@@ -35,7 +35,7 @@ Security / trust model (load-bearing — read before "fixing" CodeQL alerts):
 
 # Defers annotation evaluation, so PEP 604 unions (`str | None`) in
 # signatures parse on any Python >= 3.7. The container runs 3.13, but
-# tests/infrastructure/test_boundary_regression.py imports this module with
+# tests/infrastructure/sandbox/test_boundary_regression.py imports this module with
 # the host interpreter, and the package declares support down to 3.9
 # (pyproject.toml requires-python), where evaluating `str | None` at def
 # time raises TypeError.

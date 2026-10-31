@@ -216,7 +216,7 @@ def test_failed_candidate_diagnostic_reports_the_observed_failure(comparison):
 
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_executor_completed_outcome_is_understood_by_import_comparison(comparison, monkeypatch, tmp_path, exit_code):
-    from test_sandbox_syntax import _load_sandbox_module
+    from tests.infrastructure.sandbox.test_sandbox_syntax import _load_sandbox_module
 
     executor = _load_sandbox_module()
     # Only controlled fixture code executes on the test host. Candidate code

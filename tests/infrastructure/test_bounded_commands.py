@@ -41,7 +41,7 @@ def test_the_own_status_is_not_one_a_signal_or_a_shell_gives():
     assert 2 < bounded.OWN_LIMIT < 126
 
 
-@pytest.mark.parametrize("name", ["test_execution_resource_contract.py", "test_http_cancellation.py"])
+@pytest.mark.parametrize("name", ["sandbox/test_execution_resource_contract.py", "test_http_cancellation.py"])
 def test_no_command_of_the_limit_tests_is_written_without_an_end(name):
     source = (Path(__file__).parent / name).read_text(encoding="utf-8")
     texts = [node.value for node in ast.walk(ast.parse(source))
