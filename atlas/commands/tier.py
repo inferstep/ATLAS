@@ -537,7 +537,7 @@ class TierProfile:
         for .env writing.
 
         Model-related env vars (ATLAS_MODEL_FILE, ATLAS_MODEL_NAME) are
-        rendered by `model_registry.ModelRecommendation.env_vars()`.
+        rendered by `model_registry.Model.env_vars()`.
         Wizard / installer code merges the two dicts before writing .env.
         """
         return {

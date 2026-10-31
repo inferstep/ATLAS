@@ -25,9 +25,6 @@ the contribution flow that takes locally-trained artifacts and
 publishes them back to the registry.
 
 Schema notes:
-- `model_file` / `model_display` / `model_size_gb` are kept as field
-  names (not renamed to `file`/`display`/`size`) so the PC-055.2
-  `ModelRecommendation` API alias works without code changes.
 - `download_url` is None for gated/missing upstreams. CLI must check
   before invoking `atlas model install`. **PC-056.1: URLs are pinned
   to a specific HF commit hash** (e.g.,
