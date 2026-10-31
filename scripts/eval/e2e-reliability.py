@@ -562,6 +562,7 @@ def _check_add_toml(ws: Path) -> tuple[bool, str]:
             try:
                 verdict = json.loads(line)
             except json.JSONDecodeError:
+                # A garbled line is no verdict, and the check below says so.
                 pass
             break
     if verdict is None:
