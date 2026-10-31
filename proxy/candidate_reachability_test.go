@@ -697,12 +697,6 @@ func TestTheProducerFallbackAppliesTheComparativeChecks(t *testing.T) {
 	}
 }
 
-// Skipping generation must not remove a delivery that could have happened.
-// For every contract/capture configuration the skip predicate calls
-// undeliverable, the real candidate route is forced to run with the strongest
-// candidate the fixture can offer; the caller's baseline must be what lands.
-// Where the predicate says deliverable, the same fixture must be able to
-// deliver in at least one configuration, or the matrix proves nothing.
 // routeDeliversUnder forces the write route under one configuration, holds the
 // skip predicate to what the route did, and says whether the route delivered.
 func routeDeliversUnder(t *testing.T, contract string, supported, capture bool) bool {
@@ -727,6 +721,12 @@ func routeDeliversUnder(t *testing.T, contract string, supported, capture bool) 
 	return got == routeWinner
 }
 
+// Skipping generation must not remove a delivery that could have happened.
+// For every contract/capture configuration the skip predicate calls
+// undeliverable, the real candidate route is forced to run with the strongest
+// candidate the fixture can offer; the caller's baseline must be what lands.
+// Where the predicate says deliverable, the same fixture must be able to
+// deliver in at least one configuration, or the matrix proves nothing.
 func TestSkippingGenerationLosesNoDelivery(t *testing.T) {
 	contracts := map[string]string{
 		"no contract":                        "",

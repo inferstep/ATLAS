@@ -429,10 +429,6 @@ func TestCloseShortFence(t *testing.T) {
 	}
 }
 
-// A code file's block ends on a three-backtick closer, so the grammar attempt
-// is used. A Markdown file keeps the four-backtick closer: its own ``` lines
-// are content, so a reply that ends on one is not a finished block, and a
-// free-text retry fetches the file.
 // grammarAwareServer answers a request that carries a grammar with one reply and
 // any other with another. It returns its address and what it has seen so far.
 func grammarAwareServer(t *testing.T, grammarReply, retryReply string) (string, func() []bool) {
@@ -464,6 +460,10 @@ func grammarAwareServer(t *testing.T, grammarReply, retryReply string) (string, 
 	}
 }
 
+// A code file's block ends on a three-backtick closer, so the grammar attempt
+// is used. A Markdown file keeps the four-backtick closer: its own ``` lines
+// are content, so a reply that ends on one is not a finished block, and a
+// free-text retry fetches the file.
 func TestWhichCloserEndsTheGrammarAttempt(t *testing.T) {
 	for _, c := range []struct {
 		name, path               string

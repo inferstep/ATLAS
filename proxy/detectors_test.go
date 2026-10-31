@@ -2323,7 +2323,6 @@ func TestRepeatDetectorFiresOnIdenticalCalls(t *testing.T) {
 	}
 }
 
-// Calls that differ only in ways the signature ignores are one call repeated.
 func checkFiresOnTheThirdCall(t *testing.T, tool string, calls [3]string, wantInMessage []string) {
 	t.Helper()
 	ctx := &AgentContext{}
@@ -2343,6 +2342,7 @@ func checkFiresOnTheThirdCall(t *testing.T, tool string, calls [3]string, wantIn
 	}
 }
 
+// Calls that differ only in ways the signature ignores are one call repeated.
 func TestRepeatDetectorFiresOnTheThirdSameCall(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
