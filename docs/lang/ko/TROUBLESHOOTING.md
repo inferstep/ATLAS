@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-이전에 미지원이던 카드에서 이 방법이 동작한다면 [GH #26](https://github.com/inferstep/ATLAS/issues/26)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
+이전에 미지원이던 카드에서 이 방법이 동작한다면 [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x 필요
 

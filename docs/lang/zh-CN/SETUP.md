@@ -340,7 +340,7 @@ ATLAS 面向两种 CPU 架构：`x86_64`（默认，所有后端可用）和 `aa
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）—— 通过 sbsa 基础镜像启用 CUDA，计算能力 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** —— 通过 l4t 基础镜像启用 CUDA，计算能力 8.7
-- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；原生 Metal 安装在 [#32](https://github.com/inferstep/ATLAS/issues/32) 跟踪（快速路径）
+- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；已发布的快速路径是原生混合 Metal 安装，见 [SETUP_MACOS.md](../../SETUP_MACOS.md)
 - **Snapdragon X Elite**（Windows on ARM 笔记本）—— 通过 Adreno 驱动走 Vulkan
 - **Raspberry Pi 5** —— 通过 Mesa V3D 驱动走 Vulkan，预期 CPU 级性能
 - **Ampere Altra / AWS Graviton 工作站** —— 通过 lavapipe 走 Vulkan（CPU 回退，因为目前还没有消费级 arm64 独显）

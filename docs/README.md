@@ -135,21 +135,22 @@ the [repository map](#repository-map) if you're looking for code rather than doc
 
 ## Core terms (one line each)
 
-- **Direct agent / outer loop** — the Go proxy's tool-calling loop; works
-  with any GGUF, no per-model training ([ARCHITECTURE.md](ARCHITECTURE.md)).
+- **Direct agent / outer loop** — the Go proxy's tool-calling loop. A model
+  needs a lens bundle first, which `atlas lens build` makes
+  ([ARCHITECTURE.md](ARCHITECTURE.md), [ADR 0011](adr/0011-the-lens-is-required.md)).
 - **V3 pipeline / inner layer** — multi-candidate generation, scoring,
   sandbox verification, and repair for non-trivial files
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Tiers (T0–T3)** — two separate classifications. The per-file tier gates
   V3: T1 writes directly, T2/T3 use the pipeline. The per-message tier only
-  distinguishes T0 (conversational: 5-turn cap, no plan) from everything
+  distinguishes T0 (conversational: 12-turn cap, no plan) from everything
   else, since the turn cap and plan gate are all it feeds
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
   ([ARCHITECTURE.md](ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
-  per-model, opt-in until validated ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
+  per-model, always on wherever a vector is installed ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
   ([ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md)).
 - **GBNF grammar enforcement** — token-level constrained decoding that strongly

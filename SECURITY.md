@@ -11,16 +11,17 @@ Within that model:
 
 Model-generated tool calls are treated as untrusted input: file edits are constrained to the workspace and shell commands run in the sandbox container (read-only rootfs, no-new-privileges, pids limit, `/workspace` as the only writable host mount). If you find a way around either boundary, that is exactly the kind of report we want.
 
-Three current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`4g` memory, `2` CPUs, `1024` PIDs), never unlimited. Third, execution is permitted from the bind-mounted `/workspace` and from one 512M tmpfs (`/home/sandbox/gobuild`, the Go toolchain's link-and-run directory); every other writable tmpfs, `/tmp` included, is mounted `noexec`. That scoped grant adds no capability the sandbox lacked, since `/workspace` already permitted exec, but it is where compiled output can run.
+Three current limits of that boundary, so reports can be calibrated against what is actually enforced: the sandbox has outbound network access by default (toolchains need to fetch dependencies) — `ATLAS_SANDBOX_NET_INTERNAL=true` cuts all egress from executed code; and the resource caps are host-sized only when `atlas init` writes them — a raw `docker compose up` without the wizard falls back to conservative caps (`1536m` memory, `2` CPUs, `1024` PIDs), never unlimited. Third, execution is permitted from the bind-mounted `/workspace` and from one 512M tmpfs (`/home/sandbox/gobuild`, the Go toolchain's link-and-run directory); every other writable tmpfs, `/tmp` included, is mounted `noexec`. That scoped grant adds no capability the sandbox lacked, since `/workspace` already permitted exec, but it is where compiled output can run.
 
-One install method is outside the localhost model today. The K3s method (Preview) publishes the services as NodePorts on the node's network addresses, and its templates do not mount the service token, so the services check no token there. Run it only on a trusted network or behind a host firewall (see SETUP.md, Method 3). A report that needs network reach to a K3s install describes this known limit; the change is tracked for 3.2.0.
+One install method is outside the localhost model today. The K3s method (Preview) publishes the services as NodePorts on the node's network addresses, and its templates do not mount the service token, so the services check no token there. Run it only on a trusted network or behind a host firewall (see SETUP.md, Method 3). A report that needs network reach to a K3s install describes this known limit; the change is tracked for 3.2.0 in [#697](https://github.com/inferstep/ATLAS/issues/697).
 
 ## Supported versions
 
 | Version | Supported |
 | ------- | --------- |
-| 3.1.x   | Yes       |
-| < 3.1   | No        |
+| The latest release | Yes |
+| The release before it | Security and critical fixes for 90 days after the latest ships |
+| Older | No |
 
 ## Command-execution trust modes
 
@@ -67,7 +68,7 @@ through a shared filter that masks credential-shaped values
 passwords, private-key blocks) with `[FILTERED]` before serialization.
 The pattern spec is pinned by a synthetic fixture corpus
 (`tests/fixtures/private_value_fixtures.json`) that every
-implementation must pass (Go: `proxy/private_values.go`; Python: three
+implementation must pass (Go: `filterPrivateValues` in `proxy/main.go`; Python: three
 byte-identical copies enforced by
 `tests/contracts/test_private_value_filtering.py`). Filtering is a
 backstop for accidents, not a guarantee against adversarial encoding;

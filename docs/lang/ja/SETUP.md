@@ -333,7 +333,7 @@ ATLAS は 2 つの CPU アーキテクチャを対象としています: `x86_64
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）— sbsa ベースイメージによる CUDA、compute cap 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t ベースイメージによる CUDA、compute cap 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。高速パスとしてのネイティブ Metal インストールは [#32](https://github.com/inferstep/ATLAS/issues/32) で追跡
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop の MoltenVK 経由の Vulkan（低速パス）。出荷済みの高速パスはネイティブのハイブリッド Metal インストールです。[SETUP_MACOS.md](../../SETUP_MACOS.md) を参照してください
 - **Snapdragon X Elite**（Windows on ARM ラップトップ）— Adreno ドライバ経由の Vulkan
 - **Raspberry Pi 5** — Mesa V3D ドライバ経由の Vulkan、CPU 級の性能を想定
 - **Ampere Altra / AWS Graviton ワークステーション** — lavapipe 経由の Vulkan（コンシューマ向け arm64 dGPU がまだ存在しないため CPU フォールバック）

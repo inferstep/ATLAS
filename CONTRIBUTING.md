@@ -126,7 +126,7 @@ shows every Ready issue. The board's fields mean:
 
 | Field | Meaning |
 |---|---|
-| Status | Triage → Needs Design → Backlog → **Ready** → In Progress → In Review → Done. Only Ready issues can be claimed. |
+| Status | Triage → Needs Design → Backlog → **Ready** → In Progress → In Review → Done, and Blocked at any step. Only Ready issues can be claimed. |
 | Priority | P0 is most urgent, P3 least |
 | Size | XS (under an hour) to XL (more than a week) |
 | Contributor Level | Starter, Intermediate, Advanced, Maintainer-only |
@@ -193,8 +193,9 @@ the hardware you ran it on (or "untested on hardware").
 
 Under **What users will notice**, say what a user of ATLAS sees differently
 after your change, in plain sentences or a list. If users notice nothing,
-write only "Nothing." The changelog of a release is made from that part, so
-a pull request does not edit `CHANGELOG.md`.
+write only "Nothing." The changelog of a release is made from that part. A pull
+request edits `CHANGELOG.md` only for a note a user must act on when upgrading,
+under `[Unreleased]`.
 
 GitHub sets **base** to `main` on a new pull request. Change it to `dev`
 before you click **Create pull request**.
@@ -325,7 +326,7 @@ How code should read (size, structure, abstractions, comments) is in
 [CODE_STYLE.md](docs/CODE_STYLE.md). The rules per language:
 
 **Python.** PEP 8, type hints on function signatures, docstrings on public
-functions, lines up to 100 characters. `ruff` runs in the gate.
+functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
 
 **Go.** Format with `gofmt`. `go vet` and `staticcheck` run in the gate
 for `proxy/` and `tui/`.
