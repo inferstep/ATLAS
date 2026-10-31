@@ -1165,34 +1165,98 @@ func latestUserMessage(ctx *AgentContext) string {
 // alternatives it generates, and sends it back unchanged when none ranks
 // higher (#259), which proposedV3Candidate reads as no proposal.
 func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResult, error) {
-	// Build V3 request with project context
-	req := V3GenerateRequest{
-		FilePath:     path,
-		BaselineCode: baselineContent,
-		Tier:         int(ctx.Tier),
-		WorkingDir:   ctx.WorkingDir,
-		UserMessage:  latestUserMessage(ctx),
+	req := v3WriteRequest(path, baselineContent, ctx)
+
+	// The production call path for invocation feasibility: before a single
+	// candidate is generated, record whether this task could close at all. The
+	// answer is recorded only; generation proceeds whatever it concludes.
+	//
+	// One entry of the candidate-generation route, named before anything is
+	// decided about it. Every record this attempt produces carries it, so a
+	// retry's work can never be mistaken for this one's.
+	entry := mintRouteEntry(ctx)
+	// One owner for how this entry ends, finalised exactly once. The deferred
+	// default means a branch that forgets to speak still records the
+	// fail-closed member instead of leaving an entry that never ended.
+	lifecycle := newRouteLifecycle(entry)
+	// The attribution is deferred first so it runs last, over the recorded
+	// ending.
+	defer lifecycle.recordAttribution(ctx)
+	defer lifecycle.finalizeDefault(ctx)
+	// Recorded, never enforced: generation proceeds whatever it says.
+	observeInvocationFeasibility(ctx, entry)
+
+	v3Result, err := generateV3Write(ctx, entry, path, req)
+	if err != nil {
+		return writeAfterV3Failure(ctx, lifecycle, path, baselineContent, err)
+	}
+	// V3 answered for this write: an earlier unchecked write of the file is
+	// no longer the one to name.
+	ctx.clearV3Unchecked(path)
+
+	write := proposeWriteCandidate(ctx, entry, lifecycle, path, baselineContent, v3Result)
+	evidence := collectWriteCandidateEvidence(ctx, entry, write)
+	decideWriteCandidateDelivery(ctx, entry, write, evidence)
+	if refusal := applyWriteGates(write); refusal != nil {
+		return refusal, nil
 	}
 
-	// Add project context from files read during this session. The target
-	// file's own PRE-EDIT snapshot is excluded: its current symbols come
-	// from the baseline, and stale content would let the in-pipeline veto
-	// credit a def this write deletes (#147 review finding #2 — same rule
-	// as checkStructuralUnresolved).
-	cleanTarget := filepath.Clean(path)
-	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
-		req.ProjectContext = make(map[string]string)
-		for p, content := range filesRead {
-			if filepath.Clean(p) == cleanTarget {
-				continue
-			}
-			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
-			if relPath == "" {
-				relPath = p
-			}
-			req.ProjectContext[relPath] = contextEntry(content, 4000)
-		}
+	// A gate fallback wrote the model's own baseline, which was NOT
+	// V3-sandbox-verified (only syntax- and structural-checked). Report it
+	// as a plain direct write with no V3 metadata — the same honest
+	// reporting as the V3-unavailable fallback — so the vetoed winner's
+	// score/phase/evidence don't attach to unverified content and the
+	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	// The observation that travels to the write must describe the bytes being
+	// written. Every transition above re-observes what it changed, so this
+	// normally returns what it was handed; it re-evaluates only if a future
+	// branch alters the bytes without saying what it found about them, which is
+	// the one way this invariant could rot.
+	logMandatoryChecks(ctx, "write_file", path, "candidate route")
+	final := write.deliveredCheck
+	if write.checkedFor != write.code {
+		log.Printf("[write_file] final bytes for %s are not the observed ones — re-checking",
+			logPath(path))
+		final = fallbackSyntaxOutcomeFor(ctx, path, write.code).aggregate()
 	}
+
+	if write.fellBack || !write.authorizedV3 {
+		return writeRetainedContent(write, final)
+	}
+
+	// Stream V3 completion summary — after the gate, so a rejected write
+	// doesn't present as a successfully completed V3 stage.
+	if ctx.StreamFn != nil {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+		})
+	}
+
+	// THE consumer of the authorization grant, and the only mutation on this
+	// route that a typed request can reach. Everything it needs is re-read
+	// from disk inside it: the grant froze a moment and this is a later one.
+	if write.delivery.Typed {
+		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(write.code), "")
+		result, outcome, err := deliverAuthorizedCandidate(ctx, path, write.code,
+			write.delivery.Grant, final, write.delivery.MetCommands, write.delivery.BaselinePreserved)
+		lifecycle.noteDelivery(outcome)
+		return settleTypedDelivery(write, final, result, outcome, err)
+	}
+
+	// Unreachable by an authorized candidate: authorization now requires a
+	// grant, and a grant requires declared output knowledge. Kept as the
+	// fail-closed floor rather than deleted, because a future policy that
+	// authorizes without minting would otherwise write bytes through a path
+	// nobody reviewed.
+	log.Printf("[write_file] authorized delivery reached the ungranted path for %s — writing the caller's content",
+		logPath(path))
+	return write.writeCallersContent()
+}
+
+// v3WriteRequest is the V3 request for a write: an edit's request, and the
+// files this session wrote as context too.
+func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateRequest {
+	req := v3Request(path, baselineContent, ctx)
 
 	// Files this session wrote are project context too; otherwise
 	// siblings written but never read are invisible to candidate
@@ -1215,32 +1279,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		}
 		req.ProjectContext[rel] = contextEntry(string(data), 4000)
 	}
+	return req
+}
 
-	// Add project info if available
-	if ctx.Project != nil {
-		req.Framework = ctx.Project.Framework
-		req.BuildCommand = ctx.Project.BuildCommand
-	}
-
-	// The production call path for invocation feasibility: before a single
-	// candidate is generated, record whether this task could close at all. The
-	// answer is recorded only; generation proceeds whatever it concludes.
-	//
-	// One entry of the candidate-generation route, named before anything is
-	// decided about it. Every record this attempt produces carries it, so a
-	// retry's work can never be mistaken for this one's.
-	entry := mintRouteEntry(ctx)
-	// One owner for how this entry ends, finalised exactly once. The deferred
-	// default means a branch that forgets to speak still records the
-	// fail-closed member instead of leaving an entry that never ended.
-	lifecycle := newRouteLifecycle(entry)
-	// The attribution is deferred first so it runs last, over the recorded
-	// ending.
-	defer lifecycle.recordAttribution(ctx)
-	defer lifecycle.finalizeDefault(ctx)
-	// Recorded, never enforced: generation proceeds whatever it says.
-	observeInvocationFeasibility(ctx, entry)
-
+// generateV3Write calls V3 for a write and reports its stages to the client
+// and the pipeline pane.
+func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
+	req V3GenerateRequest) (*V3GenerateResponse, error) {
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
 	// a winner — without this message the chat goes silent for the 1–3
@@ -1267,113 +1312,61 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_start   — V3 is starting an LLM call (candidate gen, scoring…)
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
-	currentV3Stage := ""
+	var stages v3StageMarks
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		// Token deltas: forward to the TUI on a separate SSE event so
-		// it can render them as a streaming dim row, mirroring how the
-		// agent's own LLM tokens are shown. No envelope (would bloat
-		// /events with thousands of metric events for a single call).
-		if stage == "token" {
-			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_token", map[string]string{"text": detail})
-			}
-			return
-		}
-		// Reasoning deltas during V3 LLM calls (<think>
-		// stream). Forwarded as v3_reasoning_token (NOT plain
-		// reasoning_token) because the agent-loop's reasoning_token
-		// handler in the TUI targets the agent's LLM row — V3 calls
-		// run in a different lifecycle and need their own pipe into
-		// the V3 streaming row. Gives the /demo viewer something to
-		// watch during long PlanSearch / repair phases.
-		if stage == "reasoning_token" {
-			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
-			}
-			return
-		}
-		// LLM-call boundary markers. Match the chat protocol's
-		// llm_call_start/end shapes so the TUI can reuse handlers.
-		if stage == "llm_start" {
-			if ctx.StreamFn != nil {
-				payload := map[string]interface{}{"detail": detail}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn("v3_llm_start", payload)
-			}
-			return
-		}
-		if stage == "llm_end" {
-			if ctx.StreamFn != nil {
-				payload := map[string]interface{}{"detail": detail}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn("v3_llm_end", payload)
-			}
-			return
-		}
-
-		// Dedicated structured events for the pipeline pane. The TUI
-		// renders each as its own row instead of a generic v3_progress
-		// string. data is the structured payload from V3's _emit; we
-		// pass it through verbatim with `stage` and `detail` for
-		// fallback rendering.
-		if ctx.StreamFn != nil {
-			eventName := v3StageToEvent(stage)
-			if eventName == "v3_progress" {
-				// Unknown / unmapped stage — emit the legacy text line
-				// only. Keeps third-party clients that haven't migrated
-				// to typed events working.
-				ctx.StreamFn("v3_progress", map[string]string{
-					"message": fmt.Sprintf("  \u2502 [%s] %s", stage, detail),
-				})
-			} else {
-				payload := map[string]interface{}{
-					"stage":  stage,
-					"detail": detail,
-				}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn(eventName, payload)
-			}
-		}
-		// Stage transitions emit start/end envelopes for the pipeline
-		// pane — close the previous stage when we see a new name.
-		if stage != currentV3Stage {
-			if currentV3Stage != "" {
-				Emit(Envelope{
-					EventID:   NewEventID(),
-					Timestamp: float64(time.Now().UnixNano()) / 1e9,
-					Type:      EvtStageEnd,
-					Stage:     "v3:" + currentV3Stage,
-					Payload: map[string]interface{}{
-						"success": true,
-					},
-				})
-			}
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
-			currentV3Stage = stage
-		} else {
-			Emit(NewEnvelope(EvtMetric, "v3:"+stage,
-				map[string]interface{}{"name": "progress", "value": detail}))
+		forwardV3Stage(ctx, stage, detail, data)
+		switch stage {
+		case "token", "reasoning_token", "llm_start", "llm_end":
+			// No envelope: it would bloat /events with thousands of metric
+			// events for a single call.
+		default:
+			stages.note(stage, detail, data)
 		}
 	})
-	if currentV3Stage != "" {
-		Emit(Envelope{
-			EventID:   NewEventID(),
-			Timestamp: float64(time.Now().UnixNano()) / 1e9,
-			Type:      EvtStageEnd,
-			Stage:     "v3:" + currentV3Stage,
-			Payload:   map[string]interface{}{"success": err == nil},
-		})
+	stages.closeCurrent(err == nil)
+	emitV3WriteStageEnd(v3Start, v3Result, err)
+	return v3Result, err
+}
+
+// v3StageMarks turns V3's stage markers into start and end envelopes for the
+// pipeline pane.
+type v3StageMarks struct {
+	current string
+}
+
+// note closes the previous stage when a new name comes, and reports progress
+// inside the same stage.
+func (m *v3StageMarks) note(stage, detail string, data map[string]interface{}) {
+	if stage == m.current {
+		Emit(NewEnvelope(EvtMetric, "v3:"+stage,
+			map[string]interface{}{"name": "progress", "value": detail}))
+		return
 	}
+	m.closeCurrent(true)
+	payload := map[string]interface{}{"detail": detail}
+	for k, v := range data {
+		payload[k] = v
+	}
+	Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
+	m.current = stage
+}
+
+// closeCurrent emits the end of the stage that is open, if one is.
+func (m *v3StageMarks) closeCurrent(success bool) {
+	if m.current == "" {
+		return
+	}
+	Emit(Envelope{
+		EventID:   NewEventID(),
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		Type:      EvtStageEnd,
+		Stage:     "v3:" + m.current,
+		Payload:   map[string]interface{}{"success": success},
+	})
+}
+
+// emitV3WriteStageEnd closes the V3 stage of a write.
+func emitV3WriteStageEnd(v3Start time.Time, v3Result *V3GenerateResponse, err error) {
 	// The structured evidence rides the telemetry envelope, whole. It is
 	// deliberately NOT put on the ToolResult: that is projected to the model
 	// and to the guarded tool-result SSE, where an unconsumed research field
@@ -1404,52 +1397,82 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		DurationMS: time.Since(v3Start).Milliseconds(),
 		Payload:    v3StagePayload,
 	})
-	if err != nil {
-		// User cancellation is not a fallback case — the turn was aborted,
-		// so nothing should land on disk.
-		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-			log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
-			lifecycle.finish(ctx, routingCancelled, "", "")
-			return &ToolResult{
-				Success: false,
-				Error:   "write_file cancelled — no content was written",
-			}, nil
-		}
-		// The lens stopped scoring inside V3. The lens is required, so this
-		// is not a fallback case either: nothing is written, and the agent
-		// loop ends the run with the reason (lens_required.go).
-		if why, down := lensUnavailable(err); down {
-			log.Printf("[write_file] the lens cannot score (%s) — not writing %s", why, logPath(path))
-			ctx.noteLensDown(why)
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-			return noMutation("write_file not applied: the geometric lens stopped answering (" + why + ")"), nil
-		}
-		// Fallback to direct write if V3 service unavailable — but never
-		// land content the sandbox confirms is broken: a truncated tool
-		// call writing a SyntaxError to disk with success=true is how the
-		// mini-bench got its two broken files (t06/t09).
-		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
-		// The final summary names this file while these bytes are on disk.
-		ctx.noteV3Unchecked(path, v3FailureReason(err), baselineContent)
-		if errors.Is(err, context.DeadlineExceeded) {
-			lifecycle.finish(ctx, routingProducerTimedOut, "", "")
-		} else {
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-		}
-		msg := "  \u2514\u2500 V3 unavailable, writing directly"
-		if errors.Is(err, context.DeadlineExceeded) {
-			// Not the configured ceiling: the session's remaining time can
-			// shorten this call's cap, and naming the wrong number tells the
-			// operator to raise a setting that was not the limit they hit.
-			// The exact cap and its source are in the error and the log.
-			msg = "  \u2514\u2500 V3 ran out of its time budget, writing your version"
-		}
-		return writeWithoutCandidate(ctx, path, baselineContent, msg)
-	}
-	// V3 answered for this write: an earlier unchecked write of the file is
-	// no longer the one to name.
-	ctx.clearV3Unchecked(path)
+}
 
+// writeAfterV3Failure ends a write whose V3 call failed.
+func writeAfterV3Failure(ctx *AgentContext, lifecycle *routeLifecycle, path, baselineContent string,
+	err error) (*ToolResult, error) {
+	// User cancellation is not a fallback case — the turn was aborted,
+	// so nothing should land on disk.
+	if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+		log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
+		lifecycle.finish(ctx, routingCancelled, "", "")
+		return &ToolResult{
+			Success: false,
+			Error:   "write_file cancelled — no content was written",
+		}, nil
+	}
+	// The lens stopped scoring inside V3. The lens is required, so this
+	// is not a fallback case either: nothing is written, and the agent
+	// loop ends the run with the reason (lens_required.go).
+	if why, down := lensUnavailable(err); down {
+		log.Printf("[write_file] the lens cannot score (%s) — not writing %s", why, logPath(path))
+		ctx.noteLensDown(why)
+		lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+		return noMutation("write_file not applied: the geometric lens stopped answering (" + why + ")"), nil
+	}
+	// Fallback to direct write if V3 service unavailable — but never
+	// land content the sandbox confirms is broken: a truncated tool
+	// call writing a SyntaxError to disk with success=true is how the
+	// mini-bench got its two broken files (t06/t09).
+	log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
+	// The final summary names this file while these bytes are on disk.
+	ctx.noteV3Unchecked(path, v3FailureReason(err), baselineContent)
+	if errors.Is(err, context.DeadlineExceeded) {
+		lifecycle.finish(ctx, routingProducerTimedOut, "", "")
+	} else {
+		lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+	}
+	msg := "  └─ V3 unavailable, writing directly"
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Not the configured ceiling: the session's remaining time can
+		// shorten this call's cap, and naming the wrong number tells the
+		// operator to raise a setting that was not the limit they hit.
+		// The exact cap and its source are in the error and the log.
+		msg = "  └─ V3 ran out of its time budget, writing your version"
+	}
+	return writeWithoutCandidate(ctx, path, baselineContent, msg)
+}
+
+// v3Write is one write once V3 has answered. `code` is what would land, and
+// the fields below it describe those bytes: a step that changes `code` changes
+// them with it, through revokeV3 and restoreBaseline.
+type v3Write struct {
+	ctx             *AgentContext
+	lifecycle       *routeLifecycle
+	path            string
+	baselineContent string
+	v3Result        *V3GenerateResponse
+	scope           mutationScope
+	scopeOK         bool
+
+	code           string
+	authorizedV3   bool
+	fellBack       bool
+	deliveredCheck checkOutcome
+	checkedFor     string // the bytes deliveredCheck describes
+
+	candidateProposed           bool
+	proposalIdentity            string
+	languageOrBoundaryViolation bool
+	delivery                    deliveryAuthorization
+	policy                      candidatePolicyOutcome
+}
+
+// proposeWriteCandidate takes V3's answer down to the bytes this write would
+// land, and observes them.
+func proposeWriteCandidate(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
+	path, baselineContent string, v3Result *V3GenerateResponse) *v3Write {
 	// Write the winning candidate, or the baseline if V3 did not improve. The
 	// presence of Code is not authorization: an unverified alternative must
 	// never displace the baseline, and delivery is decided below by the proxy's
@@ -1508,33 +1531,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// checkedFor records which bytes those were, so the pairing is checkable
 	// rather than a discipline each branch below has to remember.
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
-	checkedFor := code
-
-	// The production call path for the proxy-owned syntax producer. It sits
-	// here because this is the one moment the bytes are fixed and the gate has
-	// just reported on exactly those bytes: the verdict is handed over, never
-	// recomputed, so there is no second sandbox call and no second opinion. Its
-	// evidence goes to private telemetry and into the authorization owner
-	// below.
-	//
-	// The live authorization owner. For a request that declared structured
-	// obligations the typed answer is binding: no candidate lands without a
-	// one-time grant, and a refusal keeps the caller's own content rather than
-	// falling through to a candidate the envelope happened to like. A request
-	// that declared nothing has no typed answer to give.
-	//
-	// A retained baseline is not a candidate.
-	//
-	// When nothing materially different came back, `code` is the caller's own
-	// content. Staging it, taking an authorization decision over it and minting
-	// a one-time licence for it describes a delivery that is not going to
-	// happen: the fallback below writes those same bytes directly and the
-	// licence retires unused.
-	//
-	// What a candidate does not have to be is service-certified. The service
-	// ranks; the evidence this machine produces about these exact bytes is what
-	// authorizes, and it cannot be produced without staging the candidate.
-	candidateProposed := proposed
+	write := &v3Write{
+		ctx: ctx, lifecycle: lifecycle, path: path, baselineContent: baselineContent,
+		v3Result: v3Result, scope: scope, scopeOK: scopeOK,
+		code: code, fellBack: fellBack, deliveredCheck: deliveredCheck, checkedFor: code,
+		candidateProposed:           proposed,
+		languageOrBoundaryViolation: languageOrBoundaryViolation,
+	}
 	// The proposal's own identity, taken here rather than at the ending.
 	// Every gate below that withdraws a candidate restores `code` to the
 	// caller's bytes, so a hash read at the end names the BASELINE -- which is
@@ -1542,26 +1545,65 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// the model's own content attributed to the pipeline. The pilot has one:
 	// route entry 1 of pilot_go_duration_label carries the sha256 of the
 	// main.go the model wrote itself.
-	proposalIdentity := ""
-	if candidateProposed {
-		proposalIdentity = contentSHA256(code)
+	if proposed {
+		write.proposalIdentity = contentSHA256(code)
 	}
+	return write
+}
 
-	var observed []proxyEvidence
-	var evID candidateEvidenceIdentity
-	var unmet map[string]AuthorizationReason
-	stagingMutatedAssets := false
-	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen && candidateProposed {
-		observed, evID = []proxyEvidence{ev}, id
+// writeCandidateEvidence is what this machine observed about a candidate's
+// exact bytes.
+type writeCandidateEvidence struct {
+	observed             []proxyEvidence
+	evID                 candidateEvidenceIdentity
+	unmet                map[string]AuthorizationReason
+	stagingMutatedAssets bool
+	selected             string
+	scopeAdmits          bool
+	scopeRefusal         string
+}
+
+// collectWriteCandidateEvidence gathers the evidence the authorization owner
+// decides over.
+//
+// The production call path for the proxy-owned syntax producer. It sits
+// here because this is the one moment the bytes are fixed and the gate has
+// just reported on exactly those bytes: the verdict is handed over, never
+// recomputed, so there is no second sandbox call and no second opinion. Its
+// evidence goes to private telemetry and into the authorization owner
+// below.
+//
+// The live authorization owner. For a request that declared structured
+// obligations the typed answer is binding: no candidate lands without a
+// one-time grant, and a refusal keeps the caller's own content rather than
+// falling through to a candidate the envelope happened to like. A request
+// that declared nothing has no typed answer to give.
+//
+// A retained baseline is not a candidate.
+//
+// When nothing materially different came back, `code` is the caller's own
+// content. Staging it, taking an authorization decision over it and minting
+// a one-time licence for it describes a delivery that is not going to
+// happen: the fallback below writes those same bytes directly and the
+// licence retires unused.
+//
+// What a candidate does not have to be is service-certified. The service
+// ranks; the evidence this machine produces about these exact bytes is what
+// authorizes, and it cannot be produced without staging the candidate.
+func collectWriteCandidateEvidence(ctx *AgentContext, entry routeEntry, write *v3Write) writeCandidateEvidence {
+	path, code := write.path, write.code
+	var evidence writeCandidateEvidence
+	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, write.deliveredCheck); seen && write.candidateProposed {
+		evidence.observed, evidence.evID = []proxyEvidence{ev}, id
 	}
-	if candidateProposed && evID.InvocationID == "" {
+	if write.candidateProposed && evidence.evID.InvocationID == "" {
 		// No producer spoke -- a request that declared no outputs owes no
 		// syntax obligation, and a class the syntax gate does not check owes
 		// none either -- but the candidate is still this route entry's and
 		// these exact bytes, and the authorization owner binds to that.
-		evID = proposedCandidateIdentity(ctx, entry, code)
+		evidence.evID = proposedCandidateIdentity(ctx, entry, code)
 	}
-	if candidateProposed {
+	if write.candidateProposed {
 		// THE production call path for the client-declared verification
 		// producer. It stages these exact bytes in a workspace that is not the
 		// caller's and runs the commands the client declared there, so the
@@ -1570,13 +1612,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// budget bounds what it may spend on one. It no longer waits for a
 		// syntax obligation: a declared main.rs has none, so its declared
 		// command was owed and never run.
-		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evID, scope)
-		observed, unmet = append(observed, behavioral...), why
-		stagingMutatedAssets = mutatedAssets
+		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evidence.evID, write.scope)
+		evidence.observed, evidence.unmet = append(evidence.observed, behavioral...), why
+		evidence.stagingMutatedAssets = mutatedAssets
 	}
-	selected := ""
-	if v3Result != nil && v3Result.Evidence != nil {
-		selected = v3Result.Evidence.Identity.CandidateContentHash
+	if write.v3Result != nil && write.v3Result.Evidence != nil {
+		evidence.selected = write.v3Result.Evidence.Identity.CandidateContentHash
 	}
 	// Unconditionally, and deliberately so. The producers decline for a target
 	// the client never declared and for a class the structural gate does not
@@ -1584,41 +1625,49 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// mean exactly those two cases fell through to the legacy decision -- a
 	// candidate landing on a structured request because nothing could speak
 	// for it. The owner handles an empty evidence set: it refuses.
-	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
-	if scopeOK {
-		scopeAdmits, scopeRefusal = scopeAdmitsCandidate(ctx, scope, code)
+	evidence.scopeAdmits, evidence.scopeRefusal = false, scopeRefusedNoScope
+	if write.scopeOK {
+		evidence.scopeAdmits, evidence.scopeRefusal = scopeAdmitsCandidate(ctx, write.scope, code)
 	}
-	if candidateProposed {
-		recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
+	if write.candidateProposed {
+		recordMutationScope(ctx, write.scope, evidence.scopeAdmits, evidence.scopeRefusal)
 	}
+	return evidence
+}
+
+// decideWriteCandidateDelivery asks the authorization owner and the policy
+// owner about the candidate, and records whether it may land.
+func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3Write,
+	evidence writeCandidateEvidence) {
+	path, code, v3Result := write.path, write.code, write.v3Result
 	// ONE veto list, two readers. The authorization owner needs the
 	// disqualifying facts before it can mint an automatic grant, and the
 	// policy owner needs them to reach its decision. The authorization owner
 	// computes it, after its decision, and both read that list.
 	vetoInput := advisoryInput{
-		Observed:                    deliveredCheck,
+		Observed:                    write.deliveredCheck,
 		TargetDeclared:              outputKnowledgeDeclared(ctx),
 		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
-		LanguageOrBoundaryViolation: languageOrBoundaryViolation,
-		Unmet:                       unmet,
-		Evidence:                    observed,
+		LanguageOrBoundaryViolation: write.languageOrBoundaryViolation,
+		Unmet:                       evidence.unmet,
+		Evidence:                    evidence.observed,
 		Cancelled:                   ctx.Ctx != nil && ctx.Ctx.Err() != nil,
-		MutatedProtectedAssets:      stagingMutatedAssets,
-		ScopeAdmits:                 scopeAdmits,
-		ScopeRefusal:                scopeRefusal,
+		MutatedProtectedAssets:      evidence.stagingMutatedAssets,
+		ScopeAdmits:                 evidence.scopeAdmits,
+		ScopeRefusal:                evidence.scopeRefusal,
 	}
 	vetoInput.Envelope = envelopeOf(v3Result)
 	// Nil without a candidate: the policy owner then computes the list itself,
 	// from the same input.
 	var vetoes []string
 	var delivery deliveryAuthorization
-	if candidateProposed {
-		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
-			v3Result.Evidence, observed, selected, unmet, deliveredCheck, scope,
-			automaticIntent{VetoInput: vetoInput})
+	if write.candidateProposed {
+		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evidence.evID,
+			v3Result.Evidence, evidence.observed, evidence.selected, evidence.unmet,
+			write.deliveredCheck, write.scope, automaticIntent{VetoInput: vetoInput})
 		vetoes = delivery.Vetoes
 		vetoInput.Unmet = delivery.Unmet
-		lifecycle.noteAuthorization(delivery, evID, contentSHA256(code), vetoes)
+		write.lifecycle.noteAuthorization(delivery, evidence.evID, contentSHA256(code), vetoes)
 	}
 	// THE policy owner. It reads the typed answer, the trusted observations and
 	// the disqualifying facts, and says which of the honest decisions this
@@ -1637,13 +1686,14 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// reporting it as a strict authorization would name the wrong rule in the
 	// record a calibration is computed from.
 	policy := decideCandidatePolicy(ctx, policyInput,
-		candidateProposed && delivery.holds(grantBasisStrict))
-	if candidateProposed {
+		write.candidateProposed && delivery.holds(grantBasisStrict))
+	if write.candidateProposed {
 		recordCandidatePolicyDecision(ctx, entry, contentSHA256(code), policy)
 		if delivery.CaptureOnly {
 			recordCaptureOnlyDisposition(ctx, entry, contentSHA256(code), policy, true)
 		}
 	}
+	write.delivery, write.policy = delivery, policy
 
 	// Whether the proposal becomes the delivered artifact. One owner, for every
 	// request: the proxy's policy, over evidence the proxy produced about these
@@ -1655,322 +1705,315 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// The service's closure verdict does not decide it. A machine that let the
 	// producer of a candidate certify that candidate has no authorization
 	// story at all, and "it was like that before" is not one either.
-	authorizedV3 := candidateProposed && policy.mayDeliverUnderPolicy()
+	write.authorizedV3 = write.candidateProposed && policy.mayDeliverUnderPolicy()
+}
 
-	// A refusal withdraws the candidate. The caller's own content is the
-	// alternative, and it is checked before being restored -- the same rule
-	// every other gate on this path follows.
-	if candidateProposed && !authorizedV3 {
-		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(code),
-			AuthorizationReason(delivery.Refusal))
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
-		}
-		code, authorizedV3, fellBack = revokeV3(
-			baselineContent, "the policy refused it ("+string(policy.Decision)+")", path)
-		deliveredCheck, checkedFor = baseCheck, code
+// checkBaseline observes the caller's own content before it is restored. A
+// non-nil result refuses the write: the content does not parse.
+func (w *v3Write) checkBaseline() (checkOutcome, *ToolResult) {
+	baseCheck := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.baselineContent).aggregate()
+	if baseCheck.Status == ValidationFailed {
+		return baseCheck, syntaxRefusal(w.path, w.baselineContent, baseCheck.Detail)
 	}
-	if deliveredCheck.Status == ValidationFailed {
-		if !authorizedV3 {
-			// The caller's own content, and it does not parse. Nothing here
-			// authored it and there is no alternative to fall back to.
-			log.Printf("[write_file] fallback content for %s does not parse: %s",
-				logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, code, deliveredCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: deliveredCheck.Detail}, nil
+	return baseCheck, nil
+}
+
+// restoreBaseline withdraws the candidate. The verdict on the caller's content
+// travels with it to the write.
+func (w *v3Write) restoreBaseline(baseCheck checkOutcome, reason string) {
+	w.code, w.authorizedV3, w.fellBack = revokeV3(w.baselineContent, reason, w.path)
+	w.deliveredCheck, w.checkedFor = baseCheck, w.code
+}
+
+// syntaxRefusal refuses content that does not parse.
+func syntaxRefusal(path, content, detail string) *ToolResult {
+	return &ToolResult{Success: false,
+		Error:            fallbackSyntaxRejection(path, content, detail),
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindSyntax,
+		ValidationStatus: ValidationFailed,
+		ValidationDetail: detail}
+}
+
+// applyWriteGates runs the gates between the decision and the disk, in order.
+// A non-nil result ends the write with it.
+func applyWriteGates(write *v3Write) *ToolResult {
+	for _, gate := range []func(*v3Write) *ToolResult{
+		withdrawRefusedCandidate, refuseContentThatDoesNotParse, refuseUnresolvedCalls,
+		refuseBrokenEmbeddedScript, refuseDuplicateEntrypoint, refuseCancelledWrite,
+	} {
+		if refusal := gate(write); refusal != nil {
+			return refusal
 		}
-		// A candidate that does not parse is not a candidate. The model's own
-		// content is the alternative, and it is checked before being restored:
-		// falling back to bytes nobody looked at is how the harness would
-		// replace one broken artifact with another.
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
-			log.Printf("[write_file] V3 winner and baseline both fail the syntax gate for %s",
-				logPath(path))
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
-		}
-		log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
+	}
+	return nil
+}
+
+// withdrawRefusedCandidate applies the policy's refusal. A refusal withdraws the
+// candidate. The caller's own content is the alternative, and it is checked
+// before being restored -- the same rule every other gate on this path follows.
+func withdrawRefusedCandidate(write *v3Write) *ToolResult {
+	if !write.candidateProposed || write.authorizedV3 {
+		return nil
+	}
+	write.lifecycle.finish(write.ctx, routingAuthorizationRefused, contentSHA256(write.code),
+		AuthorizationReason(write.delivery.Refusal))
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		return refusal
+	}
+	write.restoreBaseline(baseCheck, "the policy refused it ("+string(write.policy.Decision)+")")
+	return nil
+}
+
+// refuseContentThatDoesNotParse is the syntax gate on what would land.
+func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
+	path, deliveredCheck := write.path, write.deliveredCheck
+	if deliveredCheck.Status != ValidationFailed {
+		return nil
+	}
+	if !write.authorizedV3 {
+		// The caller's own content, and it does not parse. Nothing here
+		// authored it and there is no alternative to fall back to.
+		log.Printf("[write_file] fallback content for %s does not parse: %s",
 			logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
-		code, authorizedV3, fellBack = revokeV3(
-			baselineContent, "the winner does not parse", path)
-		deliveredCheck, checkedFor = baseCheck, code
+		return syntaxRefusal(path, write.code, deliveredCheck.Detail)
 	}
-
-	// #147: authoritative structural gate on whatever is about to land —
-	// the in-pipeline veto only prunes phase-1 sandbox-passing candidates,
-	// so probe/repair returns, the energy fallback, and the baseline
-	// resurrection above can all deliver content that calls a name the
-	// file never binds. Same rule as the edit paths: original is the
-	// on-disk content (empty for a first write), only NEWLY unresolved
-	// calls block, and an unreadable existing original skips the gate.
-	// When the WINNER fails but the model's own baseline passes, write
-	// the baseline instead of rejecting: the offending call is V3-
-	// authored, and a rejection would blame the model for content it
-	// never wrote and cost a full pipeline retry per resend.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
-			if code != baselineContent {
-				// The baseline is about to become the delivered artifact, so it
-				// is observed before it is restored -- and the verdict is kept,
-				// not spent on the allow/refuse decision and discarded.
-				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-				if baseCheck.Status == ValidationFailed {
-					return &ToolResult{Success: false,
-						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindSyntax,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: baseCheck.Detail}, nil
-				}
-				if intrBase := editIntroducesUnresolved(ctx, path, original, baselineContent); len(intrBase) == 0 {
-					log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(path))
-					if ctx.StreamFn != nil {
-						ctx.StreamFn("v3_progress", map[string]string{
-							"message": "  └─ V3 winner failed the structural gate — writing your version",
-						})
-					}
-					code, authorizedV3, fellBack = revokeV3(
-						baselineContent, "winner failed the structural gate", path)
-					deliveredCheck, checkedFor = baseCheck, code
-				} else {
-					introduced = intrBase // name what the MODEL can act on
-				}
-			}
-			if !fellBack {
-				log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
-				// Syntax already passed on these exact bytes at the final-byte
-				// check; the structural failure is what refused them, so it is
-				// the decisive outcome. The earlier pass is not carried here --
-				// it would describe a check that did not make this decision.
-				rejection := structuralWriteRejection(path, introduced)
-				return &ToolResult{Success: false,
-					Error:            rejection,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
-					ValidationDetail: rejection}, nil
-			}
-		}
-	}
-
-	// Embedded-script gate: V3 verifies a candidate by RUNNING it — the
-	// server starts and the page returns 200 — which is exactly the evidence a
-	// broken <script> block inside the rendered HTML survives. Nothing else on
-	// this path parses that JavaScript. Same healthy->broken rule; and when the
-	// WINNER is the one carrying the break, write the model's gate-passing
-	// baseline rather than blaming it for V3-authored content.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if msg := embeddedScriptGate(ctx, path, original, code); msg != "" {
-			if code != baselineContent && embeddedScriptGate(ctx, path, original, baselineContent) == "" {
-				// Same rule as the structural revocation: the baseline is
-				// observed before it is restored, and the verdict travels with
-				// it to the write.
-				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-				if baseCheck.Status == ValidationFailed {
-					return &ToolResult{Success: false,
-						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindSyntax,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: baseCheck.Detail}, nil
-				}
-				log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
-				code, authorizedV3, fellBack = revokeV3(
-					baselineContent, "winner breaks an embedded script", path)
-				deliveredCheck, checkedFor = baseCheck, code
-			} else {
-				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
-				// Structural, not syntax. A standalone embedded parse failure
-				// is already owned by the final-byte check, which asks without
-				// a `previous` and would have refused before this gate ran.
-				// What survives to here is what only a before/after comparison
-				// can see -- a render loop the change stopped driving -- which
-				// is a structural regression in code that parses.
-				return &ToolResult{Success: false,
-					Error:            msg,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
-					ValidationDetail: msg}, nil
-			}
-		}
-	}
-
-	// Same entrypoint check every edit path runs. write_file on an existing
-	// file is a whole-file replacement, which is exactly how a second
-	// `if __name__` block gets appended.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if msg := duplicateMainGuard(path, original, code); msg != "" {
-			log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(path))
-			// The file parses; what is wrong is its module-level structure, so
-			// this is a structural refusal like the two above.
-			return &ToolResult{Success: false,
-				Error:            msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: msg}, nil
-		}
-	}
-
-	// The structural gate made HTTP calls; a user cancel during that window
-	// must not land content on disk, mirroring the main call's abort path above.
-	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-		log.Printf("[write_file] cancelled during structural gate — not writing %s", path)
-		// MutationNone, not Refused: no gate declined anything and no write was
-		// attempted -- the turn ended. The observation earned on the current
-		// bytes is still true and is carried, but nothing new is evaluated
-		// here: cancellation is exactly the point at which no further work may
-		// be done. It is overlaid only while it still describes those bytes.
-		cancelled := &ToolResult{
-			Success:        false,
-			Error:          "write_file cancelled — no content was written",
-			MutationStatus: MutationNone,
-		}
-		if checkedFor == code {
-			overlayValidation(cancelled, deliveredCheck)
-		}
-		return cancelled, nil
-	}
-
-	// A gate fallback wrote the model's own baseline, which was NOT
-	// V3-sandbox-verified (only syntax- and structural-checked). Report it
-	// as a plain direct write with no V3 metadata — the same honest
-	// reporting as the V3-unavailable fallback — so the vetoed winner's
-	// score/phase/evidence don't attach to unverified content and the
-	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
-	// The observation that travels to the write must describe the bytes being
-	// written. Every transition above re-observes what it changed, so this
-	// normally returns what it was handed; it re-evaluates only if a future
-	// branch alters the bytes without saying what it found about them, which is
-	// the one way this invariant could rot.
-	logMandatoryChecks(ctx, "write_file", path, "candidate route")
-	final := deliveredCheck
-	if checkedFor != code {
-		log.Printf("[write_file] final bytes for %s are not the observed ones — re-checking",
+	// A candidate that does not parse is not a candidate. The model's own
+	// content is the alternative, and it is checked before being restored:
+	// falling back to bytes nobody looked at is how the harness would
+	// replace one broken artifact with another.
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		log.Printf("[write_file] V3 winner and baseline both fail the syntax gate for %s",
 			logPath(path))
-		final = fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
+		return refusal
 	}
+	log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
+		logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+	write.restoreBaseline(baseCheck, "the winner does not parse")
+	return nil
+}
 
-	if fellBack || !authorizedV3 {
-		// The caller's own bytes are what lands. Any grant minted over them was
-		// never owed a delivery, and says so through its own lifecycle.
-		markBaselineRetainedGrant(ctx, delivery)
-		// WHICH of the two things happened is a different fact, and the
-		// vocabulary already has both words for it. Nothing materially
-		// different came back, or a gate above withdrew what did -- and only
-		// the second had a candidate to name. Recording both as a retained
-		// baseline is what made this ending unreadable: an analysis cannot
-		// tell a producer that agreed with the caller from one whose winner
-		// was revoked, and the hash it joined on belonged to neither.
-		ending := routingBaselineRetained
-		if candidateProposed {
-			ending = routingRevokedByGate
+// refuseUnresolvedCalls is the #147 gate: authoritative structural gate on
+// whatever is about to land — the in-pipeline veto only prunes phase-1
+// sandbox-passing candidates, so probe/repair returns, the energy fallback, and
+// the baseline resurrection above can all deliver content that calls a name the
+// file never binds. Same rule as the edit paths: original is the on-disk content
+// (empty for a first write), only NEWLY unresolved calls block, and an unreadable
+// existing original skips the gate. When the WINNER fails but the model's own
+// baseline passes, write the baseline instead of rejecting: the offending call
+// is V3-authored, and a rejection would blame the model for content it never
+// wrote and cost a full pipeline retry per resend.
+func refuseUnresolvedCalls(write *v3Write) *ToolResult {
+	original, origOK := readOriginalForGate(write.path)
+	if !origOK {
+		return nil
+	}
+	introduced := editIntroducesUnresolved(write.ctx, write.path, original, write.code)
+	if len(introduced) == 0 {
+		return nil
+	}
+	if write.code != write.baselineContent {
+		// The baseline is about to become the delivered artifact, so it
+		// is observed before it is restored -- and the verdict is kept,
+		// not spent on the allow/refuse decision and discarded.
+		baseCheck, refusal := write.checkBaseline()
+		if refusal != nil {
+			return refusal
 		}
-		lifecycle.finish(ctx, ending, proposalIdentity,
-			AuthorizationReason(delivery.Refusal))
-		// Authorization governs METADATA as well as bytes: reporting
-		// V3Used/score/phase/evidence over content V3 did not author is the
-		// same false claim in a different field, and it fires the agent's
-		// "V3 verified this edit" completion nudge.
-		fbRes, fbErr := writeFileRecorded(path, code, ctx)
-		out, outErr := applyRouteObservation(fbRes, fbErr, final)
-		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
-		return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+		introduced = restoreBaselineWithoutUnresolvedCalls(write, original, introduced, baseCheck)
 	}
+	if write.fellBack {
+		return nil
+	}
+	log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(write.path))
+	// Syntax already passed on these exact bytes at the final-byte
+	// check; the structural failure is what refused them, so it is
+	// the decisive outcome. The earlier pass is not carried here --
+	// it would describe a check that did not make this decision.
+	return structuralRefusal(structuralWriteRejection(write.path, introduced))
+}
 
-	// Stream V3 completion summary — after the gate, so a rejected write
-	// doesn't present as a successfully completed V3 stage.
-	if ctx.StreamFn != nil {
-		ctx.StreamFn("v3_progress", map[string]string{
-			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+// restoreBaselineWithoutUnresolvedCalls restores the baseline when it passes the
+// gate its winner failed. It returns the names to report if the write is
+// refused after all.
+func restoreBaselineWithoutUnresolvedCalls(write *v3Write, original string, introduced []string,
+	baseCheck checkOutcome) []string {
+	intrBase := editIntroducesUnresolved(write.ctx, write.path, original, write.baselineContent)
+	if len(intrBase) > 0 {
+		return intrBase // name what the MODEL can act on
+	}
+	log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(write.path))
+	if write.ctx.StreamFn != nil {
+		write.ctx.StreamFn("v3_progress", map[string]string{
+			"message": "  └─ V3 winner failed the structural gate — writing your version",
 		})
 	}
+	write.restoreBaseline(baseCheck, "winner failed the structural gate")
+	return introduced
+}
 
-	// The caller's own bytes, checked before they land, for a delivery that
-	// cannot go ahead after the policy said it could.
-	writeCallersContent := func() (*ToolResult, error) {
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
+// refuseBrokenEmbeddedScript is the embedded-script gate: V3 verifies a candidate
+// by RUNNING it — the server starts and the page returns 200 — which is exactly
+// the evidence a broken <script> block inside the rendered HTML survives. Nothing
+// else on this path parses that JavaScript. Same healthy->broken rule; and when
+// the WINNER is the one carrying the break, write the model's gate-passing
+// baseline rather than blaming it for V3-authored content.
+func refuseBrokenEmbeddedScript(write *v3Write) *ToolResult {
+	ctx, path, baselineContent := write.ctx, write.path, write.baselineContent
+	original, origOK := readOriginalForGate(path)
+	if !origOK {
+		return nil
+	}
+	msg := embeddedScriptGate(ctx, path, original, write.code)
+	if msg == "" {
+		return nil
+	}
+	if write.code == baselineContent || embeddedScriptGate(ctx, path, original, baselineContent) != "" {
+		log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
+		// Structural, not syntax. A standalone embedded parse failure
+		// is already owned by the final-byte check, which asks without
+		// a `previous` and would have refused before this gate ran.
+		// What survives to here is what only a before/after comparison
+		// can see -- a render loop the change stopped driving -- which
+		// is a structural regression in code that parses.
+		return structuralRefusal(msg)
+	}
+	// Same rule as the structural revocation: the baseline is
+	// observed before it is restored, and the verdict travels with
+	// it to the write.
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		return refusal
+	}
+	log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
+	write.restoreBaseline(baseCheck, "winner breaks an embedded script")
+	return nil
+}
+
+// refuseDuplicateEntrypoint is the same entrypoint check every edit path runs.
+// write_file on an existing file is a whole-file replacement, which is exactly
+// how a second `if __name__` block gets appended.
+func refuseDuplicateEntrypoint(write *v3Write) *ToolResult {
+	original, origOK := readOriginalForGate(write.path)
+	if !origOK {
+		return nil
+	}
+	msg := duplicateMainGuard(write.path, original, write.code)
+	if msg == "" {
+		return nil
+	}
+	log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(write.path))
+	// The file parses; what is wrong is its module-level structure, so
+	// this is a structural refusal like the two above.
+	return structuralRefusal(msg)
+}
+
+// refuseCancelledWrite stops a write the user cancelled. The structural gate made
+// HTTP calls; a user cancel during that window must not land content on disk,
+// mirroring the main call's abort path.
+func refuseCancelledWrite(write *v3Write) *ToolResult {
+	ctx := write.ctx
+	if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
+		return nil
+	}
+	log.Printf("[write_file] cancelled during structural gate — not writing %s", write.path)
+	// MutationNone, not Refused: no gate declined anything and no write was
+	// attempted -- the turn ended. The observation earned on the current
+	// bytes is still true and is carried, but nothing new is evaluated
+	// here: cancellation is exactly the point at which no further work may
+	// be done. It is overlaid only while it still describes those bytes.
+	cancelled := &ToolResult{
+		Success:        false,
+		Error:          "write_file cancelled — no content was written",
+		MutationStatus: MutationNone,
+	}
+	if write.checkedFor == write.code {
+		overlayValidation(cancelled, write.deliveredCheck)
+	}
+	return cancelled
+}
+
+// writeRetainedContent lands the caller's own bytes: no candidate came back, or
+// a gate withdrew it.
+func writeRetainedContent(write *v3Write, final checkOutcome) (*ToolResult, error) {
+	ctx, path := write.ctx, write.path
+	// The caller's own bytes are what lands. Any grant minted over them was
+	// never owed a delivery, and says so through its own lifecycle.
+	markBaselineRetainedGrant(ctx, write.delivery)
+	// WHICH of the two things happened is a different fact, and the
+	// vocabulary already has both words for it. Nothing materially
+	// different came back, or a gate above withdrew what did -- and only
+	// the second had a candidate to name. Recording both as a retained
+	// baseline is what made this ending unreadable: an analysis cannot
+	// tell a producer that agreed with the caller from one whose winner
+	// was revoked, and the hash it joined on belonged to neither.
+	ending := routingBaselineRetained
+	if write.candidateProposed {
+		ending = routingRevokedByGate
+	}
+	write.lifecycle.finish(ctx, ending, write.proposalIdentity,
+		AuthorizationReason(write.delivery.Refusal))
+	// Authorization governs METADATA as well as bytes: reporting
+	// V3Used/score/phase/evidence over content V3 did not author is the
+	// same false claim in a different field, and it fires the agent's
+	// "V3 verified this edit" completion nudge.
+	fbRes, fbErr := writeFileRecorded(path, write.code, ctx)
+	out, outErr := applyRouteObservation(fbRes, fbErr, final)
+	emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, write.policy)
+	return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+}
+
+// writeCallersContent lands the caller's own bytes, checked before they land,
+// for a delivery that cannot go ahead after the policy said it could.
+func (w *v3Write) writeCallersContent() (*ToolResult, error) {
+	baseCheck, refusal := w.checkBaseline()
+	if refusal != nil {
+		return refusal, nil
+	}
+	fbRes, fbErr := writeFileRecorded(w.path, w.baselineContent, w.ctx)
+	out, outErr := applyRouteObservation(fbRes, fbErr, baseCheck)
+	emitDeliveryProvenance(w.ctx, w.path, DeliveryFromModelProposal, w.policy)
+	return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+}
+
+// settleTypedDelivery turns what the grant's consumer did into the tool result.
+func settleTypedDelivery(write *v3Write, final checkOutcome, result *ToolResult,
+	outcome deliveryOutcome, err error) (*ToolResult, error) {
+	if err != nil {
+		if result == nil && errors.Is(err, errDeliveryUnauthorized) {
+			// Refused before any byte moved. The caller's own content is
+			// still the alternative, exactly as on the edit route and on
+			// every other refusal here. Refusing the whole write told the
+			// model its content was kept when nothing had been written.
+			log.Printf("[write_file] the candidate was not spendable (%s) — writing the caller's content",
+				outcome.Reason)
+			return write.writeCallersContent()
+		}
+		if result == nil {
+			// The write itself failed. The licence was spent on bytes that
+			// never reached disk: nothing moved and nothing is claimed.
 			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+				Error:            "the file could not be written (" + outcome.Reason + ") — nothing was changed",
 				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
+				ValidationKind:   final.kind(),
+				ValidationStatus: final.Status,
+				ValidationDetail: final.Detail}, nil
 		}
-		fbRes, fbErr := writeFileRecorded(path, baselineContent, ctx)
-		out, outErr := applyRouteObservation(fbRes, fbErr, baseCheck)
-		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
-		return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+		return result, err
 	}
-
-	// THE consumer of the authorization grant, and the only mutation on this
-	// route that a typed request can reach. Everything it needs is re-read
-	// from disk inside it: the grant froze a moment and this is a later one.
-	if delivery.Typed {
-		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(code), "")
-		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code,
-			delivery.Grant, final, delivery.MetCommands, delivery.BaselinePreserved)
-		lifecycle.noteDelivery(outcome)
-		if err != nil {
-			if result == nil && errors.Is(err, errDeliveryUnauthorized) {
-				// Refused before any byte moved. The caller's own content is
-				// still the alternative, exactly as on the edit route and on
-				// every other refusal here. Refusing the whole write told the
-				// model its content was kept when nothing had been written.
-				log.Printf("[write_file] the candidate was not spendable (%s) — writing the caller's content",
-					outcome.Reason)
-				return writeCallersContent()
-			}
-			if result == nil {
-				// The write itself failed. The licence was spent on bytes that
-				// never reached disk: nothing moved and nothing is claimed.
-				return &ToolResult{Success: false,
-					Error:            "the file could not be written (" + outcome.Reason + ") — nothing was changed",
-					MutationStatus:   MutationRefused,
-					ValidationKind:   final.kind(),
-					ValidationStatus: final.Status,
-					ValidationDetail: final.Detail}, nil
-			}
-			return result, err
-		}
-		if !outcome.Delivered {
-			// The write happened and the result is not what was authorized.
-			// No V3 metadata is attached: reporting a verified delivery over
-			// bytes that did not settle is the same false claim in a
-			// different field.
-			return result, nil
-		}
-		provenance := deliveryProvenanceFor(policy)
-		emitDeliveryProvenance(ctx, path, provenance, policy)
-		return withDeliveryProvenance(v3DeliveredResult(ctx, result, v3Result, code),
-			provenance), nil
+	if !outcome.Delivered {
+		// The write happened and the result is not what was authorized.
+		// No V3 metadata is attached: reporting a verified delivery over
+		// bytes that did not settle is the same false claim in a
+		// different field.
+		return result, nil
 	}
-
-	// Unreachable by an authorized candidate: authorization now requires a
-	// grant, and a grant requires declared output knowledge. Kept as the
-	// fail-closed floor rather than deleted, because a future policy that
-	// authorizes without minting would otherwise write bytes through a path
-	// nobody reviewed.
-	log.Printf("[write_file] authorized delivery reached the ungranted path for %s — writing the caller's content",
-		logPath(path))
-	return writeCallersContent()
+	provenance := deliveryProvenanceFor(write.policy)
+	emitDeliveryProvenance(write.ctx, write.path, provenance, write.policy)
+	return withDeliveryProvenance(v3DeliveredResult(write.ctx, result, write.v3Result, write.code),
+		provenance), nil
 }
 
 // originalForScope is the artifact as it stands before this call, or "" when
@@ -2896,7 +2939,7 @@ func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
 // licence to: WHERE, never whether.
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
-	req := v3EditRequest(path, content, ctx)
+	req := v3Request(path, content, ctx)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming
@@ -2907,7 +2950,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		forwardV3EditStage(ctx, stage, detail, data)
+		forwardV3Stage(ctx, stage, detail, data)
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
@@ -2965,9 +3008,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	}, nil
 }
 
-// v3EditRequest is the V3 request for an edit: the caller's content as the
+// v3Request is the V3 request for a write or edit: the caller's content as the
 // baseline, and the other files this session read as its context.
-func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
+func v3Request(path, content string, ctx *AgentContext) V3GenerateRequest {
 	req := V3GenerateRequest{
 		FilePath:     path,
 		BaselineCode: content,
@@ -2998,24 +3041,29 @@ func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
 	return req
 }
 
-// forwardV3EditStage hands one V3 progress event of an edit to the client, as
-// the event the client renders it with.
-func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
+// forwardV3Stage hands one V3 progress event to the client, as the event the
+// client renders it with.
+func forwardV3Stage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
 	if ctx.StreamFn == nil {
 		return
 	}
+	// Token deltas: a separate SSE event, so the client can render them as a
+	// streaming dim row, mirroring how the agent's own LLM tokens are shown.
 	if stage == "token" {
 		ctx.StreamFn("v3_token", map[string]string{"text": detail})
 		return
 	}
-	// Reasoning deltas from V3's LLM calls (see write_file path's
-	// matching branch). Same purpose: visible thinking stream
-	// during long PlanSearch / repair phases. v3_reasoning_token,
-	// not reasoning_token, so it targets the V3 row not the agent row.
+	// Reasoning deltas from V3's LLM calls (<think> stream). Forwarded as
+	// v3_reasoning_token, NOT plain reasoning_token, because the agent-loop's
+	// reasoning_token handler in the TUI targets the agent's LLM row, and V3
+	// calls run in a different lifecycle. Gives the /demo viewer something to
+	// watch during long PlanSearch / repair phases.
 	if stage == "reasoning_token" {
 		ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 		return
 	}
+	// LLM-call boundary markers. Match the chat protocol's
+	// llm_call_start/end shapes so the TUI can reuse handlers.
 	if stage == "llm_start" {
 		payload := map[string]interface{}{"detail": detail}
 		for k, v := range data {
@@ -3032,8 +3080,14 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 		ctx.StreamFn("v3_llm_end", payload)
 		return
 	}
+	// Dedicated structured events for the pipeline pane. The TUI renders each
+	// as its own row instead of a generic v3_progress string. data is the
+	// structured payload from V3's _emit; it passes through verbatim with
+	// `stage` and `detail` for fallback rendering.
 	eventName := v3StageToEvent(stage)
 	if eventName == "v3_progress" {
+		// Unknown / unmapped stage — emit the legacy text line only. Keeps
+		// third-party clients that haven't migrated to typed events working.
 		ctx.StreamFn("v3_progress", map[string]string{
 			"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
 		})

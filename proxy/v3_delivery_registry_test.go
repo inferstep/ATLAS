@@ -22,6 +22,11 @@ var v3DeliveryRouteSteps = map[string][]string{
 		"edit_route_delivery.go:collectEditCandidateEvidence",
 		"edit_route_delivery.go:decideEditCandidateDelivery",
 	},
+	"tools.go:writeFileWithV3": {
+		"tools.go:proposeWriteCandidate",
+		"tools.go:collectWriteCandidateEvidence",
+		"tools.go:decideWriteCandidateDelivery",
+	},
 }
 
 // routeOf names the route a call site answers for: the route whose step the
@@ -50,8 +55,8 @@ func TestEachRouteStepIsCalledOnlyByItsRoute(t *testing.T) {
 	}
 }
 
-// A route calls its steps in their order, and the shared delivery owner after
-// the last of them: no byte is delivered before the decision.
+// A route calls its steps in their order, and its own sink after the last of
+// them: no byte is delivered before the decision.
 func TestARouteCallsItsStepsInTheirOrder(t *testing.T) {
 	files := proxyFiles(t)
 	for route, steps := range v3DeliveryRouteSteps {
@@ -60,7 +65,11 @@ func TestARouteCallsItsStepsInTheirOrder(t *testing.T) {
 			_, name, _ := strings.Cut(step, ":")
 			want = append(want, name)
 		}
-		want = append(want, "deliverCandidateBytes")
+		for sink, caller := range v3DeliveryRouteSinkCallers[route] {
+			if caller == route {
+				want = append(want, sink)
+			}
+		}
 		if got := callsInOrder(files, route, want); !slices.Equal(got, want) {
 			t.Errorf("route %s calls %v, want %v in that order", route, got, want)
 		}
@@ -74,6 +83,10 @@ var v3DeliveryRouteSinkCallers = map[string]map[string]string{
 	"edit_route_delivery.go:deliverEditCandidate": {
 		"authorizeCandidateDelivery": "edit_route_delivery.go:decideEditCandidateDelivery",
 		"deliverCandidateBytes":      "edit_route_delivery.go:deliverEditCandidate",
+	},
+	"tools.go:writeFileWithV3": {
+		"authorizeCandidateDelivery": "tools.go:decideWriteCandidateDelivery",
+		"deliverAuthorizedCandidate": "tools.go:writeFileWithV3",
 	},
 }
 

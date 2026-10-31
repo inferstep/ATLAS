@@ -432,7 +432,9 @@ func TestEveryProductionConsumerOfProvenanceIsEnumerated(t *testing.T) {
 		"authorization_decision.go:decideAuthorization": true,
 		// The one site that computes the shadow decision beside the live one,
 		// and the one that asks the feasibility question before generation.
-		"tools.go:writeFileWithV3": true,
+		"tools.go:writeFileWithV3":               true,
+		"tools.go:collectWriteCandidateEvidence": true,
+		"tools.go:decideWriteCandidateDelivery":  true,
 		// The feasibility owner reads only its own closed input set.
 		"feasibility_decision.go:observeInvocationFeasibility": true,
 	}
@@ -455,7 +457,8 @@ func TestTheDeliveryGraphGainedNoCaller(t *testing.T) {
 		"v3_bridge.go:v3DeliveryAuthorized":          true,
 		"v3_bridge.go:EvidenceSupportsProvenanceFor": true,
 		"tools.go:proposedV3Candidate":               true,
-		"tools.go:writeFileWithV3":                   true,
+		"tools.go:proposeWriteCandidate":             true,
+		"tools.go:emitV3WriteStageEnd":               true,
 		"tools.go:improveContentWithV3":              true,
 	}
 	for _, fn := range deliveryDecisions {
@@ -577,18 +580,18 @@ func TestATypedRefusalNeverFallsBackToACandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	i := strings.Index(body, "if candidateProposed && !authorizedV3 {")
+	i := strings.Index(body, "func withdrawRefusedCandidate(")
 	if i < 0 {
 		t.Fatal("the policy refusal is no longer on the production path")
 	}
-	// The refusal branch restores the caller's own baseline. It must name
-	// baselineContent and must not reach for the candidate.
-	end := strings.Index(body[i:], "\n\t}\n")
+	// The refusal restores the caller's own baseline, through the one
+	// transition that does, and does not reach for the candidate.
+	end := strings.Index(body[i:], "\n}\n")
 	if end < 0 {
-		t.Fatal("could not bound the refusal branch")
+		t.Fatal("could not bound the refusal")
 	}
 	branch := body[i : i+end]
-	if !strings.Contains(branch, "revokeV3(") || !strings.Contains(branch, "baselineContent") {
+	if !strings.Contains(branch, "write.restoreBaseline(") {
 		t.Error("a typed refusal does not restore the caller's own content")
 	}
 	if strings.Contains(branch, "v3Result.Code") || strings.Contains(branch, "proposedV3Candidate") {
