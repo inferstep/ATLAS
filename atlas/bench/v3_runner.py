@@ -229,9 +229,6 @@ class LLMAdapter:
     hang).
     """
 
-    THINK_BUDGET_RATIO = 0.80
-    MIN_OUTPUT_CHARS = 50
-
     # Serialize generation by default to avoid concurrent multi-slot hangs.
     # Set ATLAS_LLM_PARALLEL=1 to disable the lock.
     _llm_lock = threading.Lock()
