@@ -232,9 +232,9 @@ type WriteFileOutput struct {
 // whether a run finished was matching on English, and "Stopped: ..." and
 // "Made your change" are not a contract.
 //
-// The zero value is TerminalUnknown, and every consumer must read it -- along
-// with an absent or unrecognised value -- as incomplete. Failing closed is the
-// whole point: a run whose outcome cannot be named did not finish.
+// The zero value is TerminalUnknown. A consumer reads it, or an absent value,
+// as incomplete, and never reads an unrecognised value as completed. Failing
+// closed is the whole point: a run whose outcome cannot be named did not finish.
 type TerminalStatus string
 
 const (

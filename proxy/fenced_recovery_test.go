@@ -671,7 +671,7 @@ func TestAfterFencedExhaustionACorrectArtifactIsVerifiedNotRewritten(t *testing.
 	if *subcalls > maxFencedFailuresPerPath {
 		t.Errorf("%d sub-generations after exhaustion", *subcalls)
 	}
-	if NormalizeTerminalStatus(terminal["status"]) == TerminalUnknown {
+	if !TerminalStatus(terminal["status"]).Classified() {
 		t.Error("no classified terminal")
 	}
 }

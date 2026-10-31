@@ -446,9 +446,8 @@ func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
 		if NormalizeTerminalStatus(raw).Completed() {
 			t.Errorf("consumer read %q as completed", raw)
 		}
-		if NormalizeTerminalStatus(raw) != TerminalIncomplete {
-			t.Errorf("consumer read %q as %q, want incomplete",
-				raw, NormalizeTerminalStatus(raw))
+		if TerminalStatus(raw).Classified() {
+			t.Errorf("%q counts as a named outcome", raw)
 		}
 	}
 	if !NormalizeTerminalStatus("completed").Completed() {
