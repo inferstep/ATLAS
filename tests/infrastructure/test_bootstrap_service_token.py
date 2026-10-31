@@ -14,6 +14,7 @@ def shell_function(name):
 
 FUNCTIONS = ("env_file_value", "set_env_file_value", "keep_or_set_env_file_value", "ensure_service_token")
 STUBS = """log_ok() { :; }
+log_warn() { echo "WARN $*"; }
 die() { echo "$*" >&2; exit 1; }
 run_as_target() { "$@"; }
 stat() { echo 1500; }
@@ -108,3 +109,20 @@ def test_without_sudo_the_stop_names_the_fix(tmp_path):
 
     assert done.returncode == 1
     assert "sudo chown -R 1500:1600 secrets" in done.stderr
+
+
+def test_a_root_login_is_warned_that_the_services_run_as_root(tmp_path):
+    (tmp_path / ".env").write_text("")
+
+    done = run_step(tmp_path, before="TARGET_UID=0\nTARGET_GID=0")
+
+    assert "WARN Installing from a root login" in done.stdout
+    assert "ATLAS_PROXY_UID=0\n" in (tmp_path / ".env").read_text()
+
+
+def test_a_normal_user_gets_no_root_warning(tmp_path):
+    (tmp_path / ".env").write_text("")
+
+    done = run_step(tmp_path)
+
+    assert "WARN" not in done.stdout

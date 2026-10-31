@@ -1179,6 +1179,9 @@ ensure_service_token() {
     keep_or_set_env_file_value ATLAS_PROXY_GID "$TARGET_GID"
     keep_or_set_env_file_value ATLAS_SANDBOX_UID "$TARGET_UID"
     keep_or_set_env_file_value ATLAS_SANDBOX_GID "$TARGET_GID"
+    if [[ "$TARGET_UID" == "0" ]]; then
+        log_warn "Installing from a root login: the services, the sandbox among them, run as root. Run as a normal user to avoid this."
+    fi
     # A stack started before there was a token left Docker's ./secrets, owned by root.
     if [[ -d secrets && "$(stat -c '%u' secrets)" != "$TARGET_UID" ]]; then
         $SUDO chown -R "$TARGET_UID:$TARGET_GID" secrets \
