@@ -342,9 +342,9 @@ Every session ends in exactly one terminal event, from one emitter. It carries
 the legacy `summary` unchanged plus an additive `status` — `completed`,
 `incomplete`, `stopped`, `timed_out`, `failed` — and a stable machine-readable
 `reason`. Consumers read absent, malformed or unrecognised as `incomplete`,
-never as completion (`NormalizeTerminalStatus` in Go, `terminal_status` in
-`atlas/events.py`). The broker's `done`/`stage_end` envelopes report the same
-outcome instead of asserting `success: true`.
+never as completion (`terminal_status` in `atlas/events.py`). The broker's
+`done`/`stage_end` envelopes report the same outcome instead of asserting
+`success: true`.
 
 For any status other than `completed`, the server owns the sentence as well as
 the field. The model's own account is passed through only where the completion

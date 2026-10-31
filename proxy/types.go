@@ -261,16 +261,6 @@ func (t TerminalStatus) Classified() bool {
 	return false
 }
 
-// NormalizeTerminalStatus is what a CONSUMER applies to whatever arrived.
-// Absent, malformed, unknown, or from a future producer all become incomplete,
-// never completed.
-func NormalizeTerminalStatus(raw string) TerminalStatus {
-	if s := TerminalStatus(raw); s.Classified() {
-		return s
-	}
-	return TerminalIncomplete
-}
-
 // AgentContext holds all state for a single agent loop execution.
 type AgentContext struct {
 	// Configuration

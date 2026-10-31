@@ -264,7 +264,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 #### 终端契约与会话预算
 
-每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。消费方把缺失、畸形或无法识别读作 `incomplete`，绝不读作完成（Go 侧 `NormalizeTerminalStatus`，`atlas/events.py` 侧 `terminal_status`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。消费方把缺失、畸形或无法识别读作 `incomplete`，绝不读作完成（`atlas/events.py` 侧 `terminal_status`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
 
 对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
 
