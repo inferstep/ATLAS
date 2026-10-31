@@ -152,18 +152,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## 🗺️ Roadmap
 
-**3.2.0** ([milestone](https://github.com/inferstep/ATLAS/milestone/2)) - make "done" mean what it says, and ship the `dev` line.
-- Verification: close the gaps between "completed" and what was verified ([#330](https://github.com/inferstep/ATLAS/issues/330)), and count a guard's refusal as a failure ([#327](https://github.com/inferstep/ATLAS/issues/327)).
-- Safety: harden the sandbox and the first install ([#384](https://github.com/inferstep/ATLAS/issues/384), [#410](https://github.com/inferstep/ATLAS/issues/410), [#483](https://github.com/inferstep/ATLAS/issues/483)), and test the service token end to end ([#212](https://github.com/inferstep/ATLAS/issues/212)), on K3s too ([#697](https://github.com/inferstep/ATLAS/issues/697)).
-- IDEs: the VS Code extension, in Preview.
-- Release: a release candidate tested for at least three days ([#196](https://github.com/inferstep/ATLAS/issues/196)), with signatures and build attestations ([#252](https://github.com/inferstep/ATLAS/issues/252), [#361](https://github.com/inferstep/ATLAS/issues/361)).
-
-**Backlog / help wanted**
-- Hardware: ARM64 multi-arch builds ([#115](https://github.com/inferstep/ATLAS/issues/115)), multi-GPU for larger models ([#34](https://github.com/inferstep/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27)).
-- Tooling: JetBrains plugin ([#35](https://github.com/inferstep/ATLAS/issues/35)).
-- Deployment: ROCm on K3s / Kubernetes.
-- Research: reasoning with sampling ([#9](https://github.com/inferstep/ATLAS/issues/9)); rerun LiveCodeBench with its hidden tests ([#28](https://github.com/inferstep/ATLAS/issues/28)).
-- Models: automated HuggingFace submission ([#102](https://github.com/inferstep/ATLAS/issues/102)); model-agnostic backends ([#66](https://github.com/inferstep/ATLAS/issues/66)).
+What is planned and in progress lives on the [ATLAS Roadmap board](https://github.com/orgs/inferstep/projects/1).
 
 ---
 
