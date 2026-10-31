@@ -526,6 +526,7 @@ def _sigkill_group(pgid: int) -> None:
     try:
         os.killpg(pgid, signal.SIGKILL)
     except OSError:
+        # The group is already gone.
         pass
 
 
