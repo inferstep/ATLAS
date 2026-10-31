@@ -77,10 +77,7 @@ from atlas import compose as compose_config
 
 @dataclass(frozen=True)
 class Model:
-    """A known model entry. Field names preserve the PC-055.2
-    ModelRecommendation contract (model_file/model_display/model_size_gb)
-    so the back-compat shim is a trivial re-export.
-    """
+    """A known model entry."""
     name: str                      # registry key, what `atlas model install` takes
     tier: str                      # 'cpu'|'small'|'medium'|'large'|'xlarge'
     model_file: str                # gguf filename — matches ATLAS_MODEL_FILE

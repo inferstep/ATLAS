@@ -848,12 +848,10 @@ def _print_tier_card(t: TierProfile, p: Optional[Probe], color: bool) -> None:
     _safe_print()
     _safe_print(f"  {BOLD}Recommended ATLAS settings:{RESET}" if color
                 else "  Recommended ATLAS settings:")
-    # PC-055.2: model lookup lives in model_recommendations (now a shim
-    # over model_registry). PC-056 added lens_status — surface it here
-    # so users see the warning before committing to install.
+    # Surfaced here so users see the lens warning before committing to install.
     rec = model_registry.for_tier(t.tier)
     if rec is not None:
-        lens = getattr(rec, "lens_status", None)  # tolerate older shim
+        lens = rec.lens_status
         if lens == "supported":
             lens_marker = (f"{GREEN}[Lens supported]{RESET}" if color
                            else "[Lens supported]")
