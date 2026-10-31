@@ -146,7 +146,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_REPO_URL=https://...` | 대체 저장소 URL |
 | `ATLAS_GO_VERSION=1.26.10` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.10+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
 
-**왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남으며, 같은 머신의 여러 사용자가 하나의 설치를 공유할 수 있기 때문입니다. 홈 디렉토리에 설치하고 싶다면:
+**왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남기 때문입니다. 설치는 한 사용자가 소유하며, 서비스 토큰은 그 사용자만 사용합니다. 홈 디렉토리에 설치하고 싶다면:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \

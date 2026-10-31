@@ -145,7 +145,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_REPO_URL=https://...` | 替代的仓库 URL |
 | `ATLAS_GO_VERSION=1.26.10` | 为构建 TUI 安装的 Go 工具链版本（TUI 需要 1.26.10+；已安装的更老工具链会自动拉取它） |
 
-**为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及，还能让同一台机器上的多个用户共享一份安装。如果你更希望装进自己的家目录：
+**为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及。一份安装只属于一个用户：服务令牌仅归该用户所有。如果你更希望装进自己的家目录：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \

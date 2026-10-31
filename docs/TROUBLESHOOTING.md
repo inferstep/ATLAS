@@ -857,7 +857,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **Fix:**
 1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    The pooled norm should land in the low hundreds (~100-150 for the

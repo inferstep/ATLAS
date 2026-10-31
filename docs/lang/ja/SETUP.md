@@ -138,7 +138,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_REPO_URL=https://...` | 別のリポジトリ URL |
 | `ATLAS_GO_VERSION=1.26.10` | TUI ビルド用にインストールされる Go ツールチェーンのバージョン（TUI には 1.26.10+ が必要。より古いインストール済みツールチェーンは自動で取得します） |
 
-**なぜ `/opt/atlas` なのか?** システム全体で使うサードパーティソフトウェアの標準的な FHS プレフィックスであり、`$HOME` のクリーンアップを生き残り、同じマシンの複数ユーザーが 1 つのインストールを共有できるためです。ホームディレクトリに置きたい場合は:
+**なぜ `/opt/atlas` なのか?** システム全体で使うサードパーティソフトウェアの標準的な FHS プレフィックスであり、`$HOME` のクリーンアップを生き残るためです。インストールを所有するユーザーは 1 人で、サービストークンはそのユーザー専用です。ホームディレクトリに置きたい場合は:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
