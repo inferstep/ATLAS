@@ -255,10 +255,7 @@ func structuralProjectContext(ctx *AgentContext, path string) map[string]string 
 		if strings.ToLower(filepath.Ext(r)) != ".py" {
 			return
 		}
-		if len(c) > 4000 {
-			c = c[:4000] + "\n... (truncated)"
-		}
-		rel[r] = c
+		rel[r] = contextEntry(c, 4000)
 	}
 	for p, c := range ctx.SnapshotFilesRead() {
 		addContext(p, c)

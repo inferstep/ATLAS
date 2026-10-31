@@ -329,7 +329,7 @@ func writeFileTool() *ToolDef {
 				return refusal, nil
 			}
 
-			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
+			// Stub detection. Reject one-heading or to-do-marker
 			// placeholder writes that pass syntactic gates but ship the
 			// minimum content humanly possible. The model's lazy-completion
 			// failure mode is to write 8-line stubs and call it done; this
@@ -1073,6 +1073,9 @@ func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolRes
 	return res, nil
 }
 
+// atomicTempSuffix names the temp file every atomic write renames over its target.
+const atomicTempSuffix = ".atlas.tmp"
+
 // atomicReplaceFile is the write-then-rename of the mutating tools as one
 // primitive (edit_file and structural_edit still inline it). A reader of the
 // target either sees the old bytes or the new ones, never a partial file, and
@@ -1081,7 +1084,7 @@ func atomicReplaceFile(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("cannot create parent dir for %s: %w", path, err)
 	}
-	tmpPath := path + ".atlas.tmp"
+	tmpPath := path + atomicTempSuffix
 	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
 		return fmt.Errorf("cannot write %s: %w", path, err)
 	}
@@ -1187,11 +1190,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 			if relPath == "" {
 				relPath = p
 			}
-			// Truncate large files in context to save tokens
-			if len(content) > 4000 {
-				content = content[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[relPath] = content
+			req.ProjectContext[relPath] = contextEntry(content, 4000)
 		}
 	}
 
@@ -1211,14 +1210,10 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		if rerr != nil {
 			continue
 		}
-		content := string(data)
-		if len(content) > 4000 {
-			content = content[:4000] + "\n... (truncated)"
-		}
 		if req.ProjectContext == nil {
 			req.ProjectContext = make(map[string]string)
 		}
-		req.ProjectContext[rel] = content
+		req.ProjectContext[rel] = contextEntry(string(data), 4000)
 	}
 
 	// Add project info if available
@@ -2399,7 +2394,7 @@ func editFileTool() *ToolDef {
 			logMandatoryChecks(ctx, "edit_file", input.Path, "")
 
 			// Atomic write
-			tmpPath := path + ".atlas.tmp"
+			tmpPath := path + atomicTempSuffix
 			if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
 				return nil, editWriteFailure(path,
 					fmt.Errorf("cannot write %s: %w", input.Path, err), observed)
@@ -2744,7 +2739,7 @@ func structuralEditTool() *ToolDef {
 			logMandatoryChecks(ctx, "structural_edit", input.Path, "")
 
 			// Atomic write — same pattern as edit_file/write_file.
-			tmpPath := path + ".atlas.tmp"
+			tmpPath := path + atomicTempSuffix
 			if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
 				return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot write %s: %w", input.Path, err))
 			}
@@ -2993,10 +2988,7 @@ func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
 			if rel == "" {
 				rel = p
 			}
-			if len(c) > 4000 {
-				c = c[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[rel] = c
+			req.ProjectContext[rel] = contextEntry(c, 4000)
 		}
 	}
 	if ctx.Project != nil {
@@ -3057,8 +3049,64 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 	ctx.StreamFn(eventName, payload)
 }
 
-// findActualString searches for oldStr in content, handling quote normalization.
-// Returns the actual string found in content (may differ in quote style).
+// closestLineHint finds the file line most similar to the first
+// non-blank line of a missed old_str and formats it (with its line
+// number) for inclusion in the edit_file mismatch error. Similarity is
+// shared-token count — crude, but enough to map a from-memory paraphrase
+// like `item = items[id + 1]` onto the real
+// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
+// minimal overlap bar (so unrelated guesses don't get a misleading
+// anchor).
+func closestLineHint(content, oldStr string) string {
+	probeToks := identifierTokens(firstNonBlankLine(oldStr))
+	lines := strings.Split(content, "\n")
+	bestIdx, bestScore := lineSharingMostTokens(lines, probeToks)
+	// Require at least 2 shared identifiers and half the probe's tokens —
+	// below that the "closest" line is likely unrelated.
+	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
+		return ""
+	}
+	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
+		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
+}
+
+func firstNonBlankLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func identifierTokens(line string) map[string]bool {
+	tokens := map[string]bool{}
+	for _, token := range strings.FieldsFunc(line, func(r rune) bool {
+		return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+	}) {
+		tokens[token] = true
+	}
+	return tokens
+}
+
+// lineSharingMostTokens returns the first line with the highest count of
+// tokens in common with probeToks, or -1 when no line shares one.
+func lineSharingMostTokens(lines []string, probeToks map[string]bool) (bestIdx, bestScore int) {
+	bestIdx = -1
+	for i, line := range lines {
+		score := 0
+		for token := range identifierTokens(line) {
+			if probeToks[token] {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore, bestIdx = score, i
+		}
+	}
+	return bestIdx, bestScore
+}
+
 // findFuzzyLineMatch rescues an old_str whose only error is per-line
 // whitespace drift (indentation width, tabs vs spaces, trailing spaces) —
 // the dominant edit_file failure mode for small models. It compares old_str
@@ -3072,63 +3120,6 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 // non-whitespace content (would match any blank run). Content differences
 // beyond whitespace (renamed tokens, changed quotes) do NOT match — those
 // are semantic and must fail.
-// closestLineHint finds the file line most similar to the first
-// non-blank line of a missed old_str and formats it (with its line
-// number) for inclusion in the edit_file mismatch error. Similarity is
-// shared-token count — crude, but enough to map a from-memory paraphrase
-// like `item = items[id + 1]` onto the real
-// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
-// minimal overlap bar (so unrelated guesses don't get a misleading
-// anchor).
-func closestLineHint(content, oldStr string) string {
-	var probe string
-	for _, l := range strings.Split(oldStr, "\n") {
-		if strings.TrimSpace(l) != "" {
-			probe = l
-			break
-		}
-	}
-	if probe == "" {
-		return ""
-	}
-	tokenize := func(s string) map[string]bool {
-		out := map[string]bool{}
-		for _, t := range strings.FieldsFunc(s, func(r rune) bool {
-			return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
-		}) {
-			out[t] = true
-		}
-		return out
-	}
-	probeToks := tokenize(probe)
-	if len(probeToks) == 0 {
-		return ""
-	}
-	bestScore, bestIdx := 0, -1
-	lines := strings.Split(content, "\n")
-	for i, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		score := 0
-		for t := range tokenize(l) {
-			if probeToks[t] {
-				score++
-			}
-		}
-		if score > bestScore {
-			bestScore, bestIdx = score, i
-		}
-	}
-	// Require at least 2 shared identifiers and half the probe's tokens —
-	// below that the "closest" line is likely unrelated.
-	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
-		return ""
-	}
-	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
-		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
-}
-
 func findFuzzyLineMatch(content, oldStr string) (string, bool) {
 	fileLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldStr, "\n")
@@ -3136,52 +3127,55 @@ func findFuzzyLineMatch(content, oldStr string) (string, bool) {
 	if len(oldLines) > 1 && strings.TrimSpace(oldLines[len(oldLines)-1]) == "" {
 		oldLines = oldLines[:len(oldLines)-1]
 	}
-	if len(oldLines) == 0 {
-		return "", false
-	}
-	strip := func(ls []string) []string {
-		out := make([]string, len(ls))
-		nonEmpty := false
-		for i, l := range ls {
-			out[i] = strings.TrimSpace(l)
-			if out[i] != "" {
-				nonEmpty = true
-			}
-		}
-		if !nonEmpty {
-			return nil // all-whitespace target: refuse
-		}
-		return out
-	}
-	want := strip(oldLines)
+	want := trimmedLines(oldLines)
 	if want == nil {
 		return "", false
 	}
 	n := len(want)
 	matchStart := -1
-	matches := 0
 	for i := 0; i+n <= len(fileLines); i++ {
-		ok := true
-		for j := 0; j < n; j++ {
-			if strings.TrimSpace(fileLines[i+j]) != want[j] {
-				ok = false
-				break
-			}
+		if !trimmedLinesMatchAt(fileLines, i, want) {
+			continue
 		}
-		if ok {
-			matches++
-			matchStart = i
-			if matches > 1 {
-				return "", false // ambiguous — fail safe
-			}
+		if matchStart >= 0 {
+			return "", false // ambiguous — fail safe
 		}
+		matchStart = i
 	}
-	if matches != 1 {
+	if matchStart < 0 {
 		return "", false
 	}
 	return strings.Join(fileLines[matchStart:matchStart+n], "\n"), true
 }
 
+// trimmedLines trims each line. It returns nil when every line is blank, so an
+// all-whitespace target is refused.
+func trimmedLines(lines []string) []string {
+	trimmed := make([]string, len(lines))
+	nonEmpty := false
+	for i, line := range lines {
+		trimmed[i] = strings.TrimSpace(line)
+		if trimmed[i] != "" {
+			nonEmpty = true
+		}
+	}
+	if !nonEmpty {
+		return nil
+	}
+	return trimmed
+}
+
+func trimmedLinesMatchAt(fileLines []string, start int, want []string) bool {
+	for offset, line := range want {
+		if strings.TrimSpace(fileLines[start+offset]) != line {
+			return false
+		}
+	}
+	return true
+}
+
+// findActualString searches for oldStr in content, handling quote normalization.
+// Returns the actual string found in content (may differ in quote style).
 func findActualString(content, oldStr string) string {
 	// Direct match first
 	if strings.Contains(content, oldStr) {
