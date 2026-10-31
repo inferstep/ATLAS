@@ -453,7 +453,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 4 Dockerfiles agree on LLAMA_CPP_REV=$SHA"
+          echo "All 3 Dockerfiles agree on LLAMA_CPP_REV=$SHA"
 
       - name: fetch pinned llama.cpp
         # Mirror the production fetch pattern: init + shallow-fetch a
