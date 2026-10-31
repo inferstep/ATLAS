@@ -10,16 +10,15 @@
   "proxy/agent.go:runAgentLoop": 152,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/gates.go:assetLintFindingsFor": 118,
-  "proxy/tools.go:deleteFileTool": 118,
-  "proxy/tools.go:editFileTool": 429,
-  "proxy/tools.go:structuralEditTool": 368,
-  "proxy/tools.go:writeFileWithV3": 828,
+  "proxy/tools.go:editFileTool": 426,
+  "proxy/tools.go:structuralEditTool": 355,
+  "proxy/tools.go:writeFileWithV3": 816,
   "sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "proxy/agent.go": 10971,
-  "proxy/tools.go": 6913,
+  "proxy/agent.go": 10818,
+  "proxy/tools.go": 6888,
   "sandbox/executor_server.py": 2059,
-  "v3-service/pipeline.py": 2764
+  "v3-service/pipeline.py": 2736
  }
 }

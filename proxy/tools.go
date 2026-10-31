@@ -62,6 +62,11 @@ import (
 // Tool registry
 // ---------------------------------------------------------------------------
 
+const (
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+)
+
 var toolRegistry = map[string]*ToolDef{}
 
 func init() {
@@ -532,37 +537,42 @@ func outlineFileTool() *ToolDef {
 
 			ctx.RecordFileRead(path, src)
 
-			var sb strings.Builder
-			fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
-				input.Path, totalLines, len(syms), engine)
-			if len(syms) == 0 {
-				sb.WriteString("(no top-level functions/classes found — read_file to view it directly)\n")
-			}
-			hasGraph := false
-			for _, s := range syms {
-				fmt.Fprintf(&sb, "L%d-%d\t%s %s\n", s.StartLine, s.EndLine, s.Kind, s.Name)
-				if len(s.Calls) > 0 {
-					fmt.Fprintf(&sb, "\tcalls: %s\n", strings.Join(s.Calls, ", "))
-					hasGraph = true
-				}
-				if len(s.CalledBy) > 0 {
-					fmt.Fprintf(&sb, "\tcalled by: %s\n", strings.Join(s.CalledBy, ", "))
-					hasGraph = true
-				}
-			}
-			if hasGraph {
-				// Steer the model to use the structure for localization — the
-				// #39 point: a wrong value a function returns may come from a
-				// function it calls, not from the function itself.
-				sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
-			}
-			sb.WriteString(embeddedRegionNote(regions))
-			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0,
-				EmbeddedRegions: regions, Outline: sb.String()}
+			out := OutlineOutput{Symbols: syms, Supported: len(syms) > 0, EmbeddedRegions: regions,
+				Outline: outlineText(input.Path, totalLines, syms, engine) + embeddedRegionNote(regions)}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// outlineText renders the outline the model reads: one line per symbol, with
+// its call edges when V3 found any.
+func outlineText(path string, totalLines int, syms []OutlineSymbol, engine string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s — %d lines, %d symbols (%s)\n",
+		path, totalLines, len(syms), engine)
+	if len(syms) == 0 {
+		sb.WriteString("(no top-level functions/classes found — read_file to view it directly)\n")
+	}
+	hasGraph := false
+	for _, s := range syms {
+		fmt.Fprintf(&sb, "L%d-%d\t%s %s\n", s.StartLine, s.EndLine, s.Kind, s.Name)
+		if len(s.Calls) > 0 {
+			fmt.Fprintf(&sb, "\tcalls: %s\n", strings.Join(s.Calls, ", "))
+			hasGraph = true
+		}
+		if len(s.CalledBy) > 0 {
+			fmt.Fprintf(&sb, "\tcalled by: %s\n", strings.Join(s.CalledBy, ", "))
+			hasGraph = true
+		}
+	}
+	if hasGraph {
+		// Steer the model to use the structure for localization — the
+		// #39 point: a wrong value a function returns may come from a
+		// function it calls, not from the function itself.
+		sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
+	}
+	return sb.String()
 }
 
 // callGraphFooter renders a compact intra-file call-graph summary for a
@@ -575,12 +585,12 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 		return ""
 	}
 	var sb strings.Builder
-	any := false
+	hasEdges := false
 	for _, s := range syms {
 		if len(s.Calls) == 0 && len(s.CalledBy) == 0 {
 			continue
 		}
-		if !any {
+		if !hasEdges {
 			// The footer is concatenated onto the file content the model
 			// reads, so without an explicit boundary it looks like the last
 			// lines of the file. Observed live: a model anchored edit_file's
@@ -591,7 +601,7 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 			sb.WriteString("The lines below are ATLAS analysis, NOT part of the file. " +
 				"Never copy them into old_str.\n")
 			sb.WriteString("## Call graph (within this file)\n")
-			any = true
+			hasEdges = true
 		}
 		sb.WriteString("- " + s.Name)
 		if len(s.Calls) > 0 {
@@ -602,7 +612,7 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 		}
 		sb.WriteString("\n")
 	}
-	if any {
+	if hasEdges {
 		sb.WriteString("If a function returns a wrong value, the bug may be in a function it calls — follow the edges to the root cause before editing.\n")
 	}
 	return sb.String()
@@ -620,7 +630,7 @@ func outlineViaV3(ctx *AgentContext, path, source string) ([]OutlineSymbol, bool
 	if err != nil {
 		return nil, false, nil
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, contentTypeJSON)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, false, nil
@@ -795,8 +805,7 @@ func searchReadsEntry(input SearchFilesInput, d fs.DirEntry, walkErr error) (rea
 		return false, false // skip unreadable dirs
 	}
 	if d.IsDir() {
-		base := d.Name()
-		if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
+		if isUnsearchedDir(d.Name()) {
 			return false, true
 		}
 		return false, false
@@ -1553,14 +1562,14 @@ func readFileByteCap() int {
 	// budget and re-introduce the overflow this cap exists to prevent
 	// (#147 review finding #6). 2 KB is a sane minimum and, since the token
 	// budget floors at 4000, never actually raises the derived value.
-	cap := perSlot / 2
-	if cap < 2_000 {
-		cap = 2_000
+	byteCap := perSlot / 2
+	if byteCap < 2_000 {
+		byteCap = 2_000
 	}
-	if cap > 200_000 {
-		cap = 200_000
+	if byteCap > 200_000 {
+		byteCap = 200_000
 	}
-	return cap
+	return byteCap
 }
 
 var maxReadFileBytes = readFileByteCap()
@@ -3328,7 +3337,7 @@ func structuralEditTool() *ToolDef {
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: build request: %w", err))
 			}
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(headerContentType, contentTypeJSON)
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return nil, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
@@ -4526,83 +4535,89 @@ func deleteFileTool() *ToolDef {
 					return refusedNoCheck(fmt.Sprintf("directory not empty: %s (%d entries) — delete_file only removes files or empty directories", input.Path, len(entries))), nil
 				}
 			}
-			// The approval was granted against an inspected object. Re-inspect
-			// now, next to the removal, and compare: bytes, type, link text,
-			// emptiness. If any of it moved while the prompt was on screen,
-			// the user's answer was about a different thing and is spent
-			// rather than reused. A fresh tool call can ask again.
-			//
-			// This narrows the window between check and remove; it does not
-			// close it. There is no portable way to remove a directory entry
-			// conditional on the inode behind it, so a change landing inside
-			// that window is still possible. What is ruled out is honouring an
-			// approval for bytes that were already different when the user
-			// answered.
-			// The approved route.
-			if userApproved {
-				// The re-inspection's own reference is needed only for the
-				// comparison and is released with the attempt.
-				now, refusal := inspectDeleteTarget(ctx, rawInput)
-				defer now.release()
-				if refusal != "" || !approved.identityMatches(now) {
-					log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(input.Path))
-					return refusedNoCheck(fmt.Sprintf(
-						"%s changed after you were asked about it, so the approval no longer "+
-							"describes what is on disk and nothing was deleted. Ask again if "+
-							"you still want it removed.", input.Path)), nil
-				}
-				// Room to account for it, reserved before anything is
-				// removed: a destructive mutation this session could not
-				// track is worse than one it declines.
-				if !reserveDeletionSlot(ctx, path) {
-					log.Printf("[delete_file] no room to track %s — refusing", logPath(input.Path))
-					return refusedNoCheck(fmt.Sprintf(
-						"this session is already tracking as many removals as it can account "+
-							"for, so %s was not deleted.", input.Path)), nil
-				}
-			}
-			if rmErr := os.Remove(path); rmErr != nil {
-				// The removal was attempted and the entry may or may not
-				// still be there, so the producer says failed, not none.
-				return &ToolResult{
-					Success:          false,
-					Error:            fmt.Sprintf("delete_file: %v", rmErr),
-					MutationStatus:   MutationFailed,
-					ValidationKind:   ValidationKindNone,
-					ValidationStatus: ValidationNotApplicable,
-				}, nil
-			}
-
-			out := DeleteFileOutput{Deleted: true}
-			outBytes, _ := json.Marshal(out)
-			// The approval, the revalidation and the successful removal are
-			// all true at this instant, so they are recorded together rather
-			// than reconstructed later from separate booleans. Absence and the
-			// tombstone are the ledger's to confirm, and it promotes this.
-			if userApproved {
-				noteDeletionAttempt(ctx, permCallIDFor(ctx), approved)
-			}
-
-			// Removal demonstrated. A delete validates nothing: there are no
-			// bytes left to have an opinion about.
-			//
-			// This used to hand the loop a sentinel that ended the session on
-			// the spot, so the model could not narrate after a destructive
-			// operation. It also ended the TASK. Asked to delete a.py and
-			// write report.py, a run that happened to delete first stopped
-			// before report.py was ever attempted, and the outcome turned on
-			// nothing but which tool the model reached for first.
-			//
-			// The delete now returns like any other call. It still cannot
-			// authorise a completion -- the tombstone rule at the real
-			// terminal is unchanged and still fail-closed -- but the run gets
-			// to finish what it was asked to do and be judged on all of it.
-			return &ToolResult{Success: true, Data: outBytes,
-				MutationStatus:   MutationApplied,
-				ValidationKind:   ValidationKindNone,
-				ValidationStatus: ValidationNotApplicable}, nil
+			return removeDeleteTarget(ctx, rawInput, input.Path, path, approved, userApproved), nil
 		},
 	}
+}
+
+// removeDeleteTarget removes what delete_file found, checking an approval again
+// right next to the removal.
+func removeDeleteTarget(ctx *AgentContext, rawInput json.RawMessage, shownPath, path string, approved deleteTarget, userApproved bool) *ToolResult {
+	// The approval was granted against an inspected object. Re-inspect
+	// now, next to the removal, and compare: bytes, type, link text,
+	// emptiness. If any of it moved while the prompt was on screen,
+	// the user's answer was about a different thing and is spent
+	// rather than reused. A fresh tool call can ask again.
+	//
+	// This narrows the window between check and remove; it does not
+	// close it. There is no portable way to remove a directory entry
+	// conditional on the inode behind it, so a change landing inside
+	// that window is still possible. What is ruled out is honouring an
+	// approval for bytes that were already different when the user
+	// answered.
+	// The approved route.
+	if userApproved {
+		// The re-inspection's own reference is needed only for the
+		// comparison and is released with the attempt.
+		now, refusal := inspectDeleteTarget(ctx, rawInput)
+		defer now.release()
+		if refusal != "" || !approved.identityMatches(now) {
+			log.Printf("[delete_file] approval is stale for %s — not deleting", logPath(shownPath))
+			return refusedNoCheck(fmt.Sprintf(
+				"%s changed after you were asked about it, so the approval no longer "+
+					"describes what is on disk and nothing was deleted. Ask again if "+
+					"you still want it removed.", shownPath))
+		}
+		// Room to account for it, reserved before anything is
+		// removed: a destructive mutation this session could not
+		// track is worse than one it declines.
+		if !reserveDeletionSlot(ctx, path) {
+			log.Printf("[delete_file] no room to track %s — refusing", logPath(shownPath))
+			return refusedNoCheck(fmt.Sprintf(
+				"this session is already tracking as many removals as it can account "+
+					"for, so %s was not deleted.", shownPath))
+		}
+	}
+	if rmErr := os.Remove(path); rmErr != nil {
+		// The removal was attempted and the entry may or may not
+		// still be there, so the producer says failed, not none.
+		return &ToolResult{
+			Success:          false,
+			Error:            fmt.Sprintf("delete_file: %v", rmErr),
+			MutationStatus:   MutationFailed,
+			ValidationKind:   ValidationKindNone,
+			ValidationStatus: ValidationNotApplicable,
+		}
+	}
+
+	out := DeleteFileOutput{Deleted: true}
+	outBytes, _ := json.Marshal(out)
+	// The approval, the revalidation and the successful removal are
+	// all true at this instant, so they are recorded together rather
+	// than reconstructed later from separate booleans. Absence and the
+	// tombstone are the ledger's to confirm, and it promotes this.
+	if userApproved {
+		noteDeletionAttempt(ctx, permCallIDFor(ctx), approved)
+	}
+
+	// Removal demonstrated. A delete validates nothing: there are no
+	// bytes left to have an opinion about.
+	//
+	// This used to hand the loop a sentinel that ended the session on
+	// the spot, so the model could not narrate after a destructive
+	// operation. It also ended the TASK. Asked to delete a.py and
+	// write report.py, a run that happened to delete first stopped
+	// before report.py was ever attempted, and the outcome turned on
+	// nothing but which tool the model reached for first.
+	//
+	// The delete now returns like any other call. It still cannot
+	// authorise a completion -- the tombstone rule at the real
+	// terminal is unchanged and still fail-closed -- but the run gets
+	// to finish what it was asked to do and be judged on all of it.
+	return &ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   MutationApplied,
+		ValidationKind:   ValidationKindNone,
+		ValidationStatus: ValidationNotApplicable}
 }
 
 // ---------------------------------------------------------------------------
@@ -4642,10 +4657,7 @@ func moveFileTool() *ToolDef {
 			// so the model's mental model stays in project-relative terms.
 			relDest := input.Destination
 			dst := resolveAgentPath(ctx, input.Destination)
-			if info, err := os.Stat(dst); err == nil && info.IsDir() {
-				dst = filepath.Join(dst, filepath.Base(src))
-				relDest = filepath.Join(input.Destination, filepath.Base(src))
-			} else if strings.HasSuffix(input.Destination, "/") {
+			if info, err := os.Stat(dst); (err == nil && info.IsDir()) || strings.HasSuffix(input.Destination, "/") {
 				dst = filepath.Join(dst, filepath.Base(src))
 				relDest = filepath.Join(input.Destination, filepath.Base(src))
 			}
@@ -4780,33 +4792,7 @@ func findFileTool() *ToolDef {
 				return nil, fmt.Errorf("invalid regex: %w", err)
 			}
 
-			var matches []FindFileMatch
-			maxMatches := 200
-
-			err = filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
-				if walkErr != nil {
-					return nil
-				}
-				if d.IsDir() {
-					base := d.Name()
-					if base == ".git" || base == "node_modules" || base == "__pycache__" || base == ".next" || base == "target" {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				relPath, _ := filepath.Rel(ctx.WorkingDir, path)
-				if relPath == "" {
-					relPath = path
-				}
-				if re.MatchString(d.Name()) || re.MatchString(relPath) {
-					matches = append(matches, FindFileMatch{Path: relPath, Name: d.Name()})
-					if len(matches) >= maxMatches {
-						return filepath.SkipAll
-					}
-				}
-				return nil
-			})
-
+			matches, err := findFilesByName(ctx, searchPath, re)
 			if err != nil && len(matches) == 0 {
 				return nil, fmt.Errorf("find error: %w", err)
 			}
@@ -4814,12 +4800,49 @@ func findFileTool() *ToolDef {
 			out := FindFileOutput{
 				Matches:    matches,
 				TotalCount: len(matches),
-				Truncated:  len(matches) >= maxMatches,
+				Truncated:  len(matches) >= maxFindFileMatches,
 			}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
 	}
+}
+
+// maxFindFileMatches caps one find_file answer.
+const maxFindFileMatches = 200
+
+// findFilesByName walks searchPath for files whose name or workspace-relative
+// path matches re, up to maxFindFileMatches.
+func findFilesByName(ctx *AgentContext, searchPath string, re *regexp.Regexp) ([]FindFileMatch, error) {
+	var matches []FindFileMatch
+	err := filepath.WalkDir(searchPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if isUnsearchedDir(d.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		relPath, _ := filepath.Rel(ctx.WorkingDir, path)
+		if relPath == "" {
+			relPath = path
+		}
+		if re.MatchString(d.Name()) || re.MatchString(relPath) {
+			matches = append(matches, FindFileMatch{Path: relPath, Name: d.Name()})
+			if len(matches) >= maxFindFileMatches {
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+	return matches, err
+}
+
+// isUnsearchedDir names the folders search_files and find_file never enter.
+func isUnsearchedDir(name string) bool {
+	return name == ".git" || name == "node_modules" || name == "__pycache__" || name == ".next" || name == "target"
 }
 
 // ---------------------------------------------------------------------------
@@ -5010,7 +5033,7 @@ func runViaSandbox(ctx *AgentContext, command, cwd string, timeoutSec int) (RunC
 	if err != nil {
 		return RunCommandOutput{}, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(headerContentType, contentTypeJSON)
 	client := &http.Client{Timeout: time.Duration(timeoutSec+30) * time.Second}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -5277,7 +5300,7 @@ func cyclomaticComplexity(ctx *AgentContext, path, source string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, contentTypeJSON)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, false
@@ -5681,36 +5704,12 @@ func runBackgroundTool() *ToolDef {
 				return nil, fmt.Errorf("invalid input: %w", err)
 			}
 
-			// Trust gate: same contract as run_command — untrusted mode
-			// refuses all command execution, foreground or background.
-			if !ctx.TrustMode.commandsAllowed() {
-				return &ToolResult{Success: false, Error: untrustedRefusal}, nil
-			}
-
-			if strings.TrimSpace(input.Command) == "" {
-				return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}, nil
-			}
-			if reason := validateShellCommand(input.Command); reason != "" {
-				return &ToolResult{Success: false, Error: reason}, nil
-			}
-			if ctx.VerifyOnHost {
-				return &ToolResult{
-					Success: false,
-					Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
-				}, nil
+			if refusal := backgroundRefusal(ctx, input); refusal != nil {
+				return refusal, nil
 			}
 			cwd := ctx.WorkingDir
 			if input.Cwd != "" {
 				cwd = resolveAgentPath(ctx, input.Cwd)
-			}
-			settleMs := 1500
-			if input.SettleMs != nil {
-				settleMs = *input.SettleMs
-				if settleMs < 0 {
-					settleMs = 0
-				} else if settleMs > 10000 {
-					settleMs = 10000
-				}
 			}
 			jobID, pid, err := sandboxStartBackground(ctx, input.Command, cwd)
 			if err != nil {
@@ -5718,7 +5717,7 @@ func runBackgroundTool() *ToolDef {
 			}
 			// Settle window — give the process time to bind a port, fail
 			// to import, etc., before we hand back to the model.
-			time.Sleep(time.Duration(settleMs) * time.Millisecond)
+			time.Sleep(settleWindow(input.SettleMs))
 			tail, _ := sandboxTailBackground(ctx, jobID, 50)
 			out := RunBackgroundOutput{
 				JobID:   jobID,
@@ -5730,16 +5729,7 @@ func runBackgroundTool() *ToolDef {
 			if !tail.Running {
 				out.ExitCode = tail.ExitCode
 			}
-			if ctx.BackgroundJobs == nil {
-				ctx.BackgroundJobs = make(map[string]string)
-			}
-			if tail.Running {
-				ctx.BackgroundJobs[jobID] = input.Command
-				if ctx.BackgroundJobStarted == nil {
-					ctx.BackgroundJobStarted = map[string]time.Time{}
-				}
-				ctx.BackgroundJobStarted[jobID] = time.Now()
-			}
+			trackBackgroundJob(ctx, jobID, input.Command, tail.Running)
 			outBytes, _ := json.Marshal(out)
 			// A job that has already exited non-zero did not start. Reporting
 			// that as a success is how the failure got lost: measured on
@@ -5755,6 +5745,54 @@ func runBackgroundTool() *ToolDef {
 			}
 			return &ToolResult{Success: true, Data: outBytes}, nil
 		},
+	}
+}
+
+// backgroundRefusal is the answer to a run_background call that must not start,
+// or nil.
+func backgroundRefusal(ctx *AgentContext, input RunBackgroundInput) *ToolResult {
+	// Trust gate: same contract as run_command — untrusted mode
+	// refuses all command execution, foreground or background.
+	if !ctx.TrustMode.commandsAllowed() {
+		return &ToolResult{Success: false, Error: untrustedRefusal}
+	}
+
+	if strings.TrimSpace(input.Command) == "" {
+		return &ToolResult{Success: false, Error: "run_background: command cannot be empty"}
+	}
+	if reason := validateShellCommand(input.Command); reason != "" {
+		return &ToolResult{Success: false, Error: reason}
+	}
+	if ctx.VerifyOnHost {
+		return &ToolResult{
+			Success: false,
+			Error:   "run_background is only available in sandbox mode (ATLAS_VERIFY_IN=sandbox). On the host, use `run_command` with `nohup ... &` and track the PID yourself.",
+		}
+	}
+	return nil
+}
+
+// settleWindow is the wait after a start: 1.5 s unless the call asks for
+// another, at most 10 s.
+func settleWindow(settleMs *int) time.Duration {
+	ms := 1500
+	if settleMs != nil {
+		ms = min(max(*settleMs, 0), 10000)
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// trackBackgroundJob remembers a job that is still running.
+func trackBackgroundJob(ctx *AgentContext, jobID, command string, running bool) {
+	if ctx.BackgroundJobs == nil {
+		ctx.BackgroundJobs = make(map[string]string)
+	}
+	if running {
+		ctx.BackgroundJobs[jobID] = command
+		if ctx.BackgroundJobStarted == nil {
+			ctx.BackgroundJobStarted = map[string]time.Time{}
+		}
+		ctx.BackgroundJobStarted[jobID] = time.Now()
 	}
 }
 
@@ -5834,7 +5872,7 @@ func sandboxStartBackground(ctx *AgentContext, command, cwd string) (string, int
 	if err != nil {
 		return "", 0, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, contentTypeJSON)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return "", 0, err
@@ -5904,7 +5942,7 @@ func sandboxStopBackground(ctx *AgentContext, jobID string) (StopBackgroundOutpu
 	if err != nil {
 		return StopBackgroundOutput{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerContentType, contentTypeJSON)
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return StopBackgroundOutput{}, err
@@ -6060,6 +6098,9 @@ func buildResponseFormat() interface{} {
 // descriptions and system prompt rules can be ignored by the model, but
 // the grammar physically cannot emit the banned tool name.
 func buildGBNFGrammarForTools(excluded []string) string {
+	// objectRuleEnd closes a rule whose value is one JSON object.
+	const objectRuleEnd = "\"}\"\n\n"
+
 	excludeSet := make(map[string]struct{}, len(excluded))
 	for _, name := range excluded {
 		excludeSet[name] = struct{}{}
@@ -6085,7 +6126,7 @@ func buildGBNFGrammarForTools(excluded []string) string {
 	sb.WriteString(`"\"type\"" ws ":" ws "\"tool_call\"" ws "," ws `)
 	sb.WriteString(`"\"name\"" ws ":" ws tool-name ws "," ws `)
 	sb.WriteString(`"\"args\"" ws ":" ws json-object ws `)
-	sb.WriteString("\"}\"\n\n")
+	sb.WriteString(objectRuleEnd)
 
 	// Tool name enum
 	sb.WriteString("tool-name ::= ")
@@ -6096,13 +6137,13 @@ func buildGBNFGrammarForTools(excluded []string) string {
 	sb.WriteString("text-response ::= \"{\" ws ")
 	sb.WriteString(`"\"type\"" ws ":" ws "\"text\"" ws "," ws `)
 	sb.WriteString(`"\"content\"" ws ":" ws json-string ws `)
-	sb.WriteString("\"}\"\n\n")
+	sb.WriteString(objectRuleEnd)
 
 	// Done response
 	sb.WriteString("done-response ::= \"{\" ws ")
 	sb.WriteString(`"\"type\"" ws ":" ws "\"done\"" ws "," ws `)
 	sb.WriteString(`"\"summary\"" ws ":" ws json-string ws `)
-	sb.WriteString("\"}\"\n\n")
+	sb.WriteString(objectRuleEnd)
 
 	// JSON primitives
 	sb.WriteString("json-object ::= \"{\" ws (json-pair (\",\" ws json-pair)*)? ws \"}\"\n")
