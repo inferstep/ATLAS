@@ -1,4 +1,6 @@
-from stages.llm_client import extract_code, extract_code_for_problem
+import pytest
+
+from stages.llm_client import extract_code, extract_code_for_problem, strip_reasoning_leak
 
 
 def test_extract_code_accepts_non_python_language_fence():
@@ -72,6 +74,15 @@ def test_inline_and_fenced_forms_share_bytes_only_when_the_bytes_agree():
 def test_extract_code_prose_before_a_fence_is_not_part_of_the_artifact():
     response = "Here is the file:\n```javascript\nconst x = 1;\n```\nThat should do it.\n"
     assert extract_code(response) == "const x = 1;\n"
+
+
+@pytest.mark.parametrize("response, expected", [
+    pytest.param("<think>plan</think>\n```python\nx = 1\n```", "```python\nx = 1\n```", id="closed"),
+    pytest.param("plan</think>\nx = 1\n", "x = 1\n", id="orphan-close-keeps-what-follows"),
+    pytest.param("x = 1\n<think>truncated", "x = 1\n", id="orphan-open-keeps-what-precedes"),
+])
+def test_a_leaked_reasoning_block_is_removed(response, expected):
+    assert strip_reasoning_leak(response) == expected
 
 
 def test_problem_extractor_prefers_requested_artifact_over_later_tests():

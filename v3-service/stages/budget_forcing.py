@@ -105,11 +105,6 @@ _SYSTEM_PROMPT_THINK = (
 
 
 # ---------------------------------------------------------------------------
-# Telemetry event
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Core functions (stateless, usable without class)
 # ---------------------------------------------------------------------------
 
@@ -244,7 +239,3 @@ class BudgetForcing:
         """Return the max token budget for a tier. Delegates to the
         module-level get_max_tokens()."""
         return get_max_tokens(tier)
-
-
-    # -- Private helpers ----------------------------------------------------
-

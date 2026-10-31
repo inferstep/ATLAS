@@ -163,10 +163,3 @@ def test_format_chatml(tier):
     # No /nothink directive and no <think> prefill: both were specific to one model family.
     assert "/nothink" not in chatml
     assert "<think>" not in chatml
-
-
-# ---------------------------------------------------------------------------
-# Telemetry
-# ---------------------------------------------------------------------------
-
-

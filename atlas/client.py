@@ -1,4 +1,4 @@
-"""HTTP client for llama-server and the sandbox executor. Pure urllib, no dependencies."""
+"""HTTP client for llama-server. Pure urllib, no dependencies."""
 
 import json
 import os
@@ -20,9 +20,6 @@ INFERENCE_URL = compose_config.service_url("llama")
 LENS_URL = (os.environ.get("ATLAS_LENS_URL")
             or os.environ.get("ATLAS_RAG_URL")
             or compose_config.service_url("lens"))
-
-
-# --- Health checks ---
 
 
 # --- llama-server model probe ---
@@ -143,10 +140,3 @@ def probe_llama(url: Optional[str] = None,
                        f"was started without `--embeddings`. Check "
                        f"inference/entrypoint-v3.1.sh.")
     return probe
-
-
-# --- Generation ---
-
-
-# --- Sandbox ---
-

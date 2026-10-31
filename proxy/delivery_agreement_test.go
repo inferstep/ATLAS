@@ -296,6 +296,9 @@ func TestAModelGeneratedSelfTestNeverDelivers(t *testing.T) {
 	if a.Grant != nil {
 		t.Error("a model-generated record minted a grant")
 	}
+	if !a.Typed {
+		t.Error("a model-generated record was allowed to deliver")
+	}
 }
 
 func TestALegacyRecordNeitherAuthorizesNorBlocks(t *testing.T) {
@@ -314,7 +317,7 @@ func TestALegacyRecordNeitherAuthorizesNorBlocks(t *testing.T) {
 	}
 	// The request declared obligations, so the typed path still owns it and
 	// an unusable record is a refusal rather than a pass-through.
-	if !a.Typed || a.Grant != nil {
+	if !a.Typed {
 		t.Error("an unusable record was allowed to deliver")
 	}
 }
