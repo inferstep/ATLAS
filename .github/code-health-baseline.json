@@ -10,12 +10,11 @@
   "proxy/agent.go:runAgentLoop": 152,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/gates.go:assetLintFindingsFor": 118,
-  "proxy/tools.go:structuralEditTool": 355,
   "sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
   "proxy/agent.go": 10800,
-  "proxy/tools.go": 5118,
+  "proxy/tools.go": 5183,
   "sandbox/executor_server.py": 2059,
   "v3-service/pipeline.py": 2735
  }

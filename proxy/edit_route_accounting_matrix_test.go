@@ -324,7 +324,7 @@ func TestTheSessionWriteMapIsUnchangedForItsOtherReaders(t *testing.T) {
 		t.Errorf("insert_after/replace_lines registrations changed: %d, want 2", n)
 	}
 	for tool, spanEnd := range map[string]string{"editFileTool": "\nfunc structuralEditTool(",
-		"structuralEditTool": "\nfunc "} {
+		"structuralEditTool": "\ntype V3EditMetadata struct"} {
 		start := strings.Index(body, "func "+tool+"(")
 		end := strings.Index(body[start+1:], spanEnd)
 		if strings.Contains(body[start:start+1+end], "SessionWrites[") {
