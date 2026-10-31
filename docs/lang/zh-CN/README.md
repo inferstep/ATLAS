@@ -148,18 +148,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## 🗺️ 路线图
 
-**3.2.0** ([里程碑](https://github.com/inferstep/ATLAS/milestone/2)) - 让"完成"名副其实，并发布 `dev` 分支的内容。
-- 验证：消除"已完成"与实际验证内容之间的差距 ([#330](https://github.com/inferstep/ATLAS/issues/330))，并把守卫的拒绝计为失败 ([#327](https://github.com/inferstep/ATLAS/issues/327))。
-- 安全：加固沙箱和首次安装 ([#384](https://github.com/inferstep/ATLAS/issues/384)、[#410](https://github.com/inferstep/ATLAS/issues/410)、[#483](https://github.com/inferstep/ATLAS/issues/483))，端到端测试服务令牌 ([#212](https://github.com/inferstep/ATLAS/issues/212))，K3s 也包括在内 ([#697](https://github.com/inferstep/ATLAS/issues/697))。
-- IDE：以预览版提供 VS Code 扩展。
-- 发布：候选版本至少测试三天 ([#196](https://github.com/inferstep/ATLAS/issues/196))，并附带签名和构建证明 ([#252](https://github.com/inferstep/ATLAS/issues/252)、[#361](https://github.com/inferstep/ATLAS/issues/361))。
-
-**待办 / 欢迎贡献**
-- 硬件：ARM64 多架构构建 ([#115](https://github.com/inferstep/ATLAS/issues/115))、面向更大模型的多 GPU ([#34](https://github.com/inferstep/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27))。
-- 工具链：JetBrains 插件 ([#35](https://github.com/inferstep/ATLAS/issues/35))。
-- 部署：ROCm 跑在 K3s / Kubernetes 上。
-- 研究：带采样的推理 ([#9](https://github.com/inferstep/ATLAS/issues/9))；用隐藏测试重跑 LiveCodeBench ([#28](https://github.com/inferstep/ATLAS/issues/28))。
-- 模型：自动化 HuggingFace 提交 ([#102](https://github.com/inferstep/ATLAS/issues/102))；模型无关的后端 ([#66](https://github.com/inferstep/ATLAS/issues/66))。
+计划中和进行中的工作都在 [ATLAS Roadmap 看板](https://github.com/orgs/inferstep/projects/1) 上。
 
 ---
 
