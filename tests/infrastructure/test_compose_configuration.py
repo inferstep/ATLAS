@@ -149,6 +149,20 @@ def test_legacy_runtime_keys_are_upgrade_fallbacks_only():
     )
 
 
+def test_v3_service_gets_the_slot_count_llama_server_gets():
+    yaml = pytest.importorskip("yaml")
+    services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+
+    assert (
+        "ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}"
+        in services["v3-service"]["environment"]
+    )
+    assert (
+        "PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}"
+        in services["llama-server"]["environment"]
+    )
+
+
 def _sandbox(compose):
     return compose["services"]["sandbox"]
 
