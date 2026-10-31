@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -31,7 +32,8 @@ def test_invalid_cx_calibration_is_disabled(tmp_path):
 def test_a_pickled_gx_model_is_not_loaded_and_the_log_says_how_to_rebuild(tmp_path, monkeypatch, caplog):
     for name in ("_gx_xgboost", "_gx_pca_components", "_gx_pca_mean", "_gx_top_dims"):
         monkeypatch.setattr(service, name, getattr(service, name))
-    (tmp_path / "gx_xgboost.pkl").write_bytes(b"never read")
+    monkeypatch.setenv("ATLAS_ALLOW_PICKLE_GX", "1")
+    (tmp_path / "gx_xgboost.pkl").write_bytes(pickle.dumps("a loaded pickle"))
     (tmp_path / "gx_weights.json").write_text("{}")
 
     service._load_gx_models(str(tmp_path))
