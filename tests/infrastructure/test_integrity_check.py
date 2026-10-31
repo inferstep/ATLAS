@@ -193,6 +193,13 @@ def test_every_finding_says_why_and_how_to_fix(ic):
         assert f.fix.strip(), f.what
 
 
+def test_the_task_names_come_from_the_runner_at_its_new_place(ic, tmp_path):
+    runner = tmp_path / "scripts" / "eval" / "e2e-reliability.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text('TASKS = {"a_task": None}\n')
+    assert ic.task_names(tmp_path) == {"a_task"}
+
+
 def test_the_task_names_come_from_the_runner(ic):
     names = ic.task_names()
     assert {"flask_pause", "aoc_sonar", "multifile_cli"} <= names

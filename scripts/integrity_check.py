@@ -37,7 +37,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TASK_SOURCE = Path("scripts") / "e2e-reliability.py"
+# The base's copy of this script judges a change, so it has to know the runner's
+# new place before the change that moves the runner there.
+TASK_SOURCES = (Path("scripts") / "eval" / "e2e-reliability.py", Path("scripts") / "e2e-reliability.py")
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
 PRODUCT_DIRS = ("proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
@@ -330,11 +332,12 @@ def test_name(line: str) -> str:
     return next((group for group in match.groups() if group), "") if match else ""
 
 
-def task_names(source: Path = ROOT / TASK_SOURCE) -> set[str]:
+def task_names(root: Path = ROOT) -> set[str]:
     """The evaluation suite's task names, read from the runner that defines them.
 
     The runner builds some names in a loop, so it is loaded, not searched.
     """
+    source = next(root / path for path in TASK_SOURCES if (root / path).exists())
     spec = importlib.util.spec_from_file_location("atlas_task_source", source)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # its dataclasses resolve annotations through it
@@ -1250,11 +1253,11 @@ def main() -> int:
               "  fix: fetch the base branch (git fetch origin) or pass --base <commit>.", file=sys.stderr)
         return 2
     try:
-        tasks = task_names(args.root / TASK_SOURCE)
+        tasks = task_names(args.root)
     except Exception as error:  # the runner is a script: anything can go wrong loading it
-        print(f"integrity check: cannot read the evaluation task names from {TASK_SOURCE}: {error!r}\n"
+        print(f"integrity check: cannot read the evaluation task names from {TASK_SOURCES}: {error!r}\n"
               "  why: without them, a task name in product code would pass unseen.\n"
-              "  fix: make the runner importable again, or point TASK_SOURCE at the file that defines TASKS.",
+              "  fix: make the runner importable again, or point TASK_SOURCES at the file that defines TASKS.",
               file=sys.stderr)
         return 2
     merge_base = subprocess.run(["git", "merge-base", "--end-of-options", args.base, "HEAD"],
