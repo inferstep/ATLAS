@@ -203,7 +203,7 @@ What each top-level folder owns. For how the pieces work together see
 | `scripts/` | Install, deploy, K3s, and CI/release automation | — |
 | `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
-| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `integration/`, `perf/`, `v3/`, `v3-service/` | — |
+| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/` | — |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`
 (the `atlas` CLI entry point), and the standard `.env.example`.
