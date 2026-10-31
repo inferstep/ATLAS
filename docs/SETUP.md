@@ -101,6 +101,9 @@ docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml -f com
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
 
+A `.env` made by hand gets no service token, so internal auth stays off there.
+The bootstrap and `atlas init` write one.
+
 **Firewall:** the Compose stack publishes every service on `127.0.0.1` only, so local use needs no firewall change and the bootstrap leaves firewalld alone by default. Set `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` to open the service ports (8090, 8099, 8070, 30820) for deployments that rebind services to a routable interface.
 
 **Run modes — both work:**

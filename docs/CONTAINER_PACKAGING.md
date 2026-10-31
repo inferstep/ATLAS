@@ -21,8 +21,8 @@ installing user's uid:gid instead (see below).
 `docker-compose.yml` runs llama-server, the proxy, the V3 service and the lens
 as `ATLAS_PROXY_UID:ATLAS_PROXY_GID`, and the sandbox as
 `ATLAS_SANDBOX_UID:ATLAS_SANDBOX_GID`: the installing user's ids, which
-`atlas init` writes. So each of them can read the service token, which
-`atlas init` makes readable for that user only (0600).
+`atlas init` and the bootstrap write. So each of them can read the service
+token, which they make readable for that user only (0600).
 
 llama-server stops with an error when its token folder or token is there and
 cannot be read, so it never starts with internal auth off by accident. The K3s

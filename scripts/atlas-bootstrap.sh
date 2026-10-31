@@ -14,7 +14,7 @@
 #        (Apple Silicon / Intel Arc not yet supported — V3.1.2 roadmap)
 #   4. RHEL-family: enables EPEL, warns about nouveau. (Firewalld ports are
 #      opt-in via ATLAS_BOOTSTRAP_OPEN_FIREWALL=1 — services bind loopback.)
-#   5. Copies .env.example to .env if missing.
+#   5. Copies .env.example to .env if missing, and writes the service token.
 #   6. Downloads model GGUFs and Lens weights from HuggingFace.
 #   7. `docker compose up -d` and waits for all services healthy.
 #      (ROCm hosts: brings up with -f compose/docker-compose.rocm.yml override.)
@@ -1015,6 +1015,7 @@ ensure_repo_and_env() {
     migrate_legacy_ghcr_owner
     ensure_default_model_selected
     persist_backend_selection
+    ensure_service_token
 
     install_atlas_cli || die "ATLAS CLI installation failed."
     install_go || die "Go installation failed; atlas-tui cannot be built."
@@ -1067,6 +1068,14 @@ migrate_legacy_ghcr_owner() {
 host_gid() {
     local name="$1"
     getent group "$name" | cut -d: -f3 | grep . || echo "$name"
+}
+
+# Set key=value in ./.env unless the key already holds a value.
+keep_or_set_env_file_value() {
+    local key="$1" value="$2"
+    if [[ -z "$(env_file_value "$key")" ]]; then
+        set_env_file_value "$key" "$value"
+    fi
 }
 
 # Set (or append) key=value in ./.env.
@@ -1161,6 +1170,23 @@ persist_backend_selection() {
             set_env_file_value ATLAS_LLAMA_USER "$(id -u "$TARGET_USER"):$(id -g "$TARGET_USER")"
         fi
     fi
+}
+
+# What `atlas init` does for internal auth: the same path, modes and token form.
+# The services must run as the user who owns the token, or they cannot read it.
+ensure_service_token() {
+    keep_or_set_env_file_value ATLAS_PROXY_UID "$TARGET_UID"
+    keep_or_set_env_file_value ATLAS_PROXY_GID "$TARGET_GID"
+    keep_or_set_env_file_value ATLAS_SANDBOX_UID "$TARGET_UID"
+    keep_or_set_env_file_value ATLAS_SANDBOX_GID "$TARGET_GID"
+    if [[ -f secrets/service-token ]]; then
+        log_ok "Service token already present at secrets/service-token (kept)"
+        return
+    fi
+    run_as_target bash -c 'umask 077 && mkdir -p secrets && chmod 700 secrets &&
+        printf "atlas-st-%s\n" "$(head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n")" > secrets/service-token' \
+        || die "Could not write secrets/service-token."
+    log_ok "Wrote secrets/service-token (mode 0600) — internal service auth"
 }
 
 install_atlas_cli() {
