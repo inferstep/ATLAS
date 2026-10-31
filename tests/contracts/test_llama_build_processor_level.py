@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD_FILES = sorted(path for path in (ROOT / "inference").glob("Dockerfile*") if "cmake -B" in path.read_text(encoding="utf-8"))
 
 
-def test_the_four_images_of_the_model_server_are_the_build_files_that_are_read():
-    assert [path.name for path in BUILD_FILES] == ["Dockerfile", "Dockerfile.rocm", "Dockerfile.v31", "Dockerfile.vulkan"], (
-        "the build files of the model server under inference/ are not the four that this test knows. Fix: when a build "
+def test_the_three_images_of_the_model_server_are_the_build_files_that_are_read():
+    assert [path.name for path in BUILD_FILES] == ["Dockerfile.rocm", "Dockerfile.v31", "Dockerfile.vulkan"], (
+        "the build files of the model server under inference/ are not the three that this test knows. Fix: when a build "
         "file is added or removed, give this list the same names; a new one must name its processor level too.")
 
 

@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRYPOINTS = ["entrypoint.sh", "entrypoint-v3.1.sh"]
+ENTRYPOINTS = ["entrypoint-v3.1.sh"]
 not_as_root = pytest.mark.skipif(os.geteuid() == 0, reason="root can read a file of any mode")
 
 

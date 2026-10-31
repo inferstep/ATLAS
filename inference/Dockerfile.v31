@@ -16,7 +16,8 @@
 # Then build with `--platform linux/arm64` via buildx. The dnf -> apt
 # differences are handled by the package install step below (the recipe
 # uses apt if dnf isn't present).
-# Digest-pinned defaults for reproducible builds (Dependabot maintains);
+# Digest-pinned defaults for reproducible builds, bumped by hand: Dependabot
+# updates a FROM line, not an ARG default;
 # override the ARGs for alternate bases (e.g. sbsa arm64 experiments).
 ARG BUILDER_IMAGE=docker.io/nvidia/cuda:12.9.0-devel-rockylinux9@sha256:7c290c736a183f91b1e90cd62e90ff9fb760102d6ace39292c43a567c0f5b24e
 ARG RUNTIME_IMAGE=docker.io/nvidia/cuda:12.9.0-runtime-rockylinux9@sha256:b58050e1787e4ace37bdda12b097a2c6ca30df3d563f3356238029cb49cf7201

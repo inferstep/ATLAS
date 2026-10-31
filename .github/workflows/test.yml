@@ -446,7 +446,7 @@ jobs:
           fi
           echo "Pinned SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          for f in inference/Dockerfile inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
+          for f in inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
             if ! grep -q "LLAMA_CPP_REV=$SHA" "$f"; then
               actual=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' "$f" | head -1)
               echo "::error file=$f::LLAMA_CPP_REV mismatch — found '$actual', expected '$SHA' (matches Dockerfile.v31). Bump all 4 Dockerfiles together."

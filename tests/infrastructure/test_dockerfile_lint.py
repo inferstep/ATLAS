@@ -101,7 +101,7 @@ def test_it_takes_the_dockerfiles_of_this_repository(lint):
     tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "*Dockerfile*"], capture_output=True, text=True,
                              check=True).stdout.split()
     assert found == sorted(path for path in tracked if not path.endswith(".py"))
-    assert len(found) >= 8
+    assert len(found) >= 7
 
 
 def test_a_finding_is_reported_and_does_not_fail(lint, repo, hadolint, capsys):
