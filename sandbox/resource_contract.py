@@ -521,6 +521,34 @@ def _wait_without_blocking(proc):
     return done, st, usage
 
 
+def _sigkill_group(pgid: int) -> None:
+    """SIGKILL the group, which may already be gone."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _collect_within(proc, pgid: int, grace: float) -> tuple:
+    """Collect the command once it has ended: (wait status or None, rusage or None).
+
+    _kill_group sees the group through /proc, so without /proc it returns with
+    the command still running. The command gets the grace, then SIGKILL, and the
+    wait ends either way: one that cannot be collected does not hold the request.
+    """
+    for end_it in (False, True):
+        if end_it:
+            _sigkill_group(pgid)
+        deadline = time.time() + (0.5 if end_it else grace)
+        while time.time() < deadline:
+            done, status, usage = _wait_without_blocking(proc)
+            if done:
+                # No rusage means the child was already gone: it left no status.
+                return (status if usage else None), usage
+            time.sleep(0.02)
+    return None, None
+
+
 def _rusage_peak(usage, child_peak: int) -> int:
     """The peak in bytes that wait4's rusage gives, or child_peak when there is no rusage."""
     if usage is not None:
@@ -649,16 +677,14 @@ def run_bounded(cmd: List[str], contract: ResourceContract,
         if outcome != OUTCOME_COMPLETED:
             _kill_group(pgid, contract.grace_seconds)
             _kill_token(token, contract.grace_seconds)
-            try:
-                _, status, usage = os.wait4(proc.pid, 0)
-                child_peak = _rusage_peak(usage, child_peak)
-            except OSError:  # ChildProcessError is an OSError
-                pass
+            status, usage = _collect_within(proc, pgid, contract.grace_seconds)
+            child_peak = _rusage_peak(usage, child_peak)
         out_pump.join(timeout=2)
         err_pump.join(timeout=2)
         # Nothing outlives the request, including on the ordinary path: a command
         # that exited after forking a child into the background left it running.
         _kill_group(pgid, 0.1)
+        _sigkill_group(pgid)  # without /proc, _kill_group stops at SIGTERM
         survivors = _kill_token(token, contract.grace_seconds)
         # Once the command's processes are gone, the feed's write has ended; the
         # join is bounded for one that is not.
