@@ -172,7 +172,7 @@ ATLAS는 오픈으로 개발되며 기여자와 핵심 메인테이너를 환영
 
 버그를 찾았거나 벽에 부딪히셨나요? **[이슈를 열어 주세요](https://github.com/inferstep/ATLAS/issues)** — 수정까지 제출하실 필요는 없습니다. 버그 리포트와 피드백은 코드만큼이나 큰 도움이 됩니다.
 
-가이드라인은 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**를, 코드베이스 구조 개요는 [저장소 맵](../../README.md#repository-map)을 참고하세요.
+가이드라인은 **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)**를, 코드베이스 구조 개요는 [저장소 맵](../../README.md#repository-map)을 참고하세요.
 
 ---
 

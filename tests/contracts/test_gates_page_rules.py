@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / "docs" / "quality" / "gates.md"
-GUIDE = ROOT / "CONTRIBUTING.md"
+GUIDE = ROOT / ".github" / "CONTRIBUTING.md"
 HEADING = "## Rules learned from review and from failures"
 ANCHOR = "rules-learned-from-review-and-from-failures"
 
@@ -34,7 +34,7 @@ def test_the_rules_are_in_the_gates_page_and_in_no_file_of_their_own():
     assert "rules.md" not in (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     page = PAGE.read_text(encoding="utf-8")
     assert f"(#{ANCHOR})" in page, "the gates page does not link to its section of the rules"
-    assert f"(docs/quality/gates.md#{ANCHOR})" in GUIDE.read_text(encoding="utf-8"), (
+    assert f"(../docs/quality/gates.md#{ANCHOR})" in GUIDE.read_text(encoding="utf-8"), (
         "CONTRIBUTING.md does not point to the rules on the gates page. Fix: one line in its Testing section.")
 
 
@@ -58,7 +58,7 @@ def test_a_rule_is_written_once_and_a_rule_of_the_guide_is_pointed_to():
     rules = [rule for rule, _source, _held in rows()]
     assert len(rules) == len(set(rules))
     guide = GUIDE.read_text(encoding="utf-8")
-    pointed = [(rule, anchor) for rule in rules for anchor in re.findall(r"\(\.\./\.\./CONTRIBUTING\.md#([^)]+)\)", rule)]
+    pointed = [(rule, anchor) for rule in rules for anchor in re.findall(r"\(\.\./\.\./\.github/CONTRIBUTING\.md#([^)]+)\)", rule)]
     assert pointed, "no rule of the section points to the contributor guide; the form of those rows has changed"
     lost = [(rule, anchor) for rule, anchor in pointed if anchor not in anchors_of(guide)]
     assert not lost, f"these rules point to a heading that CONTRIBUTING.md does not have: {lost}"

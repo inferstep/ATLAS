@@ -241,9 +241,9 @@ class Audit:
         self.add("Ops", "Membership limited to the team", PASS if members <= in_teams else FAIL,
                  f"{len(members)} members, all in a team: {members <= in_teams}")
         self.add("Ops", "Review settings after transfer", MANUAL, "done 2026-09-27 against the pre-transfer snapshot")
-        ir = self.exists("docs/INCIDENT_RESPONSE.md") and self.exists("SECURITY.md")
+        ir = self.exists("docs/INCIDENT_RESPONSE.md") and self.exists(".github/SECURITY.md")
         self.add("Ops", "Incident response plan", PASS if ir else FAIL,
-                 f"SECURITY.md + docs/INCIDENT_RESPONSE.md on {self.default}: {ir}")
+                 f".github/SECURITY.md + docs/INCIDENT_RESPONSE.md on {self.default}: {ir}")
         sa = self.repo_info.get("security_and_analysis") or {}
         scanning = (sa.get("secret_scanning", {}).get("status") == "enabled"
                     and sa.get("secret_scanning_push_protection", {}).get("status") == "enabled"

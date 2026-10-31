@@ -86,10 +86,10 @@ Task-oriented index for everything under `docs/`. The
 
 ### Contribute
 
-- [../CONTRIBUTING.md](../CONTRIBUTING.md) — from finding an issue and
+- [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) — from finding an issue and
   `/claim` to review and release; style, tests, and the developer quality
   gate (`scripts/production-readiness.py`).
-- [CONTRIBUTING.md § Development workflow](../CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
+- [CONTRIBUTING.md § Development workflow](../.github/CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
   `scripts/code_health.py` enforces on new code and refactors.
@@ -105,10 +105,10 @@ Task-oriented index for everything under `docs/`. The
   leaks, a release is bad, or automation misbehaves.
 - [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — image accounts,
   writable dirs, dependency pinning.
-- [GOVERNANCE.md](GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
-  [../SECURITY.md](../SECURITY.md),
+- [GOVERNANCE.md](GOVERNANCE.md), [MAINTAINERS.md](MAINTAINERS.md),
+  [../.github/SECURITY.md](../.github/SECURITY.md),
   [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
-- READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
+- READMEs beside code and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
   are not listed one-by-one here: they live in the tree next to what they
   describe (see the [repository map](#repository-map)), and
   third-party notices live at the repository root.
@@ -177,7 +177,7 @@ In order, each building on the last:
 12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
 13. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
 14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
-15. [../CONTRIBUTING.md](../CONTRIBUTING.md) (its Development workflow),
+15. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here

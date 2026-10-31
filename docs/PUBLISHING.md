@@ -2,7 +2,7 @@
 
 This guide walks you through contributing trained **Geometric Lens** (`cost_field.pt`) or **ASA control vectors** (`*.gguf`) back to ATLAS so other users running the same base model get them automatically.
 
-It's the long-form walkthrough for the artifact-contribution flow introduced in [CONTRIBUTING.md](../CONTRIBUTING.md#contributing-trained-artifacts-lens--asa). CLI flag reference lives in [CLI.md](CLI.md). If you just want flag syntax, that's the right place — read this one first if you've never published before.
+It's the long-form walkthrough for the artifact-contribution flow introduced in [CONTRIBUTING.md](../.github/CONTRIBUTING.md#contributing-trained-artifacts-lens--asa). CLI flag reference lives in [CLI.md](CLI.md). If you just want flag syntax, that's the right place — read this one first if you've never published before.
 
 ---
 
@@ -189,4 +189,4 @@ The CLI accepts any `--license` value — there's no runtime license gate. The g
 
 - [CLI.md — atlas lens / atlas asa command reference](CLI.md)
 - [CONFIGURATION.md — env vars including HF_TOKEN](CONFIGURATION.md)
-- [CONTRIBUTING.md — broader contribution guidelines](../CONTRIBUTING.md)
+- [CONTRIBUTING.md — broader contribution guidelines](../.github/CONTRIBUTING.md)

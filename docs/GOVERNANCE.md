@@ -1,7 +1,7 @@
 # Governance
 
 ATLAS is a **single-maintainer project** today (see
-[MAINTAINERS.md](../MAINTAINERS.md)). This document states how decisions
+[MAINTAINERS.md](MAINTAINERS.md)). This document states how decisions
 are made now, how people gain access, and the limits that apply at every
 level. It does not pretend a committee exists.
 
@@ -85,7 +85,7 @@ earning maintainer trust, so every rung also has hard technical limits.
 - Every path has a code owner, whose approval a pull request into
   `staging` or `main` needs. The security- and
   release-critical paths stay with the lead even when subsystems gain
-  owners: `.github/workflows/`, `scripts/`, `sandbox/`, `SECURITY.md`,
+  owners: `.github/workflows/`, `scripts/`, `sandbox/`, `.github/SECURITY.md`,
   `docs/RELEASE.md`, `docs/PUBLISHING.md` and
   `atlas/commands/model_registry.py` (see
   [CODEOWNERS](../.github/CODEOWNERS)).
@@ -124,7 +124,7 @@ ADR statuses and format are in [docs/adr/README.md](adr/README.md).
 - A maintainer responds to a pull request within **5 business days**.
 - New issues are triaged within **5 business days**; see
   [Triage](#triage).
-- Security reports follow the targets in [SECURITY.md](../SECURITY.md).
+- Security reports follow the targets in [SECURITY.md](../.github/SECURITY.md).
 
 ## Triage
 
@@ -242,7 +242,7 @@ artifacts allow forks to continue.
 
 ## Security
 
-Security reports follow [SECURITY.md](../SECURITY.md). What to do when
+Security reports follow [SECURITY.md](../.github/SECURITY.md). What to do when
 something goes wrong (a vulnerability, a leaked key, a bad release) is in
 [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md). Security fixes may land
 ahead of the normal review flow, with the ADR or notes written

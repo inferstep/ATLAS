@@ -174,7 +174,7 @@ ATLAS はオープンに開発されており、コントリビューターと�
 
 バグを見つけた、あるいは行き詰まった? **[Issue を作成してください](https://github.com/inferstep/ATLAS/issues)** — 修正の提出は必須ではありません。バグ報告とフィードバックはコードと同じくらい役に立ちます。
 
-ガイドラインは **[CONTRIBUTING.md](../../../CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
+ガイドラインは **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
 
 ---
 

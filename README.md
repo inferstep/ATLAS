@@ -177,7 +177,7 @@ ATLAS is developed in the open and welcomes contributors and core maintainers. B
 
 Found a bug or hit a wall? **[Open an issue](https://github.com/inferstep/ATLAS/issues)** - you don't need to submit a fix. Bug reports and feedback help just as much as code.
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for guidelines and the [repository map](docs/README.md#repository-map) for an overview of the codebase layout.
+See **[CONTRIBUTING.md](.github/CONTRIBUTING.md)** for guidelines and the [repository map](docs/README.md#repository-map) for an overview of the codebase layout.
 
 ---
 

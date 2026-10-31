@@ -287,7 +287,7 @@ def test_after_the_answer_the_command_alone_claims(api, cfg):
 
 
 def test_the_guide_says_what_the_bot_does_with_more_words_on_the_line():
-    with open(os.path.join(ROOT, "CONTRIBUTING.md"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, ".github", "CONTRIBUTING.md"), encoding="utf-8") as fh:
         guide = fh.read()
     assert "Comment `/claim` (alone, as the first line) on a Ready issue." in guide
     assert "With more words on that line the bot claims nothing and tells you so" in guide
@@ -412,7 +412,7 @@ def claimed(api, days_ago):
 
 
 def test_contributing_states_the_periods_of_the_settings(cfg):
-    with open(os.path.join(ROOT, "CONTRIBUTING.md"), encoding="utf-8") as fh:
+    with open(os.path.join(ROOT, ".github", "CONTRIBUTING.md"), encoding="utf-8") as fh:
         text = " ".join(fh.read().split())
     assert f"Open a pull request within **{cfg['claims']['ping_after_days']} days**" in text
     assert f"After **{cfg['claims']['release_after_days']} days** without one, the claim is released" in text

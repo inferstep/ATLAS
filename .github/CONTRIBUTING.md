@@ -6,8 +6,8 @@ issue.
 
 **Quick links:** [Start Here](https://github.com/orgs/inferstep/projects/1/views/1) (issues ready for newcomers) ·
 [Roadmap board](https://github.com/orgs/inferstep/projects/1) ·
-[ARCHITECTURE](docs/ARCHITECTURE.md) · [MAP](docs/README.md#repository-map) ·
-[Development workflow](#development-workflow) · [GOVERNANCE](docs/GOVERNANCE.md) ·
+[ARCHITECTURE](../docs/ARCHITECTURE.md) · [MAP](../docs/README.md#repository-map) ·
+[Development workflow](#development-workflow) · [GOVERNANCE](../docs/GOVERNANCE.md) ·
 [Security reports](SECURITY.md)
 
 ## 1. How ATLAS is organized
@@ -16,8 +16,8 @@ ATLAS is a local coding agent made of a few services: the Go agent loop
 (`proxy/`), the terminal client (`tui/`), the Python CLI (`atlas/`), the V3
 candidate pipeline (`v3-service/`), the Geometric Lens (`geometric-lens/`),
 the sandbox (`sandbox/`) and the llama.cpp images (`inference/`).
-[The repository map](docs/README.md#repository-map) says what every directory owns, and
-[ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the pieces work
+[The repository map](../docs/README.md#repository-map) says what every directory owns, and
+[ARCHITECTURE.md](../docs/ARCHITECTURE.md) explains how the pieces work
 together.
 
 Every change lands on `dev`. `dev` is promoted to `staging` as a release
@@ -32,7 +32,7 @@ candidate, and `staging` to `main` as a release. See
   issue, or send a pull request.
 - **Hardware reports.** Run ATLAS on your GPU and report what happened,
   with your `atlas doctor` output. AMD (ROCm), Apple Silicon (Metal) and
-  Vulkan reports help most; see [SUPPORT_MATRIX](docs/SUPPORT_MATRIX.md).
+  Vulkan reports help most; see [SUPPORT_MATRIX](../docs/SUPPORT_MATRIX.md).
 - **Trained artifacts** for a new model (see below).
 - **Questions** go to [Discussions Q&A](https://github.com/inferstep/ATLAS/discussions/categories/q-a).
 
@@ -45,7 +45,7 @@ were trained against. If you've trained them with `atlas lens build` /
 `atlas asa publish`. That uploads to a Hugging Face repo you own and opens
 a registry pull request. You don't need write access here, just a Hugging
 Face account and write token. The walkthrough is in
-[PUBLISHING.md](docs/PUBLISHING.md).
+[PUBLISHING.md](../docs/PUBLISHING.md).
 
 ## 3. Set up
 
@@ -71,7 +71,7 @@ pip install --no-deps -e .
 python scripts/production-readiness.py
 ```
 
-**With a GPU.** Install the full stack with [SETUP.md](docs/SETUP.md). Then
+**With a GPU.** Install the full stack with [SETUP.md](../docs/SETUP.md). Then
 use the dev mode in [Development workflow](#development-workflow), which runs your
 working tree in the containers without a rebuild after every edit.
 
@@ -156,7 +156,7 @@ them on the lines below.
   issue is Ready again.
 - Comment `/unclaim` any time to let it go. No hard feelings.
 
-These numbers live in [.github/atlas-bot.yml](.github/atlas-bot.yml).
+These numbers live in [.github/atlas-bot.yml](atlas-bot.yml).
 
 ## 7. Branches, commits and pull request titles
 
@@ -214,7 +214,7 @@ cancelled workflow, re-run this check too.
 
 A required check stops the merge while it is red. The other checks report:
 a red one is a reason to look, and a maintainer decides what it means for
-the merge. The [quality gates page](docs/quality/gates.md) keeps the list
+the merge. The [quality gates page](../docs/quality/gates.md) keeps the list
 of both kinds.
 
 | You see | What it means | What to do |
@@ -277,7 +277,7 @@ v3-service gets it because no other check can name such a change: no
 recorded request shows that text. Each label says in its own description
 what it is computed from. The numbers, the list of core paths and the list
 of those files of v3-service are in
-[.github/atlas-bot.yml](.github/atlas-bot.yml).
+[.github/atlas-bot.yml](atlas-bot.yml).
 
 ## 10. After your change merges
 
@@ -294,7 +294,7 @@ ships your change. If the issue should stay open after your change lands
 (it still needs a check after a deploy), write `Refs #N` instead.
 
 Minor releases ship when `dev` is ready; there's no fixed calendar. Fixes
-and security releases can ship any time. [RELEASE.md](docs/RELEASE.md) has
+and security releases can ship any time. [RELEASE.md](../docs/RELEASE.md) has
 the details.
 
 ## 11. Proposing something big
@@ -303,7 +303,7 @@ Use the **RFC** issue form for architecture changes, new dependencies,
 security-model changes, release-policy or support-matrix changes, and any
 breaking change. An RFC gets a 7-day comment period and then a decision:
 Accepted, Revise, or Declined. An accepted RFC becomes an Epic with
-sub-issues. The whole flow is in [GOVERNANCE](docs/GOVERNANCE.md#proposals-rfc--adr--epic).
+sub-issues. The whole flow is in [GOVERNANCE](../docs/GOVERNANCE.md#proposals-rfc--adr--epic).
 
 ## 12. Getting help
 
@@ -318,12 +318,12 @@ Report security problems privately, never in an issue (see
 Access follows trust built over time, not a count of pull requests. The
 path is Contributor → Triager → Reviewer → Maintainer. Each rung has a
 minimum time, a nomination, and hard technical limits. See the
-[trust ladder](docs/GOVERNANCE.md#trust-ladder).
+[trust ladder](../docs/GOVERNANCE.md#trust-ladder).
 
 ## Code style
 
 How code should read (size, structure, abstractions, comments) is in
-[CODE_STYLE.md](docs/CODE_STYLE.md). The rules per language:
+[CODE_STYLE.md](../docs/CODE_STYLE.md). The rules per language:
 
 **Python.** PEP 8, type hints on function signatures, docstrings on public
 functions, lines up to 100 characters. `ruff` runs in the gate; it does not check line length.
@@ -412,7 +412,7 @@ pytest tests/e2e -v
   with `tests/infrastructure/bounded_commands.py`.
 - More rules that a review or a failure has taught us, each with the check
   or test that holds it:
-  [the gates page](docs/quality/gates.md#rules-learned-from-review-and-from-failures).
+  [the gates page](../docs/quality/gates.md#rules-learned-from-review-and-from-failures).
 
 One more check reads your change, not the code. It looks for removed or
 skipped tests, history in new comments, new documents, new suppression
@@ -581,7 +581,7 @@ This is the fallback whenever dev mode is off or doesn't apply
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** (see [LICENSE](LICENSE)).
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** (see [LICENSE](../LICENSE)).
 
 By submitting a contribution (pull request, patch, or any other form), you agree to the following terms:
 
