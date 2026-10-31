@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -2971,4 +2972,217 @@ func syntaxCallCounts(t *testing.T) (structured, legacy int) {
 		})
 	}
 	return structured, legacy
+}
+
+// One write's V3 progress reaches the client as the events it renders, and the
+// pipeline pane gets a start and an end for each stage. Tokens and LLM-call
+// markers go to the client only.
+func TestV3ProgressReachesTheClientAndThePipelinePane(t *testing.T) {
+	baseline := "x = 1\n"
+	result, err := json.Marshal(map[string]interface{}{"code": baseline, "candidates_tested": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := strings.Join([]string{
+		`data: {"stage": "token", "detail": "tok"}`,
+		`data: {"stage": "reasoning_token", "detail": "why"}`,
+		`data: {"stage": "llm_start", "detail": "gen", "data": {"role": "candidate"}}`,
+		`data: {"stage": "llm_end", "detail": "gen", "data": {"tokens": 3}}`,
+		`data: {"stage": "phase1", "detail": "first", "data": {"n": 1}}`,
+		`data: {"stage": "phase1", "detail": "again"}`,
+		`data: {"stage": "no_such_stage", "detail": "odd"}`,
+		"event: result", "data: " + string(result), "", "data: [DONE]", "",
+	}, "\n")
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, stream)
+	}))
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	var client []string
+	ctx.StreamFn = func(event string, data interface{}) {
+		if strings.HasPrefix(event, "v3_") {
+			client = append(client, fmt.Sprintf("%s %v", event, data))
+		}
+	}
+	envelopes := defaultBroker.subscribe()
+	defer defaultBroker.unsubscribe(envelopes)
+
+	if _, err := writeFileWithV3(filepath.Join(dir, "a.py"), baseline, ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	wantClient := []string{
+		"v3_progress map[message:V3 pipeline starting for a.py — generating diverse candidates and build-verifying each.]",
+		"v3_token map[text:tok]",
+		"v3_reasoning_token map[text:why]",
+		"v3_llm_start map[detail:gen role:candidate]",
+		"v3_llm_end map[detail:gen tokens:3]",
+		"v3_phase map[detail:first n:1 stage:phase1]",
+		"v3_phase map[detail:again stage:phase1]",
+		"v3_progress map[message:  │ [no_such_stage] odd]",
+	}
+	if !reflect.DeepEqual(client, wantClient) {
+		t.Errorf("the client got %q, want %q", client, wantClient)
+	}
+	var pane []string
+	for len(envelopes) > 0 {
+		if ev := <-envelopes; strings.HasPrefix(ev.Stage, "v3") {
+			pane = append(pane, string(ev.Type)+" "+ev.Stage)
+		}
+	}
+	wantPane := []string{
+		string(EvtStageStart) + " v3",
+		string(EvtStageStart) + " v3:phase1",
+		string(EvtMetric) + " v3:phase1",
+		string(EvtStageEnd) + " v3:phase1",
+		string(EvtStageStart) + " v3:no_such_stage",
+		string(EvtStageEnd) + " v3:no_such_stage",
+		string(EvtStageEnd) + " v3",
+	}
+	if !reflect.DeepEqual(pane, wantPane) {
+		t.Errorf("the pane got %q, want %q", pane, wantPane)
+	}
+}
+
+// A write's V3 request carries what the session read and wrote, and what the
+// project is. The target itself, a blank name and a file that is gone stay out.
+func TestAWriteRequestCarriesTheSessionsFilesAndTheProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "written.py"), []byte("y = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sent V3GenerateRequest
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+				t.Error(err)
+			}
+		}
+		http.Error(w, "the request is all this test needs", http.StatusInternalServerError)
+	}))
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	ctx.Project = &ProjectInfo{Framework: "flask", BuildCommand: "make"}
+	ctx.SessionWrites["written.py"] = true
+	ctx.SessionWrites["target.py"] = true
+	ctx.SessionWrites["gone.py"] = true
+	ctx.SessionWrites[""] = true
+
+	if _, err := writeFileWithV3(filepath.Join(dir, "target.py"), "x = 1\n", ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{"written.py": "y = 2\n"}
+	if !reflect.DeepEqual(sent.ProjectContext, want) {
+		t.Errorf("project context %q, want %q", sent.ProjectContext, want)
+	}
+	if sent.Framework != "flask" || sent.BuildCommand != "make" {
+		t.Errorf("project %q and %q, want flask and make", sent.Framework, sent.BuildCommand)
+	}
+
+	// A path outside the workspace's coordinates keeps its own name.
+	ctx.RecordFileRead("relative.py", "z = 3\n")
+	if _, err := writeFileWithV3(filepath.Join(dir, "target.py"), "x = 1\n", ctx); err != nil {
+		t.Fatal(err)
+	}
+	want["relative.py"] = "z = 3\n"
+	if !reflect.DeepEqual(sent.ProjectContext, want) {
+		t.Errorf("project context %q, want %q", sent.ProjectContext, want)
+	}
+}
+
+// A proposal that is the caller's content inside a fence is no candidate once
+// the fence goes: the caller's bytes land, under the caller's name.
+func TestAFencedCopyOfTheCallersContentIsNoCandidate(t *testing.T) {
+	baseline := "x = 1\n"
+	v3 := v3AndStructuralServer(t, "```python\nx = 1\n```\n", "no_such_name")
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+
+	res, err := writeFileWithV3(path, baseline, writeGateCtx(t, v3.URL, sandbox.URL, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.V3Used || res.DeliveryProvenance != DeliveryFromModelProposal {
+		t.Errorf("V3Used %v, provenance %q, want the model's own write", res.V3Used, res.DeliveryProvenance)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != baseline {
+		t.Errorf("the file holds %q (%v), want %q", got, err, baseline)
+	}
+}
+
+// V3 that outlasts its time budget leaves the caller's content on disk, and the
+// client is told the time ran out, not that V3 is down.
+func TestAV3CallThatRunsOutOfTimeWritesTheCallersContent(t *testing.T) {
+	t.Setenv("ATLAS_V3_TIMEOUT", "1")
+	baseline := "x = 1\n"
+	stop := make(chan struct{})
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			<-stop
+		}
+	}))
+	defer v3.Close()
+	defer close(stop)
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	var messages []string
+	ctx.StreamFn = func(event string, data interface{}) {
+		messages = append(messages, fmt.Sprint(data))
+	}
+
+	res, err := writeFileWithV3(path, baseline, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !res.Success {
+		t.Errorf("the write failed: %s", res.Error)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != baseline {
+		t.Errorf("the file holds %q (%v), want %q", got, err, baseline)
+	}
+	if !strings.Contains(strings.Join(messages, "\n"), "V3 ran out of its time budget") {
+		t.Errorf("no message says the time ran out: %q", messages)
+	}
+}
+
+// With no candidate there is nothing to fall back to: the caller's content is
+// what would land, and it does not parse.
+func TestCallersBrokenContentIsRefusedWhenV3ProposesNothing(t *testing.T) {
+	baseline := "def broken(:\n"
+	v3 := v3AndStructuralServer(t, baseline, "no_such_name")
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "broken")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+
+	res, err := writeFileWithV3(path, baseline, writeGateCtx(t, v3.URL, sandbox.URL, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Success || res.MutationStatus != MutationRefused || res.ValidationKind != ValidationKindSyntax {
+		t.Errorf("success %v, %q, %q, want a syntax refusal", res.Success, res.MutationStatus, res.ValidationKind)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the file was written: %v", err)
+	}
 }
