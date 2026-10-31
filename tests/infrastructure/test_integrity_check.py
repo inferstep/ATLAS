@@ -200,6 +200,14 @@ def test_the_task_names_come_from_the_runner_at_its_new_place(ic, tmp_path):
     assert ic.task_names(tmp_path) == {"a_task"}
 
 
+def test_the_runner_at_its_old_place_wins_while_both_exist(ic, tmp_path):
+    new = tmp_path / "scripts" / "eval" / "e2e-reliability.py"
+    new.parent.mkdir(parents=True)
+    new.write_text('TASKS = {"from_the_new_place": None}\n')
+    (tmp_path / "scripts" / "e2e-reliability.py").write_text('TASKS = {"from_the_old_place": None}\n')
+    assert ic.task_names(tmp_path) == {"from_the_old_place"}
+
+
 def test_the_task_names_come_from_the_runner(ic):
     names = ic.task_names()
     assert {"flask_pause", "aoc_sonar", "multifile_cli"} <= names

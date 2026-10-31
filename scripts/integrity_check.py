@@ -38,8 +38,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # The base's copy of this script judges a change, so it has to know the runner's
-# new place before the change that moves the runner there.
-TASK_SOURCES = (Path("scripts") / "eval" / "e2e-reliability.py", Path("scripts") / "e2e-reliability.py")
+# new place before the change that moves the runner there. The old place comes
+# first: while both exist, a file added at the new place decides nothing.
+TASK_SOURCES = (Path("scripts") / "e2e-reliability.py", Path("scripts") / "eval" / "e2e-reliability.py")
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
 PRODUCT_DIRS = ("proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
