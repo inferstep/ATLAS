@@ -1,7 +1,5 @@
 """Tests for V3 Budget Forcing (Feature 1C)."""
 
-import json
-
 import pytest
 
 from stages.budget_forcing import (
@@ -171,31 +169,4 @@ def test_format_chatml(tier):
 # Telemetry
 # ---------------------------------------------------------------------------
 
-def test_log_event_appends_one_json_line_per_event(tmp_path):
-    budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True), telemetry_dir=tmp_path)
 
-    budget_forcing.log_event(
-        task_id="LCB_001", tier="hard", raw_energy=12.5, normalized_energy=0.82,
-        thinking_tokens=2000, wait_injections=1, thinking_extended=True, total_tokens=5000,
-    )
-    budget_forcing.log_event(task_id="LCB_002", tier="nothink")
-
-    lines = (tmp_path / "budget_forcing_events.jsonl").read_text().splitlines()
-    assert len(lines) == 2
-    first, second = json.loads(lines[0]), json.loads(lines[1])
-    assert first["task_id"] == "LCB_001"
-    assert first["tier"] == "hard"
-    assert first["raw_energy"] == 12.5
-    assert first["thinking_tokens"] == 2000
-    assert first["wait_injections"] == 1
-    assert first["thinking_extended"] is True
-    # An event without energy leaves the energy fields out.
-    assert second["task_id"] == "LCB_002"
-    assert "raw_energy" not in second
-    assert "normalized_energy" not in second
-
-
-def test_log_event_without_a_telemetry_dir_still_returns_the_event():
-    budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True), telemetry_dir=None)
-    event = budget_forcing.log_event(task_id="test", tier="standard")
-    assert event.task_id == "test"

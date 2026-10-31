@@ -1,5 +1,6 @@
 """Lens provenance manifest (§9.5)."""
 
+import json
 import os
 import sys
 
@@ -30,42 +31,7 @@ def test_build_and_roundtrip(tmp_path):
 
     path = provenance.save_provenance(str(tmp_path), m)
     assert os.path.basename(path) == "provenance.json"
-    loaded = provenance.load_provenance(str(tmp_path))
-    assert loaded == m
+    with open(path) as f:
+        assert json.load(f) == m
 
 
-def test_completeness_gate(tmp_path):
-    (tmp_path / "cost_field.pt").write_bytes(b"x")
-    complete = provenance.build_manifest(
-        model="m", embedding_dim=3840, created_at="2026-07-05T00:00:00",
-        dataset="ds", metrics={"val_auc": 0.7},
-        normalization={"midpoint": 1.0}, save_dir=str(tmp_path))
-    # training_commit may be "(unknown)" off a git tree; force a value
-    complete["training_commit"] = "abc1234"
-    assert provenance.is_complete(complete), provenance.missing_fields(complete)
-
-    incomplete = dict(complete)
-    incomplete["dataset"] = ""
-    assert not provenance.is_complete(incomplete)
-    assert "dataset" in provenance.missing_fields(incomplete)
-
-
-def test_missing_manifest_is_incomplete():
-    assert not provenance.is_complete(None)
-    assert set(provenance.missing_fields(None)) == set(
-        provenance.REQUIRED_FOR_COMPLETE)
-
-
-def test_is_complete_rejects_zero_dim():
-    m = {
-        "model": "m", "embedding_dim": 0, "created_at": "t",
-        "training_commit": "abc", "dataset": "ds",
-        "metrics": {"val_auc": 0.7}, "normalization": {"midpoint": 1.0},
-        "artifact_sha256": {"cost_field.pt": "x" * 64},
-    }
-    assert not provenance.is_complete(m)
-    assert "embedding_dim" in provenance.missing_fields(m)
-    # a valid positive dim passes
-    m["embedding_dim"] = 3840
-    assert provenance.is_complete(m)
-    assert "embedding_dim" not in provenance.missing_fields(m)

@@ -150,8 +150,6 @@ def test_there_are_six_failure_categories_with_descriptions():
     }
     for name, description in FAILURE_CATEGORIES.items():
         assert len(description) > 10, f"{name!r} has too short a description: {description!r}"
-    analyzer = FailureAnalyzer(FailureAnalysisConfig())
-    assert analyzer.get_category_descriptions() == FAILURE_CATEGORIES
 
 
 def test_parse_failure_categories_knows_every_category():

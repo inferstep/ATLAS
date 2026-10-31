@@ -1638,7 +1638,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// The would-have, not the outcome: an acquisition control takes the licence
 	// and leaves the answer, so the policy is asked the question it would have
 	// been asked without one.
-	// Strict means strict. An automatic licence also makes mayDeliver true, and
+	// Strict means strict. An automatic licence also holds a grant, and
 	// reporting it as a strict authorization would name the wrong rule in the
 	// record a calibration is computed from.
 	policy := decideCandidatePolicy(ctx, policyInput,

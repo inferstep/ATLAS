@@ -243,16 +243,6 @@ class DivSampling:
         """The current perturbation library."""
         return self._library
 
-    @property
-    def library_size(self) -> int:
-        return len(self._library)
-
-    def get_perturbation(self, candidate_index: int) -> Perturbation:
-        """Get the perturbation for a specific candidate index."""
-        if not self.config.enabled:
-            return Perturbation(text="", category="none", label="disabled")
-        return select_perturbation(candidate_index, self._library)
-
     def apply(self, prompt: str, candidate_index: int,
               task_id: str = "") -> str:
         """Apply perturbation to a prompt for a given candidate.
@@ -282,12 +272,6 @@ class DivSampling:
 
         return result
 
-    def get_category_counts(self) -> Dict[str, int]:
-        """Count perturbations by category."""
-        counts: Dict[str, int] = {}
-        for p in self._library:
-            counts[p.category] = counts.get(p.category, 0) + 1
-        return counts
 
     # -- Private helpers ----------------------------------------------------
 

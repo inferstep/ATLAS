@@ -174,14 +174,6 @@ class Model:
         (e.g., a model whose upstream has been deleted)."""
         return self.download_url is not None
 
-    @property
-    def is_gated(self) -> bool:
-        """True for entries whose upstream returns 401 without auth.
-        Now backed by an explicit field rather than 'no URL' so we
-        can populate URLs for authenticated users while still steering
-        anonymous users to the helpful message."""
-        return self.requires_hf_token
-
 
 # PC-056.1: the unsloth/Qwen3.5-9B-GGUF URLs are pinned to this commit so a
 # future upstream re-upload can't silently invalidate our recorded SHA256s.
@@ -513,11 +505,6 @@ def artifact_download_hint(model_name: str, kind: str) -> str:
                 f"`atlas model install-artifacts {m.name}` downloads and "
                 f"hash-verifies them — no local retrain needed.")
     return ""
-
-
-def models_for_tier(tier_name: str) -> List[Model]:
-    """All models registered against a tier (not just the default)."""
-    return [m for m in REGISTRY if m.tier == tier_name]
 
 
 def supported_models() -> List[Model]:

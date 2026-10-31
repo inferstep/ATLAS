@@ -446,7 +446,6 @@ class V3Pipeline:
                 enabled=self.enable_phase1,
                 default_tier=self._v3_conf.get("bf_default_tier", "standard"),
             ),
-            telemetry_dir=telemetry_dir,
         )
         self.plan_search = PlanSearch(
             PlanSearchConfig(

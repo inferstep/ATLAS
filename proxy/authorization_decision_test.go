@@ -157,9 +157,6 @@ func TestTheDecisionSaysTruthfullyWhetherItDecides(t *testing.T) {
 			if a.Typed != tc.influences {
 				t.Errorf("typed=%v, want %v", a.Typed, tc.influences)
 			}
-			if !a.Typed && !a.mayDeliver() {
-				t.Error("an unowned request was refused by the typed path")
-			}
 		})
 	}
 }

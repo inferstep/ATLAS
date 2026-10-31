@@ -5,7 +5,6 @@ Controls model thinking depth by tier: each tier maps to a system prompt
 
 Paper: Muennighoff et al., Stanford (arxiv:2501.19393)
 Config: [budget_forcing] in atlas.conf
-Telemetry: telemetry/budget_forcing_events.jsonl
 
 Budget Tiers:
   nothink  — 0 thinking tokens (thinking disabled via the shared client)
@@ -23,11 +22,8 @@ Energy-to-tier mapping uses normalized Lens energy (sigmoid scale 0-1):
 If no energy available (first generation, no Lens score), uses default_tier.
 """
 
-import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, Optional
 
 
@@ -112,35 +108,6 @@ _SYSTEM_PROMPT_THINK = (
 # Telemetry event
 # ---------------------------------------------------------------------------
 
-@dataclass
-class BudgetForcingEvent:
-    """A single Budget Forcing telemetry event."""
-    task_id: str
-    tier: str
-    raw_energy: Optional[float] = None
-    normalized_energy: Optional[float] = None
-    thinking_tokens: int = 0
-    wait_injections: int = 0
-    thinking_extended: bool = False
-    total_tokens: int = 0
-    timestamp: str = ""
-
-    def to_dict(self) -> Dict:
-        d = {
-            "task_id": self.task_id,
-            "tier": self.tier,
-            "thinking_tokens": self.thinking_tokens,
-            "wait_injections": self.wait_injections,
-            "thinking_extended": self.thinking_extended,
-            "total_tokens": self.total_tokens,
-            "timestamp": self.timestamp or datetime.now(timezone.utc).isoformat(),
-        }
-        if self.raw_energy is not None:
-            d["raw_energy"] = self.raw_energy
-        if self.normalized_energy is not None:
-            d["normalized_energy"] = self.normalized_energy
-        return d
-
 
 # ---------------------------------------------------------------------------
 # Core functions (stateless, usable without class)
@@ -224,22 +191,14 @@ def get_system_prompt(tier: str) -> str:
 class BudgetForcing:
     """Budget Forcing controller for V3 extended reasoning.
 
-    Manages thinking budget tier selection, prompt formatting, and
-    telemetry logging.
+    Manages thinking budget tier selection and prompt formatting.
 
     Args:
         config: BudgetForcingConfig instance.
-        telemetry_dir: Directory for JSONL event logs. None disables logging.
     """
 
-    def __init__(self, config: BudgetForcingConfig,
-                 telemetry_dir: Optional[Path] = None):
+    def __init__(self, config: BudgetForcingConfig):
         self.config = config
-        self.telemetry_dir = telemetry_dir
-        self._events_file: Optional[Path] = None
-        if telemetry_dir is not None:
-            telemetry_dir.mkdir(parents=True, exist_ok=True)
-            self._events_file = telemetry_dir / "budget_forcing_events.jsonl"
 
     # -- Public API ---------------------------------------------------------
 
@@ -255,7 +214,6 @@ class BudgetForcing:
             midpoint=self.config.energy_midpoint,
             steepness=self.config.energy_steepness,
         )
-
 
     def format_chatml(self, user_content: str, tier: str) -> str:
         """Format a ChatML prompt with the appropriate system prompt for the tier.
@@ -287,39 +245,6 @@ class BudgetForcing:
         module-level get_max_tokens()."""
         return get_max_tokens(tier)
 
-    def log_event(self, task_id: str, tier: str,
-                  raw_energy: Optional[float] = None,
-                  normalized_energy: Optional[float] = None,
-                  thinking_tokens: int = 0,
-                  wait_injections: int = 0,
-                  thinking_extended: bool = False,
-                  total_tokens: int = 0) -> BudgetForcingEvent:
-        """Log a Budget Forcing telemetry event.
-
-        Returns the event object for inspection/testing.
-        """
-        event = BudgetForcingEvent(
-            task_id=task_id,
-            tier=tier,
-            raw_energy=raw_energy,
-            normalized_energy=normalized_energy,
-            thinking_tokens=thinking_tokens,
-            wait_injections=wait_injections,
-            thinking_extended=thinking_extended,
-            total_tokens=total_tokens,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
-        self._write_event(event)
-        return event
 
     # -- Private helpers ----------------------------------------------------
 
-    def _write_event(self, event: BudgetForcingEvent) -> None:
-        """Append event to JSONL telemetry file."""
-        if self._events_file is None:
-            return
-        try:
-            with open(self._events_file, "a") as f:
-                f.write(json.dumps(event.to_dict()) + "\n")
-        except OSError:
-            pass  # Telemetry failure should not crash the benchmark
