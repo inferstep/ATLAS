@@ -1870,7 +1870,7 @@ func eraseOneSlot(reqCtx context.Context, client *http.Client, llamaURL string, 
 func pollPromptProgress(ctx *AgentContext, llamaURL string, stop <-chan struct{}, totalEst int) {
 	// Defense in depth: if anything panics inside this goroutine
 	// (e.g. a write to a closed flusher) don't take the whole proxy
-	// down with it. The WaitGroup in callLLMOnce should prevent the
+	// down with it. The WaitGroup in callLLMOnceWithGrammar should prevent the
 	// race that makes this possible, but a recover here is cheap.
 	defer func() {
 		if r := recover(); r != nil {
@@ -1980,17 +1980,6 @@ var llmStreamClient = &http.Client{
 	},
 }
 
-// callLLMOnce is callLLMOnceWithGrammar with no grammar: one round-trip
-// to llama-server's /v1/chat/completions. The request streams over SSE so
-// the proxy can forward per-token deltas to the TUI as llm_token events;
-// the first delta also fires llm_first_token with the prompt-eval
-// duration (request sent to first token), which the user otherwise cannot
-// see. A streamed call has no total-request timeout, so a long write_file
-// generation is not cut (see llmStreamClient).
-func callLLMOnce(ctx *AgentContext, messages []AgentMessage, temperature float64) (string, int, error) {
-	return callLLMOnceWithGrammar(ctx, messages, temperature, "")
-}
-
 // toWireMessages converts the agent's internal messages to the role/content
 // pairs sent on /v1/chat/completions.
 //
@@ -2090,7 +2079,7 @@ func envIntOr(key string, def int) int {
 // bottleneck anyway, and a big paste costs prompt-processing time on every turn.
 const restatementMaxBytes = 24000
 
-// appendLastReadRestatement puts the most recently read file back at the END of
+// appendLastReadRestatementFor puts the most recently read file back at the END of
 // the message list, immediately before the generation point.
 //
 // Why this helps: the read_file result the model must copy from sits behind the
@@ -2105,12 +2094,8 @@ const restatementMaxBytes = 24000
 // Skipped when nothing has been read, when the file is large, and when the same
 // content is already in the window (the common case right after a read_file).
 // ATLAS_RESTATE_LAST_READ=0 disables.
-func appendLastReadRestatement(ctx *AgentContext, wire []map[string]string) []map[string]string {
-	return appendLastReadRestatementFor(ctx, wire, "")
-}
-
-// appendLastReadRestatementFor is appendLastReadRestatement with a target: when
-// onlyPath is set, the last read is restated only if it IS that file.
+//
+// When onlyPath is set, the last read is restated only if it IS that file.
 //
 // Measured (stabilization cycle 4, probe M, 98 generations on 49 captured
 // requests): the file-content sub-call asks for one file while the context
@@ -2174,11 +2159,17 @@ func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, o
 	return append(wire, map[string]string{"role": "user", "content": sb.String()})
 }
 
-// callLLMOnceWithGrammar is callLLMOnce with an optional GBNF grammar override,
-// which llama-server enforces at token-decode level (for example to ban
-// edit_file and write_file from the tool-name production for a single
-// decision). With a grammar the json_object response_format is dropped, because
-// GBNF is the more specific constraint.
+// callLLMOnceWithGrammar is one round-trip to llama-server's
+// /v1/chat/completions. The request streams over SSE so the proxy can forward
+// per-token deltas to the TUI as llm_token events; the first delta also fires
+// llm_first_token with the prompt-eval duration (request sent to first token),
+// which the user otherwise cannot see. A streamed call has no total-request
+// timeout, so a long write_file generation is not cut (see llmStreamClient).
+//
+// An optional GBNF grammar override is enforced by llama-server at token-decode
+// level (for example to ban edit_file and write_file from the tool-name
+// production for a single decision). With a grammar the json_object
+// response_format is dropped, because GBNF is the more specific constraint.
 func callLLMOnceWithGrammar(ctx *AgentContext, messages []AgentMessage, temperature float64, grammar string) (string, int, error) {
 	return callLLMOnceRestating(ctx, messages, temperature, grammar, "")
 }
@@ -2315,7 +2306,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 
 	// pollPromptProgress runs as a sibling goroutine while the LLM call is
 	// in flight; it streams elapsed_ms ticks back to the TUI. We MUST
-	// guarantee it has fully exited before callLLMOnce returns — otherwise
+	// guarantee it has fully exited before callLLMOnceWithGrammar returns — otherwise
 	// it can call ctx.Stream (which writes to handleAgent's flusher) AFTER
 	// handleAgent has returned and the response writer is invalid, causing
 	// a SIGSEGV inside bufio.(*Writer).Flush. The defers run LIFO: stop
@@ -4566,7 +4557,7 @@ func (loop *agentLoop) detectRepetition(turn int, parsed ModelResponse, intentAr
 // turn after turn, and returns the corrective it queued, or "".
 //
 // Reasoning-repetition detector. The model's reasoning_content stream
-// is captured per-turn in ctx.LastTurnReasoning by callLLMOnce.
+// is captured per-turn in ctx.LastTurnReasoning by callLLMOnceWithGrammar.
 // recordReasoning compares the normalized opening prefix against the
 // prior turn's snippet; three consecutive identical openings
 // (reasoningRepeatThreshold repeats) fire the intervention. Sibling to
@@ -6051,15 +6042,6 @@ func conversationTokenBudget() int {
 		}
 	}
 	return budget
-}
-
-// isLoopingTail reports whether the content stream has degenerated into a
-// verbatim repeating phrase — the signature of a model spiraling on the same
-// sentence ("...the first line is X. Wait, I can't see the output. I'll just
-// say X. Wait, I can't see..."). Takes a chunk from the tail and counts its
-// occurrences; 3+ verbatim repeats is a loop a real response never produces.
-func isLoopingTail(s string) bool {
-	return loopingTailCount(s) >= 3
 }
 
 // loopingTailCount is how many times the stream's 48-char tail appears in

@@ -51,8 +51,14 @@ func (k commandEvidenceKind) String() string {
 	return "none"
 }
 
-// verifies reports whether the kind can stand as verification that the
-// program works. Static checks cannot.
+// verifies reports whether the kind can stand as verification that the program
+// works: the command ran the program or its tests, or fetched a response body,
+// and the line reports that part's exit status. A parse, a lint, a build, a
+// `--version`, a headers-only probe, and a test whose status `| tail` or
+// `|| true` replaced are not verification. A probe that never retrieves a body
+// proves the SERVER is up, not that the artifact works: measured on a "build me
+// a snake game" session, `curl -I` was recorded as the verification and `done`
+// shipped an index.html with no HTML in it.
 func (k commandEvidenceKind) verifies() bool {
 	return k == evidenceProbe || k == evidenceExecution
 }

@@ -579,7 +579,7 @@ could close at all. Closed reasons: `closure_path_available`, `no_trusted_source
 `adapter_cannot_measure`, `unsupported_obligation`, `baseline_floor_unreachable`,
 `unspecified_contract`, `unknown`.
 
-It reads `producibleStrengths()`, which is derived from the producer wiring
+It reads `producibleStrengthsWith()`, which is derived from the producer wiring
 inventory rather than declared separately — so a producer that loses its call
 path makes the tasks that need it infeasible, automatically.
 

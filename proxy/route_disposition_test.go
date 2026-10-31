@@ -11,49 +11,27 @@ import (
 
 // --- the vocabularies are closed ------------------------------------------
 
-// Every routing disposition is registered, and only an authorized candidate
-// counts as routing success.
+// Every routing disposition is registered.
 func TestRoutingDispositionsAreAClosedSet(t *testing.T) {
-	for _, tc := range []struct {
-		disposition routingDisposition
-		success     bool
-	}{
-		{routingSkippedInfeasible, false},
-		{routingProducerUnavailable, false},
-		{routingProducerTimedOut, false},
-		{routingCancelled, false},
-		{routingNoCandidate, false},
-		{routingNotClosureEligible, false},
-		{routingRevokedByGate, false},
-		{routingBaselineRetained, false},
-		{routingAuthorizationRefused, false},
-		{routingUnclassified, false},
-		{routingCandidateAuthorized, true},
+	for _, disposition := range []routingDisposition{
+		routingSkippedInfeasible,
+		routingProducerUnavailable,
+		routingProducerTimedOut,
+		routingCancelled,
+		routingNoCandidate,
+		routingNotClosureEligible,
+		routingRevokedByGate,
+		routingBaselineRetained,
+		routingAuthorizationRefused,
+		routingUnclassified,
+		routingCandidateAuthorized,
 	} {
-		if !knownRoutingDisposition(tc.disposition) {
-			t.Errorf("%q is used and not registered", tc.disposition)
-		}
-		if got := routingDispositionSucceeded(tc.disposition); got != tc.success {
-			t.Errorf("routingDispositionSucceeded(%q) = %v, want %v", tc.disposition, got, tc.success)
+		if !knownRoutingDisposition(disposition) {
+			t.Errorf("%q is used and not registered", disposition)
 		}
 	}
 	if knownRoutingDisposition("delivered") {
 		t.Error("an unregistered disposition was accepted")
-	}
-}
-
-func TestOnlyOneDeliveryDispositionMeansLanded(t *testing.T) {
-	if !deliveryDispositionLanded(deliveryConsumedAndLanded) {
-		t.Error("consumed_and_landed is the landing case")
-	}
-	for _, d := range []deliveryDisposition{
-		deliveryNotAttemptedBaseline, deliveryNotAttemptedSuperseded,
-		deliveryConsumedDidNotSettle, deliveryRefusedAtConsumption,
-		deliveryRetiredAtTerminal, deliveryCancelled, deliveryUnclassified,
-	} {
-		if deliveryDispositionLanded(d) {
-			t.Errorf("%q was read as a landing", d)
-		}
 	}
 }
 

@@ -20,7 +20,7 @@ func feasibilityFor(t *testing.T, contract string, files map[string]string) Feas
 	return decideInvocationFeasibility(feasibilityInput{
 		Obligations:       obs,
 		AuthorizedTargets: authorizedTargets(obs),
-		Producible:        producibleStrengths(),
+		Producible:        producibleStrengthsWith(true),
 	})
 }
 
@@ -125,7 +125,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       obs,
 			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        producibleStrengths(),
+			Producible:        producibleStrengthsWith(true),
 		})
 		// Preservation has no producer and never will. It is reachable because
 		// the syntax evidence that speaks for the candidate reaches the same
@@ -154,7 +154,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 			FeasibilityBaselineFloorUnreachable)
 
 		// With behavioural evidence producible, the same floor is reachable.
-		in.Producible = producibleStrengths()
+		in.Producible = producibleStrengthsWith(true)
 		expectFeasibility(t, "behavioural baseline, staging wired",
 			decideInvocationFeasibility(in), true, FeasibilityClosurePathAvailable)
 	})
@@ -173,7 +173,7 @@ func TestFeasibilityOfAPreservedBaseline(t *testing.T) {
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       obs,
 			AuthorizedTargets: authorizedTargets(obs),
-			Producible:        producibleStrengths(),
+			Producible:        producibleStrengthsWith(true),
 		})
 		// The floor is the baseline's, and staging can reach it. Preservation
 		// itself is derived rather than produced; staging is what reaches that
@@ -195,7 +195,7 @@ func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       []taskObligation{exists, unsup},
 			AuthorizedTargets: []string{"a.py"},
-			Producible:        producibleStrengths(),
+			Producible:        producibleStrengthsWith(true),
 		})
 		expectFeasibility(t, "unsupported", d, false, FeasibilityUnsupportedObligation)
 	})
@@ -220,7 +220,7 @@ func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       []taskObligation{cmd},
 			AuthorizedTargets: nil,
-			Producible:        producibleStrengths(),
+			Producible:        producibleStrengthsWith(true),
 		})
 		expectFeasibility(t, "no target", d, false, FeasibilityNoTrustedSource)
 	})
@@ -232,7 +232,7 @@ func TestFeasibilityNeedsAClosablePrerequisite(t *testing.T) {
 		d := decideInvocationFeasibility(feasibilityInput{
 			Obligations:       []taskObligation{exists, forged},
 			AuthorizedTargets: []string{"a.py"},
-			Producible:        producibleStrengths(),
+			Producible:        producibleStrengthsWith(true),
 		})
 		// A kind with no role is not a prerequisite, so there is nothing left
 		// to demonstrate and no closure path.
@@ -251,7 +251,7 @@ func TestALaterInvocationRecomputesFromWhatIsAvailableThen(t *testing.T) {
 	in := feasibilityInput{
 		Obligations:       obs,
 		AuthorizedTargets: authorizedTargets(obs),
-		Producible:        producibleStrengths(),
+		Producible:        producibleStrengthsWith(true),
 	}
 	withStaging := decideInvocationFeasibility(in)
 	expectFeasibility(t, "with the staging producer wired", withStaging, true,

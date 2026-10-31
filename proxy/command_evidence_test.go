@@ -430,7 +430,7 @@ func TestRunCommandForEachExecutableLanguage(t *testing.T) {
 		if got := runCommandFor(path); got != want {
 			t.Errorf("runCommandFor(%q) = %q, want %q", path, got, want)
 		}
-		if !isVerificationCommand(runCommandFor(path)) {
+		if !classifyCommandEvidence(runCommandFor(path)).Kind.verifies() {
 			t.Errorf("the command quoted for %s does not count as verification", path)
 		}
 	}

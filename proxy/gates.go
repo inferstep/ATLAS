@@ -460,13 +460,6 @@ func checkFallbackSyntax(ctx *AgentContext, path, content string) (string, bool)
 	return agg.Detail, agg.Status != ValidationFailed
 }
 
-// checkSandboxSyntax is the whole-file half of checkFallbackSyntax: the
-// sandbox's /syntax-check in the file's own language.
-func checkSandboxSyntax(ctx *AgentContext, path, content string) (string, bool) {
-	o := sandboxSyntaxOutcome(ctx, path, content)
-	return o.Detail, o.Status != ValidationFailed
-}
-
 // sandboxSyntaxRequest builds the /syntax-check body, carrying the filename
 // only in the workspace-relative form the sandbox accepts.
 //
@@ -511,11 +504,12 @@ func workspaceRelativeName(ctx *AgentContext, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// sandboxSyntaxOutcome is the structured core. APPLICABILITY IS EVALUATED
+// sandboxSyntaxOutcome is the whole-file half of checkFallbackSyntax: the
+// sandbox's /syntax-check in the file's own language. APPLICABILITY IS EVALUATED
 // FIRST: the extension decides whether this check applies at all, before any
 // service availability question, so a missing sandbox cannot mask genuinely
 // non-applicable content. That changes the structured evidence only -- the
-// wrapper's allow/refuse decision is identical either way.
+// allow/refuse decision is identical either way.
 func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome {
 	meta, gated := syntaxGateLanguages[strings.ToLower(filepath.Ext(path))]
 	if !gated {

@@ -57,11 +57,6 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 			if got.Status != c.want {
 				t.Errorf("Status = %q, want %q (detail %q)", got.Status, c.want, got.Detail)
 			}
-			// Wrapper parity: only a demonstrated failure may refuse.
-			_, ok := checkSandboxSyntax(ctx, c.path, "A = 1\n")
-			if wantOK := c.want != ValidationFailed; ok != wantOK {
-				t.Errorf("wrapper ok = %v, want %v -- fail-open behavior changed", ok, wantOK)
-			}
 			if got.Status == ValidationPassed && !got.attempted() {
 				t.Error("a pass must count as attempted")
 			}
@@ -78,9 +73,6 @@ func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
 	got := sandboxSyntaxOutcome(nil, "mod.py", "A = 1\n")
 	if got.Status != ValidationNotRun {
 		t.Errorf("Status = %q, want %q (detail %q)", got.Status, ValidationNotRun, got.Detail)
-	}
-	if _, ok := checkSandboxSyntax(nil, "mod.py", "A = 1\n"); !ok {
-		t.Error("wrapper ok = false, want true -- fail-open behavior changed")
 	}
 }
 

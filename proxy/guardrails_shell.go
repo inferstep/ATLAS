@@ -410,8 +410,8 @@ func runsAServerLoop(cmd string, readFile func(string) (string, bool)) bool {
 	return false
 }
 
-// foregroundServerRejection redirects a server start from run_command to
-// run_background before it executes.
+// foregroundServerRejectionWithSource redirects a server start from run_command
+// to run_background before it executes.
 //
 // Observed on the first-contact path — an empty workspace, "create a simple
 // portfolio website": the model wrote three files, then ran
@@ -423,13 +423,9 @@ func runsAServerLoop(cmd string, readFile func(string) (string, bool)) bool {
 // The guidance already says to use run_background for servers and the model
 // still does this, which is the usual result for an instruction. The harness
 // can see the command before it runs, so it stops being a suggestion.
-func foregroundServerRejection(cmd string) string {
-	return foregroundServerRejectionWithSource(cmd, nil)
-}
-
-// foregroundServerRejectionWithSource is foregroundServerRejection plus the
-// workspace reader, so a script that serves is caught alongside the
-// launchers that always do.
+//
+// The workspace reader catches a script that serves, alongside the launchers
+// that always do.
 //
 // The pattern list covers the well-known launchers (`http.server`,
 // `npm run dev`, `flask run`). It cannot cover a file the user wrote:

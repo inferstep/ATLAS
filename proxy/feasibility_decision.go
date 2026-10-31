@@ -71,8 +71,9 @@ type FeasibilityDecision struct {
 	InfluencesLiveDecision bool
 }
 
-// producibleStrengths is what each trusted source could observe on this build,
-// keyed by the obligation kind it speaks for.
+// producibleStrengthsWith is what each trusted source could observe on this
+// build, keyed by the obligation kind it speaks for, told whether the sandbox
+// that runs both producers is actually reachable.
 //
 // Read from the wiring inventory, not from a wish list: a source declared
 // unavailable contributes nothing, so a task that needs it has no path. That
@@ -80,12 +81,6 @@ type FeasibilityDecision struct {
 // later invocation recomputes from what is available then. The current
 // invocation cannot gain authority retroactively, because the decision is made
 // once, before generation, from what exists at that moment.
-func producibleStrengths() map[string]string {
-	return producibleStrengthsWith(true)
-}
-
-// producibleStrengthsWith is the same inventory, told whether the sandbox that
-// runs both producers is actually reachable.
 //
 // A producer that is wired and unreachable can demonstrate nothing, and a
 // feasibility answer that ignored that would say a task could close while the
