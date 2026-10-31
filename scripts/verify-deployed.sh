@@ -87,7 +87,9 @@ if [ ${#stale[@]} -gt 0 ]; then
         echo "     current session and record protocol defects caused by you,"
         echo "     not by ATLAS. Wait for it to finish, then recreate."
     fi
-    busy=$(curl -s --max-time 5 http://localhost:8080/slots 2>/dev/null \
+    # The token goes through stdin, so it never shows in a process list.
+    busy=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat secrets/service-token 2>/dev/null)" \
+           | curl -s --max-time 5 -K - http://localhost:8080/slots 2>/dev/null \
            | grep -o '"is_processing":true' | wc -l)
     if [ "${busy:-0}" -gt 0 ]; then
         echo "  !! llama-server has ${busy} slot(s) processing — something is mid-turn."
