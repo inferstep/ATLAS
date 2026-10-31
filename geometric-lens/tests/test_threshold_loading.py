@@ -28,6 +28,18 @@ def test_invalid_cx_calibration_is_disabled(tmp_path):
     assert service._cx_normalization is None
 
 
+def test_a_pickled_gx_model_is_not_loaded_and_the_log_says_how_to_rebuild(tmp_path, monkeypatch, caplog):
+    for name in ("_gx_xgboost", "_gx_pca_components", "_gx_pca_mean", "_gx_top_dims"):
+        monkeypatch.setattr(service, name, getattr(service, name))
+    (tmp_path / "gx_xgboost.pkl").write_bytes(b"never read")
+    (tmp_path / "gx_weights.json").write_text("{}")
+
+    service._load_gx_models(str(tmp_path))
+
+    assert service._gx_xgboost is None
+    assert "atlas lens build" in caplog.text
+
+
 def test_missing_threshold_file_disables_calibrated_verdicts(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_gx_thresholds", {"off_rails": 0.9, "low": 0.9, "severe": 0.9})
     service._load_gx_thresholds(str(tmp_path))

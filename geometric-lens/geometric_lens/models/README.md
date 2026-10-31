@@ -13,8 +13,7 @@
 | `gx_thresholds.json` | <1K | Per-model `severe`, `off_rails`, and `low` operating thresholds. |
 | `provenance.json` | <2K | Build manifest written by `atlas lens build` into every activated bundle: dataset, sample counts, metrics, hyperparameters, per-file SHA-256. Consumed by `atlas artifact verify/snapshot/rollback`. |
 
-`gx_xgboost.pkl` (the legacy pickle fallback) is removed on retrain —
-`save_gx` deletes it so a previous model's pickle can't shadow the JSON.
+The lens does not load an old `gx_xgboost.pkl`, and `save_gx` deletes one on retrain.
 
 The checked-in reference bundle predates the identity/calibration files above.
 It remains useful as frozen provenance, but current runtime interventions stay

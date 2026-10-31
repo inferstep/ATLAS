@@ -16,6 +16,9 @@ come from your checkout, so run `git pull` first.
 - On ROCm and Vulkan, your `.env` keeps llama-server as root, so it keeps the
   GPU. Run `atlas init --reconfigure` to move it to the installing user with the
   host's group numbers. This path has not run on an AMD or a Vulkan GPU.
+- `ATLAS_ALLOW_PICKLE_GX` is gone: the lens loads G(x) from `gx_xgboost.json` only.
+  A model folder that holds only `gx_xgboost.pkl` runs without G(x) and says so in
+  the lens's log. Run `atlas lens build` to rebuild it.
 
 ### Changed: the Compose overlays moved to `compose/`
 

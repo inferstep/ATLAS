@@ -167,7 +167,7 @@ tui/atlas-tui
 geometric-lens/geometric_lens/models/training_embeddings_*.json
 geometric-lens/geometric_lens/models/*_backup.pt
 geometric-lens/geometric_lens/models/cost_field_phase0.pt
-# Keep: cost_field.pt, gx_xgboost.pkl, gx_weights.json,
+# Keep: cost_field.pt, gx_xgboost.json, gx_weights.json,
 # gx_thresholds.json, model_identity.json, stats files
 # Keep: geometric-lens/data/sample/ (small in-repo sample). The broad
 # `data/` rule above would swallow it, so re-include the path chain.
