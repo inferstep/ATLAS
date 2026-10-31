@@ -204,7 +204,8 @@ shows it is the **remainder**: what the enforced budgets leave for the one
 component nothing holds. With the compose defaults that is 9.86 GiB against an
 expectation of 11 GiB.
 
-An overrun of the remainder is neither reported nor refused. The refusal is for
+An overrun of the remainder is never refused. When `ATLAS_HOST_MEMORY_BYTES` is set, the proxy
+log reports it once at start. The refusal is for
 enforced maxima that over-commit — a number an operator can edit. An unbounded component that
 outgrows the remainder needs a different fix (a validated limit, or a smaller
 model), and disabling execution would not make the machine safer.

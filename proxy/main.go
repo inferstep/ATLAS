@@ -777,6 +777,7 @@ func main() {
 	// verdict the TUI's header badge will render, as one calibration view (Lens
 	// and ASA lines) at startup.
 	logCalibrationStatusAtStartup()
+	logEnvelopeOverruns(envelopeFromEnv())
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()

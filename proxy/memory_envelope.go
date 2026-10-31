@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -18,7 +19,7 @@ import (
 // something to kill. It chose the largest resident process, which was the
 // model.
 //
-// So the sum is checked, once, at startup, against a host size the operator
+// So the sum is checked before a command runs, against a host size the operator
 // states. Nothing is inferred: an envelope nobody declared is not silently
 // assumed to be fine, it is reported as unvalidated, and the per-command
 // contract carries the safety on its own until someone declares one.
@@ -95,6 +96,18 @@ func (e memoryEnvelope) unenforcedOverruns() []string {
 		}
 	}
 	return out
+}
+
+// logEnvelopeOverruns writes each overrun to the log once, at startup, so an
+// operator can see it before the kernel has to act on it. An envelope nobody
+// declared has no remainder to compare against.
+func logEnvelopeOverruns(e memoryEnvelope) {
+	if !e.declared() {
+		return
+	}
+	for _, overrun := range e.unenforcedOverruns() {
+		log.Printf("  Memory: %s", overrun)
+	}
 }
 
 // validate reports every way the declaration cannot hold. All of them, not the
