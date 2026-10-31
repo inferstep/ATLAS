@@ -601,7 +601,7 @@ def _probe_service_auth(name: str, method: str, url: str, body: Optional[dict], 
         return CheckResult(check, "skip", f"token present; enforcement probe skipped ({type(e).__name__})")
     if wrong != 401:
         return CheckResult(check, "warn", f"token file present but the {name} accepts wrong tokens",
-                           f"the {name} container predates the token or lacks the secrets mount — docker compose up -d")
+                           f"the {name} container predates the token or lacks the secrets mount — docker compose up -d --force-recreate")
     if right == 401:
         return CheckResult(check, "fail", f"host token rejected by the {name} (rotation without restart?)",
                            "docker compose restart  # services reload the token")

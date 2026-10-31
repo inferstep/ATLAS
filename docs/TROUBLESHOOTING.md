@@ -272,7 +272,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-If this works for you on a previously-unsupported card, please leave a note on [GH #26](https://github.com/inferstep/ATLAS/issues/26) — community-tested overrides feed into the next release's docs.
+If this works for you on a previously-unsupported card, please leave a note on [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports) — community-tested overrides feed into the next release's docs.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x required
 
@@ -623,6 +623,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **Fix:** The proxy sets a `response_format` automatically inside the `/v1/agent` agent-loop handler. `ATLAS_GRAMMAR_MODE` picks the shape: the default `strict` sends `{"type":"json_object","schema":<full tool-call schema>}` so llama-server's GBNF sampler can only emit the tool_call/text/done union; `ATLAS_GRAMMAR_MODE=loose` sends `{"type":"json_object"}` only (valid JSON, shape not enforced) — the escape hatch for models that handle the schema-to-GBNF conversion poorly (Gemma-family models need `loose` — strict mode makes them done-spam). If you're hitting llama-server directly via `/v1/chat/completions` or `/v1/completions`, you have to include the parameter yourself:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -742,7 +743,7 @@ Restart the proxy after changing. If you see hallucinations with the erase disab
 
 **What to do:** Read the missing file via `read_file` so it lands in the project context. If you're calling the sandbox `/execute` API directly, pass supporting files in the request body:
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -856,7 +857,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **Fix:**
 1. Confirm the embed server's convention. A pooled+normalized server returns a flat vector with ‖v‖≈1:
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    The pooled norm should land in the low hundreds (~100-150 for the
@@ -878,6 +879,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```

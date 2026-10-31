@@ -39,7 +39,7 @@ func TestPromptProgressComesOnlyWhileTheModelHasGivenNoFirstPiece(t *testing.T) 
 		defer mu.Unlock()
 		events = append(events, event)
 	}
-	if _, _, err := callLLMOnce(ctx, ctx.Messages, 0.3); err != nil {
+	if _, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, ""); err != nil {
 		t.Fatalf("the call of the model failed: %v", err)
 	}
 	mu.Lock()

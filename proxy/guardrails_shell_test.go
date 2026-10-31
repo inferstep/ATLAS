@@ -270,12 +270,12 @@ func TestForegroundServerStartsAreRedirectedBeforeTheyRun(t *testing.T) {
 		{"npm test", false},
 	} {
 		t.Run(c.cmd, func(t *testing.T) {
-			if got := foregroundServerRejection(c.cmd); (got != "") != c.redirected {
-				t.Errorf("foregroundServerRejection = %q, want a redirect: %v", got, c.redirected)
+			if got := foregroundServerRejectionWithSource(c.cmd, nil); (got != "") != c.redirected {
+				t.Errorf("foregroundServerRejectionWithSource = %q, want a redirect: %v", got, c.redirected)
 			}
 		})
 	}
-	msg := foregroundServerRejection("python3 -m http.server 8000")
+	msg := foregroundServerRejectionWithSource("python3 -m http.server 8000", nil)
 	for _, want := range []string{"run_background", "python3 -m http.server 8000", "curl", "stop_background"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the redirect lacks %q:\n%s", want, msg)

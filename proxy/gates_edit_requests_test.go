@@ -381,20 +381,52 @@ const ownTestFile = "from stats import mean, median\n\n\ndef test_mean():\n" +
 // applies only to files the session did not write.
 const smallOwnTestFile = "from chunk import chunks\n\nresult = chunks([1, 2, 3, 4, 5], 2)\nprint(result)\n"
 
+type resentWriteCase struct {
+	name         string
+	path         string
+	onDisk       string
+	sessionWrote bool
+	send         string
+	wantSuccess  bool
+	errorHas     []string
+	errorLacks   string
+}
+
+func checkResentWrite(t *testing.T, tc resentWriteCase) {
+	t.Helper()
+	ctx, path := exactEditWorld(t, tc.path, tc.onDisk)
+	if tc.sessionWrote {
+		ctx.SessionWrites[tc.path] = true
+	}
+
+	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
+		"path": tc.path, "content": tc.send})
+
+	if res.Success != tc.wantSuccess {
+		t.Fatalf("success = %v, want %v (error %q)", res.Success, tc.wantSuccess, res.Error)
+	}
+	for _, want := range tc.errorHas {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, res.Error)
+		}
+	}
+	if tc.errorLacks != "" && strings.Contains(res.Error, tc.errorLacks) {
+		t.Errorf("refusal says %q:\n%s", tc.errorLacks, res.Error)
+	}
+	wantDisk := tc.onDisk
+	if tc.wantSuccess {
+		wantDisk = tc.send
+	}
+	if got := diskBytes(t, path); got != wantDisk {
+		t.Errorf("disk holds %q, want %q", got, wantDisk)
+	}
+}
+
 func TestWriteFileOfContentTheFileAlreadyHolds(t *testing.T) {
 	runIt := []string{"already holds exactly this content", "You wrote it earlier in this session", "run it"}
 	changedSmallFile := strings.Replace(smallOwnTestFile, "print(result)", "assert result[-1] == [5]\nprint(result)", 1)
 
-	for _, tc := range []struct {
-		name         string
-		path         string
-		onDisk       string
-		sessionWrote bool
-		send         string
-		wantSuccess  bool
-		errorHas     []string
-		errorLacks   string
-	}{
+	for _, tc := range []resentWriteCase{
 		{name: "own file re-sent",
 			path: "test_stats.py", onDisk: ownTestFile, sessionWrote: true, send: ownTestFile,
 			errorHas: runIt, errorLacks: "input or fixture data"},
@@ -413,34 +445,7 @@ func TestWriteFileOfContentTheFileAlreadyHolds(t *testing.T) {
 			path: "test_chunk.py", onDisk: smallOwnTestFile, send: smallOwnTestFile,
 			wantSuccess: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, path := exactEditWorld(t, tc.path, tc.onDisk)
-			if tc.sessionWrote {
-				ctx.SessionWrites[tc.path] = true
-			}
-
-			res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
-				"path": tc.path, "content": tc.send})
-
-			if res.Success != tc.wantSuccess {
-				t.Fatalf("success = %v, want %v (error %q)", res.Success, tc.wantSuccess, res.Error)
-			}
-			for _, want := range tc.errorHas {
-				if !strings.Contains(res.Error, want) {
-					t.Errorf("refusal lacks %q:\n%s", want, res.Error)
-				}
-			}
-			if tc.errorLacks != "" && strings.Contains(res.Error, tc.errorLacks) {
-				t.Errorf("refusal says %q:\n%s", tc.errorLacks, res.Error)
-			}
-			wantDisk := tc.onDisk
-			if tc.wantSuccess {
-				wantDisk = tc.send
-			}
-			if got := diskBytes(t, path); got != wantDisk {
-				t.Errorf("disk holds %q, want %q", got, wantDisk)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { checkResentWrite(t, tc) })
 	}
 }
 

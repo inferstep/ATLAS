@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-如果这个方法在一张此前不受支持的卡上对你有效，请在 [GH #26](https://github.com/inferstep/ATLAS/issues/26) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
+如果这个方法在一张此前不受支持的卡上对你有效，请在 [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports) 留言 —— 社区验证过的覆盖值会进入下一个版本的文档。
 
 ### RDNA4（RX 9070 / 9070 XT，gfx1200 / gfx1201）—— 需要 ROCm 7.x
 
@@ -578,6 +578,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **解决方法：** 代理在 `/v1/agent` 的 agent 循环处理器内部自动设置 `response_format`。`ATLAS_GRAMMAR_MODE` 决定其形态：默认的 `strict` 发送 `{"type":"json_object","schema":<full tool-call schema>}`，让 llama-server 的 GBNF 采样器只能发出 tool_call/text/done 联合形态之一；`ATLAS_GRAMMAR_MODE=loose` 只发送 `{"type":"json_object"}`（有效 JSON，不强制形态）—— 这是为 schema 转 GBNF 处理得不好的模型准备的逃生口（Gemma 家族模型需要 `loose` —— strict 模式会让它们疯狂输出 done）。如果你直接通过 `/v1/chat/completions` 或 `/v1/completions` 调用 llama-server，需要自己带上该参数：
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -697,7 +698,7 @@ ATLAS_FRESH_SLOT_PER_SESSION=0
 
 **怎么做：** 通过 `read_file` 读取缺失的文件，让它进入项目上下文。如果你直接调用 sandbox 的 `/execute` API，在请求体中传入辅助文件：
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -811,7 +812,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **解决：**
 1. 确认嵌入服务器的约定。池化 + 归一化的服务器会返回 ‖v‖≈1 的扁平向量：
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    池化后的 `norm` 应在数百量级（随附的 Gemma 工件约为 100-150）。若 `norm` 恰好为 `1.0`，说明服务器无视了 `embd_normalize: -1` 而对向量做了归一化，此时 C(x) 对任何输入都会返回约 0.8 的恒定值：分数看似正常，却无法区分任何东西。
@@ -828,6 +829,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```

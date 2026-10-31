@@ -32,7 +32,7 @@ Supported row cites its validation.
 | Rocky Linux 9 (RHEL-like) | amd64 | Supported | CI install matrix; maintainer dev box is EL9 |
 | Linux Mint / Pop!_OS (ID_LIKE ubuntu) | amd64 | Preview | Accepted by bootstrap with a warning; not separately tested |
 | macOS 14+ (Apple Silicon) | arm64 | Supported | Maintainer-verified on M2 Pro 32GB (hybrid Metal deployment) |
-| Linux | arm64 | Preview | llama-vulkan image is built multi-arch on releases; no end-to-end arm64 device validation yet (see § ARM64 scope) |
+| Linux | arm64 | Preview | llama-vulkan image is built multi-arch on releases; no end-to-end arm64 device validation yet (see [SETUP.md, arm64 hosts](SETUP.md#arm64-hosts-115)) |
 | Arch / openSUSE / Alpine / NixOS | any | Unsupported | Bootstrap refuses with a clear message |
 | Windows (incl. WSL) | any | Unsupported | Untested; no claims made |
 
@@ -109,9 +109,9 @@ Every bundle activated by `atlas lens build` auto-writes `provenance.json`:
 backbone + dim + quant + layer, dataset, training commit,
 hyperparameters, seed, train/val split, validation metrics,
 normalization + thresholds, creation time, and SHA-256 of every artifact
-file. `geometric_lens.provenance.is_complete()` gates Supported
-eligibility — a bundle missing required fields stays Preview/Legacy
-rather than silently claiming Supported. The gemma reference bundle
+file. `geometric_lens.provenance.is_complete()` says whether a bundle has every
+required field. No product code calls it yet, so it does not gate Supported
+status. The gemma reference bundle
 carries a complete manifest (val AUC 0.73, all seven files hashed).
 
 ### Model contract
@@ -148,9 +148,9 @@ timeouts/output caps; **syntax** = compile/parse check only.
 |---|---|---|
 | Python 3 | executed + self-tests | Supported |
 | JavaScript / TypeScript (node, tsx) | executed | Supported |
-| Go | executed | Supported |
-| Rust | executed | Supported |
-| C / C++ | executed (gcc/g++) | Supported |
+| Go | executed by `run_command` in the project; V3 checks syntax, and `/execute` only compiles ([#163](https://github.com/inferstep/ATLAS/issues/163)) | Supported |
+| Rust | executed by `run_command` in the project; V3 checks syntax, and `/execute` only compiles ([#163](https://github.com/inferstep/ATLAS/issues/163)) | Supported |
+| C / C++ | executed (gcc/g++) by `run_command` in the project; V3 checks syntax, and `/execute` only compiles ([#163](https://github.com/inferstep/ATLAS/issues/163)) | Supported |
 | Bash / sh | executed | Supported |
 | HTML / XML / JSON / YAML | syntax | Supported |
 | Java | executed | Preview (installed in default sandbox; CI smoke test containerized; host-runner tests skipif-gated) |
@@ -169,7 +169,7 @@ timeouts/output caps; **syntax** = compile/parse check only.
 | Call-graph reasoning (#39) | Preview | Always on, Python files only (the veto, repair context and read/outline edges); hermetic tests; effect on task outcomes not yet measured |
 | Host verification (`ATLAS_VERIFY_IN=host`) | Experimental | Explicit opt-in; removes the container backstop |
 | Benchmark/ablation stack (`ATLAS_V3_*`, lens feedback) | Research-only | Never read by the product runtime (contract-tested) |
-| IDE integration | Preview (VS Code and JetBrains) | VS Code: type-check, lint, unit suite and production bundle in `vscode-extension.yml`; no on-screen acceptance run against a live proxy. JetBrains: Plugin Verifier on IDEA, PyCharm, WebStorm and GoLand (2026.1.5 and 2026.2.3); no on-screen acceptance run against a live proxy yet |
+| IDE integration | Preview on `dev`, not in 3.1.7 (VS Code and JetBrains) | VS Code: type-check, lint, unit suite and production bundle in `vscode-extension.yml`; no on-screen acceptance run against a live proxy. JetBrains: Plugin Verifier on IDEA, PyCharm, WebStorm and GoLand (2026.1.5 and 2026.2.3); no on-screen acceptance run against a live proxy yet |
 
 ## Context lengths
 
@@ -198,7 +198,7 @@ fails fast at llama-server startup (fit is off).
 - **HTTP/SSE protocol:** additive event types are non-breaking (clients
   drop unknown types — the TUI does); field removals or renames require
   a major version and one release of deprecation notice.
-- **Python:** ≥3.9 (CLI), 3.13 (sandbox), 3.11 (proxy/lens/v3 containers), CI runs 3.12.
+- **Python:** ≥3.9 (CLI), 3.13 (sandbox and V3 containers), 3.11 (lens container), CI runs 3.12. The proxy is Go.
   **Go:** proxy 1.24+, TUI 1.26+ (GOTOOLCHAIN auto-fetch).
 - **Docker:** Engine 24+ with Compose v2. **llama.cpp:** pinned by
   revision in all inference Dockerfiles; bumps go through the CI

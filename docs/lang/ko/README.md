@@ -16,11 +16,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/test.yml?branch=main&label=tests" alt="테스트"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="설치 매트릭스"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/container-scan.yml?label=container%20scan" alt="컨테이너 스캔"/></a>
-  <a href="https://github.com/itigges22/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/itigges22/ATLAS/verify-tags.yml?label=release%20signature" alt="릴리스 서명"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/test.yml?branch=main&label=tests" alt="테스트"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/install-test.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/install-test.yml?branch=main&label=install%20matrix" alt="설치 매트릭스"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/codeql.yml?branch=main&label=codeql" alt="CodeQL"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/container-scan.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/container-scan.yml?label=container%20scan" alt="컨테이너 스캔"/></a>
+  <a href="https://github.com/inferstep/ATLAS/actions/workflows/verify-tags.yml"><img src="https://img.shields.io/github/actions/workflow/status/inferstep/ATLAS/verify-tags.yml?label=release%20signature" alt="릴리스 서명"/></a>
 </p>
 
 
@@ -33,7 +33,7 @@
 * **더 작은 모델에서 더 많은 것을 끌어냅니다.** ATLAS는 단일 생성에 의존하는 대신 모델 주위에 계획 수립, 후보 선택, 검증, 수리를 더합니다.
 * **받아들이기 전에 검증합니다.** 생성된 코드는 격리된 실행 환경 안에서 컴파일·테스트·수정될 수 있습니다.
 * **연산을 필요한 곳에 씁니다.** 단순한 편집은 짧은 경로를 타고, 어려운 작업일수록 더 많은 후보·추론·검증을 받습니다.
-* **본인 모델을 돌립니다.** NVIDIA, AMD, Apple Silicon, Vulkan, CPU 지원 하드웨어에서 호환 GGUF 모델을 사용할 수 있습니다.
+* **본인 모델을 돌립니다.** NVIDIA, AMD, Apple Silicon, Vulkan, CPU 지원 하드웨어에서 호환 GGUF 모델을 사용할 수 있습니다. 모델에는 렌즈 번들이 필요하며, 없는 모델은 `atlas lens build`로 만들 수 있습니다.
 * **로컬에서 관리합니다.** ATLAS는 저장소나 프롬프트를 호스팅 모델 또는 ATLAS 운영 서비스에 의도적으로 업로드하지 않습니다. 샌드박스 명령은 기본적으로 외부 네트워크에 접근할 수 있으며, `ATLAS_SANDBOX_NET_INTERNAL=true`로 비활성화할 수 있습니다.
 * **스택 전체를 소유합니다.** ATLAS는 오픈 소스이며 셀프 호스팅됩니다. 호스팅 모델이나 타사 모델 제공업체 API 키는 필요하지 않으며, 로컬 설치별 서비스 토큰이 ATLAS 서비스 간 통신을 인증합니다.
 
@@ -49,11 +49,11 @@
      onto the `star-history` asset branch (scripts/star-history-chart.py).
      Replaces the star-history.com embed, whose shared token pool
      rate-limits unpredictably. -->
-<a href="https://github.com/itigges22/ATLAS/stargazers">
+<a href="https://github.com/inferstep/ATLAS/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" />
-   <img alt="Star history chart" src="https://raw.githubusercontent.com/itigges22/ATLAS/star-history/star-history-light.svg" width="100%" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-dark.svg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-light.svg" />
+   <img alt="Star history chart" src="https://raw.githubusercontent.com/inferstep/ATLAS/star-history/star-history-light.svg" width="100%" />
  </picture>
 </a>
 
@@ -77,16 +77,16 @@
 3. **[V3 파이프라인](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 단일 프롬프트를 검증된 후보로 바꾸는 멀티 페이즈 코드 생성.
    - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 제약 기반 구조화 계획
    - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 온도와 전략에 걸친 다양한 후보 생성
-   - [예산 티어](../../ARCHITECTURE.md#pipeline-flow) - 할당기가 과제마다 계산 티어를 고릅니다. 현재 티어는 생성할 후보 수를 정할 뿐 사고 깊이는 바꾸지 않습니다
+   - [예산 티어](../../ARCHITECTURE.md#pipeline-flow) - 할당기가 과제마다 계산 티어를 고릅니다. 티어는 생성할 후보 수와 후보마다의 프롬프트·토큰 예산을 정합니다
    - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 샌드박스의 오류 출력을 바탕으로 실패한 후보를 수리
    - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 샌드박스 검증과 수정의 반복
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 모델 자체 임베딩 위에서 동작하는 에너지 기반 스코어링. 외부 오라클 불필요. (["Geometric Lens"란?](../../ARCHITECTURE.md#why-geometric-lens))
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 후보 품질을 스코어링하는 모델 hidden-dim→512→128→1 MLP
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 선택에 쓰이는 XGBoost 앙상블
+   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 생성할 후보 수를 정하는 데 쓰이는 XGBoost 앙상블. 후보 선택 자체는 가장 낮은 C(x)로 합니다
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 빌드 검증을 위한 격리 실행 환경.
-   - 다중 언어 실행: Python, Rust, Go, C, Shell 등
+   - 다중 언어 실행: Python, Rust, Go, C, Shell 등. Rust, Go, C는 프로젝트에서 명령으로 실행할 수 있습니다. V3는 구문을 검사하고, 샌드박스의 `/execute`는 컴파일만 하고 아직 실행하지 못합니다 ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - 스코어링 전 컴파일과 린팅
    - 생성된 테스트와 기존 테스트 스위트 모두 실행
 
@@ -95,7 +95,7 @@
    - 토큰 수준의 문법 제약 디코딩
    - 셀프 임베딩 — lens에 별도 모델이 필요 없음
 
-전체 문서(설정, 아키텍처, 구성, 문제 해결, 벤치마크 보고서, 그리고 각 구성요소의 [연구 배경](../../SOURCES.md))는 [docs/](../../) 디렉토리에 있습니다.
+전체 문서(설정, 아키텍처, 구성, 문제 해결, 그리고 각 구성요소의 [연구 배경](../../SOURCES.md))는 [docs/](../../) 디렉토리에 있습니다.
 
 ---
 
@@ -103,7 +103,7 @@
 
 원샷 설치:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh | bash
 ```
 
 계속 바뀌는 스크립트를 그대로 bash에 파이프하고 싶지 않다면? 같은 설치 프로그램을 더 신중하게 실행하는 두 가지 방법이 있습니다:
@@ -113,7 +113,7 @@ curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/v3.1.7/scripts/atla
   | ATLAS_BOOTSTRAP_REF=v3.1.7 bash
 
 # Review before running
-curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/itigges22/ATLAS/main/scripts/atlas-bootstrap.sh
+curl -fsSL -o atlas-bootstrap.sh https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh
 less atlas-bootstrap.sh
 bash atlas-bootstrap.sh
 ```
@@ -127,7 +127,7 @@ bash atlas-bootstrap.sh
 | | |
 |---|---|
 | GPU | VRAM 16GB 이상. NVIDIA (CUDA, 지원(Supported)), AMD (ROCm, 커뮤니티 검증(Community-tested)), 또는 Apple Silicon (Metal, macOS 하이브리드, 지원); 그 외 대부분의 GPU는 Vulkan(프리뷰(Preview))으로 커버됩니다. 사전 빌드된 CUDA 이미지는 Blackwell(RTX 50xx)을 대상으로 하며, 구형 NVIDIA GPU는 일회성 로컬 재빌드가 필요합니다([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) 참고). 지원 수준: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md); GPU 목록: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus). 특정 모델이 본인 카드에 맞는지 가늠하려면 [내 GPU에는 무엇이 들어가는가?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)를 참고하세요. |
-| 런타임 | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 단독 Docker로 충분) 또는 Podman |
+| 런타임 | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 단독 Docker로 충분) |
 | Python | 3.9 이상 |
 | 디스크 | 약 20GB CUDA / 약 22GB ROCm (모델 가중치 + 컨테이너 이미지) |
 
@@ -137,8 +137,9 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## ⚠️ 알려진 제한 사항
 
-- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/itigges22/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md).
-- **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/itigges22/ATLAS/issues/28)에서 추적합니다.
+- **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md).
+- **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/inferstep/ATLAS/issues/28)에서 추적합니다.
+- **렌즈의 신호는 아직 입증되지 않았습니다.** 기준 모델에서는 점수를 내지만 보정되지 않은 상태이므로 개입은 중립입니다. 3.1.6에서는 쓸 만한 신호를 주지 못했고, `dev`에서는 아직 측정하지 않았습니다 ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다.
 - **문법 제약 디코딩은 제약 없는 디코딩보다 느립니다.**
 
@@ -146,16 +147,18 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## 🗺️ 로드맵
 
-**V3.2** - 다음 마일스톤: 더 깊은 코드 추론과 계획.
-- 구조적 코드 추론 (후속) — 솔버 기반 도달성 분석 + 다중 해상도 "어떤 파일이 중요한가" 검색을 위한 구문 비의존적 wavelet 분해 ([#39](https://github.com/itigges22/ATLAS/issues/39)).
-- 샘플링 기반 추론 — 효율성과 품질 향상 ([#9](https://github.com/itigges22/ATLAS/issues/9)).
-- 이월된 인프라: 자동화된 HuggingFace 제출 파이프라인 ([#102](https://github.com/itigges22/ATLAS/issues/102)); K3s / Kubernetes 상의 ROCm; 공식 레지스트리 모델 벤치마크 — LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/itigges22/ATLAS/issues/28)).
+**3.2.0** ([마일스톤](https://github.com/inferstep/ATLAS/milestone/2)) - "완료"가 실제로 완료를 뜻하게 하고 `dev` 브랜치를 출시합니다.
+- 검증: "완료"와 실제로 검증된 내용의 차이를 없애고 ([#330](https://github.com/inferstep/ATLAS/issues/330)), 가드의 거부를 실패로 셉니다 ([#327](https://github.com/inferstep/ATLAS/issues/327)).
+- 안전: 샌드박스와 첫 설치를 강화하고 ([#384](https://github.com/inferstep/ATLAS/issues/384), [#410](https://github.com/inferstep/ATLAS/issues/410), [#483](https://github.com/inferstep/ATLAS/issues/483)), 서비스 토큰을 처음부터 끝까지 시험합니다 ([#212](https://github.com/inferstep/ATLAS/issues/212)). K3s도 포함합니다 ([#697](https://github.com/inferstep/ATLAS/issues/697)).
+- IDE: VS Code 확장을 프리뷰로 제공합니다.
+- 릴리스: 릴리스 후보를 최소 3일 시험하고 ([#196](https://github.com/inferstep/ATLAS/issues/196)), 서명과 빌드 증명을 붙입니다 ([#252](https://github.com/inferstep/ATLAS/issues/252), [#361](https://github.com/inferstep/ATLAS/issues/361)).
 
 **백로그 / 도움 요청**
-- 하드웨어: ARM64 멀티 아키텍처 빌드 ([#115](https://github.com/itigges22/ATLAS/issues/115)), 더 큰 모델을 위한 멀티 GPU ([#34](https://github.com/itigges22/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/itigges22/ATLAS/issues/27)).
-- 툴링: VS Code / JetBrains 확장 ([#35](https://github.com/itigges22/ATLAS/issues/35)).
-- 샌드박스 언어: Java / Kotlin ([#29](https://github.com/itigges22/ATLAS/issues/29)), Ruby / PHP ([#30](https://github.com/itigges22/ATLAS/issues/30)).
-- 아키텍처: 모델 비의존적 플랫폼 ([#66](https://github.com/itigges22/ATLAS/issues/66)).
+- 하드웨어: ARM64 멀티 아키텍처 빌드 ([#115](https://github.com/inferstep/ATLAS/issues/115)), 더 큰 모델을 위한 멀티 GPU ([#34](https://github.com/inferstep/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27)).
+- 툴링: JetBrains 플러그인 ([#35](https://github.com/inferstep/ATLAS/issues/35)).
+- 배포: K3s / Kubernetes 상의 ROCm.
+- 연구: 샘플링 기반 추론 ([#9](https://github.com/inferstep/ATLAS/issues/9)); 숨겨진 테스트로 LiveCodeBench 재실행 ([#28](https://github.com/inferstep/ATLAS/issues/28)).
+- 모델: 자동화된 HuggingFace 제출 ([#102](https://github.com/inferstep/ATLAS/issues/102)); 모델 비의존적 백엔드 ([#66](https://github.com/inferstep/ATLAS/issues/66)).
 
 ---
 
@@ -178,7 +181,7 @@ ATLAS는 대학생 한 명이 여가 시간에 소비자용 GPU 한 장으로 �
 
 ATLAS는 오픈으로 개발되며 기여자와 핵심 메인테이너를 환영합니다. 버그 수정, 가속기 지원, 더 큰 하위 시스템 작업 모두 환영입니다.
 
-버그를 찾았거나 벽에 부딪히셨나요? **[이슈를 열어 주세요](https://github.com/itigges22/ATLAS/issues)** — 수정까지 제출하실 필요는 없습니다. 버그 리포트와 피드백은 코드만큼이나 큰 도움이 됩니다.
+버그를 찾았거나 벽에 부딪히셨나요? **[이슈를 열어 주세요](https://github.com/inferstep/ATLAS/issues)** — 수정까지 제출하실 필요는 없습니다. 버그 리포트와 피드백은 코드만큼이나 큰 도움이 됩니다.
 
 가이드라인은 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**를, 코드베이스 구조 개요는 [저장소 맵](../../README.md#repository-map)을 참고하세요.
 

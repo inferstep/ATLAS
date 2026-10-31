@@ -336,7 +336,7 @@ func TestATLASRunsNoInstallOfItsOwn(t *testing.T) {
 // response cannot show that the page works. Declined in silence, the run
 // repeats the same probe until it runs out of turns.
 func TestAHeadersOnlyProbeIsDeclinedOutLoud(t *testing.T) {
-	if isVerificationCommand("curl -I http://127.0.0.1:5001") {
+	if classifyCommandEvidence("curl -I http://127.0.0.1:5001").Kind.verifies() {
 		t.Fatal("precondition changed: a HEAD probe now counts as verification")
 	}
 	if !isHeadOnlyProbe("curl -I http://127.0.0.1:5001") || isHeadOnlyProbe("curl http://127.0.0.1:5001/") {

@@ -129,14 +129,16 @@ want to scope the runtime application:
 Narrower ranges are safer (less collateral damage to non-tool tasks)
 but the signal is weaker.
 
-## Why not always-on?
+## When it runs
+
+ASA is always on wherever a vector is installed for the served model. At start,
+`inference/entrypoint-v3.1.sh` looks for the file at `ATLAS_CONTROL_VECTOR` and
+its `.model` marker. A marker that names the served model turns ASA on. A vector
+marked for another model, or with no marker, stays disabled, and the startup
+banner says why. `ATLAS_CONTROL_VECTOR_ALLOW_UNVERIFIED=1` accepts any marker.
 
 ASA composes with the grammar gate (items #2/#3) — the grammar is a
 hard ban that fires after a write_file rejection on .py/.html. ASA
 covers the cases the grammar gate doesn't: **first-attempt** decisions
 where no rejection has happened yet. Both can run together; they don't
 conflict.
-
-The gating decision lives at the entrypoint (env var present ⇒ on,
-absent ⇒ off). No proxy changes are needed beyond the startup log
-that surfaces the configured state.

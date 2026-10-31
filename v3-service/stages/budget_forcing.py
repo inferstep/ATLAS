@@ -78,8 +78,6 @@ BUDGET_TIERS: Dict[str, Dict] = {
     },
 }
 
-VALID_TIERS = frozenset(BUDGET_TIERS.keys())
-
 # System prompts per tier category. Thinking is controlled model-agnostically
 # by the shared client (`enable_thinking` chat-template kwarg) rather than by an
 # in-prompt directive, so no `/nothink` token here — these are plain English.

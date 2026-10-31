@@ -165,7 +165,7 @@ func TestTheBypassOwnersAreTheRoutingRules(t *testing.T) {
 			ctx.V3URL = c.url
 			// A session where a candidate could be delivered and no
 			// deadline limits generation; the budget-ownership
-			// reasons are pinned in budget_ownership_test.go.
+			// reasons are pinned in this file.
 			ctx.TaskContract = declaredOutputs("mod.py")
 			wantWrite := tier >= Tier2Medium && ctx.V3URL != "" && !c.iterating
 			if got := writeGenerationBypass(ctx, tier, c.iterating); (got == bypassNone) != wantWrite {
@@ -697,6 +697,30 @@ func TestTheProducerFallbackAppliesTheComparativeChecks(t *testing.T) {
 	}
 }
 
+// routeDeliversUnder forces the write route under one configuration, holds the
+// skip predicate to what the route did, and says whether the route delivered.
+func routeDeliversUnder(t *testing.T, contract string, supported, capture bool) bool {
+	t.Helper()
+	if capture {
+		t.Setenv(CandidateCaptureOnlyEnv, "1")
+	}
+	w := newAutomaticWorld(t, workContract, routeWinner, nil, supported)
+	w.ctx.TaskContract = nil
+	if contract != "" {
+		w.ctx.TaskContract = mustContract(t, w.dir, contract)
+	}
+	deliverable := candidateDeliverable(w.ctx)
+	if _, err := w.write(t); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	got := w.disk(t)
+	if !deliverable && got != routeBaseline {
+		t.Fatalf("the skip predicate said undeliverable, but the forced route delivered %q", got)
+	}
+	t.Logf("deliverable=%v delivered=%v", deliverable, got == routeWinner)
+	return got == routeWinner
+}
+
 // Skipping generation must not remove a delivery that could have happened.
 // For every contract/capture configuration the skip predicate calls
 // undeliverable, the real candidate route is forced to run with the strongest
@@ -717,26 +741,9 @@ func TestSkippingGenerationLosesNoDelivery(t *testing.T) {
 		for _, supported := range []bool{true, false} {
 			for _, capture := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/supported=%v/capture=%v", name, supported, capture), func(t *testing.T) {
-					if capture {
-						t.Setenv(CandidateCaptureOnlyEnv, "1")
-					}
-					w := newAutomaticWorld(t, workContract, routeWinner, nil, supported)
-					w.ctx.TaskContract = nil
-					if contract != "" {
-						w.ctx.TaskContract = mustContract(t, w.dir, contract)
-					}
-					deliverable := candidateDeliverable(w.ctx)
-					if _, err := w.write(t); err != nil {
-						t.Fatalf("write failed: %v", err)
-					}
-					got := w.disk(t)
-					if !deliverable && got != routeBaseline {
-						t.Fatalf("the skip predicate said undeliverable, but the forced route delivered %q", got)
-					}
-					if got == routeWinner {
+					if routeDeliversUnder(t, contract, supported, capture) {
 						delivered++
 					}
-					t.Logf("deliverable=%v delivered=%v", deliverable, got == routeWinner)
 				})
 			}
 		}

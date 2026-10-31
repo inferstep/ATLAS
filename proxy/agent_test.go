@@ -690,19 +690,19 @@ func TestCategorizeParseFailureHtmlEntitiesShape(t *testing.T) {
 	}
 }
 
-func TestIsLoopingTail(t *testing.T) {
+func TestARepeatingProseTailIsALoop(t *testing.T) {
 	loop := "The first line is <!DOCTYPE html>. " +
 		strings.Repeat("Wait, I'll check if I can see the output. I can't. I'll just say it. ", 6)
-	if !isLoopingTail(loop) {
+	if !streamLooping(loop) {
 		t.Errorf("expected a repeating self-doubt stream to be detected as a loop")
 	}
 	normal := "The first line of index.html is `<!DOCTYPE html>`. It declares the document type for the HTML5 page, followed by the html and head elements with meta tags and a title."
-	if isLoopingTail(normal) {
+	if streamLooping(normal) {
 		t.Errorf("a normal varied response must not be flagged as a loop")
 	}
 }
 
-// Tests for callLLMOnce's failure handling against a fake llama-server:
+// Tests for callLLMOnceWithGrammar's failure handling against a fake llama-server:
 // HTTP errors, unreachable server, truncated streams, mid-stream
 // cancellation, and the reasoning_content fallback. The agent loop's
 // resilience depends on these paths returning promptly with a
@@ -735,7 +735,7 @@ func TestCallLLMOnce_HTTPErrorSurfacesStatusAndBody(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	_, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	_, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("500 from llama-server produced no error")
 	}
@@ -758,7 +758,7 @@ func TestCallLLMOnce_UnreachableServerFailsFast(t *testing.T) {
 
 	ctx := llmTestCtx(url)
 	start := time.Now()
-	_, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	_, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("dead llama-server produced no error")
 	}
@@ -784,7 +784,7 @@ func TestCallLLMOnce_TruncatedStreamReturnsPartialContent(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("clean-EOF truncation returned error: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestCallLLMOnce_ContextCancelAbortsStalledStream(t *testing.T) {
 	}()
 
 	start := time.Now()
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("cancelled stream returned no error")
 	}
@@ -857,7 +857,7 @@ func TestCallLLMOnce_ReasoningOnlyStreamRecoversToolCall(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, tokens, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, tokens, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("reasoning-only stream errored: %v", err)
 	}
@@ -883,7 +883,7 @@ func TestCallLLMOnce_ReasoningOnlyProseReturnsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("prose-only stream errored: %v", err)
 	}
@@ -2334,7 +2334,7 @@ func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
 	ctx.RecordFileRead(filepath.Join(dir, "app.py"), "alpha\nbravo\n")
 
 	wire := []map[string]string{{"role": "user", "content": "fix the bug"}}
-	got := appendLastReadRestatement(ctx, wire)
+	got := appendLastReadRestatementFor(ctx, wire, "")
 	if len(got) != 2 {
 		t.Fatalf("expected a restatement appended, got %d messages", len(got))
 	}
@@ -2354,7 +2354,7 @@ func TestRestatementSkipsWhenItWouldDuplicate(t *testing.T) {
 	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
 
 	wire := []map[string]string{{"role": "user", "content": "here it is: alpha\n"}}
-	if got := appendLastReadRestatement(ctx, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(ctx, wire, ""); len(got) != 1 {
 		t.Errorf("must not duplicate content already at the end, got %d messages", len(got))
 	}
 }
@@ -2365,20 +2365,20 @@ func TestRestatementSkipsBigFilesAndEmptyState(t *testing.T) {
 
 	// Nothing read yet.
 	fresh := NewAgentContext(dir, Tier1Simple)
-	if got := appendLastReadRestatement(fresh, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(fresh, wire, ""); len(got) != 1 {
 		t.Error("restated with no file read")
 	}
 	// Too big to be worth pasting every turn.
 	big := NewAgentContext(dir, Tier1Simple)
 	big.RecordFileRead(filepath.Join(dir, "big.py"), strings.Repeat("x", restatementMaxBytes+1))
-	if got := appendLastReadRestatement(big, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(big, wire, ""); len(got) != 1 {
 		t.Error("restated a file over the size cap")
 	}
 	// Escape hatch works.
 	t.Setenv("ATLAS_RESTATE_LAST_READ", "0")
 	off := NewAgentContext(dir, Tier1Simple)
 	off.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
-	if got := appendLastReadRestatement(off, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(off, wire, ""); len(got) != 1 {
 		t.Error("ATLAS_RESTATE_LAST_READ=0 did not disable it")
 	}
 }

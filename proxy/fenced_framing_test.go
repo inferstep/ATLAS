@@ -429,6 +429,37 @@ func TestCloseShortFence(t *testing.T) {
 	}
 }
 
+// grammarAwareServer answers a request that carries a grammar with one reply and
+// any other with another. It returns its address and what it has seen so far.
+func grammarAwareServer(t *testing.T, grammarReply, retryReply string) (string, func() []bool) {
+	t.Helper()
+	var mu sync.Mutex
+	var used []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isChatCompletion(r) {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, withGrammar := body["grammar"]
+		mu.Lock()
+		used = append(used, withGrammar)
+		mu.Unlock()
+		if withGrammar {
+			serveReply(w, grammarReply)
+			return
+		}
+		serveReply(w, retryReply)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]bool(nil), used...)
+	}
+}
+
 // A code file's block ends on a three-backtick closer, so the grammar attempt
 // is used. A Markdown file keeps the four-backtick closer: its own ``` lines
 // are content, so a reply that ends on one is not a finished block, and a
@@ -446,28 +477,9 @@ func TestWhichCloserEndsTheGrammarAttempt(t *testing.T) {
 			[]bool{true, false}, "# Title\n```sh\nls\n```\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var mu sync.Mutex
-			var used []bool
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if !isChatCompletion(r) {
-					http.NotFound(w, r)
-					return
-				}
-				var body map[string]interface{}
-				_ = json.NewDecoder(r.Body).Decode(&body)
-				_, withGrammar := body["grammar"]
-				mu.Lock()
-				used = append(used, withGrammar)
-				mu.Unlock()
-				if withGrammar {
-					serveReply(w, c.grammarReply)
-					return
-				}
-				serveReply(w, c.retryReply)
-			}))
-			defer srv.Close()
+			url, used := grammarAwareServer(t, c.grammarReply, c.retryReply)
 			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
-			ctx.InferenceURL = srv.URL
+			ctx.InferenceURL = url
 			ctx.Ctx = context.Background()
 			call, _ := json.Marshal(map[string]interface{}{"type": "tool_call", "name": "write_file",
 				"args": map[string]string{"path": c.path, "content": "@fenced"}})
@@ -476,10 +488,8 @@ func TestWhichCloserEndsTheGrammarAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("fetch %s: %v", c.path, err)
 			}
-			mu.Lock()
-			defer mu.Unlock()
-			if fmt.Sprint(used) != fmt.Sprint(c.wantGrammar) {
-				t.Errorf("requests carried a grammar as %v, want %v", used, c.wantGrammar)
+			if got := used(); fmt.Sprint(got) != fmt.Sprint(c.wantGrammar) {
+				t.Errorf("requests carried a grammar as %v, want %v", got, c.wantGrammar)
 			}
 			if content != c.want {
 				t.Errorf("content %q, want %q", content, c.want)

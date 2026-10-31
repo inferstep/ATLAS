@@ -79,6 +79,8 @@ set `ATLAS_BOOTSTRAP_SKIP_DOCKER=1` before running the bootstrap.
 **Model selection:** `.env.example` ships with no model selected. When the bootstrap creates `.env` and `ATLAS_MODEL_FILE` is empty, it writes the registry's default recommended model into `.env` (logged as it happens) so the one-shot flow completes without a wizard. Change the selection any time by editing `.env` or running `atlas init`. An existing non-empty selection is respected.
 
 <a id="cpu-only"></a>
+**Internal auth:** the bootstrap writes `secrets/service-token`, readable by the installing user only, and records that user's ids in `.env` as `ATLAS_PROXY_UID`, `ATLAS_PROXY_GID`, `ATLAS_SANDBOX_UID` and `ATLAS_SANDBOX_GID`, unless they are already set. A re-run keeps an existing token. On an older install it adds one, takes over a `secrets/` that Docker made as root, and recreates the services so they read it. Direct calls to a service then need the header `Authorization: Bearer <token>`; a call without it gets 401. `atlas` and the TUI send it for the installing user. Another user on the box cannot read the token, so their calls are refused.
+
 **CPU-only / no-GPU hosts (Preview — smoke-test only).** ATLAS boots without a
 GPU via the Vulkan image's lavapipe CPU rasterizer, but inference is very
 slow; use this to verify the stack works, not for real coding sessions.
@@ -100,6 +102,9 @@ atlas model install Qwen3.5-9B-Q6_K
 docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml -f compose/docker-compose.cpu.yml up -d
 atlas doctor            # gpu check WARNS ("CPU-only mode — very slow"); warns exit 0
 ```
+
+A `.env` made by hand gets no service token, so internal auth stays off there.
+The bootstrap and `atlas init` write one.
 
 **Firewall:** the Compose stack publishes every service on `127.0.0.1` only, so local use needs no firewall change and the bootstrap leaves firewalld alone by default. Set `ATLAS_BOOTSTRAP_OPEN_FIREWALL=1` to open the service ports (8090, 8099, 8070, 30820) for deployments that rebind services to a routable interface.
 
@@ -153,7 +158,7 @@ bash atlas-bootstrap.sh
 
 **Downloads and logs.** The installer keeps its downloads and logs in a private temporary folder that it makes for the run. An install that passed removes the folder at the end. When the install failed, or a step warned and named its log, the folder is kept, and the last line of the output gives its path.
 
-**Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, survives `$HOME` cleanup, and lets multiple users on the same box share one install. If you'd rather it land in your home dir:
+**Why `/opt/atlas`?** It's the standard FHS prefix for system-wide third-party software, and it survives `$HOME` cleanup. One user owns the install: the service token is theirs alone. If you'd rather it land in your home dir:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \

@@ -2834,7 +2834,7 @@ var shadowGuardOwners = map[string]bool{
 	"observeActionDemand":       true,
 	// The observe-only writers. Each WRITES one record to the capture and
 	// reads nothing back from it; that they reach no live decision is pinned
-	// separately, by name, in evidence_inertness_test.go.
+	// separately, by name, in evidence_wiring_test.go.
 	"recordEvidenceObservation":   true,
 	"recordAuthorizationDecision": true,
 	"recordFeasibilityDecision":   true,

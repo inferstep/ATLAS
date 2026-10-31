@@ -146,7 +146,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_REPO_URL=https://...` | 대체 저장소 URL |
 | `ATLAS_GO_VERSION=1.26.10` | TUI 빌드에 설치되는 Go 툴체인 버전 (TUI는 1.26.10+가 필요하며, 구형 툴체인이 설치되어 있으면 자동으로 이를 가져옵니다) |
 
-**왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남으며, 같은 머신의 여러 사용자가 하나의 설치를 공유할 수 있기 때문입니다. 홈 디렉토리에 설치하고 싶다면:
+**왜 `/opt/atlas`인가?** 시스템 전역 서드파티 소프트웨어의 표준 FHS 접두사이고, `$HOME` 정리에도 살아남기 때문입니다. 설치는 한 사용자가 소유하며, 서비스 토큰은 그 사용자만 사용합니다. 홈 디렉토리에 설치하고 싶다면:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
@@ -341,7 +341,7 @@ ATLAS는 두 CPU 아키텍처를 대상으로 합니다: `x86_64`(기본, 모든
 
 - **NVIDIA DGX Spark** (Grace-Blackwell GB10) — sbsa 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** — l4t 베이스 이미지 경유 CUDA, 컴퓨트 캐퍼빌리티 8.7
-- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 빠른 경로인 네이티브 Metal 설치는 [#32](https://github.com/inferstep/ATLAS/issues/32)에서 추적
+- **Apple Silicon (M1/M2/M3/M4)** — Docker Desktop의 MoltenVK 경유 Vulkan(느린 경로); 출시된 빠른 경로는 네이티브 하이브리드 Metal 설치입니다. [SETUP_MACOS.md](../../SETUP_MACOS.md) 참고
 - **Snapdragon X Elite** (Windows on ARM 노트북) — Adreno 드라이버 경유 Vulkan
 - **Raspberry Pi 5** — Mesa V3D 드라이버 경유 Vulkan, CPU급 성능 예상
 - **Ampere Altra / AWS Graviton 워크스테이션** — lavapipe 경유 Vulkan(CPU 폴백; 아직 소비자용 arm64 dGPU가 없으므로)

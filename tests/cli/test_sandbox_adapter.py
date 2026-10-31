@@ -1,4 +1,4 @@
-# tests/v3/test_sandbox_adapter.py
+# tests/cli/test_sandbox_adapter.py
 """Tests for V3 SandboxAdapter dual mode (real tests vs self-verify)."""
 
 

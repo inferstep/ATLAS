@@ -70,9 +70,6 @@ from reliability_stream import PROMPT_POLICIES, answer_prompt, read_stream
 # "did the model claim it did".
 
 
-SNAKE_APP = (REPO / "scripts" / "fixtures" / "snake_app.py")
-
-
 def _read_fixture(name: str) -> str:
     p = REPO / "scripts" / "fixtures" / name
     if not p.exists():

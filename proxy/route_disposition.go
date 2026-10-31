@@ -49,13 +49,6 @@ func knownRoutingDisposition(d routingDisposition) bool {
 	return false
 }
 
-// routingDispositionSucceeded reports whether a disposition means a candidate
-// was authorized to land. Nothing else is success, and the fail-closed member
-// never is.
-func routingDispositionSucceeded(d routingDisposition) bool {
-	return d == routingCandidateAuthorized
-}
-
 type deliveryDisposition string
 
 const (
@@ -78,12 +71,6 @@ func knownDeliveryDisposition(d deliveryDisposition) bool {
 		return true
 	}
 	return false
-}
-
-// deliveryDispositionLanded reports whether a disposition means the exact
-// authorized bytes reached the artifact. Only one member does.
-func deliveryDispositionLanded(d deliveryDisposition) bool {
-	return d == deliveryConsumedAndLanded
 }
 
 // routeLifecycle finalises one route entry exactly once.

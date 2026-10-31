@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-이전에 미지원이던 카드에서 이 방법이 동작한다면 [GH #26](https://github.com/inferstep/ATLAS/issues/26)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
+이전에 미지원이던 카드에서 이 방법이 동작한다면 [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x 필요
 
@@ -598,6 +598,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **해결:** 프록시는 `/v1/agent` 에이전트 루프 핸들러 안에서 자동으로 `response_format`을 설정합니다. 그 형태는 `ATLAS_GRAMMAR_MODE`가 결정합니다: 기본값 `strict`는 `{"type":"json_object","schema":<full tool-call schema>}`를 전송해 llama-server의 GBNF 샘플러가 tool_call/text/done 유니언만 방출할 수 있게 하고, `ATLAS_GRAMMAR_MODE=loose`는 `{"type":"json_object"}`만 전송합니다(유효한 JSON이되 형태는 강제하지 않음) — 스키마→GBNF 변환을 잘 다루지 못하는 모델을 위한 탈출구입니다(Gemma 계열 모델은 `loose`가 필요합니다 — strict 모드에서는 done만 반복 방출합니다). llama-server를 `/v1/chat/completions`나 `/v1/completions`로 직접 호출하는 경우에는 파라미터를 직접 포함해야 합니다:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -717,7 +718,7 @@ ATLAS_FRESH_SLOT_PER_SESSION=0
 
 **할 일:** 누락된 파일을 `read_file`로 읽어 프로젝트 컨텍스트에 올리세요. 샌드박스 `/execute` API를 직접 호출하는 경우 요청 본문에 지원 파일을 전달하세요:
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -831,7 +832,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **해결:**
 1. 임베딩 서버의 규약을 확인하세요. 풀링 + 정규화된 서버는 ‖v‖≈1인 평탄한 벡터를 반환합니다:
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다. `cx_normalization.json`의 `pass_energy_mean`과 비교하세요: 서빙되는 에너지는 한 값에 머무르지 않고 그 대역에 걸쳐 분포해야 합니다.
@@ -848,6 +849,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```
