@@ -29,6 +29,41 @@ var v3DeliveryRouteSteps = map[string][]string{
 	},
 }
 
+// writeRouteGates are the gates of the new-file route, in the order they run.
+// Each can restore the baseline or end the write, so the order decides what
+// lands and which refusal the model reads.
+var writeRouteGates = []string{
+	"withdrawRefusedCandidate",
+	"refuseContentThatDoesNotParse",
+	"refuseUnresolvedCalls",
+	"refuseBrokenEmbeddedScript",
+	"refuseDuplicateEntrypoint",
+	"refuseCancelledWrite",
+}
+
+// The route runs its gates from one list, so nothing but this test fixes the
+// list's order, and each gate stays on it.
+func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
+	var got []string
+	for _, d := range proxyFiles(t)["tools.go"].Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "applyWriteGates" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if list, ok := n.(*ast.CompositeLit); ok {
+				for _, gate := range list.Elts {
+					got = append(got, gate.(*ast.Ident).Name)
+				}
+			}
+			return true
+		})
+	}
+	if !slices.Equal(got, writeRouteGates) {
+		t.Errorf("applyWriteGates runs %v, want %v", got, writeRouteGates)
+	}
+}
+
 // routeOf names the route a call site answers for: the route whose step the
 // site is, or else the site itself.
 func routeOf(site string) string {

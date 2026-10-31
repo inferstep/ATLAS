@@ -3018,8 +3018,11 @@ func v3Request(path, content string, ctx *AgentContext) V3GenerateRequest {
 		WorkingDir:   ctx.WorkingDir,
 		UserMessage:  latestUserMessage(ctx),
 	}
-	// Exclude the target's own pre-edit snapshot from project context —
-	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	// Add project context from files read during this session. The target
+	// file's own PRE-EDIT snapshot is excluded: its current symbols come
+	// from the baseline, and stale content would let the in-pipeline veto
+	// credit a def this write deletes (#147 review finding #2 — same rule
+	// as checkStructuralUnresolved).
 	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
