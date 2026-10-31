@@ -623,6 +623,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **Fix:** The proxy sets a `response_format` automatically inside the `/v1/agent` agent-loop handler. `ATLAS_GRAMMAR_MODE` picks the shape: the default `strict` sends `{"type":"json_object","schema":<full tool-call schema>}` so llama-server's GBNF sampler can only emit the tool_call/text/done union; `ATLAS_GRAMMAR_MODE=loose` sends `{"type":"json_object"}` only (valid JSON, shape not enforced) — the escape hatch for models that handle the schema-to-GBNF conversion poorly (Gemma-family models need `loose` — strict mode makes them done-spam). If you're hitting llama-server directly via `/v1/chat/completions` or `/v1/completions`, you have to include the parameter yourself:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -742,7 +743,7 @@ Restart the proxy after changing. If you see hallucinations with the erase disab
 
 **What to do:** Read the missing file via `read_file` so it lands in the project context. If you're calling the sandbox `/execute` API directly, pass supporting files in the request body:
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -878,6 +879,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```

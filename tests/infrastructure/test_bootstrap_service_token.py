@@ -12,12 +12,23 @@ def shell_function(name):
     return re.search(rf"^{name}\(\) \{{.*?^\}}", BOOTSTRAP.read_text(), re.M | re.S).group()
 
 
+FUNCTIONS = ("env_file_value", "set_env_file_value", "keep_or_set_env_file_value", "ensure_service_token")
+STUBS = """log_ok() { :; }
+die() { echo "$*" >&2; exit 1; }
+run_as_target() { "$@"; }
+stat() { echo 1500; }
+"""
+
+
+def run_step(folder, before="", after=""):
+    """The bootstrap's step, for an installing user of uid 1500, with what the case needs on each side."""
+    functions = "\n".join(shell_function(name) for name in FUNCTIONS)
+    script = f"TARGET_UID=1500\nTARGET_GID=1600\nSUDO=false\n{STUBS}{functions}\n{before}\nensure_service_token\n{after}"
+    return subprocess.run(["bash", "-c", script], cwd=folder, capture_output=True, text=True)
+
+
 def ensure_service_token(folder):
-    functions = "\n".join(shell_function(name) for name in (
-        "env_file_value", "set_env_file_value", "keep_or_set_env_file_value", "ensure_service_token"))
-    stubs = 'log_ok() { :; }\ndie() { echo "$*" >&2; exit 1; }\nrun_as_target() { "$@"; }\n'
-    subprocess.run(["bash", "-c", f"TARGET_UID=1500\nTARGET_GID=1600\n{stubs}{functions}\nensure_service_token"],
-                   cwd=folder, check=True)
+    run_step(folder).check_returncode()
 
 
 def test_a_first_install_gets_a_token_only_its_owner_can_read(tmp_path):
@@ -62,3 +73,38 @@ def test_ids_already_in_env_stay(tmp_path):
     body = (tmp_path / ".env").read_text()
     assert "ATLAS_PROXY_UID=1234\n" in body
     assert "ATLAS_PROXY_UID=1500" not in body
+
+
+def test_a_new_token_is_marked_so_the_services_are_recreated(tmp_path):
+    (tmp_path / ".env").write_text("")
+
+    first = run_step(tmp_path, after='echo "new=[${SERVICE_TOKEN_IS_NEW:-}]"')
+    second = run_step(tmp_path, after='echo "new=[${SERVICE_TOKEN_IS_NEW:-}]"')
+
+    assert "new=[1]" in first.stdout
+    assert "new=[]" in second.stdout
+
+
+def test_a_new_token_recreates_the_running_services():
+    assert "up_args+=(--force-recreate)" in shell_function("start_compose")
+
+
+def test_a_secrets_folder_that_docker_made_as_root_is_taken_over(tmp_path):
+    (tmp_path / ".env").write_text("")
+    (tmp_path / "secrets").mkdir()
+    taken = 'stat() { echo 0; }\nowner() { echo "$*" > took; }\nSUDO=owner'
+
+    done = run_step(tmp_path, before=taken)
+
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "took").read_text() == "chown -R 1500:1600 secrets\n"
+
+
+def test_without_sudo_the_stop_names_the_fix(tmp_path):
+    (tmp_path / ".env").write_text("")
+    (tmp_path / "secrets").mkdir()
+
+    done = run_step(tmp_path, before="stat() { echo 0; }")
+
+    assert done.returncode == 1
+    assert "sudo chown -R 1500:1600 secrets" in done.stderr

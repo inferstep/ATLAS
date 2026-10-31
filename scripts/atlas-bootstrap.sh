@@ -1179,6 +1179,11 @@ ensure_service_token() {
     keep_or_set_env_file_value ATLAS_PROXY_GID "$TARGET_GID"
     keep_or_set_env_file_value ATLAS_SANDBOX_UID "$TARGET_UID"
     keep_or_set_env_file_value ATLAS_SANDBOX_GID "$TARGET_GID"
+    # A stack started before there was a token left Docker's ./secrets, owned by root.
+    if [[ -d secrets && "$(stat -c '%u' secrets)" != "$TARGET_UID" ]]; then
+        $SUDO chown -R "$TARGET_UID:$TARGET_GID" secrets \
+            || die "secrets/ belongs to another user. Fix: sudo chown -R $TARGET_UID:$TARGET_GID secrets, then run this again."
+    fi
     if [[ -f secrets/service-token ]]; then
         log_ok "Service token already present at secrets/service-token (kept)"
         return
@@ -1186,6 +1191,7 @@ ensure_service_token() {
     run_as_target bash -c 'umask 077 && mkdir -p secrets && chmod 700 secrets &&
         printf "atlas-st-%s\n" "$(head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n")" > secrets/service-token' \
         || die "Could not write secrets/service-token."
+    SERVICE_TOKEN_IS_NEW=1
     log_ok "Wrote secrets/service-token (mode 0600) — internal service auth"
 }
 
@@ -1495,8 +1501,13 @@ start_compose() {
 
     log_info "Starting containers…"
     echo
+    # `up -d` keeps a running container, which would never see a new token.
+    local up_args=(-d)
+    if [[ -n "${SERVICE_TOKEN_IS_NEW:-}" ]]; then
+        up_args+=(--force-recreate)
+    fi
     set +e
-    $DC up -d 2>&1 | tee "$ATLAS_RUN_DIR/atlas-compose.log"
+    $DC up "${up_args[@]}" 2>&1 | tee "$ATLAS_RUN_DIR/atlas-compose.log"
     rc=${PIPESTATUS[0]}
     set -e
     echo
@@ -1778,7 +1789,7 @@ run_doctor() {
     local install_dir="${ATLAS_INSTALL_DIR:-$(pwd)}"
     local doctor_out doctor_rc
     set +e
-    doctor_out=$(cd "$install_dir" && python3 -m atlas.commands.doctor --quick --no-color 2>&1)
+    doctor_out=$(cd "$install_dir" && python3 -m atlas doctor --quick --no-color 2>&1)
     doctor_rc=$?
     set -e
 
@@ -1855,9 +1866,9 @@ main() {
     echo
     log_info "Install location: ${BOLD}${ATLAS_INSTALL_DIR:-/opt/atlas}${NC} (override with ATLAS_INSTALL_DIR=...)"
     log_info "  Why /opt/atlas? It's the standard prefix for system-wide third-party"
-    log_info "  software (FHS), survives \$HOME purges, and lets multiple users on the"
-    log_info "  same box share one install. Set ATLAS_INSTALL_DIR=\$HOME/atlas if you'd"
-    log_info "  rather it land in your home dir."
+    log_info "  software (FHS) and survives \$HOME purges. One user owns the install:"
+    log_info "  the service token is theirs alone. Set ATLAS_INSTALL_DIR=\$HOME/atlas if"
+    log_info "  you'd rather it land in your home dir."
     echo
 
     install_docker
