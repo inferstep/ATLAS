@@ -16,7 +16,7 @@ READER_GLOBS = [
     "proxy/*.go", "tui/*.go",
     "atlas/**/*.py", "v3-service/**/*.py", "geometric-lens/**/*.py",
     "sandbox/*.py",
-    "scripts/*.sh", "scripts/**/*.sh", "scripts/*.py",
+    "scripts/*.sh", "scripts/**/*.sh", "scripts/**/*.py",
     "inference/*.sh", "inference/Dockerfile*",
     "templates/*.tmpl", "docker-compose*.yml", "compose/*.yml",
 ]

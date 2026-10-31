@@ -37,12 +37,12 @@ import time
 import urllib.request
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _load_suite():
     """Import the hyphenated e2e module so tasks and checkers stay shared."""
-    path = REPO / "scripts" / "e2e-reliability.py"
+    path = REPO / "scripts" / "eval" / "e2e-reliability.py"
     spec = importlib.util.spec_from_file_location("e2e_suite", path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["e2e_suite"] = mod

@@ -10,7 +10,7 @@ Everything here is measured, not judged. No model scores another model's
 output: each probe is a parse, a count, or a linter's verdict, so the number
 means the same thing on every run and can be compared across builds.
 
-Used by scripts/e2e-reliability.py, and runnable on its own:
+Used by scripts/eval/e2e-reliability.py, and runnable on its own:
 
     python scripts/code_quality.py <dir> [--baseline f1.py,f2.py]
 

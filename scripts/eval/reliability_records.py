@@ -1,4 +1,4 @@
-"""The two records of the reliability runner (scripts/e2e-reliability.py).
+"""The two records of the reliability runner (scripts/eval/e2e-reliability.py).
 
 A Task is what a session is asked: its prompt, the fixture files it starts
 from, and the check that decides whether the requested change landed. A

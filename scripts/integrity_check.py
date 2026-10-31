@@ -37,10 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# The base's copy of this script judges a change, so it has to know the runner's
-# new place before the change that moves the runner there. The old place comes
-# first: while both exist, a file added at the new place decides nothing.
-TASK_SOURCES = (Path("scripts") / "e2e-reliability.py", Path("scripts") / "eval" / "e2e-reliability.py")
+TASK_SOURCE = Path("scripts") / "eval" / "e2e-reliability.py"
 
 CODE_EXTENSIONS = (".go", ".py", ".ts", ".js", ".mjs", ".sh")
 PRODUCT_DIRS = ("proxy/", "tui/", "atlas/", "v3-service/", "geometric-lens/",
@@ -338,8 +335,7 @@ def task_names(root: Path = ROOT) -> set[str]:
 
     The runner builds some names in a loop, so it is loaded, not searched.
     """
-    source = next(root / path for path in TASK_SOURCES if (root / path).exists())
-    spec = importlib.util.spec_from_file_location("atlas_task_source", source)
+    spec = importlib.util.spec_from_file_location("atlas_task_source", root / TASK_SOURCE)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # its dataclasses resolve annotations through it
     try:
@@ -1256,9 +1252,9 @@ def main() -> int:
     try:
         tasks = task_names(args.root)
     except Exception as error:  # the runner is a script: anything can go wrong loading it
-        print(f"integrity check: cannot read the evaluation task names from {TASK_SOURCES}: {error!r}\n"
+        print(f"integrity check: cannot read the evaluation task names from {TASK_SOURCE}: {error!r}\n"
               "  why: without them, a task name in product code would pass unseen.\n"
-              "  fix: make the runner importable again, or point TASK_SOURCES at the file that defines TASKS.",
+              "  fix: make the runner importable again, or point TASK_SOURCE at the file that defines TASKS.",
               file=sys.stderr)
         return 2
     merge_base = subprocess.run(["git", "merge-base", "--end-of-options", args.base, "HEAD"],

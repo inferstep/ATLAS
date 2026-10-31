@@ -591,7 +591,7 @@ atlas bench                                  # full dataset (hours on a local mo
 |---|---|---|
 | `--tasks N` | `0` (all) | how many tasks to run |
 | `--run-id NAME` | `bench_livecodebench_<ts>` | names the run; results land in `benchmark/results/<run-id>/` |
-| `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`), recorded in the run metadata. The run is always the runner's **baseline path** (V3 phases off), which generates one candidate per task — selection has nothing to choose between, so all four values produce the same run. The strategies diverge only on multi-candidate runs: `python -m atlas.bench.v3_runner --selection-strategy … ` *without* `--baseline`, which is how the ablation conditions are produced (`scripts/derive_ablation.py`). |
+| `--strategy` | `random` | candidate selection (`lens`/`random`/`logprob`/`oracle`), recorded in the run metadata. The run is always the runner's **baseline path** (V3 phases off), which generates one candidate per task — selection has nothing to choose between, so all four values produce the same run. The strategies diverge only on multi-candidate runs: `python -m atlas.bench.v3_runner --selection-strategy … ` *without* `--baseline`, which is how the ablation conditions are produced (`scripts/eval/derive_ablation.py`). |
 
 On completion it prints the matching `atlas lens build --force --from-results …` command.
 
