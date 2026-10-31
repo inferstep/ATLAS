@@ -2860,8 +2860,11 @@ func TestFindFileLeavesOutToolFoldersAndCapsItsAnswer(t *testing.T) {
 	if err := json.Unmarshal(res.Data, &out); err != nil {
 		t.Fatalf("%v: %s", err, res.Error)
 	}
-	if out.TotalCount != maxFindFileMatches || !out.Truncated {
-		t.Errorf("TotalCount = %d, Truncated = %v, want %d and true", out.TotalCount, out.Truncated, maxFindFileMatches)
+	if out.TotalCount != maxFindFileMatches {
+		t.Errorf("TotalCount = %d, want %d", out.TotalCount, maxFindFileMatches)
+	}
+	if !out.Truncated {
+		t.Error("an answer stopped at the cap must say it is truncated")
 	}
 	for _, m := range out.Matches {
 		if strings.HasPrefix(m.Path, ".git") {
@@ -2939,8 +2942,11 @@ func TestRunBackgroundRefusesBeforeItStarts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.Success || res.Error != c.want {
-				t.Errorf("Success = %v, Error = %q, want a refusal %q", res.Success, res.Error, c.want)
+			if res.Success {
+				t.Error("the call was not refused")
+			}
+			if res.Error != c.want {
+				t.Errorf("Error = %q, want %q", res.Error, c.want)
 			}
 		})
 	}
