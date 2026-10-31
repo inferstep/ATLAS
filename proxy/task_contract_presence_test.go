@@ -14,7 +14,7 @@ import (
 // [] as nil.
 //
 // Every owned sender (the TUI, tests/e2e/conftest.py and
-// scripts/e2e-reliability.py) sends `{"task_mode": ...}` and nothing else.
+// scripts/eval/e2e-reliability.py) sends `{"task_mode": ...}` and nothing else.
 // Reading "a contract is present, so its output list is authoritative" would
 // turn all that traffic into "the caller requires no outputs". So knowledge is
 // stated, not inferred.

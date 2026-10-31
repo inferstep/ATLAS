@@ -1272,7 +1272,7 @@ const maxTaskContractEntries = 64
 // so an explicit [] was STORED as nil, byte-identical to omitted.
 //
 // That is not a cosmetic loss. Every owned sender -- the TUI,
-// tests/e2e/conftest.py, scripts/e2e-reliability.py -- sends
+// tests/e2e/conftest.py, scripts/eval/e2e-reliability.py -- sends
 // `{"task_mode": ...}` and nothing else, so a rule of the form "a contract is
 // present, therefore its output list is authoritative" would read 100% of
 // owned traffic as "this caller requires no outputs" and drop the legacy

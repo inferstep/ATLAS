@@ -1,9 +1,9 @@
-"""The harness-defect detectors of the reliability runner (scripts/e2e-reliability.py).
+"""The harness-defect detectors of the reliability runner (scripts/eval/e2e-reliability.py).
 
 Each detector returns the harness defects it finds in a session: the faults of
 ATLAS's own plumbing, apart from whether the model did the task. The runner
 applies all nine; h2, which judges a rejection against the file on disk, is
-in scripts/e2e-reliability.py. Also the event types the TUI can render, which
+in scripts/eval/e2e-reliability.py. Also the event types the TUI can render, which
 h1 checks against.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 from reliability_records import WRITE_TOOLS, Session, Task
 from reliability_sandbox import _file_parses
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 
 # --------------------------------------------------------------------------
 # Harness-defect detectors

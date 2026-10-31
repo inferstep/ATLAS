@@ -11,10 +11,10 @@ This script replays each condition's selection logic on stored candidate
 data, producing per-task results without re-running any LLM calls.
 
 Usage:
-    python3 scripts/derive_ablation.py <condition_f_dir> <output_dir>
+    python3 scripts/eval/derive_ablation.py <condition_f_dir> <output_dir>
 
 Example:
-    python3 scripts/derive_ablation.py \
+    python3 scripts/eval/derive_ablation.py \
         benchmark/results/v31_full_F \
         benchmark/results/v31_ablation_derived
 
@@ -26,9 +26,9 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # stages/ (the V3 pipeline stages) lives in v3-service
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "v3-service"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 from stages.candidate_selection import CandidateInfo, select_candidate
 

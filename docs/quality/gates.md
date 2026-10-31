@@ -809,7 +809,7 @@ Each night it:
 5. starts a stack under the name `atlas-nightly`, on loopback ports of its
    own, so that it stands beside a stack on the usual ports, and asks the
    services whether they are whole;
-6. runs the driver `scripts/e2e-reliability.py` with three fixed small
+6. runs the driver `scripts/eval/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
 7. runs the tests that need a real model, and judges pytest's result file
    with the judge of such runs: all 30 of them are to be collected and to
