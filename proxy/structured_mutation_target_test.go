@@ -344,9 +344,12 @@ func TestTheProposedCandidateIdentityHasOneOwner(t *testing.T) {
 	if strings.Count(readSourceForTest(t, "evidence_wiring.go"), "func proposedCandidateIdentity(") != 1 {
 		t.Error("proposedCandidateIdentity is not defined exactly once in the identity owner")
 	}
-	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
-		if strings.Count(readSourceForTest(t, f), "proposedCandidateIdentity(") != 1 {
-			t.Errorf("%s does not mint the proposed candidate's identity exactly once", f)
+	for name, source := range map[string]string{
+		"the tool files":         toolSources(t),
+		"edit_route_delivery.go": readSourceForTest(t, "edit_route_delivery.go"),
+	} {
+		if strings.Count(source, "proposedCandidateIdentity(") != 1 {
+			t.Errorf("%s do not mint the proposed candidate's identity exactly once", name)
 		}
 	}
 }

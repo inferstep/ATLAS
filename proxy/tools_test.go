@@ -2321,7 +2321,7 @@ func TestLegacyCheckerWrapperInventory(t *testing.T) {
 	for name, fn := range map[string]string{
 		"edit_file":     span("Name:   \"edit_file\"", "\nfunc structuralEditTool("),
 		"insert_after":  span("Name:   \"insert_after\"", "\n// replaceLinesMaxSpan"),
-		"replace_lines": span("Name:   \"replace_lines\"", "\nfunc deleteFileTool("),
+		"replace_lines": span("Name:   \"replace_lines\"", "\nfunc runCommandTool("),
 	} {
 		if n := strings.Count(fn, "checkFallbackSyntax("); n != 0 {
 			t.Errorf("%s still calls the legacy wrapper %d time(s)", name, n)
