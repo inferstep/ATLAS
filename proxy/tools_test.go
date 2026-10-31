@@ -3186,3 +3186,78 @@ func TestCallersBrokenContentIsRefusedWhenV3ProposesNothing(t *testing.T) {
 		t.Errorf("the file was written: %v", err)
 	}
 }
+
+// What edit_file answers for each shape of old_str and new_str that no other
+// test sends. A refusal leaves the file as it was.
+func TestEditFileAnswersEachShapeOfItsInput(t *testing.T) {
+	long := strings.Repeat("value = compute_the_value()\n", 5)
+	entry := "if __name__ == \"__main__\":\n    run()\n"
+	for _, c := range []struct {
+		name, original, oldStr, newStr string
+		replaceAll                     bool
+		wantError, wantData, wantDisk  string
+	}{
+		{name: "a corrupted character", original: "x = 1\n", oldStr: "x → 1", newStr: "x = 2",
+			wantError: "That is a corrupted character", wantDisk: "x = 1\n"},
+		{name: "a line-number prefix on text that is not in the file", original: "x = 1\n",
+			oldStr: "12\ty = 1", newStr: "y = 2",
+			wantError: "still has read_file's line-number prefix", wantDisk: "x = 1\n"},
+		{name: "stray carriage returns", original: "x = 1\n", oldStr: "a\rb\rc\rd", newStr: "y",
+			wantError: "stray carriage returns", wantDisk: "x = 1\n"},
+		{name: "a fenced new_str loses its fence", original: "x = 1\n", oldStr: "x = 1\n",
+			newStr: "```python\nx = 2\n```\n", wantDisk: "x = 2\n"},
+		{name: "replace_all changes every match", original: "x = 1\nx = 1\n", oldStr: "x = 1",
+			newStr: "x = 2", replaceAll: true, wantDisk: "x = 2\nx = 2\n"},
+		{name: "a replacement far smaller than its target", original: long, oldStr: long, newStr: "x\n",
+			wantError: "suspiciously small", wantDisk: long},
+		{name: "a whitespace-tolerant match that changes nothing", original: "x = 1\n", oldStr: "  x = 1",
+			newStr: "x = 1", wantError: "nothing was changed", wantDisk: "x = 1\n"},
+		{name: "fewer lines than before", original: "x = 1\ny = 2\n", oldStr: "x = 1\ny = 2",
+			newStr: "z = 3", wantData: `"lines_removed":1`, wantDisk: "z = 3\n"},
+		{name: "a second module entrypoint", original: entry, oldStr: "    run()\n",
+			newStr: "    run()\n\n" + entry, wantError: "`if __name__ == \"__main__\":` blocks", wantDisk: entry},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]interface{}{"path": "app.py", "old_str": c.oldStr,
+				"new_str": c.newStr, "replace_all": c.replaceAll})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, disk, _, _ := runEditGate(t, "edit_file", editGateCase{original: c.original,
+				argsFor: func(string) []byte { return args }})
+			if !strings.Contains(res.Error, c.wantError) {
+				t.Errorf("error %q, want it to hold %q", res.Error, c.wantError)
+			}
+			if !strings.Contains(string(res.Data), c.wantData) {
+				t.Errorf("data %s, want it to hold %s", res.Data, c.wantData)
+			}
+			if disk != c.wantDisk {
+				t.Errorf("the file holds %q, want %q", disk, c.wantDisk)
+			}
+		})
+	}
+}
+
+// The same whitespace-only edit, sent twice, is applied once: its old_str still
+// matches afterwards, so nothing else would stop it repeating.
+func TestTheSameEditIsAppliedOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(path, "x = 1\n")
+	args := json.RawMessage(`{"path":"app.py","old_str":"x","new_str":" x"}`)
+
+	if res, err := editFileTool().Execute(args, ctx); err != nil || !res.Success {
+		t.Fatalf("the first edit: %v, %v", res, err)
+	}
+	res, err := editFileTool().Execute(args, ctx)
+	if err != nil || res.Success || !strings.Contains(res.Error, "already succeeded earlier") {
+		t.Errorf("the second edit: %+v, %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != " x = 1\n" {
+		t.Errorf("the file holds %q", got)
+	}
+}
