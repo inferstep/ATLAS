@@ -139,7 +139,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 - **Linux Docker 스택과 네이티브 macOS 경로.** NVIDIA(지원(Supported)), AMD ROCm(커뮤니티 검증(Community-tested)), Vulkan(프리뷰(Preview)) Docker 경로가 현재 존재합니다. Apple Silicon(지원)은 네이티브 macOS 하이브리드 Metal 경로([#32](https://github.com/inferstep/ATLAS/issues/32))로 동작합니다. Intel Arc / SYCL은 로드맵(Roadmap)입니다. 수준 정의: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md).
 - **ATLAS에는 현재 벤치마크 결과가 없습니다.** V3.0 LiveCodeBench 수치는 철회되었고([CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 참조), 현재 릴리스의 능력·신뢰성 수치는 아직 측정되지 않았습니다. 수치는 보류 과제로 재측정한 뒤에만 공개하며, 모델별 결과는 [#28](https://github.com/inferstep/ATLAS/issues/28)에서 추적합니다.
-- **렌즈는 아직 쓸 만한 신호를 주지 못합니다.** 보정이 맞지 않고 기본 설정에서는 토큰별 점수 계산이 실행되지 않아 후보를 거부하거나 경고를 낼 수 없습니다 ([#281](https://github.com/inferstep/ATLAS/issues/281)).
+- **렌즈의 신호는 아직 입증되지 않았습니다.** 기준 모델에서는 점수를 내지만 보정되지 않은 상태이므로 개입은 중립입니다. 3.1.6에서는 쓸 만한 신호를 주지 못했고, `dev`에서는 아직 측정하지 않았습니다 ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **복잡한 기능 추가는 일관성이 떨어질 수 있습니다.** 콤팩트 모델은 코드를 쓰기 전에 낯선 코드베이스 탐색으로 에이전트 턴을 소비하기도 합니다.
 - **문법 제약 디코딩은 제약 없는 디코딩보다 느립니다.**
 

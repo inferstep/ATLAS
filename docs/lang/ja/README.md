@@ -141,7 +141,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 - **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
 - **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（[CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/inferstep/ATLAS/issues/28) で追跡します。
-- **レンズはまだ有効なシグナルを出しません。** 較正が一致しておらず、既定の設定ではトークンごとのスコアリングが実行できないため、候補の拒否や警告はできません ([#281](https://github.com/inferstep/ATLAS/issues/281))。
+- **レンズのシグナルはまだ実証されていません。** リファレンスモデルではスコアは出ますが未較正のままで、介入は中立です。3.1.6 では有効なシグナルが得られず、`dev` ではまだ測定していません ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。
 - **文法制約デコーディングは制約なしのデコーディングより遅くなります。**
 

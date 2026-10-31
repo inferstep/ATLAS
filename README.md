@@ -144,7 +144,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 - **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
 - **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see the [CHANGELOG](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
-- **The lens gives no usable signal yet.** Its calibration is mismatched and its per-token scoring cannot run with the default settings, so it cannot veto a candidate or raise an alert ([#281](https://github.com/inferstep/ATLAS/issues/281)).
+- **The lens's signal is not proven yet.** On the reference model it scores but stays uncalibrated, so its interventions are neutral. On 3.1.6 it gave no usable signal, and that is not yet measured on `dev` ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code.
 - **Grammar-constrained decoding is slower than unconstrained decoding.**
 
