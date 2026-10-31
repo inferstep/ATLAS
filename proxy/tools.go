@@ -2076,420 +2076,491 @@ func editFileTool() *ToolDef {
 		InputSchema: EditFileInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-			var input EditFileInput
-			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
-			}
-
-			// Reject empty path — same reasoning as read_file.
-			if strings.TrimSpace(input.Path) == "" {
-				return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path."), nil
-			}
-
-			// Malformed-args check, BEFORE the read-staleness check. Observed
-			// live: the model sent
-			//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
-			// — an empty old_str, a key literally named "", and write_file's
-			// `content` field instead of new_str. It got "file not read yet",
-			// which was true and said nothing about the four things wrong with
-			// the call, so the next attempt fumbled a different field.
-			if strings.TrimSpace(input.OldStr) == "" {
-				hint := ""
-				if bytes.Contains(rawInput, []byte(`"content"`)) {
-					hint = " You sent `content`, which is write_file's field — edit_file does not take it."
-				}
-				return noMutation("edit_file: old_str is required and cannot be empty." + hint +
-					" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
-					"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
-					"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
-					"take `content`."), nil
-			}
-
-			path := resolveAgentPath(ctx, input.Path)
-
-			// Require file was read first (staleness protection)
-			if !editViewIsCurrent(ctx, path) {
-				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", input.Path))
-			}
-
-			// Read current content
-			data, err := readRegularFile(path)
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
-			}
-			content := string(data)
-
-			// Check for staleness
-			if modifiedSinceSessionView(ctx, path, data) {
-				return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", input.Path))
-			}
-
-			// Find old_str. Exact bytes first; a match that needed quote-style
-			// or whitespace tolerance is allowed but reported, so the model
-			// knows which text of the file its new_str replaced.
-			actualOldStr := findActualString(content, input.OldStr)
-			matchNote := ""
-			if actualOldStr != "" && actualOldStr != input.OldStr {
-				matchNote = fmt.Sprintf("old_str matched %s only after treating curly and straight quotes as the "+
-					"same; the file's own text there was replaced by new_str exactly as sent.",
-					lineSpanOf(content, actualOldStr))
-			}
-			// An old_str that matches only after decoding HTML entities is NOT
-			// accepted by decoding new_str to match (GH #39's old shortcut):
-			// the replacement may hold entities on purpose (&amp; in markup,
-			// or in a Python string), and decoding it wrote different bytes
-			// from the ones sent. The targeted refusal below names the
-			// entities and the retry.
-			if actualOldStr == "" {
-				// read_file prints "12<tab>" before each line for reference
-				// and the model pastes back what it was shown. The edit used
-				// to strip the prefix from old_str and new_str and apply the
-				// result, reporting nothing: an unannounced rewrite of both
-				// arguments (stabilization cycle 2, smallrung_toml rep 2).
-				// old_str and new_str are applied exactly as sent; text that
-				// really begins "12<tab>" (tab-separated data) still edits,
-				// because it matched above. When only the prefix-free form
-				// matches, nothing is changed and the refusal gives the exact
-				// replace_lines call that makes this change without
-				// reproducing the text: the lines where it matched, their
-				// real contents, and a note if new_str carries the prefix too.
-				if stripped := stripLineNumberPrefixes(input.OldStr); stripped != input.OldStr {
-					if maybeMatch := findActualString(content, stripped); maybeMatch != "" {
-						log.Printf("[edit_file] old_str on %s matches only without read_file's line-number prefixes — refused", input.Path)
-						return nil, errNoMutation(fmt.Errorf("%s", prefixedEditRefusal(input.Path, content, maybeMatch,
-							input.OldStr, input.NewStr)))
-					}
-				}
-			}
-			if actualOldStr == "" {
-				// Last resort before failing: whitespace-tolerant line match.
-				// Small models can't reproduce a code block byte-for-byte —
-				// indentation width, tabs-vs-spaces, and trailing spaces drift
-				// constantly — so exact old_str matching is the #1 reason
-				// edit_file fails for them, which strands the whole V3/lens
-				// stack (it only engages after a successful edit). This
-				// matches old_str against the file ignoring per-line leading/
-				// trailing whitespace, and ONLY accepts a UNIQUE match — an
-				// ambiguous or content-different old_str still fails, so it
-				// can never silently edit the wrong place. Exact-matching
-				// (frontier) models never reach this path. See GH #39.
-				if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
-					log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
-					actualOldStr = fuzzy
-					matchNote = fmt.Sprintf("old_str matched %s only after ignoring leading and trailing whitespace "+
-						"on each line; those lines were replaced by new_str exactly as sent.", lineSpanOf(content, fuzzy))
-				}
-			}
-			if actualOldStr == "" {
-				// Degenerate old_str: not drift the fuzzy matcher can rescue,
-				// but corrupted output. Observed across three sessions —
-				// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
-				// the middle of copied code. "Must match byte-for-byte" is
-				// useless advice for that, and the model re-sent an equally
-				// corrupted block each time. Name it, and ask for the short
-				// anchor that is far less likely to degenerate.
-				// A long multi-line anchor is a transcription burden, and this
-				// model corrupts under it: asked to reproduce a ten-line block
-				// it emitted "safe_load_aller" for "safe_load_all". One line
-				// is enough to locate an edit, and both the tool description
-				// and the structural_edit steer already say so — repeat it
-				// here, where the failure actually happened.
-				// Checked before everything: one corrupted character is
-				// invisible next to a long old_str, and every other hint here
-				// sends the model to re-copy text it already copied right.
-				if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
-						"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
-						"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
-						"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
-						describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200)))
-				}
-				// Checked next because it is the most specific remaining: the
-				// text is otherwise correct and only carries read_file's
-				// display prefix. Saying "not found" here sends the model back to
-				// re-copy a line it already copied right.
-				if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
-						"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
-						"added for reference and is NOT in the file. Send the line text only, starting at "+
-						"the first real character. If you are ADDING lines rather than changing one, "+
-						"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
-						n, truncateStr(input.OldStr, 200)))
-				}
-				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
-						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
-						"Use `replace_lines` instead: give the start and end line numbers read_file "+
-						"printed and assert only the FIRST and LAST line of that range, so there is no "+
-						"multi-line block to reproduce. Or anchor edit_file on ONE short line that "+
-						"appears exactly once and put the whole replacement in `new_str`. If you are "+
-						"ADDING code rather than replacing it, use insert_after with the line number "+
-						"read_file printed — it needs no old_str at all.\nSearched for: %s",
-						lines, truncateStr(input.OldStr, 200)))
-				}
-				if n := strayCarriageReturns(input.OldStr); n >= 3 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` "+
-						"contains %d stray carriage returns and looks corrupted rather than copied "+
-						"— long blocks tend to come out this way. Use `replace_lines` on the line "+
-						"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
-						"file (the single line you are changing), not a multi-line block", n))
-				}
-				// Mismatch persists — return targeted error.
-				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
-					strings.Contains(input.OldStr, "&gt;") ||
-					strings.Contains(input.OldStr, "&amp;")
-				literalsOnDisk := strings.ContainsAny(content, "<>&")
-				if hasEntities && literalsOnDisk {
-					alt := ""
-					if guide := selectorGuidance(input.Path, content); guide != "" {
-						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector and the new content body, no old_str needed; " + guide + "."
-					}
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
-						alt, truncateStr(input.OldStr, 200)))
-				}
-				// Generic mismatch — the model's old_str doesn't byte-match
-				// the file (whitespace, quotes, or paraphrase drift, which
-				// smaller models do constantly). For structured files,
-				// structural_edit sidesteps the whole problem: it selects the node
-				// by name, no old_str to reproduce exactly. Steer there.
-				astAlt := ""
-				if guide := selectorGuidance(input.Path, content); guide != "" {
-					astAlt = " To replace a whole function/class/element without " +
-						"matching exact text, use structural_edit with a selector and the " +
-						"new content — no old_str needed, so a near-miss can't fail it; " +
-						guide + "."
-				}
-				// Ground the retry in the file's REAL content. A small model
-				// frequently writes old_str from its memory of the file
-				// rather than the file itself (observed: old_str
-				// `item = items[id + 1]` for a file whose actual line is
-				// `return jsonify(items[item_id + 1])`). Without an anchor it
-				// gives up on the surgical edit and rewrites the whole node
-				// from the same faulty memory. Quoting the closest actual
-				// line gives it real bytes to copy into the next attempt.
-				hint := closestLineHint(content, input.OldStr)
-				return nil, errNoMutation(fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200)))
-			}
-
-			// Check uniqueness
-			count := strings.Count(content, actualOldStr)
-			if count > 1 && !input.ReplaceAll {
-				return nil, errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
-			}
-
-			// No-op check. The bare diagnosis was a dead end: the model
-			// copies old_str into new_str precisely because it cannot
-			// reproduce a span with a change applied, so telling it only
-			// that the two match gives it nothing to do differently and it
-			// re-sends the identical call until the loop breaker kills the
-			// session. Measured on a "build me a snake game" run: refused at
-			// turn 11, re-sent at 12 and 13, session dead at 757s with
-			// game.js half-written. Name the tool that removes the
-			// requirement it just failed.
-			if input.OldStr == input.NewStr {
-				alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
-				if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
-					alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
-				}
-				// The alternative it is being sent to needs line numbers, and
-				// "the line numbers read_file printed" may be many turns and
-				// several successful edits old. Measured (cycle 7 audit,
-				// family O): refused at turns 11, 14 and 16 against a file
-				// last read at turn 5, alternating with a structural_edit
-				// that changed nothing, until the run stopped on repeated
-				// refusals. Where those bytes sit RIGHT NOW is something this
-				// call already knows, so it is said here.
-				return nil, errNoMutation(fmt.Errorf(
-					"old_str and new_str are identical, so this edit would change nothing. "+
-						"Re-sending it will not help. You are being asked to reproduce a span "+
-						"verbatim AND change it, which is what just failed — use %s.%s "+
-						"If you meant to REPLACE the whole file, use write_file with the "+
-						"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
-			}
-
-			// Sanitise the replacement string before splicing it in. The
-			// model occasionally fences the new_str ("```python\n...\n```")
-			// even though it's a fragment, not a whole file. If we let
-			// that slip through, every line of the edit would have a
-			// stray ``` at the top and bottom.
-			if cleanedNew, sanitized := sanitizeFileContent(input.Path, input.NewStr); sanitized {
-				log.Printf("[edit_file] removed a whole-content fence wrapper from new_str of %s", input.Path)
-				input.NewStr = cleanedNew
-				defer func() { noteContentChange(res, wholeFileWrapperNote) }()
-			}
-
-			if matchNote != "" {
-				note := matchNote
-				defer func() { noteContentChange(res, note) }()
-			}
-
-			var newContent string
-			if input.ReplaceAll {
-				newContent = strings.ReplaceAll(content, actualOldStr, input.NewStr)
-			} else {
-				newContent = strings.Replace(content, actualOldStr, input.NewStr, 1)
-			}
-
-			// Shrinkage guard — same shape as structural_edit's. Catches the
-			// "model emitted a stub for old_str" failure where new_str
-			// is implausibly tiny for a substantial old_str. We compare
-			// the local replacement footprint (old_str → new_str), not
-			// whole-file size, so refactors that genuinely shrink the
-			// file aren't false-rejected.
-			if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
-				log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
-					input.Path, len(actualOldStr), len(input.NewStr))
-				// The shrinkage heuristic declining bytes that were formed.
-				return refusedNoCheck(rejection), nil
-			}
-
-			// No-op guard — same rationale as structural_edit's. new_str identical
-			// to old_str (or a replacement that leaves the file unchanged)
-			// must not report success: the model believes the fix landed
-			// and moves on while the bug is still on disk.
-			if newContent == content {
-				log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
-				return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
-					"Look at the current code again and emit a new_str that actually differs from the existing code."), nil
-			}
-
-			// Already-applied guard. The check above only catches an edit that
-			// leaves the file byte-identical; it cannot see an edit that
-			// applied once and is now being applied AGAIN. A whitespace-only
-			// change is the dangerous shape: after " x" replaces "x", the
-			// original old_str still matches as a substring, so the same call
-			// keeps succeeding and keeps adding whitespace. The repeat
-			// detector does not help — it needs three occurrences, and two
-			// runs of a 75-second edit is already two minutes gone.
-			editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
-			if ctx.AppliedEdits[editKey] {
-				log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
-				return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
-					"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
-					"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
-					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."), nil
-			}
-
-			// Same pipeline entry every content edit uses; see
-			// runEditPipeline for why it is shared rather than inlined.
-			route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			newContent = route.Content
-
-			// Syntax gate on the composed result. A truncated new_str (or a
-			// string-level edit that broke the file) must not land when V3
-			// verification didn't run or failed — same class as the
-			// write_file fallback gate (mini-bench t06/t09). Semantics:
-			// an edit must not INTRODUCE breakage — when the ORIGINAL
-			// content already fails to parse, a still-failing result is a
-			// permitted repair-in-progress (fixing one error at a time),
-			// so the gate only blocks healthy→broken transitions.
-			observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
-				content, newContent, func(detail string) string {
-					// An embedded-script finding is already model-ready and names
-					// its own fix; the generic wrapper's "check old_str/new_str"
-					// advice is wrong for JavaScript inside a string.
-					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
-						return msg
-					}
-					return fmt.Sprintf(
-						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
-						input.Path, truncateStr(detail, 200))
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-
-			// Structural gate (#147): a parse-clean edit can still introduce
-			// an unresolved direct call (render_template with only
-			// render_template_string imported) that 500s at runtime. Block a
-			// write that NEWLY makes a name unresolved; a pre-existing one
-			// (mid-repair) is allowed, mirroring the syntax gate above.
-			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
-				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				return structuralRefusal(structuralRejection(input.Path, introduced)), nil
-			}
-			// edit_file ran checkFallbackSyntax, which parses the embedded
-			// script but has no pre-edit file to compare against, so the
-			// comparative findings — a render loop that stopped repeating, a
-			// lexical binding declared twice — were never checked here. Every
-			// other edit path had them. Observed: the same one-shot
-			// setTimeout the gate refuses under replace_lines landed through
-			// edit_file, and the page returned 200 with a dead game.
-			if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
-				log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, content, newContent); msg != "" {
-				log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "edit_file", input.Path, "")
-
-			// Atomic write
-			tmpPath := path + atomicTempSuffix
-			if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", input.Path, err), observed)
-			}
-			if err := os.Rename(tmpPath, path); err != nil {
-				os.Remove(tmpPath)
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot rename temp file: %w", err), observed)
-			}
-
-			// Update cached state with whatever was actually written
-			ctx.RecordFileRead(path, newContent)
-			ctx.RecordBodySeen(path)
-
-			// Build diff preview against the original on-disk content
-			oldLines := strings.Count(input.OldStr, "\n") + 1
-			newLines := strings.Count(input.NewStr, "\n") + 1
-			preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
-
-			out := EditFileOutput{
-				OK:           true,
-				DiffPreview:  preview,
-				LinesAdded:   newLines - oldLines,
-				LinesRemoved: 0,
-			}
-			if newLines < oldLines {
-				out.LinesRemoved = oldLines - newLines
-				out.LinesAdded = 0
-			}
-
-			outBytes, _ := json.Marshal(out)
-			// Record it so an identical re-application is refused above.
-			if ctx.AppliedEdits != nil {
-				ctx.AppliedEdits[editKey] = true
-			}
-			result := &ToolResult{Success: true, Data: outBytes,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact and is attached below.
-			overlayValidation(result, observed)
-			if v3Out.Used {
-				result.V3Used = true
-				result.CandidatesTested = v3Out.CandidatesTested
-				result.WinningScore = v3Out.WinningScore
-				result.PhaseSolved = v3Out.PhaseSolved
-				result.VerificationEvidence = v3Out.VerificationEvidence
-			}
-			return result, nil
-		},
+		Execute:     executeEditFile,
 	}
+}
+
+// executeEditFile runs one edit_file call: it finds old_str in the file, checks
+// the edit, sends it down the pipeline every content edit shares, and writes
+// what comes back.
+func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
+	var input EditFileInput
+	if err := json.Unmarshal(rawInput, &input); err != nil {
+		return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
+	}
+	if refusal := editInputRefusal(input, rawInput); refusal != nil {
+		return refusal, nil
+	}
+
+	path := resolveAgentPath(ctx, input.Path)
+	content, err := readFileToEdit(ctx, path, input.Path)
+	if err != nil {
+		return nil, err
+	}
+	actualOldStr, matchNote, err := locateOldStr(content, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := matchedEditError(content, actualOldStr, input); err != nil {
+		return nil, err
+	}
+
+	// Sanitise the replacement string before splicing it in. The
+	// model occasionally fences the new_str ("```python\n...\n```")
+	// even though it's a fragment, not a whole file. If we let
+	// that slip through, every line of the edit would have a
+	// stray ``` at the top and bottom.
+	if cleanedNew, sanitized := sanitizeFileContent(input.Path, input.NewStr); sanitized {
+		log.Printf("[edit_file] removed a whole-content fence wrapper from new_str of %s", input.Path)
+		input.NewStr = cleanedNew
+		defer func() { noteContentChange(res, wholeFileWrapperNote) }()
+	}
+
+	if matchNote != "" {
+		note := matchNote
+		defer func() { noteContentChange(res, note) }()
+	}
+
+	newContent := applyEdit(content, actualOldStr, input)
+	editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
+	if refusal := composedEditRefusal(ctx, input, content, newContent, actualOldStr, editKey); refusal != nil {
+		return refusal, nil
+	}
+
+	// Same pipeline entry every content edit uses; see
+	// runEditPipeline for why it is shared rather than inlined.
+	route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	newContent = route.Content
+
+	// Syntax gate on the composed result. A truncated new_str (or a
+	// string-level edit that broke the file) must not land when V3
+	// verification didn't run or failed — same class as the
+	// write_file fallback gate (mini-bench t06/t09). Semantics:
+	// an edit must not INTRODUCE breakage — when the ORIGINAL
+	// content already fails to parse, a still-failing result is a
+	// permitted repair-in-progress (fixing one error at a time),
+	// so the gate only blocks healthy→broken transitions.
+	observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
+		content, newContent, editFileSyntaxMessage(input.Path))
+	if refusal != nil {
+		return refusal, nil
+	}
+	if refusal := editGateRefusal(ctx, path, input.Path, content, newContent); refusal != nil {
+		return refusal, nil
+	}
+	logMandatoryChecks(ctx, "edit_file", input.Path, "")
+
+	if err := writeEditedFile(path, input.Path, newContent, observed); err != nil {
+		return nil, err
+	}
+
+	// Update cached state with whatever was actually written
+	ctx.RecordFileRead(path, newContent)
+	ctx.RecordBodySeen(path)
+
+	out := editFileOutput(input, content, newContent, actualOldStr)
+	outBytes, _ := json.Marshal(out)
+	// Record it so an identical re-application is refused above.
+	if ctx.AppliedEdits != nil {
+		ctx.AppliedEdits[editKey] = true
+	}
+	result := &ToolResult{Success: true, Data: outBytes,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written: the tool's
+	// own edit. A delivered candidate returned above.
+	overlayValidation(result, observed)
+	return result, nil
+}
+
+// editInputRefusal refuses a call whose arguments cannot name an edit.
+func editInputRefusal(input EditFileInput, rawInput json.RawMessage) *ToolResult {
+	// Reject empty path — same reasoning as read_file.
+	if strings.TrimSpace(input.Path) == "" {
+		return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.")
+	}
+
+	// Malformed-args check, BEFORE the read-staleness check. Observed
+	// live: the model sent
+	//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
+	// — an empty old_str, a key literally named "", and write_file's
+	// `content` field instead of new_str. It got "file not read yet",
+	// which was true and said nothing about the four things wrong with
+	// the call, so the next attempt fumbled a different field.
+	if strings.TrimSpace(input.OldStr) == "" {
+		hint := ""
+		if bytes.Contains(rawInput, []byte(`"content"`)) {
+			hint = " You sent `content`, which is write_file's field — edit_file does not take it."
+		}
+		return noMutation("edit_file: old_str is required and cannot be empty." + hint +
+			" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
+			"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
+			"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
+			"take `content`.")
+	}
+	return nil
+}
+
+// readFileToEdit reads the file an edit names, if the model has seen what is
+// there now.
+func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
+	// Require file was read first (staleness protection)
+	if !editViewIsCurrent(ctx, path) {
+		return "", errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", relPath))
+	}
+
+	// Read current content
+	data, err := readRegularFile(path)
+	if err != nil {
+		return "", errNoMutation(fmt.Errorf("cannot read %s: %w", relPath, err))
+	}
+
+	// Check for staleness
+	if modifiedSinceSessionView(ctx, path, data) {
+		return "", errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", relPath))
+	}
+	return string(data), nil
+}
+
+// locateOldStr finds the text of the file that old_str names, and a note for
+// the model when the match needed any tolerance.
+func locateOldStr(content string, input EditFileInput) (string, string, error) {
+	// Find old_str. Exact bytes first; a match that needed quote-style
+	// or whitespace tolerance is allowed but reported, so the model
+	// knows which text of the file its new_str replaced.
+	actualOldStr := findActualString(content, input.OldStr)
+	if actualOldStr == input.OldStr {
+		return actualOldStr, "", nil
+	}
+	if actualOldStr != "" {
+		return actualOldStr, fmt.Sprintf("old_str matched %s only after treating curly and straight quotes as the "+
+			"same; the file's own text there was replaced by new_str exactly as sent.",
+			lineSpanOf(content, actualOldStr)), nil
+	}
+	// An old_str that matches only after decoding HTML entities is NOT
+	// accepted by decoding new_str to match (GH #39's old shortcut):
+	// the replacement may hold entities on purpose (&amp; in markup,
+	// or in a Python string), and decoding it wrote different bytes
+	// from the ones sent. The targeted refusal below names the
+	// entities and the retry.
+	// read_file prints "12<tab>" before each line for reference
+	// and the model pastes back what it was shown. The edit used
+	// to strip the prefix from old_str and new_str and apply the
+	// result, reporting nothing: an unannounced rewrite of both
+	// arguments (stabilization cycle 2, smallrung_toml rep 2).
+	// old_str and new_str are applied exactly as sent; text that
+	// really begins "12<tab>" (tab-separated data) still edits,
+	// because it matched above. When only the prefix-free form
+	// matches, nothing is changed and the refusal gives the exact
+	// replace_lines call that makes this change without
+	// reproducing the text: the lines where it matched, their
+	// real contents, and a note if new_str carries the prefix too.
+	if stripped := stripLineNumberPrefixes(input.OldStr); stripped != input.OldStr {
+		if maybeMatch := findActualString(content, stripped); maybeMatch != "" {
+			log.Printf("[edit_file] old_str on %s matches only without read_file's line-number prefixes — refused", input.Path)
+			return "", "", errNoMutation(fmt.Errorf("%s", prefixedEditRefusal(input.Path, content, maybeMatch,
+				input.OldStr, input.NewStr)))
+		}
+	}
+	// Last resort before failing: whitespace-tolerant line match.
+	// Small models can't reproduce a code block byte-for-byte —
+	// indentation width, tabs-vs-spaces, and trailing spaces drift
+	// constantly — so exact old_str matching is the #1 reason
+	// edit_file fails for them, which strands the whole V3/lens
+	// stack (it only engages after a successful edit). This
+	// matches old_str against the file ignoring per-line leading/
+	// trailing whitespace, and ONLY accepts a UNIQUE match — an
+	// ambiguous or content-different old_str still fails, so it
+	// can never silently edit the wrong place. Exact-matching
+	// (frontier) models never reach this path. See GH #39.
+	if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
+		log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
+		return fuzzy, fmt.Sprintf("old_str matched %s only after ignoring leading and trailing whitespace "+
+			"on each line; those lines were replaced by new_str exactly as sent.", lineSpanOf(content, fuzzy)), nil
+	}
+	// Degenerate old_str: not drift the fuzzy matcher can rescue,
+	// but corrupted output. Observed across three sessions —
+	// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
+	// the middle of copied code. "Must match byte-for-byte" is
+	// useless advice for that, and the model re-sent an equally
+	// corrupted block each time. Name it, and ask for the short
+	// anchor that is far less likely to degenerate.
+	// A long multi-line anchor is a transcription burden, and this
+	// model corrupts under it: asked to reproduce a ten-line block
+	// it emitted "safe_load_aller" for "safe_load_all". One line
+	// is enough to locate an edit, and both the tool description
+	// and the structural_edit steer already say so — repeat it
+	// here, where the failure actually happened.
+	// Checked before everything: one corrupted character is
+	// invisible next to a long old_str, and every other hint here
+	// sends the model to re-copy text it already copied right.
+	if err := corruptedOldStrError(content, input); err != nil {
+		return "", "", err
+	}
+	return "", "", oldStrMismatchError(content, input)
+}
+
+// corruptedOldStrError names what is wrong with an old_str that was not copied
+// faithfully, or returns nil.
+func corruptedOldStrError(content string, input EditFileInput) error {
+	if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
+			"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
+			"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
+			"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
+			describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200)))
+	}
+	// Checked next because it is the most specific remaining: the
+	// text is otherwise correct and only carries read_file's
+	// display prefix. Saying "not found" here sends the model back to
+	// re-copy a line it already copied right.
+	if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
+			"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
+			"added for reference and is NOT in the file. Send the line text only, starting at "+
+			"the first real character. If you are ADDING lines rather than changing one, "+
+			"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
+			n, truncateStr(input.OldStr, 200)))
+	}
+	if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
+			"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
+			"Use `replace_lines` instead: give the start and end line numbers read_file "+
+			"printed and assert only the FIRST and LAST line of that range, so there is no "+
+			"multi-line block to reproduce. Or anchor edit_file on ONE short line that "+
+			"appears exactly once and put the whole replacement in `new_str`. If you are "+
+			"ADDING code rather than replacing it, use insert_after with the line number "+
+			"read_file printed — it needs no old_str at all.\nSearched for: %s",
+			lines, truncateStr(input.OldStr, 200)))
+	}
+	if n := strayCarriageReturns(input.OldStr); n >= 3 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` "+
+			"contains %d stray carriage returns and looks corrupted rather than copied "+
+			"— long blocks tend to come out this way. Use `replace_lines` on the line "+
+			"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
+			"file (the single line you are changing), not a multi-line block", n))
+	}
+	return nil
+}
+
+// oldStrMismatchError is the targeted refusal for an old_str the file does not
+// hold.
+func oldStrMismatchError(content string, input EditFileInput) error {
+	// Mismatch persists — return targeted error.
+	hasEntities := strings.Contains(input.OldStr, "&lt;") ||
+		strings.Contains(input.OldStr, "&gt;") ||
+		strings.Contains(input.OldStr, "&amp;")
+	literalsOnDisk := strings.ContainsAny(content, "<>&")
+	if hasEntities && literalsOnDisk {
+		alt := ""
+		if guide := selectorGuidance(input.Path, content); guide != "" {
+			alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector and the new content body, no old_str needed; " + guide + "."
+		}
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
+			alt, truncateStr(input.OldStr, 200)))
+	}
+	// Generic mismatch — the model's old_str doesn't byte-match
+	// the file (whitespace, quotes, or paraphrase drift, which
+	// smaller models do constantly). For structured files,
+	// structural_edit sidesteps the whole problem: it selects the node
+	// by name, no old_str to reproduce exactly. Steer there.
+	astAlt := ""
+	if guide := selectorGuidance(input.Path, content); guide != "" {
+		astAlt = " To replace a whole function/class/element without " +
+			"matching exact text, use structural_edit with a selector and the " +
+			"new content — no old_str needed, so a near-miss can't fail it; " +
+			guide + "."
+	}
+	// Ground the retry in the file's REAL content. A small model
+	// frequently writes old_str from its memory of the file
+	// rather than the file itself (observed: old_str
+	// `item = items[id + 1]` for a file whose actual line is
+	// `return jsonify(items[item_id + 1])`). Without an anchor it
+	// gives up on the surgical edit and rewrites the whole node
+	// from the same faulty memory. Quoting the closest actual
+	// line gives it real bytes to copy into the next attempt.
+	hint := closestLineHint(content, input.OldStr)
+	return errNoMutation(fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200)))
+}
+
+// matchedEditError refuses an edit whose old_str was found but cannot be applied
+// as sent.
+func matchedEditError(content, actualOldStr string, input EditFileInput) error {
+	// Check uniqueness
+	count := strings.Count(content, actualOldStr)
+	if count > 1 && !input.ReplaceAll {
+		return errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
+	}
+
+	// No-op check. The bare diagnosis was a dead end: the model
+	// copies old_str into new_str precisely because it cannot
+	// reproduce a span with a change applied, so telling it only
+	// that the two match gives it nothing to do differently and it
+	// re-sends the identical call until the loop breaker kills the
+	// session. Measured on a "build me a snake game" run: refused at
+	// turn 11, re-sent at 12 and 13, session dead at 757s with
+	// game.js half-written. Name the tool that removes the
+	// requirement it just failed.
+	if input.OldStr == input.NewStr {
+		alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
+		if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
+			alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
+		}
+		// The alternative it is being sent to needs line numbers, and
+		// "the line numbers read_file printed" may be many turns and
+		// several successful edits old. Measured (cycle 7 audit,
+		// family O): refused at turns 11, 14 and 16 against a file
+		// last read at turn 5, alternating with a structural_edit
+		// that changed nothing, until the run stopped on repeated
+		// refusals. Where those bytes sit RIGHT NOW is something this
+		// call already knows, so it is said here.
+		return errNoMutation(fmt.Errorf(
+			"old_str and new_str are identical, so this edit would change nothing. "+
+				"Re-sending it will not help. You are being asked to reproduce a span "+
+				"verbatim AND change it, which is what just failed — use %s.%s "+
+				"If you meant to REPLACE the whole file, use write_file with the "+
+				"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
+	}
+	return nil
+}
+
+// applyEdit is the file with the edit applied.
+func applyEdit(content, actualOldStr string, input EditFileInput) string {
+	if input.ReplaceAll {
+		return strings.ReplaceAll(content, actualOldStr, input.NewStr)
+	}
+	return strings.Replace(content, actualOldStr, input.NewStr, 1)
+}
+
+// composedEditRefusal refuses a composed edit that should not go further.
+func composedEditRefusal(ctx *AgentContext, input EditFileInput, content, newContent, actualOldStr,
+	editKey string) *ToolResult {
+	// Shrinkage guard — same shape as structural_edit's. Catches the
+	// "model emitted a stub for old_str" failure where new_str
+	// is implausibly tiny for a substantial old_str. We compare
+	// the local replacement footprint (old_str → new_str), not
+	// whole-file size, so refactors that genuinely shrink the
+	// file aren't false-rejected.
+	if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
+		log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
+			input.Path, len(actualOldStr), len(input.NewStr))
+		// The shrinkage heuristic declining bytes that were formed.
+		return refusedNoCheck(rejection)
+	}
+
+	// No-op guard — same rationale as structural_edit's. new_str identical
+	// to old_str (or a replacement that leaves the file unchanged)
+	// must not report success: the model believes the fix landed
+	// and moves on while the bug is still on disk.
+	if newContent == content {
+		log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
+		return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
+			"Look at the current code again and emit a new_str that actually differs from the existing code.")
+	}
+
+	// Already-applied guard. The check above only catches an edit that
+	// leaves the file byte-identical; it cannot see an edit that
+	// applied once and is now being applied AGAIN. A whitespace-only
+	// change is the dangerous shape: after " x" replaces "x", the
+	// original old_str still matches as a substring, so the same call
+	// keeps succeeding and keeps adding whitespace. The repeat
+	// detector does not help — it needs three occurrences, and two
+	// runs of a 75-second edit is already two minutes gone.
+	if ctx.AppliedEdits[editKey] {
+		log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
+		return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
+			"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
+			"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
+			"Read the file to see its current state, then either make a DIFFERENT edit or declare done.")
+	}
+	return nil
+}
+
+// editFileSyntaxMessage is edit_file's refusal for a result that does not parse.
+func editFileSyntaxMessage(relPath string) func(string) string {
+	return func(detail string) string {
+		// An embedded-script finding is already model-ready and names
+		// its own fix; the generic wrapper's "check old_str/new_str"
+		// advice is wrong for JavaScript inside a string.
+		if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
+			return msg
+		}
+		return fmt.Sprintf(
+			"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
+			relPath, truncateStr(detail, 200))
+	}
+}
+
+// editGateRefusal runs edit_file's gates after the syntax gate.
+func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *ToolResult {
+	// Structural gate (#147): a parse-clean edit can still introduce
+	// an unresolved direct call (render_template with only
+	// render_template_string imported) that 500s at runtime. Block a
+	// write that NEWLY makes a name unresolved; a pre-existing one
+	// (mid-repair) is allowed, mirroring the syntax gate above.
+	if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
+		log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
+		return structuralRefusal(structuralRejection(relPath, introduced))
+	}
+	// edit_file ran checkFallbackSyntax, which parses the embedded
+	// script but has no pre-edit file to compare against, so the
+	// comparative findings — a render loop that stopped repeating, a
+	// lexical binding declared twice — were never checked here. Every
+	// other edit path had them. Observed: the same one-shot
+	// setTimeout the gate refuses under replace_lines landed through
+	// edit_file, and the page returned 200 with a dead game.
+	if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	if msg := duplicateMainGuard(path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	return nil
+}
+
+// writeEditedFile replaces the file atomically.
+func writeEditedFile(path, relPath, newContent string, observed checkOutcome) error {
+	tmpPath := path + atomicTempSuffix
+	if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
+		return editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", relPath, err), observed)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return editWriteFailure(path,
+			fmt.Errorf("cannot rename temp file: %w", err), observed)
+	}
+	return nil
+}
+
+// editFileOutput is what edit_file tells the model about the change.
+func editFileOutput(input EditFileInput, content, newContent, actualOldStr string) EditFileOutput {
+	// Build diff preview against the original on-disk content
+	oldLines := strings.Count(input.OldStr, "\n") + 1
+	newLines := strings.Count(input.NewStr, "\n") + 1
+	preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
+
+	out := EditFileOutput{
+		OK:           true,
+		DiffPreview:  preview,
+		LinesAdded:   newLines - oldLines,
+		LinesRemoved: 0,
+	}
+	if newLines < oldLines {
+		out.LinesRemoved = oldLines - newLines
+		out.LinesAdded = 0
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
