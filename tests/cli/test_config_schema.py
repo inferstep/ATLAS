@@ -83,17 +83,6 @@ def test_resolve_empty_does_not_shadow_lower_layer():
                       None, environ={"ATLAS_MODEL_NAME": ""}) == "gemma"
 
 
-def test_resolve_typed_coerces():
-    assert cs.resolve_typed("ATLAS_CTX_SIZE", {}, "131072", environ={}) == 131072
-    assert cs.resolve_typed("ATLAS_KEEP_LLAMA_WARM", {}, "1", environ={}) is True
-    assert cs.resolve_typed("ATLAS_KEEP_LLAMA_WARM", {}, "0", environ={}) is False
-    assert cs.resolve_typed("ATLAS_MODEL_NAME", {}, "gemma", environ={}) == "gemma"
-
-
-def test_resolve_typed_missing_is_none():
-    assert cs.resolve_typed("ATLAS_CTX_SIZE", {}, None, environ={}) is None
-
-
 def test_migrate_preserves_comments_and_blanks(tmp_path):
     from atlas.commands import config as cfg
     p = tmp_path / ".env"

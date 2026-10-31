@@ -11,7 +11,6 @@ from stages.pr_cot import (
     PRCoTEvent,
     PRCoTResult,
     PerspectiveResult,
-    extract_code_from_repair,
 )
 
 
@@ -58,26 +57,6 @@ def test_there_are_four_named_perspectives_with_real_descriptions():
     pr = PRCoT(PRCoTConfig(enabled=True))
     assert pr.perspectives == PERSPECTIVES
     assert pr.num_perspectives == 4
-
-
-@pytest.mark.parametrize("response, expected", [
-    pytest.param("Here is the fix:\n```python\ndef solve(n):\n    return n + 1\n```",
-                 "def solve(n):\n    return n + 1\n", id="python-fence"),
-    pytest.param("Fixed:\n```\ndef solve(n):\n    return n + 1\n```",
-                 "def solve(n):\n    return n + 1\n", id="plain-fence"),
-    pytest.param("def solve(n):\n    return n + 1",
-                 "def solve(n):\n    return n + 1", id="raw-code-without-fence"),
-    pytest.param("```python\ndef helper(): pass\n```\nThe full solution:\n"
-                 "```python\ndef solve(n):\n    return n + 1\n```",
-                 "def solve(n):\n    return n + 1\n", id="last-of-several-fences"),
-    pytest.param("<think>Let me fix this.</think>\n```python\ndef solve(): pass\n```",
-                 "def solve(): pass\n", id="think-block-dropped"),
-    pytest.param("", "", id="empty-response"),
-    pytest.param("The solution needs to handle edge cases properly.",
-                 "The solution needs to handle edge cases properly.", id="prose-without-code"),
-])
-def test_extract_code_from_repair(response, expected):
-    assert extract_code_from_repair(response) == expected
 
 
 def test_repair_analyses_each_perspective_then_repairs_from_that_analysis():

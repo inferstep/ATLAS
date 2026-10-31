@@ -588,7 +588,7 @@ table; bootstrap-only knobs (`ATLAS_BOOTSTRAP_*` and friends) in
 | `ATLAS_UPGRADE_PULL_TIMEOUT` | `3600` | Timeout (seconds) `atlas upgrade` allows for pulling the target images before the staged upgrade aborts and restores the previous release. |
 | `ATLAS_UPGRADE_SKIP_VERIFY` | (unset) | Set `1` to skip the keyless cosign signature verification `atlas upgrade` and `atlas rollback` run on each target image before applying (skipped, with a note, when `cosign` is not installed). |
 
-The CLI sends no generation parameters of its own beyond `atlas.client.chat_stream`'s defaults (`max_tokens=8192`, `temperature=0.6`); interactive generation runs through the proxy's agent loop (§ 2) and the TUI. The CLI and the proxy send no stop sequences (the V3 service stops on four newlines) — llama-server applies the GGUF's own chat template (`--jinja`).
+The CLI sends no generation parameters of its own; interactive generation runs through the proxy's agent loop (§ 2) and the TUI. The CLI and the proxy send no stop sequences (the V3 service stops on four newlines) — llama-server applies the GGUF's own chat template (`--jinja`).
 
 ---
 

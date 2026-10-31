@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import extract_code_for_problem, strip_reasoning_leak
+from .llm_client import extract_code_for_problem
 
 from .budget_forcing import BudgetForcing, get_system_prompt
 
@@ -177,7 +177,6 @@ class PlanSearchResult:
     constraint_sets: List[ConstraintSet] = field(default_factory=list)
     plans: List[Plan] = field(default_factory=list)
     candidates: List[str] = field(default_factory=list)
-    raw_responses: Dict[str, List[str]] = field(default_factory=dict)
     total_tokens: int = 0
     total_time_ms: float = 0.0
 
@@ -397,32 +396,6 @@ def parse_plan(response: str, constraint_set: ConstraintSet) -> Plan:
     return plan
 
 
-def extract_code_from_response(response: str) -> str:
-    """Extract Python code from an LLM response.
-
-    Handles: ```python blocks, ``` blocks, <think> blocks, raw code.
-    """
-    # Strip any reasoning leak via the shared, model-agnostic helper (handles
-    # both closed <think>...</think> blocks and orphaned closing tags).
-    response = strip_reasoning_leak(response)
-
-    # The block comes back verbatim: the fence is framing, the bytes inside
-    # it are the artifact, final newline and trailing blank lines included.
-    # The candidate hash downstream is computed from exactly this value.
-    # Try ```python blocks
-    py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
-    if py_blocks:
-        return py_blocks[-1]
-
-    # Try plain ``` blocks
-    code_blocks = re.findall(r'```\s*\n(.*?)```', response, re.DOTALL)
-    if code_blocks:
-        return code_blocks[-1]
-
-    # Return as-is (may be raw code)
-    return response.lstrip()
-
-
 # ---------------------------------------------------------------------------
 # Main class
 # ---------------------------------------------------------------------------
@@ -478,7 +451,7 @@ class PlanSearch:
                                     plans=[], candidates=[])
 
         n = min(num_plans or self.config.num_plans, self.config.max_plans)
-        result = PlanSearchResult(task_id=task_id, raw_responses={})
+        result = PlanSearchResult(task_id=task_id)
         total_start = time.time()
         step1_tokens = 0
 

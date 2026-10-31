@@ -2113,8 +2113,7 @@ class V3PipelineService:
         # into ATLAS_V3_TELEMETRY_DIR so live-orchestrator runs are measurable.
         self.telemetry_dir = _resolve_telemetry_dir()
         t = self.telemetry_dir
-        self.budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True),
-                                            telemetry_dir=t)
+        self.budget_forcing = BudgetForcing(BudgetForcingConfig(enabled=True))
         self.plan_search = PlanSearch(PlanSearchConfig(enabled=True),
                                       telemetry_dir=t)
         self.div_sampling = DivSampling(DivSamplingConfig(enabled=True),

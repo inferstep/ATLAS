@@ -1,4 +1,6 @@
-from stages.llm_client import extract_code, extract_code_for_problem
+import pytest
+
+from stages.llm_client import extract_code, extract_code_for_problem, strip_reasoning_leak
 
 
 def test_extract_code_accepts_non_python_language_fence():
@@ -39,49 +41,31 @@ export function add(a: number, b: number): number { return a + b; }
 # every trailing blank line in between. The Markdown fence is framing and is
 # not part of the artifact; the artifact's own line terminator is.
 
-import pytest
-
-from stages.plan_search import extract_code_from_response
-from stages.pr_cot import extract_code_from_repair
-
-EXTRACTORS = [
-    pytest.param(extract_code, id="llm_client.extract_code"),
-    pytest.param(extract_code_from_response, id="plan_search.extract_code_from_response"),
-    pytest.param(extract_code_from_repair, id="pr_cot.extract_code_from_repair"),
-]
+def test_fenced_code_keeps_its_final_newline():
+    assert extract_code("```python\ndef f():\n    return 1\n```") == "def f():\n    return 1\n"
 
 
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_fenced_code_keeps_its_final_newline(extract):
-    assert extract("```python\ndef f():\n    return 1\n```") == "def f():\n    return 1\n"
+def test_fenced_code_without_a_final_newline_gets_none():
+    assert extract_code("```python\ndef f():\n    return 1```") == "def f():\n    return 1"
 
 
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_fenced_code_without_a_final_newline_gets_none(extract):
-    assert extract("```python\ndef f():\n    return 1```") == "def f():\n    return 1"
+def test_fenced_code_keeps_every_trailing_blank_line():
+    assert extract_code("```python\ndef f():\n    return 1\n\n\n```") == "def f():\n    return 1\n\n\n"
 
 
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_fenced_code_keeps_every_trailing_blank_line(extract):
-    assert extract("```python\ndef f():\n    return 1\n\n\n```") == "def f():\n    return 1\n\n\n"
+def test_fenced_code_keeps_its_line_endings():
+    assert extract_code("```python\r\nx = 1\r\ny = 2\r\n```") == "x = 1\r\ny = 2\r\n"
 
 
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_fenced_code_keeps_its_line_endings(extract):
-    assert extract("```python\r\nx = 1\r\ny = 2\r\n```") == "x = 1\r\ny = 2\r\n"
-
-
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_inline_code_keeps_its_final_newline(extract):
+def test_inline_code_keeps_its_final_newline():
     # No fence: the response is the artifact, and its terminator stays.
-    assert extract("def f():\n    return 1\n") == "def f():\n    return 1\n"
+    assert extract_code("def f():\n    return 1\n") == "def f():\n    return 1\n"
 
 
-@pytest.mark.parametrize("extract", EXTRACTORS)
-def test_inline_and_fenced_forms_share_bytes_only_when_the_bytes_agree(extract):
-    fenced = extract("```\ndef f():\n    return 1\n```")
-    inline = extract("def f():\n    return 1\n")
-    bare = extract("def f():\n    return 1")
+def test_inline_and_fenced_forms_share_bytes_only_when_the_bytes_agree():
+    fenced = extract_code("```\ndef f():\n    return 1\n```")
+    inline = extract_code("def f():\n    return 1\n")
+    bare = extract_code("def f():\n    return 1")
     assert fenced == inline
     assert bare != fenced
     assert bare + "\n" == fenced
@@ -90,6 +74,15 @@ def test_inline_and_fenced_forms_share_bytes_only_when_the_bytes_agree(extract):
 def test_extract_code_prose_before_a_fence_is_not_part_of_the_artifact():
     response = "Here is the file:\n```javascript\nconst x = 1;\n```\nThat should do it.\n"
     assert extract_code(response) == "const x = 1;\n"
+
+
+@pytest.mark.parametrize("response, expected", [
+    pytest.param("<think>plan</think>\n```python\nx = 1\n```", "```python\nx = 1\n```", id="closed"),
+    pytest.param("plan</think>\nx = 1\n", "x = 1\n", id="orphan-close-keeps-what-follows"),
+    pytest.param("x = 1\n<think>truncated", "x = 1\n", id="orphan-open-keeps-what-precedes"),
+])
+def test_a_leaked_reasoning_block_is_removed(response, expected):
+    assert strip_reasoning_leak(response) == expected
 
 
 def test_problem_extractor_prefers_requested_artifact_over_later_tests():

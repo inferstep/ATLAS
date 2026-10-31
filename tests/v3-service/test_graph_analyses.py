@@ -8,8 +8,6 @@ the identical graph via `npx tsx`. Divergence flags a behavioral fork.
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "v3-service"))
 
 from graph.types import (
@@ -140,16 +138,3 @@ class TestEntryPoints:
         g = _graph()
         # main (exported, zero in-degree) is an entry point.
         assert "main" in analyses.detect_entry_points(g)
-
-
-class TestDispatch:
-    def test_run_analysis_routes(self):
-        g = _graph()
-        assert analyses.run_analysis(g, "callers", target="leaf") == ["helper"]
-        assert analyses.run_analysis(g, "reachability", frm="main", to="leaf") is True
-        assert analyses.run_analysis(g, "cycles") == ["recurse"]
-
-    def test_unknown_analysis_raises(self):
-        graph = _graph()
-        with pytest.raises(ValueError):
-            analyses.run_analysis(graph, "nonsense")

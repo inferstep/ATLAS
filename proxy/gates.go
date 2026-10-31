@@ -376,7 +376,6 @@ type checkOutcome struct {
 	ProducerUnavailable bool
 }
 
-func (o checkOutcome) applicable() bool { return o.Status != ValidationNotApplicable }
 func (o checkOutcome) attempted() bool {
 	return o.Status == ValidationPassed || o.Status == ValidationFailed
 }

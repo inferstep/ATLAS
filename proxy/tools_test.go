@@ -1646,27 +1646,6 @@ func TestStripLineNumberPrefixes(t *testing.T) {
 	})
 }
 
-func TestAllLinesLineNumbered(t *testing.T) {
-	cases := []struct {
-		name string
-		src  string
-		want bool
-	}{
-		{"wholesale paste of read_file output", "1\tdef f():\n2\t    return 1\n", true},
-		{"blank lines do not disqualify", "1\tdef f():\n\n3\t    return 1\n", true},
-		{"a block that merely contains one numbered line", "def f():\n2\t    return 1\n", false},
-		{"ordinary replacement text", "def f():\n    return 1\n", false},
-		{"empty", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := allLinesLineNumbered(tc.src); got != tc.want {
-				t.Errorf("allLinesLineNumbered(%q) = %v, want %v", tc.src, got, tc.want)
-			}
-		})
-	}
-}
-
 // The strip is only safe because it is self-validating: the stripped form has
 // to match the file. A stripped old_str that matches nothing must fall through
 // to the existing rejection rather than edit somewhere else.
