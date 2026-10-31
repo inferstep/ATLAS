@@ -124,11 +124,7 @@ func (c confinedDir) readCapped(rel string, maxBytes int) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	text := string(data)
-	if len(text) > maxBytes {
-		text = text[:maxBytes] + "\n... (truncated)"
-	}
-	return text, true
+	return contextEntry(string(data), maxBytes), true
 }
 
 // readConfined returns the content of rel inside dir, for a caller that
