@@ -20,7 +20,8 @@ READ_PROC = {
         "test_a_healthy_sibling_survives_a_memory_kill", "test_repeated_memory_failures_stay_bounded",
         "test_the_executor_result_names_a_command_that_took_too_much_memory",
         "test_a_child_that_runs_past_its_time_still_dies",
-        "test_nothing_the_command_started_outlives_the_request"},
+        "test_nothing_the_command_started_outlives_the_request",
+        "test_self_check_passes_with_real_proc"},
 }
 
 

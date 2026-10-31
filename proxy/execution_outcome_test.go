@@ -341,6 +341,11 @@ func TestTheExecutorWireCarriesTheOutcome(t *testing.T) {
 	if err != nil {
 		t.Skip("sandbox source not present")
 	}
+	models, err := os.ReadFile("../sandbox/executor_models.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, models...)
 	for _, required := range []string{`outcome: str = "internal_unclassified"`,
 		"peak_memory_bytes", "EXEC_CONTRACT", "run_bounded("} {
 		if !strings.Contains(string(body), required) {

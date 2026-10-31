@@ -177,10 +177,12 @@ from resource_contract import (
     OUTCOME_OUTPUT_LIMIT, OUTCOME_PROCESS_LIMIT, OUTCOME_SPAWN_FAILED,
     OUTCOME_TIMED_OUT, OUTCOME_UNCLASSIFIED, ResourceContract,
     contract_from_env, outcome_is_complete, run_bounded, stopped_words, why_it_failed,
-    EXEC_TOKEN_VAR, _apply_child_limits, _kill_token)
+    EXEC_TOKEN_VAR, _apply_child_limits, _kill_token, check_process_supervision)
 
 # The parts of the executor that live in modules beside it (sandbox/Dockerfile copies each one).
-from executor_models import ExecuteRequest, ExecuteResponse, SyntaxCheckRequest, SyntaxCheckResponse
+from executor_models import (
+    ExecuteRequest, ExecuteResponse, ShellObservation, ShellRequest, ShellResponse,
+    SyntaxCheckRequest, SyntaxCheckResponse)
 from executor_parsers import _html_syntax_errors, _xml_syntax_errors, _yaml_syntax_errors
 
 # THE resource contract for every untrusted command, validated here at import.
@@ -189,6 +191,11 @@ from executor_parsers import _html_syntax_errors, _xml_syntax_errors, _yaml_synt
 EXEC_CONTRACT = contract_from_env()
 MAX_EXECUTION_TIME = EXEC_CONTRACT.wall_seconds
 WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/sandbox"))
+
+# Check whether this host can govern child processes through /proc.
+SUPERVISION_AVAILABLE, SUPERVISION_REASON = check_process_supervision()
+if not SUPERVISION_AVAILABLE:
+    logger.warning("Resource limits: %s", SUPERVISION_REASON)
 
 SUPPORTED_LANGUAGES = {
     "python", "py", "python3",
@@ -247,7 +254,14 @@ def normalize_language(lang: str) -> str:  # noqa: C901
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    resp = {
+        "status": "healthy",
+        "limits_enforced": SUPERVISION_AVAILABLE,
+        "resource_limits": "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
+    }
+    if not SUPERVISION_AVAILABLE:
+        resp["resource_limits_reason"] = SUPERVISION_REASON
+    return resp
 
 
 @app.get("/languages")
@@ -299,63 +313,6 @@ def list_languages():
 # the container: no-new-privileges, read-only rootfs, and /workspace as the
 # ONLY writable host mount, so the blast radius is the project folder.
 # ---------------------------------------------------------------------------
-
-
-class ShellRequest(BaseModel):
-    command: str
-    cwd: Optional[str] = None  # absolute path inside container, defaults to /workspace
-    timeout: int = 30          # seconds; capped at MAX_EXECUTION_TIME
-    env: Optional[Dict[str, str]] = None
-    # Optional ephemeral overlay used by V3 build verification. When
-    # present, /shell copies a bounded workspace snapshot into /tmp,
-    # overlays these relative file paths, runs the command there, then
-    # deletes the snapshot. This lets V3 test a candidate without
-    # writing it into the real bind-mounted project.
-    files: Optional[Dict[str, str]] = None
-    # Optional bounded observation, used by candidate staging. When present,
-    # /shell hashes these relative paths and the snapshot as a whole BEFORE
-    # and AFTER the command, and returns both. It reports facts and draws no
-    # conclusion: whether a change is permitted is the caller's judgement, and
-    # this endpoint has no way to know what the caller declared.
-    observe_paths: Optional[List[str]] = None
-
-
-class ShellObservation(BaseModel):
-    """What the workspace looked like either side of one command.
-
-    Hashes and counts only. No path contents, no command text, no output --
-    a staging observation that carried any of those would put candidate bytes
-    into the caller's telemetry, which is the one thing staging exists to
-    avoid.
-    """
-    target_before: Dict[str, str] = {}
-    target_after: Dict[str, str] = {}
-    workspace_before: str = ""
-    workspace_after: str = ""
-    workspace_files: int = 0
-    # True when the digest hit its own cap and therefore describes only part
-    # of the workspace. A caller that needs an exact answer must treat this as
-    # unobservable rather than as "unchanged".
-    digest_truncated: bool = False
-
-
-class ShellResponse(BaseModel):
-    success: bool
-    stdout: str
-    stderr: str
-    exit_code: int
-    elapsed_ms: int
-    # Present only when the request asked for it.
-    timed_out: bool = False
-    # How the command ended, from the closed vocabulary in resource_contract.
-    # `completed` is the only member that means the command reached its own
-    # end; every other one means it was stopped, and a stopped command
-    # demonstrates nothing about the code it was pointed at. Defaulted so an
-    # older executor answering a newer proxy is read as unclassified rather
-    # than as success.
-    outcome: str = "internal_unclassified"
-    peak_memory_bytes: int = 0
-    observation: Optional[ShellObservation] = None
 
 
 # The bind-mounted project root. /workspace in every container
@@ -993,6 +950,8 @@ def _shell_response(result: Dict, elapsed_ms: int, observation: Optional[ShellOb
         outcome=str(result.get("outcome", OUTCOME_UNCLASSIFIED)),
         peak_memory_bytes=int(result.get("peak_memory_bytes", 0)),
         observation=observation,
+        limits_enforced=result.get("limits_enforced", True),
+        resource_limits=result.get("resource_limits"),
     )
 
 
@@ -1121,6 +1080,9 @@ def execute_code(request: ExecuteRequest):
             requirements=request.requirements,
             stdin=request.stdin,
         )
+        result.limits_enforced = SUPERVISION_AVAILABLE
+        result.resource_limits = (
+            "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced")
         return result
     except Exception as e:
         logger.exception(f"Execution error for {lang}")
@@ -1134,6 +1096,8 @@ def execute_code(request: ExecuteRequest):
             error_type=type(e).__name__,
             error_message=str(e),
             execution_time_ms=0,
+            limits_enforced=SUPERVISION_AVAILABLE,
+            resource_limits="enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
         )
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
@@ -1607,6 +1571,8 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
         "peak_memory_bytes": result.peak_memory_bytes,
         "peak_processes": result.peak_processes,
         "survivors": result.survivors,
+        "limits_enforced": SUPERVISION_AVAILABLE,
+        "resource_limits": "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
     }
 
 

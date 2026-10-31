@@ -564,6 +564,7 @@ Run all services as local processes without containers. Useful for development o
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
+| **Linux with /proc** | Required for sandbox process-group memory and process-count limits and cleanup of escaped processes (`/proc/<pid>/stat`, `environ`); without `/proc`, only wall-clock timeouts and per-process address-space ceilings (`setrlimit`) apply |
 
 ### Build
 
@@ -624,6 +625,9 @@ python main.py
 # Terminal 4: Sandbox
 cd sandbox
 python executor_server.py
+# The sandbox checks on startup whether it can govern child processes via /proc.
+# On hosts without a readable /proc (e.g. macOS), it starts with degraded limits
+# and reports "resource limits not enforced" in /health and execution results.
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \

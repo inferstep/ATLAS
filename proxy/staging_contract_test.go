@@ -338,7 +338,11 @@ func TestTheExecutorReportsFactsAndNotConclusions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(src)
+	models, err := os.ReadFile("../sandbox/executor_models.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src) + "\n" + string(models)
 	// Vocabulary that would mean the executor had made a trust claim. Each is
 	// specific to this stack's provenance language: none of them can appear by
 	// accident, which is what makes their absence meaningful.
