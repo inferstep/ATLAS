@@ -659,8 +659,7 @@ service, or the built TUI with a proxy.
 
 A test gets the mark in two ways: from a mark in its own file, or from the
 hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
-the mark to every test of the files it lists and to every test under
-`tests/integration/`.
+the mark to every test of the files it lists.
 
 The marked files are in four groups, by what they need. Each group is run
 in one place.
@@ -678,8 +677,7 @@ in one place.
 
 - That is 124 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
   TUI, 30 for the model, and 1 that asks a real Docker engine what it
-  removes with an image's name by digest. `tests/integration/` holds no
-  test.
+  removes with an image's name by digest.
 - GitHub's runner has Docker 28.0.4 with the storage driver overlay2, not
   the image store of containerd. So on GitHub that one test proves that
   the guard keeps the name by digest: with the guard taken out it fails on

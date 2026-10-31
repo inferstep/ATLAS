@@ -1226,7 +1226,6 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     marks = ic.left_out_marks((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert marks == ("integration",)
     targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)
-    assert "/tests/integration/" in targets
     files = sorted(target for target in targets if target.endswith(".py"))
     assert files
     assert all((root / target.lstrip("/")).is_file() for target in files)
