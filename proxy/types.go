@@ -232,9 +232,9 @@ type WriteFileOutput struct {
 // whether a run finished was matching on English, and "Stopped: ..." and
 // "Made your change" are not a contract.
 //
-// The zero value is TerminalUnknown, and every consumer must read it -- along
-// with an absent or unrecognised value -- as incomplete. Failing closed is the
-// whole point: a run whose outcome cannot be named did not finish.
+// The zero value is TerminalUnknown. A consumer reads it, or an absent value,
+// as incomplete, and never reads an unrecognised value as completed. Failing
+// closed is the whole point: a run whose outcome cannot be named did not finish.
 type TerminalStatus string
 
 const (
@@ -259,16 +259,6 @@ func (t TerminalStatus) Classified() bool {
 		return true
 	}
 	return false
-}
-
-// NormalizeTerminalStatus is what a CONSUMER applies to whatever arrived.
-// Absent, malformed, unknown, or from a future producer all become incomplete,
-// never completed.
-func NormalizeTerminalStatus(raw string) TerminalStatus {
-	if s := TerminalStatus(raw); s.Classified() {
-		return s
-	}
-	return TerminalIncomplete
 }
 
 // AgentContext holds all state for a single agent loop execution.

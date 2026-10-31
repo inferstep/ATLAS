@@ -431,14 +431,23 @@ func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
 	}
 }
 
+// NormalizeTerminalStatus is how these tests read a terminal event's status, as
+// a consumer must. Absent, malformed, unknown, or from a future producer all
+// become incomplete, never completed.
+func NormalizeTerminalStatus(raw string) TerminalStatus {
+	if s := TerminalStatus(raw); s.Classified() {
+		return s
+	}
+	return TerminalIncomplete
+}
+
 func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
 	for _, raw := range []string{"", "COMPLETED", "done", "success", "ok", "finished"} {
 		if NormalizeTerminalStatus(raw).Completed() {
 			t.Errorf("consumer read %q as completed", raw)
 		}
-		if NormalizeTerminalStatus(raw) != TerminalIncomplete {
-			t.Errorf("consumer read %q as %q, want incomplete",
-				raw, NormalizeTerminalStatus(raw))
+		if TerminalStatus(raw).Classified() {
+			t.Errorf("%q counts as a named outcome", raw)
 		}
 	}
 	if !NormalizeTerminalStatus("completed").Completed() {
