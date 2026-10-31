@@ -690,14 +690,14 @@ func TestCategorizeParseFailureHtmlEntitiesShape(t *testing.T) {
 	}
 }
 
-func TestIsLoopingTail(t *testing.T) {
+func TestARepeatingProseTailIsALoop(t *testing.T) {
 	loop := "The first line is <!DOCTYPE html>. " +
 		strings.Repeat("Wait, I'll check if I can see the output. I can't. I'll just say it. ", 6)
-	if loopingTailCount(loop) < 3 {
+	if !streamLooping(loop) {
 		t.Errorf("expected a repeating self-doubt stream to be detected as a loop")
 	}
 	normal := "The first line of index.html is `<!DOCTYPE html>`. It declares the document type for the HTML5 page, followed by the html and head elements with meta tags and a title."
-	if loopingTailCount(normal) >= 3 {
+	if streamLooping(normal) {
 		t.Errorf("a normal varied response must not be flagged as a loop")
 	}
 }

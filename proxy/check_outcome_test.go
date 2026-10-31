@@ -63,16 +63,24 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 			if got.Status == ValidationNotApplicable && got.applicable() {
 				t.Error("not_applicable must not count as applicable")
 			}
+			// Only a demonstrated failure may refuse.
+			_, ok := checkFallbackSyntax(ctx, c.path, "A = 1\n")
+			if wantOK := c.want != ValidationFailed; ok != wantOK {
+				t.Errorf("ok = %v, want %v -- fail-open behavior changed", ok, wantOK)
+			}
 		})
 	}
 }
 
 // With no session at all, an applicable file is a check that did not run, and
-// the wrapper does not refuse it.
+// the write is not refused.
 func TestSandboxSyntaxOutcomeWithANilContextIsNotRun(t *testing.T) {
 	got := sandboxSyntaxOutcome(nil, "mod.py", "A = 1\n")
 	if got.Status != ValidationNotRun {
 		t.Errorf("Status = %q, want %q (detail %q)", got.Status, ValidationNotRun, got.Detail)
+	}
+	if _, ok := checkFallbackSyntax(nil, "mod.py", "A = 1\n"); !ok {
+		t.Error("ok = false, want true -- fail-open behavior changed")
 	}
 }
 
