@@ -596,7 +596,7 @@ func installTokenTransport() {
 //
 // Mirrors the Envelope struct in proxy/events.go and the Python
 // dataclass in atlas/events.py. The schema contract is documented
-// in docs/PROTOCOL.md — any change here MUST be made in lockstep
+// in docs/API.md — any change here MUST be made in lockstep
 // across all three implementations.
 //
 // The TUI receives Envelope events on a channel and feeds them into
@@ -657,7 +657,7 @@ func streamEvents(ctx context.Context, eventsURL string, out chan<- Envelope) er
 
 // parseSSE reads SSE frames from r and pushes parsed envelopes onto out.
 // Skips comment lines (`: connected`, `: heartbeat`) and anything that
-// is not a `data:` line — see docs/PROTOCOL.md "SSE control frames".
+// is not a `data:` line — see docs/API.md "SSE control frames".
 func parseSSE(ctx context.Context, r io.Reader, out chan<- Envelope) error {
 	scanner := bufio.NewScanner(r)
 	// SSE frames can contain large JSON blobs. The default 64KB buffer

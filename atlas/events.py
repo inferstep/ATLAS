@@ -6,7 +6,7 @@ this shape; the Go TUI consumes it via its own implementation of the
 same contract (tui/consumer.go), and the tests here consume it via
 `iter_events(url)`.
 
-The schema is also documented in docs/PROTOCOL.md; this docstring is
+The schema is also documented in docs/API.md; this docstring is
 the executable spec.
 
 Envelope shape
