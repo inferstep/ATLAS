@@ -905,7 +905,7 @@ def test_publish_opens_pr_via_github_api(monkeypatch, tmp_path, capsys):
 # The lens re-scores fixed reference texts at boot and fails /ready when an
 # energy drifts, but nothing wrote the fingerprint it compares against.
 
-_REPO = Path(__file__).resolve().parents[2]
+_REPO = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture

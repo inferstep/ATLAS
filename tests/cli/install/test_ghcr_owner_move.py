@@ -22,7 +22,7 @@ from atlas import upgrade_engine as eng
 from atlas.commands import config as cfg
 from atlas.commands import upgrade as up
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
@@ -55,10 +55,12 @@ def _owner_in(path):
 def test_a_moving_tag_moves_the_legacy_owner(tmp_path, tag):
     path = _env(tmp_path, tag=tag)
     note = eng.migrate_legacy_ghcr_owner(str(path), keep_release_pin=True)
-    assert note and "itigges22 → inferstep" in note
+    assert note
+    assert "itigges22 → inferstep" in note
     assert _owner_in(path) == "inferstep"
     text = path.read_text()
-    assert "# ATLAS config\n" in text and "ATLAS_MODEL_FILE=m.gguf\n" in text
+    assert "# ATLAS config\n" in text
+    assert "ATLAS_MODEL_FILE=m.gguf\n" in text
 
 
 @pytest.mark.parametrize("tag", ["3.1.3", "v3.1.3", "3.2.0-rc.1"])
@@ -147,9 +149,9 @@ def test_upgrade_moves_the_owner_before_verifying(tmp_path):
 
 def test_a_failed_upgrade_puts_the_legacy_owner_back(tmp_path):
     _env(tmp_path, tag="3.1.3")
-    steps = _Steps(str(tmp_path), fail_on="pull")
+    steps = _Steps(str(tmp_path), fail_on="pull").build()
     with pytest.raises(eng.UpgradeError):
-        eng.run_upgrade(str(tmp_path), "3.2.0", steps.build(), "s2")
+        eng.run_upgrade(str(tmp_path), "3.2.0", steps, "s2")
     assert _owner_in(tmp_path / ".env") == "itigges22"
     assert eng.read_env_tag(str(tmp_path)) == "3.1.3"
 
@@ -188,7 +190,8 @@ def test_target_images_use_the_env_owner(tmp_path, monkeypatch):
 
     monkeypatch.setattr(up.compose_config, "command", no_compose)
     refs = up._target_images(str(tmp_path), "3.2.0")
-    assert refs and all(r.startswith("ghcr.io/myfork/") for r in refs)
+    assert refs
+    assert all(r.startswith("ghcr.io/myfork/") for r in refs)
 
 
 # --- atlas config migrate ---------------------------------------------------

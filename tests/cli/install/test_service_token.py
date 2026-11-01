@@ -151,6 +151,6 @@ def test_the_bench_started_as_a_module_installs_the_cli_opener(tmp_path):
         "except SystemExit:\n"
         "    pass\n"
         "print('handlers:', [type(handler).__name__ for handler in urllib.request._opener.handlers])\n")
-    done = subprocess.run([sys.executable, "-c", start_the_bench_with_help], cwd=Path(__file__).resolve().parents[2],
+    done = subprocess.run([sys.executable, "-c", start_the_bench_with_help], cwd=Path(__file__).resolve().parents[3],
                           env={**os.environ, "ATLAS_SERVICE_TOKEN_FILE": str(tok)}, capture_output=True, text=True, timeout=120)
     assert "_TokenForTheStackOnly" in done.stdout, done.stdout[-2000:] + done.stderr[-2000:]

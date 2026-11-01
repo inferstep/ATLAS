@@ -35,8 +35,8 @@ ALLOWLIST = {
     "tests/contracts/test_private_value_filtering.py",
     "tests/infrastructure/supply/test_no_committed_secrets.py",
     "tests/infrastructure/release/test_release_signing.py",
-    "tests/cli/test_service_token.py",
-    "tests/cli/test_diagnostics.py",
+    "tests/cli/install/test_service_token.py",
+    "tests/cli/doctor/test_diagnostics.py",
     "proxy/main_test.go",
     "proxy/tools_test.go",
     ".github/allowed_signers",     # public keys only, no private material
