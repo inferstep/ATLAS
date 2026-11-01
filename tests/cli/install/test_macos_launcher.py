@@ -6,7 +6,7 @@ import subprocess
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
-LAUNCHER = ROOT / "scripts" / "atlas-llama-macos.sh"
+LAUNCHER = ROOT / "scripts" / "install" / "atlas-llama-macos.sh"
 
 
 def test_launcher_accepts_disabled_asa_on_macos_bash(tmp_path):

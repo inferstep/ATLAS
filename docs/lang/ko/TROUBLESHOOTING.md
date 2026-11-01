@@ -26,7 +26,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | `rocm-smi`를 실행하고 `/dev/kfd`가 존재하는지 확인합니다. |
-| Apple Silicon / Metal | `atlas doctor`를 실행합니다. 네이티브 서버가 수신 대기 중이 아니면 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting)의 설명대로 `./scripts/atlas-llama-macos.sh`를 시작하고 포그라운드 런처 출력을 확인합니다. |
+| Apple Silicon / Metal | `atlas doctor`를 실행합니다. 네이티브 서버가 수신 대기 중이 아니면 [SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting)의 설명대로 `./scripts/install/atlas-llama-macos.sh`를 시작하고 포그라운드 런처 출력을 확인합니다. |
 | Vulkan | `/dev/dri`가 존재하는지 확인한 다음 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`를 실행합니다. |
 | CPU 전용 | `compose/docker-compose.vulkan.yml`과 `compose/docker-compose.cpu.yml` 오버레이가 활성화되어 있는지 확인합니다. GPU가 없다는 이유만으로 `atlas doctor`가 실패하지 않고 경고 후 정상 종료해야 합니다. |
 
@@ -396,7 +396,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-확인: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test`가 성공해야 합니다(확인 후 파일은 삭제하세요). K3s 배포에서는 `scripts/generate-manifests.sh`가 동일한 id를 프록시 Pod의 `securityContext`에 렌더링합니다.
+확인: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test`가 성공해야 합니다(확인 후 파일은 삭제하세요). K3s 배포에서는 `scripts/install/generate-manifests.sh`가 동일한 id를 프록시 Pod의 `securityContext`에 렌더링합니다.
 
 ### 바로 거기 있는 파일을 에이전트가 "없다"고 말함 (워크스페이스 마운트 분리)
 

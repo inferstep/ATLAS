@@ -280,7 +280,7 @@ docker inspect -f '{{index .Config.Labels "com.docker.compose.image"}}' atlas-at
 
 ## Deploying a checkout, gated
 
-`scripts/deploy-gated.sh` deploys the checked-out commit to the local Compose
+`scripts/install/deploy-gated.sh` deploys the checked-out commit to the local Compose
 stack and records what "deployed" means. In order, it:
 
 - refuses a checkout with uncommitted changes;

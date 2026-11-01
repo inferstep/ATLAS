@@ -5,7 +5,7 @@ set -euo pipefail
 # Checks all services are running and healthy
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/config.sh"
+source "$SCRIPT_DIR/../lib/config.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -179,7 +179,7 @@ main() {
         echo "  2. Copy K3s config: sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config"
         echo "                      sudo chown \$(id -u):\$(id -g) ~/.kube/config"
         echo "  3. Set ATLAS_KUBECONFIG in atlas.conf"
-        echo "  4. Run as root: sudo ./scripts/verify-install.sh"
+        echo "  4. Run as root: sudo ./scripts/install/verify-install.sh"
         echo ""
         exit 1
     fi

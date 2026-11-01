@@ -94,7 +94,7 @@ def test_k3s_nodeports_are_explicit():
 
 
 def test_macos_launcher_defaults_to_loopback():
-    launcher = REPO / "scripts" / "atlas-llama-macos.sh"
+    launcher = REPO / "scripts" / "install" / "atlas-llama-macos.sh"
     text = launcher.read_text()
     m = re.search(r'\$\{ATLAS_LLAMA_HOST:-(?P<default>[^}"]+)\}', text)
     assert m, "launcher no longer reads ATLAS_LLAMA_HOST — update this test"

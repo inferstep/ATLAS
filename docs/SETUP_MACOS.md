@@ -35,14 +35,14 @@ git clone https://github.com/inferstep/ATLAS.git
 cd ATLAS
 
 # One-time setup (5-10 minutes): brew deps + builds llama.cpp with Metal
-./scripts/atlas-setup-macos.sh
+./scripts/install/atlas-setup-macos.sh
 
 # Wizard: detects Apple Silicon, writes .env for the hybrid Metal path
 atlas init
 
 # Bring up the stack — TWO terminals:
 # Terminal 1 (foreground):
-./scripts/atlas-llama-macos.sh
+./scripts/install/atlas-llama-macos.sh
 
 # Terminal 2:
 docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d
@@ -60,7 +60,7 @@ atlas
 ### Step 1: Run the setup script
 
 ```bash
-./scripts/atlas-setup-macos.sh
+./scripts/install/atlas-setup-macos.sh
 ```
 
 What this does (idempotent, re-runs are cheap; the numbering below matches the `[N/8]` progress markers the script prints):
@@ -77,8 +77,8 @@ What this does (idempotent, re-runs are cheap; the numbering below matches the `
 Optional flags:
 
 ```bash
-./scripts/atlas-setup-macos.sh --rebuild        # force rebuild even if SHA matches
-./scripts/atlas-setup-macos.sh --prefix /opt/atlas  # install to a different prefix
+./scripts/install/atlas-setup-macos.sh --rebuild        # force rebuild even if SHA matches
+./scripts/install/atlas-setup-macos.sh --prefix /opt/atlas  # install to a different prefix
 ```
 
 For a custom prefix, set `ATLAS_MACOS_PREFIX=/opt/atlas` in `.env` or pass
@@ -99,7 +99,7 @@ The wizard detects Apple Silicon and writes a `.env` for the hybrid Metal path. 
   Apple Silicon detected. Recommended setup: native Metal inference + Docker
   for the supporting services.
 
-  Before you continue: run ./scripts/atlas-setup-macos.sh if you haven't.
+  Before you continue: run ./scripts/install/atlas-setup-macos.sh if you haven't.
   It installs the build tools and compiles llama.cpp with Metal. Full
   instructions in docs/SETUP_MACOS.md.
 
@@ -115,7 +115,7 @@ If you want the slow docker-only fallback instead (e.g. you're scripting a CI ru
 In a **new terminal** (the launcher runs in the foreground):
 
 ```bash
-./scripts/atlas-llama-macos.sh
+./scripts/install/atlas-llama-macos.sh
 ```
 
 This reads `.env` and starts `llama-server-metal` with the same flags as the Docker entrypoint. You'll see a banner like:
@@ -143,7 +143,7 @@ docker compose -f docker-compose.yml -f compose/docker-compose.macos.yml up -d
 
 The macOS overlay swaps the `llama-server` service for a pinned `alpine/socat` container that forwards Docker-internal `llama-server:8080` → `host.docker.internal:${ATLAS_LLAMA_PORT:-8080}` (where the native server you started in Step 3 is listening). Its healthcheck tests that complete connection, so dependent services wait until native inference is accepting connections. The other services come up unchanged from the base compose file.
 
-If port 8080 is already occupied, set `ATLAS_LLAMA_PORT` in `.env` or launch with `./scripts/atlas-llama-macos.sh --port 8081`, then bring the compose stack up with the same `ATLAS_LLAMA_PORT` value. The container-side URL remains `http://llama-server:8080`; only the native host-side port changes.
+If port 8080 is already occupied, set `ATLAS_LLAMA_PORT` in `.env` or launch with `./scripts/install/atlas-llama-macos.sh --port 8081`, then bring the compose stack up with the same `ATLAS_LLAMA_PORT` value. The container-side URL remains `http://llama-server:8080`; only the native host-side port changes.
 
 First-time pull is small (~4 MB for socat if not cached; the v3 / lens / proxy / sandbox images come from GHCR, ~600 MB total).
 
@@ -180,7 +180,7 @@ Same UX as Linux + CUDA. The TUI connects to the proxy on localhost:8090; the pr
 ```
 Your Mac
  |
- |- Native process: ./scripts/atlas-llama-macos.sh
+ |- Native process: ./scripts/install/atlas-llama-macos.sh
  |   |- llama-server-metal listening on :${ATLAS_LLAMA_PORT:-8080} (Apple GPU via Metal)
  |
  |- Docker Desktop
@@ -204,13 +204,13 @@ The 4 Docker services and the base `docker-compose.yml` are unchanged — only t
 
 You haven't run the setup script, or the configured prefix does not match where it was installed. The default binary path is `~/.atlas/macos/bin/llama-server-metal`. Either:
 
-- Run `./scripts/atlas-setup-macos.sh` (no flags)
+- Run `./scripts/install/atlas-setup-macos.sh` (no flags)
 - Or set `ATLAS_MACOS_PREFIX=/your/custom/prefix` in `.env`
-- Or launch explicitly with `./scripts/atlas-llama-macos.sh --prefix /your/custom/prefix`
+- Or launch explicitly with `./scripts/install/atlas-llama-macos.sh --prefix /your/custom/prefix`
 
 ### `atlas doctor` says `metal-native: warn — nothing listening on the configured llama port`
 
-The binary is installed but you haven't started it. Open a new terminal and run `./scripts/atlas-llama-macos.sh`. The launcher stays in the foreground; leave it running.
+The binary is installed but you haven't started it. Open a new terminal and run `./scripts/install/atlas-llama-macos.sh`. The launcher stays in the foreground; leave it running.
 
 ### Native llama-server starts but Docker services can't reach it
 
@@ -245,7 +245,7 @@ Plain `atlas` (or `atlas tui`) prints this when it can't find or build the TUI b
 1. **Re-run the latest setup script** (it installs `go` via brew in step 3 + builds the TUI in step 8):
    ```bash
    git pull origin dev
-   ./scripts/atlas-setup-macos.sh
+   ./scripts/install/atlas-setup-macos.sh
    ```
 
 2. **Manual fix without re-running setup** (skip the cmake rebuild):
@@ -263,7 +263,7 @@ This is Homebrew Python's PEP 668 enforcement — `pip install` and `pip install
 1. **Re-run the latest setup script** (it now installs `pipx` automatically and uses it for the atlas install):
    ```bash
    git pull origin dev
-   ./scripts/atlas-setup-macos.sh
+   ./scripts/install/atlas-setup-macos.sh
    ```
 
 2. **Manual fix without re-running setup** (skip the cmake rebuild):

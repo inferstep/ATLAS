@@ -23,7 +23,7 @@ docker compose logs --tail 50
 |---|---|
 | NVIDIA CUDA | `nvidia-smi` |
 | AMD ROCm | `rocm-smi` を実行し、`/dev/kfd` が存在することを確認します。 |
-| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
+| Apple Silicon / Metal | `atlas doctor` を実行します。ネイティブサーバーが待ち受けていない場合は、[SETUP_MACOS.md](../../SETUP_MACOS.md#troubleshooting) の説明に従って `./scripts/install/atlas-llama-macos.sh` を起動し、フォアグラウンドのランチャー出力を確認します。 |
 | Vulkan | `/dev/dri` が存在することを確認し、`docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary` を実行します。 |
 | CPU のみ | `compose/docker-compose.vulkan.yml` と `compose/docker-compose.cpu.yml` のオーバーレイが有効であることを確認します。GPU がないことだけを理由に `atlas doctor` が失敗するのではなく、警告を出して正常終了するはずです。 |
 
@@ -393,7 +393,7 @@ echo "ATLAS_PROXY_GID=$(id -g)" >> .env
 docker compose up -d --no-deps --force-recreate atlas-proxy
 ```
 
-確認: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` が成功すること（確認後はファイルを削除してください）。K3s デプロイでは、`scripts/generate-manifests.sh` が同じ id をプロキシ Pod の `securityContext` に展開します。
+確認: `docker exec atlas-atlas-proxy-1 touch /workspace/.write_test` が成功すること（確認後はファイルを削除してください）。K3s デプロイでは、`scripts/install/generate-manifests.sh` が同じ id をプロキシ Pod の `securityContext` に展開します。
 
 ### すぐそこにあるファイルをエージェントが「存在しない」と言う（ワークスペースマウントの分裂）
 

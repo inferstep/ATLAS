@@ -7,7 +7,7 @@
 # step and every check passed. A failure prints why and leaves the previous
 # DEPLOYED_SHA in place.
 #
-#   scripts/deploy-gated.sh
+#   scripts/install/deploy-gated.sh
 #
 # ATLAS_DEPLOY_DIR holds the records (default ~/atlas-ralph):
 #   DEPLOYED_SHA                    the commit the stack runs
@@ -21,7 +21,7 @@
 # script: a recreate reloads the model. The other four are rebuilt every time.
 set -uo pipefail
 export PATH="$HOME/.local/bin:$PATH"
-cd "$(dirname "$0")/.." || exit 2
+cd "$(dirname "$0")/../.." || exit 2
 
 RECORD=${ATLAS_DEPLOY_DIR:-$HOME/atlas-ralph}
 mkdir -p "$RECORD/deployed"
@@ -31,8 +31,8 @@ PREV_SHA=$(cat "$RECORD/DEPLOYED_SHA" 2>/dev/null || true)
 ALL="llama-server geometric-lens v3-service sandbox atlas-proxy"
 
 fail() { echo "NOT DEPLOYED: $*"; exit 1; }
-cid() { docker compose ps -a -q "$1" 2>/dev/null | head -1; }
-image_of() { docker inspect -f '{{.Image}}' "$(cid "$1")" 2>/dev/null || true; }
+cid() { local service=$1; docker compose ps -a -q "$service" 2>/dev/null | head -1; }
+image_of() { local service=$1; docker inspect -f '{{.Image}}' "$(cid "$service")" 2>/dev/null || true; }
 port() {  # .env key, default
   local v
   v=$(grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"')
@@ -44,13 +44,13 @@ git log --oneline -1
 
 # A deploy describes a commit, so the tree must be that commit. Ignored files
 # (.env, local fuzz tests) are not seen here.
-[ -z "$(git status --porcelain)" ] || fail "the checkout has uncommitted changes"
+[[ -z "$(git status --porcelain)" ]] || fail "the checkout has uncommitted changes"
 
 SERVICES="geometric-lens v3-service sandbox atlas-proxy"
 llama_pin=""
-[ -n "$PREV_SHA" ] &&
+[[ -n "$PREV_SHA" ]] &&
   llama_pin=$(docker image inspect -f '{{.Id}}' "atlas-built:llama-server-$PREV_SHA" 2>/dev/null || true)
-if [ -z "$llama_pin" ] || [ "$llama_pin" != "$(image_of llama-server)" ] ||
+if [[ -z "$llama_pin" ]] || [[ "$llama_pin" != "$(image_of llama-server)" ]] ||
    ! git diff --quiet "$PREV_SHA" HEAD -- inference/ 2>/dev/null; then
   SERVICES="llama-server $SERVICES"
 fi
@@ -77,7 +77,7 @@ PREV=$RECORD/deployed/prev-$STAMP.json
   for svc in $SERVICES; do
     id=$(image_of "$svc")
     tag=none
-    if [ -n "$id" ]; then
+    if [[ -n "$id" ]]; then
       tag="atlas-prev:${svc}-${STAMP}"
       docker tag "$id" "$tag" >/dev/null 2>&1 || tag=UNTAGGABLE
     fi
@@ -91,26 +91,26 @@ cat "$PREV"
 echo "=== build: $SERVICES ==="
 read -ra build_services <<< "$SERVICES"
 docker compose build "${build_services[@]}" 2>&1 | tail -15
-[ "${PIPESTATUS[0]}" = 0 ] || fail "docker compose build failed"
+[[ "${PIPESTATUS[0]}" = 0 ]] || fail "docker compose build failed"
 
 # --- recreate, in dependency order, each one healthy before the next --------
 wait_healthy() {  # service, deadline in seconds
-  local s=none
-  for _ in $(seq 1 $(( $2 / 5 ))); do
+  local service=$1 deadline=$2 s=none
+  for _ in $(seq 1 $(( deadline / 5 ))); do
     s=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
-      "$(cid "$1")" 2>/dev/null || echo none)
-    [ "$s" = healthy ] && { echo "$1 healthy"; return 0; }
+      "$(cid "$service")" 2>/dev/null || echo none)
+    [[ "$s" = healthy ]] && { echo "$service healthy"; return 0; }
     sleep 5
   done
-  echo "$1 is '$s' after $2 s"
+  echo "$service is '$s' after $deadline s"
   return 1
 }
 for svc in $SERVICES; do
   echo "=== recreate $svc ==="
   docker compose up -d --force-recreate --no-deps "$svc" 2>&1 | tail -3
-  [ "${PIPESTATUS[0]}" = 0 ] || fail "docker compose up $svc failed"
+  [[ "${PIPESTATUS[0]}" = 0 ]] || fail "docker compose up $svc failed"
   deadline=240
-  [ "$svc" = llama-server ] && deadline=900  # the model loads first
+  [[ "$svc" = llama-server ]] && deadline=900  # the model loads first
   wait_healthy "$svc" "$deadline" || fail "$svc did not become healthy"
 done
 
@@ -128,7 +128,7 @@ for svc in $ALL; do
     *)
       want=$llama_pin ;;
   esac
-  if [ -z "$got" ] || [ "$got" != "$want" ]; then
+  if [[ -z "$got" ]] || [[ "$got" != "$want" ]]; then
     fail "image identity mismatch for $svc: runs ${got:-nothing}, expected ${want:-nothing}"
   fi
   docker tag "$got" "atlas-built:${svc}-${SHA}" >/dev/null 2>&1
@@ -215,7 +215,7 @@ ok, _, err = A.SandboxAdapter().syntax_check('x = 1\n', 'python', '/workspace/su
 print('OK' if ok else 'BROKEN:' + err[:120])
 " 2>&1 | tail -1)
 echo "v3 absolute-path syntax check: $V3PATH"
-[ "$V3PATH" = OK ] || fail "v3-service cannot syntax-check an absolute path"
+[[ "$V3PATH" = OK ]] || fail "v3-service cannot syntax-check an absolute path"
 
 echo "$SHA" > "$RECORD/DEPLOYED_SHA"
 echo "DEPLOYED $SHA  (identities in $RUNNING, rollback targets in $PREV)"

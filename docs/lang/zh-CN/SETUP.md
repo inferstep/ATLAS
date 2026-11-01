@@ -505,7 +505,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选地）卸载 K3s 节点本身。加上 `--data` 时还会删除数据目录和项目目录（你自己的项目就在那里）；加上 `--models` 时则删除模型文件。脚本在请求确认前，会先列出它将删除的每个目录及其路径。
+K3s 安装改用 `scripts/install/uninstall.sh`，它会拆除清单文件并（可选地）卸载 K3s 节点本身。加上 `--data` 时还会删除数据目录和项目目录（你自己的项目就在那里）；加上 `--models` 时则删除模型文件。脚本在请求确认前，会先列出它将删除的每个目录及其路径。
 
 ---
 
@@ -659,16 +659,16 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf
 
 # 2. Build and import images
-scripts/build-containers.sh
+scripts/install/build-containers.sh
 
 # 3. Generate manifests from atlas.conf
-scripts/generate-manifests.sh
+scripts/install/generate-manifests.sh
 
 # 4. Deploy
 kubectl apply -n atlas -f manifests/
 
 # 5. Verify
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
 ### K3s 专属配置
@@ -699,10 +699,10 @@ kubectl get pods -n atlas
 kubectl describe nodes | grep nvidia.com/gpu
 
 # Run verification suite
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
-> **注意：** Docker Compose 是被运用得最充分的部署方式（CI 针对它运行；每次发布都在 Compose 下做冒烟测试）。K3s 清单在部署时由 `scripts/generate-manifests.sh`（或 `install.sh` 的 `process_templates` 步骤）从 `templates/*.yaml.tmpl` 生成。模板使用 `atlas.conf` 中选定的模型；CHANGELOG 中的基准测试数字记录的是它们各自冻结的模型/配置。
+> **注意：** Docker Compose 是被运用得最充分的部署方式（CI 针对它运行；每次发布都在 Compose 下做冒烟测试）。K3s 清单在部署时由 `scripts/install/generate-manifests.sh`（或 `install.sh` 的 `process_templates` 步骤）从 `templates/*.yaml.tmpl` 生成。模板使用 `atlas.conf` 中选定的模型；CHANGELOG 中的基准测试数字记录的是它们各自冻结的模型/配置。
 
 ---
 
@@ -746,7 +746,7 @@ medium tier 是 ATLAS 的开发目标 —— `atlas-bootstrap.sh` 默认使用�
 | NVIDIA（Blackwell —— RTX 50xx、B100、GB10） | CUDA | 支持 (Supported)（已发布镜像） | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB（主要开发用） |
 | NVIDIA（前 Blackwell —— RTX 20xx–40xx、GTX 10xx、V100/A100/H100/T4/L4） | CUDA | 预览 (Preview) —— 需要一次性[本地重建](#cuda-计算能力-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | —（上游 llama.cpp 支持这些卡；维护者未在 ATLAS 上验证） |
 | AMD | ROCm / HIP | 社区验证 (Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX（社区冒烟测试，[GH #26](https://github.com/inferstep/ATLAS/issues/26)） |
-| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
+| Apple Silicon | Metal | 支持（macOS 混合方案：原生 llama-server + Docker，[#32](https://github.com/inferstep/ATLAS/issues/32)） | `scripts/install/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB（已验证）；M3/M4（目标） |
 | 任意（跨厂商回退） | Vulkan | 预览 | `inference/Dockerfile.vulkan` | lavapipe（CPU ICD）已冒烟测试；尚无真实 GPU 验证 |
 | Intel Arc | SYCL | 路线图 (Roadmap) —— Intel Arc 目前走 Vulkan | 待定 | Arc A770 16GB（目标） |
 

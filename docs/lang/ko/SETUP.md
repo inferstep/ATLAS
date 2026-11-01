@@ -506,7 +506,7 @@ rm -rf ~/.cache/atlas-tui          # TUI session history
 # disk (models are the multi-GB part).
 ```
 
-K3s 설치는 대신 `scripts/uninstall.sh`를 사용합니다. 이 스크립트는 매니페스트를 정리하고 (선택적으로) K3s 노드 자체도 제거합니다.
+K3s 설치는 대신 `scripts/install/uninstall.sh`를 사용합니다. 이 스크립트는 매니페스트를 정리하고 (선택적으로) K3s 노드 자체도 제거합니다.
 
 ---
 
@@ -660,16 +660,16 @@ cp atlas.conf.example atlas.conf
 # Edit atlas.conf
 
 # 2. Build and import images
-scripts/build-containers.sh
+scripts/install/build-containers.sh
 
 # 3. Generate manifests from atlas.conf
-scripts/generate-manifests.sh
+scripts/install/generate-manifests.sh
 
 # 4. Deploy
 kubectl apply -n atlas -f manifests/
 
 # 5. Verify
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
 ### K3s 전용 설정
@@ -700,10 +700,10 @@ kubectl get pods -n atlas
 kubectl describe nodes | grep nvidia.com/gpu
 
 # Run verification suite
-scripts/verify-install.sh
+scripts/install/verify-install.sh
 ```
 
-> **참고:** Docker Compose가 가장 많이 검증된 배포 방법입니다(CI가 이에 대해 실행되며, 모든 릴리스는 Compose로 스모크 테스트됩니다). K3s 매니페스트는 배포 시점에 `templates/*.yaml.tmpl`로부터 `scripts/generate-manifests.sh`(또는 `install.sh`의 `process_templates` 단계)를 통해 생성됩니다. 템플릿은 `atlas.conf`에서 선택된 모델을 사용하며, CHANGELOG의 벤치마크 수치는 각자의 동결된 모델/구성을 기록합니다.
+> **참고:** Docker Compose가 가장 많이 검증된 배포 방법입니다(CI가 이에 대해 실행되며, 모든 릴리스는 Compose로 스모크 테스트됩니다). K3s 매니페스트는 배포 시점에 `templates/*.yaml.tmpl`로부터 `scripts/install/generate-manifests.sh`(또는 `install.sh`의 `process_templates` 단계)를 통해 생성됩니다. 템플릿은 `atlas.conf`에서 선택된 모델을 사용하며, CHANGELOG의 벤치마크 수치는 각자의 동결된 모델/구성을 기록합니다.
 
 ---
 
@@ -747,7 +747,7 @@ VRAM 8GB 이상에 llama.cpp가 지원하는 백엔드를 갖춘 모든 GPU:
 | NVIDIA (Blackwell — RTX 50xx, B100, GB10) | CUDA | 지원(Supported) (게시된 이미지) | `inference/Dockerfile.v31` | RTX 5060 Ti 16GB (주 개발 GPU) |
 | NVIDIA (Blackwell 이전 — RTX 20xx–40xx, GTX 10xx, V100/A100/H100/T4/L4) | CUDA | 프리뷰(Preview) — 일회성 [로컬 재빌드 필요](#cuda-컴퓨트-캐퍼빌리티-dockerfilev31) | `inference/Dockerfile.v31` + `--build-arg CUDA_ARCH=<cc>` | — (업스트림 llama.cpp는 이들을 지원; ATLAS에서의 메인테이너 검증은 없음) |
 | AMD | ROCm / HIP | 커뮤니티 검증(Community-tested) | `inference/Dockerfile.rocm` | RX 7900 XTX (커뮤니티 스모크 테스트, [GH #26](https://github.com/inferstep/ATLAS/issues/26)) |
-| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
+| Apple Silicon | Metal | 지원 (macOS 하이브리드: 네이티브 llama-server + Docker, [#32](https://github.com/inferstep/ATLAS/issues/32)) | `scripts/install/atlas-setup-macos.sh` + `compose/docker-compose.macos.yml` | M2 Pro 32GB (검증됨); M3/M4 (목표) |
 | 모든 벤더 (크로스 벤더 폴백) | Vulkan | 프리뷰 | `inference/Dockerfile.vulkan` | lavapipe (CPU ICD) 스모크 테스트됨; 실제 GPU 검증은 아직 없음 |
 | Intel Arc | SYCL | 로드맵(Roadmap) — Intel Arc는 현재 Vulkan 사용 | 미정 | Arc A770 16GB (목표) |
 

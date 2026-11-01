@@ -716,7 +716,7 @@ graph LR
     style AP fill:#1a3a5c,color:#fff
 ```
 
-`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
+`llama-server` と `sandbox` は独立して起動します。`geometric-lens` は `llama-server` が healthy になるのを待ちます; `v3-service` は `llama-server` と `geometric-lens` を待ちます; `atlas-proxy` は `llama-server`、`geometric-lens`、`v3-service`、`sandbox` を待ちます。同じ `inference/entrypoint-v3.1.sh` が Docker Compose、ベアメタル、K3s を駆動するため、コンテキストサイズ、KV キャッシュ量子化、flash attention、mlock は環境変数で制御され、挙動はこれらのモード間で同一です。macOS ハイブリッドパスは `scripts/install/atlas-llama-macos.sh` 経由でネイティブ llama-server を起動し、このスクリプトはエントリーポイントのフラグをミラーします。
 
 インストールとモード別の立ち上げ手順（NVIDIA / ROCm オーバーライド、ベアメタル、macOS ハイブリッド Metal、K3s マニフェスト）は [SETUP.md](./SETUP.md) に、macOS ネイティブパスは [SETUP_MACOS.md](../../SETUP_MACOS.md) にあります。
 

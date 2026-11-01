@@ -1413,11 +1413,11 @@ download_models() {
         return
     fi
 
-    if [[ ! -x "./scripts/download-models.sh" ]]; then
-        die "scripts/download-models.sh not found or not executable."
+    if [[ ! -x "./scripts/install/download-models.sh" ]]; then
+        die "scripts/install/download-models.sh not found or not executable."
     fi
 
-    log_info "Calling scripts/download-models.sh (this can take 10-30 min on first run)…"
+    log_info "Calling scripts/install/download-models.sh (this can take 10-30 min on first run)…"
     log_info "Progress is shown live below."
     echo
     # Run as the target user so files end up owned by the human, not root.
@@ -1425,7 +1425,7 @@ download_models() {
     # and any error messages that didn't match the [INFO]/[WARN]/[ERROR]
     # pattern). `tee` preserves the log without breaking line buffering.
     set +e
-    run_as_target ./scripts/download-models.sh 2>&1 | tee "$ATLAS_RUN_DIR/atlas-models.log"
+    run_as_target ./scripts/install/download-models.sh 2>&1 | tee "$ATLAS_RUN_DIR/atlas-models.log"
     local rc=${PIPESTATUS[0]}
     set -e
     echo
@@ -1440,14 +1440,14 @@ download_models() {
     # --lens path. Without compatible artifacts, scoring degrades safely.
     log_info "Fetching model-compatible Lens/ASA artifacts…"
     set +e
-    run_as_target ./scripts/download-models.sh --lens 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-models.log"
+    run_as_target ./scripts/install/download-models.sh --lens 2>&1 | tee -a "$ATLAS_RUN_DIR/atlas-models.log"
     rc=${PIPESTATUS[0]}
     set -e
     if [[ $rc -eq 0 ]]; then
         log_ok "Model-compatible artifacts ready"
     else
         log_warn "Artifact fetch failed (exit $rc) — service will run with neutral scores."
-        log_warn "Recovery: ./scripts/download-models.sh --lens"
+        log_warn "Recovery: ./scripts/install/download-models.sh --lens"
     fi
 }
 
@@ -1619,7 +1619,7 @@ build_asa_steering_vector() {
 
     # This step reads ATLAS_* keys (models dir, model file/name, ports,
     # image tag) that live in the install's .env, not this process's
-    # environment. Load them the same way scripts/download-models.sh
+    # environment. Load them the same way scripts/install/download-models.sh
     # does: values already set in the environment win, .env fills gaps.
     local env_file="$ATLAS_INSTALL_DIR/.env"
     if [[ -f "$env_file" ]]; then

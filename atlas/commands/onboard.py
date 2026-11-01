@@ -160,13 +160,13 @@ def _arch_supported(atlas_root: str, env: Dict[str, str], model_file: str,
             loaded = _loaded_model_name(url)
             return False, (
                 "native Metal llama-server is healthy but serves {!r}, not "
-                "{!r}. Stop it and relaunch scripts/atlas-llama-macos.sh "
+                "{!r}. Stop it and relaunch scripts/install/atlas-llama-macos.sh "
                 "after checking .env.".format(loaded or "an unknown model",
                                                 model_file)
             )
         return False, (
             "native Metal llama-server is not reachable at {}. Start it in "
-            "another terminal with ./scripts/atlas-llama-macos.sh; onboarding "
+            "another terminal with ./scripts/install/atlas-llama-macos.sh; onboarding "
             "will not start the CUDA container on a Metal host.".format(url)
         )
 

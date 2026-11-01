@@ -5,7 +5,7 @@
 #
 # Why hybrid: on Apple Silicon, llama.cpp under MoltenVK + Docker
 # Desktop is 5-10x slower than native Metal. We run llama-server
-# NATIVELY on macOS (via scripts/atlas-llama-macos.sh) for the inference
+# NATIVELY on macOS (via scripts/install/atlas-llama-macos.sh) for the inference
 # perf, but keep proxy/v3/lens/sandbox in Docker so the rest of the
 # stack is unchanged from the linux + cuda/rocm path.
 #
@@ -22,7 +22,7 @@
 #   * proxy / v3 / lens / sandbox: unchanged from base compose
 #   * depends_on chain: still works (socat is healthy when listening)
 #
-# Prereq: run ./scripts/atlas-llama-macos.sh in a separate terminal
+# Prereq: run ./scripts/install/atlas-llama-macos.sh in a separate terminal
 # BEFORE `docker compose up`. The socat container starts fine without
 # the host server running but every request returns connection-refused
 # until it's up.
