@@ -399,10 +399,10 @@
       "red": [
         "sandbox tests (containerized)"
       ],
-      "what": "a failing test at the end of tests/infrastructure/test_sandbox.py, a file that the job runs",
+      "what": "a failing test at the end of tests/infrastructure/sandbox/test_sandbox.py, a file that the job runs",
       "shows": "canary: this test fails on purpose",
       "action": "append",
-      "path": "tests/infrastructure/test_sandbox.py",
+      "path": "tests/infrastructure/sandbox/test_sandbox.py",
       "lines": [
         "",
         "",

@@ -39,9 +39,9 @@ class Group(NamedTuple):
 # The tests that need a running service. A file is in one group, and a group is run in one place.
 GROUPS = {
     "sandbox": Group("a running sandbox service", "the job `sandbox tests (containerized)`", 80, (
-        "tests/infrastructure/test_sandbox.py",
-        "tests/infrastructure/test_sandbox_java_kotlin.py",
-        "tests/infrastructure/test_sandbox_ruby_php.py")),
+        "tests/infrastructure/sandbox/test_sandbox.py",
+        "tests/infrastructure/sandbox/test_sandbox_java_kotlin.py",
+        "tests/infrastructure/sandbox/test_sandbox_ruby_php.py")),
     "proxy": Group("the built TUI and a running proxy", "the job `proxy and TUI tests (no model)`", 13, (
         "tests/infrastructure/test_tui_render.py",
         "tests/infrastructure/test_tui_commands.py",

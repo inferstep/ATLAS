@@ -365,15 +365,17 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 	if n := strings.Count(body, "restoreSaferDeliverables("); n != 2 {
 		t.Errorf("restoration has %d call sites, want exactly 2", n)
 	}
-	i := strings.Index(body, "restoreSaferDeliverables(")
+	results := readSourceForTest(t, "loop_results.go")
+	i := strings.Index(results, "restoreSaferDeliverables(")
 	if i < 0 {
 		t.Fatal("restoration call site not found")
 	}
-	if !strings.Contains(body[i:min(len(body), i+400)], "repeatTerminalSummary(") {
+	if !strings.Contains(results[i:min(len(results), i+400)], "repeatTerminalSummary(") {
 		t.Error("restoration is no longer adjacent to the repeat-detector terminal")
 	}
-	j := strings.LastIndex(body, "restoreSaferDeliverables(")
-	if !strings.Contains(body[max(0, j-900):j], "finalizeOnWorkDeadline") {
+	runEnd := readSourceForTest(t, "run_end.go")
+	j := strings.Index(runEnd, "restoreSaferDeliverables(")
+	if j < 0 || !strings.Contains(runEnd[max(0, j-900):j], "finalizeOnWorkDeadline") {
 		t.Error("the second restoration site is not the work-deadline finaliser")
 	}
 	// The other terminal producers must not have gained it. They all route
@@ -1807,15 +1809,11 @@ func TestPathEscapeAndDenyListDiagnosticsAreVerbatim(t *testing.T) {
 // Keyed on the rejection's own wording rather than line numbers, so ordinary
 // edits above it do not break the guard.
 func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(sourcesForTest(t, []string{"agent.go", "loop_turn.go", "loop_checks.go"}), "\n")
 	start, ban := -1, -1
 	for i, l := range lines {
 		switch {
-		case start < 0 && strings.TrimSpace(l) == `case "tool_call":` && i > 1100:
+		case start < 0 && strings.TrimSpace(l) == `case "tool_call":`:
 			start = i
 		case start >= 0 && ban < 0 && strings.Contains(l, "identicalRetryRefusal("):
 			ban = i
@@ -1863,7 +1861,7 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 		case containsAny(window, knownPhrases...):
 			// Listed above, with what bounds it.
 		default:
-			unlisted = append(unlisted, fmt.Sprintf("agent.go:%d", i+1))
+			unlisted = append(unlisted, strings.TrimSpace(lines[i]))
 		}
 	}
 	if len(unlisted) > 0 {
@@ -1872,8 +1870,7 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 			"workspace-boundary loop happened; account for it or record why it "+
 			"is bounded", unlisted)
 	}
-	t.Logf("audited pre-execution bounces between agent.go:%d and the retry ban at agent.go:%d",
-		start+1, ban+1)
+	t.Logf("audited %d lines of pre-execution bounces, up to the retry ban", ban-start)
 }
 
 // The reasoning-repetition detector compares the normalized opening of each

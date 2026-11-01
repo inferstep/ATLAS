@@ -480,10 +480,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 ### 업데이트
 
 ```bash
+cp .env .env.bak             # config backup (one file holds all your settings)
 git pull
-docker compose down
 docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d
+docker compose up -d         # recreate changed services
+atlas doctor                 # verify: services healthy, model/artifacts intact
 ```
 
 ### 제거
@@ -521,6 +522,7 @@ K3s 설치는 대신 `scripts/uninstall.sh`를 사용합니다. 이 스크립트
 | **llama.cpp** | CUDA로 소스 빌드 ([llama.cpp 빌드 안내](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) 참고) |
 | **Node.js 20+** | 샌드박스의 JavaScript/TypeScript 실행에 필요 |
 | **Rust** | 샌드박스의 Rust 실행에 필요 |
+| **/proc가 있는 Linux** | 샌드박스의 그룹 메모리 제한, 프로세스 수 제한, 빠져나간 프로세스 정리에 필요합니다(`/proc/<pid>/stat`, `status`, `environ`). `/proc`가 없어도 출력 상한은 적용되고, 시간 제한은 명령의 프로세스 그룹을 종료하며 유예 시간 뒤 SIGKILL을 보냅니다. 그룹을 벗어난 프로세스는 종료되지 않습니다. 주소 공간 상한은 `/proc`가 필요 없지만 기본값은 꺼짐입니다(`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`). |
 
 ### 빌드
 
@@ -542,8 +544,8 @@ cd ..
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
 
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# 5. Install V3 service dependencies
+pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
 pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
@@ -581,6 +583,9 @@ python main.py
 # Terminal 4: Sandbox
 cd sandbox
 python executor_server.py
+# 샌드박스는 시작할 때 /proc로 자식 프로세스를 관리할 수 있는지 확인합니다.
+# 읽을 수 있는 /proc가 없는 호스트(예: macOS)에서는 제한이 약해진 상태로 시작하고,
+# /health와 실행 결과에 "resource limits not enforced"라고 보고합니다.
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \

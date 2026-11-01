@@ -521,7 +521,7 @@ class ChatSession(
 
             PERMISSION_DENIED_EVENT -> {
                 // The proxy answers a denial with permission_denied and then a
-                // tool_result whose success is false (proxy/agent.go), so that
+                // tool_result whose success is false (proxy/loop_checks.go), so that
                 // result is what consumes the snapshot and the pre-op stat,
                 // exactly as for a call that failed. A stream that ends before
                 // it leaves nothing behind: the turn's finally clears both.

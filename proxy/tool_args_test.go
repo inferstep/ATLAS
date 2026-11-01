@@ -579,15 +579,8 @@ func TestUnknownToolAnswersUnknownWhateverItsArguments(t *testing.T) {
 // dispatcher's own check is safe only while that holds, so a second caller fails
 // here instead of silently opening an unchecked route.
 func TestHandlerDispatchHasOneGuardedCallSite(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	fset := token.NewFileSet()
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			continue
-		}
+	for _, file := range nonTestGoFiles(t) {
 		tree, perr := parser.ParseFile(fset, file, nil, 0)
 		if perr != nil {
 			t.Fatalf("parse %s: %v", file, perr)

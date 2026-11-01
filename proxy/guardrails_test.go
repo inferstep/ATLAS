@@ -428,7 +428,7 @@ func TestModuleReferenceRequiresImportContext(t *testing.T) {
 	}
 }
 
-// exitGates is in agent.go. Each gate has its own bounce budget: one gate
+// exitGates is in gates_exit.go. Each gate has its own bounce budget: one gate
 // that spends all of its bounces does not silence the next, and once both are
 // spent the exit goes through. A spent budget is not a passing verification.
 func TestEachExitGateHasItsOwnBounceBudget(t *testing.T) {

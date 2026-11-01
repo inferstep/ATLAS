@@ -26,7 +26,7 @@ ALLOWED_EXTRA_CONSUMERS = {"__turn_done__"}
 
 def _proxy_chat_events() -> set:
     events = set()
-    for go in (REPO / "proxy").glob("*.go"):
+    for go in (REPO / "proxy").rglob("*.go"):
         if go.name.endswith("_test.go"):
             continue
         src = go.read_text()

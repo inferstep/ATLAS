@@ -15,7 +15,7 @@ from tests.infrastructure import proc_files
 from tests.infrastructure.proc_files import needs_proc
 
 HERE = Path(__file__).parent
-COUNTING_TESTS = ("test_execution_resource_contract.py", "test_http_cancellation.py")
+COUNTING_TESTS = ("sandbox/test_execution_resource_contract.py", "test_http_cancellation.py")
 
 
 def a_place(root: Path, processes: dict[int, bytes]) -> str:

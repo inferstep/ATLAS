@@ -71,13 +71,9 @@ func runBackgroundTool() *ToolDef {
 			trackBackgroundJob(ctx, jobID, input.Command, tail.Running)
 			outBytes, _ := json.Marshal(out)
 			// A job that has already exited non-zero did not start. Reporting
-			// that as a success is how the failure got lost: measured on
-			// flask_pause (cycles 3-5), `python app.py` exited 1 inside the
-			// settle window with ModuleNotFoundError in its stderr, the result
-			// came back success=true with no error, and the run went on to
-			// probe a port nothing was listening on -- three times, then gave
-			// up. run_command reports a failing command as a failure; so does
-			// this now.
+			// that as a success would lose the failure, and the run would go
+			// on to probe a port nothing is listening on. run_command reports
+			// a failing command as a failure; so does this.
 			if !tail.Running && tail.ExitCode != nil && *tail.ExitCode != 0 {
 				return &ToolResult{Success: false, Data: outBytes,
 					Error: immediateExitMessage(ctx, input.Command, out)}, nil

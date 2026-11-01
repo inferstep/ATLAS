@@ -479,10 +479,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 ### 更新
 
 ```bash
+cp .env .env.bak             # config backup (one file holds all your settings)
 git pull
-docker compose down
 docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d
+docker compose up -d         # recreate changed services
+atlas doctor                 # verify: services healthy, model/artifacts intact
 ```
 
 ### 卸载
@@ -520,6 +521,7 @@ K3s 安装改用 `scripts/uninstall.sh`，它会拆除清单文件并（可选�
 | **llama.cpp** | 从源码编译并启用 CUDA（参见 [llama.cpp 构建说明](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)） |
 | **Node.js 20+** | 沙箱执行 JavaScript/TypeScript 所需 |
 | **Rust** | 沙箱执行 Rust 所需 |
+| **带 /proc 的 Linux** | 沙箱的组内存限制、进程数限制和逃逸进程清理所需（`/proc/<pid>/stat`、`status`、`environ`）。没有 `/proc` 时，输出上限仍然生效，时间限制仍会结束命令的进程组，并在宽限期后发送 SIGKILL。离开该组的进程不会被结束。地址空间上限不需要 `/proc`，但默认关闭（`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`）。 |
 
 ### 构建
 
@@ -541,8 +543,8 @@ cd ..
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
 
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# 5. Install V3 service dependencies
+pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
 pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
@@ -580,6 +582,9 @@ python main.py
 # Terminal 4: Sandbox
 cd sandbox
 python executor_server.py
+# 沙箱在启动时检查能否通过 /proc 管理子进程。
+# 在没有可读 /proc 的主机上（例如 macOS），它以降级的限制启动，
+# 并在 /health 和执行结果中报告 "resource limits not enforced"。
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \

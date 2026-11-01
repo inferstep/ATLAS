@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -957,7 +958,8 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// licence to replace an artifact nobody declared is the one thing no
 	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
-		"agent.go:": true, "agent_handler.go:": true, "guardrails.go:": true, "obligations.go:": true,
+		"gates_exit.go:": true, "agent_handler.go:": true, "run_end.go:": true, "task_intake.go:": true,
+		"guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
 		// delivery_settlement.go joins for the same reason again: it asks
@@ -1009,20 +1011,42 @@ func astSites(t *testing.T, match func(ast.Node) bool) []string {
 	return out
 }
 
-// nonTestGoFiles names the package's .go files that are not tests, sorted.
+// nonTestGoFiles names the module's .go files that are not tests, sorted.
 func nonTestGoFiles(t *testing.T) []string {
 	t.Helper()
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out []string
-	for _, n := range names {
+	for _, n := range moduleGoFiles(t) {
 		if !strings.HasSuffix(n, "_test.go") {
 			out = append(out, n)
 		}
 	}
 	return out
+}
+
+// moduleGoFiles names every .go file of the module, tests too, as paths from
+// this folder. It walks sub-folders because a guard over one folder stops
+// reading a file that moves into a package, and a check that forbids text
+// then passes in silence. A list of allowed files keeps naming them, so such a
+// move goes red there until the list follows.
+func moduleGoFiles(t *testing.T) []string {
+	t.Helper()
+	var names []string
+	err := filepath.WalkDir(".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Name() == "testdata" {
+			return filepath.SkipDir
+		}
+		if !entry.IsDir() && strings.HasSuffix(path, ".go") {
+			names = append(names, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
 }
 
 // Step 1 pinned that NOTHING consulted the contract, because Step 1 added
@@ -1038,7 +1062,7 @@ func nonTestGoFiles(t *testing.T) []string {
 // policy owner and uses the answer. This pins that shape exactly, so a
 // future edit that starts inspecting TaskMode inline still fails.
 func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
-	body, _ := os.ReadFile("agent.go")
+	body, _ := os.ReadFile("run_end.go")
 	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
 	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
 		final = final[:e]
@@ -1063,9 +1087,9 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 	// Each function is read from the file that holds it. A name that is not
 	// there is an error: its check would otherwise pass without reading it.
 	for _, c := range []struct{ file, fn string }{
-		{"task_tier.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
-		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
-		{"agent.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
+		{"task_tier.go", "classifyAgentTier"}, {"run_end.go", "terminalCompletionAllowed"},
+		{"run_end.go", "blockingTombstone"}, {"loop_checks.go", "needsPermission"},
+		{"run_end.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
 		{"system_prompt.go", "writeProjectContext"}, {"system_prompt.go", "writeToolchains"},
 		{"system_prompt.go", "writeProjectFiles"}, {"system_prompt.go", "writePlan"},
 		{"tool_schema.go", "buildToolDescriptionsExcluding"},
@@ -3712,10 +3736,10 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 	if sharedConst != 0 {
 		t.Error("a shared shadowSchemaVersion constant is back; versions are per record kind")
 	}
-	agent, _ := os.ReadFile("agent.go")
+	intake, _ := os.ReadFile("task_intake.go")
 	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate",
 		"shadowSchemaVersionFooter"} {
-		if !strings.Contains(string(agent), want) {
+		if !strings.Contains(string(intake), want) {
 			t.Errorf("%s is missing", want)
 		}
 	}
@@ -3987,7 +4011,7 @@ func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
 		t.Fatal("the demand is not evaluated inside finalizeCompletion, the single " +
 			"finalizer both the done and text exits call")
 	}
-	if g := guardCalls(t, "agent.go", "exitGates"); !g["decideVerificationDemand"] {
+	if g := guardCalls(t, "gates_exit.go", "exitGates"); !g["decideVerificationDemand"] {
 		t.Fatal("the second call site is not the exit gates both exits run")
 	}
 	for _, marker := range []string{

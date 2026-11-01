@@ -202,7 +202,7 @@ It cannot judge these, and says so when it meets one:
 
 | Tool | Where the setting is | Setting |
 |---|---|---|
-| Size check | `scripts/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Entries on the baseline may shrink and may not grow |
+| Size check | `scripts/code_health.py`, `.github/code-health-baseline.json` | 100 lines per function, 1,500 per file. Entries on the baseline may shrink and may not grow. A folder over 25 entries gets a note and never a failure |
 | Workflow lint | `.github/workflows/workflow-lint.yml` | zizmor v1.30.1 at its default level, with lookups on GitHub by the job's read-only token; actionlint 1.7.12 without its shellcheck and pyflakes passes, which would use whatever version the runner has. Both are release binaries held against the checksums the workflow records. A step that must stay as it is carries `# zizmor: ignore[<rule>]` with its reason. Five lines carry one today: the checkout of `star-chart.yml`, whose job pushes with the token; and the four lines of `test.yml` and `dev-results.yml` that use the two upload actions of this repository (`ignore[self-repository]`). zizmor asks for the form `$/...` on those four, and actionlint 1.7.12, its newest release, does not read that form yet (its issues 711 and 732). When actionlint reads it, the four lines take the new form and their marks go |
 | Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only |
 | Extension lint | `extensions/vscode/eslint.config.mjs` | 100 lines per function, and 15 decision points per function, where a switch counts once. A file that holds a larger function is listed with that function's size, and the limit holds for the whole file. A listed number may go down and may not go up |
@@ -666,9 +666,9 @@ in one place.
 
 | File | Tests | What it needs | The job that runs it |
 |---|---|---|---|
-| `tests/infrastructure/test_sandbox.py` | 38 | a running sandbox service | the job `sandbox tests (containerized)` |
-| `tests/infrastructure/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the job `sandbox tests (containerized)` |
-| `tests/infrastructure/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox.py` | 38 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox_java_kotlin.py` | 24 | a running sandbox service | the job `sandbox tests (containerized)` |
+| `tests/infrastructure/sandbox/test_sandbox_ruby_php.py` | 18 | a running sandbox service | the job `sandbox tests (containerized)` |
 | `tests/infrastructure/test_tui_render.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_tui_commands.py` | 4 | the built TUI and a running proxy | the job `proxy and TUI tests (no model)` |
 | `tests/infrastructure/test_control_plane.py` | 5 | a running proxy | the job `proxy and TUI tests (no model)` |

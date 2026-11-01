@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -183,6 +184,22 @@ func TestC5RecoveryReachesAVerifiedCompletion(t *testing.T) {
 	}
 	if census["done"] != 1 {
 		t.Errorf("%d terminal events", census["done"])
+	}
+}
+
+func TestAFileCutForTheModelSaysSo(t *testing.T) {
+	for _, tc := range []struct {
+		truncated bool
+		want      string
+	}{
+		{false, "a.py currently contains:\n\nx = 1\n"},
+		{true, fmt.Sprintf("a.py currently contains (first %d lines):\n\nx = 1\n", fencedRecoveryMaxLines)},
+	} {
+		var sb strings.Builder
+		writeCurrentSource(&sb, "a.py", "x = 1\n", tc.truncated)
+		if sb.String() != tc.want {
+			t.Errorf("truncated=%v: %q, want %q", tc.truncated, sb.String(), tc.want)
+		}
 	}
 }
 

@@ -246,12 +246,9 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	}
 
 	// A tool call whose JSON was cut off (max_tokens, a stream cut) or is
-	// otherwise malformed is NOT reconstructed. Recovery used to rebuild
-	// write_file / edit_file / structural_edit args from whatever prefix
-	// arrived and execute them: a write cut at `return [{"user": 1` landed on
-	// disk as that fragment, and an invalid escape was "unescaped" by guesswork,
-	// all reported as a clean success and never told to the model. The bytes
-	// intended are unknowable from a prefix, so the call is refused through the
+	// otherwise malformed is NOT reconstructed. The bytes intended are
+	// unknowable from a prefix: rebuilding args from it would land a fragment
+	// on disk and report a clean success. So the call is refused through the
 	// parse-failure path, which tells the model its call was cut or malformed
 	// and that nothing was executed.
 
@@ -441,4 +438,50 @@ func swallowedContentFeedback(toolName string, args json.RawMessage) (string, bo
 		}
 	}
 	return "", false
+}
+
+// recoverTruncatedText salvages the answer from a `text` response whose JSON
+// was cut off mid-string.
+//
+// Without this a cut text answer is thrown away entirely: the loop detector
+// cuts a model that began repeating itself, and the user receives nothing at
+// all, because the closing quote and brace are missing.
+//
+// Only for a stream WE cut. A response the model ended on its own is not
+// truncated, and guessing at one would invent content.
+func recoverTruncatedText(raw string) (string, bool) {
+	const marker = `"content":`
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		if i = strings.Index(raw, `"content" :`); i < 0 {
+			return "", false
+		}
+	}
+	rest := strings.TrimSpace(raw[i+len(marker):])
+	if !strings.HasPrefix(rest, `"`) {
+		return "", false
+	}
+	rest = rest[1:]
+
+	// Walk the JSON string body by hand: it has no closing quote, so the
+	// decoder cannot help. Stop at an unescaped quote if one somehow exists.
+	var sb strings.Builder
+	for j := 0; j < len(rest); j++ {
+		c := rest[j]
+		if c == '\\' && j+1 < len(rest) {
+			j += writeJSONEscape(&sb, rest[j:]) - 1
+			continue
+		}
+		if c == '"' {
+			break
+		}
+		sb.WriteByte(c)
+	}
+	out := strings.TrimSpace(sb.String())
+	// Too little to be worth showing, and a short fragment is more likely to
+	// mislead than help.
+	if len(out) < 200 {
+		return "", false
+	}
+	return out, true
 }

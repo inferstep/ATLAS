@@ -679,9 +679,7 @@ func driftedSinceVerification(ctx *AgentContext, verified map[string]string) str
 // unshownSymbolCitations returns the code a reply names whose definition the
 // run never showed. unreadFileCitations works per file: any read of a file
 // counts there as seeing all of it, but a truncated or ranged read shows only
-// part. Smoke run 2026-09-27 (bugfind_tiebreak): both reads stopped near line
-// 190, the reply named `_score_plan`, which it said lay "past the provided
-// snippet", and the run ended completed.
+// part.
 //
 // The predicate matches the file-level one: existence plus absence of
 // evidence. The name must be defined in a file the run read only in part, at a

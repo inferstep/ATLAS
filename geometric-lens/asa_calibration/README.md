@@ -1,7 +1,7 @@
 # ASA steering vectors — structural_edit vs edit_file bias
 
 The vector complements the grammar-level enforcement (the per-step tool
-restriction in `proxy/agent.go`) by shifting the proposal distribution
+restriction in `proxy/llm_call.go`) by shifting the proposal distribution
 upstream: even before grammar can ban `edit_file`, the residual stream
 is already biased toward `structural_edit` for whole-function/class/element
 swaps.

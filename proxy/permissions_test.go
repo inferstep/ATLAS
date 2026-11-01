@@ -823,18 +823,17 @@ func TestAbsoluteSymlinkIsRefusedByContainment(t *testing.T) {
 // Structural: one handshake, no verb list, and deletion cannot be allowlisted.
 func TestDeleteConfirmationStructure(t *testing.T) {
 	// The rejected extractor and every verb table stay gone.
-	entries, _ := os.ReadDir(".")
 	self := "permissions_test.go" // this file necessarily spells the banned names
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || e.Name() == self {
+	for _, n := range moduleGoFiles(t) {
+		if n == self {
 			continue
 		}
-		body := readSourceForTest(t, e.Name())
+		body := readSourceForTest(t, n)
 		for _, banned := range []string{"explicitDeleteIntent", "deleteVerbs",
 			"deleteClauseUnsupported", "deleteHedgeWords", "maxDeleteIntentPaths"} {
 			if strings.Contains(body, banned) {
 				t.Errorf("%s references %s; the verb-inference approach was removed",
-					e.Name(), banned)
+					n, banned)
 			}
 		}
 	}
@@ -1426,13 +1425,8 @@ func TestDeletionTrackingCapacity(t *testing.T) {
 
 // The fulfilled record has exactly one consumer: the tombstone decision.
 func TestFulfilledDeletionHasOneConsumer(t *testing.T) {
-	entries, _ := os.ReadDir(".")
 	var callers []string
-	for _, e := range entries {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		b, _ := os.ReadFile(n)
 		body := strings.Replace(string(b), "func fulfilledDeletionFor(", "", 1)
 		if c := strings.Count(body, "fulfilledDeletionFor("); c > 0 {
@@ -1440,14 +1434,14 @@ func TestFulfilledDeletionHasOneConsumer(t *testing.T) {
 		}
 	}
 	t.Logf("consumers: %v", callers)
-	if len(callers) != 1 || !strings.HasPrefix(callers[0], "agent.go") {
+	if len(callers) != 1 || !strings.HasPrefix(callers[0], "run_end.go") {
 		t.Errorf("fulfilled deletions are consumed from %v, want only the tombstone "+
-			"decision in agent.go", callers)
+			"decision in run_end.go", callers)
 	}
 }
 
 func TestDeletionCompletionHasNoLanguageDependency(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("run_end.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1484,12 +1478,7 @@ func TestTheDeletionGrantIsWrittenInOnePlace(t *testing.T) {
 	if n := strings.Count(string(perms), "ctx.approvedDelete = &approvedDeletion{"); n != 1 {
 		t.Errorf("%d writers of the approval grant, want exactly one", n)
 	}
-	entries, _ := os.ReadDir(".")
-	for _, e := range entries {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		b, _ := os.ReadFile(n)
 		s := string(b)
 		if n != "permissions.go" {
@@ -1505,12 +1494,7 @@ func TestTheDeletionGrantIsWrittenInOnePlace(t *testing.T) {
 
 // Promotion happens in exactly one place.
 func TestFulfilledDeletionsArePromotedInOnePlace(t *testing.T) {
-	entries, _ := os.ReadDir(".")
-	for _, e := range entries {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
+	for _, n := range nonTestGoFiles(t) {
 		b, _ := os.ReadFile(n)
 		s := string(b)
 		if c := strings.Count(s, "promoteFulfilledDeletion("); c > 0 && n != "gates.go" && n != "permissions.go" {

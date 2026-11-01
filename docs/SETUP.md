@@ -519,10 +519,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 ### Updating
 
 ```bash
+cp .env .env.bak             # config backup (one file holds all your settings)
 git pull
-docker compose down
 docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d
+docker compose up -d         # recreate changed services
+atlas doctor                 # verify: services healthy, model/artifacts intact
 ```
 
 ### Uninstalling
@@ -564,6 +565,7 @@ Run all services as local processes without containers. Useful for development o
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
+| **Linux with /proc** | Required for the sandbox's group memory limit, process-count limit and cleanup of escaped processes (`/proc/<pid>/stat`, `status`, `environ`). Without `/proc`, the output cap still applies, and the time limit still ends the command's process group, with SIGKILL after the grace. A process that left the group is not ended. The address-space ceiling does not need `/proc`, but it is off by default (`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`). |
 
 ### Build
 
@@ -585,8 +587,8 @@ cd ..
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
 
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# 5. Install V3 service dependencies
+pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
 pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
@@ -624,6 +626,9 @@ python main.py
 # Terminal 4: Sandbox
 cd sandbox
 python executor_server.py
+# The sandbox checks on startup whether it can govern child processes via /proc.
+# On hosts without a readable /proc (e.g. macOS), it starts with degraded limits
+# and reports "resource limits not enforced" in /health and execution results.
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \

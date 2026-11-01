@@ -294,12 +294,8 @@ func TestCancelledOrExpiredContextStopsLensCalls(t *testing.T) {
 // Structural guards over the proxy sources (non-test files).
 func proxySources(t *testing.T) map[string]string {
 	t.Helper()
-	files, _ := filepath.Glob("*.go")
 	out := map[string]string{}
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue
-		}
+	for _, f := range nonTestGoFiles(t) {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

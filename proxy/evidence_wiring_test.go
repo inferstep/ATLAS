@@ -246,11 +246,11 @@ func TestTheStagingPathExistsAndIsTheOnlyRouteToBehavioralEvidence(t *testing.T)
 	// And the model running the same command through run_command remains a
 	// different, untrusted event: it writes its own record, and no producer
 	// reads it.
-	agent, err := os.ReadFile("agent.go")
+	gates, err := os.ReadFile("gates_exit.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(agent), "ctx.VerificationEvidence = append") {
+	if !strings.Contains(string(gates), "ctx.VerificationEvidence = append") {
 		t.Error("the model's own command record moved; re-derive the boundary")
 	}
 	producer, err := os.ReadFile("verification_evidence.go")

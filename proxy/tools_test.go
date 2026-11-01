@@ -2944,7 +2944,8 @@ func toolSources(t *testing.T) string {
 // agentFiles are the files that hold the agent loop and its request. A guard
 // over the loop reads them all, as toolFiles does for the tools.
 var agentFiles = []string{"agent.go", "llm_call.go", "model_reply.go", "task_tier.go", "system_prompt.go",
-	"agent_handler.go"}
+	"agent_handler.go", "plan_generation.go", "run_end.go", "recovery.go", "fenced_channel.go", "task_intake.go",
+	"gates_exit.go", "loop_turn.go", "loop_checks.go", "loop_results.go"}
 
 func agentSources(t *testing.T) string {
 	t.Helper()

@@ -37,10 +37,8 @@ const wsAlignTTL = 5 * time.Minute
 // It matters because nothing else notices. Every /health passes, the proxy
 // writes files that the sandbox cannot see, `run_command` reports them
 // missing, and the agent concludes its own work does not exist and gives up.
-// `atlas doctor` has flagged this since 2026-07-18 and it recurred on
-// 2026-08-03 after a power cut recreated one container from .env — which is
-// exactly the case a health check has to cover, because nobody runs doctor
-// after an unplanned reboot.
+// `atlas doctor` flags this too, but a power cut can recreate one container
+// from .env, and nobody runs doctor after an unplanned reboot.
 func verifyWorkspaceAlignment(ctx *AgentContext) string {
 	if ctx == nil || ctx.SandboxURL == "" || ctx.WorkingDir == "" {
 		return ""

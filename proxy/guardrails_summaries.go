@@ -18,10 +18,7 @@ import (
 //
 // The verification gate bounces a `done` three times and then, out of
 // bounces, lets it through — so the model's summary reaches the user
-// unchanged. Observed 2026-08-02 across three runs: "I updated the snake game
-// logic... I also verified that the page loads", over a file whose only
-// @app.route had been deleted. The gate had done its job and the claim
-// shipped anyway.
+// unchanged, whatever the run showed.
 //
 // Rewriting the summary is mechanical and needs nothing from the model, which
 // is why it is done here rather than by asking the model to be more careful.

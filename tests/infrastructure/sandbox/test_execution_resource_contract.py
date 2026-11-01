@@ -27,8 +27,8 @@ from tests.infrastructure.bounded_commands import (OWN_LIMIT, REACHED_OWN_LIMIT,
                                                    with_an_address_space_limit)
 from tests.infrastructure.proc_files import needs_proc, sleeping
 
-SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))), "sandbox")
+SANDBOX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))), "sandbox")
 sys.path.insert(0, SANDBOX)
 
 import resource_contract as rc
@@ -421,3 +421,102 @@ def test_the_executor_result_names_a_command_that_took_too_much_memory(monkeypat
     assert killed["returncode"] != OWN_LIMIT, REACHED_OWN_LIMIT
     assert killed["outcome"] == rc.OUTCOME_MEMORY_EXHAUSTED
     assert killed["success"] is False
+
+
+# --- the process supervision self-check ---------------------------------------
+
+
+@needs_proc
+def test_self_check_passes_with_real_proc():
+    """On a host with a working /proc, the self-check finds its probe child and reports enforced."""
+    assert rc.check_process_supervision() == (True, "enforced")
+
+
+def test_self_check_detects_unreadable_proc(tmp_path):
+    """When the process directory cannot be listed, the self-check reports unenforced limits."""
+    unreadable = tmp_path / "proc"
+    ok, reason = rc.check_process_supervision(proc_dir=str(unreadable))
+    assert ok is False
+    assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
+
+
+def test_self_check_detects_probe_not_found(tmp_path):
+    """When /proc exists but the probe process is not found, limits are reported unenforced."""
+    ok, reason = rc.check_process_supervision(proc_dir=str(tmp_path))
+    assert ok is False
+    assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
+
+
+def test_self_check_survives_a_probe_that_will_not_be_reaped(tmp_path, monkeypatch):
+    """A probe stuck in the kernel reads as unenforced limits, and the check still returns."""
+    class StuckProbe:
+        pid = 2 ** 30  # no such process
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("probe", timeout)
+
+    monkeypatch.setattr(rc.subprocess, "Popen", lambda *args, **kwargs: StuckProbe())
+    monkeypatch.setattr(rc, "_kill_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rc, "_kill_token", lambda *args, **kwargs: None)
+    ok, reason = rc.check_process_supervision(proc_dir=str(tmp_path))
+    assert ok is False
+    assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
+
+
+def test_health_reports_degraded_state_when_supervision_unavailable(monkeypatch, tmp_path):
+    """The /health endpoint and execution results report when resource limits are not enforced."""
+    monkeypatch.syspath_prepend(SANDBOX)
+    import executor_server as ex
+
+    monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
+    monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", False)
+    monkeypatch.setattr(ex, "SUPERVISION_REASON", rc.SUPERVISION_UNAVAILABLE_REASON)
+
+    health = ex.health_check()
+    assert health["status"] == "healthy"
+    assert health["limits_enforced"] is False
+    assert health["resource_limits"] == "resource limits not enforced"
+    assert health["resource_limits_reason"] == rc.SUPERVISION_UNAVAILABLE_REASON
+
+    res = ex._run_cmd(["bash", "-c", "echo ok"], timeout=5)
+    assert res["limits_enforced"] is False
+    assert res["resource_limits"] == "resource limits not enforced"
+
+    shell_res = ex._shell_response(res, 0, None)
+    assert shell_res.limits_enforced is False
+    assert shell_res.resource_limits == "resource limits not enforced"
+
+    exec_res = ex.execute_code(ex.ExecuteRequest(code="echo ok\n", language="bash", timeout=5))
+    assert exec_res.limits_enforced is False
+    assert exec_res.resource_limits == "resource limits not enforced"
+
+
+def test_health_reports_enforced_state_when_supervision_available(monkeypatch, tmp_path):
+    """The /health endpoint and execution results report when resource limits are enforced."""
+    monkeypatch.syspath_prepend(SANDBOX)
+    import executor_server as ex
+
+    monkeypatch.setattr(ex, "WORKSPACE_BASE", tmp_path)
+    monkeypatch.setattr(ex, "SUPERVISION_AVAILABLE", True)
+    monkeypatch.setattr(ex, "SUPERVISION_REASON", "enforced")
+
+    health = ex.health_check()
+    assert health["status"] == "healthy"
+    assert health["limits_enforced"] is True
+    assert health["resource_limits"] == "enforced"
+    assert "resource_limits_reason" not in health
+
+    res = ex._run_cmd(["bash", "-c", "echo ok"], timeout=5)
+    assert res["limits_enforced"] is True
+    assert res["resource_limits"] == "enforced"
+
+    shell_res = ex._shell_response(res, 0, None)
+    assert shell_res.limits_enforced is True
+    assert shell_res.resource_limits == "enforced"
+
+    exec_res = ex.execute_code(ex.ExecuteRequest(code="echo ok\n", language="bash", timeout=5))
+    assert exec_res.limits_enforced is True
+    assert exec_res.resource_limits == "enforced"

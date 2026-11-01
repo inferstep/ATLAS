@@ -200,7 +200,7 @@ Abort an in-flight `/v1/agent` turn. Idempotent — repeated calls for the same 
 
 When cancelled, the agent loop exits via `context.Canceled`, the SSE stream emits its trailing `[DONE]`, and the connection closes cleanly. Any in-flight LLM call to llama-server is also aborted via the cascading request context.
 
-The TUI uses this on `Esc` mid-turn — see [CLI.md → Cancelling a turn](CLI.md).
+The TUI uses this on `Ctrl+C` mid-turn — see [CLI.md → Cancelling a turn](CLI.md).
 
 ---
 
@@ -354,7 +354,7 @@ Defined in `proxy/tools.go` and the `proxy/tool_*.go` files beside it. Used by t
 |------|---------|
 | `read_file` | Read a file and return its contents with line numbers |
 | `outline_file` | Symbol outline of a file (functions/classes with line ranges and call edges, via tree-sitter). Orients inside a file too large to read whole; returns no bodies, so it locates code without showing it. |
-| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/agent.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
+| `write_file` | Create a new file. **Rejected for any existing file >5 lines** (`proxy/loop_checks.go`) — use `structural_edit` (whole function/class/element rewrite) or `edit_file` (≤10-line surgical change). Two exemptions: corrupted-looking files (prose preamble, stray markdown fences), so a self-heal full-replace is allowed there; and files the session itself created, so the agent can rewrite its own drafts. |
 | `edit_file` | Apply targeted `old_str`/`new_str` edits to an existing file. `old_str` and `new_str` are applied exactly as sent. A match that needed quote-style or per-line whitespace tolerance is applied and reported in the result (`content_note`). An `old_str` that matches only once `read_file`'s `N<tab>` display prefixes are removed is refused, with the matched line range and a `replace_lines` call that makes the change. Routes through V3 verification at tier 2+. A `.py` edit that introduces an unresolved direct call (would-be `NameError`) is refused by the structural gate — the error names the call and the file is not modified. The wrong tool for >10 lines of change — switch to `structural_edit`. |
 | `insert_after` | Insert lines into a file after line `line` (1-based, as printed by `read_file`; `0` inserts at the top). Only the new text is supplied — there is no anchor to reproduce, which is what makes it the right tool for ADDING code rather than changing it. Requires the file to have been read, so the line numbers are current. Same syntax, structural and embedded-script gates as `edit_file`. |
 | `replace_lines` | Replace lines `start_line`..`end_line` (1-based, inclusive, as printed by `read_file`) with new content. Instead of reproducing the whole span as an anchor, the model asserts only `expected_first_line` and `expected_last_line` — two lines, compared ignoring leading/trailing whitespace, so a stale range is caught before anything is written: a block that only moved is applied where its two lines now are, and any other mismatch returns the actual lines with a ±3-line numbered window. Capped at `replaceLinesMaxSpan` (60) lines and one hunk per call; requires the file to have been read. Same structural and embedded-script gates as `edit_file`. |
@@ -913,12 +913,14 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
   "stderr": "",
   "exit_code": 0,
   "elapsed_ms": 78,
-  "timed_out": false
+  "timed_out": false,
+  "limits_enforced": true,
+  "resource_limits": "enforced"
 }
 ```
 
 `success` is `exit_code == 0` with `outcome` `completed`. `timed_out` states the timeout structurally so a
-caller does not have to recognise it from prose.
+caller does not have to recognise it from prose. `limits_enforced` and `resource_limits` report whether process supervision and memory/process limits are enforced.
 
 **Observation** (present only when `observe_paths` was sent):
 
@@ -989,7 +991,9 @@ Execute code in an isolated environment.
   "error_message": null,
   "execution_time_ms": 45,
   "timed_out": false,
-  "outcome": "completed"
+  "outcome": "completed",
+  "limits_enforced": true,
+  "resource_limits": "enforced"
 }
 ```
 
@@ -1007,6 +1011,8 @@ Execute code in an isolated environment.
 | `execution_time_ms` | int | Execution time in milliseconds |
 | `timed_out` | bool | Whether the run was stopped at its time limit |
 | `outcome` | string | How the run ended. `completed`: it reached its own end, and `success` says whether it passed. Any other value means that it was stopped: `timed_out`, `memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `cancelled`, `spawn_failed`, `internal_unclassified` |
+| `limits_enforced` | bool | Whether process supervision and resource limits are active |
+| `resource_limits` | string? | `"enforced"` when supervision is active, `"resource limits not enforced"` otherwise |
 
 ### POST /syntax-check
 
@@ -1070,8 +1076,10 @@ Each value is the first line the tool's version command prints on stdout within 
 
 ```bash
 curl http://localhost:30820/health
-# {"status": "healthy"}
+# {"status": "healthy", "limits_enforced": true, "resource_limits": "enforced"}
 ```
+
+On a host where the sandbox cannot govern child processes, `limits_enforced` is `false`, `resource_limits` is `"resource limits not enforced"`, and `resource_limits_reason` says why.
 
 ---
 

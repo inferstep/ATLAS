@@ -94,7 +94,12 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
 | `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
 | `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
-| `agent.go` | agent 循环：轮次状态、计划生成、卡死循环断路器 |
+| `agent.go` | `runAgentLoop`、围栏获取、工具链检测 |
+| `gates_exit.go` | 退出门控，以及它们读取的运行状态 |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 循环的一轮：模型调用与回复、工具运行前的检查、结果与卡死循环断路器 |
+| `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及给规划器看的样本；请求声明的任务契约 |
+| `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
+| `fenced_channel.go` | 获取文件正文的子调用及其预算 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
@@ -202,8 +207,8 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 | `edit_file` | 针对 ≤10 行改动的外科式内联字符串替换（old_str/new_str） | 否 |
 | `insert_after` | 在给定行号（`read_file` 打印的行号）之后插入新行。适用于**新增**代码（分支、函数、import）且不改动任何已有内容的场景：没有需要复现的 `old_str`，而这正是长跨度下失败的那一步 | 否 |
 | `replace_lines` | 用新内容替换一个行范围（`start_line`..`end_line`，即 `read_file` 打印的行号）。适用于**修改**代码而无需复现它：锚点是断言的两行（范围的首行与末行，忽略空白），而不是整个跨度，因此逐字复现的负担是 2 行而非 N 行。每次调用上限 60 行 | 否 |
-| `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。GH #39，v1 中仅支持 .py/.html/.htm | 否 |
-| `delete_file` | 删除文件或空目录（之后强制退出循环） | 否 |
+| `structural_edit` | 通过 tree-sitter 选择器（`function:NAME`、`class:NAME`、`<tag>`）对整个函数/类/HTML 元素进行重写；对整节点替换而言，必须优先于 edit_file 使用。支持 Python、HTML、Go、JavaScript 和 TypeScript | 否 |
+| `delete_file` | 删除文件或空目录 | 否 |
 | `move_file` | 在工作区内移动或重命名文件（例如 `index.html` → `templates/`）。纯粹的重定位 —— 绕过 V3/外科式编辑门控，拒绝覆盖已存在的目标。由于 shell `mv`/`cp` 会被拒绝，这是"重新组织文件"的受支持路径 | 否 |
 | `find_file` | 按文件**名**/路径做正则搜索（廉价的存在性检查 + 定位）。区别于在文件内容中 grep 的 `search_files`。 | 是 |
 | `search_files` | 跨文件内容做正则搜索（最多 200 个匹配，跳过 .git/node_modules） | 是 |
@@ -232,8 +237,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 | 工具 | 能否达到 `passed` | 说明 |
 |------|------------------|------|
-| `write_file`、`edit_file`、`insert_after`、`replace_lines` | 能 | 经语法门，当沙箱可达时 |
-| `structural_edit` | 不能 | tree-sitter 拼接属于 v3-service；该工具对自己写入的字节不运行任何检查，因此报告 `syntax`/`not_run` |
+| `write_file`、`edit_file`、`insert_after`、`replace_lines`、`structural_edit` | 能 | 经语法门，当沙箱可达时 |
 | `delete_file`、`move_file` | 不能 | 二者都不改变内容，因此都无可给定的判定 |
 
 七个变更工具的每个分支都携带自己的 `MutationStatus`：该边界在结构上被禁止对直接变更工具做分类，因此一个未分类的分支将无法与一次有意的空操作区分。`noMutation` / `errNoMutation` 标记一个未形成待写字节的分支，`refusedNoCheck` 标记一个拒绝了已就绪字节的守卫，`errFailedMutation` 标记一次被尝试过且使目标处于不确定状态的写入。`TestEvery*OutcomeIsClassified` 覆盖这些家族。
@@ -244,7 +248,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 三处测试守住这条边界，位于 `proxy/result_contract_test.go` 与 `proxy/tool_effect_test.go`：`TestEveryModelFacingSerializationSiteIsInventoried` 在出现新的直接序列化或经未盘点路由构建的工具消息时失败，`TestModelFacingTextCarriesNoClassification` 逐结果固定投影后的字节，而 `TestModelPromptBytesAreUnchangedByClassification` 让 agent 循环跑过两个分类发生变化的分支，并把请求体与父提交对比。
 
-两个限制被如实携带而非绕开推理：`structural_edit` 成功时报告 `syntax`/`not_run`，因此无法晋升检查点；`move_file` 的跨文件系统复制路径在生产可达，但没有生产路径的测试，因为单个临时目录无法横跨两个文件系统。
+一个限制被如实携带而非绕开推理：`move_file` 的跨文件系统复制路径在生产可达，但没有生产路径的测试，因为单个临时目录无法横跨两个文件系统。
 
 #### 恢复
 
@@ -291,7 +295,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 `SessionWrites` 是另一张更旧的、以模型提供的原始路径为键的表；`proxy/types.go` 记录了由此而来的别名问题。其读者是 write_file 覆盖守卫对模型自身草稿的概念、活跃调试快速路径、会话清单注记、V3 项目上下文、制品门的漂移检查与编辑工具的宽松门；这些都不在此改变。
 
-工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`classifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`runnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。`structural_edit` 把其验证记为未运行（它对自己拼接的字节不执行任何检查），因此唯一变更是一次结构编辑的任务以 `unresolved_mutation_debt` 结束，除非别的什么东西验证了该文件：一个已知的、独立的限制。
+工作契约的验证要求（`decideVerificationDemand`）把它问及的代码交付物取自账本，每个变更工具的落地都被 `recordLedgerEffect` 规范记录。回答它的覆盖——一次通过的运行点名了哪些路径、持有的是什么字节——由 `proxy/guardrails.go` 的 `changedPathsForCoverage` 计算：会话写入加账本的规范代码交付物，因此要求与其覆盖读同一身份。在那之前，覆盖只读会话写入表，而 `edit_file` 与 `structural_edit` 从不写入它、任何编辑工具也不为交付的候选写入它，因此 `task_mode: work` 下的每个编辑任务无论模型运行了什么都以 `verification_demanded_unmet` 收场。覆盖只陈述一次运行在其当前字节上点名了一条变更路径；完成仍需要那次运行，后续变更仍重新武装该要求，账本自身的验证仍结算变更债。只有运行了程序或其测试、或抓取了页面的片段才绑定覆盖，且仅当命令行报告该片段的退出状态时（`classifyCommandEvidence`）：一次解析、一次 lint 或一次构建不绑定任何东西，管道进 `tail` 的测试也不。不点名文件的运行器绑定它发现的会话文件（`runnerEntries`）：一个裸 `pytest` 或 `pytest tests/` 绑定其测试文件，`python -m unittest` 绑定其 `test*.py`，`go run .` 绑定其包，`go test ./...` 绑定含测试的包（无测试时只编译），`npm test`、`jest` 或 `vitest` 绑定其默认模式匹配的文件；import 从那里如同从点名入口一样被跟随。失败的运行同样被记录，同一字节上的失败收回更早的通过，因此最新结果说了算。要求在退出时未满足，验证门在终结器拒绝退出之前言明，附上本可运行该文件的命令。一次被取消的编辑不报告变更，账本对它无观测。
 
 
 ### 工具选择偏差缓解
@@ -390,7 +394,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 
 ### 安全限制
 
-面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/agent.go`。
+面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/loop_*.go`。
 
 | 限制 | 取值 | 用途 |
 |-------|-------|---------|
@@ -401,7 +405,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 | 对已有文件的 write_file | 文件 > 5 行时拒绝；在 .py/.html/.htm 上，逐步语法门控操控转向 `structural_edit` | 强制外科式编辑（`edit_file`）或整节点编辑（`structural_edit`） |
 | 可疑收缩守卫 | 当 `oldSize >= 100B` 且 `newSize < 64B` 时拒绝 `structural_edit`/`edit_file`（`proxy/guardrails_write.go::validateNotSuspiciouslyShrunk`） | 在破坏性的桩重写落盘之前抓住它们 |
 | structural_edit 失控内容守卫 | 当 `content` > 8 KB 且 > 4× 文件大小时拒绝 | 抓住作为替换节点发出的推理泄漏块 |
-| 错误循环熔断器 | 连续 3 次失败 | 停止失控的失败循环 |
+| 错误循环熔断器 | 同一路径上连续 3 次同类失败 | 停止失控的失败循环 |
 | 探索预算 | 连续 4 次只读调用时提示（nudge）；5 次以上时升级提示。读取始终会执行 —— 提示是把*下一*轮引向写入 | 推动模型去写，而不是无限探索 |
 | 命令输出截断 | stdout 8,000 字符，stderr 4,000 字符 | 防止上下文泛滥 |
 | 搜索结果 | 最多 200 个匹配；文件搜索跳过 > 1 MB 的文件 | 限定搜索成本 |
@@ -606,7 +610,7 @@ graph LR
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.22\ngo build + run"]
+        Go["Go 1.27.2\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
@@ -626,7 +630,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`java`（Java）、`kt`/`kts`（Kotlin）、`rs`（Rust）、`c++`（C++）、`rb`（Ruby）、`php`（PHP）、`sh`/`shell`（Bash）。常用 CLI 工具已内置在镜像中（`git`、`sqlite3`、`jq`、`patch`、`zip`/`unzip`、`xz`、`curl`），另外还有二进制检查工具（来自 binutils 的 `strings`、`objdump`、`readelf`、`nm`，以及 `file`、`xxd`）—— 容器以非 root 身份运行在只读基础镜像上，因此任务要 shell 调用的一切都必须预装，运行时无法用 apt 安装。对二进制文件调用 `read_file` 会返回指向这些工具的提示，而不是原始字节。最大执行时间：Docker 部署中为 300s（compose 设置 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` 以匹配代理 5 分钟的 `run_command` 上限；裸代码默认值为 60s）。内存、CPU 和进程数上限是容器级的：compose 设置 `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}` 和 `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`；`atlas init` 会把与主机相称的取值（约为 RAM 和核心数的 75%）写入 `.env`。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
+接受的语言别名：`py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`java`（Java）、`kt`/`kts`（Kotlin）、`rs`（Rust）、`c++`（C++）、`rb`（Ruby）、`php`（PHP）、`sh`/`shell`（Bash）。常用 CLI 工具已内置在镜像中（`git`、`sqlite3`、`jq`、`patch`、`zip`/`unzip`、`xz`、`curl`），另外还有二进制检查工具（来自 binutils 的 `strings`、`objdump`、`readelf`、`nm`，以及 `file`、`xxd`）—— 容器以非 root 身份运行在只读基础镜像上，因此任务要 shell 调用的一切都必须预装，运行时无法用 apt 安装。对二进制文件调用 `read_file` 会返回指向这些工具的提示，而不是原始字节。最大执行时间：Docker 部署中为 300s（compose 设置 `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` 以匹配代理 5 分钟的 `run_command` 上限；裸代码默认值为 60s）。内存、CPU 和进程数上限是容器级的：compose 设置 `mem_limit ${ATLAS_SANDBOX_MEM:-1536m}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}` 和 `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`；`atlas init` 会把与主机相称的取值（约为 RAM 和核心数的 75%）写入 `.env`。两个工作区路径：**`/execute`**（V3 候选测试路径）使用 `/tmp/sandbox`（tmpfs）下的一个临时草稿目录；**`/shell`**（agent 的 `run_command` 路由，外加用于后台进程的 `/jobs/*`）针对 `/workspace` 运行 —— 即来自 `ATLAS_PROJECT_DIR`（Docker）或 hostPath `${ATLAS_PROJECTS_DIR}`（K3s）绑定挂载的项目根，与代理看到的是同一路径。
 
 ---
 
@@ -778,4 +782,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-超过 5 行的已有文件对 `write_file` 会被拒绝 —— 模型必须使用 `edit_file`（外科式，≤10 行）或 `structural_edit`（整节点重写，仅 .py/.html/.htm）。在 `.py`/`.html`/`.htm` 文件上，逐步语法门控（BiasBusters #2）会在下一次决策中主动从工具名产生式里禁掉 `edit_file`/`write_file`，使模型无法退回到错误的捷径。
+超过 5 行的已有文件对 `write_file` 会被拒绝 —— 模型必须使用 `edit_file`（外科式，≤10 行）或 `structural_edit`（整节点重写：Python、HTML、Go、JavaScript 和 TypeScript）。在 `.py`/`.html`/`.htm` 文件上，逐步语法门控（BiasBusters #2）会在下一次决策中主动从工具名产生式里禁掉 `edit_file`/`write_file`，使模型无法退回到错误的捷径。

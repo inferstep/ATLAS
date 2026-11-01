@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1173,6 +1175,59 @@ func TestSamplePlanContextSkipsNoiseDirs(t *testing.T) {
 		if _, ok := got[junk]; ok {
 			t.Errorf("noise path %q leaked into context", junk)
 		}
+	}
+}
+
+// The sample stops at its limit wherever it is reading, and a hit at one level
+// leaves the next level unread.
+func TestThePlanSampleStopsWhereItShould(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []string
+		want  []string
+	}{
+		{"the root stops at the limit",
+			[]string{"app.py", "main.py", "manage.py"},
+			[]string{"app.py", "main.py"}},
+		{"the subfolders stop at the limit",
+			[]string{"a/app.py", "a/main.py", "b/app.py"},
+			[]string{"a/app.py", "a/main.py"}},
+		{"the source files stop at the limit",
+			[]string{"a.py", "b.py", "c.py"},
+			[]string{"a.py", "b.py"}},
+		{"a root hit ends the walk",
+			[]string{"app.py", "sub/main.py"},
+			[]string{"app.py"}},
+		{"a subfolder hit ends the walk",
+			[]string{"sub/app.py", "a.py"},
+			[]string{"sub/app.py"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range c.files {
+				path := filepath.Join(dir, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := slices.Sorted(maps.Keys(samplePlanContext(dir, 2, 2000)))
+			if !slices.Equal(got, c.want) {
+				t.Errorf("sampled %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// Some chat templates refuse a system role in mid-conversation, and the prefix
+// is how the model tells a note from the user.
+func TestASystemNoteGoesAsAUserMessage(t *testing.T) {
+	got := systemNote("the file changed")
+	if got.Role != "user" || got.Content != "[system note]: the file changed" {
+		t.Errorf("got role %q, content %q", got.Role, got.Content)
 	}
 }
 
@@ -3727,5 +3782,42 @@ func TestProbeSlotReadsTheSlotInUse(t *testing.T) {
 					processed, total, keepProbing, tc.processed, tc.total, tc.keepProbing)
 			}
 		})
+	}
+}
+
+// A tool_call is streamed the moment it parses, before permission and
+// execution. Every exit between that point and the tool_result has to answer
+// the call it announced, or the client is left rendering a spinner for a call
+// that never resolves.
+//
+// Measured 2026-08-03 on multiturn_stats: the repetition breaker stopped the
+// session one line after announcing a call, and the stream carried 12
+// tool_call events against 11 tool_result. endStream exists so the invariant
+// holds at every exit rather than at each one that remembered to; this test
+// keeps a new exit from quietly reintroducing the gap.
+func TestEveryExitAfterAToolCallAnswersIt(t *testing.T) {
+	lines := strings.Split(sourcesForTest(t, []string{"agent.go", "loop_turn.go", "loop_checks.go", "loop_results.go"}), "\n")
+
+	opening, closing := -1, -1
+	for i, ln := range lines {
+		if strings.Contains(ln, "pendingToolCall = parsed.Name") {
+			opening = i
+		}
+		if strings.Contains(ln, `pendingToolCall = ""`) && i > opening && opening != -1 {
+			closing = i
+		}
+	}
+	if opening == -1 || closing == -1 {
+		t.Fatal("could not locate the tool_call announcement and its result; " +
+			"if this moved, move the invariant with it")
+	}
+
+	for i := opening; i < closing; i++ {
+		if strings.Contains(lines[i], `ctx.Stream("done"`) {
+			t.Errorf("a stream ends between announcing a tool_call and answering it, "+
+				"leaving an orphaned call. Use endStream(summary) "+
+				"instead of ctx.Stream(\"done\", ...):\n\t%s",
+				strings.TrimSpace(lines[i]))
+		}
 	}
 }

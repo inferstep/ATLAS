@@ -128,9 +128,8 @@ func hasMidMessageQuestion(lower string) bool {
 // descriptive, not a question. Requiring inversion stops a field list like
 // "post an item (what it is, where it was found)" from being read as a question
 // and misrouted to the 12-turn conversational tier, which caps the run and
-// skips planning (measured on the lost-and-found scenario: the whole build was
-// capped at 12 turns and never finished). A fronted auxiliary opener (", is the
-// sandbox read-only") is already inverted.
+// skips planning. A fronted auxiliary opener (", is the sandbox read-only") is
+// already inverted.
 //
 // A fronted auxiliary mid-message is a question only when a subject follows it
 // (". Can you", ", is the sandbox"). Without that, the imperative ". Do not

@@ -733,7 +733,7 @@ except curses.error:
 
 **现象：** 第一个请求创建了文件且 V3 运行了。像 "ok" 或 "yes" 这样简短的跟进只得到一句对话式回复 —— 没有工具调用、没有 V3 事件。
 
-**发生了什么：** agent 循环的 tier 分类器（`proxy/task_tier.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 5 并跳过 planning，直接让请求失败。
+**发生了什么：** agent 循环的 tier 分类器（`proxy/task_tier.go:classifyAgentTier`）只回答一个问题：这是对话，还是工作？默认是工作，T0 需要正面证据，因为两类错误的代价相差很大。把对话读成工作，只是为一条模型一轮就能收尾的消息浪费一次 planner 调用；把工作读成对话，则会把该轮次上限压到 12 并跳过 planning，直接让请求失败。
 
 只有当消息少于 12 个字符（`hi`、`thanks`、`ok`），或呈现为疑问句时才算对话式 —— 以结束一个子句的 `?` 结尾，或以整词匹配的疑问词开头（`why`、`what`、`how`、`is`、`can` 等）。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。声明了 `task_mode: work` 的客户端（TUI 即如此）永远不会被分类为对话。但表示任务的措辞优先于二者，因此 `can you fix the login bug?` 尽管带问号仍是工作。其余一律视为工作：`still doesn't work, try again` 和 `the snake is moving way too fast, slow it down` 都不指名文件、也不匹配任务动词列表，但两者都会走 pipeline。
 
@@ -940,7 +940,7 @@ atlas bench --run-id <your-run-id> --tasks 200
 **预期内存使用：**
 - llama-server：约 8 GB（模型在显存中，仅占少量系统内存）
 - geometric-lens：约 200 MB（PyTorch 运行时 + 模型）
-- v3-service：约 150 MB（PyTorch 运行时）
+- v3-service：约 150 MB（不含 PyTorch：仅解析与编排）
 - sandbox：约 100 MB（基础值，编译时会有峰值）
 - atlas-proxy：约 30 MB（Go 二进制文件）
 

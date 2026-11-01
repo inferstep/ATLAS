@@ -27,9 +27,9 @@ func v3CandidatesTested(r *V3GenerateResponse) int {
 // loop stores the request verbatim before appending anything, because the
 // conversation itself cannot answer this question — correctives, manifests
 // and re-injected file content all ride user-role messages for chat-template
-// compatibility, and "last user turn" was observed resolving to "[system
-// note]: run the program standalone" mid-session, sending V3 off to generate
-// against harness feedback instead of the task (third-party audit finding).
+// compatibility, and "last user turn" can resolve to a "[system note]"
+// mid-session, sending V3 off to generate against harness feedback instead
+// of the task.
 // The scan below is a fallback for contexts built without the loop (tests,
 // direct bridge calls) and skips synthetic notes.
 func latestUserMessage(ctx *AgentContext) string {
@@ -54,7 +54,7 @@ func latestUserMessage(ctx *AgentContext) string {
 // writeFileWithV3 routes through the V3 pipeline for T2/T3 tasks.
 // The model's content is the incumbent: V3 checks and ranks it with the
 // alternatives it generates, and sends it back unchanged when none ranks
-// higher (#259), which proposedV3Candidate reads as no proposal.
+// higher, which proposedV3Candidate reads as no proposal.
 func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResult, error) {
 	req := v3WriteRequest(path, baselineContent, ctx)
 
@@ -97,7 +97,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// as a plain direct write with no V3 metadata — the same honest
 	// reporting as the V3-unavailable fallback — so the vetoed winner's
 	// score/phase/evidence don't attach to unverified content and the
-	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	// "V3 verified this edit" completion nudge (loop_results.go) doesn't fire.
 	// The observation that travels to the write must describe the bytes being
 	// written. Every transition above re-observes what it changed, so this
 	// normally returns what it was handed; it re-evaluates only if a future
@@ -377,9 +377,8 @@ func proposeWriteCandidate(ctx *AgentContext, entry routeEntry, lifecycle *route
 		originalForScope(path, ctx), baselineContent)
 
 	code, proposed := proposedV3Candidate(v3Result, baselineContent)
-	// Declared here, with the bytes it describes. It used to be declared
-	// below the language-swap gate, which is precisely why that gate could
-	// restore the baseline without withdrawing provenance.
+	// Declared here, with the bytes it describes, so the language-swap gate
+	// below cannot restore the baseline without withdrawing provenance.
 	fellBack := !proposed
 
 	// Language-swap gate. V3 generates candidates for the TASK, and on a
@@ -500,9 +499,9 @@ func collectWriteCandidateEvidence(ctx *AgentContext, entry routeEntry, write *v
 		// caller's and runs the commands the client declared there, so the
 		// behavioral question has an answer rather than a blocker. It runs
 		// commands only for a request that declared them, and the staging
-		// budget bounds what it may spend on one. It no longer waits for a
-		// syntax obligation: a declared main.rs has none, so its declared
-		// command was owed and never run.
+		// budget bounds what it may spend on one. It does not wait for a
+		// syntax obligation: a declared main.rs has none, and its declared
+		// command is still owed.
 		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evidence.evID, write.scope)
 		evidence.observed, evidence.unmet = append(evidence.observed, behavioral...), why
 		evidence.stagingMutatedAssets = mutatedAssets
@@ -686,7 +685,7 @@ func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
 	return nil
 }
 
-// refuseUnresolvedCalls is the #147 gate: authoritative structural gate on
+// refuseUnresolvedCalls is the authoritative structural gate on
 // whatever is about to land — the in-pipeline veto only prunes phase-1
 // sandbox-passing candidates, so probe/repair returns, the energy fallback, and
 // the baseline resurrection above can all deliver content that calls a name the
@@ -1121,8 +1120,8 @@ func v3Request(path, content string, ctx *AgentContext) V3GenerateRequest {
 	// Add project context from files read during this session. The target
 	// file's own PRE-EDIT snapshot is excluded: its current symbols come
 	// from the baseline, and stale content would let the in-pipeline veto
-	// credit a def this write deletes (#147 review finding #2 — same rule
-	// as checkStructuralUnresolved).
+	// credit a def this write deletes (the same rule as
+	// checkStructuralUnresolved).
 	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
@@ -1301,7 +1300,7 @@ func writeWithoutCandidate(ctx *AgentContext, path, content, message string) (*T
 			ValidationStatus: ValidationFailed,
 			ValidationDetail: synErr}, nil
 	}
-	// #147: structural gate on the fallback too. It matters on the
+	// Structural gate on the fallback too. It matters on the
 	// DeadlineExceeded case -- /generate timed out but the service is up, so
 	// /internal/structural_check (own 5s timeout) still answers; when the
 	// service is genuinely down the gate fails open.

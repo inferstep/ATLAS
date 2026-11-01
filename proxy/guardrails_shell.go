@@ -383,17 +383,13 @@ func runsAServerLoop(cmd string, readFile func(string) (string, bool)) bool {
 	}
 	// `python3 -m py_compile app.py` and `python3 -c "import app"` hand the
 	// file to a module or an inline program; they never execute its server
-	// loop. Observed 2026-09-14: the compile check the model reached for
-	// after a SyntaxError was refused as a server start, and the session
-	// ended without ever fixing the file.
+	// loop, so a compile check after a SyntaxError is not a server start.
 	//
 	// Scoped to the invocation that RUNS the script (m[0]), not the whole
 	// command. reServerScript's [^|;&] class already stops m[0] at the
 	// segment boundary, so a chained `python3 -m pip install ... && python3
 	// app.py` matches only the second segment here — checking the whole
-	// command instead let the pip step's `-m` exempt the real server start,
-	// and app.py then ran in the foreground until the sandbox timeout
-	// (observed 2026-09-14).
+	// command instead would let the pip step's `-m` exempt the real server start.
 	if reInterpreterModuleOrInline.MatchString(m[0]) {
 		return false
 	}
@@ -413,25 +409,16 @@ func runsAServerLoop(cmd string, readFile func(string) (string, bool)) bool {
 // foregroundServerRejectionWithSource redirects a server start from run_command
 // to run_background before it executes.
 //
-// Observed on the first-contact path — an empty workspace, "create a simple
-// portfolio website": the model wrote three files, then ran
-// `python3 -m http.server 8000` in the foreground, waited out the full 30s
-// sandbox timeout, and only then reached for run_background. That is 30
-// seconds of a 3m39s run, every time, on the most common way anyone will
-// first try ATLAS.
-//
-// The guidance already says to use run_background for servers and the model
-// still does this, which is the usual result for an instruction. The harness
-// can see the command before it runs, so it stops being a suggestion.
+// A model told to use run_background for servers can still run one in the
+// foreground and wait out the full sandbox timeout. The harness can see the
+// command before it runs, so it stops being a suggestion.
 //
 // The workspace reader catches a script that serves, alongside the launchers
 // that always do.
 //
 // The pattern list covers the well-known launchers (`http.server`,
-// `npm run dev`, `flask run`). It cannot cover a file the user wrote:
-// measured 2026-08-04 on flask_pause, `python app.py` sat through the full
-// 30s sandbox timeout before the verification gate said anything, and that
-// is the shape a real project takes.
+// `npm run dev`, `flask run`). It cannot cover a file the user wrote, and
+// `python app.py` is the shape a real project takes.
 func foregroundServerRejectionWithSource(cmd string,
 	readFile func(string) (string, bool)) string {
 	// A trailing & already detaches, so the call returns immediately and

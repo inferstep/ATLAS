@@ -156,7 +156,7 @@ func TestTheVerificationGateSaysWhyItRefused(t *testing.T) {
 	}
 }
 
-// verificationDemandedAndUnmet is in agent.go; the verification gate fires on
+// verificationDemandedAndUnmet is in gates_exit.go; the verification gate fires on
 // the same condition: a red run, or a repair request, with no passing run
 // since. That a spent bounce budget leaves it unmet is checked in
 // TestEachExitGateHasItsOwnBounceBudget.

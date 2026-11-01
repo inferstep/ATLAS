@@ -341,8 +341,8 @@ func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
 		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"}, agentFiles...), toolFiles...) {
 		src := readSourceForTest(t, file)
 		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge"} {
-			// validateTaskContract owns normalisation and lives in agent.go.
-			if file == "agent.go" {
+			// validateTaskContract owns normalisation and lives in task_intake.go.
+			if file == "task_intake.go" {
 				continue
 			}
 			if strings.Contains(src, sym) {
