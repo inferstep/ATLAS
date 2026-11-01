@@ -1222,6 +1222,15 @@ func TestThePlanSampleStopsWhereItShould(t *testing.T) {
 	}
 }
 
+// Some chat templates refuse a system role in mid-conversation, and the prefix
+// is how the model tells a note from the user.
+func TestASystemNoteGoesAsAUserMessage(t *testing.T) {
+	got := systemNote("the file changed")
+	if got.Role != "user" || got.Content != "[system note]: the file changed" {
+		t.Errorf("got role %q, content %q", got.Role, got.Content)
+	}
+}
+
 func TestShouldGeneratePlanGates(t *testing.T) {
 	cases := []struct {
 		name string

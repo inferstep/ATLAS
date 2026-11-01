@@ -330,12 +330,15 @@ func (s *runState) queueCorrective(msg string) {
 // and clears the queue. Called once per turn, after the tool result.
 func (s *runState) drainCorrectives(ctx *AgentContext) {
 	for _, msg := range s.correctives {
-		ctx.Messages = append(ctx.Messages, AgentMessage{
-			Role:    "user",
-			Content: "[system note]: " + msg,
-		})
+		ctx.Messages = append(ctx.Messages, systemNote(msg))
 	}
 	s.correctives = nil
+}
+
+// systemNote is a note from the proxy to the model. runState.correctives says
+// why it goes as a user message.
+func systemNote(text string) AgentMessage {
+	return AgentMessage{Role: "user", Content: "[system note]: " + text}
 }
 
 // bounce echoes the model's output plus a synthetic tool rejection into
@@ -478,46 +481,56 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 		log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — latching the verification gate: %q",
 			truncateStr(command, 60))
 	case ev.Kind.verifies():
-		s.verifiedThisLoop = true
-		s.lastVerifyWasLocalProbe = isHTTPProbe(strings.Join(ev.Covering, " && "))
-		s.failing, s.sawFailedVerification = nil, false
-		s.redRunStreak = 0
-		s.uncountedCheck = ""
-		s.driftedAfterVerify = ""
-		s.verifiedHashes = sessionWriteHashes(ctx)
-		// A program run as `prog < data` is verified under a contract the
-		// caller may not use. Tracked so the exit can tell the two apart.
-		// See stdinRedirectSource.
-		if src := stdinRedirectSource(command); src != "" {
-			s.verifiedByRedirect = src
-		} else {
-			s.verifiedStandalone = true
-		}
-		recordVerificationEvidence(ctx, turn, command, ev, false)
+		s.observePassedRun(ctx, turn, command, ev)
 	default:
-		// It passed and ran nothing: a static check, or a declared command
-		// that runs nothing. It clears only its own earlier failure, and it
-		// is recorded only when the client declared it, so the declaration
-		// can be discharged; the record binds no file (showsWorking).
-		if s.failing[command] {
-			delete(s.failing, command)
-			if len(s.failing) == 0 {
-				s.sawFailedVerification = false
-				s.redRunStreak = 0
-				log.Printf("[agent] %q passes again — its earlier failure no longer holds the gate", truncateStr(command, 60))
-			}
+		s.observeUnprovenPass(ctx, turn, command, ev, declared)
+	}
+}
+
+// observePassedRun records a run that showed the work working, which clears
+// every earlier failure.
+func (s *runState) observePassedRun(ctx *AgentContext, turn int, command string, ev commandEvidence) {
+	s.verifiedThisLoop = true
+	s.lastVerifyWasLocalProbe = isHTTPProbe(strings.Join(ev.Covering, " && "))
+	s.failing, s.sawFailedVerification = nil, false
+	s.redRunStreak = 0
+	s.uncountedCheck = ""
+	s.driftedAfterVerify = ""
+	s.verifiedHashes = sessionWriteHashes(ctx)
+	// A program run as `prog < data` is verified under a contract the
+	// caller may not use. Tracked so the exit can tell the two apart.
+	// See stdinRedirectSource.
+	if src := stdinRedirectSource(command); src != "" {
+		s.verifiedByRedirect = src
+	} else {
+		s.verifiedStandalone = true
+	}
+	recordVerificationEvidence(ctx, turn, command, ev, false)
+}
+
+// observeUnprovenPass handles a command that passed and ran nothing: a static
+// check, or a declared command that runs nothing. It clears only its own
+// earlier failure, and it is recorded only when the client declared it, so the
+// declaration can be discharged; the record binds no file (showsWorking).
+func (s *runState) observeUnprovenPass(ctx *AgentContext, turn int, command string, ev commandEvidence, declared bool) {
+	if s.failing[command] {
+		delete(s.failing, command)
+		if len(s.failing) == 0 {
+			s.sawFailedVerification = false
+			s.redRunStreak = 0
+			log.Printf("[agent] %q passes again — its earlier failure no longer holds the gate", truncateStr(command, 60))
 		}
-		if declared {
-			recordVerificationEvidence(ctx, turn, command, ev, false)
-		}
-		switch {
-		case ev.Masked:
-			s.uncountedCheck = uncountedNote(command, ev.MaskNote)
-		case ev.Kind == evidenceStatic:
-			s.uncountedCheck = uncountedNote(command,
-				"it checks that the code is well formed, not that it works. Run the program or its tests.")
-			log.Printf("[agent] static check only, not verification: %q", truncateStr(command, 60))
-		}
+	}
+	if declared {
+		recordVerificationEvidence(ctx, turn, command, ev, false)
+	}
+	switch {
+	case ev.Masked:
+		s.uncountedCheck = uncountedNote(command, ev.MaskNote)
+	case ev.Kind == evidenceStatic:
+		s.uncountedCheck = uncountedNote(command,
+			"it checks that the code is well formed, not that it works. Run the program or its tests.")
+		log.Printf("[agent] static check only, not verification: %q", truncateStr(command, 60))
 	}
 }
 
@@ -1684,15 +1697,7 @@ func injectSymbolContext(ctx *AgentContext, symbols []string) {
 			// returned. Empty string when it returned none.
 			body += formatGraphNeighborhood(idx.Graph)
 			if body != "" {
-				// Role MUST be "user" with a "[system note]:" prefix —
-				// some Jinja chat templates enforce "System message
-				// must be at the beginning" and 500 on any system role
-				// appended mid-conversation. Same convention the
-				// lens-intervention path uses (drainCorrectives).
-				ctx.Messages = append(ctx.Messages, AgentMessage{
-					Role:    "user",
-					Content: "[system note]: " + body,
-				})
+				ctx.Messages = append(ctx.Messages, systemNote(body))
 				names := make([]string, 0, len(idx.Matched))
 				for _, m := range idx.Matched {
 					names = append(names, m.Name)
@@ -3827,17 +3832,11 @@ func noteCrossFileCoherence(ctx *AgentContext, turn int, parsed ModelResponse, r
 			parsed.Name == "structural_edit" || parsed.Name == "move_file" ||
 			parsed.Name == "delete_file") {
 		if note := sessionManifestNote(ctx); note != "" {
-			ctx.Messages = append(ctx.Messages, AgentMessage{
-				Role:    "user",
-				Content: "[system note]: " + note,
-			})
+			ctx.Messages = append(ctx.Messages, systemNote(note))
 			log.Printf("[agent] session manifest announced (%d files)", len(ctx.SessionWrites))
 		}
 		if note := assetLintNote(ctx); note != "" {
-			ctx.Messages = append(ctx.Messages, AgentMessage{
-				Role:    "user",
-				Content: "[system note]: " + note,
-			})
+			ctx.Messages = append(ctx.Messages, systemNote(note))
 			ctx.Stream("asset_lint", map[string]interface{}{
 				"turn":   turn,
 				"detail": note,
@@ -4453,16 +4452,16 @@ func detectProjectVenvPython(workingDir string) string {
 // small. Names only, no content.
 // inspectableWorkspaceFiles is listWorkspaceFiles without ATLAS's own marker
 // files, which are not something a user could be asked about.
-func inspectableWorkspaceFiles(ctx *AgentContext, max int) []string {
+func inspectableWorkspaceFiles(ctx *AgentContext, limit int) []string {
 	if ctx == nil {
 		return nil
 	}
 	var out []string
-	for _, f := range listWorkspaceFiles(ctx.WorkingDir, max+8) {
+	for _, f := range listWorkspaceFiles(ctx.WorkingDir, limit+8) {
 		if strings.HasPrefix(filepath.Base(f), ".atlas") {
 			continue
 		}
-		if out = append(out, f); len(out) >= max {
+		if out = append(out, f); len(out) >= limit {
 			break
 		}
 	}
