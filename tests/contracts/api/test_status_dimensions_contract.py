@@ -14,7 +14,7 @@ from pathlib import Path
 
 from tests.contracts import go_source
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 CANONICAL = [
     "model_runtime",

@@ -20,7 +20,7 @@ Covered surfaces:
 import re
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 COMPOSE_FILES = sorted([*REPO.glob("docker-compose*.yml"), *REPO.glob("compose/*.yml")])
 TEMPLATE_FILES = sorted((REPO / "templates").glob("*.yaml.tmpl"))

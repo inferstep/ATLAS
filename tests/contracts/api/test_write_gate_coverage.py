@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-PROXY = Path(__file__).resolve().parents[2] / "proxy"
+PROXY = Path(__file__).resolve().parents[3] / "proxy"
 # Read in this order, a tool's body runs from its constructor to the next one.
 # The V3 route comes first so that no body holds that route's own definitions:
 # a check on a name must find a call, not the function it names.

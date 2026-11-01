@@ -468,7 +468,7 @@ This describes **v1** of the protocol. Future schema changes:
 
 #### Test contract
 
-The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/test_event_contract.py`.
+The schema is pinned by `tests/cli/test_events.py` (Python consumer) and `proxy/events_test.go` (Go producer). Any change to the wire format MUST update both, in lockstep. Producer/consumer drift (proxy emissions ↔ TUI handlers, envelope-type parity across implementations) is pinned by `tests/contracts/api/test_event_contract.py`.
 
 ---
 

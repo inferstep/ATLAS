@@ -9,7 +9,7 @@ allowlist entry.
 import re
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 # Directories whose text is searched for readers.
 READER_GLOBS = [

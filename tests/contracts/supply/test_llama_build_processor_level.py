@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BUILD_FILES = sorted(path for path in (ROOT / "inference").glob("Dockerfile*") if "cmake -B" in path.read_text(encoding="utf-8"))
 
 

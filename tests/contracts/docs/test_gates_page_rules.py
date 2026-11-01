@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 PAGE = ROOT / "docs" / "quality" / "gates.md"
 GUIDE = ROOT / ".github" / "CONTRIBUTING.md"
 HEADING = "## Rules learned from review and from failures"

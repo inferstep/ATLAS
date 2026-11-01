@@ -11,7 +11,7 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 COMPOSE = REPO / "docker-compose.yml"
 
 # Services that talk to llama-server and therefore need the hostname to

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 INFERENCE_DOCKERFILES = [
     "inference/Dockerfile.v31",
     "inference/Dockerfile.vulkan",

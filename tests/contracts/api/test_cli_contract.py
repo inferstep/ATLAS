@@ -9,7 +9,7 @@ from pathlib import Path
 
 from atlas.__main__ import _SUBCOMMAND_HELP
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 # Subcommands implemented inline in atlas/__main__.py rather than as a module.
 INLINE = {"compose"}

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize("script", ["inference/entrypoint-v3.1.sh", "scripts/atlas-llama-macos.sh"])

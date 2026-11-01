@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__",
              ".pytest_cache"}

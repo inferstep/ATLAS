@@ -12,7 +12,7 @@ from pathlib import Path
 
 from tests.contracts import go_source
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 # Events the proxy may emit that the TUI intentionally does not render.
 # Each entry needs a reason. Keep empty unless a real exception appears.
