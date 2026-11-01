@@ -184,7 +184,7 @@ def _invalid_runtime_artifacts(artifact_dir: str,
 
 
 # ---------------------------------------------------------------------------
-# atlas lens check  (PC-057)
+# atlas lens check
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -442,7 +442,7 @@ def _emit_check(args: argparse.Namespace, color: bool) -> int:
 
 
 # ---------------------------------------------------------------------------
-# atlas lens build  (PC-058)
+# atlas lens build
 # ---------------------------------------------------------------------------
 
 def _embed_text(llama_url: str, text: str,
@@ -604,7 +604,7 @@ _MANAGED_LENS_ARTIFACTS = (
 
 def _write_bundle_fingerprint(staging_dir: str, model, embed=None,
                               llama_url: str = "") -> Optional[str]:
-    """Write the drift fingerprint for a freshly trained bundle (#230).
+    """Write the drift fingerprint for a freshly trained bundle.
 
     The lens re-scores these reference texts at boot and fails /ready when an
     energy moves beyond tolerance, which is how a serving stack that drifted
@@ -646,7 +646,7 @@ def _write_bundle_fingerprint(staging_dir: str, model, embed=None,
 
         write_fingerprint(staging_dir, score, note="written by atlas lens build")
         return None
-    except Exception as exc:  # a missing fingerprint is the old behaviour
+    except Exception as exc:
         return (f"drift fingerprint not written ({exc}); the lens drift check "
                 f"enforces nothing for this bundle")
     finally:
@@ -1060,7 +1060,7 @@ def _stage_and_activate(args: argparse.Namespace, verdict: CheckVerdict, data: D
         model_identity = _record_model_identity(args, verdict, staging_dir, color)
         if model_identity is None:
             return None
-        # Drift fingerprint (#230): the reference energies the lens re-checks
+        # Drift fingerprint: the reference energies the lens re-checks
         # at boot. Before the provenance manifest, which hashes it.
         warning = _write_bundle_fingerprint(staging_dir, result["model"],
                                             llama_url=verdict.probe.url)
@@ -1094,7 +1094,7 @@ def _print_build_complete(verdict: CheckVerdict, artifact_dir: str, gx_result: D
                 f"geometric-lens{RESET if color else ''}")
     _safe_print("  then `atlas lens check` should report compat.")
     _safe_print(f"  Next: `atlas lens publish` to share these artifacts and "
-                f"generate a registry-PR (PC-059), or manually update the "
+                f"generate a registry-PR, or manually update the "
                 f"registry entry for "
                 f"{verdict.matched_model or '<your model>'} to "
                 f"lens_status=\"supported\".")
@@ -1157,7 +1157,7 @@ def _emit_build(args: argparse.Namespace, color: bool) -> int:
 
 
 # ---------------------------------------------------------------------------
-# atlas lens publish  (PC-059)
+# atlas lens publish
 # ---------------------------------------------------------------------------
 
 def _publish_artifact_dir(args: argparse.Namespace, matched, atlas_root: str) -> str:
@@ -1252,7 +1252,7 @@ def _hash_and_inspect(artifact_dir: str, cost_path: str, files_to_upload: List[s
 def _emit_publish(args: argparse.Namespace, color: bool) -> int:
     """Upload local artifacts to HF + generate a registry-add PR body.
 
-    Pipeline (matches PC-059 issue spec):
+    Pipeline:
       0. publish_preflight: print requirements panel + bail if creds missing
       1. Validate: artifact dir exists + cost_field.pt is in it
       2. Compute SHA256 for the registry entry
@@ -1320,11 +1320,11 @@ def _emit_publish(args: argparse.Namespace, color: bool) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="atlas lens",
-        description="Geometric Lens compat probe + build (PC-057, PC-058)")
+        description="Geometric Lens probe, build and publish")
     sub = parser.add_subparsers(dest="subcommand")
 
     p_check = sub.add_parser("check",
-        help="probe llama-server for Lens compatibility (PC-057)")
+        help="probe llama-server for Lens compatibility")
     p_check.add_argument("model", nargs="?", default=None,
         help="registry name or path (default: whatever llama-server has loaded)")
     p_check.add_argument("--json", action="store_true",
@@ -1332,8 +1332,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_check.add_argument("--no-color", action="store_true")
 
     p_build = sub.add_parser("build",
-        help="train fresh lens artifacts — C(x) + G(x) — for the loaded "
-             "model (PC-058/PC-211)")
+        help="train fresh lens artifacts — C(x) + G(x) — for the loaded model")
     p_build.add_argument("model", nargs="?", default=None,
         help="registry name or path (default: whatever llama-server has loaded)")
     p_build.add_argument("--samples", default=None,
@@ -1361,7 +1360,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_build.add_argument("--no-color", action="store_true")
 
     p_pub = sub.add_parser("publish",
-        help="upload local artifacts to HF + open registry-PR (PC-059)")
+        help="upload local artifacts to HF + open registry-PR")
     p_pub.add_argument("model", nargs="?", default=None,
         help="registry name or path of the model these artifacts are for")
     p_pub.add_argument("--repo", default=None,
