@@ -94,7 +94,10 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
 | `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
 | `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
-| `agent.go` | agent 循环：轮次状态、计划生成、卡死循环断路器 |
+| `agent.go` | agent 循环：轮次状态、卡死循环断路器 |
+| `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及给规划器看的样本；请求声明的任务契约 |
+| `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
+| `fenced_channel.go` | 获取文件正文的子调用及其预算 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |

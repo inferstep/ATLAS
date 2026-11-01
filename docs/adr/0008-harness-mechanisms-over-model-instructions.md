@@ -62,7 +62,7 @@ Three changes follow from it directly, all model-agnostic:
    harness states whether anything was written and that nothing verified
    it. When the run counts as completed, it keeps the model's account,
    labelled as unverified; otherwise it drops it (`modelProseIfAuthorized`
-   in `proxy/agent.go`).
+   in `proxy/run_end.go`).
 
 3. **`outline_file` reports embedded-language regions**
    (`embedded_region_outline` in `v3-service/symbols.py`), reusing the

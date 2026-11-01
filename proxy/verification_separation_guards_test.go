@@ -143,7 +143,7 @@ func TestGuardVerificationNeverRequiresSettlement(t *testing.T) {
 }
 
 func TestGuardSettlementStaysAfterVerificationAndStaysMandatory(t *testing.T) {
-	body, err := os.ReadFile("agent.go")
+	body, err := os.ReadFile("run_end.go")
 	if err != nil {
 		t.Fatal(err)
 	}

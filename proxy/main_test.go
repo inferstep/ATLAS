@@ -957,7 +957,8 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// licence to replace an artifact nobody declared is the one thing no
 	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
-		"agent.go:": true, "agent_handler.go:": true, "guardrails.go:": true, "obligations.go:": true,
+		"agent.go:": true, "agent_handler.go:": true, "run_end.go:": true, "task_intake.go:": true,
+		"guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
 		// delivery_settlement.go joins for the same reason again: it asks
@@ -1038,7 +1039,7 @@ func nonTestGoFiles(t *testing.T) []string {
 // policy owner and uses the answer. This pins that shape exactly, so a
 // future edit that starts inspecting TaskMode inline still fails.
 func TestFinalizeCompletionHandsTheContractToThePolicyOwner(t *testing.T) {
-	body, _ := os.ReadFile("agent.go")
+	body, _ := os.ReadFile("run_end.go")
 	final := string(body)[strings.Index(string(body), "func finalizeCompletion"):]
 	if e := strings.Index(final[1:], "\nfunc "); e >= 0 {
 		final = final[:e]
@@ -1063,9 +1064,9 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 	// Each function is read from the file that holds it. A name that is not
 	// there is an error: its check would otherwise pass without reading it.
 	for _, c := range []struct{ file, fn string }{
-		{"task_tier.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
-		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
-		{"agent.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
+		{"task_tier.go", "classifyAgentTier"}, {"run_end.go", "terminalCompletionAllowed"},
+		{"run_end.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
+		{"run_end.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
 		{"system_prompt.go", "writeProjectContext"}, {"system_prompt.go", "writeToolchains"},
 		{"system_prompt.go", "writeProjectFiles"}, {"system_prompt.go", "writePlan"},
 		{"tool_schema.go", "buildToolDescriptionsExcluding"},
@@ -3712,10 +3713,10 @@ func TestSchemaVersionOwnershipIsPerRecordKind(t *testing.T) {
 	if sharedConst != 0 {
 		t.Error("a shared shadowSchemaVersion constant is back; versions are per record kind")
 	}
-	agent, _ := os.ReadFile("agent.go")
+	intake, _ := os.ReadFile("task_intake.go")
 	for _, want := range []string{"shadowSchemaVersionRequest", "shadowSchemaVersionGate",
 		"shadowSchemaVersionFooter"} {
-		if !strings.Contains(string(agent), want) {
+		if !strings.Contains(string(intake), want) {
 			t.Errorf("%s is missing", want)
 		}
 	}

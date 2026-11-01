@@ -1,12 +1,138 @@
-// What the planner is shown: a small sample of the project, read before any tool has run.
+// Plan generation: whether a request earns a plan, and the sample of the project the planner is shown.
 
 package main
 
 import (
+	"fmt"
 	"io/fs"
+	"log"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// shouldGeneratePlan decides whether a turn warrants the ~5-15s plan
+// pipeline cost. We skip plans for:
+//   - T0 (trivial chat — "hi", "thanks") where a plan is wasted budget
+//   - explicit follow-up / clarification requests that depend on the
+//     prior turn's plan, which we'd just regenerate identically
+//
+// Everything else gets a plan — we'd rather plan and have the model
+// ignore it than not plan and let the model thrash.
+func shouldGeneratePlan(ctx *AgentContext, message string) bool {
+	if ctx.Tier == Tier0Conversational {
+		return false
+	}
+	// Single-line ack-style messages where the user is just steering
+	// the existing direction ("yes do that", "looks good", "try again")
+	// — already-running plan is still relevant; a fresh one would just
+	// re-derive it.
+	trimmed := strings.ToLower(strings.TrimSpace(message))
+	if len(trimmed) < 12 {
+		return false
+	}
+	// A request to LOOK needs no plan, and a wrong one actively steers.
+	// Observed live: "Yes, please list the files" produced a three-step plan
+	// (read_file app.py -> structural_edit app.py -> run_command python
+	// app.py). The model listed the directory as asked, then followed the plan
+	// into editing a snake game it had merely been asked to enumerate.
+	return !isReadOnlyRequest(message)
+}
+
+// generatePlan hits /v3/plan with a sampled project context and the
+// user's message, streaming plan_* stage events out to the TUI as
+// `v3_plan` events. Returns the winning Plan or nil if the planner
+// errored — callers should treat nil as "no plan, proceed without
+// adherence gating".
+func generatePlan(ctx *AgentContext, userMessage string) *Plan {
+	if ctx.V3URL == "" {
+		return nil
+	}
+	pctx := samplePlanContext(ctx.WorkingDir, 6, 2000)
+	req := V3PlanRequest{
+		UserMessage:    userMessage,
+		WorkingDir:     ctx.WorkingDir,
+		ProjectContext: pctx,
+		ExistingFiles:  listWorkspaceFiles(ctx.WorkingDir, 400),
+		NCandidates:    3,
+	}
+
+	planStart := time.Now()
+	Emit(NewEnvelope(EvtStageStart, planStage, map[string]interface{}{
+		"detail":     fmt.Sprintf("planning: %s", truncateStr(userMessage, 60)),
+		"context_n":  len(pctx),
+		"candidates": req.NCandidates,
+	}))
+
+	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
+		// Filter out per-token events — the LLM emits ~150 token deltas
+		// per candidate × 3 candidates = ~450 streamed events. Forwarding
+		// every one to the TUI as a separate v3_plan row clogs the
+		// pipeline pane (same regression as the v3-generation token
+		// spam we already fixed). The structural plan stages
+		// (plan_candidate, plan_candidate_scored, plan_selected) are
+		// what the renderer actually wants — token-level visibility is
+		// debug noise.
+		switch stage {
+		case "token", "llm_start", "llm_end":
+			return
+		}
+		payload := map[string]interface{}{"stage": stage, "detail": detail}
+		for k, v := range data {
+			payload[k] = v
+		}
+		ctx.Stream("v3_plan", payload)
+		// Mirror to the typed broker so non-TUI consumers (logs, audit)
+		// see the same stream.
+		Emit(NewEnvelope(EvtMetric, "v3:plan:"+stage, payload))
+	})
+	dur := time.Since(planStart).Milliseconds()
+
+	if err != nil {
+		log.Printf("[agent] plan generation failed: %v", err)
+		Emit(Envelope{
+			EventID:    NewEventID(),
+			Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+			Type:       EvtStageEnd,
+			Stage:      planStage,
+			DurationMS: dur,
+			Payload:    map[string]interface{}{"success": false, "error": err.Error()},
+		})
+		return nil
+	}
+
+	Emit(Envelope{
+		EventID:    NewEventID(),
+		Timestamp:  float64(time.Now().UnixNano()) / 1e9,
+		Type:       EvtStageEnd,
+		Stage:      planStage,
+		DurationMS: dur,
+		Payload: map[string]interface{}{
+			"success":           true,
+			"steps":             len(plan.Steps),
+			"verify_step":       plan.VerifyStep,
+			"winning_score":     plan.WinningScore,
+			"candidates_tested": plan.CandidatesTested,
+		},
+	})
+
+	// Stream the full plan structure so the TUI / IDE plugins can
+	// render the step list. Per-stage events (plan_start, plan_selected,
+	// etc.) only carry counts and indices — the actual step rows live
+	// here. One event per plan: subsequent step satisfaction goes
+	// through plan_adherence, and a revision fires another plan_loaded.
+	planPayload := map[string]interface{}{
+		"steps":         plan.Steps,
+		"verify_step":   plan.VerifyStep,
+		"rationale":     plan.Rationale,
+		"winning_score": plan.WinningScore,
+		"revision":      0,
+	}
+	ctx.Stream("plan_loaded", planPayload)
+	Emit(NewEnvelope(EvtMetric, "v3:plan:loaded", planPayload))
+
+	return plan
+}
 
 // samplePlanContext walks ctx.WorkingDir and reads a handful of files
 // the planner is most likely to need: source files, templates,
