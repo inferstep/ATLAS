@@ -319,8 +319,7 @@ func runCommandFor(path string) string {
 // accept it. A script that serves until killed is refused by the
 // foreground-server redirect when sent through run_command, so demanding
 // `run_command python3 app.py` for such a file is a contradiction the model
-// cannot resolve. Observed 2026-09-14: the gate demanded exactly that, the
-// redirect refused it, and the session ended with the broken file on disk.
+// cannot resolve.
 func runFirstInstruction(ctx *AgentContext, path string) string {
 	cmd := runCommandFor(path)
 	if foregroundServerRejectionWithSource(cmd, workspaceFileReader(ctx)) != "" {

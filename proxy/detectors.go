@@ -199,8 +199,8 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 	// body, then join with "\n". Leading whitespace is PRESERVED because in
 	// Python it is semantic: an indentation-only fix is a real change and
 	// must produce a different fingerprint, or it is misclassified as
-	// reassertion and the loop breaker kills a legitimate iteration (#147
-	// review finding #13). Trailing whitespace and CR are dropped as noise.
+	// reassertion and the loop breaker kills a legitimate iteration. Trailing
+	// whitespace and CR are dropped as noise.
 	lines := strings.Split(wf.Content, "\n")
 	for i, ln := range lines {
 		lines[i] = strings.TrimRight(ln, " \t\r")
@@ -217,12 +217,10 @@ func writeFileContentFingerprint(args json.RawMessage) string {
 //
 // write_file signatures are keyed on target path + a whitespace-stripped
 // content fingerprint. Rewriting the SAME path with the SAME logical
-// content is reassertion (a real loop — observed 2026-07-18: the model
-// reasserted its ~25-line app.py draft five times while V3 wrote the
-// verified expansion). Rewriting the same path with MATERIALLY DIFFERENT
-// content is iteration (observed 2026-07-19: a polyglot task rewriting
-// main.py.c three times to clear successive compiler errors, killed by
-// the path-only key as if it were a loop). The content fingerprint
+// content is reassertion, a real loop. Rewriting the same path with
+// MATERIALLY DIFFERENT content is iteration, such as clearing successive
+// compiler errors, which a path-only key would kill as if it were a loop.
+// The content fingerprint
 // separates the two: reassertion collides, iteration diverges. Falls back
 // to path-only when there's no content to fingerprint.
 // edit_file/structural_edit keep full-args signatures: distinct surgical
@@ -316,7 +314,7 @@ func toolCallSignature(toolName string, args json.RawMessage) string {
 	return hex.EncodeToString(h[:])
 }
 
-// Reasoning-repetition detector. May 10 2026 BiasBusters follow-up #30.
+// Reasoning-repetition detector.
 //
 // Sibling to:
 //   - the tool-call repetition detector above (structural call-shape repetition)
@@ -464,16 +462,14 @@ func truncateForCorrective(s string, n int) string {
 	return cut
 }
 
-// Option 3 (issue #39 / Dmitri thesis): convert localization the model is bad
+// Convert localization the model is bad
 // at into the directed edit it is good at. When run_command surfaces a Python
 // traceback, the deepest in-project frame names the exact fix site — so instead
 // of leaving a weak model to "find the bug" (where it hallucinates symbols and
 // edits the wrong function), the harness mechanically extracts file:line:
 // function from the traceback and hands the model a directed instruction.
 //
-// Verified failure this addresses: a traceback pointing at draw():95 / get_item
-// line N, after which the model edited an unrelated function. The stack frame IS
-// the localization — no LLM reasoning required to read it.
+// The stack frame IS the localization — no LLM reasoning required to read it.
 
 var reTraceFrame = regexp.MustCompile(`File "([^"]+)", line (\d+), in (\S+)`)
 
@@ -498,7 +494,7 @@ var reMissingModule = regexp.MustCompile(`No module named '?([A-Za-z0-9_.]+)'?`)
 var (
 	// Anchored to a real bash diagnostic — `bash: [line N: ]<cmd>: command
 	// not found` — so it can't fire on the string "X: command not found"
-	// appearing in ordinary program output (#147 review finding #9). Path
+	// appearing in ordinary program output. Path
 	// prefixes on the shell name (/usr/bin/bash) and the `line N:` clause
 	// are both optional.
 	reCmdNotFoundBash = regexp.MustCompile(`(?m)(?:^|\s)(?:[\w./-]*/)?bash: (?:line \d+: )?([A-Za-z0-9._/+-]+): command not found`)
@@ -551,8 +547,8 @@ func missingModuleSteer(ctx *AgentContext, output string) string {
 // missingCommandSteer catches the missing-binary loop: the model runs a
 // command whose binary isn't in the sandbox image (`git clone ...` →
 // "bash: line 1: git: command not found"), then either re-runs it
-// identically into the repetition breaker or gives up outright (both
-// observed 2026-07-18: git and sqlite3). The sandbox runs non-root on a
+// identically into the repetition breaker or gives up outright. The
+// sandbox runs non-root on a
 // read-only base fs, so `apt-get install` can NEVER work at runtime —
 // without this steer the model has no way to know
 // that, and suggesting apt-get would just start a different loop. The
@@ -582,10 +578,8 @@ func missingCommandSteer(output string) string {
 // script>"` — a script containing a `def`/`for`/`if`/`class` body that can't
 // live on a single -c line — so the command fails with a SyntaxError in the
 // `-c` argument ITSELF, not in the file being tested. The model then re-runs
-// the same malformed command (observed 2026-07-19 on a regex-chess task:
-// the solution file re.json may be fine; the verify one-liner had `def` inline
-// and never parsed) until the repetition breaker ends the session with the
-// solution unverified. Steer it to move the test into a file. Keyed on a
+// the same malformed command until the repetition breaker ends the session
+// with the solution unverified. Steer it to move the test into a file. Keyed on a
 // syntax error in code compiled from a string ("<string>") plus an inline
 // -c/-command invocation, so a genuine syntax error in a real .py file (which
 // tracebackSteer handles) doesn't match. Returns "" otherwise.
@@ -594,9 +588,7 @@ func brokenInlineScriptSteer(command, output string) string {
 	// in code compiled from a string to "<string>"/"<stdin>" (a real file
 	// error names the file). This is robust to output truncation — the
 	// "<string>" frame is printed BEFORE the "SyntaxError:" line, so a
-	// clipped sandbox result keeps the frame but may drop the keyword
-	// (observed 2026-07-19: the SyntaxError line was truncated away and
-	// the keyword-gated check missed the loop).
+	// clipped sandbox result keeps the frame but may drop the keyword.
 	fromString := strings.Contains(output, `File "<string>"`) ||
 		strings.Contains(output, `File "<stdin>"`)
 	inlineFlag := strings.Contains(command, " -c ") ||
@@ -608,7 +600,7 @@ func brokenInlineScriptSteer(command, output string) string {
 	// If the -c script execs external code (exec(open(f).read()),
 	// eval/compile), a SyntaxError in THAT code is also attributed to
 	// "<string>" — the bug is in the exec'd file, not the one-liner, so
-	// "move your test to a file" is wrong advice (#147 review finding #11).
+	// "move your test to a file" is wrong advice.
 	if strings.Contains(command, "exec(") || strings.Contains(command, "eval(") ||
 		strings.Contains(command, "compile(") {
 		return ""
@@ -852,12 +844,8 @@ func tracebackSteer(ctx *AgentContext, output string) string {
 // This is the one intervention in this class that needs no per-model tuning.
 // Everything about WHY a model repeats itself is model-specific; that a
 // byte-identical call against a deterministic harness will fail again is not.
-// Observed 2026-08-02: run 9 emitted the same `replace_lines` call on turns 2
-// and 3 against a rejection that named the file, the line, the cause and two
-// concrete fixes. The existing repetition detector needs three occurrences in
-// its window and emits a corrective for the NEXT turn, so a two-turn identical
-// pair never reached it, and the run died on the three-strike breaker with the
-// file untouched.
+// The repetition detector needs three occurrences in its window and emits a
+// corrective for the NEXT turn, so a two-turn identical pair never reaches it.
 //
 // Scoped to calls that FAILED. Re-reading a file after editing it is
 // byte-identical and correct, and this must never touch it.
@@ -876,11 +864,8 @@ func identicalRetryRefusal(ctx *AgentContext, toolName string, args json.RawMess
 	// is still here proves nothing has succeeded since it was recorded,
 	// which is exactly what the refusal claims.
 	//
-	// Exempting commands wholesale cost more than it saved. Observed
-	// 2026-08-03 on multiturn_stats: the model sent one `python3 -c`
-	// with mismatched quotes, bash rejected it with a syntax error, and
-	// it re-sent the identical command seven times across six turns
-	// before the turn cap ended the request.
+	// Exempting commands wholesale costs more than it saves: a model can
+	// re-send one malformed `python3 -c` until the turn cap ends the request.
 	if toolName == "tail_background" {
 		return ""
 	}

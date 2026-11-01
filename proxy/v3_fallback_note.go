@@ -12,10 +12,9 @@ import (
 
 // When V3 fails on a write -- it runs out of its time budget or cannot be
 // reached -- the model's own bytes land, after the gates every write passes
-// (ADR 0004). The tool result says so at that moment. The run's final summary
-// did not, so a user who read only the summary could not tell which files V3
-// never checked. Decision (2026-09-27): keep writing, and name those files in
-// the final summary.
+// (ADR 0004). The tool result says so at that moment, and the final summary
+// names those files, so a user who reads only the summary can tell which
+// files V3 never checked.
 //
 // A lens that cannot score is not this case: the run stops instead
 // (lens_required.go).
