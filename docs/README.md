@@ -45,12 +45,11 @@ Task-oriented index for everything under `docs/`. The
 - [API.md](API.md) — HTTP reference for all five services (proxy,
   v3-service, geometric-lens, sandbox, llama-server), and the typed SSE
   event envelope shared by proxy, v3-service, and clients.
-- [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) — typed
+- [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) — the one delivery rule for
+  V3 candidates: what can honestly be decided without an oracle. Also typed
   obligations, evidence provenance, the evidence wire between v3-service and
   the proxy, candidate staging, and the observe-only authorization and
   feasibility decisions.
-- [CANDIDATE_POLICY.md](CANDIDATE_POLICY.md) — the one delivery rule for
-  V3 candidates: what can honestly be decided without an oracle.
 - [schemas/](schemas/) — machine-readable contracts:
   [proxy_openapi.yaml](schemas/proxy_openapi.yaml),
   [error_envelope.schema.json](schemas/error_envelope.schema.json),
