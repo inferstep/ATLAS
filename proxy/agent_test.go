@@ -1686,6 +1686,23 @@ func TestStepExclusions(t *testing.T) {
 			wantExt:   "",
 		},
 		{
+			name: "a read after the refusal, inside the window — still fires",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file", Content: "x = 1"},
+			},
+			wantTools: []string{"edit_file", "write_file"},
+			wantExt:   ".py",
+		},
+		{
+			name: "no space after the path — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: "already exists: File app.py"},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
 			name: "a refusal seven tool results back — out of the window",
 			messages: []AgentMessage{
 				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
