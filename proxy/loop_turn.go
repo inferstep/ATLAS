@@ -19,8 +19,7 @@ const maxContentLoopRecoveries = 2
 
 // contentLoopRecoveryAllowance and contentLoopCountUnproductive expose the two
 // halves of that bound separately, so an experiment can change ONE of them.
-// Defaults reproduce the shipped behaviour exactly: allowance 2, every
-// recovery charged.
+// Defaults: allowance 2, every recovery charged.
 func contentLoopRecoveryAllowance() int {
 	if v := envOr("ATLAS_CONTENT_LOOP_RECOVERIES", ""); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
@@ -33,13 +32,9 @@ func contentLoopRecoveryAllowance() int {
 // contentLoopCountUnproductive reports whether the allowance counts only
 // CONSECUTIVE recoveries that led to nothing landing on disk.
 //
-// Measured (stabilization cycle 4, flask_pause, both repetitions, identical to
-// the token): cut at turn 1, recovery 1, cut at turn 2, recovery 2, then a
-// valid replace_lines at turn 3 that landed, then a third cut at turn 4 which
-// hit the allowance and ended the run with the feature half applied — at 271 s
-// of a 570 s work budget, with the prompt at 7,270 tokens of an 18,432-token
-// conversation budget. The counter had spent both charges before the run made
-// its only productive edit, and that edit did not give any of them back.
+// Counting every recovery can spend the whole allowance before the run's only
+// productive edit, which gives none of it back, so the next cut ends the run
+// with the work half applied.
 func contentLoopCountUnproductive() bool {
 	return envOr("ATLAS_CONTENT_LOOP_COUNT", "all") == "unproductive"
 }
@@ -62,19 +57,18 @@ type agentLoop struct {
 	consecutiveErrors int
 	totalFailures     int // Track consecutive tool failures to break error loops
 	repeatDetections  int // hard-stop after the 2nd repeated-identical-call detection
-	// Runaway backstop for content-varying write loops (#147 review finding
-	// #14): the content-fingerprint repeat detector, by design, does not
-	// catch a model that rewrites one file with materially different content
-	// every time and never converges. This counts total writes per path and
-	// escalates to the repeat corrective only at a threshold far above any
-	// realistic iteration (polyglot's healthiest run was ~10), so it stops a
-	// true runaway without regressing legitimate iteration.
+	// Runaway backstop for content-varying write loops: the content-fingerprint
+	// repeat detector, by design, does not catch a model that rewrites one file
+	// with materially different content every time and never converges. This
+	// counts total writes per path and escalates to the repeat corrective only at
+	// a threshold far above any realistic iteration, so it stops a true runaway
+	// without regressing legitimate iteration.
 	writeCountByPath map[string]int
 	// One-shot: when a loop-stop is about to fire but the task's named
 	// deliverable was never written, steer toward it once instead of
-	// stopping (many hard tasks loop on run_command exploration and
+	// stopping (a hard task can loop on run_command exploration and
 	// hard-stop without ever reaching the done/text exit where the
-	// expected-output gate lives — observed on sqlite and merge-diff).
+	// expected-output gate lives).
 	outputRescueUsed bool
 	// Flag whether we've already injected the approaching-budget hint,
 	// so we don't fire it every turn after crossing the threshold.
@@ -269,12 +263,12 @@ func openConversation(ctx *AgentContext, userMessage string) bool {
 	ctx.Messages = append(ctx.Messages, AgentMessage{Role: "system", Content: systemPrompt})
 	ctx.Messages = append(ctx.Messages, ctx.PriorHistory...)
 
-	// GH #39 point 4: auto-inject reachability slice. If the user
+	// Auto-inject the reachability slice. If the user
 	// message names project symbols (`dashboard`, "the foo function",
 	// foo.bar.baz), pre-load their definitions so the model doesn't
 	// burn agent turns on read_file/list_directory recon. Fail-soft —
 	// no v3-service / no symbols / no project files / network error
-	// all degrade silently to the original message-only flow.
+	// all degrade silently to the message-only flow.
 	if symbols := extractCandidateSymbols(userMessage); len(symbols) > 0 {
 		injectSymbolContext(ctx, symbols)
 	}
@@ -304,7 +298,7 @@ func injectSymbolContext(ctx *AgentContext, symbols []string) {
 	if len(fileMap) > 0 {
 		if idx, ok := resolveProjectSymbols(ctx, fileMap, symbols); ok && len(idx.Matched) > 0 {
 			body := formatProjectContextMessage(idx.Matched)
-			// #39 Phase 3: append the call-graph neighborhood v3-service
+			// Append the call-graph neighborhood v3-service
 			// returned. Empty string when it returned none.
 			body += formatGraphNeighborhood(idx.Graph)
 			if body != "" {
@@ -407,16 +401,14 @@ func announceModelCall(ctx *AgentContext, turn int) time.Time {
 	// (5+ tool calls) push the user's task beyond the trim window, and
 	// the next LLM call sees only system + tool exchanges. Model has no
 	// instruction to work from and goes generic ("Hi! I'm ATLAS...").
-	// Hardcoding ctx.Messages[1] as the user msg used to work, but
-	// PriorHistory makes that index a prior-turn message instead — so
-	// scan backwards for the actual current-turn user role.
-	// Trim by TOKEN BUDGET, not a blind message count. The
-	// old `> 12 messages → keep 8` rule dropped a just-read file after
-	// a couple of turns even when the prompt was a fraction of the
-	// context window — the model would then re-read in a loop, saying
-	// "I don't see the output in the history". keepLast is now derived
-	// from how many recent messages actually fit the per-slot budget,
-	// floored at 8 so we never trim more aggressively than before.
+	// ctx.Messages[1] cannot be taken as the user message, because PriorHistory
+	// makes that index a prior-turn message — so scan backwards for the actual
+	// current-turn user role.
+	// Trim by TOKEN BUDGET, not a blind message count: a fixed count drops a
+	// just-read file after a couple of turns even when the prompt is a fraction
+	// of the context window, and the model then re-reads in a loop. keepLast
+	// comes from how many recent messages actually fit the per-slot budget,
+	// floored at 8.
 	trimmed := false
 	if keep := budgetedKeepLast(ctx.Messages); keep < len(ctx.Messages)-1 {
 		ctx.Messages = trimMessages(ctx.Messages, keep)
@@ -483,12 +475,10 @@ func (loop *agentLoop) endOnInferenceFailure(turn int, err error, llmElapsed tim
 	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
 		return finishCancelledRun(ctx, st, turn)
 	}
-	// An `error` event is not an outcome. This exit streamed one and
-	// returned, so the client saw a tool call, an error, and then
-	// nothing — aoc_sonar died here in BOTH reps on a context-size
-	// 400 and the user got silence. Every other exit in this loop
-	// authors a `done`; this one has to as well, or the failure is
-	// invisible to anything rendering the stream.
+	// An `error` event is not an outcome: without a terminal here the
+	// client sees a tool call, an error, and then nothing. Every other
+	// exit in this loop authors a `done`; this one has to as well, or
+	// the failure is invisible to anything rendering the stream.
 	emitTerminal(ctx, st, TerminalFailed, "inference_failed",
 		inferenceFailureSummary(err, st.madeProductiveChange)+liveBackgroundJobNote(ctx))
 	return fmt.Errorf("LLM call failed on turn %d: %w", turn, err)
@@ -582,10 +572,9 @@ func (loop *agentLoop) recoverFromParseFailure(turn int, response string, parseE
 				"Ask again and name the line to change, or ask for replace_lines with line numbers."
 		}
 		if ctx.LastStreamCut == "content_loop" {
-			// Same misdiagnosis the classifier used to make: the token cap
-			// had nothing to do with it. The model began repeating itself
-			// and the proxy cut the stream, so "make the request smaller"
-			// is advice the user cannot act on.
+			// The token cap has nothing to do with this: the model began
+			// repeating itself and the proxy cut the stream, so "make the
+			// request smaller" is advice the user cannot act on.
 			summary = "Stopped: the model began repeating itself and its response was cut " +
 				"off mid-call, three times. This usually means it tried to reproduce a " +
 				"large block of data — the contents of an input or fixture file — " +
@@ -631,17 +620,15 @@ func (loop *agentLoop) answerContentLoop(turn int, response string) turnOutcome 
 		ctx.Stream("text", map[string]string{"content": salvaged})
 		// The salvaged text is the model's own words and already
 		// reached the client as a `text` event. Repeating it in
-		// the summary of an INCOMPLETE terminal is how half-written
-		// code came to read as the answer, so the summary describes
-		// what happened instead of restating it.
+		// the summary of an INCOMPLETE terminal would make half-written
+		// code read as the answer, so the summary describes what
+		// happened instead of restating it.
 		salvageSummary := "The reply was cut short — it had begun repeating itself, " +
 			"so what arrived above is partial. Ask again if something is missing."
-		// Salvage is a third exit, alongside done and text, and it
-		// reached the user without the honesty the other two apply.
-		// Observed on aoc_slope rep2 and smallrung_toml rep2 (run
-		// 16): the cut reply was half-written code, so the run
-		// finished by handing back code that reads like the answer
-		// while nothing was on disk.
+		// Salvage is a third exit, alongside done and text, and needs the
+		// same honesty: when the cut reply is half-written code and
+		// nothing is on disk, the run must not hand back code that reads
+		// like the answer.
 		if st.actionDemandedAndUnmet(ctx, userMessage) {
 			log.Printf("[agent] salvaged text at turn %d with nothing written — saying so", turn)
 			salvageSummary = nothingWrittenSummary(salvageSummary)
@@ -777,11 +764,10 @@ func (loop *agentLoop) endOnText(turn int, parsed ModelResponse) bool {
 	ctx, st, userMessage := loop.ctx, loop.st, loop.userMessage
 	// `text` is the agent's user-facing chat answer. End the turn
 	// here — the user gets one reply per message they send, and can
-	// follow up to continue. Looping after text caused two failures
-	// in earlier revisions: a trailing role=assistant tripped
-	// llama-server's "prefill incompatible with enable_thinking"
-	// 400, and with a "continue" nudge the model would rabbit-hole
-	// into nonsense tool_calls on conversational input.
+	// follow up to continue. Looping after text breaks two ways: a
+	// trailing role=assistant trips llama-server's "prefill
+	// incompatible with enable_thinking" 400, and a "continue" nudge
+	// sends the model into nonsense tool_calls on conversational input.
 	//
 	// text is otherwise an UNGATED exit, and on action-intent
 	// prompts models abandon work through it ("I will now proceed

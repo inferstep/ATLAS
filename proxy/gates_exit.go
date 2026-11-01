@@ -27,8 +27,8 @@ const maxGateBounces = 3
 
 // runState is the per-run evidence the completion-honesty gates decide
 // on, plus their bounce budgets. One struct so the gates see the
-// same facts on the done and text exits instead of two hand-copied
-// gate blocks (which is exactly how the text exit shipped ungated once).
+// same facts on the done and text exits, instead of two hand-copied
+// gate blocks that can leave one exit ungated.
 type runState struct {
 	turn     int    // current loop turn, for tool-call IDs and logs
 	response string // raw model output this turn, echoed on a bounce
@@ -57,15 +57,15 @@ type runState struct {
 	handoffSentBack bool
 	// unresolvedGates records, for the exit being judged, each gate whose
 	// finding still held when its bounces were spent, with the finding in one
-	// line. A spent gate used to fall straight through to "completed" with
-	// nothing in the status, the reason or the summary. finalizeCompletion
+	// line. Without it a spent gate would fall straight through to "completed"
+	// with nothing in the status, the reason or the summary. finalizeCompletion
 	// ends the run on the findings that are facts about the delivered work;
 	// the heuristic ones become caveats in the summary (unresolvedGateCaveats).
 	unresolvedGates map[string]string
 	// driftedAfterVerify names a file whose bytes changed, outside the edit
 	// tools, after the run that verified it. It holds until a run verifies
 	// again: the artifact gate that found it clears verifiedThisLoop on its
-	// first bounce, and without this the next exit no longer saw the drift.
+	// first bounce, and without this the next exit would not see the drift.
 	driftedAfterVerify string
 	// Name of a tool_call that has been streamed but not yet answered by a
 	// tool_result. The call is announced before permission and execution,
@@ -89,14 +89,14 @@ type runState struct {
 	// or by exploring without ever committing the named output. Computed
 	// once from the prompt.
 	expectedOutputs []string
-	// The decision that named them, carried whole. A later change cannot
-	// merge the contract list with the prose heuristic again: the source and
-	// whether knowledge was stated travel with the paths.
+	// The decision that named them, carried whole, so the contract list and
+	// the prose heuristic stay separate: the source and whether knowledge was
+	// stated travel with the paths.
 	outputObligation obligationDecision
 	// The expected-output gate fires at most ONCE per session: a named
 	// deliverable might be PRODUCED AT RUNTIME by the model's code (not
 	// authored), so repeatedly bouncing a correct done would steer the
-	// model to fabricate a stand-in (#147 review finding #8).
+	// model to fabricate a stand-in.
 	outputGateUsed bool
 	// Set when a verification command (pytest, curl, go test, ...)
 	// completed successfully in any turn of this run. One success per
@@ -115,24 +115,17 @@ type runState struct {
 	// verifiedHashes binds the verification to the BYTES it verified: the
 	// sha256 of every session-written file, snapshotted when a verifying run
 	// succeeds. The exit re-hashes; any drift means the final artifact is not
-	// the one that was checked. Session-level booleans cannot express that —
-	// they verify a moment, not an artifact — which is the shared root of the
-	// verify-then-modify, warned-write and stale-evidence holes (third-party
-	// audit finding: evidence must be a contract tied to the final artifact).
+	// the one that was checked. Session-level booleans cannot express that:
+	// they verify a moment, not an artifact.
 	verifiedHashes map[string]string
 	// pendingWarnedRun is the SET of paths whose last landed write carried a
 	// parse warning and has not been executed since. A warned landing is
-	// pending work, not advice: measured, a session wrote six times without a
-	// single run, ignoring "Run it now" in four consecutive warnings, then
-	// died on edit repeats. Further writes to such a path bounce until any
+	// pending work, not advice: further writes to such a path bounce until any
 	// verification command runs.
 	//
-	// Membership IS the warning. It was briefly a map of booleans written
-	// with both values, and the exit gate reads it by ranging over keys, so a
-	// clean landing stored false and was then announced to the model as "on
-	// disk with a parse warning ... as written it cannot work" over a file
-	// that parsed. Both frozen Stage-1 sessions that spent themselves
-	// rewriting an already-valid file took that gate at turn 1. Go through
+	// Membership IS the warning. The exit gate reads it by ranging over keys,
+	// so a stored false would be announced to the model as "on disk with a parse
+	// warning ... as written it cannot work" over a file that parsed. Go through
 	// markWarnedRun and the value is never anything but true.
 	pendingWarnedRun map[string]bool
 	// repairs are the files this session left unparseable, keyed by
@@ -150,7 +143,7 @@ type runState struct {
 	// ATLAS_CONTENT_LOOP_COUNT=unproductive.
 	productiveChanges      int
 	productiveAtLastCharge int
-	// Phase 4B: how many times a raw @fenced write for a canonical path has
+	// How many times a raw @fenced write for a canonical path has
 	// met the run-first demand, and whether that path's one recovery has been
 	// spent. Both are session-local, bounded by the number of paths the run
 	// touches, and hold no file contents.
@@ -196,19 +189,15 @@ type runState struct {
 	debtOverflow bool
 	// toolBanned records (tool, path) pairs the loop has taken away from the
 	// model after it proved it cannot use them on that file. Advice is not a
-	// fix when the model ignores advice: measured dogfooding "build me a
-	// snake game", a no-op edit_file was refused with an explicit "re-sending
-	// will not help, use structural_edit instead" and the model re-sent the
-	// identical call on the very next turn, twice, until the breaker killed a
-	// 48-minute session. A tool the harness removes is a contract; a tool the
-	// harness merely discourages is a suggestion.
+	// fix when the model ignores advice: a tool the harness removes is a
+	// contract; a tool the harness merely discourages is a suggestion.
 	toolBanned map[string]bool
 
 	// redRunStreak counts consecutive FAILED verification commands with no
 	// green in between. Past a threshold, incremental edits have had their
 	// chance: the bare-model retry loop's whole advantage is the fresh
-	// rewrite, and sessions here were observed re-running a broken program
-	// five times while nibbling at it with edits.
+	// rewrite, and a model can keep re-running a broken program while
+	// nibbling at it with edits.
 	redRunStreak int
 	// headOnlyProbe is the last successful headers-only probe this run made.
 	// Such a probe is not verification; naming it is how the run learns that.
@@ -247,13 +236,10 @@ type runState struct {
 	// Bounces spent per gate this run, keyed by gate name.
 	//
 	// Per-gate rather than one shared counter: the gates are evaluated in
-	// a fixed order, so a single counter let whichever fired first spend
-	// the whole allowance and silence the rest. An observed session put
-	// all three bounces on the verification gate, so the
-	// done-without-action gate never ran and the model exited having
-	// changed nothing while claiming the work was already present. Each
-	// gate reports a DIFFERENT problem, and a gate that has said its
-	// piece three times must stop without muting the others.
+	// a fixed order, so a single counter would let whichever fired first
+	// spend the whole allowance and silence the rest. Each gate reports a
+	// DIFFERENT problem, and a gate that has said its piece three times
+	// must stop without muting the others.
 	gateBounces map[string]int
 
 	// correctives queued by the loop-health detectors this turn, drained
@@ -298,13 +284,11 @@ func systemNote(text string) AgentMessage {
 // the conversation, so the next LLM call sees exactly why the attempt
 // was refused. The one shape every gate and guard refusal shares.
 func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
-	// The rejection reaches the model through Messages. It reached nothing
-	// else: a completion gate holding a run back — "you were asked to change
-	// something and have not" — produced no event, so the TUI showed an
-	// unexplained pause and the run's own event stream held no record that a
-	// gate had fired at all. Measured across 84 sessions, that made the
-	// completion gates unobservable while 11 of 35 failures were the model
-	// stopping short, which is exactly what they exist to catch.
+	// The rejection reaches the model through Messages, and nothing else would
+	// see it: without this event a completion gate holding a run back — "you
+	// were asked to change something and have not" — shows in the TUI as an
+	// unexplained pause, and the run's own event stream holds no record that a
+	// gate fired at all.
 	//
 	// Emitted as its own type rather than a tool_result: nothing was
 	// executed, and a consumer pairing calls with results must not see a
@@ -330,7 +314,7 @@ func (s *runState) bounce(ctx *AgentContext, toolName, rejection string) {
 }
 
 // bounceContent is a refusal's tool message: the legacy two-key shape, and
-// open_repair while a file this session wrote does not parse (#214).
+// open_repair while a file this session wrote does not parse.
 func bounceContent(rejection, openRepair string) string {
 	if openRepair == "" {
 		return fmt.Sprintf(`{"success":false,"error":%q}`, rejection)
@@ -347,11 +331,6 @@ func bounceContent(rejection, openRepair string) string {
 // event has already gone out. Without a matching tool_result the consumer
 // sees a call that never resolves: the TUI prints the call row and nothing
 // after it, so the user is never told the tool was refused and why.
-//
-// Observed live: a model tried to overwrite a fixture input file, the
-// surgical-edit gate correctly refused, and the refusal reached the model
-// (through ctx.Messages) but never the event stream — the session's tool_call
-// and tool_result counts disagreed by one.
 func (s *runState) bounceToolCall(ctx *AgentContext, toolName, rejection string) {
 	s.bounce(ctx, toolName, rejection)
 	s.pendingToolCall = ""
@@ -418,17 +397,12 @@ func (s *runState) observeVerification(ctx *AgentContext, userMessage string, tu
 			truncateStr(command, 60))
 	case ev.Kind.verifies() && silentRunWhenOutputPromised(ctx, userMessage, command, result.Data):
 		// Exit 0 with empty stdout is not verification of a task whose
-		// prompt demands printed output. Measured: a generation drifted into
-		// comment-reasoning, the tail of the file (including the solve()
-		// call) was swallowed by a comment, and the program parsed, ran,
-		// printed nothing and exited 0 — the session recorded that as
-		// verification and reported success on a program that provably
-		// produced no answer.
+		// prompt demands printed output: a program whose tail, solve() call
+		// included, was swallowed by a comment parses, runs, prints nothing
+		// and exits 0.
 		// Latch, don't just decline: a silent run IS a failed verification of
-		// a print-demanding task. Merely not counting it left done free to
-		// pass when nothing else demanded verification — measured: the gate
-		// fired three times in one night and three silent finals still
-		// shipped.
+		// a print-demanding task. Merely not counting it would leave done free
+		// to pass when nothing else demands verification.
 		s.noteFailure(command)
 		s.verifiedThisLoop = false
 		log.Printf("[agent] run exited 0 with no stdout on a print-demanding task — latching the verification gate: %q",
@@ -501,8 +475,8 @@ func (s *runState) observeFailedCheck(ctx *AgentContext, turn int, command strin
 	log.Printf("[agent] verification FAILED: turn=%d cmd=%q server_blocked=%v — done is gated until it passes",
 		turn, truncateStr(command, 60), s.serverStartBlocked)
 	// Advice at the crossing, not at the done-gate: waiting for the model to
-	// attempt `done` meant it kept nibbling edits for turns after the streak
-	// already proved the approach dead. Queue once, on the transition — the
+	// attempt `done` lets it keep nibbling edits for turns after the streak
+	// has proved the approach dead. Queue once, on the transition — the
 	// done-gate text repeats it if the model still tries to exit red.
 	if s.redRunStreak == rewriteThreshold+1 && !s.serverStartBlocked {
 		s.queueCorrective(freshRewriteAdvice(s.redRunStreak))
@@ -561,11 +535,10 @@ func uncountedNote(command, why string) string {
 // The action gate bounces this while it has bounces left, and then stops:
 // chargeBounce is capped so an exhausted gate cannot loop. Past that cap the
 // exit goes through unremarked, which is how a session ends having written
-// nothing while saying nothing about it. Observed on smallrung_toml: a
-// structural_edit was refused for making the file invalid, the model gave up
-// on tools and emitted the replacement as chat text, and the run finished
-// with that code as its summary — the user is shown a block of code that
-// was never applied, with no indication it was not.
+// nothing while saying nothing about it: a model that gives up on tools and
+// emits the replacement as chat text finishes with that code as its summary,
+// and the user is shown a block of code that was never applied, with no
+// indication it was not.
 func (s *runState) actionDemandedAndUnmet(ctx *AgentContext, userMessage string) bool {
 	return observeActionDemand(ctx, s, shadowGateActionDemanded,
 		decideActionDemand(ctx.TaskContract, userMessage, ctx.Tier, s.inspectedWorkspace)) &&
@@ -582,12 +555,10 @@ func (s *runState) actionDemandedAndUnmet(ctx *AgentContext, userMessage string)
 // "skip completion checks". Bounces stay capped by maxGateBounces, so
 // unattended runs cannot loop on a gate.
 func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (string, string) {
-	// Announcing a tool call is not making one. Observed on a question about
-	// code: the model replied "I need to read orders.py — I'll start by
-	// outlining the file to locate the function" and the turn ended there,
-	// because text is a terminal event. It had the right intent and never
-	// acted on it. Only fires before any tool has run, so it cannot interrupt
-	// work already in progress.
+	// Announcing a tool call is not making one: a reply such as "I need to read
+	// orders.py — I'll start by outlining the file to locate the function" ends
+	// the turn there, because text is a terminal event. Only fires before any
+	// tool has run, so it cannot interrupt work already in progress.
 	// A reply that signs off promising the actual answer leaves the user with
 	// half of one, whether or not tools ran. Checked before the zero-tools
 	// case below, since this one applies after the work is done.
@@ -595,8 +566,8 @@ func (s *runState) exitGates(ctx *AgentContext, userMessage, claimText string) (
 	// Whichever of these matches, the reply is not an answer. It goes back for
 	// one more attempt only while a bounce is left AND the session has time to
 	// act on it; otherwise the flags below make finalizeCompletion report the
-	// session incomplete. Before this, a spent bounce fell straight through
-	// to "completed", so the cap turned an unfinished reply into a success.
+	// session incomplete, so the cap cannot turn an unfinished reply into a
+	// success.
 	s.replyOutstanding, s.replyDeclaredIncomplete = false, false
 	s.replyAwaitsUser, s.replyHandedBack, s.replyScopeUnmet = false, false, false
 	s.unresolvedGates = nil
@@ -676,14 +647,12 @@ func (s *runState) intentGates(ctx *AgentContext, claimText string) (string, str
 		s.replyOutstanding = true
 	}
 	// The same failure after work has started. The zero-tools condition above
-	// was there so narration could not interrupt work in progress -- but a
+	// is there so narration cannot interrupt work in progress -- but a
 	// `text` exit has already stopped the work, and a reply that CLOSES by
 	// deferring ("I will now check the generate_plan function", "Please wait
-	// while I verify the exact line") hands the user nothing. Every
-	// bugfind_tiebreak session across four benchmark runs ended this way and
-	// was reported completed. Judged on the closing only, with offers to the
-	// user removed, so a real answer that mentions reading, or ends "If you'd
-	// like, I can fix it", still completes.
+	// while I verify the exact line") hands the user nothing. Judged on the
+	// closing only, with offers to the user removed, so a real answer that
+	// mentions reading, or ends "If you'd like, I can fix it", still completes.
 	if replyDeclaresInability(claimText) {
 		// Honest, and final: sending it back would demand work the agent has
 		// just said it cannot do.
@@ -730,9 +699,9 @@ func (s *runState) evidenceGates(ctx *AgentContext, claimText string) (string, s
 	// A claim about a file the run never opened. This is the conversational
 	// half of an invariant the write path already enforces — edit_file,
 	// structural_edit, insert_after and replace_lines all refuse a path that
-	// was not read first — and until now answers were exempt, because
-	// "conversational messages are never gated" (see wantsStateChange).
-	// Diagnostic questions are exactly where that exemption costs the most:
+	// was not read first. Answers are held to it despite the rule that
+	// "conversational messages are never gated" (see wantsStateChange), because
+	// diagnostic questions are exactly where that exemption costs the most:
 	// the reply IS the deliverable, and a guess is indistinguishable from an
 	// answer.
 	if cited := unreadFileCitations(ctx, claimText); len(cited) > 0 {
@@ -781,11 +750,10 @@ func (s *runState) scopeGate(ctx *AgentContext, userMessage, claimText string) (
 // runFirstGateAtExit holds the exit while a file on disk carries a parse
 // warning and has never been run.
 func (s *runState) runFirstGateAtExit(ctx *AgentContext) (string, string) {
-	// A warned, never-executed artifact is not a deliverable. Without this a
+	// A warned, never-executed artifact is not a deliverable: warned state is a
+	// terminal integrity condition, not a rewrite throttle. Without this a
 	// session whose prompt carried no verification wording could end with a
-	// file that never parsed and was never run, reported as success (audit
-	// finding: warned state must be a terminal integrity condition, not a
-	// rewrite throttle).
+	// file that never parsed and was never run, reported as success.
 	for _, p := range sortedKeys(s.pendingWarnedRun) {
 		if s.repairOpenFor(ctx, p) {
 			// The repair gate owns a file that still does not parse.
@@ -886,7 +854,7 @@ func (s *runState) verificationGates(ctx *AgentContext, contractDemand verificat
 // stdin.
 func (s *runState) redirectGate(ctx *AgentContext) (string, string) {
 	// Verified only through a stdin redirect: the program was never run the
-	// way its caller will run it. See stdinRedirectSource for the measurement.
+	// way its caller will run it. See stdinRedirectSource.
 	if s.verifiedByRedirect != "" && !s.verifiedStandalone {
 		if s.chargeBounce("contract_gate") {
 			log.Printf("[agent] contract gate: every verification piped %q into stdin (bounce %d/%d)",
