@@ -515,6 +515,7 @@ K3s のインストールでは代わりに `scripts/uninstall.sh` を使いま�
 | **llama.cpp** | CUDA 付きでソースからビルド（[llama.cpp ビルド手順](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build) を参照） |
 | **Node.js 20+** | サンドボックスの JavaScript/TypeScript 実行に必要 |
 | **Rust** | サンドボックスの Rust 実行に必要 |
+| **/proc のある Linux** | サンドボックスのグループメモリ制限、プロセス数制限、抜け出したプロセスの後始末に必要（`/proc/<pid>/stat`、`status`、`environ`）。`/proc` がなくても出力の上限は有効で、時間制限はコマンドのプロセスグループを終了させ、猶予の後に SIGKILL を送ります。グループを抜けたプロセスは終了しません。アドレス空間の上限は `/proc` を必要としませんが、既定では無効です（`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`）。 |
 
 ### ビルド
 
@@ -575,6 +576,9 @@ python main.py
 # Terminal 4: Sandbox
 cd sandbox
 python executor_server.py
+# サンドボックスは起動時に、/proc を通じて子プロセスを管理できるか確認します。
+# 読み取れる /proc がないホスト（macOS など）では、制限を弱めた状態で起動し、
+# /health と実行結果で "resource limits not enforced" と報告します。
 
 # Terminal 5: atlas-proxy
 ATLAS_PROXY_PORT=8090 \
