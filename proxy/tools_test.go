@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -3295,34 +3296,7 @@ func TestStructuralEditAnswersEachShapeOfItsCall(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var sent string
-			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/internal/structural_edit":
-					var body struct{ Content string }
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-						t.Error(err)
-					}
-					sent = body.Content
-					if c.body != "" {
-						fmt.Fprint(w, c.body)
-						return
-					}
-					json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "language": "python",
-						"new_content": c.spliced, "old_size": c.oldSize, "new_size": c.newSize})
-				case "/internal/structural_check":
-					var body struct{ Source string }
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-						t.Error(err)
-					}
-					unresolved := []string{}
-					if strings.Contains(body.Source, "missing_helper(") {
-						unresolved = append(unresolved, "missing_helper")
-					}
-					json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": unresolved})
-				default:
-					http.NotFound(w, r)
-				}
-			}))
+			service := httptest.NewServer(structuralEditStub(t, c.spliced, c.body, c.oldSize, c.newSize, &sent))
 			defer service.Close()
 			dir := t.TempDir()
 			path := filepath.Join(dir, c.file)
@@ -3352,6 +3326,80 @@ func TestStructuralEditAnswersEachShapeOfItsCall(t *testing.T) {
 				t.Errorf("the file holds %q (%v), want %q", got, err, c.wantDisk)
 			}
 		})
+	}
+}
+
+// structuralEditStub answers for v3-service: `spliced` is the file it hands back,
+// or `body` its whole answer. It keeps the content it was sent in `sent`, and
+// reports `missing_helper` as a call that resolves to nothing.
+func structuralEditStub(t *testing.T, spliced, body string, oldSize, newSize int, sent *string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/structural_edit":
+			var request struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			*sent = request.Content
+			if body != "" {
+				fmt.Fprint(w, body)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "language": "python",
+				"new_content": spliced, "old_size": oldSize, "new_size": newSize})
+		case "/internal/structural_check":
+			var request struct{ Source string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			unresolved := []string{}
+			if strings.Contains(request.Source, "missing_helper(") {
+				unresolved = append(unresolved, "missing_helper")
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": unresolved})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// An edit below the tier that warrants a candidate lands the caller's own
+// content, and the service is never asked to generate one.
+func TestABypassedStructuralEditStaysOffTheV3Route(t *testing.T) {
+	const original, edited = "def a():\n    return 1\n", "def a():\n    return 2\n"
+	var sent string
+	var generated atomic.Bool
+	stub := structuralEditStub(t, edited, "", 0, 0, &sent)
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			generated.Store(true)
+		}
+		stub(w, r)
+	}))
+	defer service.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := writeGateCtx(t, service.URL, "", dir)
+	ctx.RecordFileRead(path, original)
+	args, err := json.Marshal(map[string]string{"path": "a.py", "selector": "function:a", "content": edited})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, execErr := structuralEditTool().Execute(args, ctx)
+
+	if execErr != nil || !res.Success {
+		t.Fatalf("the edit was refused: %v, %+v", execErr, res)
+	}
+	if generated.Load() {
+		t.Error("a bypassed edit reached the V3 route")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != edited {
+		t.Errorf("the file holds %q (%v), want %q", got, err, edited)
 	}
 }
 
