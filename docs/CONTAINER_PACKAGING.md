@@ -69,7 +69,7 @@ pinned, so a rebuild can resolve newer ones:
 The proxy's two Alpine packages are pinned in `proxy/Dockerfile`
 (`curl=8.22.0-r0`, `bash=5.3.9-r1`).
 
-`tests/infrastructure/test_dependency_pinning.py` asserts the pinning
+`tests/infrastructure/supply/test_dependency_pinning.py` asserts the pinning
 policy: requirements files carry `==` pins on every entry, inline
 `pip install`s in Dockerfiles are pinned, the four service images' bases are
 digest-pinned (`@sha256:...`), and the proxy's `apk` packages carry

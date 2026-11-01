@@ -277,7 +277,7 @@ How to read the coverage rows:
   action: when Dependabot moves that pin in a workflow file, move it in the
   two action files in the same pull request.
 - Dependabot updates the Gradle wrapper of the JetBrains plugin, and the jar of
-  the wrapper is a binary file. `tests/infrastructure/test_gradle_wrapper.py`
+  the wrapper is a binary file. `tests/infrastructure/supply/test_gradle_wrapper.py`
   holds the jar against the sum that Gradle published for its version. The
   sums stand in `tests/infrastructure/gradle_wrapper_jar_sums.txt`, and a
   wrapper of a version with no line there is red. Add the line first, in a
@@ -426,7 +426,7 @@ made twice.
 | The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../.github/CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
 | The guide's rule for a skip: it has its reason ([Testing](../../.github/CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
 | A test that stops running in the plain jobs (a skip, a mark, a move to another folder) is named in the change that does it | #391, #397, #404 | `integrity check` |
-| The guide's rule for a test gate that ran no test ([section 4](../../.github/CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
+| The guide's rule for a test gate that ran no test ([section 4](../../.github/CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/pipeline/test_production_readiness_tests_ran.py` |
 | A Go test gate does not take a result from the cache | #382 | `scripts/production-readiness.py` |
 | A test writes under the test runner's own folder, never into a folder of the user | #305 | review |
 | A test claims only what the code under test promises | #355 | review |
@@ -439,15 +439,15 @@ made twice.
 | A check that stops checking must be seen ([The canary](#the-canary)) | #350, #396 | `scripts/canary.py check` |
 | A change whose checks did not run fails. A job that was skipped behind a failed job is not counted twice | #303, #403 | `checks ran` |
 | The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
-| A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/test_change_base.py` |
+| A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/pipeline/test_change_base.py` |
 | Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
-| The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
-| A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/test_workflow_concurrency.py` |
-| A push to `dev` runs no test again: it sends what the merge queue's run of the commit kept | #402 | `tests/infrastructure/test_dev_results.py` |
+| The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/pipeline/test_workflow_lint.py` |
+| A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/pipeline/test_workflow_concurrency.py` |
+| A push to `dev` runs no test again: it sends what the merge queue's run of the commit kept | #402 | `tests/infrastructure/pipeline/test_dev_results.py` |
 | The message of a check says what failed, why it matters, and how to fix it | #300 | review |
-| A red that the change did not cause is counted apart, and its cause is repaired where the user meets it too: a failed download is tried again | #406 | `tests/infrastructure/test_bootstrap_download_retry.py` |
-| A job that checks out another commit than the one its workflow file comes from takes no action from that checkout | #415 | `tests/infrastructure/test_workflow_local_actions.py` |
-| A word that ends an issue counts only where it starts a line, outside a fenced block. A sentence that quotes such a line ends nothing | #416 | `tests/infrastructure/test_atlas_bot.py` |
+| A red that the change did not cause is counted apart, and its cause is repaired where the user meets it too: a failed download is tried again | #406 | `tests/infrastructure/bootstrap/test_bootstrap_download_retry.py` |
+| A job that checks out another commit than the one its workflow file comes from takes no action from that checkout | #415 | `tests/infrastructure/pipeline/test_workflow_local_actions.py` |
+| A word that ends an issue counts only where it starts a line, outside a fenced block. A sentence that quotes such a line ends nothing | #416 | `tests/infrastructure/pipeline/test_atlas_bot.py` |
 | A test job installs every package from a lock file with hashes, the product's packages too | #407 | `tests/contracts/test_ci_lock.py` |
 
 ### Scripts
@@ -455,8 +455,8 @@ made twice.
 | Rule | From | Held by |
 |---|---|---|
 | Every shell script is read by shellcheck at warning level, and no line switches a warning off | #342 | `shellcheck` |
-| A script keeps the downloads and logs of a run in a temporary folder that it makes for that run, and says where they are when the run fails | #409 | `tests/infrastructure/test_bootstrap_run_folder.py` |
-| A script that removes a folder names it first, and refuses a setting that is empty, is not a full path, or is or holds the home folder or the repository | #414 | `tests/infrastructure/test_uninstall_script.py` |
+| A script keeps the downloads and logs of a run in a temporary folder that it makes for that run, and says where they are when the run fails | #409 | `tests/infrastructure/bootstrap/test_bootstrap_run_folder.py` |
+| A script that removes a folder names it first, and refuses a setting that is empty, is not a full path, or is or holds the home folder or the repository | #414 | `tests/infrastructure/bootstrap/test_uninstall_script.py` |
 
 ### Product code
 
