@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1173,6 +1175,50 @@ func TestSamplePlanContextSkipsNoiseDirs(t *testing.T) {
 		if _, ok := got[junk]; ok {
 			t.Errorf("noise path %q leaked into context", junk)
 		}
+	}
+}
+
+// The sample stops at its limit wherever it is reading, and a hit at one level
+// leaves the next level unread.
+func TestThePlanSampleStopsWhereItShould(t *testing.T) {
+	cases := []struct {
+		name  string
+		files []string
+		want  []string
+	}{
+		{"the root stops at the limit",
+			[]string{"app.py", "main.py", "manage.py"},
+			[]string{"app.py", "main.py"}},
+		{"the subfolders stop at the limit",
+			[]string{"a/app.py", "a/main.py", "b/app.py"},
+			[]string{"a/app.py", "a/main.py"}},
+		{"the source files stop at the limit",
+			[]string{"a.py", "b.py", "c.py"},
+			[]string{"a.py", "b.py"}},
+		{"a root hit ends the walk",
+			[]string{"app.py", "sub/main.py"},
+			[]string{"app.py"}},
+		{"a subfolder hit ends the walk",
+			[]string{"sub/app.py", "a.py"},
+			[]string{"sub/app.py"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range c.files {
+				path := filepath.Join(dir, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := slices.Sorted(maps.Keys(samplePlanContext(dir, 2, 2000)))
+			if !slices.Equal(got, c.want) {
+				t.Errorf("sampled %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

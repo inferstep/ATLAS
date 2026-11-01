@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // --- Ignored write_file steering ---------------------------------------------
@@ -467,6 +469,23 @@ func TestASteerRecoveryOfALongFileRecordsOnlyItsHead(t *testing.T) {
 	}
 	if ctx.LineWasShown(path, fencedRecoveryMaxLines+1) {
 		t.Error("a line past the head was recorded as shown")
+	}
+}
+
+func TestALowBudgetSkipsSteerRecovery(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	workCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ctx.Ctx = workCtx
+	st := &runState{}
+
+	var note string
+	for i := 0; i < steerRecoveryRepeat; i++ {
+		note = steerRecovery(ctx, st, "app.py", filepath.Join(ctx.WorkingDir, "app.py"), false)
+	}
+
+	if note != "" {
+		t.Errorf("recovery ran with less budget than it needs to be acted on: %.120s", note)
 	}
 }
 

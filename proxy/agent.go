@@ -6248,13 +6248,6 @@ func hasHonestMarker(s string) bool {
 	return false
 }
 
-// honestTerminalSummary is the last thing between a terminal and the client.
-//
-// For a completed status the account stands, because the gate authorised the
-// claim; what a spent heuristic gate still found is appended as a caveat. For
-// every other status it guarantees three properties --
-// there is a summary, it carries no completion claim, and it says plainly that
-// the task was not confirmed finished.
 // runNotConfirmedNote ends the summary of a run that did not finish.
 const runNotConfirmedNote = " This run did not confirm the task was complete."
 
@@ -6262,6 +6255,13 @@ const runNotConfirmedNote = " This run did not confirm the task was complete."
 // counting the rest, so a large tidy-up stays readable.
 const deletionSummaryLimit = 5
 
+// honestTerminalSummary is the last thing between a terminal and the client.
+//
+// For a completed status the account stands, because the gate authorised the
+// claim; what a spent heuristic gate still found is appended as a caveat. For
+// every other status it guarantees three properties --
+// there is a summary, it carries no completion claim, and it says plainly that
+// the task was not confirmed finished.
 func honestTerminalSummary(ctx *AgentContext, st *runState, status TerminalStatus,
 	reason, summary string) string {
 	if status.Completed() {
