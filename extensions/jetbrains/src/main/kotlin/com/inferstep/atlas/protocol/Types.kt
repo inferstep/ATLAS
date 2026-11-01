@@ -175,7 +175,7 @@ data class TaskContract(
 
 /**
  * POST /v1/agent request body. Field names match the anonymous struct in
- * proxy/agent.go's handleAgent (see tui/chat.go's agentRequest).
+ * proxy/agent_handler.go's handleAgent (see tui/chat.go's agentRequest).
  */
 @Serializable
 data class AgentRequest(

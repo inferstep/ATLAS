@@ -3292,7 +3292,7 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 	}
 	// handleAgent applies it once the contract is validated, and resets the
 	// turn cap with it.
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("agent_handler.go")
 	if err != nil {
 		t.Fatal(err)
 	}

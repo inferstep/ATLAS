@@ -957,7 +957,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// licence to replace an artifact nobody declared is the one thing no
 	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
-		"agent.go:": true, "guardrails.go:": true, "obligations.go:": true,
+		"agent.go:": true, "agent_handler.go:": true, "guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
 		// delivery_settlement.go joins for the same reason again: it asks
@@ -1063,11 +1063,11 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 	// Each function is read from the file that holds it. A name that is not
 	// there is an error: its check would otherwise pass without reading it.
 	for _, c := range []struct{ file, fn string }{
-		{"agent.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
+		{"task_tier.go", "classifyAgentTier"}, {"agent.go", "terminalCompletionAllowed"},
 		{"agent.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
-		{"agent.go", "honestTerminalSummary"}, {"agent.go", "buildSystemPrompt"},
-		{"agent.go", "writeProjectContext"}, {"agent.go", "writeToolchains"},
-		{"agent.go", "writeProjectFiles"}, {"agent.go", "writePlan"},
+		{"agent.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
+		{"system_prompt.go", "writeProjectContext"}, {"system_prompt.go", "writeToolchains"},
+		{"system_prompt.go", "writeProjectFiles"}, {"system_prompt.go", "writePlan"},
 		{"tool_schema.go", "buildToolDescriptionsExcluding"},
 	} {
 		text := readSourceForTest(t, c.file)
@@ -3759,11 +3759,11 @@ func textsFrom(src, marker string, width int) []string {
 
 // The prompt never sees them.
 func TestTheSystemPromptNeverReadsThePolicyFields(t *testing.T) {
-	prompt, _ := os.ReadFile("agent.go")
+	prompt, _ := os.ReadFile("system_prompt.go")
 	for _, fn := range []string{"buildSystemPrompt", "writeProjectContext", "writeToolchains", "writeProjectFiles", "writePlan"} {
 		i := strings.Index(string(prompt), "func "+fn)
 		if i < 0 {
-			t.Fatalf("agent.go holds no func %s, so the prompt check reads nothing; name the file that holds it", fn)
+			t.Fatalf("system_prompt.go holds no func %s, so the prompt check reads nothing; name the file that holds it", fn)
 		}
 		end := strings.Index(string(prompt)[i+1:], "\nfunc ")
 		if end < 0 {
@@ -3974,16 +3974,12 @@ func verificationDemandRun(t *testing.T, prompt string, contract *TaskContract,
 }
 
 func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// Two call sites, both shared by the done and text exits: the finalizer
 	// decides the terminal, and exitGates asks the same owner earlier so the
 	// run is told what it still owes while it can act on it.
 	if n := strings.Count(body, "decideVerificationDemand("); n != 2 {
-		t.Fatalf("agent.go calls decideVerificationDemand %d times; want the finalizer "+
+		t.Fatalf("the agent loop calls decideVerificationDemand %d times; want the finalizer "+
 			"and the exit gates, which both exits share", n)
 	}
 	i := strings.Index(body, "func finalizeCompletion")

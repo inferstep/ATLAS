@@ -333,13 +333,12 @@ func TestCanonicalAliasesStillDedupe(t *testing.T) {
 // meant -- and two places deciding is how the contract list and the prose
 // heuristic became a union the first time.
 func TestGatesReadTheDecisionNotTheRawKnowledgeFields(t *testing.T) {
-	for _, file := range append([]string{"guardrails.go", "gates.go",
+	for _, file := range append(append([]string{"guardrails.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
-		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go",
-		"agent.go"}, toolFiles...) {
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"}, agentFiles...), toolFiles...) {
 		src := readSourceForTest(t, file)
 		for _, sym := range []string{"OutputKnowledge", "VerificationKnowledge"} {
 			// validateTaskContract owns normalisation and lives in agent.go.
@@ -576,10 +575,10 @@ func TestProvenancePresenceDoesNotChangeAuthorization(t *testing.T) {
 }
 
 func TestNoProductionCallerConsultsProvenanceYet(t *testing.T) {
-	for _, file := range append([]string{"v3_bridge.go", "agent.go", "gates.go",
+	for _, file := range append(append([]string{"v3_bridge.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
-		"gates_syntax_rejection.go", "gates_workspace_alignment.go"}, toolFiles...) {
+		"gates_syntax_rejection.go", "gates_workspace_alignment.go"}, agentFiles...), toolFiles...) {
 		src := readSourceForTest(t, file)
 		for _, fn := range []string{"MayAuthorize(", "BindsTo("} {
 			if strings.Contains(src, fn) {

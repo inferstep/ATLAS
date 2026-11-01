@@ -91,7 +91,10 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | 文件 | 职责 |
 |---|---|
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
-| `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、卡死循环断路器 |
+| `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
+| `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
+| `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
+| `agent.go` | agent 循环：轮次状态、计划生成、卡死循环断路器 |
 | `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
@@ -300,7 +303,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。
 2. **条件式 GBNF 语法**（`proxy/tool_schema.go`，
-   `proxy/agent.go:stepExclusions`）。当一个 write_file 对
+   `proxy/llm_call.go:stepExclusions`）。当一个 write_file 对
    一个 >5 行的已有 .py/.html/.htm 文件被拒绝时，下一次 LLM 调用会
    被一个 GBNF 语法约束，该语法从工具名产生式中禁掉
    edit_file 和 write_file。模型在物理上无法发出

@@ -82,11 +82,7 @@ func TestEveryTerminalDisclosureRefusesCompletion(t *testing.T) {
 // The model's own `done` is untouched: it is not a breaker terminal and this
 // change must not alter ordinary clean completion.
 func TestModelIssuedDoneIsUnchanged(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// The model-issued done path streams the model's own summary verbatim.
 	if !strings.Contains(body, `case "done":`) {
 		t.Fatal("model-issued done branch is gone")
@@ -362,11 +358,7 @@ func TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal(t *testing.T) {
 // silently attaching recovery to them would turn an evidence-bound action
 // into a routine one.
 func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// Two sites, both deliberate: the repeat detector's terminal (Phase 3B)
 	// and the work-deadline finaliser (Phase 2B), which reuses the same
 	// eligibility rules rather than relaxing them for a timeout.
@@ -402,11 +394,7 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 // terminal with no status, which consumers must read as incomplete -- so the
 // defect would be invisible in behaviour and visible only here.
 func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	if n := strings.Count(body, `Stream("done"`); n != 1 {
 		t.Errorf("%d direct done payloads outside the emitter, want 0", n-1)
 	}
@@ -1270,11 +1258,7 @@ func TestRefusedUnsafeMutationsCannotComplete(t *testing.T) {
 // Structural guard: both exits must reach the SAME finalizer, so a future
 // producer cannot consult unmet-action evidence only for prose.
 func TestBothCompletionPathsShareOneDecision(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	if n := strings.Count(body, "finalizeCompletion("); n < 3 {
 		t.Errorf("finalizeCompletion has %d references (definition + 2 exits expected); "+
 			"both completion paths must share one decision", n)

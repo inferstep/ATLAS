@@ -12,7 +12,7 @@
   "sandbox/executor_server.py:_syntax_check_impl": 123
  },
  "files": {
-  "proxy/agent.go": 10797,
+  "proxy/agent.go": 7984,
   "sandbox/executor_server.py": 2059,
   "v3-service/pipeline.py": 2700
  }
