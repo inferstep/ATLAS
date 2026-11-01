@@ -1079,6 +1079,8 @@ curl http://localhost:30820/health
 # {"status": "healthy", "limits_enforced": true, "resource_limits": "enforced"}
 ```
 
+On a host where the sandbox cannot govern child processes, `limits_enforced` is `false`, `resource_limits` is `"resource limits not enforced"`, and `resource_limits_reason` says why.
+
 ---
 
 ## llama-server (Port 8080)

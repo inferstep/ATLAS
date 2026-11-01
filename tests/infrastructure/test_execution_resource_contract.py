@@ -447,6 +447,25 @@ def test_self_check_detects_probe_not_found(tmp_path):
     assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
 
 
+def test_self_check_survives_a_probe_that_will_not_be_reaped(tmp_path, monkeypatch):
+    """A probe stuck in the kernel reads as unenforced limits, and the check still returns."""
+    class StuckProbe:
+        pid = 2 ** 30  # no such process
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("probe", timeout)
+
+    monkeypatch.setattr(rc.subprocess, "Popen", lambda *args, **kwargs: StuckProbe())
+    monkeypatch.setattr(rc, "_kill_group", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rc, "_kill_token", lambda *args, **kwargs: None)
+    ok, reason = rc.check_process_supervision(proc_dir=str(tmp_path))
+    assert ok is False
+    assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
+
+
 def test_health_reports_degraded_state_when_supervision_unavailable(monkeypatch, tmp_path):
     """The /health endpoint and execution results report when resource limits are not enforced."""
     monkeypatch.syspath_prepend(SANDBOX)

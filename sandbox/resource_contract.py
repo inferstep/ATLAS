@@ -449,7 +449,7 @@ def check_process_supervision(proc_dir: str = "/proc") -> tuple[bool, str]:
                 _kill_group(proc.pid, 0.1, proc_dir=proc_dir)
             with contextlib.suppress(OSError):
                 _kill_token(token, 0.1, proc_dir=proc_dir)
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
                 proc.kill()
                 proc.wait(timeout=2)
 
