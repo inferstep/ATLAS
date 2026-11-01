@@ -629,6 +629,33 @@ func TestALowBudgetSkipsDebtRecovery(t *testing.T) {
 	}
 }
 
+// Only a deadline too close to act on skips it, not having a deadline at all.
+func TestAGenerousBudgetStillOffersDebtRecovery(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	workCtx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	ctx.Ctx = workCtx
+	st := &runState{}
+	args, _ := json.Marshal(map[string]string{"path": "a.py", "content": "@fenced"})
+	noteMutationIntent(ctx, st, "write_file", args)
+	if offerDebtRecovery(ctx, st) == "" {
+		t.Error("recovery was skipped with an hour of budget left")
+	}
+}
+
+// A write the workspace check refuses is not work the session owes.
+func TestAPathOutsideTheWorkspaceOwesNoWork(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	outside, _ := json.Marshal(map[string]string{"path": "/etc/hosts", "content": "x"})
+	if got := mutationIntentTargets(ctx, "write_file", outside); got != nil {
+		t.Errorf("a path outside the workspace was tracked: %+v", got[0])
+	}
+	inside, _ := json.Marshal(map[string]string{"path": "a.py", "content": "x"})
+	if got := mutationIntentTargets(ctx, "write_file", inside); len(got) != 1 {
+		t.Errorf("a path inside the workspace gave %d entries, want 1", len(got))
+	}
+}
+
 func TestASamePathCorrectionSettlesDebtWithoutDeletion(t *testing.T) {
 	dir := t.TempDir()
 	var step2 int

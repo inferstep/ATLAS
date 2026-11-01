@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // --- Ignored write_file steering ---------------------------------------------
@@ -440,6 +442,50 @@ func TestUnreadSteerRecoveryShowsTheFile(t *testing.T) {
 	}
 	if terminal["reason"] != "repeated_refusal" {
 		t.Errorf("reason=%q, want repeated_refusal", terminal["reason"])
+	}
+}
+
+// A file too long to show whole is shown by its head, and the model owns only
+// that: the lines past it stay unread.
+func TestASteerRecoveryOfALongFileRecordsOnlyItsHead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "long.py")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x = 1\n", fencedRecoveryMaxLines+50)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier2Medium)
+	st := &runState{}
+
+	var note string
+	for i := 0; i < steerRecoveryRepeat; i++ {
+		note = steerRecovery(ctx, st, "long.py", path, true)
+	}
+
+	if want := fmt.Sprintf("(first %d lines)", fencedRecoveryMaxLines); !strings.Contains(note, want) {
+		t.Errorf("the recovery does not say %q: %.120s", want, note)
+	}
+	if !ctx.LineWasShown(path, fencedRecoveryMaxLines) {
+		t.Error("the last line of the head was not recorded as shown")
+	}
+	if ctx.LineWasShown(path, fencedRecoveryMaxLines+1) {
+		t.Error("a line past the head was recorded as shown")
+	}
+}
+
+func TestALowBudgetSkipsSteerRecovery(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	workCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ctx.Ctx = workCtx
+	st := &runState{}
+
+	var note string
+	for i := 0; i < steerRecoveryRepeat; i++ {
+		note = steerRecovery(ctx, st, "app.py", filepath.Join(ctx.WorkingDir, "app.py"), false)
+	}
+
+	if note != "" {
+		t.Errorf("recovery ran with less budget than it needs to be acted on: %.120s", note)
 	}
 }
 
