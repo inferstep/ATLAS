@@ -67,27 +67,29 @@ func TestARefusedDeletionReachesTheUserAndTheModelAsItsReason(t *testing.T) {
 			if asked := r.census["permission_request"]; asked != 0 {
 				t.Errorf("%d prompt(s) were shown for a deletion the proxy refuses before asking", asked)
 			}
-			read := map[string][]string{
-				"the permission_denied event": r.eventsOf("permission_denied"),
-				"the tool_result event":       r.eventsOf("tool_result"),
-				"the message to the model":    r.toolMessages("delete_file"),
-			}
-			for where, texts := range read {
-				if len(texts) != 1 {
-					t.Errorf("%s: %d found, want 1: %q", where, len(texts), texts)
-					continue
-				}
-				if !strings.Contains(texts[0], tc.reason) {
-					t.Errorf("%s does not give the reason %q: %s", where, tc.reason, texts[0])
-				}
-				if strings.Contains(texts[0], userDenied) {
-					t.Errorf("%s says the user denied a deletion nobody was asked about: %s", where, texts[0])
-				}
-			}
+			checkRefusalReason(t, "the permission_denied event", r.eventsOf("permission_denied"), tc.reason)
+			checkRefusalReason(t, "the tool_result event", r.eventsOf("tool_result"), tc.reason)
+			checkRefusalReason(t, "the message to the model", r.toolMessages("delete_file"), tc.reason)
 			if _, err := os.Stat(filepath.Join(r.dir, "a.py")); err != nil {
 				t.Errorf("a.py is gone after a refused deletion: %v", err)
 			}
 		})
+	}
+}
+
+// checkRefusalReason expects one text at one place, giving the refusal's own
+// reason and never a denial by the user.
+func checkRefusalReason(t *testing.T, where string, texts []string, reason string) {
+	t.Helper()
+	if len(texts) != 1 {
+		t.Errorf("%s: %d found, want 1: %q", where, len(texts), texts)
+		return
+	}
+	if !strings.Contains(texts[0], reason) {
+		t.Errorf("%s does not give the reason %q: %s", where, reason, texts[0])
+	}
+	if strings.Contains(texts[0], userDenied) {
+		t.Errorf("%s says the user denied a deletion nobody was asked about: %s", where, texts[0])
 	}
 }
 
