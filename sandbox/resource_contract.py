@@ -270,8 +270,10 @@ class BoundedResult:
 
 # --- process-group accounting ------------------------------------------------
 
+PROC_DIR = "/proc"
 
-def _pids_in_group(pgid: int, proc_dir: str = "/proc") -> List[int]:
+
+def _pids_in_group(pgid: int, proc_dir: str = PROC_DIR) -> List[int]:
     """Every live process in the group, read from /proc.
 
     The group is the unit because the thing that kills a host is rarely one
@@ -297,7 +299,7 @@ def _pids_in_group(pgid: int, proc_dir: str = "/proc") -> List[int]:
     return out
 
 
-def _rss_bytes(pid: int, proc_dir: str = "/proc") -> int:
+def _rss_bytes(pid: int, proc_dir: str = PROC_DIR) -> int:
     """This process's PEAK resident set, not its current one.
 
     VmHWM is a kernel-maintained high-water mark that survives until the
@@ -330,7 +332,7 @@ def group_usage(pgid: int, token: str = "") -> tuple:
 EXEC_TOKEN_VAR = "ATLAS_EXEC_TOKEN"
 
 
-def _token_holders(token: str, proc_dir: str = "/proc") -> List[int]:
+def _token_holders(token: str, proc_dir: str = PROC_DIR) -> List[int]:
     """Every live process carrying this execution's token.
 
     The process group is not enough. `(cmd &)`, a double fork, or an explicit
@@ -359,7 +361,7 @@ def _token_holders(token: str, proc_dir: str = "/proc") -> List[int]:
     return found
 
 
-def _kill_token(token: str, grace: float, proc_dir: str = "/proc") -> int:
+def _kill_token(token: str, grace: float, proc_dir: str = PROC_DIR) -> int:
     """End everything carrying the token. Returns how many were still alive."""
     victims = _token_holders(token, proc_dir=proc_dir)
     if not victims:
@@ -379,7 +381,7 @@ def _kill_token(token: str, grace: float, proc_dir: str = "/proc") -> int:
     return len(_token_holders(token, proc_dir=proc_dir))
 
 
-def _kill_group(pgid: int, grace: float, proc_dir: str = "/proc") -> None:
+def _kill_group(pgid: int, grace: float, proc_dir: str = PROC_DIR) -> None:
     """End the group and everything in it, politely then not.
 
     Called on every path including the ordinary one: a command that exits
@@ -403,7 +405,7 @@ SUPERVISION_UNAVAILABLE_REASON = (
 )
 
 
-def check_process_supervision(proc_dir: str = "/proc") -> tuple[bool, str]:
+def check_process_supervision(proc_dir: str = PROC_DIR) -> tuple[bool, str]:
     """Verify that this host can observe and govern child processes through /proc.
 
     Spawns one short-lived probe process in its own session carrying an execution
