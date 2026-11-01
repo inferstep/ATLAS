@@ -227,7 +227,7 @@ function predictEditFile(
 		return { path, kind: 'file', left: current, right: current.split(oldStr).join(newStr), approximate: false };
 	}
 	// Without replace_all the proxy requires a UNIQUE match and rejects the
-	// call otherwise (proxy/tools.go uniqueness check) — a first-occurrence
+	// call otherwise (proxy/tool_edit.go uniqueness check) — a first-occurrence
 	// splice labeled exact would show a diff that can never apply.
 	const count = current.split(oldStr).length - 1;
 	if (count > 1) {
@@ -275,7 +275,7 @@ function predictStructuralEdit(path: string, current: string | undefined, select
 		if (tag[1].toLowerCase() === 'html') {
 			// Mirror the proxy's <html>-selector quirk: the element replace
 			// does not cover a preceding <!DOCTYPE>, so the proxy strips a
-			// leading doctype from the content (proxy/tools.go).
+			// leading doctype from the content (proxy/tool_structural_edit.go).
 			body = stripLeadingDoctype(body);
 		}
 		const spliced = spliceHtmlElement(current, tag[1], body);
