@@ -323,9 +323,10 @@ func TestTheSessionWriteMapIsUnchangedForItsOtherReaders(t *testing.T) {
 	if n := strings.Count(body, "ctx.SessionWrites[in.Path] = true"); n != 2 {
 		t.Errorf("insert_after/replace_lines registrations changed: %d, want 2", n)
 	}
-	for _, tool := range []string{"editFileTool", "structuralEditTool"} {
+	for tool, spanEnd := range map[string]string{"editFileTool": "\nfunc structuralEditTool(",
+		"structuralEditTool": "\nfunc "} {
 		start := strings.Index(body, "func "+tool+"(")
-		end := strings.Index(body[start+1:], "\nfunc ")
+		end := strings.Index(body[start+1:], spanEnd)
 		if strings.Contains(body[start:start+1+end], "SessionWrites[") {
 			t.Errorf("%s now writes the session map; coverage comes from the ledger instead", tool)
 		}
