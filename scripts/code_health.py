@@ -7,6 +7,10 @@ listed in .github/code-health-baseline.json with its size then. It may
 shrink but not grow. So the check stops new oversized code and keeps the
 old from getting worse while it is refactored.
 
+It also names the folders with more than FOLDER_SOFT_MAX entries. That is a
+note and never a failure: a sub-folder that makes a list harder to read is no
+gain, so a folder can stay flat with a reason.
+
 Usage:
   scripts/code_health.py           check; exit 1 on a new or grown item
   scripts/code_health.py --update  write the baseline from the current code
@@ -25,12 +29,16 @@ import ast
 import json
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASELINE = os.path.join(ROOT, ".github", "code-health-baseline.json")
 FUNC_MAX = 100
 FILE_MAX = 1500
+FOLDER_SOFT_MAX = 25
+# GitHub reads workflows from this folder only, and never from a sub-folder.
+FLAT_BY_NECESSITY = {".github/workflows"}
 
 GO_DIRS = ("proxy", "tui")
 PY_DIRS = ("atlas", "v3-service", "geometric-lens", "sandbox", "scripts")
@@ -107,6 +115,23 @@ def measure() -> tuple:
     return funcs, files, totals
 
 
+def tracked_paths() -> list:
+    """Every path git tracks. Outside a checkout there are none, so no note."""
+    out = subprocess.run(["git", "-C", ROOT, "ls-files"], capture_output=True, text=True, check=False)
+    return out.stdout.splitlines()
+
+
+def crowded_folders(paths: list) -> dict:
+    """{folder: entries} over FOLDER_SOFT_MAX, counting files and sub-folders."""
+    entries: dict = {}
+    for path in paths:
+        parts = path.split("/")
+        for depth, part in enumerate(parts):
+            entries.setdefault("/".join(parts[:depth]) or ".", set()).add(part)
+    return {folder: len(names) for folder, names in entries.items()
+            if len(names) > FOLDER_SOFT_MAX and folder not in FLAT_BY_NECESSITY}
+
+
 def load_baseline() -> dict:
     try:
         with open(BASELINE, encoding="utf-8") as fh:
@@ -160,6 +185,10 @@ def main() -> int:
     if shrunk:
         print(f"note: {len(shrunk)} baseline item(s) got smaller or went away; "
               "run scripts/code_health.py --update and commit the baseline")
+    crowded = crowded_folders(tracked_paths())
+    if crowded:
+        listed = ", ".join(f"{folder} ({n})" for folder, n in sorted(crowded.items(), key=lambda kv: -kv[1]))
+        print(f"note: {len(crowded)} folder(s) over {FOLDER_SOFT_MAX} entries: {listed}")
     if problems:
         print("See docs/CODE_STYLE.md: split the function or file into parts with one job each.")
         return 1

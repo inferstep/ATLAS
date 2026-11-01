@@ -5,7 +5,7 @@
  },
  "functions": {
   "geometric-lens/geometric_lens/training.py:train_gx": 132,
-  "proxy/agent.go:runAgentLoop": 152,
+  "proxy/agent.go:runAgentLoop": 151,
   "proxy/candidate_delivery.go:deliverCandidateBytes": 128,
   "proxy/gates.go:assetLintFindingsFor": 118,
   "sandbox/executor_server.py:_syntax_check_impl": 123

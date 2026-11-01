@@ -40,6 +40,13 @@ def test_new_and_grown_items_fail_and_shrunk_ones_pass():
     assert not any("small" in p or "big.go" in p for p in problems)
 
 
+def test_a_folder_over_the_soft_limit_counts_files_and_sub_folders():
+    paths = [f"crowded/file{i}" for i in range(20)] + [f"crowded/sub{i}/file" for i in range(6)]
+    paths += [f"fits/file{i}" for i in range(25)]
+    paths += [f".github/workflows/file{i}.yml" for i in range(30)]
+    assert ch.crowded_folders(paths) == {"crowded": 26}
+
+
 def test_the_committed_baseline_matches_the_code():
     funcs, files, _ = ch.measure()
     assert ch.check(funcs, files, ch.load_baseline()) == [], (
