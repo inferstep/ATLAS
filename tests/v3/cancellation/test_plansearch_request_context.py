@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
@@ -128,7 +128,7 @@ class Relay(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-@pytest.fixture()
+@pytest.fixture
 def relay():
     Relay.allowed = set()
     Relay.calls = []
@@ -226,7 +226,8 @@ def test_two_concurrent_parents_never_exchange_ids(relay):
         assert call["request_id"] == expected, (
             f"seed {seed} was sent under {call['request_id']}")
         assert call["invocation_id"] == expected.replace("req-", "inv-")
-    assert out["A"].candidates and out["B"].candidates
+    assert out["A"].candidates
+    assert out["B"].candidates
 
 
 def test_cancelling_one_parent_leaves_the_other_running(relay):
@@ -297,8 +298,9 @@ def test_missing_identity_is_visible_not_candidate_scarcity(relay):
     llm.cancel_scope = adapters.CancelScope(invocation_id="inv-A")
     llm.request_identity = None  # the wiring defect
 
+    stage = _stage()
     with pytest.raises(PlanSearchInfrastructureError):
-        _stage().generate("sum the file", "t1", llm, num_plans=3)
+        stage.generate("sum the file", "t1", llm, num_plans=3)
     assert relay.calls == [], "an unattributed call reached the upstream"
 
 
@@ -311,8 +313,9 @@ def test_refused_fan_out_raises_instead_of_returning_empty(relay):
     relay.allowed = {"req-OTHER"}  # this request's ID is not on the list
     llm = _adapter("req-A", "inv-A")
 
+    stage = _stage()
     with pytest.raises(PlanSearchInfrastructureError) as caught:
-        _stage().generate("sum the file", "t1", llm, num_plans=3)
+        stage.generate("sum the file", "t1", llm, num_plans=3)
     assert caught.value.failures
     assert relay.refusals, "expected the upstream to refuse"
     # The tokens already spent stay on the ledger.
@@ -352,9 +355,9 @@ def test_infrastructure_and_model_failures_are_counted_apart(relay, tmp_path):
                                  _adapter("req-A", "inv-A"), num_plans=3)
 
     relay.allowed = {"req-OTHER"}
+    stage, adapter = _stage(str(events)), _adapter("req-A", "inv-A")
     with pytest.raises(PlanSearchInfrastructureError):
-        _stage(str(events)).generate("sum the file", "t2",
-                                     _adapter("req-A", "inv-A"), num_plans=3)
+        stage.generate("sum the file", "t2", adapter, num_plans=3)
 
     rows = [json.loads(x) for x in events.read_text().splitlines() if x.strip()]
     healthy = next(r for r in rows if r["task_id"] == "t1")
@@ -427,7 +430,8 @@ def test_no_request_means_no_identity_and_no_header(relay):
     attribute it to."""
     relay.allowed = {""}  # the enforcing upstream happens to allow it
     llm = adapters.LLMAdapter()
-    assert llm.cancel_scope is None and llm.request_identity is None
+    assert llm.cancel_scope is None
+    assert llm.request_identity is None
     headers = llm._inference_headers()
     assert adapters.REQUEST_ID_HEADER not in headers
     assert headers["Content-Type"] == "application/json"

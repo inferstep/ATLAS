@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 SERVICES = ["v3-service", "geometric-lens", "sandbox-service"]
 
 # Constructs that start work somewhere the current context does not follow by
@@ -170,12 +170,9 @@ def test_inference_path_takes_no_contextvar_fallback():
         "to the ContextVar")
 
 
-def test_missing_identity_under_a_request_raises():
+def test_missing_identity_under_a_request_raises(monkeypatch):
     """Fail closed: serving a request with no identity is a wiring error."""
-    import sys
-    v3 = str(ROOT / "v3-service")
-    if v3 not in sys.path:
-        sys.path.insert(0, v3)
+    monkeypatch.syspath_prepend(str(ROOT / "v3-service"))
     import adapters
 
     llm = adapters.LLMAdapter()

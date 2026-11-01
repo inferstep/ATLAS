@@ -98,9 +98,10 @@ def test_the_run_plans_against_the_callers_cap(monkeypatch):
     monkeypatch.setenv("ATLAS_V3_TIMEOUT", "300")
     monkeypatch.setattr(adapters, "LLMAdapter", RecordingLLM)
     monkeypatch.setattr(adapters, "SandboxAdapter", no_sandbox)
+    service = pipeline.V3PipelineService()
     before = time.time()
     with pytest.raises(Stop):
-        pipeline.V3PipelineService().run(
+        service.run(
             "write a helper", task_id="budget", file_path="helper.py",
             budget_ms=40_000)
     assert made, "the run never built its generation adapter"

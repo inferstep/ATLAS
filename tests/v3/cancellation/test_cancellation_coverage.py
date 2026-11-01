@@ -11,7 +11,7 @@ import os
 import re
 import sys
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 sys.path.insert(0, V3)
 import adapters
 

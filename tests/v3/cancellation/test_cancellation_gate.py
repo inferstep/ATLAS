@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "v3-service"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service"))
 import adapters
 
 
@@ -125,9 +125,11 @@ class FakeConn:
 def test_cancel_closes_every_live_connection():
     scope = adapters.CancelScope("inv-1")
     a, b = FakeConn(), FakeConn()
-    assert scope.register(a) and scope.register(b)
+    assert scope.register(a)
+    assert scope.register(b)
     assert scope.cancel() == 2
-    assert a.closed == 1 and b.closed == 1
+    assert a.closed == 1
+    assert b.closed == 1
     assert scope.cancelled
 
 
@@ -152,7 +154,8 @@ def test_one_scope_never_touches_another():
     mine.register(ours)
     theirs.register(yours)
     mine.cancel()
-    assert ours.closed == 1 and yours.closed == 0
+    assert ours.closed == 1
+    assert yours.closed == 0
     assert theirs.cancelled is False
 
 

@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
@@ -181,7 +181,7 @@ def test_a_cancellation_record_carries_exactly_the_bound_ids(bound, expected_ids
 # --- the governed copies stay identical --------------------------------------
 
 def test_governed_logger_copies_remain_byte_identical():
-    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
     copies = [
         os.path.join(root, "geometric-lens", "geometric_lens", "structured_log.py"),
         os.path.join(root, "sandbox", "structured_log.py"),

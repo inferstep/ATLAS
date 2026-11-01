@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-V3 = os.path.join(os.path.dirname(__file__), "..", "..", "v3-service")
+V3 = os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service")
 if V3 not in sys.path:
     sys.path.insert(0, V3)
 
@@ -69,7 +69,7 @@ class Upstream(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
-@pytest.fixture()
+@pytest.fixture
 def upstream():
     Upstream.seen_bodies = []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
@@ -141,7 +141,8 @@ def test_delta_keys_and_length_remain_observable(upstream):
     assert "first delta keys=" in logs, "the first-delta diagnostic disappeared"
     assert "content_chars=" in logs, "content length is no longer observable"
     m = re.search(r"content_chars=(\d+)", logs)
-    assert m and int(m.group(1)) > 0
+    assert m
+    assert int(m.group(1)) > 0
 
 
 def test_identity_remains_available_for_joins(upstream):
@@ -200,7 +201,8 @@ def test_logging_does_not_alter_the_outbound_payload_or_the_result(upstream):
     body_b = Upstream.seen_bodies[-1]
 
     assert json.loads(body_a) == json.loads(body_b), "the outbound payload moved"
-    assert content_a == content_b and tok_a == tok_b
+    assert content_a == content_b
+    assert tok_a == tok_b
 
 
 def test_json_mode_off_still_works_and_stays_clean(upstream, monkeypatch):
@@ -276,7 +278,8 @@ def test_token_stage_detail_is_never_logged_verbatim():
     safe = _safe_detail()
     out = safe("token", CANDIDATE_CODE)
     assert CANDIDATE_SENTINEL not in out
-    assert out.startswith("<") and "chars>" in out
+    assert out.startswith("<")
+    assert "chars>" in out
 
 
 def test_multiline_detail_is_reduced_whatever_the_stage():

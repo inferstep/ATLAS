@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "v3-service"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "v3-service"))
 import pipeline
 
 
@@ -49,7 +49,9 @@ def test_candidate_id_is_content_derived_and_stable(tmp_path, monkeypatch):
     a = cap.candidate_id("print('a')\n")
     b = cap.candidate_id("print('a')\n")
     c = cap.candidate_id("print('b')\n")
-    assert a == b and a != c and len(a) == 12
+    assert a == b
+    assert a != c
+    assert len(a) == 12
     assert cap.candidate_id("") == ""
     cap.close(None)
 
