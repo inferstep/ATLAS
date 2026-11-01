@@ -27,6 +27,15 @@ type bgWorld struct {
 	prompts  []string // what the model was told, request by request
 	terminal map[string]string
 	mu       sync.Mutex
+	jobs     map[string]bgJob
+	turn     int
+}
+
+// bgJob is what the stubbed sandbox holds for one started job.
+type bgJob struct {
+	stderr  []string
+	exit    int
+	running bool
 }
 
 // told reports whether any request to the model carried this text.
@@ -55,7 +64,7 @@ func startBgWorldWith(t *testing.T, files map[string]string, script []string,
 	jobFor func(cmd string, w *bgWorld) (stderr []string, exit int, running bool),
 	setup func(*AgentContext)) *bgWorld {
 	t.Helper()
-	w := &bgWorld{dir: t.TempDir(), terminal: map[string]string{}}
+	w := &bgWorld{dir: t.TempDir(), terminal: map[string]string{}, jobs: map[string]bgJob{}}
 	for name, body := range files {
 		full := filepath.Join(w.dir, name)
 		_ = os.MkdirAll(filepath.Dir(full), 0o755)
@@ -63,99 +72,10 @@ func startBgWorldWith(t *testing.T, files map[string]string, script []string,
 			t.Fatal(err)
 		}
 	}
-	jobs := map[string]struct {
-		stderr  []string
-		exit    int
-		running bool
-	}{}
-	turn := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/syntax-check"):
-			json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
-			return
-		case strings.HasSuffix(r.URL.Path, "/jobs/start"):
-			var in struct{ Command, Cwd string }
-			json.NewDecoder(r.Body).Decode(&in)
-			w.mu.Lock()
-			w.executed = append(w.executed, in.Command)
-			w.mu.Unlock()
-			stderr, exit, running := jobFor(in.Command, w)
-			id := fmt.Sprintf("job%d", len(jobs)+1)
-			jobs[id] = struct {
-				stderr  []string
-				exit    int
-				running bool
-			}{stderr, exit, running}
-			json.NewEncoder(rw).Encode(map[string]interface{}{"job_id": id, "pid": 100 + len(jobs)})
-			return
-		case strings.Contains(r.URL.Path, "/jobs/") && strings.HasSuffix(r.URL.Path, "/stop"):
-			id := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")[0]
-			if j, ok := jobs[id]; ok {
-				j.running = false
-				j.exit = -15
-				jobs[id] = j
-			}
-			json.NewEncoder(rw).Encode(map[string]interface{}{"job_id": id, "killed": true, "exit_code": -15})
-			return
-		case strings.Contains(r.URL.Path, "/jobs/") && strings.HasSuffix(r.URL.Path, "/output"):
-			id := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")[0]
-			j := jobs[id]
-			body := map[string]interface{}{"job_id": id, "running": j.running, "stdout": []string{}, "stderr": j.stderr}
-			if !j.running {
-				body["exit_code"] = j.exit
-			}
-			json.NewEncoder(rw).Encode(body)
-			return
-		case strings.HasSuffix(r.URL.Path, "/shell"):
-			var in struct{ Command string }
-			json.NewDecoder(r.Body).Decode(&in)
-			w.mu.Lock()
-			w.executed = append(w.executed, in.Command)
-			w.mu.Unlock()
-			json.NewEncoder(rw).Encode(map[string]interface{}{
-				"stdout": "ok\n", "stderr": "", "exit_code": 0, "success": true})
-			return
-		case strings.HasSuffix(r.URL.Path, "/execute"):
-			var in struct{ Code, Command string }
-			b, _ := io.ReadAll(r.Body)
-			_ = json.Unmarshal(b, &in)
-			cmd := in.Command
-			if cmd == "" {
-				cmd = in.Code
-			}
-			w.mu.Lock()
-			if !strings.Contains(cmd, ".atlas-mount-probe") {
-				w.executed = append(w.executed, cmd)
-			}
-			w.mu.Unlock()
-			out := ""
-			if strings.Contains(cmd, ".atlas-mount-probe") {
-				p, _ := os.ReadFile(filepath.Join(w.dir, ".atlas-mount-probe"))
-				out = string(p)
-			}
-			json.NewEncoder(rw).Encode(map[string]interface{}{"success": true, "stdout": out, "exit_code": 0})
-			return
-		case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
-			http.Error(rw, "unavailable", http.StatusServiceUnavailable)
-			return
-		case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
-			http.NotFound(rw, r)
-			return
+		if !w.serveSandbox(rw, r, jobFor) {
+			w.serveModel(rw, r, script)
 		}
-		body, _ := io.ReadAll(r.Body)
-		w.mu.Lock()
-		k := turn
-		turn++
-		w.prompts = append(w.prompts, string(body))
-		w.mu.Unlock()
-		rw.Header().Set("Content-Type", "text/event-stream")
-		out := `{"type":"done","summary":"finished"}`
-		if k < len(script) {
-			out = script[k]
-		}
-		d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": out}}}})
-		fmt.Fprintf(rw, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -184,6 +104,93 @@ func startBgWorldWith(t *testing.T, files map[string]string, script []string,
 		t.Fatal(err)
 	}
 	return w
+}
+
+// serveSandbox answers the routes of the stubbed services, and reports whether
+// it answered. What is left is the model's.
+func (w *bgWorld) serveSandbox(rw http.ResponseWriter, r *http.Request,
+	jobFor func(cmd string, w *bgWorld) (stderr []string, exit int, running bool)) bool {
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/syntax-check"):
+		json.NewEncoder(rw).Encode(map[string]interface{}{"valid": true})
+	case strings.HasSuffix(r.URL.Path, "/jobs/start"):
+		var in struct{ Command, Cwd string }
+		json.NewDecoder(r.Body).Decode(&in)
+		w.mu.Lock()
+		w.executed = append(w.executed, in.Command)
+		w.mu.Unlock()
+		stderr, exit, running := jobFor(in.Command, w)
+		id := fmt.Sprintf("job%d", len(w.jobs)+1)
+		w.jobs[id] = bgJob{stderr, exit, running}
+		json.NewEncoder(rw).Encode(map[string]interface{}{"job_id": id, "pid": 100 + len(w.jobs)})
+	case strings.Contains(r.URL.Path, "/jobs/") && strings.HasSuffix(r.URL.Path, "/stop"):
+		id := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")[0]
+		if j, ok := w.jobs[id]; ok {
+			j.running = false
+			j.exit = -15
+			w.jobs[id] = j
+		}
+		json.NewEncoder(rw).Encode(map[string]interface{}{"job_id": id, "killed": true, "exit_code": -15})
+	case strings.Contains(r.URL.Path, "/jobs/") && strings.HasSuffix(r.URL.Path, "/output"):
+		id := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")[0]
+		j := w.jobs[id]
+		body := map[string]interface{}{"job_id": id, "running": j.running, "stdout": []string{}, "stderr": j.stderr}
+		if !j.running {
+			body["exit_code"] = j.exit
+		}
+		json.NewEncoder(rw).Encode(body)
+	case strings.HasSuffix(r.URL.Path, "/shell"):
+		var in struct{ Command string }
+		json.NewDecoder(r.Body).Decode(&in)
+		w.mu.Lock()
+		w.executed = append(w.executed, in.Command)
+		w.mu.Unlock()
+		json.NewEncoder(rw).Encode(map[string]interface{}{
+			"stdout": "ok\n", "stderr": "", "exit_code": 0, "success": true})
+	case strings.HasSuffix(r.URL.Path, "/execute"):
+		var in struct{ Code, Command string }
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &in)
+		cmd := in.Command
+		if cmd == "" {
+			cmd = in.Code
+		}
+		w.mu.Lock()
+		if !strings.Contains(cmd, ".atlas-mount-probe") {
+			w.executed = append(w.executed, cmd)
+		}
+		w.mu.Unlock()
+		out := ""
+		if strings.Contains(cmd, ".atlas-mount-probe") {
+			p, _ := os.ReadFile(filepath.Join(w.dir, ".atlas-mount-probe"))
+			out = string(p)
+		}
+		json.NewEncoder(rw).Encode(map[string]interface{}{"success": true, "stdout": out, "exit_code": 0})
+	case strings.HasPrefix(r.URL.Path, "/v3/"), strings.HasPrefix(r.URL.Path, "/internal/"):
+		http.Error(rw, "unavailable", http.StatusServiceUnavailable)
+	case !strings.HasSuffix(r.URL.Path, "/v1/chat/completions"):
+		http.NotFound(rw, r)
+	default:
+		return false
+	}
+	return true
+}
+
+// serveModel sends the script's next turn.
+func (w *bgWorld) serveModel(rw http.ResponseWriter, r *http.Request, script []string) {
+	body, _ := io.ReadAll(r.Body)
+	w.mu.Lock()
+	k := w.turn
+	w.turn++
+	w.prompts = append(w.prompts, string(body))
+	w.mu.Unlock()
+	rw.Header().Set("Content-Type", "text/event-stream")
+	out := `{"type":"done","summary":"finished"}`
+	if k < len(script) {
+		out = script[k]
+	}
+	d, _ := json.Marshal(map[string]interface{}{"choices": []map[string]interface{}{{"delta": map[string]string{"content": out}}}})
+	fmt.Fprintf(rw, "data: %s\n\ndata: [DONE]\n\n", d)
 }
 
 const importsMissing = "from flask import Flask\n\napp = Flask(__name__)\n\n\n@app.route('/')\ndef index():\n    return 'hi'\n\n\nif __name__ == '__main__':\n    app.run(port=5001)\n"

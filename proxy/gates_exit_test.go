@@ -22,8 +22,6 @@ func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 	bg := &bgSandbox{running: true}
 	sandbox := newBgSandbox(t, dir, bg)
 
-	var mu sync.Mutex
-	turns := 0
 	plan := func(i int) map[string]interface{} {
 		switch i {
 		case 0:
@@ -43,6 +41,45 @@ func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 		}
 		return map[string]interface{}{"type": "done", "summary": "Built solve.py and verified it prints 7."}
 	}
+	inference := scriptedModel(t, plan)
+
+	ctx := NewAgentContext(dir, Tier2Medium)
+	ctx.InferenceURL, ctx.SandboxURL = inference.URL, sandbox.URL
+	ctx.PermissionMode = PermissionYolo
+	ctx.TrustMode = trustFullyTrusted
+	ctx.MaxTurns = 0
+	seen := &backgroundGateLog{terminal: map[string]string{}}
+	ctx.StreamFn = seen.observe
+	runAgentLoop(ctx, "Create solve.py so it prints 7.")
+
+	gates, terminal := seen.gates, seen.terminal
+	t.Logf("gates=%d status=%q reason=%q summary=%q stops=%v",
+		len(gates), terminal["status"], terminal["reason"], terminal["summary"], bg.stopped)
+	if len(gates) != 1 {
+		t.Fatalf("expected one background_gate bounce, got %d", len(gates))
+	}
+	if !strings.Contains(gates[0], "job1") || !strings.Contains(gates[0], "stop_background") {
+		t.Errorf("the gate must name the job and the call that resolves it: %s", gates[0])
+	}
+	if bg.stopped == nil || bg.stopped[0] != "job1" {
+		t.Errorf("the model's stop_background did not reach the sandbox: %v", bg.stopped)
+	}
+	if terminal["reason"] == "background_work_unresolved" {
+		t.Errorf("a stopped job still counted as unresolved: %q", terminal["summary"])
+	}
+	if !strings.Contains(terminal["summary"], "Built solve.py") {
+		t.Errorf("the model's own summary was replaced: %q", terminal["summary"])
+	}
+	if strings.Contains(terminal["summary"], "Still running") {
+		t.Errorf("a stopped job is still announced as running: %q", terminal["summary"])
+	}
+}
+
+// scriptedModel is a model server that sends plan(i) on its i-th turn.
+func scriptedModel(t *testing.T, plan func(int) map[string]interface{}) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	turns := 0
 	inference := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/slots/") {
 			http.NotFound(w, r) // this model server has no slots to erase; the erase and its retry have their own tests (slot_erase_test.go)
@@ -68,52 +105,32 @@ func TestBackgroundGateAsksForTheStopBeforeFinishing(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", d)
 	}))
 	t.Cleanup(inference.Close)
+	return inference
+}
 
-	ctx := NewAgentContext(dir, Tier2Medium)
-	ctx.InferenceURL, ctx.SandboxURL = inference.URL, sandbox.URL
-	ctx.PermissionMode = PermissionYolo
-	ctx.TrustMode = trustFullyTrusted
-	ctx.MaxTurns = 0
-	var gates []string
-	terminal := map[string]string{}
-	ctx.StreamFn = func(et string, data interface{}) {
-		b, _ := json.Marshal(data)
-		mu.Lock()
-		defer mu.Unlock()
-		if et == "gate" {
-			var g struct{ Gate, Reason string }
-			if json.Unmarshal(b, &g) == nil && g.Gate == "background_gate" {
-				gates = append(gates, g.Reason)
-			}
-		}
-		if et == "done" {
-			var m map[string]string
-			json.Unmarshal(b, &m)
-			for k, v := range m {
-				terminal[k] = v
-			}
+// backgroundGateLog keeps what a run streams about the background gate: the
+// reason of each bounce, and the terminal's fields.
+type backgroundGateLog struct {
+	mu       sync.Mutex
+	gates    []string
+	terminal map[string]string
+}
+
+func (l *backgroundGateLog) observe(et string, data interface{}) {
+	b, _ := json.Marshal(data)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if et == "gate" {
+		var g struct{ Gate, Reason string }
+		if json.Unmarshal(b, &g) == nil && g.Gate == "background_gate" {
+			l.gates = append(l.gates, g.Reason)
 		}
 	}
-	runAgentLoop(ctx, "Create solve.py so it prints 7.")
-
-	t.Logf("gates=%d status=%q reason=%q summary=%q stops=%v",
-		len(gates), terminal["status"], terminal["reason"], terminal["summary"], bg.stopped)
-	if len(gates) != 1 {
-		t.Fatalf("expected one background_gate bounce, got %d", len(gates))
-	}
-	if !strings.Contains(gates[0], "job1") || !strings.Contains(gates[0], "stop_background") {
-		t.Errorf("the gate must name the job and the call that resolves it: %s", gates[0])
-	}
-	if bg.stopped == nil || bg.stopped[0] != "job1" {
-		t.Errorf("the model's stop_background did not reach the sandbox: %v", bg.stopped)
-	}
-	if terminal["reason"] == "background_work_unresolved" {
-		t.Errorf("a stopped job still counted as unresolved: %q", terminal["summary"])
-	}
-	if !strings.Contains(terminal["summary"], "Built solve.py") {
-		t.Errorf("the model's own summary was replaced: %q", terminal["summary"])
-	}
-	if strings.Contains(terminal["summary"], "Still running") {
-		t.Errorf("a stopped job is still announced as running: %q", terminal["summary"])
+	if et == "done" {
+		var m map[string]string
+		json.Unmarshal(b, &m)
+		for k, v := range m {
+			l.terminal[k] = v
+		}
 	}
 }
