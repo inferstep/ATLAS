@@ -147,18 +147,7 @@ Apple Silicon은 macOS 하이브리드 Metal 경로(추론은 네이티브 llama
 
 ## 🗺️ 로드맵
 
-**3.2.0** ([마일스톤](https://github.com/inferstep/ATLAS/milestone/2)) - "완료"가 실제로 완료를 뜻하게 하고 `dev` 브랜치를 출시합니다.
-- 검증: "완료"와 실제로 검증된 내용의 차이를 없애고 ([#330](https://github.com/inferstep/ATLAS/issues/330)), 가드의 거부를 실패로 셉니다 ([#327](https://github.com/inferstep/ATLAS/issues/327)).
-- 안전: 샌드박스와 첫 설치를 강화하고 ([#384](https://github.com/inferstep/ATLAS/issues/384), [#410](https://github.com/inferstep/ATLAS/issues/410), [#483](https://github.com/inferstep/ATLAS/issues/483)), 서비스 토큰을 처음부터 끝까지 시험합니다 ([#212](https://github.com/inferstep/ATLAS/issues/212)). K3s도 포함합니다 ([#697](https://github.com/inferstep/ATLAS/issues/697)).
-- IDE: VS Code 확장을 프리뷰로 제공합니다.
-- 릴리스: 릴리스 후보를 최소 3일 시험하고 ([#196](https://github.com/inferstep/ATLAS/issues/196)), 서명과 빌드 증명을 붙입니다 ([#252](https://github.com/inferstep/ATLAS/issues/252), [#361](https://github.com/inferstep/ATLAS/issues/361)).
-
-**백로그 / 도움 요청**
-- 하드웨어: ARM64 멀티 아키텍처 빌드 ([#115](https://github.com/inferstep/ATLAS/issues/115)), 더 큰 모델을 위한 멀티 GPU ([#34](https://github.com/inferstep/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27)).
-- 툴링: JetBrains 플러그인 ([#35](https://github.com/inferstep/ATLAS/issues/35)).
-- 배포: K3s / Kubernetes 상의 ROCm.
-- 연구: 샘플링 기반 추론 ([#9](https://github.com/inferstep/ATLAS/issues/9)); 숨겨진 테스트로 LiveCodeBench 재실행 ([#28](https://github.com/inferstep/ATLAS/issues/28)).
-- 모델: 자동화된 HuggingFace 제출 ([#102](https://github.com/inferstep/ATLAS/issues/102)); 모델 비의존적 백엔드 ([#66](https://github.com/inferstep/ATLAS/issues/66)).
+계획 중이거나 진행 중인 작업은 [ATLAS Roadmap 보드](https://github.com/orgs/inferstep/projects/1)에서 확인할 수 있습니다.
 
 ---
 
@@ -183,7 +172,7 @@ ATLAS는 오픈으로 개발되며 기여자와 핵심 메인테이너를 환영
 
 버그를 찾았거나 벽에 부딪히셨나요? **[이슈를 열어 주세요](https://github.com/inferstep/ATLAS/issues)** — 수정까지 제출하실 필요는 없습니다. 버그 리포트와 피드백은 코드만큼이나 큰 도움이 됩니다.
 
-가이드라인은 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**를, 코드베이스 구조 개요는 [저장소 맵](../../README.md#repository-map)을 참고하세요.
+가이드라인은 **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)**를, 코드베이스 구조 개요는 [저장소 맵](../../README.md#repository-map)을 참고하세요.
 
 ---
 

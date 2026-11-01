@@ -94,7 +94,7 @@ README = """# ATLAS Roadmap
 
 Everything planned for [ATLAS](https://github.com/{owner}/{repo}), in one place.
 
-**New here?** Open the **Start Here** view: Ready issues for newcomers that nobody has claimed yet. Read [CONTRIBUTING](https://github.com/{owner}/{repo}/blob/main/CONTRIBUTING.md), then comment `/claim` on the issue you want.
+**New here?** Open the **Start Here** view: Ready issues for newcomers that nobody has claimed yet. Read [CONTRIBUTING](https://github.com/{owner}/{repo}/blob/main/.github/CONTRIBUTING.md), then comment `/claim` on the issue you want.
 
 **Status:** Triage → Needs Design (RFCs) → Backlog → Ready → In Progress → In Review → Done. Blocked means waiting, with the reason in a comment.
 

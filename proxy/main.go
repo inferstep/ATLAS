@@ -1290,16 +1290,6 @@ func handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// safeLogField encodes untrusted text as one quoted ASCII log field. Newlines,
-// carriage returns, and control bytes become escape sequences, so model/user
-// data cannot forge additional log records.
-func safeLogField(value string, maxLen int) string {
-	if maxLen > 0 {
-		value = truncateStr(value, maxLen)
-	}
-	return strconv.QuoteToASCII(value)
-}
-
 // Private-value filtering: masks values that look like credentials
 // before they reach a serialized sink. The proxy installs this on the
 // standard logger's output (one choke point covers every log.Printf),

@@ -329,7 +329,7 @@ func writeFileTool() *ToolDef {
 				return refusal, nil
 			}
 
-			// Stub detection. Reject "<h1>X Page</h1>" / "TODO"
+			// Stub detection. Reject one-heading or to-do-marker
 			// placeholder writes that pass syntactic gates but ship the
 			// minimum content humanly possible. The model's lazy-completion
 			// failure mode is to write 8-line stubs and call it done; this
@@ -1073,6 +1073,9 @@ func applyRouteObservation(res *ToolResult, err error, o checkOutcome) (*ToolRes
 	return res, nil
 }
 
+// atomicTempSuffix names the temp file every atomic write renames over its target.
+const atomicTempSuffix = ".atlas.tmp"
+
 // atomicReplaceFile is the write-then-rename of the mutating tools as one
 // primitive (edit_file and structural_edit still inline it). A reader of the
 // target either sees the old bytes or the new ones, never a partial file, and
@@ -1081,7 +1084,7 @@ func atomicReplaceFile(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("cannot create parent dir for %s: %w", path, err)
 	}
-	tmpPath := path + ".atlas.tmp"
+	tmpPath := path + atomicTempSuffix
 	if err := os.WriteFile(tmpPath, content, 0644); err != nil {
 		return fmt.Errorf("cannot write %s: %w", path, err)
 	}
@@ -1162,70 +1165,7 @@ func latestUserMessage(ctx *AgentContext) string {
 // alternatives it generates, and sends it back unchanged when none ranks
 // higher (#259), which proposedV3Candidate reads as no proposal.
 func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResult, error) {
-	// Build V3 request with project context
-	req := V3GenerateRequest{
-		FilePath:     path,
-		BaselineCode: baselineContent,
-		Tier:         int(ctx.Tier),
-		WorkingDir:   ctx.WorkingDir,
-		UserMessage:  latestUserMessage(ctx),
-	}
-
-	// Add project context from files read during this session. The target
-	// file's own PRE-EDIT snapshot is excluded: its current symbols come
-	// from the baseline, and stale content would let the in-pipeline veto
-	// credit a def this write deletes (#147 review finding #2 — same rule
-	// as checkStructuralUnresolved).
-	cleanTarget := filepath.Clean(path)
-	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
-		req.ProjectContext = make(map[string]string)
-		for p, content := range filesRead {
-			if filepath.Clean(p) == cleanTarget {
-				continue
-			}
-			relPath, _ := filepath.Rel(ctx.WorkingDir, p)
-			if relPath == "" {
-				relPath = p
-			}
-			// Truncate large files in context to save tokens
-			if len(content) > 4000 {
-				content = content[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[relPath] = content
-		}
-	}
-
-	// Files this session wrote are project context too; otherwise
-	// siblings written but never read are invisible to candidate
-	// generation. Disk content wins over any stale read snapshot: the
-	// on-disk version is what verification produced.
-	for rel := range ctx.SessionWrites {
-		if rel == "" {
-			continue
-		}
-		abs := resolveAgentPath(ctx, rel)
-		if abs == path {
-			continue // the file being generated is the baseline, not context
-		}
-		data, rerr := readRegularFile(abs)
-		if rerr != nil {
-			continue
-		}
-		content := string(data)
-		if len(content) > 4000 {
-			content = content[:4000] + "\n... (truncated)"
-		}
-		if req.ProjectContext == nil {
-			req.ProjectContext = make(map[string]string)
-		}
-		req.ProjectContext[rel] = content
-	}
-
-	// Add project info if available
-	if ctx.Project != nil {
-		req.Framework = ctx.Project.Framework
-		req.BuildCommand = ctx.Project.BuildCommand
-	}
+	req := v3WriteRequest(path, baselineContent, ctx)
 
 	// The production call path for invocation feasibility: before a single
 	// candidate is generated, record whether this task could close at all. The
@@ -1246,6 +1186,106 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// Recorded, never enforced: generation proceeds whatever it says.
 	observeInvocationFeasibility(ctx, entry)
 
+	v3Result, err := generateV3Write(ctx, entry, path, req)
+	if err != nil {
+		return writeAfterV3Failure(ctx, lifecycle, path, baselineContent, err)
+	}
+	// V3 answered for this write: an earlier unchecked write of the file is
+	// no longer the one to name.
+	ctx.clearV3Unchecked(path)
+
+	write := proposeWriteCandidate(ctx, entry, lifecycle, path, baselineContent, v3Result)
+	evidence := collectWriteCandidateEvidence(ctx, entry, write)
+	decideWriteCandidateDelivery(ctx, entry, write, evidence)
+	if refusal := applyWriteGates(write); refusal != nil {
+		return refusal, nil
+	}
+
+	// A gate fallback wrote the model's own baseline, which was NOT
+	// V3-sandbox-verified (only syntax- and structural-checked). Report it
+	// as a plain direct write with no V3 metadata — the same honest
+	// reporting as the V3-unavailable fallback — so the vetoed winner's
+	// score/phase/evidence don't attach to unverified content and the
+	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	// The observation that travels to the write must describe the bytes being
+	// written. Every transition above re-observes what it changed, so this
+	// normally returns what it was handed; it re-evaluates only if a future
+	// branch alters the bytes without saying what it found about them, which is
+	// the one way this invariant could rot.
+	logMandatoryChecks(ctx, "write_file", path, "candidate route")
+	final := write.deliveredCheck
+	if write.checkedFor != write.code {
+		log.Printf("[write_file] final bytes for %s are not the observed ones — re-checking",
+			logPath(path))
+		final = fallbackSyntaxOutcomeFor(ctx, path, write.code).aggregate()
+	}
+
+	if write.fellBack || !write.authorizedV3 {
+		return writeRetainedContent(write, final)
+	}
+
+	// Stream V3 completion summary — after the gate, so a rejected write
+	// doesn't present as a successfully completed V3 stage.
+	if ctx.StreamFn != nil {
+		ctx.StreamFn("v3_progress", map[string]string{
+			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+		})
+	}
+
+	// THE consumer of the authorization grant, and the only mutation on this
+	// route that a typed request can reach. Everything it needs is re-read
+	// from disk inside it: the grant froze a moment and this is a later one.
+	if write.delivery.Typed {
+		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(write.code), "")
+		result, outcome, err := deliverAuthorizedCandidate(ctx, path, write.code,
+			write.delivery.Grant, final, write.delivery.MetCommands, write.delivery.BaselinePreserved)
+		lifecycle.noteDelivery(outcome)
+		return settleTypedDelivery(write, final, result, outcome, err)
+	}
+
+	// Unreachable by an authorized candidate: authorization now requires a
+	// grant, and a grant requires declared output knowledge. Kept as the
+	// fail-closed floor rather than deleted, because a future policy that
+	// authorizes without minting would otherwise write bytes through a path
+	// nobody reviewed.
+	log.Printf("[write_file] authorized delivery reached the ungranted path for %s — writing the caller's content",
+		logPath(path))
+	return write.writeCallersContent()
+}
+
+// v3WriteRequest is the V3 request for a write: an edit's request, and the
+// files this session wrote as context too.
+func v3WriteRequest(path, baselineContent string, ctx *AgentContext) V3GenerateRequest {
+	req := v3Request(path, baselineContent, ctx)
+
+	// Files this session wrote are project context too; otherwise
+	// siblings written but never read are invisible to candidate
+	// generation. Disk content wins over any stale read snapshot: the
+	// on-disk version is what verification produced.
+	for rel := range ctx.SessionWrites {
+		if rel == "" {
+			continue
+		}
+		abs := resolveAgentPath(ctx, rel)
+		if abs == path {
+			continue // the file being generated is the baseline, not context
+		}
+		data, rerr := readRegularFile(abs)
+		if rerr != nil {
+			continue
+		}
+		if req.ProjectContext == nil {
+			req.ProjectContext = make(map[string]string)
+		}
+		req.ProjectContext[rel] = contextEntry(string(data), 4000)
+	}
+	return req
+}
+
+// generateV3Write calls V3 for a write and reports its stages to the client
+// and the pipeline pane.
+func generateV3Write(ctx *AgentContext, entry routeEntry, path string,
+	req V3GenerateRequest) (*V3GenerateResponse, error) {
 	// Tell the user V3 is taking over so they don't think the file
 	// vanished. write_file with V3 holds the disk write until V3 picks
 	// a winner — without this message the chat goes silent for the 1–3
@@ -1272,113 +1312,61 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	//   llm_start   — V3 is starting an LLM call (candidate gen, scoring…)
 	//   llm_end     — V3's LLM call finished (with token/timing summary)
 	//   <other>     — pipeline stage marker (probe, plansearch, sandbox…)
-	currentV3Stage := ""
+	var stages v3StageMarks
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		// Token deltas: forward to the TUI on a separate SSE event so
-		// it can render them as a streaming dim row, mirroring how the
-		// agent's own LLM tokens are shown. No envelope (would bloat
-		// /events with thousands of metric events for a single call).
-		if stage == "token" {
-			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_token", map[string]string{"text": detail})
-			}
-			return
-		}
-		// Reasoning deltas during V3 LLM calls (<think>
-		// stream). Forwarded as v3_reasoning_token (NOT plain
-		// reasoning_token) because the agent-loop's reasoning_token
-		// handler in the TUI targets the agent's LLM row — V3 calls
-		// run in a different lifecycle and need their own pipe into
-		// the V3 streaming row. Gives the /demo viewer something to
-		// watch during long PlanSearch / repair phases.
-		if stage == "reasoning_token" {
-			if ctx.StreamFn != nil {
-				ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
-			}
-			return
-		}
-		// LLM-call boundary markers. Match the chat protocol's
-		// llm_call_start/end shapes so the TUI can reuse handlers.
-		if stage == "llm_start" {
-			if ctx.StreamFn != nil {
-				payload := map[string]interface{}{"detail": detail}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn("v3_llm_start", payload)
-			}
-			return
-		}
-		if stage == "llm_end" {
-			if ctx.StreamFn != nil {
-				payload := map[string]interface{}{"detail": detail}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn("v3_llm_end", payload)
-			}
-			return
-		}
-
-		// Dedicated structured events for the pipeline pane. The TUI
-		// renders each as its own row instead of a generic v3_progress
-		// string. data is the structured payload from V3's _emit; we
-		// pass it through verbatim with `stage` and `detail` for
-		// fallback rendering.
-		if ctx.StreamFn != nil {
-			eventName := v3StageToEvent(stage)
-			if eventName == "v3_progress" {
-				// Unknown / unmapped stage — emit the legacy text line
-				// only. Keeps third-party clients that haven't migrated
-				// to typed events working.
-				ctx.StreamFn("v3_progress", map[string]string{
-					"message": fmt.Sprintf("  \u2502 [%s] %s", stage, detail),
-				})
-			} else {
-				payload := map[string]interface{}{
-					"stage":  stage,
-					"detail": detail,
-				}
-				for k, v := range data {
-					payload[k] = v
-				}
-				ctx.StreamFn(eventName, payload)
-			}
-		}
-		// Stage transitions emit start/end envelopes for the pipeline
-		// pane — close the previous stage when we see a new name.
-		if stage != currentV3Stage {
-			if currentV3Stage != "" {
-				Emit(Envelope{
-					EventID:   NewEventID(),
-					Timestamp: float64(time.Now().UnixNano()) / 1e9,
-					Type:      EvtStageEnd,
-					Stage:     "v3:" + currentV3Stage,
-					Payload: map[string]interface{}{
-						"success": true,
-					},
-				})
-			}
-			payload := map[string]interface{}{"detail": detail}
-			for k, v := range data {
-				payload[k] = v
-			}
-			Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
-			currentV3Stage = stage
-		} else {
-			Emit(NewEnvelope(EvtMetric, "v3:"+stage,
-				map[string]interface{}{"name": "progress", "value": detail}))
+		forwardV3Stage(ctx, stage, detail, data)
+		switch stage {
+		case "token", "reasoning_token", "llm_start", "llm_end":
+			// No envelope: it would bloat /events with thousands of metric
+			// events for a single call.
+		default:
+			stages.note(stage, detail, data)
 		}
 	})
-	if currentV3Stage != "" {
-		Emit(Envelope{
-			EventID:   NewEventID(),
-			Timestamp: float64(time.Now().UnixNano()) / 1e9,
-			Type:      EvtStageEnd,
-			Stage:     "v3:" + currentV3Stage,
-			Payload:   map[string]interface{}{"success": err == nil},
-		})
+	stages.closeCurrent(err == nil)
+	emitV3WriteStageEnd(v3Start, v3Result, err)
+	return v3Result, err
+}
+
+// v3StageMarks turns V3's stage markers into start and end envelopes for the
+// pipeline pane.
+type v3StageMarks struct {
+	current string
+}
+
+// note closes the previous stage when a new name comes, and reports progress
+// inside the same stage.
+func (m *v3StageMarks) note(stage, detail string, data map[string]interface{}) {
+	if stage == m.current {
+		Emit(NewEnvelope(EvtMetric, "v3:"+stage,
+			map[string]interface{}{"name": "progress", "value": detail}))
+		return
 	}
+	m.closeCurrent(true)
+	payload := map[string]interface{}{"detail": detail}
+	for k, v := range data {
+		payload[k] = v
+	}
+	Emit(NewEnvelope(EvtStageStart, "v3:"+stage, payload))
+	m.current = stage
+}
+
+// closeCurrent emits the end of the stage that is open, if one is.
+func (m *v3StageMarks) closeCurrent(success bool) {
+	if m.current == "" {
+		return
+	}
+	Emit(Envelope{
+		EventID:   NewEventID(),
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		Type:      EvtStageEnd,
+		Stage:     "v3:" + m.current,
+		Payload:   map[string]interface{}{"success": success},
+	})
+}
+
+// emitV3WriteStageEnd closes the V3 stage of a write.
+func emitV3WriteStageEnd(v3Start time.Time, v3Result *V3GenerateResponse, err error) {
 	// The structured evidence rides the telemetry envelope, whole. It is
 	// deliberately NOT put on the ToolResult: that is projected to the model
 	// and to the guarded tool-result SSE, where an unconsumed research field
@@ -1409,52 +1397,82 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		DurationMS: time.Since(v3Start).Milliseconds(),
 		Payload:    v3StagePayload,
 	})
-	if err != nil {
-		// User cancellation is not a fallback case — the turn was aborted,
-		// so nothing should land on disk.
-		if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
-			log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
-			lifecycle.finish(ctx, routingCancelled, "", "")
-			return &ToolResult{
-				Success: false,
-				Error:   "write_file cancelled — no content was written",
-			}, nil
-		}
-		// The lens stopped scoring inside V3. The lens is required, so this
-		// is not a fallback case either: nothing is written, and the agent
-		// loop ends the run with the reason (lens_required.go).
-		if why, down := lensUnavailable(err); down {
-			log.Printf("[write_file] the lens cannot score (%s) — not writing %s", why, logPath(path))
-			ctx.noteLensDown(why)
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-			return noMutation("write_file not applied: the geometric lens stopped answering (" + why + ")"), nil
-		}
-		// Fallback to direct write if V3 service unavailable — but never
-		// land content the sandbox confirms is broken: a truncated tool
-		// call writing a SyntaxError to disk with success=true is how the
-		// mini-bench got its two broken files (t06/t09).
-		log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
-		// The final summary names this file while these bytes are on disk.
-		ctx.noteV3Unchecked(path, v3FailureReason(err), baselineContent)
-		if errors.Is(err, context.DeadlineExceeded) {
-			lifecycle.finish(ctx, routingProducerTimedOut, "", "")
-		} else {
-			lifecycle.finish(ctx, routingProducerUnavailable, "", "")
-		}
-		msg := "  \u2514\u2500 V3 unavailable, writing directly"
-		if errors.Is(err, context.DeadlineExceeded) {
-			// Not the configured ceiling: the session's remaining time can
-			// shorten this call's cap, and naming the wrong number tells the
-			// operator to raise a setting that was not the limit they hit.
-			// The exact cap and its source are in the error and the log.
-			msg = "  \u2514\u2500 V3 ran out of its time budget, writing your version"
-		}
-		return writeWithoutCandidate(ctx, path, baselineContent, msg)
-	}
-	// V3 answered for this write: an earlier unchecked write of the file is
-	// no longer the one to name.
-	ctx.clearV3Unchecked(path)
+}
 
+// writeAfterV3Failure ends a write whose V3 call failed.
+func writeAfterV3Failure(ctx *AgentContext, lifecycle *routeLifecycle, path, baselineContent string,
+	err error) (*ToolResult, error) {
+	// User cancellation is not a fallback case — the turn was aborted,
+	// so nothing should land on disk.
+	if errors.Is(err, context.Canceled) || (ctx.Ctx != nil && ctx.Ctx.Err() != nil) {
+		log.Printf("[write_file] V3 aborted by cancellation — not writing %s", path)
+		lifecycle.finish(ctx, routingCancelled, "", "")
+		return &ToolResult{
+			Success: false,
+			Error:   "write_file cancelled — no content was written",
+		}, nil
+	}
+	// The lens stopped scoring inside V3. The lens is required, so this
+	// is not a fallback case either: nothing is written, and the agent
+	// loop ends the run with the reason (lens_required.go).
+	if why, down := lensUnavailable(err); down {
+		log.Printf("[write_file] the lens cannot score (%s) — not writing %s", why, logPath(path))
+		ctx.noteLensDown(why)
+		lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+		return noMutation("write_file not applied: the geometric lens stopped answering (" + why + ")"), nil
+	}
+	// Fallback to direct write if V3 service unavailable — but never
+	// land content the sandbox confirms is broken: a truncated tool
+	// call writing a SyntaxError to disk with success=true is how the
+	// mini-bench got its two broken files (t06/t09).
+	log.Printf("[write_file] V3 failed: %s — falling back to direct write", err)
+	// The final summary names this file while these bytes are on disk.
+	ctx.noteV3Unchecked(path, v3FailureReason(err), baselineContent)
+	if errors.Is(err, context.DeadlineExceeded) {
+		lifecycle.finish(ctx, routingProducerTimedOut, "", "")
+	} else {
+		lifecycle.finish(ctx, routingProducerUnavailable, "", "")
+	}
+	msg := "  └─ V3 unavailable, writing directly"
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Not the configured ceiling: the session's remaining time can
+		// shorten this call's cap, and naming the wrong number tells the
+		// operator to raise a setting that was not the limit they hit.
+		// The exact cap and its source are in the error and the log.
+		msg = "  └─ V3 ran out of its time budget, writing your version"
+	}
+	return writeWithoutCandidate(ctx, path, baselineContent, msg)
+}
+
+// v3Write is one write once V3 has answered. `code` is what would land, and
+// the fields below it describe those bytes: a step that changes `code` changes
+// them with it, through revokeV3 and restoreBaseline.
+type v3Write struct {
+	ctx             *AgentContext
+	lifecycle       *routeLifecycle
+	path            string
+	baselineContent string
+	v3Result        *V3GenerateResponse
+	scope           mutationScope
+	scopeOK         bool
+
+	code           string
+	authorizedV3   bool
+	fellBack       bool
+	deliveredCheck checkOutcome
+	checkedFor     string // the bytes deliveredCheck describes
+
+	candidateProposed           bool
+	proposalIdentity            string
+	languageOrBoundaryViolation bool
+	delivery                    deliveryAuthorization
+	policy                      candidatePolicyOutcome
+}
+
+// proposeWriteCandidate takes V3's answer down to the bytes this write would
+// land, and observes them.
+func proposeWriteCandidate(ctx *AgentContext, entry routeEntry, lifecycle *routeLifecycle,
+	path, baselineContent string, v3Result *V3GenerateResponse) *v3Write {
 	// Write the winning candidate, or the baseline if V3 did not improve. The
 	// presence of Code is not authorization: an unverified alternative must
 	// never displace the baseline, and delivery is decided below by the proxy's
@@ -1513,33 +1531,13 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// checkedFor records which bytes those were, so the pairing is checkable
 	// rather than a discipline each branch below has to remember.
 	deliveredCheck := fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
-	checkedFor := code
-
-	// The production call path for the proxy-owned syntax producer. It sits
-	// here because this is the one moment the bytes are fixed and the gate has
-	// just reported on exactly those bytes: the verdict is handed over, never
-	// recomputed, so there is no second sandbox call and no second opinion. Its
-	// evidence goes to private telemetry and into the authorization owner
-	// below.
-	//
-	// The live authorization owner. For a request that declared structured
-	// obligations the typed answer is binding: no candidate lands without a
-	// one-time grant, and a refusal keeps the caller's own content rather than
-	// falling through to a candidate the envelope happened to like. A request
-	// that declared nothing has no typed answer to give.
-	//
-	// A retained baseline is not a candidate.
-	//
-	// When nothing materially different came back, `code` is the caller's own
-	// content. Staging it, taking an authorization decision over it and minting
-	// a one-time licence for it describes a delivery that is not going to
-	// happen: the fallback below writes those same bytes directly and the
-	// licence retires unused.
-	//
-	// What a candidate does not have to be is service-certified. The service
-	// ranks; the evidence this machine produces about these exact bytes is what
-	// authorizes, and it cannot be produced without staging the candidate.
-	candidateProposed := proposed
+	write := &v3Write{
+		ctx: ctx, lifecycle: lifecycle, path: path, baselineContent: baselineContent,
+		v3Result: v3Result, scope: scope, scopeOK: scopeOK,
+		code: code, fellBack: fellBack, deliveredCheck: deliveredCheck, checkedFor: code,
+		candidateProposed:           proposed,
+		languageOrBoundaryViolation: languageOrBoundaryViolation,
+	}
 	// The proposal's own identity, taken here rather than at the ending.
 	// Every gate below that withdraws a candidate restores `code` to the
 	// caller's bytes, so a hash read at the end names the BASELINE -- which is
@@ -1547,26 +1545,65 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// the model's own content attributed to the pipeline. The pilot has one:
 	// route entry 1 of pilot_go_duration_label carries the sha256 of the
 	// main.go the model wrote itself.
-	proposalIdentity := ""
-	if candidateProposed {
-		proposalIdentity = contentSHA256(code)
+	if proposed {
+		write.proposalIdentity = contentSHA256(code)
 	}
+	return write
+}
 
-	var observed []proxyEvidence
-	var evID candidateEvidenceIdentity
-	var unmet map[string]AuthorizationReason
-	stagingMutatedAssets := false
-	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, deliveredCheck); seen && candidateProposed {
-		observed, evID = []proxyEvidence{ev}, id
+// writeCandidateEvidence is what this machine observed about a candidate's
+// exact bytes.
+type writeCandidateEvidence struct {
+	observed             []proxyEvidence
+	evID                 candidateEvidenceIdentity
+	unmet                map[string]AuthorizationReason
+	stagingMutatedAssets bool
+	selected             string
+	scopeAdmits          bool
+	scopeRefusal         string
+}
+
+// collectWriteCandidateEvidence gathers the evidence the authorization owner
+// decides over.
+//
+// The production call path for the proxy-owned syntax producer. It sits
+// here because this is the one moment the bytes are fixed and the gate has
+// just reported on exactly those bytes: the verdict is handed over, never
+// recomputed, so there is no second sandbox call and no second opinion. Its
+// evidence goes to private telemetry and into the authorization owner
+// below.
+//
+// The live authorization owner. For a request that declared structured
+// obligations the typed answer is binding: no candidate lands without a
+// one-time grant, and a refusal keeps the caller's own content rather than
+// falling through to a candidate the envelope happened to like. A request
+// that declared nothing has no typed answer to give.
+//
+// A retained baseline is not a candidate.
+//
+// When nothing materially different came back, `code` is the caller's own
+// content. Staging it, taking an authorization decision over it and minting
+// a one-time licence for it describes a delivery that is not going to
+// happen: the fallback below writes those same bytes directly and the
+// licence retires unused.
+//
+// What a candidate does not have to be is service-certified. The service
+// ranks; the evidence this machine produces about these exact bytes is what
+// authorizes, and it cannot be produced without staging the candidate.
+func collectWriteCandidateEvidence(ctx *AgentContext, entry routeEntry, write *v3Write) writeCandidateEvidence {
+	path, code := write.path, write.code
+	var evidence writeCandidateEvidence
+	if ev, id, seen := observeDeliveredCandidateSyntax(ctx, entry, path, code, write.deliveredCheck); seen && write.candidateProposed {
+		evidence.observed, evidence.evID = []proxyEvidence{ev}, id
 	}
-	if candidateProposed && evID.InvocationID == "" {
+	if write.candidateProposed && evidence.evID.InvocationID == "" {
 		// No producer spoke -- a request that declared no outputs owes no
 		// syntax obligation, and a class the syntax gate does not check owes
 		// none either -- but the candidate is still this route entry's and
 		// these exact bytes, and the authorization owner binds to that.
-		evID = proposedCandidateIdentity(ctx, entry, code)
+		evidence.evID = proposedCandidateIdentity(ctx, entry, code)
 	}
-	if candidateProposed {
+	if write.candidateProposed {
 		// THE production call path for the client-declared verification
 		// producer. It stages these exact bytes in a workspace that is not the
 		// caller's and runs the commands the client declared there, so the
@@ -1575,13 +1612,12 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 		// budget bounds what it may spend on one. It no longer waits for a
 		// syntax obligation: a declared main.rs has none, so its declared
 		// command was owed and never run.
-		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evID, scope)
-		observed, unmet = append(observed, behavioral...), why
-		stagingMutatedAssets = mutatedAssets
+		behavioral, why, mutatedAssets := observeCandidateVerification(ctx, path, code, evidence.evID, write.scope)
+		evidence.observed, evidence.unmet = append(evidence.observed, behavioral...), why
+		evidence.stagingMutatedAssets = mutatedAssets
 	}
-	selected := ""
-	if v3Result != nil && v3Result.Evidence != nil {
-		selected = v3Result.Evidence.Identity.CandidateContentHash
+	if write.v3Result != nil && write.v3Result.Evidence != nil {
+		evidence.selected = write.v3Result.Evidence.Identity.CandidateContentHash
 	}
 	// Unconditionally, and deliberately so. The producers decline for a target
 	// the client never declared and for a class the structural gate does not
@@ -1589,41 +1625,49 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// mean exactly those two cases fell through to the legacy decision -- a
 	// candidate landing on a structured request because nothing could speak
 	// for it. The owner handles an empty evidence set: it refuses.
-	scopeAdmits, scopeRefusal := false, scopeRefusedNoScope
-	if scopeOK {
-		scopeAdmits, scopeRefusal = scopeAdmitsCandidate(ctx, scope, code)
+	evidence.scopeAdmits, evidence.scopeRefusal = false, scopeRefusedNoScope
+	if write.scopeOK {
+		evidence.scopeAdmits, evidence.scopeRefusal = scopeAdmitsCandidate(ctx, write.scope, code)
 	}
-	if candidateProposed {
-		recordMutationScope(ctx, scope, scopeAdmits, scopeRefusal)
+	if write.candidateProposed {
+		recordMutationScope(ctx, write.scope, evidence.scopeAdmits, evidence.scopeRefusal)
 	}
+	return evidence
+}
+
+// decideWriteCandidateDelivery asks the authorization owner and the policy
+// owner about the candidate, and records whether it may land.
+func decideWriteCandidateDelivery(ctx *AgentContext, entry routeEntry, write *v3Write,
+	evidence writeCandidateEvidence) {
+	path, code, v3Result := write.path, write.code, write.v3Result
 	// ONE veto list, two readers. The authorization owner needs the
 	// disqualifying facts before it can mint an automatic grant, and the
 	// policy owner needs them to reach its decision. The authorization owner
 	// computes it, after its decision, and both read that list.
 	vetoInput := advisoryInput{
-		Observed:                    deliveredCheck,
+		Observed:                    write.deliveredCheck,
 		TargetDeclared:              outputKnowledgeDeclared(ctx),
 		TargetAuthorized:            targetIsAuthorized(requestObligations(ctx), resolveAgentPath(ctx, path)),
-		LanguageOrBoundaryViolation: languageOrBoundaryViolation,
-		Unmet:                       unmet,
-		Evidence:                    observed,
+		LanguageOrBoundaryViolation: write.languageOrBoundaryViolation,
+		Unmet:                       evidence.unmet,
+		Evidence:                    evidence.observed,
 		Cancelled:                   ctx.Ctx != nil && ctx.Ctx.Err() != nil,
-		MutatedProtectedAssets:      stagingMutatedAssets,
-		ScopeAdmits:                 scopeAdmits,
-		ScopeRefusal:                scopeRefusal,
+		MutatedProtectedAssets:      evidence.stagingMutatedAssets,
+		ScopeAdmits:                 evidence.scopeAdmits,
+		ScopeRefusal:                evidence.scopeRefusal,
 	}
 	vetoInput.Envelope = envelopeOf(v3Result)
 	// Nil without a candidate: the policy owner then computes the list itself,
 	// from the same input.
 	var vetoes []string
 	var delivery deliveryAuthorization
-	if candidateProposed {
-		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evID,
-			v3Result.Evidence, observed, selected, unmet, deliveredCheck, scope,
-			automaticIntent{VetoInput: vetoInput})
+	if write.candidateProposed {
+		delivery = authorizeCandidateDelivery(ctx, entry, path, code, evidence.evID,
+			v3Result.Evidence, evidence.observed, evidence.selected, evidence.unmet,
+			write.deliveredCheck, write.scope, automaticIntent{VetoInput: vetoInput})
 		vetoes = delivery.Vetoes
 		vetoInput.Unmet = delivery.Unmet
-		lifecycle.noteAuthorization(delivery, evID, contentSHA256(code), vetoes)
+		write.lifecycle.noteAuthorization(delivery, evidence.evID, contentSHA256(code), vetoes)
 	}
 	// THE policy owner. It reads the typed answer, the trusted observations and
 	// the disqualifying facts, and says which of the honest decisions this
@@ -1638,17 +1682,18 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// The would-have, not the outcome: an acquisition control takes the licence
 	// and leaves the answer, so the policy is asked the question it would have
 	// been asked without one.
-	// Strict means strict. An automatic licence also makes mayDeliver true, and
+	// Strict means strict. An automatic licence also holds a grant, and
 	// reporting it as a strict authorization would name the wrong rule in the
 	// record a calibration is computed from.
 	policy := decideCandidatePolicy(ctx, policyInput,
-		candidateProposed && delivery.holds(grantBasisStrict))
-	if candidateProposed {
+		write.candidateProposed && delivery.holds(grantBasisStrict))
+	if write.candidateProposed {
 		recordCandidatePolicyDecision(ctx, entry, contentSHA256(code), policy)
 		if delivery.CaptureOnly {
 			recordCaptureOnlyDisposition(ctx, entry, contentSHA256(code), policy, true)
 		}
 	}
+	write.delivery, write.policy = delivery, policy
 
 	// Whether the proposal becomes the delivered artifact. One owner, for every
 	// request: the proxy's policy, over evidence the proxy produced about these
@@ -1660,322 +1705,315 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// The service's closure verdict does not decide it. A machine that let the
 	// producer of a candidate certify that candidate has no authorization
 	// story at all, and "it was like that before" is not one either.
-	authorizedV3 := candidateProposed && policy.mayDeliverUnderPolicy()
+	write.authorizedV3 = write.candidateProposed && policy.mayDeliverUnderPolicy()
+}
 
-	// A refusal withdraws the candidate. The caller's own content is the
-	// alternative, and it is checked before being restored -- the same rule
-	// every other gate on this path follows.
-	if candidateProposed && !authorizedV3 {
-		lifecycle.finish(ctx, routingAuthorizationRefused, contentSHA256(code),
-			AuthorizationReason(delivery.Refusal))
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
-		}
-		code, authorizedV3, fellBack = revokeV3(
-			baselineContent, "the policy refused it ("+string(policy.Decision)+")", path)
-		deliveredCheck, checkedFor = baseCheck, code
+// checkBaseline observes the caller's own content before it is restored. A
+// non-nil result refuses the write: the content does not parse.
+func (w *v3Write) checkBaseline() (checkOutcome, *ToolResult) {
+	baseCheck := fallbackSyntaxOutcomeFor(w.ctx, w.path, w.baselineContent).aggregate()
+	if baseCheck.Status == ValidationFailed {
+		return baseCheck, syntaxRefusal(w.path, w.baselineContent, baseCheck.Detail)
 	}
-	if deliveredCheck.Status == ValidationFailed {
-		if !authorizedV3 {
-			// The caller's own content, and it does not parse. Nothing here
-			// authored it and there is no alternative to fall back to.
-			log.Printf("[write_file] fallback content for %s does not parse: %s",
-				logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, code, deliveredCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: deliveredCheck.Detail}, nil
+	return baseCheck, nil
+}
+
+// restoreBaseline withdraws the candidate. The verdict on the caller's content
+// travels with it to the write.
+func (w *v3Write) restoreBaseline(baseCheck checkOutcome, reason string) {
+	w.code, w.authorizedV3, w.fellBack = revokeV3(w.baselineContent, reason, w.path)
+	w.deliveredCheck, w.checkedFor = baseCheck, w.code
+}
+
+// syntaxRefusal refuses content that does not parse.
+func syntaxRefusal(path, content, detail string) *ToolResult {
+	return &ToolResult{Success: false,
+		Error:            fallbackSyntaxRejection(path, content, detail),
+		MutationStatus:   MutationRefused,
+		ValidationKind:   ValidationKindSyntax,
+		ValidationStatus: ValidationFailed,
+		ValidationDetail: detail}
+}
+
+// applyWriteGates runs the gates between the decision and the disk, in order.
+// A non-nil result ends the write with it.
+func applyWriteGates(write *v3Write) *ToolResult {
+	for _, gate := range []func(*v3Write) *ToolResult{
+		withdrawRefusedCandidate, refuseContentThatDoesNotParse, refuseUnresolvedCalls,
+		refuseBrokenEmbeddedScript, refuseDuplicateEntrypoint, refuseCancelledWrite,
+	} {
+		if refusal := gate(write); refusal != nil {
+			return refusal
 		}
-		// A candidate that does not parse is not a candidate. The model's own
-		// content is the alternative, and it is checked before being restored:
-		// falling back to bytes nobody looked at is how the harness would
-		// replace one broken artifact with another.
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
-			log.Printf("[write_file] V3 winner and baseline both fail the syntax gate for %s",
-				logPath(path))
-			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
-		}
-		log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
+	}
+	return nil
+}
+
+// withdrawRefusedCandidate applies the policy's refusal. A refusal withdraws the
+// candidate. The caller's own content is the alternative, and it is checked
+// before being restored -- the same rule every other gate on this path follows.
+func withdrawRefusedCandidate(write *v3Write) *ToolResult {
+	if !write.candidateProposed || write.authorizedV3 {
+		return nil
+	}
+	write.lifecycle.finish(write.ctx, routingAuthorizationRefused, contentSHA256(write.code),
+		AuthorizationReason(write.delivery.Refusal))
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		return refusal
+	}
+	write.restoreBaseline(baseCheck, "the policy refused it ("+string(write.policy.Decision)+")")
+	return nil
+}
+
+// refuseContentThatDoesNotParse is the syntax gate on what would land.
+func refuseContentThatDoesNotParse(write *v3Write) *ToolResult {
+	path, deliveredCheck := write.path, write.deliveredCheck
+	if deliveredCheck.Status != ValidationFailed {
+		return nil
+	}
+	if !write.authorizedV3 {
+		// The caller's own content, and it does not parse. Nothing here
+		// authored it and there is no alternative to fall back to.
+		log.Printf("[write_file] fallback content for %s does not parse: %s",
 			logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
-		code, authorizedV3, fellBack = revokeV3(
-			baselineContent, "the winner does not parse", path)
-		deliveredCheck, checkedFor = baseCheck, code
+		return syntaxRefusal(path, write.code, deliveredCheck.Detail)
 	}
-
-	// #147: authoritative structural gate on whatever is about to land —
-	// the in-pipeline veto only prunes phase-1 sandbox-passing candidates,
-	// so probe/repair returns, the energy fallback, and the baseline
-	// resurrection above can all deliver content that calls a name the
-	// file never binds. Same rule as the edit paths: original is the
-	// on-disk content (empty for a first write), only NEWLY unresolved
-	// calls block, and an unreadable existing original skips the gate.
-	// When the WINNER fails but the model's own baseline passes, write
-	// the baseline instead of rejecting: the offending call is V3-
-	// authored, and a rejection would blame the model for content it
-	// never wrote and cost a full pipeline retry per resend.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if introduced := editIntroducesUnresolved(ctx, path, original, code); len(introduced) > 0 {
-			if code != baselineContent {
-				// The baseline is about to become the delivered artifact, so it
-				// is observed before it is restored -- and the verdict is kept,
-				// not spent on the allow/refuse decision and discarded.
-				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-				if baseCheck.Status == ValidationFailed {
-					return &ToolResult{Success: false,
-						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindSyntax,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: baseCheck.Detail}, nil
-				}
-				if intrBase := editIntroducesUnresolved(ctx, path, original, baselineContent); len(intrBase) == 0 {
-					log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(path))
-					if ctx.StreamFn != nil {
-						ctx.StreamFn("v3_progress", map[string]string{
-							"message": "  └─ V3 winner failed the structural gate — writing your version",
-						})
-					}
-					code, authorizedV3, fellBack = revokeV3(
-						baselineContent, "winner failed the structural gate", path)
-					deliveredCheck, checkedFor = baseCheck, code
-				} else {
-					introduced = intrBase // name what the MODEL can act on
-				}
-			}
-			if !fellBack {
-				log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(path))
-				// Syntax already passed on these exact bytes at the final-byte
-				// check; the structural failure is what refused them, so it is
-				// the decisive outcome. The earlier pass is not carried here --
-				// it would describe a check that did not make this decision.
-				rejection := structuralWriteRejection(path, introduced)
-				return &ToolResult{Success: false,
-					Error:            rejection,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
-					ValidationDetail: rejection}, nil
-			}
-		}
-	}
-
-	// Embedded-script gate: V3 verifies a candidate by RUNNING it — the
-	// server starts and the page returns 200 — which is exactly the evidence a
-	// broken <script> block inside the rendered HTML survives. Nothing else on
-	// this path parses that JavaScript. Same healthy->broken rule; and when the
-	// WINNER is the one carrying the break, write the model's gate-passing
-	// baseline rather than blaming it for V3-authored content.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if msg := embeddedScriptGate(ctx, path, original, code); msg != "" {
-			if code != baselineContent && embeddedScriptGate(ctx, path, original, baselineContent) == "" {
-				// Same rule as the structural revocation: the baseline is
-				// observed before it is restored, and the verdict travels with
-				// it to the write.
-				baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-				if baseCheck.Status == ValidationFailed {
-					return &ToolResult{Success: false,
-						Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
-						MutationStatus:   MutationRefused,
-						ValidationKind:   ValidationKindSyntax,
-						ValidationStatus: ValidationFailed,
-						ValidationDetail: baseCheck.Detail}, nil
-				}
-				log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
-				code, authorizedV3, fellBack = revokeV3(
-					baselineContent, "winner breaks an embedded script", path)
-				deliveredCheck, checkedFor = baseCheck, code
-			} else {
-				log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
-				// Structural, not syntax. A standalone embedded parse failure
-				// is already owned by the final-byte check, which asks without
-				// a `previous` and would have refused before this gate ran.
-				// What survives to here is what only a before/after comparison
-				// can see -- a render loop the change stopped driving -- which
-				// is a structural regression in code that parses.
-				return &ToolResult{Success: false,
-					Error:            msg,
-					MutationStatus:   MutationRefused,
-					ValidationKind:   ValidationKindStructural,
-					ValidationStatus: ValidationFailed,
-					ValidationDetail: msg}, nil
-			}
-		}
-	}
-
-	// Same entrypoint check every edit path runs. write_file on an existing
-	// file is a whole-file replacement, which is exactly how a second
-	// `if __name__` block gets appended.
-	if original, origOK := readOriginalForGate(path); origOK {
-		if msg := duplicateMainGuard(path, original, code); msg != "" {
-			log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(path))
-			// The file parses; what is wrong is its module-level structure, so
-			// this is a structural refusal like the two above.
-			return &ToolResult{Success: false,
-				Error:            msg,
-				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindStructural,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: msg}, nil
-		}
-	}
-
-	// The structural gate made HTTP calls; a user cancel during that window
-	// must not land content on disk, mirroring the main call's abort path above.
-	if ctx.Ctx != nil && ctx.Ctx.Err() != nil {
-		log.Printf("[write_file] cancelled during structural gate — not writing %s", path)
-		// MutationNone, not Refused: no gate declined anything and no write was
-		// attempted -- the turn ended. The observation earned on the current
-		// bytes is still true and is carried, but nothing new is evaluated
-		// here: cancellation is exactly the point at which no further work may
-		// be done. It is overlaid only while it still describes those bytes.
-		cancelled := &ToolResult{
-			Success:        false,
-			Error:          "write_file cancelled — no content was written",
-			MutationStatus: MutationNone,
-		}
-		if checkedFor == code {
-			overlayValidation(cancelled, deliveredCheck)
-		}
-		return cancelled, nil
-	}
-
-	// A gate fallback wrote the model's own baseline, which was NOT
-	// V3-sandbox-verified (only syntax- and structural-checked). Report it
-	// as a plain direct write with no V3 metadata — the same honest
-	// reporting as the V3-unavailable fallback — so the vetoed winner's
-	// score/phase/evidence don't attach to unverified content and the
-	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
-	// The observation that travels to the write must describe the bytes being
-	// written. Every transition above re-observes what it changed, so this
-	// normally returns what it was handed; it re-evaluates only if a future
-	// branch alters the bytes without saying what it found about them, which is
-	// the one way this invariant could rot.
-	logMandatoryChecks(ctx, "write_file", path, "candidate route")
-	final := deliveredCheck
-	if checkedFor != code {
-		log.Printf("[write_file] final bytes for %s are not the observed ones — re-checking",
+	// A candidate that does not parse is not a candidate. The model's own
+	// content is the alternative, and it is checked before being restored:
+	// falling back to bytes nobody looked at is how the harness would
+	// replace one broken artifact with another.
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		log.Printf("[write_file] V3 winner and baseline both fail the syntax gate for %s",
 			logPath(path))
-		final = fallbackSyntaxOutcomeFor(ctx, path, code).aggregate()
+		return refusal
 	}
+	log.Printf("[write_file] V3 winner for %s does not parse — writing your version instead (%s)",
+		logPath(path), safeDiagnosticSummary(deliveredCheck.Detail))
+	write.restoreBaseline(baseCheck, "the winner does not parse")
+	return nil
+}
 
-	if fellBack || !authorizedV3 {
-		// The caller's own bytes are what lands. Any grant minted over them was
-		// never owed a delivery, and says so through its own lifecycle.
-		markBaselineRetainedGrant(ctx, delivery)
-		// WHICH of the two things happened is a different fact, and the
-		// vocabulary already has both words for it. Nothing materially
-		// different came back, or a gate above withdrew what did -- and only
-		// the second had a candidate to name. Recording both as a retained
-		// baseline is what made this ending unreadable: an analysis cannot
-		// tell a producer that agreed with the caller from one whose winner
-		// was revoked, and the hash it joined on belonged to neither.
-		ending := routingBaselineRetained
-		if candidateProposed {
-			ending = routingRevokedByGate
+// refuseUnresolvedCalls is the #147 gate: authoritative structural gate on
+// whatever is about to land — the in-pipeline veto only prunes phase-1
+// sandbox-passing candidates, so probe/repair returns, the energy fallback, and
+// the baseline resurrection above can all deliver content that calls a name the
+// file never binds. Same rule as the edit paths: original is the on-disk content
+// (empty for a first write), only NEWLY unresolved calls block, and an unreadable
+// existing original skips the gate. When the WINNER fails but the model's own
+// baseline passes, write the baseline instead of rejecting: the offending call
+// is V3-authored, and a rejection would blame the model for content it never
+// wrote and cost a full pipeline retry per resend.
+func refuseUnresolvedCalls(write *v3Write) *ToolResult {
+	original, origOK := readOriginalForGate(write.path)
+	if !origOK {
+		return nil
+	}
+	introduced := editIntroducesUnresolved(write.ctx, write.path, original, write.code)
+	if len(introduced) == 0 {
+		return nil
+	}
+	if write.code != write.baselineContent {
+		// The baseline is about to become the delivered artifact, so it
+		// is observed before it is restored -- and the verdict is kept,
+		// not spent on the allow/refuse decision and discarded.
+		baseCheck, refusal := write.checkBaseline()
+		if refusal != nil {
+			return refusal
 		}
-		lifecycle.finish(ctx, ending, proposalIdentity,
-			AuthorizationReason(delivery.Refusal))
-		// Authorization governs METADATA as well as bytes: reporting
-		// V3Used/score/phase/evidence over content V3 did not author is the
-		// same false claim in a different field, and it fires the agent's
-		// "V3 verified this edit" completion nudge.
-		fbRes, fbErr := writeFileRecorded(path, code, ctx)
-		out, outErr := applyRouteObservation(fbRes, fbErr, final)
-		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
-		return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+		introduced = restoreBaselineWithoutUnresolvedCalls(write, original, introduced, baseCheck)
 	}
+	if write.fellBack {
+		return nil
+	}
+	log.Printf("[write_file] V3 result introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(write.path))
+	// Syntax already passed on these exact bytes at the final-byte
+	// check; the structural failure is what refused them, so it is
+	// the decisive outcome. The earlier pass is not carried here --
+	// it would describe a check that did not make this decision.
+	return structuralRefusal(structuralWriteRejection(write.path, introduced))
+}
 
-	// Stream V3 completion summary — after the gate, so a rejected write
-	// doesn't present as a successfully completed V3 stage.
-	if ctx.StreamFn != nil {
-		ctx.StreamFn("v3_progress", map[string]string{
-			"message": fmt.Sprintf("  └──── V3 complete: %s, %d candidates", v3Result.PhaseSolved, v3Result.CandidatesTested),
+// restoreBaselineWithoutUnresolvedCalls restores the baseline when it passes the
+// gate its winner failed. It returns the names to report if the write is
+// refused after all.
+func restoreBaselineWithoutUnresolvedCalls(write *v3Write, original string, introduced []string,
+	baseCheck checkOutcome) []string {
+	intrBase := editIntroducesUnresolved(write.ctx, write.path, original, write.baselineContent)
+	if len(intrBase) > 0 {
+		return intrBase // name what the MODEL can act on
+	}
+	log.Printf("[write_file] V3 winner introduces unresolved call(s) %v in %s — writing gate-passing baseline instead", logPaths(introduced), logPath(write.path))
+	if write.ctx.StreamFn != nil {
+		write.ctx.StreamFn("v3_progress", map[string]string{
+			"message": "  └─ V3 winner failed the structural gate — writing your version",
 		})
 	}
+	write.restoreBaseline(baseCheck, "winner failed the structural gate")
+	return introduced
+}
 
-	// The caller's own bytes, checked before they land, for a delivery that
-	// cannot go ahead after the policy said it could.
-	writeCallersContent := func() (*ToolResult, error) {
-		baseCheck := fallbackSyntaxOutcomeFor(ctx, path, baselineContent).aggregate()
-		if baseCheck.Status == ValidationFailed {
+// refuseBrokenEmbeddedScript is the embedded-script gate: V3 verifies a candidate
+// by RUNNING it — the server starts and the page returns 200 — which is exactly
+// the evidence a broken <script> block inside the rendered HTML survives. Nothing
+// else on this path parses that JavaScript. Same healthy->broken rule; and when
+// the WINNER is the one carrying the break, write the model's gate-passing
+// baseline rather than blaming it for V3-authored content.
+func refuseBrokenEmbeddedScript(write *v3Write) *ToolResult {
+	ctx, path, baselineContent := write.ctx, write.path, write.baselineContent
+	original, origOK := readOriginalForGate(path)
+	if !origOK {
+		return nil
+	}
+	msg := embeddedScriptGate(ctx, path, original, write.code)
+	if msg == "" {
+		return nil
+	}
+	if write.code == baselineContent || embeddedScriptGate(ctx, path, original, baselineContent) != "" {
+		log.Printf("[write_file] embedded-script gate rejected content for %s", logPath(path))
+		// Structural, not syntax. A standalone embedded parse failure
+		// is already owned by the final-byte check, which asks without
+		// a `previous` and would have refused before this gate ran.
+		// What survives to here is what only a before/after comparison
+		// can see -- a render loop the change stopped driving -- which
+		// is a structural regression in code that parses.
+		return structuralRefusal(msg)
+	}
+	// Same rule as the structural revocation: the baseline is
+	// observed before it is restored, and the verdict travels with
+	// it to the write.
+	baseCheck, refusal := write.checkBaseline()
+	if refusal != nil {
+		return refusal
+	}
+	log.Printf("[write_file] V3 winner breaks an embedded script in %s — writing gate-passing baseline instead", logPath(path))
+	write.restoreBaseline(baseCheck, "winner breaks an embedded script")
+	return nil
+}
+
+// refuseDuplicateEntrypoint is the same entrypoint check every edit path runs.
+// write_file on an existing file is a whole-file replacement, which is exactly
+// how a second `if __name__` block gets appended.
+func refuseDuplicateEntrypoint(write *v3Write) *ToolResult {
+	original, origOK := readOriginalForGate(write.path)
+	if !origOK {
+		return nil
+	}
+	msg := duplicateMainGuard(write.path, original, write.code)
+	if msg == "" {
+		return nil
+	}
+	log.Printf("[write_file] write duplicates the module entrypoint in %s — rejecting", logPath(write.path))
+	// The file parses; what is wrong is its module-level structure, so
+	// this is a structural refusal like the two above.
+	return structuralRefusal(msg)
+}
+
+// refuseCancelledWrite stops a write the user cancelled. The structural gate made
+// HTTP calls; a user cancel during that window must not land content on disk,
+// mirroring the main call's abort path.
+func refuseCancelledWrite(write *v3Write) *ToolResult {
+	ctx := write.ctx
+	if ctx.Ctx == nil || ctx.Ctx.Err() == nil {
+		return nil
+	}
+	log.Printf("[write_file] cancelled during structural gate — not writing %s", write.path)
+	// MutationNone, not Refused: no gate declined anything and no write was
+	// attempted -- the turn ended. The observation earned on the current
+	// bytes is still true and is carried, but nothing new is evaluated
+	// here: cancellation is exactly the point at which no further work may
+	// be done. It is overlaid only while it still describes those bytes.
+	cancelled := &ToolResult{
+		Success:        false,
+		Error:          "write_file cancelled — no content was written",
+		MutationStatus: MutationNone,
+	}
+	if write.checkedFor == write.code {
+		overlayValidation(cancelled, write.deliveredCheck)
+	}
+	return cancelled
+}
+
+// writeRetainedContent lands the caller's own bytes: no candidate came back, or
+// a gate withdrew it.
+func writeRetainedContent(write *v3Write, final checkOutcome) (*ToolResult, error) {
+	ctx, path := write.ctx, write.path
+	// The caller's own bytes are what lands. Any grant minted over them was
+	// never owed a delivery, and says so through its own lifecycle.
+	markBaselineRetainedGrant(ctx, write.delivery)
+	// WHICH of the two things happened is a different fact, and the
+	// vocabulary already has both words for it. Nothing materially
+	// different came back, or a gate above withdrew what did -- and only
+	// the second had a candidate to name. Recording both as a retained
+	// baseline is what made this ending unreadable: an analysis cannot
+	// tell a producer that agreed with the caller from one whose winner
+	// was revoked, and the hash it joined on belonged to neither.
+	ending := routingBaselineRetained
+	if write.candidateProposed {
+		ending = routingRevokedByGate
+	}
+	write.lifecycle.finish(ctx, ending, write.proposalIdentity,
+		AuthorizationReason(write.delivery.Refusal))
+	// Authorization governs METADATA as well as bytes: reporting
+	// V3Used/score/phase/evidence over content V3 did not author is the
+	// same false claim in a different field, and it fires the agent's
+	// "V3 verified this edit" completion nudge.
+	fbRes, fbErr := writeFileRecorded(path, write.code, ctx)
+	out, outErr := applyRouteObservation(fbRes, fbErr, final)
+	emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, write.policy)
+	return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+}
+
+// writeCallersContent lands the caller's own bytes, checked before they land,
+// for a delivery that cannot go ahead after the policy said it could.
+func (w *v3Write) writeCallersContent() (*ToolResult, error) {
+	baseCheck, refusal := w.checkBaseline()
+	if refusal != nil {
+		return refusal, nil
+	}
+	fbRes, fbErr := writeFileRecorded(w.path, w.baselineContent, w.ctx)
+	out, outErr := applyRouteObservation(fbRes, fbErr, baseCheck)
+	emitDeliveryProvenance(w.ctx, w.path, DeliveryFromModelProposal, w.policy)
+	return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+}
+
+// settleTypedDelivery turns what the grant's consumer did into the tool result.
+func settleTypedDelivery(write *v3Write, final checkOutcome, result *ToolResult,
+	outcome deliveryOutcome, err error) (*ToolResult, error) {
+	if err != nil {
+		if result == nil && errors.Is(err, errDeliveryUnauthorized) {
+			// Refused before any byte moved. The caller's own content is
+			// still the alternative, exactly as on the edit route and on
+			// every other refusal here. Refusing the whole write told the
+			// model its content was kept when nothing had been written.
+			log.Printf("[write_file] the candidate was not spendable (%s) — writing the caller's content",
+				outcome.Reason)
+			return write.writeCallersContent()
+		}
+		if result == nil {
+			// The write itself failed. The licence was spent on bytes that
+			// never reached disk: nothing moved and nothing is claimed.
 			return &ToolResult{Success: false,
-				Error:            fallbackSyntaxRejection(path, baselineContent, baseCheck.Detail),
+				Error:            "the file could not be written (" + outcome.Reason + ") — nothing was changed",
 				MutationStatus:   MutationRefused,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationFailed,
-				ValidationDetail: baseCheck.Detail}, nil
+				ValidationKind:   final.kind(),
+				ValidationStatus: final.Status,
+				ValidationDetail: final.Detail}, nil
 		}
-		fbRes, fbErr := writeFileRecorded(path, baselineContent, ctx)
-		out, outErr := applyRouteObservation(fbRes, fbErr, baseCheck)
-		emitDeliveryProvenance(ctx, path, DeliveryFromModelProposal, policy)
-		return withDeliveryProvenance(out, DeliveryFromModelProposal), outErr
+		return result, err
 	}
-
-	// THE consumer of the authorization grant, and the only mutation on this
-	// route that a typed request can reach. Everything it needs is re-read
-	// from disk inside it: the grant froze a moment and this is a later one.
-	if delivery.Typed {
-		lifecycle.finish(ctx, routingCandidateAuthorized, contentSHA256(code), "")
-		result, outcome, err := deliverAuthorizedCandidate(ctx, path, code,
-			delivery.Grant, final, delivery.MetCommands, delivery.BaselinePreserved)
-		lifecycle.noteDelivery(outcome)
-		if err != nil {
-			if result == nil && errors.Is(err, errDeliveryUnauthorized) {
-				// Refused before any byte moved. The caller's own content is
-				// still the alternative, exactly as on the edit route and on
-				// every other refusal here. Refusing the whole write told the
-				// model its content was kept when nothing had been written.
-				log.Printf("[write_file] the candidate was not spendable (%s) — writing the caller's content",
-					outcome.Reason)
-				return writeCallersContent()
-			}
-			if result == nil {
-				// The write itself failed. The licence was spent on bytes that
-				// never reached disk: nothing moved and nothing is claimed.
-				return &ToolResult{Success: false,
-					Error:            "the file could not be written (" + outcome.Reason + ") — nothing was changed",
-					MutationStatus:   MutationRefused,
-					ValidationKind:   final.kind(),
-					ValidationStatus: final.Status,
-					ValidationDetail: final.Detail}, nil
-			}
-			return result, err
-		}
-		if !outcome.Delivered {
-			// The write happened and the result is not what was authorized.
-			// No V3 metadata is attached: reporting a verified delivery over
-			// bytes that did not settle is the same false claim in a
-			// different field.
-			return result, nil
-		}
-		provenance := deliveryProvenanceFor(policy)
-		emitDeliveryProvenance(ctx, path, provenance, policy)
-		return withDeliveryProvenance(v3DeliveredResult(ctx, result, v3Result, code),
-			provenance), nil
+	if !outcome.Delivered {
+		// The write happened and the result is not what was authorized.
+		// No V3 metadata is attached: reporting a verified delivery over
+		// bytes that did not settle is the same false claim in a
+		// different field.
+		return result, nil
 	}
-
-	// Unreachable by an authorized candidate: authorization now requires a
-	// grant, and a grant requires declared output knowledge. Kept as the
-	// fail-closed floor rather than deleted, because a future policy that
-	// authorizes without minting would otherwise write bytes through a path
-	// nobody reviewed.
-	log.Printf("[write_file] authorized delivery reached the ungranted path for %s — writing the caller's content",
-		logPath(path))
-	return writeCallersContent()
+	provenance := deliveryProvenanceFor(write.policy)
+	emitDeliveryProvenance(write.ctx, write.path, provenance, write.policy)
+	return withDeliveryProvenance(v3DeliveredResult(write.ctx, result, write.v3Result, write.code),
+		provenance), nil
 }
 
 // originalForScope is the artifact as it stands before this call, or "" when
@@ -2038,420 +2076,491 @@ func editFileTool() *ToolDef {
 		InputSchema: EditFileInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-			var input EditFileInput
-			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
-			}
-
-			// Reject empty path — same reasoning as read_file.
-			if strings.TrimSpace(input.Path) == "" {
-				return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path."), nil
-			}
-
-			// Malformed-args check, BEFORE the read-staleness check. Observed
-			// live: the model sent
-			//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
-			// — an empty old_str, a key literally named "", and write_file's
-			// `content` field instead of new_str. It got "file not read yet",
-			// which was true and said nothing about the four things wrong with
-			// the call, so the next attempt fumbled a different field.
-			if strings.TrimSpace(input.OldStr) == "" {
-				hint := ""
-				if bytes.Contains(rawInput, []byte(`"content"`)) {
-					hint = " You sent `content`, which is write_file's field — edit_file does not take it."
-				}
-				return noMutation("edit_file: old_str is required and cannot be empty." + hint +
-					" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
-					"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
-					"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
-					"take `content`."), nil
-			}
-
-			path := resolveAgentPath(ctx, input.Path)
-
-			// Require file was read first (staleness protection)
-			if !editViewIsCurrent(ctx, path) {
-				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", input.Path))
-			}
-
-			// Read current content
-			data, err := readRegularFile(path)
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
-			}
-			content := string(data)
-
-			// Check for staleness
-			if modifiedSinceSessionView(ctx, path, data) {
-				return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", input.Path))
-			}
-
-			// Find old_str. Exact bytes first; a match that needed quote-style
-			// or whitespace tolerance is allowed but reported, so the model
-			// knows which text of the file its new_str replaced.
-			actualOldStr := findActualString(content, input.OldStr)
-			matchNote := ""
-			if actualOldStr != "" && actualOldStr != input.OldStr {
-				matchNote = fmt.Sprintf("old_str matched %s only after treating curly and straight quotes as the "+
-					"same; the file's own text there was replaced by new_str exactly as sent.",
-					lineSpanOf(content, actualOldStr))
-			}
-			// An old_str that matches only after decoding HTML entities is NOT
-			// accepted by decoding new_str to match (GH #39's old shortcut):
-			// the replacement may hold entities on purpose (&amp; in markup,
-			// or in a Python string), and decoding it wrote different bytes
-			// from the ones sent. The targeted refusal below names the
-			// entities and the retry.
-			if actualOldStr == "" {
-				// read_file prints "12<tab>" before each line for reference
-				// and the model pastes back what it was shown. The edit used
-				// to strip the prefix from old_str and new_str and apply the
-				// result, reporting nothing: an unannounced rewrite of both
-				// arguments (stabilization cycle 2, smallrung_toml rep 2).
-				// old_str and new_str are applied exactly as sent; text that
-				// really begins "12<tab>" (tab-separated data) still edits,
-				// because it matched above. When only the prefix-free form
-				// matches, nothing is changed and the refusal gives the exact
-				// replace_lines call that makes this change without
-				// reproducing the text: the lines where it matched, their
-				// real contents, and a note if new_str carries the prefix too.
-				if stripped := stripLineNumberPrefixes(input.OldStr); stripped != input.OldStr {
-					if maybeMatch := findActualString(content, stripped); maybeMatch != "" {
-						log.Printf("[edit_file] old_str on %s matches only without read_file's line-number prefixes — refused", input.Path)
-						return nil, errNoMutation(fmt.Errorf("%s", prefixedEditRefusal(input.Path, content, maybeMatch,
-							input.OldStr, input.NewStr)))
-					}
-				}
-			}
-			if actualOldStr == "" {
-				// Last resort before failing: whitespace-tolerant line match.
-				// Small models can't reproduce a code block byte-for-byte —
-				// indentation width, tabs-vs-spaces, and trailing spaces drift
-				// constantly — so exact old_str matching is the #1 reason
-				// edit_file fails for them, which strands the whole V3/lens
-				// stack (it only engages after a successful edit). This
-				// matches old_str against the file ignoring per-line leading/
-				// trailing whitespace, and ONLY accepts a UNIQUE match — an
-				// ambiguous or content-different old_str still fails, so it
-				// can never silently edit the wrong place. Exact-matching
-				// (frontier) models never reach this path. See GH #39.
-				if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
-					log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
-					actualOldStr = fuzzy
-					matchNote = fmt.Sprintf("old_str matched %s only after ignoring leading and trailing whitespace "+
-						"on each line; those lines were replaced by new_str exactly as sent.", lineSpanOf(content, fuzzy))
-				}
-			}
-			if actualOldStr == "" {
-				// Degenerate old_str: not drift the fuzzy matcher can rescue,
-				// but corrupted output. Observed across three sessions —
-				// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
-				// the middle of copied code. "Must match byte-for-byte" is
-				// useless advice for that, and the model re-sent an equally
-				// corrupted block each time. Name it, and ask for the short
-				// anchor that is far less likely to degenerate.
-				// A long multi-line anchor is a transcription burden, and this
-				// model corrupts under it: asked to reproduce a ten-line block
-				// it emitted "safe_load_aller" for "safe_load_all". One line
-				// is enough to locate an edit, and both the tool description
-				// and the structural_edit steer already say so — repeat it
-				// here, where the failure actually happened.
-				// Checked before everything: one corrupted character is
-				// invisible next to a long old_str, and every other hint here
-				// sends the model to re-copy text it already copied right.
-				if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
-						"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
-						"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
-						"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
-						describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200)))
-				}
-				// Checked next because it is the most specific remaining: the
-				// text is otherwise correct and only carries read_file's
-				// display prefix. Saying "not found" here sends the model back to
-				// re-copy a line it already copied right.
-				if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
-						"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
-						"added for reference and is NOT in the file. Send the line text only, starting at "+
-						"the first real character. If you are ADDING lines rather than changing one, "+
-						"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
-						n, truncateStr(input.OldStr, 200)))
-				}
-				if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
-						"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
-						"Use `replace_lines` instead: give the start and end line numbers read_file "+
-						"printed and assert only the FIRST and LAST line of that range, so there is no "+
-						"multi-line block to reproduce. Or anchor edit_file on ONE short line that "+
-						"appears exactly once and put the whole replacement in `new_str`. If you are "+
-						"ADDING code rather than replacing it, use insert_after with the line number "+
-						"read_file printed — it needs no old_str at all.\nSearched for: %s",
-						lines, truncateStr(input.OldStr, 200)))
-				}
-				if n := strayCarriageReturns(input.OldStr); n >= 3 {
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` "+
-						"contains %d stray carriage returns and looks corrupted rather than copied "+
-						"— long blocks tend to come out this way. Use `replace_lines` on the line "+
-						"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
-						"file (the single line you are changing), not a multi-line block", n))
-				}
-				// Mismatch persists — return targeted error.
-				hasEntities := strings.Contains(input.OldStr, "&lt;") ||
-					strings.Contains(input.OldStr, "&gt;") ||
-					strings.Contains(input.OldStr, "&amp;")
-				literalsOnDisk := strings.ContainsAny(content, "<>&")
-				if hasEntities && literalsOnDisk {
-					alt := ""
-					if guide := selectorGuidance(input.Path, content); guide != "" {
-						alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector and the new content body, no old_str needed; " + guide + "."
-					}
-					return nil, errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
-						alt, truncateStr(input.OldStr, 200)))
-				}
-				// Generic mismatch — the model's old_str doesn't byte-match
-				// the file (whitespace, quotes, or paraphrase drift, which
-				// smaller models do constantly). For structured files,
-				// structural_edit sidesteps the whole problem: it selects the node
-				// by name, no old_str to reproduce exactly. Steer there.
-				astAlt := ""
-				if guide := selectorGuidance(input.Path, content); guide != "" {
-					astAlt = " To replace a whole function/class/element without " +
-						"matching exact text, use structural_edit with a selector and the " +
-						"new content — no old_str needed, so a near-miss can't fail it; " +
-						guide + "."
-				}
-				// Ground the retry in the file's REAL content. A small model
-				// frequently writes old_str from its memory of the file
-				// rather than the file itself (observed: old_str
-				// `item = items[id + 1]` for a file whose actual line is
-				// `return jsonify(items[item_id + 1])`). Without an anchor it
-				// gives up on the surgical edit and rewrites the whole node
-				// from the same faulty memory. Quoting the closest actual
-				// line gives it real bytes to copy into the next attempt.
-				hint := closestLineHint(content, input.OldStr)
-				return nil, errNoMutation(fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200)))
-			}
-
-			// Check uniqueness
-			count := strings.Count(content, actualOldStr)
-			if count > 1 && !input.ReplaceAll {
-				return nil, errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
-			}
-
-			// No-op check. The bare diagnosis was a dead end: the model
-			// copies old_str into new_str precisely because it cannot
-			// reproduce a span with a change applied, so telling it only
-			// that the two match gives it nothing to do differently and it
-			// re-sends the identical call until the loop breaker kills the
-			// session. Measured on a "build me a snake game" run: refused at
-			// turn 11, re-sent at 12 and 13, session dead at 757s with
-			// game.js half-written. Name the tool that removes the
-			// requirement it just failed.
-			if input.OldStr == input.NewStr {
-				alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
-				if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
-					alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
-				}
-				// The alternative it is being sent to needs line numbers, and
-				// "the line numbers read_file printed" may be many turns and
-				// several successful edits old. Measured (cycle 7 audit,
-				// family O): refused at turns 11, 14 and 16 against a file
-				// last read at turn 5, alternating with a structural_edit
-				// that changed nothing, until the run stopped on repeated
-				// refusals. Where those bytes sit RIGHT NOW is something this
-				// call already knows, so it is said here.
-				return nil, errNoMutation(fmt.Errorf(
-					"old_str and new_str are identical, so this edit would change nothing. "+
-						"Re-sending it will not help. You are being asked to reproduce a span "+
-						"verbatim AND change it, which is what just failed — use %s.%s "+
-						"If you meant to REPLACE the whole file, use write_file with the "+
-						"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
-			}
-
-			// Sanitise the replacement string before splicing it in. The
-			// model occasionally fences the new_str ("```python\n...\n```")
-			// even though it's a fragment, not a whole file. If we let
-			// that slip through, every line of the edit would have a
-			// stray ``` at the top and bottom.
-			if cleanedNew, sanitized := sanitizeFileContent(input.Path, input.NewStr); sanitized {
-				log.Printf("[edit_file] removed a whole-content fence wrapper from new_str of %s", input.Path)
-				input.NewStr = cleanedNew
-				defer func() { noteContentChange(res, wholeFileWrapperNote) }()
-			}
-
-			if matchNote != "" {
-				note := matchNote
-				defer func() { noteContentChange(res, note) }()
-			}
-
-			var newContent string
-			if input.ReplaceAll {
-				newContent = strings.ReplaceAll(content, actualOldStr, input.NewStr)
-			} else {
-				newContent = strings.Replace(content, actualOldStr, input.NewStr, 1)
-			}
-
-			// Shrinkage guard — same shape as structural_edit's. Catches the
-			// "model emitted a stub for old_str" failure where new_str
-			// is implausibly tiny for a substantial old_str. We compare
-			// the local replacement footprint (old_str → new_str), not
-			// whole-file size, so refactors that genuinely shrink the
-			// file aren't false-rejected.
-			if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
-				log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
-					input.Path, len(actualOldStr), len(input.NewStr))
-				// The shrinkage heuristic declining bytes that were formed.
-				return refusedNoCheck(rejection), nil
-			}
-
-			// No-op guard — same rationale as structural_edit's. new_str identical
-			// to old_str (or a replacement that leaves the file unchanged)
-			// must not report success: the model believes the fix landed
-			// and moves on while the bug is still on disk.
-			if newContent == content {
-				log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
-				return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
-					"Look at the current code again and emit a new_str that actually differs from the existing code."), nil
-			}
-
-			// Already-applied guard. The check above only catches an edit that
-			// leaves the file byte-identical; it cannot see an edit that
-			// applied once and is now being applied AGAIN. A whitespace-only
-			// change is the dangerous shape: after " x" replaces "x", the
-			// original old_str still matches as a substring, so the same call
-			// keeps succeeding and keeps adding whitespace. The repeat
-			// detector does not help — it needs three occurrences, and two
-			// runs of a 75-second edit is already two minutes gone.
-			editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
-			if ctx.AppliedEdits[editKey] {
-				log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
-				return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
-					"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
-					"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
-					"Read the file to see its current state, then either make a DIFFERENT edit or declare done."), nil
-			}
-
-			// Same pipeline entry every content edit uses; see
-			// runEditPipeline for why it is shared rather than inlined.
-			route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
-			if route.Cancelled != nil {
-				return route.Cancelled, nil
-			}
-			if route.Delivered {
-				// The candidate landed through the protected chain. Writing the
-				// caller's own edit now would undo a delivery that settlement
-				// and restoration already decided about.
-				return attachV3(route.Result, route.Meta), nil
-			}
-			v3Out := route.Meta
-			newContent = route.Content
-
-			// Syntax gate on the composed result. A truncated new_str (or a
-			// string-level edit that broke the file) must not land when V3
-			// verification didn't run or failed — same class as the
-			// write_file fallback gate (mini-bench t06/t09). Semantics:
-			// an edit must not INTRODUCE breakage — when the ORIGINAL
-			// content already fails to parse, a still-failing result is a
-			// permitted repair-in-progress (fixing one error at a time),
-			// so the gate only blocks healthy→broken transitions.
-			observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
-				content, newContent, func(detail string) string {
-					// An embedded-script finding is already model-ready and names
-					// its own fix; the generic wrapper's "check old_str/new_str"
-					// advice is wrong for JavaScript inside a string.
-					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
-						return msg
-					}
-					return fmt.Sprintf(
-						"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
-						input.Path, truncateStr(detail, 200))
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-
-			// Structural gate (#147): a parse-clean edit can still introduce
-			// an unresolved direct call (render_template with only
-			// render_template_string imported) that 500s at runtime. Block a
-			// write that NEWLY makes a name unresolved; a pre-existing one
-			// (mid-repair) is allowed, mirroring the syntax gate above.
-			if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
-				log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				return structuralRefusal(structuralRejection(input.Path, introduced)), nil
-			}
-			// edit_file ran checkFallbackSyntax, which parses the embedded
-			// script but has no pre-edit file to compare against, so the
-			// comparative findings — a render loop that stopped repeating, a
-			// lexical binding declared twice — were never checked here. Every
-			// other edit path had them. Observed: the same one-shot
-			// setTimeout the gate refuses under replace_lines landed through
-			// edit_file, and the page returned 200 with a dead game.
-			if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
-				log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, content, newContent); msg != "" {
-				log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "edit_file", input.Path, "")
-
-			// Atomic write
-			tmpPath := path + ".atlas.tmp"
-			if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot write %s: %w", input.Path, err), observed)
-			}
-			if err := os.Rename(tmpPath, path); err != nil {
-				os.Remove(tmpPath)
-				return nil, editWriteFailure(path,
-					fmt.Errorf("cannot rename temp file: %w", err), observed)
-			}
-
-			// Update cached state with whatever was actually written
-			ctx.RecordFileRead(path, newContent)
-			ctx.RecordBodySeen(path)
-
-			// Build diff preview against the original on-disk content
-			oldLines := strings.Count(input.OldStr, "\n") + 1
-			newLines := strings.Count(input.NewStr, "\n") + 1
-			preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
-
-			out := EditFileOutput{
-				OK:           true,
-				DiffPreview:  preview,
-				LinesAdded:   newLines - oldLines,
-				LinesRemoved: 0,
-			}
-			if newLines < oldLines {
-				out.LinesRemoved = oldLines - newLines
-				out.LinesAdded = 0
-			}
-
-			outBytes, _ := json.Marshal(out)
-			// Record it so an identical re-application is refused above.
-			if ctx.AppliedEdits != nil {
-				ctx.AppliedEdits[editKey] = true
-			}
-			result := &ToolResult{Success: true, Data: outBytes,
-				MutationStatus: MutationApplied}
-			// The observation describes exactly the bytes just written --
-			// the tool's own edit, an authorized V3 candidate, or a baseline
-			// restored after revocation, whichever runEditPipeline returned.
-			// Provenance is a separate fact and is attached below.
-			overlayValidation(result, observed)
-			if v3Out.Used {
-				result.V3Used = true
-				result.CandidatesTested = v3Out.CandidatesTested
-				result.WinningScore = v3Out.WinningScore
-				result.PhaseSolved = v3Out.PhaseSolved
-				result.VerificationEvidence = v3Out.VerificationEvidence
-			}
-			return result, nil
-		},
+		Execute:     executeEditFile,
 	}
+}
+
+// executeEditFile runs one edit_file call: it finds old_str in the file, checks
+// the edit, sends it down the pipeline every content edit shares, and writes
+// what comes back.
+func executeEditFile(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
+	var input EditFileInput
+	if err := json.Unmarshal(rawInput, &input); err != nil {
+		return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
+	}
+	if refusal := editInputRefusal(input, rawInput); refusal != nil {
+		return refusal, nil
+	}
+
+	path := resolveAgentPath(ctx, input.Path)
+	content, err := readFileToEdit(ctx, path, input.Path)
+	if err != nil {
+		return nil, err
+	}
+	actualOldStr, matchNote, err := locateOldStr(content, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := matchedEditError(content, actualOldStr, input); err != nil {
+		return nil, err
+	}
+
+	// Sanitise the replacement string before splicing it in. The
+	// model occasionally fences the new_str ("```python\n...\n```")
+	// even though it's a fragment, not a whole file. If we let
+	// that slip through, every line of the edit would have a
+	// stray ``` at the top and bottom.
+	if cleanedNew, sanitized := sanitizeFileContent(input.Path, input.NewStr); sanitized {
+		log.Printf("[edit_file] removed a whole-content fence wrapper from new_str of %s", input.Path)
+		input.NewStr = cleanedNew
+		defer func() { noteContentChange(res, wholeFileWrapperNote) }()
+	}
+
+	if matchNote != "" {
+		note := matchNote
+		defer func() { noteContentChange(res, note) }()
+	}
+
+	newContent := applyEdit(content, actualOldStr, input)
+	editKey := input.Path + "\x00" + input.OldStr + "\x00" + input.NewStr
+	if refusal := composedEditRefusal(ctx, input, content, newContent, actualOldStr, editKey); refusal != nil {
+		return refusal, nil
+	}
+
+	// Same pipeline entry every content edit uses; see
+	// runEditPipeline for why it is shared rather than inlined.
+	route := runEditPipeline(ctx, "edit_file", path, input.Path, content, newContent)
+	if route.Cancelled != nil {
+		return route.Cancelled, nil
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain. Writing the
+		// caller's own edit now would undo a delivery that settlement
+		// and restoration already decided about.
+		return attachV3(route.Result, route.Meta), nil
+	}
+	newContent = route.Content
+
+	// Syntax gate on the composed result. A truncated new_str (or a
+	// string-level edit that broke the file) must not land when V3
+	// verification didn't run or failed — same class as the
+	// write_file fallback gate (mini-bench t06/t09). Semantics:
+	// an edit must not INTRODUCE breakage — when the ORIGINAL
+	// content already fails to parse, a still-failing result is a
+	// permitted repair-in-progress (fixing one error at a time),
+	// so the gate only blocks healthy→broken transitions.
+	observed, refusal := editSyntaxObservation(ctx, "edit_file", path, input.Path,
+		content, newContent, editFileSyntaxMessage(input.Path))
+	if refusal != nil {
+		return refusal, nil
+	}
+	if refusal := editGateRefusal(ctx, path, input.Path, content, newContent); refusal != nil {
+		return refusal, nil
+	}
+	logMandatoryChecks(ctx, "edit_file", input.Path, "")
+
+	if err := writeEditedFile(path, input.Path, newContent, observed); err != nil {
+		return nil, err
+	}
+
+	// Update cached state with whatever was actually written
+	ctx.RecordFileRead(path, newContent)
+	ctx.RecordBodySeen(path)
+
+	out := editFileOutput(input, content, newContent, actualOldStr)
+	outBytes, _ := json.Marshal(out)
+	// Record it so an identical re-application is refused above.
+	if ctx.AppliedEdits != nil {
+		ctx.AppliedEdits[editKey] = true
+	}
+	result := &ToolResult{Success: true, Data: outBytes,
+		MutationStatus: MutationApplied}
+	// The observation describes exactly the bytes just written: the tool's
+	// own edit. A delivered candidate returned above.
+	overlayValidation(result, observed)
+	return result, nil
+}
+
+// editInputRefusal refuses a call whose arguments cannot name an edit.
+func editInputRefusal(input EditFileInput, rawInput json.RawMessage) *ToolResult {
+	// Reject empty path — same reasoning as read_file.
+	if strings.TrimSpace(input.Path) == "" {
+		return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.")
+	}
+
+	// Malformed-args check, BEFORE the read-staleness check. Observed
+	// live: the model sent
+	//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
+	// — an empty old_str, a key literally named "", and write_file's
+	// `content` field instead of new_str. It got "file not read yet",
+	// which was true and said nothing about the four things wrong with
+	// the call, so the next attempt fumbled a different field.
+	if strings.TrimSpace(input.OldStr) == "" {
+		hint := ""
+		if bytes.Contains(rawInput, []byte(`"content"`)) {
+			hint = " You sent `content`, which is write_file's field — edit_file does not take it."
+		}
+		return noMutation("edit_file: old_str is required and cannot be empty." + hint +
+			" The call is edit_file {\"path\":..., \"old_str\":<one unique line copied from the file>, " +
+			"\"new_str\":<what replaces it>}. To ADD lines rather than replace any, use " +
+			"insert_after {\"path\":..., \"line\":<number from read_file>, \"content\":...} — that one does " +
+			"take `content`.")
+	}
+	return nil
+}
+
+// readFileToEdit reads the file an edit names, if the model has seen what is
+// there now.
+func readFileToEdit(ctx *AgentContext, path, relPath string) (string, error) {
+	// Require file was read first (staleness protection)
+	if !editViewIsCurrent(ctx, path) {
+		return "", errNoMutation(fmt.Errorf("file not read yet — use read_file first before editing: %s", relPath))
+	}
+
+	// Read current content
+	data, err := readRegularFile(path)
+	if err != nil {
+		return "", errNoMutation(fmt.Errorf("cannot read %s: %w", relPath, err))
+	}
+
+	// Check for staleness
+	if modifiedSinceSessionView(ctx, path, data) {
+		return "", errNoMutation(fmt.Errorf("file modified since last read — read it again before editing: %s", relPath))
+	}
+	return string(data), nil
+}
+
+// locateOldStr finds the text of the file that old_str names, and a note for
+// the model when the match needed any tolerance.
+func locateOldStr(content string, input EditFileInput) (string, string, error) {
+	// Find old_str. Exact bytes first; a match that needed quote-style
+	// or whitespace tolerance is allowed but reported, so the model
+	// knows which text of the file its new_str replaced.
+	actualOldStr := findActualString(content, input.OldStr)
+	if actualOldStr == input.OldStr {
+		return actualOldStr, "", nil
+	}
+	if actualOldStr != "" {
+		return actualOldStr, fmt.Sprintf("old_str matched %s only after treating curly and straight quotes as the "+
+			"same; the file's own text there was replaced by new_str exactly as sent.",
+			lineSpanOf(content, actualOldStr)), nil
+	}
+	// An old_str that matches only after decoding HTML entities is NOT
+	// accepted by decoding new_str to match (GH #39's old shortcut):
+	// the replacement may hold entities on purpose (&amp; in markup,
+	// or in a Python string), and decoding it wrote different bytes
+	// from the ones sent. The targeted refusal below names the
+	// entities and the retry.
+	// read_file prints "12<tab>" before each line for reference
+	// and the model pastes back what it was shown. The edit used
+	// to strip the prefix from old_str and new_str and apply the
+	// result, reporting nothing: an unannounced rewrite of both
+	// arguments (stabilization cycle 2, smallrung_toml rep 2).
+	// old_str and new_str are applied exactly as sent; text that
+	// really begins "12<tab>" (tab-separated data) still edits,
+	// because it matched above. When only the prefix-free form
+	// matches, nothing is changed and the refusal gives the exact
+	// replace_lines call that makes this change without
+	// reproducing the text: the lines where it matched, their
+	// real contents, and a note if new_str carries the prefix too.
+	if stripped := stripLineNumberPrefixes(input.OldStr); stripped != input.OldStr {
+		if maybeMatch := findActualString(content, stripped); maybeMatch != "" {
+			log.Printf("[edit_file] old_str on %s matches only without read_file's line-number prefixes — refused", input.Path)
+			return "", "", errNoMutation(fmt.Errorf("%s", prefixedEditRefusal(input.Path, content, maybeMatch,
+				input.OldStr, input.NewStr)))
+		}
+	}
+	// Last resort before failing: whitespace-tolerant line match.
+	// Small models can't reproduce a code block byte-for-byte —
+	// indentation width, tabs-vs-spaces, and trailing spaces drift
+	// constantly — so exact old_str matching is the #1 reason
+	// edit_file fails for them, which strands the whole V3/lens
+	// stack (it only engages after a successful edit). This
+	// matches old_str against the file ignoring per-line leading/
+	// trailing whitespace, and ONLY accepts a UNIQUE match — an
+	// ambiguous or content-different old_str still fails, so it
+	// can never silently edit the wrong place. Exact-matching
+	// (frontier) models never reach this path. See GH #39.
+	if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
+		log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
+		return fuzzy, fmt.Sprintf("old_str matched %s only after ignoring leading and trailing whitespace "+
+			"on each line; those lines were replaced by new_str exactly as sent.", lineSpanOf(content, fuzzy)), nil
+	}
+	// Degenerate old_str: not drift the fuzzy matcher can rescue,
+	// but corrupted output. Observed across three sessions —
+	// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
+	// the middle of copied code. "Must match byte-for-byte" is
+	// useless advice for that, and the model re-sent an equally
+	// corrupted block each time. Name it, and ask for the short
+	// anchor that is far less likely to degenerate.
+	// A long multi-line anchor is a transcription burden, and this
+	// model corrupts under it: asked to reproduce a ten-line block
+	// it emitted "safe_load_aller" for "safe_load_all". One line
+	// is enough to locate an edit, and both the tool description
+	// and the structural_edit steer already say so — repeat it
+	// here, where the failure actually happened.
+	// Checked before everything: one corrupted character is
+	// invisible next to a long old_str, and every other hint here
+	// sends the model to re-copy text it already copied right.
+	if err := corruptedOldStrError(content, input); err != nil {
+		return "", "", err
+	}
+	return "", "", oldStrMismatchError(content, input)
+}
+
+// corruptedOldStrError names what is wrong with an old_str that was not copied
+// faithfully, or returns nil.
+func corruptedOldStrError(content string, input EditFileInput) error {
+	if bad := foreignRunes(input.OldStr, content); len(bad) > 0 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains %s, "+
+			"which appears nowhere in %s. That is a corrupted character, not a mis-copy — most often "+
+			"an operator that decoded wrong (`&&`, `||`, `>=`, `->`). Re-read the line from the file "+
+			"and re-emit `old_str` with plain ASCII operators.\nSearched for: %s",
+			describeForeignRunes(bad), input.Path, truncateStr(input.OldStr, 200)))
+	}
+	// Checked next because it is the most specific remaining: the
+	// text is otherwise correct and only carries read_file's
+	// display prefix. Saying "not found" here sends the model back to
+	// re-copy a line it already copied right.
+	if n := lineNumberPrefixedLines(input.OldStr); n > 0 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` still has "+
+			"read_file's line-number prefix on %d line(s) — the \"12<tab>\" at the start is "+
+			"added for reference and is NOT in the file. Send the line text only, starting at "+
+			"the first real character. If you are ADDING lines rather than changing one, "+
+			"insert_after takes that number directly and needs no old_str at all.\nSearched for: %s",
+			n, truncateStr(input.OldStr, 200)))
+	}
+	if lines := strings.Count(input.OldStr, "\n") + 1; lines >= 5 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` is %d lines "+
+			"long — reproducing that much text byte-for-byte is where these edits go wrong. "+
+			"Use `replace_lines` instead: give the start and end line numbers read_file "+
+			"printed and assert only the FIRST and LAST line of that range, so there is no "+
+			"multi-line block to reproduce. Or anchor edit_file on ONE short line that "+
+			"appears exactly once and put the whole replacement in `new_str`. If you are "+
+			"ADDING code rather than replacing it, use insert_after with the line number "+
+			"read_file printed — it needs no old_str at all.\nSearched for: %s",
+			lines, truncateStr(input.OldStr, 200)))
+	}
+	if n := strayCarriageReturns(input.OldStr); n >= 3 {
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` "+
+			"contains %d stray carriage returns and looks corrupted rather than copied "+
+			"— long blocks tend to come out this way. Use `replace_lines` on the line "+
+			"range instead, or re-emit `old_str` as ONE short unique line taken from the "+
+			"file (the single line you are changing), not a multi-line block", n))
+	}
+	return nil
+}
+
+// oldStrMismatchError is the targeted refusal for an old_str the file does not
+// hold.
+func oldStrMismatchError(content string, input EditFileInput) error {
+	// Mismatch persists — return targeted error.
+	hasEntities := strings.Contains(input.OldStr, "&lt;") ||
+		strings.Contains(input.OldStr, "&gt;") ||
+		strings.Contains(input.OldStr, "&amp;")
+	literalsOnDisk := strings.ContainsAny(content, "<>&")
+	if hasEntities && literalsOnDisk {
+		alt := ""
+		if guide := selectorGuidance(input.Path, content); guide != "" {
+			alt = " For whole-element rewrites, structural_edit is the cleaner option — it takes a selector and the new content body, no old_str needed; " + guide + "."
+		}
+		return errNoMutation(fmt.Errorf("string to replace not found in file. Your `old_str` contains HTML-entity-encoded characters (`&lt;` / `&gt;` / `&amp;`) but the file on disk has literal `<` / `>` / `&`. Re-emit `old_str` with literal angle brackets — JSON strings should contain literal `<` not `&lt;`.%s\nSearched for: %s",
+			alt, truncateStr(input.OldStr, 200)))
+	}
+	// Generic mismatch — the model's old_str doesn't byte-match
+	// the file (whitespace, quotes, or paraphrase drift, which
+	// smaller models do constantly). For structured files,
+	// structural_edit sidesteps the whole problem: it selects the node
+	// by name, no old_str to reproduce exactly. Steer there.
+	astAlt := ""
+	if guide := selectorGuidance(input.Path, content); guide != "" {
+		astAlt = " To replace a whole function/class/element without " +
+			"matching exact text, use structural_edit with a selector and the " +
+			"new content — no old_str needed, so a near-miss can't fail it; " +
+			guide + "."
+	}
+	// Ground the retry in the file's REAL content. A small model
+	// frequently writes old_str from its memory of the file
+	// rather than the file itself (observed: old_str
+	// `item = items[id + 1]` for a file whose actual line is
+	// `return jsonify(items[item_id + 1])`). Without an anchor it
+	// gives up on the surgical edit and rewrites the whole node
+	// from the same faulty memory. Quoting the closest actual
+	// line gives it real bytes to copy into the next attempt.
+	hint := closestLineHint(content, input.OldStr)
+	return errNoMutation(fmt.Errorf("string to replace not found in file. old_str must match the file byte-for-byte (whitespace and quotes included).%s%s\nSearched for: %s", astAlt, hint, truncateStr(input.OldStr, 200)))
+}
+
+// matchedEditError refuses an edit whose old_str was found but cannot be applied
+// as sent.
+func matchedEditError(content, actualOldStr string, input EditFileInput) error {
+	// Check uniqueness
+	count := strings.Count(content, actualOldStr)
+	if count > 1 && !input.ReplaceAll {
+		return errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
+	}
+
+	// No-op check. The bare diagnosis was a dead end: the model
+	// copies old_str into new_str precisely because it cannot
+	// reproduce a span with a change applied, so telling it only
+	// that the two match gives it nothing to do differently and it
+	// re-sends the identical call until the loop breaker kills the
+	// session. Measured on a "build me a snake game" run: refused at
+	// turn 11, re-sent at 12 and 13, session dead at 757s with
+	// game.js half-written. Name the tool that removes the
+	// requirement it just failed.
+	if input.OldStr == input.NewStr {
+		alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
+		if ext := strings.ToLower(filepath.Ext(input.Path)); ext == ".py" || ext == ".html" || ext == ".htm" {
+			alt = "`structural_edit` with a selector (e.g. `function:update`) and the new body — it needs no old_str at all, so there is nothing to copy"
+		}
+		// The alternative it is being sent to needs line numbers, and
+		// "the line numbers read_file printed" may be many turns and
+		// several successful edits old. Measured (cycle 7 audit,
+		// family O): refused at turns 11, 14 and 16 against a file
+		// last read at turn 5, alternating with a structural_edit
+		// that changed nothing, until the run stopped on repeated
+		// refusals. Where those bytes sit RIGHT NOW is something this
+		// call already knows, so it is said here.
+		return errNoMutation(fmt.Errorf(
+			"old_str and new_str are identical, so this edit would change nothing. "+
+				"Re-sending it will not help. You are being asked to reproduce a span "+
+				"verbatim AND change it, which is what just failed — use %s.%s "+
+				"If you meant to REPLACE the whole file, use write_file with the "+
+				"complete new contents", alt, currentSpanNote(input.Path, content, actualOldStr)))
+	}
+	return nil
+}
+
+// applyEdit is the file with the edit applied.
+func applyEdit(content, actualOldStr string, input EditFileInput) string {
+	if input.ReplaceAll {
+		return strings.ReplaceAll(content, actualOldStr, input.NewStr)
+	}
+	return strings.Replace(content, actualOldStr, input.NewStr, 1)
+}
+
+// composedEditRefusal refuses a composed edit that should not go further.
+func composedEditRefusal(ctx *AgentContext, input EditFileInput, content, newContent, actualOldStr,
+	editKey string) *ToolResult {
+	// Shrinkage guard — same shape as structural_edit's. Catches the
+	// "model emitted a stub for old_str" failure where new_str
+	// is implausibly tiny for a substantial old_str. We compare
+	// the local replacement footprint (old_str → new_str), not
+	// whole-file size, so refactors that genuinely shrink the
+	// file aren't false-rejected.
+	if rejection := validateNotSuspiciouslyShrunk("edit_file", input.Path, len(actualOldStr), len(input.NewStr)); rejection != "" {
+		log.Printf("[edit_file] rejecting suspicious shrinkage: %s old_str=%dB new_str=%dB",
+			input.Path, len(actualOldStr), len(input.NewStr))
+		// The shrinkage heuristic declining bytes that were formed.
+		return refusedNoCheck(rejection)
+	}
+
+	// No-op guard — same rationale as structural_edit's. new_str identical
+	// to old_str (or a replacement that leaves the file unchanged)
+	// must not report success: the model believes the fix landed
+	// and moves on while the bug is still on disk.
+	if newContent == content {
+		log.Printf("[edit_file] no-op edit rejected for %s — file content unchanged", input.Path)
+		return noMutation("edit_file: new_str is identical to old_str — nothing was changed and the bug is still there. " +
+			"Look at the current code again and emit a new_str that actually differs from the existing code.")
+	}
+
+	// Already-applied guard. The check above only catches an edit that
+	// leaves the file byte-identical; it cannot see an edit that
+	// applied once and is now being applied AGAIN. A whitespace-only
+	// change is the dangerous shape: after " x" replaces "x", the
+	// original old_str still matches as a substring, so the same call
+	// keeps succeeding and keeps adding whitespace. The repeat
+	// detector does not help — it needs three occurrences, and two
+	// runs of a 75-second edit is already two minutes gone.
+	if ctx.AppliedEdits[editKey] {
+		log.Printf("[edit_file] duplicate edit rejected for %s — already applied this session", input.Path)
+		return refusedNoCheck("edit_file: this exact edit already succeeded earlier in this " +
+			"session, so applying it again would just repeat it — and when the change is whitespace-only, the " +
+			"old_str still matches afterwards, so it can repeat forever. The file already has this change. " +
+			"Read the file to see its current state, then either make a DIFFERENT edit or declare done.")
+	}
+	return nil
+}
+
+// editFileSyntaxMessage is edit_file's refusal for a result that does not parse.
+func editFileSyntaxMessage(relPath string) func(string) string {
+	return func(detail string) string {
+		// An embedded-script finding is already model-ready and names
+		// its own fix; the generic wrapper's "check old_str/new_str"
+		// advice is wrong for JavaScript inside a string.
+		if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
+			return msg
+		}
+		return fmt.Sprintf(
+			"edit_file result for %s does not parse (%s). The file was NOT modified — check that old_str/new_str are complete and re-issue the edit.",
+			relPath, truncateStr(detail, 200))
+	}
+}
+
+// editGateRefusal runs edit_file's gates after the syntax gate.
+func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *ToolResult {
+	// Structural gate (#147): a parse-clean edit can still introduce
+	// an unresolved direct call (render_template with only
+	// render_template_string imported) that 500s at runtime. Block a
+	// write that NEWLY makes a name unresolved; a pre-existing one
+	// (mid-repair) is allowed, mirroring the syntax gate above.
+	if introduced := editIntroducesUnresolved(ctx, path, content, newContent); len(introduced) > 0 {
+		log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
+		return structuralRefusal(structuralRejection(relPath, introduced))
+	}
+	// edit_file ran checkFallbackSyntax, which parses the embedded
+	// script but has no pre-edit file to compare against, so the
+	// comparative findings — a render loop that stopped repeating, a
+	// lexical binding declared twice — were never checked here. Every
+	// other edit path had them. Observed: the same one-shot
+	// setTimeout the gate refuses under replace_lines landed through
+	// edit_file, and the page returned 200 with a dead game.
+	if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	if msg := duplicateMainGuard(path, content, newContent); msg != "" {
+		log.Printf("[edit_file] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	return nil
+}
+
+// writeEditedFile replaces the file atomically.
+func writeEditedFile(path, relPath, newContent string, observed checkOutcome) error {
+	tmpPath := path + atomicTempSuffix
+	if err := os.WriteFile(tmpPath, []byte(newContent), 0644); err != nil {
+		return editWriteFailure(path,
+			fmt.Errorf("cannot write %s: %w", relPath, err), observed)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return editWriteFailure(path,
+			fmt.Errorf("cannot rename temp file: %w", err), observed)
+	}
+	return nil
+}
+
+// editFileOutput is what edit_file tells the model about the change.
+func editFileOutput(input EditFileInput, content, newContent, actualOldStr string) EditFileOutput {
+	// Build diff preview against the original on-disk content
+	oldLines := strings.Count(input.OldStr, "\n") + 1
+	newLines := strings.Count(input.NewStr, "\n") + 1
+	preview := buildDiffPreview(content, newContent, actualOldStr, input.NewStr)
+
+	out := EditFileOutput{
+		OK:           true,
+		DiffPreview:  preview,
+		LinesAdded:   newLines - oldLines,
+		LinesRemoved: 0,
+	}
+	if newLines < oldLines {
+		out.LinesRemoved = oldLines - newLines
+		out.LinesAdded = 0
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -2470,348 +2579,413 @@ func structuralEditTool() *ToolDef {
 		InputSchema: StructuralEditInput{},
 		ReadOnly:    false,
 		Destructive: false,
-		Execute: func(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
-			var input StructuralEditInput
-			if err := json.Unmarshal(rawInput, &input); err != nil {
-				return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
-			}
-			if strings.TrimSpace(input.Path) == "" {
-				return noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path."), nil
-			}
-			if strings.TrimSpace(input.Selector) == "" {
-				return noMutation("structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>"), nil
-			}
-
-			path := resolveAgentPath(ctx, input.Path)
-			if !editViewIsCurrent(ctx, path) {
-				return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
-			}
-
-			data, err := readRegularFile(path)
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
-			}
-			source := string(data)
-
-			// Empty-content guard. Replacing a node with nothing is a
-			// deletion, not an edit — observed live: a model called structural_edit
-			// with the `content` field omitted entirely, which spliced an
-			// empty string over `function:add` and silently deleted it
-			// (calc.py lost both functions while __main__ still called
-			// them). It passes the syntax gate (the file still parses) and
-			// the no-op guard (the content did change), so nothing else
-			// catches it. Refuse it and steer: an edit needs a replacement
-			// body; an intentional removal is delete_file's job.
-			if strings.TrimSpace(input.Content) == "" {
-				log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
-				return noMutation(fmt.Sprintf(
-					"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
-						"Provide the full replacement body of the node (e.g. the corrected function definition). "+
-						"If you truly mean to remove code, use delete_file on the whole file instead.",
-					input.Selector)), nil
-			}
-
-			// Runaway-content guard. structural_edit replaces ONE node, so the
-			// replacement should be roughly node-sized. A reasoning-heavy
-			// model sometimes leaks its entire chain-of-thought into the
-			// content field instead of emitting just the new body — observed
-			// live: a 69KB "content" for a 3-line function, full of
-			// "# Wait, the user said..." commentary. That blob then ships to
-			// disk and, being huge, trips downstream size heuristics (it once
-			// re-triggered a 23-min V3 PlanSearch). Reject when the
-			// replacement is implausibly larger than the whole file: >4× the
-			// file and over an 8KB floor (so legit edits that grow a small
-			// file stay clear, and large-function edits in large files aren't
-			// touched). Steer the model to emit only the replacement node.
-			if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
-				log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
-					input.Path, input.Selector, len(input.Content), len(source))
-				return noMutation(fmt.Sprintf(
-					"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
-						"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
-						"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
-					len(input.Content), len(source), input.Selector)), nil
-			}
-
-			if modifiedSinceSessionView(ctx, path, data) {
-				return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path))
-			}
-
-			// Sanitise replacement content the same way edit_file does — the
-			// model occasionally fences fragments with ```python or ```html.
-			if cleaned, sanitized := sanitizeFileContent(input.Path, input.Content); sanitized {
-				log.Printf("[structural_edit] removed a whole-content fence wrapper from content of %s", input.Path)
-				input.Content = cleaned
-				defer func() { noteContentChange(res, wholeFileWrapperNote) }()
-			}
-
-			// HTML <html>-selector quirk. structural_edit replaces only the
-			// <html>...</html> element, not the <!DOCTYPE> declaration that
-			// conventionally precedes it. The model often emits a leading
-			// <!DOCTYPE html> at the top of `content` when the selector is
-			// <html>, which would leave a duplicated doctype on disk. Detect
-			// that shape and strip the leading doctype line so on-disk
-			// output matches intent.
-			ext := strings.ToLower(filepath.Ext(input.Path))
-			isHTML := ext == ".html" || ext == ".htm"
-			if isHTML && strings.EqualFold(strings.TrimSpace(input.Selector), "<html>") {
-				if stripped, ok := stripLeadingDoctype(input.Content); ok {
-					log.Printf("[structural_edit] stripped leading <!DOCTYPE> from content of %s — selector <html> only replaces the html element, not the preceding doctype", input.Path)
-					input.Content = stripped
-				}
-			}
-
-			// Call v3-service /internal/structural_edit. Stateless transform:
-			// proxy reads + writes (preserving lens-score-before-write),
-			// v3-service is the tree-sitter authority.
-			reqBody, _ := json.Marshal(map[string]interface{}{
-				"path":     input.Path, // for language detection + error messages
-				"source":   source,
-				"selector": input.Selector,
-				"content":  input.Content,
-			})
-			v3URL := ctx.V3URL
-			if v3URL == "" {
-				return nil, errNoMutation(fmt.Errorf("structural_edit unavailable: V3 service URL not configured"))
-			}
-			req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/structural_edit", bytes.NewReader(reqBody))
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("structural_edit: build request: %w", err))
-			}
-			req.Header.Set(headerContentType, contentTypeJSON)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
-			}
-			defer resp.Body.Close()
-			respBytes, err := io.ReadAll(serviceAnswer(resp.Body))
-			if err != nil {
-				return nil, errNoMutation(fmt.Errorf("structural_edit: read v3 response: %w", err))
-			}
-			var astResp struct {
-				Success    bool   `json:"success"`
-				Error      string `json:"error,omitempty"`
-				Language   string `json:"language,omitempty"`
-				NewContent string `json:"new_content,omitempty"`
-				ByteRange  []int  `json:"byte_range,omitempty"`
-				OldSize    int    `json:"old_size,omitempty"`
-				NewSize    int    `json:"new_size,omitempty"`
-			}
-			if err := json.Unmarshal(respBytes, &astResp); err != nil {
-				return nil, errNoMutation(fmt.Errorf("structural_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200)))
-			}
-			if !astResp.Success {
-				// The selector matched nothing, or the splice would not parse:
-				// either way no replacement content came back to write.
-				return noMutation(astResp.Error + moduleLevelContentNote(ctx, input.Path, input.Content)), nil
-			}
-
-			// Shrinkage guard: catch a destructive stub, such as only
-			// "<!DOCTYPE html>" emitted for a whole <html>-element
-			// rewrite. astResp.OldSize is the original node's bytes;
-			// astResp.NewSize is the replacement bytes. If the replacement
-			// is suspiciously small for the original, reject the write and
-			// tell the model to re-emit with the full body.
-			if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
-				log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
-					input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
-				return refusedNoCheck(rejection), nil
-			}
-
-			// V3 routing. The tier is the higher of the pre-edit and post-edit
-			// content, so a destructive edit that shrinks a T2+ file into a
-			// stub still reaches V3: those are the edits that most need
-			// checking. structural_edit is already surgical (the model named
-			// the exact node, and the replacement is its own tree-sitter
-			// transform), so running PlanSearch on every one-line edit is
-			// mostly cost: minutes per edit, which looks like a hang. V3 runs
-			// only when editGenerationBypass allows it: a T2+ file complex
-			// enough for editWarrantsV3, outside an active debug loop.
-			//
-			// The baseline candidate is the structurally edited full file; a V3
-			// alternative lands only through the protected route below,
-			// otherwise the structurally edited content passes through
-			// unchanged.
-			finalContent := astResp.NewContent
-
-			// No-op guard. A weak model frequently "fixes" a bug by
-			// re-emitting the node's existing (broken) code verbatim —
-			// observed live: structural_edit function:add with content identical
-			// to the buggy body, twice in one batch. Reporting success on
-			// a no-op tells the model the fix landed when nothing changed;
-			// it then moves on to verification, fails, and can't work out
-			// why. Fail loudly instead so the model re-derives the edit.
-			if finalContent == source {
-				log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
-				return noMutation(fmt.Sprintf(
-					"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
-						"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
-					input.Selector)), nil
-			}
-			v3Out := V3EditMetadata{}
-			oldTier := classifyFileTier(input.Path, source) // pre-edit content
-			newTier := classifyFileTier(input.Path, finalContent)
-			fileTier := oldTier
-			if newTier > fileTier {
-				fileTier = newTier
-			}
-			cc, ccOK := cyclomaticComplexity(ctx, input.Path, finalContent)
-			if ccOK {
-				if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
-					log.Printf("[structural_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
-					fileTier = refined
-				}
-			}
-			// A session iterating on its own file after a failed run is in
-			// the write-run-fix loop; V3's toll there only delays the next
-			// execution. The write path has had this fast-track since PC-190;
-			// the edit path never consulted it. Measured: three 900s timeout
-			// deaths whose sessions each paid one full V3 run and then
-			// V3-improve on every corrective edit until the clock died.
-			structuralBypass := editGenerationBypass(ctx, fileTier,
-				editWarrantsV3(finalContent, cc, ccOK),
-				isActiveDebugIteration(ctx, input.Path))
-			recordCandidateGenerationBypass(ctx, "structural_edit", structuralBypass,
-				fileTier, strings.Count(finalContent, "\n")+1)
-			logBudgetBypass("structural_edit", input.Path, structuralBypass)
-			if structuralBypass == bypassNone {
-				log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
-				// THE protected edit route, same owner as the other three edit
-				// tools: a service proposal reaches disk only through the
-				// evidence, authorization, one-time grant, exact-byte delivery,
-				// ledger, validation and settlement chain, and otherwise the
-				// caller's own structurally edited content is what stays.
-				route := deliverEditCandidate(ctx, "structural_edit", path,
-					input.Path, source, finalContent)
-				if route.Cancelled != nil {
-					return noMutation("structural_edit cancelled — no content was written"), nil
-				}
-				if route.Delivered {
-					// The candidate landed through the protected chain.
-					// Writing the caller's own content now would undo a
-					// delivery settlement and restoration already decided.
-					return attachV3(route.Result, route.Meta), nil
-				}
-				finalContent = route.Content
-				v3Out = route.Meta
-			}
-
-			// The healthy->broken rule the other three edit tools share.
-			// The splice service only shows it could re-parse its own
-			// output, and a splice can still leave a file unparseable. A
-			// file that already failed stays editable, which is what makes
-			// repair-in-progress possible, and the check fails open when it
-			// cannot run.
-			observed, refusal := editSyntaxObservation(ctx, "structural_edit", input.Path, input.Path,
-				source, finalContent, func(detail string) string {
-					if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
-						return msg
-					}
-					return fmt.Sprintf(
-						"structural_edit result for %s does not parse (%s). The file was NOT modified.%s\n"+
-							"Check that the replacement for `%s` is complete and re-issue the edit.",
-						input.Path, truncateStr(detail, 200), offendingLineNote(finalContent, detail), input.Selector)
-				})
-			if refusal != nil {
-				return refusal, nil
-			}
-
-			// Structural gate (#147): the structural splice guarantees the result
-			// parses, but not that its calls resolve — the observed failure
-			// was a structural_edit that introduced a render_template call with only
-			// render_template_string imported, which landed as verified and
-			// 500'd every request. Block a write that NEWLY makes a direct
-			// call unresolved (healthy->broken); a pre-existing one is left
-			// alone for repair-in-progress. Fail-open when the check can't run.
-			if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
-				log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(input.Path))
-				return structuralRefusal(structuralRejection(input.Path, introduced)), nil
-			}
-
-			// Embedded-script gate: the post-splice check in v3-service
-			// proves the .py/.html parses, not that the JavaScript inside a
-			// <script> block does — and `<script>` is a first-class selector
-			// here, so this tool is the likeliest way to land broken JS.
-			// Healthy->broken, fail-soft.
-			if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
-				log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
-				log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(input.Path))
-				return structuralRefusal(msg), nil
-			}
-			logMandatoryChecks(ctx, "structural_edit", input.Path, "")
-
-			// Atomic write — same pattern as edit_file/write_file.
-			tmpPath := path + ".atlas.tmp"
-			if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
-				return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot write %s: %w", input.Path, err))
-			}
-			if err := os.Rename(tmpPath, path); err != nil {
-				os.Remove(tmpPath)
-				return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot rename temp file: %w", err))
-			}
-			ctx.RecordFileRead(path, finalContent)
-			ctx.RecordBodySeen(path)
-
-			log.Printf("[structural_edit] %s %s selector=%q lang=%s old=%dB new=%dB v3=%v",
-				input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, len(finalContent), v3Out.Used)
-
-			out := StructuralEditOutput{
-				OK:       true,
-				Selector: input.Selector,
-				Language: astResp.Language,
-				BytesOld: astResp.OldSize,
-				BytesNew: len(finalContent),
-			}
-			// The splice landed. Validation used to stay not_run, on sound
-			// reasoning: the tree-sitter transform only proves v3-service
-			// could re-parse ITS output, this tool ran no check of its own on
-			// the bytes it writes -- which may be a V3 replacement rather
-			// than the splice -- and reading the service's ok boolean as a
-			// syntax pass is exactly the inference overlayValidation exists
-			// to prevent.
-			//
-			// The conclusion was right and the premise was fixable: run the
-			// check. not_run is not a neutral answer at the exit. A path can
-			// only retire its mutation debt on a verdict about its CURRENT
-			// bytes, so every file edited this way carried debt that nothing
-			// could ever discharge. Measured on offbyone: the run reproduced
-			// the bug, fixed chunks() with structural_edit, re-ran its
-			// reproduction and printed the corrected output -- and still
-			// ended `unresolved_mutation_debt`, told that chunk.py "was never
-			// written in a state this run could check". It had been.
-			//
-			// The verdict is real, so a clean splice settles and a broken one
-			// is recorded as broken instead of as unknown. It is the check the
-			// healthy->broken rule already ran on exactly these bytes: a splice
-			// that lands failing was a repair of a file that already failed.
-			spliceCheck := observed
-			if spliceCheck.Status == ValidationFailed {
-				log.Printf("[structural_edit] %s landed but does not parse (%s)",
-					logPath(input.Path), safeDiagnosticSummary(spliceCheck.Detail))
-				out.Warning = fmt.Sprintf(
-					"the edit landed, but %s does not parse now (%s). Run it and "+
-						"read the real traceback, then fix that line.",
-					input.Path, truncateStr(spliceCheck.Detail, 160))
-			}
-			outBytes, _ := json.Marshal(out)
-			result := &ToolResult{Success: true, Data: outBytes,
-				MutationStatus:   MutationApplied,
-				ValidationKind:   ValidationKindSyntax,
-				ValidationStatus: ValidationNotRun}
-			overlayValidation(result, spliceCheck)
-			if v3Out.Used {
-				result.V3Used = true
-				result.CandidatesTested = v3Out.CandidatesTested
-				result.WinningScore = v3Out.WinningScore
-				result.PhaseSolved = v3Out.PhaseSolved
-				result.VerificationEvidence = v3Out.VerificationEvidence
-			}
-			return result, nil
-		},
+		Execute:     executeStructuralEdit,
 	}
+}
+
+// executeStructuralEdit runs one structural_edit call: it checks the call, has
+// the service splice the node in, sends the result down the protected route
+// when that applies, and writes what comes back.
+func executeStructuralEdit(rawInput json.RawMessage, ctx *AgentContext) (res *ToolResult, execErr error) {
+	var input StructuralEditInput
+	if err := json.Unmarshal(rawInput, &input); err != nil {
+		return nil, errNoMutation(fmt.Errorf("invalid input: %w", err))
+	}
+	if refusal := structuralInputRefusal(input); refusal != nil {
+		return refusal, nil
+	}
+
+	path := resolveAgentPath(ctx, input.Path)
+	if !editViewIsCurrent(ctx, path) {
+		return nil, errNoMutation(fmt.Errorf("file not read yet — use read_file first before structural_edit: %s", input.Path))
+	}
+
+	data, err := readRegularFile(path)
+	if err != nil {
+		return nil, errNoMutation(fmt.Errorf("cannot read %s: %w", input.Path, err))
+	}
+	source := string(data)
+	if refusal := structuralContentRefusal(input, source); refusal != nil {
+		return refusal, nil
+	}
+
+	if modifiedSinceSessionView(ctx, path, data) {
+		return nil, errNoMutation(fmt.Errorf("file modified since last read — read it again before structural_edit: %s", input.Path))
+	}
+
+	// Sanitise replacement content the same way edit_file does — the
+	// model occasionally fences fragments with ```python or ```html.
+	if cleaned, sanitized := sanitizeFileContent(input.Path, input.Content); sanitized {
+		log.Printf("[structural_edit] removed a whole-content fence wrapper from content of %s", input.Path)
+		input.Content = cleaned
+		defer func() { noteContentChange(res, wholeFileWrapperNote) }()
+	}
+
+	input.Content = withoutRepeatedDoctype(input)
+
+	astResp, err := spliceStructuralEdit(ctx, input, source)
+	if err != nil {
+		return nil, err
+	}
+	if refusal := spliceRefusal(ctx, input, source, astResp); refusal != nil {
+		return refusal, nil
+	}
+	finalContent, routed := routeStructuralEdit(ctx, input, path, source, astResp.NewContent)
+	if routed != nil {
+		return routed, nil
+	}
+
+	// The healthy->broken rule the other three edit tools share.
+	// The splice service only shows it could re-parse its own
+	// output, and a splice can still leave a file unparseable. A
+	// file that already failed stays editable, which is what makes
+	// repair-in-progress possible, and the check fails open when it
+	// cannot run.
+	observed, refusal := editSyntaxObservation(ctx, "structural_edit", input.Path, input.Path,
+		source, finalContent, structuralSyntaxMessage(input, finalContent))
+	if refusal != nil {
+		return refusal, nil
+	}
+	if refusal := structuralGateRefusal(ctx, path, input.Path, source, finalContent); refusal != nil {
+		return refusal, nil
+	}
+	logMandatoryChecks(ctx, "structural_edit", input.Path, "")
+
+	// Atomic write — same pattern as edit_file/write_file.
+	tmpPath := path + atomicTempSuffix
+	if err := os.WriteFile(tmpPath, []byte(finalContent), 0644); err != nil {
+		return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot write %s: %w", input.Path, err))
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return nil, errFailedMutationSyntaxUnrun(fmt.Errorf("cannot rename temp file: %w", err))
+	}
+	ctx.RecordFileRead(path, finalContent)
+	ctx.RecordBodySeen(path)
+
+	log.Printf("[structural_edit] %s %s selector=%q lang=%s old=%dB new=%dB",
+		input.Path, input.Selector, input.Selector, astResp.Language, astResp.OldSize, len(finalContent))
+
+	outBytes, _ := json.Marshal(structuralEditOutput(input, astResp, finalContent, observed))
+	result := &ToolResult{Success: true, Data: outBytes,
+		MutationStatus:   MutationApplied,
+		ValidationKind:   ValidationKindSyntax,
+		ValidationStatus: ValidationNotRun}
+	overlayValidation(result, observed)
+	return result, nil
+}
+
+// structuralInputRefusal refuses a call that names no file or no node.
+func structuralInputRefusal(input StructuralEditInput) *ToolResult {
+	if strings.TrimSpace(input.Path) == "" {
+		return noMutation("structural_edit: path cannot be empty. Read the file first then structural_edit with the same path.")
+	}
+	if strings.TrimSpace(input.Selector) == "" {
+		return noMutation("structural_edit: selector cannot be empty. Examples: function:dashboard, class:UserModel, <body>")
+	}
+	return nil
+}
+
+// structuralContentRefusal refuses a replacement that cannot be one node's body.
+func structuralContentRefusal(input StructuralEditInput, source string) *ToolResult {
+	// Empty-content guard. Replacing a node with nothing is a
+	// deletion, not an edit — observed live: a model called structural_edit
+	// with the `content` field omitted entirely, which spliced an
+	// empty string over `function:add` and silently deleted it
+	// (calc.py lost both functions while __main__ still called
+	// them). It passes the syntax gate (the file still parses) and
+	// the no-op guard (the content did change), so nothing else
+	// catches it. Refuse it and steer: an edit needs a replacement
+	// body; an intentional removal is delete_file's job.
+	if strings.TrimSpace(input.Content) == "" {
+		log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
+		return noMutation(fmt.Sprintf(
+			"structural_edit: content is empty — that would DELETE `%s`, not fix it. "+
+				"Provide the full replacement body of the node (e.g. the corrected function definition). "+
+				"If you truly mean to remove code, use delete_file on the whole file instead.",
+			input.Selector))
+	}
+
+	// Runaway-content guard. structural_edit replaces ONE node, so the
+	// replacement should be roughly node-sized. A reasoning-heavy
+	// model sometimes leaks its entire chain-of-thought into the
+	// content field instead of emitting just the new body — observed
+	// live: a 69KB "content" for a 3-line function, full of
+	// "# Wait, the user said..." commentary. That blob then ships to
+	// disk and, being huge, trips downstream size heuristics (it once
+	// re-triggered a 23-min V3 PlanSearch). Reject when the
+	// replacement is implausibly larger than the whole file: >4× the
+	// file and over an 8KB floor (so legit edits that grow a small
+	// file stay clear, and large-function edits in large files aren't
+	// touched). Steer the model to emit only the replacement node.
+	if len(input.Content) > 8000 && len(input.Content) > len(source)*4 {
+		log.Printf("[structural_edit] rejected runaway content for %s selector=%q: %d chars vs %d-byte file",
+			input.Path, input.Selector, len(input.Content), len(source))
+		return noMutation(fmt.Sprintf(
+			"structural_edit: replacement content is %d characters — far larger than the entire %d-byte file. "+
+				"You only need to provide the new body of the single node `%s` (just the function/class/element itself), "+
+				"not the whole file and not your reasoning. Re-emit structural_edit with content set to ONLY the replacement node.",
+			len(input.Content), len(source), input.Selector))
+	}
+	return nil
+}
+
+// withoutRepeatedDoctype is the replacement, without a doctype the file keeps.
+func withoutRepeatedDoctype(input StructuralEditInput) string {
+	// HTML <html>-selector quirk. structural_edit replaces only the
+	// <html>...</html> element, not the <!DOCTYPE> declaration that
+	// conventionally precedes it. The model often emits a leading
+	// <!DOCTYPE html> at the top of `content` when the selector is
+	// <html>, which would leave a duplicated doctype on disk. Detect
+	// that shape and strip the leading doctype line so on-disk
+	// output matches intent.
+	ext := strings.ToLower(filepath.Ext(input.Path))
+	isHTML := ext == ".html" || ext == ".htm"
+	if isHTML && strings.EqualFold(strings.TrimSpace(input.Selector), "<html>") {
+		if stripped, ok := stripLeadingDoctype(input.Content); ok {
+			log.Printf("[structural_edit] stripped leading <!DOCTYPE> from content of %s — selector <html> only replaces the html element, not the preceding doctype", input.Path)
+			input.Content = stripped
+		}
+	}
+	return input.Content
+}
+
+// structuralSplice is v3-service's answer to /internal/structural_edit.
+type structuralSplice struct {
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+	Language   string `json:"language,omitempty"`
+	NewContent string `json:"new_content,omitempty"`
+	ByteRange  []int  `json:"byte_range,omitempty"`
+	OldSize    int    `json:"old_size,omitempty"`
+	NewSize    int    `json:"new_size,omitempty"`
+}
+
+// spliceStructuralEdit has v3-service splice the replacement into the file.
+func spliceStructuralEdit(ctx *AgentContext, input StructuralEditInput, source string) (structuralSplice, error) {
+	// Call v3-service /internal/structural_edit. Stateless transform:
+	// proxy reads + writes (preserving lens-score-before-write),
+	// v3-service is the tree-sitter authority.
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"path":     input.Path, // for language detection + error messages
+		"source":   source,
+		"selector": input.Selector,
+		"content":  input.Content,
+	})
+	v3URL := ctx.V3URL
+	if v3URL == "" {
+		return structuralSplice{}, errNoMutation(fmt.Errorf("structural_edit unavailable: V3 service URL not configured"))
+	}
+	req, err := http.NewRequestWithContext(ctx.Ctx, "POST", v3URL+"/internal/structural_edit", bytes.NewReader(reqBody))
+	if err != nil {
+		return structuralSplice{}, errNoMutation(fmt.Errorf("structural_edit: build request: %w", err))
+	}
+	req.Header.Set(headerContentType, contentTypeJSON)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return structuralSplice{}, errNoMutation(fmt.Errorf("structural_edit: v3-service unreachable: %w", err))
+	}
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(serviceAnswer(resp.Body))
+	if err != nil {
+		return structuralSplice{}, errNoMutation(fmt.Errorf("structural_edit: read v3 response: %w", err))
+	}
+	var astResp structuralSplice
+	if err := json.Unmarshal(respBytes, &astResp); err != nil {
+		return structuralSplice{}, errNoMutation(fmt.Errorf("structural_edit: parse v3 response: %w (body=%s)", err, truncateStr(string(respBytes), 200)))
+	}
+	return astResp, nil
+}
+
+// spliceRefusal refuses a splice that failed or would not help.
+func spliceRefusal(ctx *AgentContext, input StructuralEditInput, source string, astResp structuralSplice) *ToolResult {
+	if !astResp.Success {
+		// The selector matched nothing, or the splice would not parse:
+		// either way no replacement content came back to write.
+		return noMutation(astResp.Error + moduleLevelContentNote(ctx, input.Path, input.Content))
+	}
+
+	// Shrinkage guard: catch a destructive stub, such as only
+	// "<!DOCTYPE html>" emitted for a whole <html>-element
+	// rewrite. astResp.OldSize is the original node's bytes;
+	// astResp.NewSize is the replacement bytes. If the replacement
+	// is suspiciously small for the original, reject the write and
+	// tell the model to re-emit with the full body.
+	if rejection := validateNotSuspiciouslyShrunk("structural_edit", input.Path, astResp.OldSize, astResp.NewSize); rejection != "" {
+		log.Printf("[structural_edit] rejecting suspicious shrinkage: %s old=%dB new=%dB selector=%q",
+			input.Path, astResp.OldSize, astResp.NewSize, input.Selector)
+		return refusedNoCheck(rejection)
+	}
+
+	// No-op guard. A weak model frequently "fixes" a bug by
+	// re-emitting the node's existing (broken) code verbatim —
+	// observed live: structural_edit function:add with content identical
+	// to the buggy body, twice in one batch. Reporting success on
+	// a no-op tells the model the fix landed when nothing changed;
+	// it then moves on to verification, fails, and can't work out
+	// why. Fail loudly instead so the model re-derives the edit.
+	if astResp.NewContent == source {
+		log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
+		return noMutation(fmt.Sprintf(
+			"structural_edit: your replacement for `%s` is IDENTICAL to the code already in the file — nothing was changed and the bug is still there. "+
+				"Look at the current code again and emit a replacement that actually differs (for a swapped-operator bug, the operator itself must change).",
+			input.Selector))
+	}
+	return nil
+}
+
+// routeStructuralEdit sends the spliced file down the protected route when it
+// warrants V3. It returns the content to write, or a result that ends the call.
+//
+// V3 routing. The tier is the higher of the pre-edit and post-edit
+// content, so a destructive edit that shrinks a T2+ file into a
+// stub still reaches V3: those are the edits that most need
+// checking. structural_edit is already surgical (the model named
+// the exact node, and the replacement is its own tree-sitter
+// transform), so running PlanSearch on every one-line edit is
+// mostly cost: minutes per edit, which looks like a hang. V3 runs
+// only when editGenerationBypass allows it: a T2+ file complex
+// enough for editWarrantsV3, outside an active debug loop.
+//
+// The baseline candidate is the structurally edited full file; a V3
+// alternative lands only through the protected route below,
+// otherwise the structurally edited content passes through
+// unchanged.
+func routeStructuralEdit(ctx *AgentContext, input StructuralEditInput, path, source,
+	finalContent string) (string, *ToolResult) {
+	oldTier := classifyFileTier(input.Path, source) // pre-edit content
+	newTier := classifyFileTier(input.Path, finalContent)
+	fileTier := oldTier
+	if newTier > fileTier {
+		fileTier = newTier
+	}
+	cc, ccOK := cyclomaticComplexity(ctx, input.Path, finalContent)
+	if ccOK {
+		if refined := refineTierWithCC(fileTier, cc); refined != fileTier {
+			log.Printf("[structural_edit] %s tier %s→%s via cc=%d", input.Path, fileTier, refined, cc)
+			fileTier = refined
+		}
+	}
+	// A session iterating on its own file after a failed run is in
+	// the write-run-fix loop; V3's toll there only delays the next
+	// execution. The write path has had this fast-track since PC-190;
+	// the edit path never consulted it. Measured: three 900s timeout
+	// deaths whose sessions each paid one full V3 run and then
+	// V3-improve on every corrective edit until the clock died.
+	structuralBypass := editGenerationBypass(ctx, fileTier,
+		editWarrantsV3(finalContent, cc, ccOK),
+		isActiveDebugIteration(ctx, input.Path))
+	recordCandidateGenerationBypass(ctx, "structural_edit", structuralBypass,
+		fileTier, strings.Count(finalContent, "\n")+1)
+	logBudgetBypass("structural_edit", input.Path, structuralBypass)
+	if structuralBypass != bypassNone {
+		return finalContent, nil
+	}
+	log.Printf("[structural_edit] V3 pipeline activating for %s (oldTier=%d newTier=%d max=%d, req_tier=%d, cc=%d) post-structural-edit", input.Path, oldTier, newTier, fileTier, ctx.Tier, cc)
+	// THE protected edit route, same owner as the other three edit
+	// tools: a service proposal reaches disk only through the
+	// evidence, authorization, one-time grant, exact-byte delivery,
+	// ledger, validation and settlement chain, and otherwise the
+	// caller's own structurally edited content is what stays.
+	route := deliverEditCandidate(ctx, "structural_edit", path,
+		input.Path, source, finalContent)
+	if route.Cancelled != nil {
+		return "", noMutation("structural_edit cancelled — no content was written")
+	}
+	if route.Delivered {
+		// The candidate landed through the protected chain.
+		// Writing the caller's own content now would undo a
+		// delivery settlement and restoration already decided.
+		return "", attachV3(route.Result, route.Meta)
+	}
+	return route.Content, nil
+}
+
+// structuralSyntaxMessage is structural_edit's refusal for a result that does
+// not parse.
+func structuralSyntaxMessage(input StructuralEditInput, finalContent string) func(string) string {
+	return func(detail string) string {
+		if msg, isEmbedded := embeddedScriptRejectionFor(detail); isEmbedded {
+			return msg
+		}
+		return fmt.Sprintf(
+			"structural_edit result for %s does not parse (%s). The file was NOT modified.%s\n"+
+				"Check that the replacement for `%s` is complete and re-issue the edit.",
+			input.Path, truncateStr(detail, 200), offendingLineNote(finalContent, detail), input.Selector)
+	}
+}
+
+// structuralGateRefusal runs structural_edit's gates after the syntax gate.
+func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalContent string) *ToolResult {
+	// Structural gate (#147): the structural splice guarantees the result
+	// parses, but not that its calls resolve — the observed failure
+	// was a structural_edit that introduced a render_template call with only
+	// render_template_string imported, which landed as verified and
+	// 500'd every request. Block a write that NEWLY makes a direct
+	// call unresolved (healthy->broken); a pre-existing one is left
+	// alone for repair-in-progress. Fail-open when the check can't run.
+	if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
+		log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
+		return structuralRefusal(structuralRejection(relPath, introduced))
+	}
+
+	// Embedded-script gate: the post-splice check in v3-service
+	// proves the .py/.html parses, not that the JavaScript inside a
+	// <script> block does — and `<script>` is a first-class selector
+	// here, so this tool is the likeliest way to land broken JS.
+	// Healthy->broken, fail-soft.
+	if msg := embeddedScriptGate(ctx, path, source, finalContent); msg != "" {
+		log.Printf("[structural_edit] edit breaks an embedded script in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	if msg := duplicateMainGuard(path, source, finalContent); msg != "" {
+		log.Printf("[structural_edit] edit duplicates the module entrypoint in %s — rejecting", logPath(relPath))
+		return structuralRefusal(msg)
+	}
+	return nil
+}
+
+// structuralEditOutput is what structural_edit tells the model about the change.
+func structuralEditOutput(input StructuralEditInput, astResp structuralSplice, finalContent string,
+	observed checkOutcome) StructuralEditOutput {
+	out := StructuralEditOutput{
+		OK:       true,
+		Selector: input.Selector,
+		Language: astResp.Language,
+		BytesOld: astResp.OldSize,
+		BytesNew: len(finalContent),
+	}
+	// The splice landed. Validation used to stay not_run, on sound
+	// reasoning: the tree-sitter transform only proves v3-service
+	// could re-parse ITS output, this tool ran no check of its own on
+	// the bytes it writes -- which may be a V3 replacement rather
+	// than the splice -- and reading the service's ok boolean as a
+	// syntax pass is exactly the inference overlayValidation exists
+	// to prevent.
+	//
+	// The conclusion was right and the premise was fixable: run the
+	// check. not_run is not a neutral answer at the exit. A path can
+	// only retire its mutation debt on a verdict about its CURRENT
+	// bytes, so every file edited this way carried debt that nothing
+	// could ever discharge. Measured on offbyone: the run reproduced
+	// the bug, fixed chunks() with structural_edit, re-ran its
+	// reproduction and printed the corrected output -- and still
+	// ended `unresolved_mutation_debt`, told that chunk.py "was never
+	// written in a state this run could check". It had been.
+	//
+	// The verdict is real, so a clean splice settles and a broken one
+	// is recorded as broken instead of as unknown. It is the check the
+	// healthy->broken rule already ran on exactly these bytes: a splice
+	// that lands failing was a repair of a file that already failed.
+	if observed.Status == ValidationFailed {
+		log.Printf("[structural_edit] %s landed but does not parse (%s)",
+			logPath(input.Path), safeDiagnosticSummary(observed.Detail))
+		out.Warning = fmt.Sprintf(
+			"the edit landed, but %s does not parse now (%s). Run it and "+
+				"read the real traceback, then fix that line.",
+			input.Path, truncateStr(observed.Detail, 160))
+	}
+	return out
 }
 
 // V3EditMetadata captures what V3 did to an edit_file request, so the
@@ -2901,7 +3075,7 @@ func envelopeOf(result *V3GenerateResponse) *V3EvidenceEnvelope {
 // licence to: WHERE, never whether.
 
 func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3EditMetadata, error) {
-	req := v3EditRequest(path, content, ctx)
+	req := v3Request(path, content, ctx)
 
 	// Same callback logic as the write_file V3 path: tokens forward to
 	// the dedicated v3_token SSE event so the TUI updates one streaming
@@ -2912,7 +3086,7 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	// this branching, edit_file with V3 floods the chat pane with
 	// thousands of "[token] X" rows during a single candidate generation.
 	v3Result, err := callV3GenerateStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		forwardV3EditStage(ctx, stage, detail, data)
+		forwardV3Stage(ctx, stage, detail, data)
 	})
 	if err != nil {
 		return "", V3EditMetadata{}, err
@@ -2970,9 +3144,9 @@ func improveContentWithV3(path, content string, ctx *AgentContext) (string, V3Ed
 	}, nil
 }
 
-// v3EditRequest is the V3 request for an edit: the caller's content as the
+// v3Request is the V3 request for a write or edit: the caller's content as the
 // baseline, and the other files this session read as its context.
-func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
+func v3Request(path, content string, ctx *AgentContext) V3GenerateRequest {
 	req := V3GenerateRequest{
 		FilePath:     path,
 		BaselineCode: content,
@@ -2980,8 +3154,11 @@ func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
 		WorkingDir:   ctx.WorkingDir,
 		UserMessage:  latestUserMessage(ctx),
 	}
-	// Exclude the target's own pre-edit snapshot from project context —
-	// same rule (and reason) as writeFileWithV3 / checkStructuralUnresolved.
+	// Add project context from files read during this session. The target
+	// file's own PRE-EDIT snapshot is excluded: its current symbols come
+	// from the baseline, and stale content would let the in-pipeline veto
+	// credit a def this write deletes (#147 review finding #2 — same rule
+	// as checkStructuralUnresolved).
 	cleanTarget := filepath.Clean(path)
 	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
 		req.ProjectContext = make(map[string]string)
@@ -2993,10 +3170,7 @@ func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
 			if rel == "" {
 				rel = p
 			}
-			if len(c) > 4000 {
-				c = c[:4000] + "\n... (truncated)"
-			}
-			req.ProjectContext[rel] = c
+			req.ProjectContext[rel] = contextEntry(c, 4000)
 		}
 	}
 	if ctx.Project != nil {
@@ -3006,24 +3180,29 @@ func v3EditRequest(path, content string, ctx *AgentContext) V3GenerateRequest {
 	return req
 }
 
-// forwardV3EditStage hands one V3 progress event of an edit to the client, as
-// the event the client renders it with.
-func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
+// forwardV3Stage hands one V3 progress event to the client, as the event the
+// client renders it with.
+func forwardV3Stage(ctx *AgentContext, stage, detail string, data map[string]interface{}) {
 	if ctx.StreamFn == nil {
 		return
 	}
+	// Token deltas: a separate SSE event, so the client can render them as a
+	// streaming dim row, mirroring how the agent's own LLM tokens are shown.
 	if stage == "token" {
 		ctx.StreamFn("v3_token", map[string]string{"text": detail})
 		return
 	}
-	// Reasoning deltas from V3's LLM calls (see write_file path's
-	// matching branch). Same purpose: visible thinking stream
-	// during long PlanSearch / repair phases. v3_reasoning_token,
-	// not reasoning_token, so it targets the V3 row not the agent row.
+	// Reasoning deltas from V3's LLM calls (<think> stream). Forwarded as
+	// v3_reasoning_token, NOT plain reasoning_token, because the agent-loop's
+	// reasoning_token handler in the TUI targets the agent's LLM row, and V3
+	// calls run in a different lifecycle. Gives the /demo viewer something to
+	// watch during long PlanSearch / repair phases.
 	if stage == "reasoning_token" {
 		ctx.StreamFn("v3_reasoning_token", map[string]string{"text": detail})
 		return
 	}
+	// LLM-call boundary markers. Match the chat protocol's
+	// llm_call_start/end shapes so the TUI can reuse handlers.
 	if stage == "llm_start" {
 		payload := map[string]interface{}{"detail": detail}
 		for k, v := range data {
@@ -3040,8 +3219,14 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 		ctx.StreamFn("v3_llm_end", payload)
 		return
 	}
+	// Dedicated structured events for the pipeline pane. The TUI renders each
+	// as its own row instead of a generic v3_progress string. data is the
+	// structured payload from V3's _emit; it passes through verbatim with
+	// `stage` and `detail` for fallback rendering.
 	eventName := v3StageToEvent(stage)
 	if eventName == "v3_progress" {
+		// Unknown / unmapped stage — emit the legacy text line only. Keeps
+		// third-party clients that haven't migrated to typed events working.
 		ctx.StreamFn("v3_progress", map[string]string{
 			"message": fmt.Sprintf("  │ [%s] %s", stage, detail),
 		})
@@ -3057,8 +3242,64 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 	ctx.StreamFn(eventName, payload)
 }
 
-// findActualString searches for oldStr in content, handling quote normalization.
-// Returns the actual string found in content (may differ in quote style).
+// closestLineHint finds the file line most similar to the first
+// non-blank line of a missed old_str and formats it (with its line
+// number) for inclusion in the edit_file mismatch error. Similarity is
+// shared-token count — crude, but enough to map a from-memory paraphrase
+// like `item = items[id + 1]` onto the real
+// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
+// minimal overlap bar (so unrelated guesses don't get a misleading
+// anchor).
+func closestLineHint(content, oldStr string) string {
+	probeToks := identifierTokens(firstNonBlankLine(oldStr))
+	lines := strings.Split(content, "\n")
+	bestIdx, bestScore := lineSharingMostTokens(lines, probeToks)
+	// Require at least 2 shared identifiers and half the probe's tokens —
+	// below that the "closest" line is likely unrelated.
+	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
+		return ""
+	}
+	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
+		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
+}
+
+func firstNonBlankLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func identifierTokens(line string) map[string]bool {
+	tokens := map[string]bool{}
+	for _, token := range strings.FieldsFunc(line, func(r rune) bool {
+		return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+	}) {
+		tokens[token] = true
+	}
+	return tokens
+}
+
+// lineSharingMostTokens returns the first line with the highest count of
+// tokens in common with probeToks, or -1 when no line shares one.
+func lineSharingMostTokens(lines []string, probeToks map[string]bool) (bestIdx, bestScore int) {
+	bestIdx = -1
+	for i, line := range lines {
+		score := 0
+		for token := range identifierTokens(line) {
+			if probeToks[token] {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore, bestIdx = score, i
+		}
+	}
+	return bestIdx, bestScore
+}
+
 // findFuzzyLineMatch rescues an old_str whose only error is per-line
 // whitespace drift (indentation width, tabs vs spaces, trailing spaces) —
 // the dominant edit_file failure mode for small models. It compares old_str
@@ -3072,63 +3313,6 @@ func forwardV3EditStage(ctx *AgentContext, stage, detail string, data map[string
 // non-whitespace content (would match any blank run). Content differences
 // beyond whitespace (renamed tokens, changed quotes) do NOT match — those
 // are semantic and must fail.
-// closestLineHint finds the file line most similar to the first
-// non-blank line of a missed old_str and formats it (with its line
-// number) for inclusion in the edit_file mismatch error. Similarity is
-// shared-token count — crude, but enough to map a from-memory paraphrase
-// like `item = items[id + 1]` onto the real
-// `return jsonify(items[item_id + 1])`. Returns "" when nothing clears a
-// minimal overlap bar (so unrelated guesses don't get a misleading
-// anchor).
-func closestLineHint(content, oldStr string) string {
-	var probe string
-	for _, l := range strings.Split(oldStr, "\n") {
-		if strings.TrimSpace(l) != "" {
-			probe = l
-			break
-		}
-	}
-	if probe == "" {
-		return ""
-	}
-	tokenize := func(s string) map[string]bool {
-		out := map[string]bool{}
-		for _, t := range strings.FieldsFunc(s, func(r rune) bool {
-			return !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
-		}) {
-			out[t] = true
-		}
-		return out
-	}
-	probeToks := tokenize(probe)
-	if len(probeToks) == 0 {
-		return ""
-	}
-	bestScore, bestIdx := 0, -1
-	lines := strings.Split(content, "\n")
-	for i, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			continue
-		}
-		score := 0
-		for t := range tokenize(l) {
-			if probeToks[t] {
-				score++
-			}
-		}
-		if score > bestScore {
-			bestScore, bestIdx = score, i
-		}
-	}
-	// Require at least 2 shared identifiers and half the probe's tokens —
-	// below that the "closest" line is likely unrelated.
-	if bestIdx < 0 || bestScore < 2 || bestScore*2 < len(probeToks) {
-		return ""
-	}
-	return fmt.Sprintf("\nClosest actual line in the file (line %d): %s\nCopy real lines from the file into old_str — do not write them from memory.",
-		bestIdx+1, truncateStr(strings.TrimSpace(lines[bestIdx]), 160))
-}
-
 func findFuzzyLineMatch(content, oldStr string) (string, bool) {
 	fileLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldStr, "\n")
@@ -3136,52 +3320,55 @@ func findFuzzyLineMatch(content, oldStr string) (string, bool) {
 	if len(oldLines) > 1 && strings.TrimSpace(oldLines[len(oldLines)-1]) == "" {
 		oldLines = oldLines[:len(oldLines)-1]
 	}
-	if len(oldLines) == 0 {
-		return "", false
-	}
-	strip := func(ls []string) []string {
-		out := make([]string, len(ls))
-		nonEmpty := false
-		for i, l := range ls {
-			out[i] = strings.TrimSpace(l)
-			if out[i] != "" {
-				nonEmpty = true
-			}
-		}
-		if !nonEmpty {
-			return nil // all-whitespace target: refuse
-		}
-		return out
-	}
-	want := strip(oldLines)
+	want := trimmedLines(oldLines)
 	if want == nil {
 		return "", false
 	}
 	n := len(want)
 	matchStart := -1
-	matches := 0
 	for i := 0; i+n <= len(fileLines); i++ {
-		ok := true
-		for j := 0; j < n; j++ {
-			if strings.TrimSpace(fileLines[i+j]) != want[j] {
-				ok = false
-				break
-			}
+		if !trimmedLinesMatchAt(fileLines, i, want) {
+			continue
 		}
-		if ok {
-			matches++
-			matchStart = i
-			if matches > 1 {
-				return "", false // ambiguous — fail safe
-			}
+		if matchStart >= 0 {
+			return "", false // ambiguous — fail safe
 		}
+		matchStart = i
 	}
-	if matches != 1 {
+	if matchStart < 0 {
 		return "", false
 	}
 	return strings.Join(fileLines[matchStart:matchStart+n], "\n"), true
 }
 
+// trimmedLines trims each line. It returns nil when every line is blank, so an
+// all-whitespace target is refused.
+func trimmedLines(lines []string) []string {
+	trimmed := make([]string, len(lines))
+	nonEmpty := false
+	for i, line := range lines {
+		trimmed[i] = strings.TrimSpace(line)
+		if trimmed[i] != "" {
+			nonEmpty = true
+		}
+	}
+	if !nonEmpty {
+		return nil
+	}
+	return trimmed
+}
+
+func trimmedLinesMatchAt(fileLines []string, start int, want []string) bool {
+	for offset, line := range want {
+		if strings.TrimSpace(fileLines[start+offset]) != line {
+			return false
+		}
+	}
+	return true
+}
+
+// findActualString searches for oldStr in content, handling quote normalization.
+// Returns the actual string found in content (may differ in quote style).
 func findActualString(content, oldStr string) string {
 	// Direct match first
 	if strings.Contains(content, oldStr) {

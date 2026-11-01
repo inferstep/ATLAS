@@ -64,10 +64,10 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "a test", "GIT_AUTHOR_EMAIL": "test@example.invali
 ON_DEV = {
     "docker-compose.yml": "services: {}\n", "docker-compose.vulkan.yml": "services: {}\n", "docker-compose.cpu.yml": "services: {}\n",
     ".dockerignore": "proxy/\n",
-    "scripts/e2e-reliability.py": "# the driver of dev\n", "scripts/code_quality.py": "# of dev\n",
-    "scripts/reliability_report.py": "# of dev\n", "scripts/reliability_stream.py": "# of dev\n",
-    "scripts/reliability_detectors.py": "# of dev\n", "scripts/reliability_records.py": "# of dev\n",
-    "scripts/reliability_sandbox.py": "# of dev\n",
+    "scripts/eval/e2e-reliability.py": "# the driver of dev\n", "scripts/code_quality.py": "# of dev\n",
+    "scripts/eval/reliability_report.py": "# of dev\n", "scripts/eval/reliability_stream.py": "# of dev\n",
+    "scripts/eval/reliability_detectors.py": "# of dev\n", "scripts/eval/reliability_records.py": "# of dev\n",
+    "scripts/eval/reliability_sandbox.py": "# of dev\n",
     "scripts/smoke_result.py": "# the mark script of dev\n",
     "proxy/Dockerfile": "FROM scratch\n# the proxy of dev\n", "proxy/prompt.go": "package main\n",
     "v3-service/Dockerfile": "FROM scratch\n# v3 of dev\n", "v3-service/main.py": "# of dev\n",
@@ -181,7 +181,7 @@ class OneCommit(base.Night):
             elif call["tool"] == "nvidia-smi":
                 step = "card"
             else:
-                step = {"scripts/e2e-reliability.py": "driver", "scripts/smoke_result.py": "mark"}.get(args[0], "tests")
+                step = {"scripts/eval/e2e-reliability.py": "driver", "scripts/smoke_result.py": "mark"}.get(args[0], "tests")
             if not (step in ("ask", "logs") and short and short[-1] == step):
                 short.append(step)
         return short
@@ -232,7 +232,7 @@ def test_the_stack_runs_the_image_that_was_built_and_the_driver_is_told_the_comm
     assert yaml.safe_load((run.folder / "own-images.yml").read_text()) == {"services": {
         service: {"image": run.name_of(service) if service == "atlas-proxy" else f"localhost/atlas-nightly/{image}:night",
                   "pull_policy": "never"} for service, image in nightly.IMAGES.items()}}
-    (driver,) = [call["args"] for call in run.calls() if call["args"][0] == "scripts/e2e-reliability.py"]
+    (driver,) = [call["args"] for call in run.calls() if call["args"][0] == "scripts/eval/e2e-reliability.py"]
     assert driver[driver.index("--commit") + 1] == commit
     # The stop of the stack names the same files: it is the same stack.
     (down,) = [call["args"] for call in run.calls() if call["tool"] == "docker" and "down" in call["args"]]
@@ -510,13 +510,13 @@ TAKEN_FROM_DEV = [
     ("scripts/tests_counted.py", "the judge of the tests, which the script loads on the server itself"),
     ("scripts/nightly_images.py", "the images of a run, which the script loads on the server itself"),
     ("scripts/nightly_statuses.py", "the sending of the statuses, which the script loads on the server itself"),
-    ("scripts/e2e-reliability.py", "the driver of the sessions, which runs on the server itself"),
+    ("scripts/eval/e2e-reliability.py", "the driver of the sessions, which runs on the server itself"),
     ("scripts/code_quality.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/reliability_report.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/reliability_stream.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/reliability_detectors.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/reliability_records.py", "a module of the driver, which runs on the server itself"),
-    ("scripts/reliability_sandbox.py", "a module of the driver, which runs on the server itself"),
+    ("scripts/eval/reliability_report.py", "a module of the driver, which runs on the server itself"),
+    ("scripts/eval/reliability_stream.py", "a module of the driver, which runs on the server itself"),
+    ("scripts/eval/reliability_detectors.py", "a module of the driver, which runs on the server itself"),
+    ("scripts/eval/reliability_records.py", "a module of the driver, which runs on the server itself"),
+    ("scripts/eval/reliability_sandbox.py", "a module of the driver, which runs on the server itself"),
     ("scripts/smoke_result.py", "the script that makes the mark of the result line"),
     ("docker-compose.yml", "a compose file of the stack"),
     ("inference/Dockerfile.v31", "the model server, whose image is never built on the server and whose start script the stack mounts from the tree"),
@@ -543,8 +543,8 @@ def test_a_commit_that_changes_what_the_run_takes_from_dev_is_not_run_and_the_fi
 
 
 def test_a_file_that_is_moved_counts_under_its_old_name(tmp_path, repository):
-    commit = repository.on_a_branch({"scripts/reliability_stream.py": None, "scripts/stream.py": ON_DEV["scripts/reliability_stream.py"]})
-    not_run(OneCommit(tmp_path, repository).run(commit), "the commit changes `scripts/reliability_stream.py`")
+    commit = repository.on_a_branch({"scripts/eval/reliability_stream.py": None, "scripts/stream.py": ON_DEV["scripts/eval/reliability_stream.py"]})
+    not_run(OneCommit(tmp_path, repository).run(commit), "the commit changes `scripts/eval/reliability_stream.py`")
 
 
 def test_a_compose_file_that_the_run_was_given_is_taken_from_dev_too_and_one_that_it_does_not_use_is_not(tmp_path, repository):
@@ -885,18 +885,19 @@ def test_the_build_whose_context_is_the_whole_repository_reads_only_the_paths_th
 def test_every_file_that_the_run_starts_or_loads_on_the_server_itself_is_one_that_it_takes_from_dev():
     source = SCRIPT.read_text()
     started = set(re.findall(r'\[args\.python, "(scripts/[^"]+)"', source))
-    assert started == {"scripts/e2e-reliability.py", "scripts/smoke_result.py"}, started
-    # The files of scripts/ that the driver loads, and what those load in turn.
-    loaded, to_read = set(), ["e2e-reliability.py"]
+    assert started == {"scripts/eval/e2e-reliability.py", "scripts/smoke_result.py"}, started
+    # The files of scripts/ and scripts/eval/ that the driver loads, and what those load in turn.
+    loaded, to_read = set(), ["eval/e2e-reliability.py"]
     while to_read:
         for node in ast.walk(ast.parse((ROOT / "scripts" / to_read.pop()).read_text())):
             modules = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
                        else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
             for module in modules:
-                file = module.split(".")[0] + ".py"
-                if (ROOT / "scripts" / file).is_file() and file not in loaded:
-                    loaded.add(file)
-                    to_read.append(file)
+                name = module.split(".")[0] + ".py"
+                for file in (name, f"eval/{name}"):
+                    if (ROOT / "scripts" / file).is_file() and file not in loaded:
+                        loaded.add(file)
+                        to_read.append(file)
     assert len(loaded) >= 3
     held = {path.relative_to(ROOT.resolve()).as_posix() for path in nightly.AS_STARTED}
     assert held == {"scripts/nightly_run.py", "scripts/tests_counted.py", "scripts/nightly_images.py",

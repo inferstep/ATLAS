@@ -360,9 +360,6 @@ class FailureAnalyzer:
 
         return analysis
 
-    def get_category_descriptions(self) -> Dict[str, str]:
-        """Return failure category descriptions."""
-        return dict(FAILURE_CATEGORIES)
 
     # -- Helpers ------------------------------------------------------------
 

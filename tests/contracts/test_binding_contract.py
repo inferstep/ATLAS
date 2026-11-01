@@ -1,6 +1,6 @@
 """Local-only binding contract.
 
-ATLAS is a local single-user tool (SECURITY.md, ADR 0001): every port a
+ATLAS is a local single-user tool (.github/SECURITY.md, ADR 0001): every port a
 compose file publishes to the host must bind loopback, so a laptop on
 hotel wifi never silently exposes an internal service. Configuration
 parsing only — no sockets are opened.

@@ -155,7 +155,7 @@ def test_an_evaluation_task_named_in_product_code_is_reported(ic):
     assert whats(ic, diff("proxy/agent.go", added=[line])) == \
         ["evaluation task named in product code: 'flask_pause'"]
     assert whats(ic, diff("proxy/agent_test.go", added=[line])) == []
-    assert whats(ic, diff("scripts/e2e-reliability.py", added=['    "flask_pause": Task('])) == []
+    assert whats(ic, diff("scripts/eval/e2e-reliability.py", added=['    "flask_pause": Task('])) == []
     assert whats(ic, diff("proxy/agent.go", added=['\tname := "flask_pauses"'])) == []
 
 
@@ -191,21 +191,6 @@ def test_every_finding_says_why_and_how_to_fix(ic):
     for f in findings:
         assert f.why.strip(), f.what
         assert f.fix.strip(), f.what
-
-
-def test_the_task_names_come_from_the_runner_at_its_new_place(ic, tmp_path):
-    runner = tmp_path / "scripts" / "eval" / "e2e-reliability.py"
-    runner.parent.mkdir(parents=True)
-    runner.write_text('TASKS = {"a_task": None}\n')
-    assert ic.task_names(tmp_path) == {"a_task"}
-
-
-def test_the_runner_at_its_old_place_wins_while_both_exist(ic, tmp_path):
-    new = tmp_path / "scripts" / "eval" / "e2e-reliability.py"
-    new.parent.mkdir(parents=True)
-    new.write_text('TASKS = {"from_the_new_place": None}\n')
-    (tmp_path / "scripts" / "e2e-reliability.py").write_text('TASKS = {"from_the_old_place": None}\n')
-    assert ic.task_names(tmp_path) == {"from_the_old_place"}
 
 
 def test_the_task_names_come_from_the_runner(ic):

@@ -23,10 +23,10 @@ escaped the gates, a corrupt write, a service fault, an orphaned tool call, an
 event the TUI cannot render, or a background job left running after the session.
 
 Usage:
-    python scripts/e2e-reliability.py                 # default suite, 2 reps
-    python scripts/e2e-reliability.py --reps 5
-    python scripts/e2e-reliability.py --tasks flask_pause,add_function
-    python scripts/e2e-reliability.py --json out.json
+    python scripts/eval/e2e-reliability.py                 # default suite, 2 reps
+    python scripts/eval/e2e-reliability.py --reps 5
+    python scripts/eval/e2e-reliability.py --tasks flask_pause,add_function
+    python scripts/eval/e2e-reliability.py --json out.json
 
 Requires the stack to be up (docker compose ps) and ATLAS_PROJECT_DIR to be the
 workspace the proxy has mounted at /workspace.
@@ -47,8 +47,9 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "scripts" / "eval"))
 from code_quality import analyze as analyze_quality
 from reliability_detectors import (h1_protocol, h3_dead_end_steering, h4_gate_escape, h5_corrupt_write,
                                    h6_service_fault, h7_background_leak, h8_anchored_on_injected_text,
@@ -561,6 +562,7 @@ def _check_add_toml(ws: Path) -> tuple[bool, str]:
             try:
                 verdict = json.loads(line)
             except json.JSONDecodeError:
+                # A garbled line is no verdict, and the check below says so.
                 pass
             break
     if verdict is None:

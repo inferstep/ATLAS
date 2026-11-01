@@ -81,24 +81,6 @@ func stripLineNumberPrefixes(s string) string {
 	return reLineNumberPrefix.ReplaceAllString(s, "")
 }
 
-// allLinesLineNumbered reports whether every non-blank line of s carries the
-// prefix — the signature of a wholesale paste of read_file output, as opposed
-// to a block that happens to contain a numbered line.
-func allLinesLineNumbered(s string) bool {
-	if strings.TrimSpace(s) == "" {
-		return false
-	}
-	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if !reLineNumberPrefix.MatchString(line) {
-			return false
-		}
-	}
-	return true
-}
-
 // selectorGuidance says which structural_edit selectors exist in a file, read
 // from the file itself, or how to find out. It never offers a placeholder: a
 // refusal that suggested "a selector (`function:NAME` or `class:NAME`)" was

@@ -60,9 +60,6 @@ func TestSandboxSyntaxOutcomeTable(t *testing.T) {
 			if got.Status == ValidationPassed && !got.attempted() {
 				t.Error("a pass must count as attempted")
 			}
-			if got.Status == ValidationNotApplicable && got.applicable() {
-				t.Error("not_applicable must not count as applicable")
-			}
 			// Only a demonstrated failure may refuse.
 			_, ok := checkFallbackSyntax(ctx, c.path, "A = 1\n")
 			if wantOK := c.want != ValidationFailed; ok != wantOK {

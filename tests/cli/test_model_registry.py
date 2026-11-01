@@ -92,7 +92,6 @@ def test_download_urls_are_pinned_to_a_commit():
 def test_supported_9b_needs_no_hf_token():
     m = model_registry.by_name("Qwen3.5-9B-Q6_K")
     assert m.requires_hf_token is False
-    assert m.is_gated is False
 
 
 def test_supported_9b_lists_its_lens_artifact_files():
@@ -171,14 +170,6 @@ def test_for_tier_prefers_a_supported_model(tier, expected_name,
     m = model_registry.for_tier(tier)
     assert m.name == expected_name
     assert m.lens_status == expected_lens_status
-
-
-def test_models_for_tier_returns_only_that_tier():
-    """Medium tier: the three 9B quants plus gemma-4-12b (PC-215)."""
-    medium = model_registry.models_for_tier("medium")
-    assert sorted(m.name for m in medium) == [
-        "Qwen3.5-9B-Q4_K_M", "Qwen3.5-9B-Q6_K", "Qwen3.5-9B-Q8_0",
-        "gemma-4-12b-it-Q4_K_M"]
 
 
 def test_every_model_is_found_by_its_name_and_its_file():

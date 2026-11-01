@@ -22,7 +22,7 @@ ASKED = {"tool_name": "delete_file", "tool_call_id": "call_3", "message": "Delet
 
 @pytest.fixture(scope="module")
 def rel():
-    spec = importlib.util.spec_from_file_location("atlas_reliability_prompts", REPO / "scripts" / "e2e-reliability.py")
+    spec = importlib.util.spec_from_file_location("atlas_reliability_prompts", REPO / "scripts" / "eval" / "e2e-reliability.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

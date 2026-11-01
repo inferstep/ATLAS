@@ -614,7 +614,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
     try:
         (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
-         gx_top_dims, cx_cfg, gx_thresholds) = _snapshot_weights()
+         _, cx_cfg, gx_thresholds) = _snapshot_weights()
 
         start = time.monotonic()
 

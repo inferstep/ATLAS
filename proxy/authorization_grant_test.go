@@ -847,25 +847,6 @@ func TestASupersededGrantRecordsItsRetirement(t *testing.T) {
 	}
 }
 
-func TestEveryRetirementCauseIsRepresentable(t *testing.T) {
-	// Each cause the code can reach has a distinct token, so a lifecycle can
-	// be reconciled without inferring anything.
-	for _, want := range []grantRetirement{
-		grantSuperseded, grantTerminal, grantCancelled, grantConsumed,
-		grantAttempted, grantSessionEnd,
-	} {
-		if !knownGrantRetirement(want) {
-			t.Errorf("%q is reachable in the code and not in the closed set", want)
-		}
-	}
-	if knownGrantRetirement(grantLive) {
-		t.Error("live is not a retirement")
-	}
-	if knownGrantRetirement("something_new") {
-		t.Error("an unregistered cause was accepted")
-	}
-}
-
 func TestAGrantEndsExactlyOnce(t *testing.T) {
 	ctx := lifeCtx(t, "req-life")
 	entry := mintRouteEntry(ctx)

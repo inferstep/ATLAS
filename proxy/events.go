@@ -131,12 +131,6 @@ func (b *broker) drain() {
 	}
 }
 
-func (b *broker) isDraining() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.draining
-}
-
 func (b *broker) emit(ev Envelope) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

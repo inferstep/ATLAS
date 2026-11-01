@@ -13,7 +13,7 @@ import hashlib
 import json
 import os
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 MANIFEST_NAME = "provenance.json"
 SCHEMA_VERSION = 1
@@ -106,46 +106,3 @@ def save_provenance(save_dir: str, manifest: dict) -> str:
     return path
 
 
-def load_provenance(save_dir: str) -> Optional[dict]:
-    try:
-        with open(os.path.join(save_dir, MANIFEST_NAME)) as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return None
-
-
-# Fields that must be present + non-empty for a manifest to count as
-# "complete" (Supported-eligible). Missing any keeps the bundle Preview.
-REQUIRED_FOR_COMPLETE = [
-    "model", "embedding_dim", "created_at", "training_commit",
-    "dataset", "metrics", "normalization", "artifact_sha256",
-]
-
-
-def is_complete(manifest: Optional[dict]) -> bool:
-    if not manifest:
-        return False
-    for key in REQUIRED_FOR_COMPLETE:
-        val = manifest.get(key)
-        if val in (None, "", {}, [], "(unknown)"):
-            return False
-    # embedding_dim must be a positive int (0 would pass the emptiness
-    # check above but is never a valid lens dimension).
-    dim = manifest.get("embedding_dim")
-    if not isinstance(dim, int) or dim <= 0:
-        return False
-    return True
-
-
-def missing_fields(manifest: Optional[dict]) -> List[str]:
-    if not manifest:
-        return list(REQUIRED_FOR_COMPLETE)
-    out = []
-    for key in REQUIRED_FOR_COMPLETE:
-        val = manifest.get(key)
-        if val in (None, "", {}, [], "(unknown)"):
-            out.append(key)
-    dim = manifest.get("embedding_dim")
-    if "embedding_dim" not in out and (not isinstance(dim, int) or dim <= 0):
-        out.append("embedding_dim")
-    return out

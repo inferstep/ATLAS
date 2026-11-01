@@ -1,4 +1,4 @@
-"""Where the reliability runner (scripts/e2e-reliability.py) judges the agent's code.
+"""Where the reliability runner (scripts/eval/e2e-reliability.py) judges the agent's code.
 
 The agent writes and runs its code in the run's sandbox, whose Python is not
 necessarily the runner's. Once a run names its sandbox (use_sandbox), the

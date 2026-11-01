@@ -7,7 +7,7 @@ dependency fails the check so a new dep with an incompatible or
 unvetted license is caught in CI before it ships.
 
 Licenses are recorded in DEP_LICENSES (spot-checked against each
-package's published metadata; see THIRD_PARTY_NOTICES.md). Parsing only
+package's published metadata; see docs/THIRD_PARTY_NOTICES.md). Parsing only
 — installs nothing, reaches no network.
 """
 
@@ -29,7 +29,7 @@ ALLOWED_LICENSES = {
     "ISC", "MPL-2.0", "LGPL-3.0", "Python-2.0", "HPND",
 }
 
-# Declared license per production dependency (see THIRD_PARTY_NOTICES.md).
+# Declared license per production dependency (see docs/THIRD_PARTY_NOTICES.md).
 DEP_LICENSES = {
     "defusedxml": "PSF",
     "fastapi": "MIT",

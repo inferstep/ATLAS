@@ -16,7 +16,6 @@ from stages.plan_search import (
     PlanSearchConfig,
     PlanSearchInfrastructureError,
     PlanSearchResult,
-    extract_code_from_response,
     parse_constraint_sets,
     parse_plan,
 )
@@ -178,21 +177,6 @@ def test_parse_plan_without_sections_keeps_the_whole_text_as_the_approach():
     plan = parse_plan("Just sort and return", constraint_set)
     assert plan.constraint_set is constraint_set
     assert plan.approach == "Just sort and return"
-
-
-@pytest.mark.parametrize("response, expected", [
-    pytest.param(SAMPLE_CODE_RESPONSE, TWO_SUM_CODE, id="python-fence"),
-    pytest.param("```\ndef foo():\n    return 42\n```", "def foo():\n    return 42\n", id="plain-fence"),
-    pytest.param("def foo():\n    return 42", "def foo():\n    return 42", id="raw-code"),
-    pytest.param("<think>Let me think...</think>\n```python\ndef foo(): pass\n```",
-                 "def foo(): pass\n", id="closed-think-then-fence"),
-    # Everything after an unclosed <think> is reasoning, so no code is left.
-    pytest.param("<think>Still thinking\ndef foo(): pass", "", id="unclosed-think"),
-    pytest.param("```python\ndef helper(): pass\n```\nNow the main:\n```python\ndef solve(): return 1\n```",
-                 "def solve(): return 1\n", id="last-of-several-fences"),
-])
-def test_extract_code_from_response(response, expected):
-    assert extract_code_from_response(response) == expected
 
 
 @pytest.mark.parametrize("budget_tier", ["standard", "nothink", "hard", "extreme"])

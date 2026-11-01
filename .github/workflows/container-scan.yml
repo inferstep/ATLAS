@@ -4,7 +4,7 @@ name: Container image scan
 # manually): the four service images and the two inference images that CI
 # publishes, each as :dev and as the newest release. Findings are reported;
 # CRITICAL/HIGH in the base OS/library layers should be triaged per
-# SECURITY.md. A CRITICAL finding that has a fixed version turns the run red,
+# .github/SECURITY.md. A CRITICAL finding that has a fixed version turns the run red,
 # and the report job opens one issue, or updates the open one, that lists
 # them; a run with none closes the open issue. A finding with no fix does not
 # count (ignore-unfixed). The run blocks no merge: it is not a check of a pull

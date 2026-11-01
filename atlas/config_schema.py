@@ -283,26 +283,3 @@ def resolve(key: str, env_file: Optional[Dict[str, str]] = None,
     return default
 
 
-def _coerce(key: str, raw: str) -> object:
-    spec = SCHEMA.get(key)
-    if spec is None:
-        return raw
-    if spec.kind == "bool":
-        return raw.strip().lower() in ("1", "true", "yes")
-    if spec.kind in ("int", "port"):
-        try:
-            return int(raw)
-        except ValueError:
-            return raw
-    return raw
-
-
-def resolve_typed(key: str, env_file: Optional[Dict[str, str]] = None,
-                  default: Optional[str] = None,
-                  environ: Optional[Dict[str, str]] = None) -> object:
-    """Resolve + coerce to the schema's type (int/port -> int, bool ->
-    bool, else str). Unknown keys return the raw string."""
-    raw = resolve(key, env_file, default, environ)
-    if raw is None:
-        return None
-    return _coerce(key, raw)

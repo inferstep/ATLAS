@@ -42,7 +42,7 @@ OLD = "2" * 40
 NEWER = "3" * 40
 # Words that are in one call only, for the plan of a stand-in: the first pull, the start of the stack (and not its
 # stop), the driver, the tests.
-PULL, UP, DRIVER, TESTS = "pull --quiet ghcr.io/inferstep/atlas-llama@sha256:", "up -d --wait", "scripts/e2e-reliability.py", "-m pytest"
+PULL, UP, DRIVER, TESTS = "pull --quiet ghcr.io/inferstep/atlas-llama@sha256:", "up -d --wait", "scripts/eval/e2e-reliability.py", "-m pytest"
 
 # What whole services answer: the status of the reply, and its body.
 WHOLE = {
@@ -175,7 +175,7 @@ if "exec" in args:
     sys.stdout.write((body if isinstance(body, str) else json.dumps(body)) + "\\n" + str(status))
 '''
 PYTHON = '''
-if args and args[0] == "scripts/e2e-reliability.py":
+if args and args[0] == "scripts/eval/e2e-reliability.py":
     if plan.get("driver_rows") is not None:
         out = args[args.index("--json") + 1]
         json.dump(plan["driver_rows"], open(out, "w"))
@@ -454,7 +454,7 @@ def test_the_stack_of_the_run_has_no_service_token(tmp_path):
     assert night.report["result"] == "passed"
     assert list((night.dir / "secrets").iterdir()) == []
     assert [call for call in night.calls() if "ATLAS_SERVICE_TOKEN_FILE" in call["env"]] == []
-    driver = "".join((ROOT / "scripts" / name).read_text(encoding="utf-8") for name in (
+    driver = "".join((ROOT / "scripts" / "eval" / name).read_text(encoding="utf-8") for name in (
         "e2e-reliability.py", "reliability_detectors.py", "reliability_records.py", "reliability_sandbox.py"))
     assert "Authorization" not in driver, (
         "the driver now sends a token. Then the stack of the nightly run can have one: see check_settings in "
@@ -1265,7 +1265,7 @@ def test_a_new_copy_that_does_not_start_leaves_a_report_that_says_so(tmp_path):
 # --- what the run takes from the repository -----------------------------------------------------------------------
 
 def test_the_three_tasks_are_tasks_of_the_driver():
-    driver = (ROOT / "scripts" / "e2e-reliability.py").read_text(encoding="utf-8")
+    driver = (ROOT / "scripts" / "eval" / "e2e-reliability.py").read_text(encoding="utf-8")
     known = set(re.findall(r'^    "(\w+)": Task\(', driver, re.M)) | set(re.findall(r'^TASKS\["(\w+)"\] = Task\(', driver, re.M))
     assert len(nightly.TASKS) == 3, (nightly.TASKS, sorted(known))
     assert set(nightly.TASKS) <= known, (nightly.TASKS, sorted(known))

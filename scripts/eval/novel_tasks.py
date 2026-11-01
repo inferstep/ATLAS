@@ -462,7 +462,6 @@ def _statement(solve: Callable) -> str:
 def build_tasks(count: int = 50, seed: int = 20260806) -> List[NovelTask]:
     """`count` instances spread evenly over the families, deterministic in
     `seed` so both arms see identical problems."""
-    rng = random.Random(seed)
     out: List[NovelTask] = []
     i = 0
     while len(out) < count:

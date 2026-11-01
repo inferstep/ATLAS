@@ -13,9 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1646,27 +1648,6 @@ func TestStripLineNumberPrefixes(t *testing.T) {
 	})
 }
 
-func TestAllLinesLineNumbered(t *testing.T) {
-	cases := []struct {
-		name string
-		src  string
-		want bool
-	}{
-		{"wholesale paste of read_file output", "1\tdef f():\n2\t    return 1\n", true},
-		{"blank lines do not disqualify", "1\tdef f():\n\n3\t    return 1\n", true},
-		{"a block that merely contains one numbered line", "def f():\n2\t    return 1\n", false},
-		{"ordinary replacement text", "def f():\n    return 1\n", false},
-		{"empty", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := allLinesLineNumbered(tc.src); got != tc.want {
-				t.Errorf("allLinesLineNumbered(%q) = %v, want %v", tc.src, got, tc.want)
-			}
-		})
-	}
-}
-
 // The strip is only safe because it is self-validating: the stripped form has
 // to match the file. A stripped old_str that matches nothing must fall through
 // to the existing rejection rather than edit somewhere else.
@@ -2992,4 +2973,510 @@ func syntaxCallCounts(t *testing.T) (structured, legacy int) {
 		})
 	}
 	return structured, legacy
+}
+
+// One write's V3 progress reaches the client as the events it renders, and the
+// pipeline pane gets a start and an end for each stage. Tokens and LLM-call
+// markers go to the client only.
+func TestV3ProgressReachesTheClientAndThePipelinePane(t *testing.T) {
+	baseline := "x = 1\n"
+	result, err := json.Marshal(map[string]interface{}{"code": baseline, "candidates_tested": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := strings.Join([]string{
+		`data: {"stage": "token", "detail": "tok"}`,
+		`data: {"stage": "reasoning_token", "detail": "why"}`,
+		`data: {"stage": "llm_start", "detail": "gen", "data": {"role": "candidate"}}`,
+		`data: {"stage": "llm_end", "detail": "gen", "data": {"tokens": 3}}`,
+		`data: {"stage": "phase1", "detail": "first", "data": {"n": 1}}`,
+		`data: {"stage": "phase1", "detail": "again"}`,
+		`data: {"stage": "no_such_stage", "detail": "odd"}`,
+		"event: result", "data: " + string(result), "", "data: [DONE]", "",
+	}, "\n")
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, stream)
+	}))
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	var client []string
+	ctx.StreamFn = func(event string, data interface{}) {
+		if strings.HasPrefix(event, "v3_") {
+			client = append(client, fmt.Sprintf("%s %v", event, data))
+		}
+	}
+	envelopes := defaultBroker.subscribe()
+	defer defaultBroker.unsubscribe(envelopes)
+
+	if _, err := writeFileWithV3(filepath.Join(dir, "a.py"), baseline, ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	wantClient := []string{
+		"v3_progress map[message:V3 pipeline starting for a.py — generating diverse candidates and build-verifying each.]",
+		"v3_token map[text:tok]",
+		"v3_reasoning_token map[text:why]",
+		"v3_llm_start map[detail:gen role:candidate]",
+		"v3_llm_end map[detail:gen tokens:3]",
+		"v3_phase map[detail:first n:1 stage:phase1]",
+		"v3_phase map[detail:again stage:phase1]",
+		"v3_progress map[message:  │ [no_such_stage] odd]",
+	}
+	if !reflect.DeepEqual(client, wantClient) {
+		t.Errorf("the client got %q, want %q", client, wantClient)
+	}
+	var pane []string
+	for len(envelopes) > 0 {
+		if ev := <-envelopes; strings.HasPrefix(ev.Stage, "v3") {
+			pane = append(pane, string(ev.Type)+" "+ev.Stage)
+		}
+	}
+	wantPane := []string{
+		string(EvtStageStart) + " v3",
+		string(EvtStageStart) + " v3:phase1",
+		string(EvtMetric) + " v3:phase1",
+		string(EvtStageEnd) + " v3:phase1",
+		string(EvtStageStart) + " v3:no_such_stage",
+		string(EvtStageEnd) + " v3:no_such_stage",
+		string(EvtStageEnd) + " v3",
+	}
+	if !reflect.DeepEqual(pane, wantPane) {
+		t.Errorf("the pane got %q, want %q", pane, wantPane)
+	}
+}
+
+// A write's V3 request carries what the session read and wrote, and what the
+// project is. The target itself, a blank name and a file that is gone stay out.
+func TestAWriteRequestCarriesTheSessionsFilesAndTheProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "written.py"), []byte("y = 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sent V3GenerateRequest
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+				t.Error(err)
+			}
+		}
+		http.Error(w, "the request is all this test needs", http.StatusInternalServerError)
+	}))
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	ctx.Project = &ProjectInfo{Framework: "flask", BuildCommand: "make"}
+	ctx.SessionWrites["written.py"] = true
+	ctx.SessionWrites["target.py"] = true
+	ctx.SessionWrites["gone.py"] = true
+	ctx.SessionWrites[""] = true
+
+	if _, err := writeFileWithV3(filepath.Join(dir, "target.py"), "x = 1\n", ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{"written.py": "y = 2\n"}
+	if !reflect.DeepEqual(sent.ProjectContext, want) {
+		t.Errorf("project context %q, want %q", sent.ProjectContext, want)
+	}
+	if sent.Framework != "flask" || sent.BuildCommand != "make" {
+		t.Errorf("project %q and %q, want flask and make", sent.Framework, sent.BuildCommand)
+	}
+
+	// A path outside the workspace's coordinates keeps its own name.
+	ctx.RecordFileRead("relative.py", "z = 3\n")
+	if _, err := writeFileWithV3(filepath.Join(dir, "target.py"), "x = 1\n", ctx); err != nil {
+		t.Fatal(err)
+	}
+	want["relative.py"] = "z = 3\n"
+	if !reflect.DeepEqual(sent.ProjectContext, want) {
+		t.Errorf("project context %q, want %q", sent.ProjectContext, want)
+	}
+}
+
+// A proposal that is the caller's content inside a fence is no candidate once
+// the fence goes: the caller's bytes land, under the caller's name.
+func TestAFencedCopyOfTheCallersContentIsNoCandidate(t *testing.T) {
+	baseline := "x = 1\n"
+	v3 := v3AndStructuralServer(t, "```python\nx = 1\n```\n", "no_such_name")
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+
+	res, err := writeFileWithV3(path, baseline, writeGateCtx(t, v3.URL, sandbox.URL, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.V3Used || res.DeliveryProvenance != DeliveryFromModelProposal {
+		t.Errorf("V3Used %v, provenance %q, want the model's own write", res.V3Used, res.DeliveryProvenance)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != baseline {
+		t.Errorf("the file holds %q (%v), want %q", got, err, baseline)
+	}
+}
+
+// V3 that outlasts its time budget leaves the caller's content on disk, and the
+// client is told the time ran out, not that V3 is down.
+func TestAV3CallThatRunsOutOfTimeWritesTheCallersContent(t *testing.T) {
+	t.Setenv("ATLAS_V3_TIMEOUT", "1")
+	baseline := "x = 1\n"
+	stop := make(chan struct{})
+	v3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			<-stop
+		}
+	}))
+	defer v3.Close()
+	defer close(stop)
+	sandbox := fakeSyntaxSandbox(t, "")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	ctx := writeGateCtx(t, v3.URL, sandbox.URL, dir)
+	var messages []string
+	ctx.StreamFn = func(event string, data interface{}) {
+		messages = append(messages, fmt.Sprint(data))
+	}
+
+	res, err := writeFileWithV3(path, baseline, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !res.Success {
+		t.Errorf("the write failed: %s", res.Error)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != baseline {
+		t.Errorf("the file holds %q (%v), want %q", got, err, baseline)
+	}
+	if !strings.Contains(strings.Join(messages, "\n"), "V3 ran out of its time budget") {
+		t.Errorf("no message says the time ran out: %q", messages)
+	}
+}
+
+// With no candidate there is nothing to fall back to: the caller's content is
+// what would land, and it does not parse.
+func TestCallersBrokenContentIsRefusedWhenV3ProposesNothing(t *testing.T) {
+	baseline := "def broken(:\n"
+	v3 := v3AndStructuralServer(t, baseline, "no_such_name")
+	defer v3.Close()
+	sandbox := fakeSyntaxSandbox(t, "broken")
+	defer sandbox.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+
+	res, err := writeFileWithV3(path, baseline, writeGateCtx(t, v3.URL, sandbox.URL, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Success || res.MutationStatus != MutationRefused || res.ValidationKind != ValidationKindSyntax {
+		t.Errorf("success %v, %q, %q, want a syntax refusal", res.Success, res.MutationStatus, res.ValidationKind)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the file was written: %v", err)
+	}
+}
+
+// What edit_file answers for each shape of old_str and new_str that no other
+// test sends. A refusal leaves the file as it was.
+func TestEditFileAnswersEachShapeOfItsInput(t *testing.T) {
+	long := strings.Repeat("value = compute_the_value()\n", 5)
+	entry := "if __name__ == \"__main__\":\n    run()\n"
+	for _, c := range []struct {
+		name, original, oldStr, newStr string
+		replaceAll                     bool
+		wantError, wantData, wantDisk  string
+	}{
+		{name: "a corrupted character", original: "x = 1\n", oldStr: "x → 1", newStr: "x = 2",
+			wantError: "That is a corrupted character", wantDisk: "x = 1\n"},
+		{name: "a line-number prefix on text that is not in the file", original: "x = 1\n",
+			oldStr: "12\ty = 1", newStr: "y = 2",
+			wantError: "still has read_file's line-number prefix", wantDisk: "x = 1\n"},
+		{name: "stray carriage returns", original: "x = 1\n", oldStr: "a\rb\rc\rd", newStr: "y",
+			wantError: "stray carriage returns", wantDisk: "x = 1\n"},
+		{name: "a fenced new_str loses its fence", original: "x = 1\n", oldStr: "x = 1\n",
+			newStr: "```python\nx = 2\n```\n", wantDisk: "x = 2\n"},
+		{name: "replace_all changes every match", original: "x = 1\nx = 1\n", oldStr: "x = 1",
+			newStr: "x = 2", replaceAll: true, wantDisk: "x = 2\nx = 2\n"},
+		{name: "a replacement far smaller than its target", original: long, oldStr: long, newStr: "x\n",
+			wantError: "suspiciously small", wantDisk: long},
+		{name: "a whitespace-tolerant match that changes nothing", original: "x = 1\n", oldStr: "  x = 1",
+			newStr: "x = 1", wantError: "nothing was changed", wantDisk: "x = 1\n"},
+		{name: "fewer lines than before", original: "x = 1\ny = 2\n", oldStr: "x = 1\ny = 2",
+			newStr: "z = 3", wantData: `"lines_removed":1`, wantDisk: "z = 3\n"},
+		{name: "a second module entrypoint", original: entry, oldStr: "    run()\n",
+			newStr: "    run()\n\n" + entry, wantError: "`if __name__ == \"__main__\":` blocks", wantDisk: entry},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]interface{}{"path": "app.py", "old_str": c.oldStr,
+				"new_str": c.newStr, "replace_all": c.replaceAll})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, disk, _, _ := runEditGate(t, "edit_file", editGateCase{original: c.original,
+				argsFor: func(string) []byte { return args }})
+			if !strings.Contains(res.Error, c.wantError) {
+				t.Errorf("error %q, want it to hold %q", res.Error, c.wantError)
+			}
+			if !strings.Contains(string(res.Data), c.wantData) {
+				t.Errorf("data %s, want it to hold %s", res.Data, c.wantData)
+			}
+			if disk != c.wantDisk {
+				t.Errorf("the file holds %q, want %q", disk, c.wantDisk)
+			}
+		})
+	}
+}
+
+// The same whitespace-only edit, sent twice, is applied once: its old_str still
+// matches afterwards, so nothing else would stop it repeating.
+func TestTheSameEditIsAppliedOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.py")
+	if err := os.WriteFile(path, []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.RecordFileRead(path, "x = 1\n")
+	args := json.RawMessage(`{"path":"app.py","old_str":"x","new_str":" x"}`)
+
+	if res, err := editFileTool().Execute(args, ctx); err != nil || !res.Success {
+		t.Fatalf("the first edit: %v, %v", res, err)
+	}
+	res, err := editFileTool().Execute(args, ctx)
+	if err != nil || res.Success || !strings.Contains(res.Error, "already succeeded earlier") {
+		t.Errorf("the second edit: %+v, %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != " x = 1\n" {
+		t.Errorf("the file holds %q", got)
+	}
+}
+
+// What structural_edit answers for each shape of its call that no other test
+// sends. The service is a stub: `spliced` is the file it hands back, or `body`
+// its whole answer. A refusal leaves the file as it was.
+func TestStructuralEditAnswersEachShapeOfItsCall(t *testing.T) {
+	original := "def a():\n    return 1\n"
+	entry := "if __name__ == \"__main__\":\n    a()\n"
+	for _, c := range []struct {
+		name, file, selector, content string
+		spliced, body                 string
+		oldSize, newSize              int
+		wantSent, wantError, wantDisk string
+	}{
+		{name: "a fenced replacement loses its fence", file: "a.py", selector: "function:a",
+			content: "```python\ndef a():\n    return 2\n```\n", spliced: "def a():\n    return 2\n",
+			wantSent: "def a():\n    return 2\n", wantDisk: "def a():\n    return 2\n"},
+		{name: "the doctype of a replaced html element goes", file: "a.html", selector: "<html>",
+			content: "<!DOCTYPE html>\n<html></html>\n", spliced: "<html></html>\n",
+			wantSent: "<html></html>\n", wantDisk: "<html></html>\n"},
+		{name: "a service answer that is not JSON", file: "a.py", selector: "function:a",
+			content: "def a():\n    return 2\n", body: "not json",
+			wantError: "parse v3 response", wantDisk: original},
+		{name: "a replacement far smaller than its node", file: "a.py", selector: "function:a",
+			content: "def a(): pass\n", spliced: "def a(): pass\n", oldSize: 200, newSize: 14,
+			wantError: "suspiciously small", wantDisk: original},
+		{name: "a call that resolves to nothing", file: "a.py", selector: "function:a",
+			content: "def a():\n    return missing_helper()\n", spliced: "def a():\n    return missing_helper()\n",
+			wantError: "missing_helper", wantDisk: original},
+		{name: "a second module entrypoint", file: "a.py", selector: "function:a",
+			content: "def a():\n    return 2\n", spliced: entry + "\n" + entry,
+			wantError: "`if __name__ == \"__main__\":` blocks", wantDisk: original},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var sent string
+			service := httptest.NewServer(structuralEditStub(t, c.spliced, c.body, c.oldSize, c.newSize, &sent))
+			defer service.Close()
+			dir := t.TempDir()
+			path := filepath.Join(dir, c.file)
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := writeGateCtx(t, service.URL, "", dir)
+			ctx.RecordFileRead(path, original)
+			args, err := json.Marshal(map[string]string{"path": c.file, "selector": c.selector, "content": c.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			res, execErr := structuralEditTool().Execute(args, ctx)
+
+			answer := fmt.Sprint(execErr)
+			if res != nil {
+				answer = res.Error
+			}
+			if !strings.Contains(answer, c.wantError) {
+				t.Errorf("answer %q, want it to hold %q", answer, c.wantError)
+			}
+			if c.wantSent != "" && sent != c.wantSent {
+				t.Errorf("the service got %q, want %q", sent, c.wantSent)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != c.wantDisk {
+				t.Errorf("the file holds %q (%v), want %q", got, err, c.wantDisk)
+			}
+		})
+	}
+}
+
+// structuralEditStub answers for v3-service: `spliced` is the file it hands back,
+// or `body` its whole answer. It keeps the content it was sent in `sent`, and
+// reports `missing_helper` as a call that resolves to nothing.
+func structuralEditStub(t *testing.T, spliced, body string, oldSize, newSize int, sent *string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/internal/structural_edit":
+			var request struct{ Content string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			*sent = request.Content
+			if body != "" {
+				fmt.Fprint(w, body)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "language": "python",
+				"new_content": spliced, "old_size": oldSize, "new_size": newSize})
+		case "/internal/structural_check":
+			var request struct{ Source string }
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			unresolved := []string{}
+			if strings.Contains(request.Source, "missing_helper(") {
+				unresolved = append(unresolved, "missing_helper")
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "unresolved": unresolved})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+// An edit below the tier that warrants a candidate lands the caller's own
+// content, and the service is never asked to generate one.
+func TestABypassedStructuralEditStaysOffTheV3Route(t *testing.T) {
+	const original, edited = "def a():\n    return 1\n", "def a():\n    return 2\n"
+	var sent string
+	var generated atomic.Bool
+	stub := structuralEditStub(t, edited, "", 0, 0, &sent)
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/generate" {
+			generated.Store(true)
+		}
+		stub(w, r)
+	}))
+	defer service.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := writeGateCtx(t, service.URL, "", dir)
+	ctx.RecordFileRead(path, original)
+	args, err := json.Marshal(map[string]string{"path": "a.py", "selector": "function:a", "content": edited})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, execErr := structuralEditTool().Execute(args, ctx)
+
+	if execErr != nil || !res.Success {
+		t.Fatalf("the edit was refused: %v, %+v", execErr, res)
+	}
+	if generated.Load() {
+		t.Error("a bypassed edit reached the V3 route")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != edited {
+		t.Errorf("the file holds %q (%v), want %q", got, err, edited)
+	}
+}
+
+// A call that names no file or node, or whose content cannot be one node's body,
+// is answered before the service is asked.
+func TestStructuralEditRefusesACallThatCannotBeAnEdit(t *testing.T) {
+	body := "def a():\n    return 2\n"
+	for _, c := range []struct {
+		name, path, selector, content, want string
+	}{
+		{"no path", " ", "function:a", body, "path cannot be empty"},
+		{"no selector", "a.py", " ", body, "selector cannot be empty"},
+		{"no content", "a.py", "function:a", " ", "content is empty"},
+		{"content far larger than the file", "a.py", "function:a", strings.Repeat("x", 8001), "far larger than the entire"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("the service was asked: %s", r.URL.Path)
+			}))
+			defer service.Close()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "a.py")
+			original := "def a():\n    return 1\n"
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ctx := writeGateCtx(t, service.URL, "", dir)
+			ctx.RecordFileRead(path, original)
+			args, err := json.Marshal(map[string]string{"path": c.path, "selector": c.selector, "content": c.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := structuralEditTool().Execute(args, ctx)
+
+			if err != nil || res.Success || !strings.Contains(res.Error, c.want) {
+				t.Errorf("result %+v, error %v, want a refusal holding %q", res, err, c.want)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != original {
+				t.Errorf("the file holds %q (%v)", got, err)
+			}
+		})
+	}
+}
+
+// A file that changed after the read is refused, and a service that cannot be
+// reached leaves the file as it was.
+func TestStructuralEditRefusesWhatItCannotTrust(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.py")
+	original := "def a():\n    return 1\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := writeGateCtx(t, gone.URL, "", dir)
+	ctx.RecordFileRead(path, original)
+	args := json.RawMessage(`{"path":"a.py","selector":"function:a","content":"def a():\n    return 2\n"}`)
+
+	if _, err := structuralEditTool().Execute(args, ctx); err == nil || !strings.Contains(err.Error(), "v3-service unreachable") {
+		t.Errorf("with the service gone: %v", err)
+	}
+
+	changed := "def a():\n    return 3\n"
+	if err := os.WriteFile(path, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Later than the read, whatever the file system's clock resolution.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := structuralEditTool().Execute(args, ctx); err == nil || !strings.Contains(err.Error(), "file modified since last read") {
+		t.Errorf("with the file changed: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != changed {
+		t.Errorf("the file holds %q (%v), want %q", got, err, changed)
+	}
 }

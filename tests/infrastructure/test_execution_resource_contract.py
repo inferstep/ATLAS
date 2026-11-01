@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -294,6 +295,42 @@ def test_a_child_that_runs_past_its_time_still_dies(small, script):
     r = run(script, dataclasses.replace(small, wall_seconds=2))
     assert r.outcome == rc.OUTCOME_TIMED_OUT
     assert r.survivors == 0
+
+
+@pytest.fixture
+def no_proc(monkeypatch):
+    """A host with no readable /proc: the group and the token show no process."""
+    monkeypatch.setattr(rc, "_pids_in_group", lambda *args, **kwargs: [])
+    monkeypatch.setattr(rc, "_token_holders", lambda *args, **kwargs: [])
+
+
+def test_without_proc_a_command_that_ignores_sigterm_ends_at_the_limit(small, no_proc):
+    contract = dataclasses.replace(small, wall_seconds=1, grace_seconds=1.0)
+    r = run("trap '' TERM; sleep 6", contract)
+    assert r.outcome == rc.OUTCOME_TIMED_OUT
+    assert r.returncode == -signal.SIGKILL
+    assert r.elapsed_seconds < 4
+
+
+def test_without_proc_a_background_child_does_not_outlive_the_request(small, no_proc, tmp_path):
+    beats = tmp_path / "beats"
+    child = f"(trap '' TERM; for i in $(seq 1 60); do echo beat >> {beats}; sleep 0.05; done) >/dev/null 2>&1 &"
+    r = run(f"{child} sleep 0.3", small)
+    assert r.outcome == rc.OUTCOME_COMPLETED
+    size = beats.stat().st_size
+    time.sleep(0.3)
+    assert beats.stat().st_size == size
+
+
+def test_the_wait_for_a_command_that_never_ends_is_bounded(small, monkeypatch):
+    def nothing_to_collect(pid, options):
+        assert options == os.WNOHANG, "a wait that blocks holds the request"
+        return 0, 0, None
+
+    monkeypatch.setattr(rc.os, "wait4", nothing_to_collect)
+    r = run("sleep 5", dataclasses.replace(small, wall_seconds=1, grace_seconds=0.2))
+    assert r.outcome == rc.OUTCOME_TIMED_OUT
+    assert r.returncode == -1
 
 
 # Each case sleeps a number of seconds of its own, so its processes can be

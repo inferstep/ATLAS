@@ -149,18 +149,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## 🗺️ ロードマップ
 
-**3.2.0** ([マイルストーン](https://github.com/inferstep/ATLAS/milestone/2)) - 「完了」が本当に完了を意味するようにし、`dev` の内容をリリースします。
-- 検証: 「完了」と実際に検証された内容の差を埋め ([#330](https://github.com/inferstep/ATLAS/issues/330))、ガードによる拒否を失敗として数えます ([#327](https://github.com/inferstep/ATLAS/issues/327))。
-- 安全性: サンドボックスと初回インストールを強化し ([#384](https://github.com/inferstep/ATLAS/issues/384)、[#410](https://github.com/inferstep/ATLAS/issues/410)、[#483](https://github.com/inferstep/ATLAS/issues/483))、サービストークンをエンドツーエンドでテストします ([#212](https://github.com/inferstep/ATLAS/issues/212))。K3s も対象です ([#697](https://github.com/inferstep/ATLAS/issues/697))。
-- IDE: VS Code 拡張機能をプレビューとして提供します。
-- リリース: リリース候補を 3 日以上テストし ([#196](https://github.com/inferstep/ATLAS/issues/196))、署名とビルド証明を付けます ([#252](https://github.com/inferstep/ATLAS/issues/252)、[#361](https://github.com/inferstep/ATLAS/issues/361))。
-
-**バックログ / 協力者募集**
-- ハードウェア: ARM64 マルチアーキテクチャビルド ([#115](https://github.com/inferstep/ATLAS/issues/115))、大規模モデル向けのマルチ GPU ([#34](https://github.com/inferstep/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27))。
-- ツール: JetBrains プラグイン ([#35](https://github.com/inferstep/ATLAS/issues/35))。
-- デプロイ: K3s / Kubernetes 上の ROCm。
-- 研究: サンプリングを用いた推論 ([#9](https://github.com/inferstep/ATLAS/issues/9))。LiveCodeBench を隠しテスト付きで再実行 ([#28](https://github.com/inferstep/ATLAS/issues/28))。
-- モデル: 自動化された HuggingFace 投稿 ([#102](https://github.com/inferstep/ATLAS/issues/102))。モデル非依存のバックエンド ([#66](https://github.com/inferstep/ATLAS/issues/66))。
+計画中と進行中の作業は [ATLAS Roadmap ボード](https://github.com/orgs/inferstep/projects/1) で確認できます。
 
 ---
 
@@ -185,7 +174,7 @@ ATLAS はオープンに開発されており、コントリビューターと�
 
 バグを見つけた、あるいは行き詰まった? **[Issue を作成してください](https://github.com/inferstep/ATLAS/issues)** — 修正の提出は必須ではありません。バグ報告とフィードバックはコードと同じくらい役に立ちます。
 
-ガイドラインは **[CONTRIBUTING.md](../../../CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
+ガイドラインは **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
 
 ---
 

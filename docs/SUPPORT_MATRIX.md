@@ -109,9 +109,7 @@ Every bundle activated by `atlas lens build` auto-writes `provenance.json`:
 backbone + dim + quant + layer, dataset, training commit,
 hyperparameters, seed, train/val split, validation metrics,
 normalization + thresholds, creation time, and SHA-256 of every artifact
-file. `geometric_lens.provenance.is_complete()` says whether a bundle has every
-required field. No product code calls it yet, so it does not gate Supported
-status. The gemma reference bundle
+file. The gemma reference bundle
 carries a complete manifest (val AUC 0.73, all seven files hashed).
 
 ### Model contract

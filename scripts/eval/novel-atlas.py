@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the freshly authored task set through the full ATLAS agent.
 
-The other half of the comparison scripts/novel-baseline.py starts: identical
+The other half of the comparison scripts/eval/novel-baseline.py starts: identical
 statements, identical reference answers, identical holdout check — but this
 arm gets the whole harness (agent loop, tools, gates, V3 pipeline), driven
 through /v1/agent exactly the way a user session is.
@@ -22,8 +22,8 @@ import time
 import urllib.request
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "scripts"))
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts" / "eval"))
 
 from novel_tasks import build_tasks
 
@@ -188,7 +188,7 @@ def summarize_events(events) -> dict:
 
 def _load_e2e():
     spec = importlib.util.spec_from_file_location(
-        "e2e_suite", REPO / "scripts" / "e2e-reliability.py")
+        "e2e_suite", REPO / "scripts" / "eval" / "e2e-reliability.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["e2e_suite"] = mod
     spec.loader.exec_module(mod)
@@ -233,10 +233,10 @@ def _read_provenance(args: argparse.Namespace, url: str, e2e) -> dict:
         "count": args.count,
         "url": url,
         "runner_sha256": _file_hash(Path(__file__)),
-        "tasks_sha256": _file_hash(REPO / "scripts" / "novel_tasks.py"),
-        "e2e_sha256": _file_hash(REPO / "scripts" / "e2e-reliability.py"),
+        "tasks_sha256": _file_hash(REPO / "scripts" / "eval" / "novel_tasks.py"),
+        "e2e_sha256": _file_hash(REPO / "scripts" / "eval" / "e2e-reliability.py"),
         # The runner's records, sandbox and detector code are in these files.
-        "e2e_modules_sha256": {name: _file_hash(REPO / "scripts" / name) for name in (
+        "e2e_modules_sha256": {name: _file_hash(REPO / "scripts" / "eval" / name) for name in (
             "reliability_records.py", "reliability_sandbox.py", "reliability_detectors.py")},
         # What the proxy says it runs: grammar mode, lens and steering state.
         "stack": e2e.stack_identity(url),

@@ -16,7 +16,7 @@ project:
   number: 1
 
 links:
-  contributing: https://github.com/inferstep/ATLAS/blob/main/CONTRIBUTING.md
+  contributing: https://github.com/inferstep/ATLAS/blob/main/.github/CONTRIBUTING.md
   start_here: https://github.com/orgs/inferstep/projects/1/views/1
 
 rfc_dedupe:

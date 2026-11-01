@@ -20,10 +20,15 @@ func addFilesReadToPlanContext(ctx *AgentContext, pctx map[string]string, limit 
 		if strings.HasPrefix(path, ctx.WorkingDir+"/") {
 			rel = strings.TrimPrefix(path, ctx.WorkingDir+"/")
 		}
-		s := files[path]
-		if len(s) > 2000 {
-			s = s[:2000] + "\n... (truncated)"
-		}
-		pctx[rel] = s
+		pctx[rel] = contextEntry(files[path], 2000)
 	}
+}
+
+// contextEntry cuts a file to the bytes a request carries for it, to save
+// tokens.
+func contextEntry(content string, limit int) string {
+	if len(content) > limit {
+		return content[:limit] + "\n... (truncated)"
+	}
+	return content
 }

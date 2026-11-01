@@ -1,6 +1,6 @@
 """The e2e-reliability.py run summary, and what the runner keeps on disk as it goes.
 
-Split out of scripts/e2e-reliability.py (#222). A run that was stopped part way
+Split out of scripts/eval/e2e-reliability.py (#222). A run that was stopped part way
 used to lose everything: the defect text was printed only in the final summary,
 and nothing handled SIGINT or SIGTERM. Now each session's defects are appended
 to a JSONL file as the session ends, and a stop writes the partial results and

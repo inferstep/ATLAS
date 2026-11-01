@@ -33,6 +33,9 @@ spec:
         - {name: ATLAS_LENS_URL,      value: "http://geometric-lens:${ATLAS_LENS_PORT}"}
         - {name: ATLAS_SANDBOX_URL,   value: "http://sandbox:${ATLAS_SANDBOX_PORT}"}
         - {name: ATLAS_MODEL_NAME,    value: "${ATLAS_MAIN_MODEL}"}
+        # Same slot count llama-server gets: V3 keeps no more generations in
+        # flight than it has slots.
+        - {name: ATLAS_PARALLEL_SLOTS, value: "${ATLAS_PARALLEL_SLOTS}"}
         readinessProbe:
           httpGet:
             path: /health
