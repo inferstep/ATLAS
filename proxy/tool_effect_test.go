@@ -151,6 +151,35 @@ func TestOnlyReadOnlyAndCommandEffectsAreBoundaryClassifiable(t *testing.T) {
 	}
 }
 
+// A branch that already spoke keeps its word: a refused run_command stays
+// refused, and its validation stays what its producer said.
+func TestTheBoundaryKeepsAProducersOwnClassification(t *testing.T) {
+	result := &ToolResult{MutationStatus: MutationRefused, ValidationKind: ValidationKindSyntax, ValidationStatus: ValidationFailed}
+	classifyByEffect(ToolEffectCommandUnobserved, result)
+	if result.MutationStatus != MutationRefused {
+		t.Errorf("MutationStatus = %q, want the producer's %q", result.MutationStatus, MutationRefused)
+	}
+	if result.ValidationKind != ValidationKindSyntax {
+		t.Errorf("ValidationKind = %q, want the producer's %q", result.ValidationKind, ValidationKindSyntax)
+	}
+	if result.ValidationStatus != ValidationFailed {
+		t.Errorf("ValidationStatus = %q, want the producer's %q", result.ValidationStatus, ValidationFailed)
+	}
+}
+
+// The boundary leaves a direct mutator's result as it found it, so a missed
+// producer shows as unknown and is not filled in.
+func TestTheBoundaryLeavesADirectMutatorUnclassified(t *testing.T) {
+	result := &ToolResult{}
+	classifyByEffect(ToolEffectDirectMutation, result)
+	if result.MutationStatus != MutationUnknown {
+		t.Errorf("MutationStatus = %q, want it left unknown", result.MutationStatus)
+	}
+	if result.ValidationKind != ValidationKindUnknown {
+		t.Errorf("ValidationKind = %q, want it left unknown", result.ValidationKind)
+	}
+}
+
 // A direct mutator that fails gives its own classification and the real
 // error. Deleting a file that was never there removed nothing.
 func TestDirectMutatorFailureCarriesItsProducersClassification(t *testing.T) {
