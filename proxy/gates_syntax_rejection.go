@@ -192,10 +192,9 @@ func lastContentLine(content string) int {
 
 // fallbackSyntaxRejection builds the tool error handed back to the model
 // when the gate blocks a write. It DISTINGUISHES the two failure shapes,
-// because the old one-size message ("truncated — resend complete content")
-// is actively wrong for a genuine syntax bug in COMPLETE content and made
-// the model reassert the same broken text (observed 2026-07-20 on a
-// pytorch-model-recovery task: an f-string with nested quotes resent 5×):
+// because one message ("truncated — resend complete content") is actively
+// wrong for a genuine syntax bug in COMPLETE content and makes the model
+// reassert the same broken text:
 //   - truncation shape (unterminated string / unexpected EOF / "never
 //     closed") → the content really is cut off; resend it complete.
 //   - a mid-content syntax bug → point at the offending line (quoted from

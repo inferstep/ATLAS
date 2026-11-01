@@ -356,14 +356,10 @@ func (r VerificationRecord) showsWorking() bool {
 
 // Calibration status endpoint — surfaces lens + ASA compat for the TUI.
 //
-// GH #101: the geometric-lens /health endpoint already exposes the
+// The geometric-lens /health endpoint already exposes the
 // data we need (cost_field_dim, embed_dim, cost_field_loaded). This file
 // forwards that into a verdict-shaped response under /v1/calibration/status
 // that the TUI renders as a header badge.
-//
-// GH #113 extends the `asa` block from a file-presence check to a
-// proper dim-vs-model probe; the JSON shape stays the same so TUI
-// rendering doesn't churn.
 
 // CalibrationStatus is the JSON returned by /v1/calibration/status.
 // Shape is stable: TUI and atlas doctor both key off it.
@@ -712,7 +708,7 @@ func lensVerdictCanScore(verdict string) bool {
 //  3. The env-supplied ATLAS_MODELS_DIR if set.
 //
 // llama-server is the authoritative source of "is the vector actually
-// loaded" but doesn't expose that via /props (verified 2026-05-17), so
+// loaded" but doesn't expose that via /props, so
 // disk presence is the best we can do without an out-of-band probe.
 // For the user-facing verdict, `atlas asa check` does the deeper GGUF
 // dim parse on the host — this endpoint is the "first impression" the

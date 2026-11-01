@@ -4,8 +4,7 @@ import "strings"
 
 // replyLeadIns are words between an announcing subject ("i will", "let me")
 // and its verb that leave the announcement unchanged: "i will try to read it"
-// defers the read exactly as "i will read it" does. A #273 proof session closed
-// that way after failed reads, and the reply was reported completed.
+// defers the read exactly as "i will read it" does.
 var replyLeadIns = []string{"now ", "first ", "next ", "then ", "try to ", "attempt to ",
 	"try and ", "go ahead and "}
 

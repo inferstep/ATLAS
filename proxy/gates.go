@@ -55,17 +55,14 @@ import (
 	"time"
 )
 
-// Structural gate for the edit and write paths (issue #147). The V3
-// structural veto hard-rejects generated candidates whose direct-identifier
-// calls resolve to no local def, import, or builtin — but the edit path
-// (improveContentWithV3) frequently sent no project_context, so the
-// in-pipeline veto was gated off, and even when it fired the pipeline's
-// baseline fallback resurrected the model's own edit. Result observed in
-// 2026-07-18 dogfooding: a structural_edit replaced a route with a body calling
-// render_template while the file imported only render_template_string; it
-// passed V3 verification, landed as verified, and every request 500'd
-// (NameError). structural_edit had no syntax gate at all; edit_file's syntax gate
-// catches parse failures but a NameError parses fine.
+// Structural gate for the edit and write paths. The V3 structural veto
+// hard-rejects generated candidates whose direct-identifier calls resolve to
+// no local def, import, or builtin — but the edit path (improveContentWithV3)
+// can send no project_context, which gates the in-pipeline veto off, and even
+// when it fires the pipeline's baseline fallback brings back the model's own
+// edit. A body calling render_template in a file that imports only
+// render_template_string passes V3 verification and fails every request with
+// a NameError, which parses fine, so no syntax gate catches it.
 //
 // This proxy-side gate closes the hole where it can't be bypassed: it
 // resolves the COMPOSED post-change file through v3-service's structural
@@ -237,7 +234,7 @@ func structuralProjectContext(ctx *AgentContext, path string) map[string]string 
 	// lenient = fewer false blocks). Crucially, EXCLUDE the file being
 	// edited: SnapshotFilesRead still holds its PRE-EDIT body, which would
 	// credit a top-level def the edit just deleted and let a genuine
-	// NameError through (#147 review finding #2). The edited file's current
+	// NameError through. The edited file's current
 	// symbols come from `source`, which structural_score parses directly.
 	cleanTarget := filepath.Clean(path)
 	rel := make(map[string]string)
@@ -287,13 +284,9 @@ func addSessionWrites(ctx *AgentContext, cleanTarget string, addContext func(p, 
 }
 
 // Syntax gate for unverified fallback writes. When a V3 call fails or
-// times out, the fallback used to write the model's raw baseline to disk
-// with success=true — and a truncated tool call (content cut mid-string)
-// landed as a file with a SyntaxError while the agent believed the write
-// succeeded. Observed twice in the 2026-07-18 mini-bench (t06, t09):
-// V3 hit its 3-minute cap, the fallback wrote a 362-byte truncated
-// baseline, the follow-up run failed, and the loop breakers stopped a
-// session whose "productive change" was a broken file.
+// times out, the fallback writes the model's raw baseline to disk, and a
+// truncated tool call (content cut mid-string) would land as a file with a
+// SyntaxError while the agent believes the write succeeded.
 //
 // The gate routes fallback content through the sandbox's /syntax-check
 // (the same checker V3's smoke pass uses). Fail-open by design: if the
@@ -582,17 +575,12 @@ func sandboxSyntaxOutcome(ctx *AgentContext, path, content string) checkOutcome 
 // Embedded-script gate
 // ---------------------------------------------------------------------------
 //
-// 2026-08-01 dogfooding: the model edited a Flask app whose whole UI is one
-// HTML string (`HTML_TEMPLATE = """..."""` → render_template_string) and left
-// a stray closing paren inside its <script> block:
-//
-//	else if(key === 'ArrowDown' && direction !== 'UP') nextDirection = 'DOWN');
-//
-// Every gate on the write path was structurally blind to it. The Python
+// A Flask app whose whole UI is one HTML string (`HTML_TEMPLATE = """..."""`
+// → render_template_string) can hold a stray closing paren inside its <script>
+// block, and every other gate on the write path is blind to it. The Python
 // compiles (the JavaScript is string content), so the sandbox's /syntax-check
-// passes; the server starts and `curl /` returns 200, so the
-// verification gate passes and `done` is accepted — while the game is dead in
-// the browser. Nothing in the loop ever parses the JavaScript.
+// passes; the server starts and `curl /` returns 200, so the verification gate
+// passes and `done` is accepted — while the page is dead in the browser.
 //
 // checkEmbeddedScript closes that by routing the content through
 // v3-service /internal/embedded_script_check, which tree-sitter-parses the

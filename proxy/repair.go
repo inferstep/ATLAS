@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Repair in progress (#214).
+// Repair in progress.
 //
 // A file this session left unparseable is an open repair until a later change
 // leaves it parsing, or it is deleted or moved. While one is open:
