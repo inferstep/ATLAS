@@ -159,7 +159,7 @@ stands in for one (`test_the_retiring_prototype_is_gone`). One contract, one
 serialiser, one wire type, one validator — pinned by
 `test_one_canonical_contract_one_serialiser_no_duplicate_policy` and
 `test_no_compatibility_aliases_or_duplicate_implementations_remain`. The three
-tests are in `tests/v3-service/test_contract_genericity.py`.
+tests are in `tests/v3-service/pipeline/test_contract_genericity.py`.
 
 Local `ToolResult` validation (syntax, structural) stays completely separate:
 it says what **the proxy** checked about the bytes it wrote. The envelope says
@@ -238,8 +238,8 @@ cases: id, description, the exact response body written by the real serialiser,
 and what both sides must conclude (availability, strength, selection status,
 whether the evidence describes the delivered bytes, and the reason an
 unavailable envelope must give). It is built and verified byte-for-byte by
-`tests/v3-service/test_contract_genericity.py`; regenerate with
-`ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest tests/v3-service/test_contract_genericity.py`.
+`tests/v3-service/pipeline/test_contract_genericity.py`; regenerate with
+`ATLAS_WRITE_EVIDENCE_FIXTURES=1 pytest tests/v3-service/pipeline/test_contract_genericity.py`.
 The Go tests (`proxy/contract_gate_test.go`) read the same document, decode
 those exact bytes and check the declared expectations independently — so the
 two languages agree with the contract rather than with each other, and adding a

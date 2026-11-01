@@ -108,7 +108,7 @@ model returns no thresholds
   yet, to build one (`NEUTRAL_COMBINED` in `atlas/bench/best_of_k.py`).
   It is not the product path.
 - Pinned by `proxy/lens_required_test.go`,
-  `tests/v3-service/test_lens_required.py`,
+  `tests/v3-service/lens/test_lens_required.py`,
   `geometric-lens/tests/test_withheld_thresholds.py`, and
   `tests/e2e/test_v3_lens_acceptance.py`
   (`test_an_unreachable_lens_refuses_the_request`,

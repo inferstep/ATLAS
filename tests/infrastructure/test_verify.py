@@ -16,7 +16,7 @@ SCRIPT = ROOT / "scripts" / "verify.py"
 ALWAYS = ["test-integrity", "dockerfile-sources"]
 PYTHON = ["python-compile", "min-python", "ruff"]
 SENDERS = "tests/contracts/test_api_version_contract.py"
-CHANGED_TEST = "tests/v3-service/test_structural_edit.py"
+CHANGED_TEST = "tests/v3-service/structural_edit/test_structural_edit.py"
 
 
 @pytest.fixture(scope="module")

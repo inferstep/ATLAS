@@ -28,8 +28,8 @@ when a request arrives, the request is refused and says why; unreachable
 from V3 during a run, the run stops and says why. Deeper in-pipeline failure cases (no valid
 candidate → repair phases, winner-selection edge cases, malformed lens
 payloads and missing thresholds) are pinned by the hermetic unit
-suites tests/v3-service/test_winner_selection.py and
-tests/v3-service/test_lens_calibration.py.
+suites tests/v3-service/pipeline/test_winner_selection.py and
+tests/v3-service/lens/test_lens_calibration.py.
 """
 
 import http.client
