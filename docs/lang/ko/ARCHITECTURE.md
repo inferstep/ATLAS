@@ -94,7 +94,10 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | `llm_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
 | `system_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
 | `agent_handler.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
-| `agent.go` | 에이전트 루프: 턴 상태, 플랜 생성, 스턱 루프 차단기 |
+| `agent.go` | 에이전트 루프: 턴 상태, 스턱 루프 차단기 |
+| `plan_generation.go`, `task_intake.go` | 요청에 플랜이 필요한지 판단과 플래너에 보여 줄 샘플, 요청이 선언한 태스크 계약 |
+| `run_end.go`, `recovery.go` | 실행 종료(터미널, 시간 예산, 요약), 막힌 모델에게 보여 줄 내용과 남은 작업 |
+| `fenced_channel.go` | 파일 본문을 가져오는 서브콜과 그 예산 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
 | `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
 | `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |

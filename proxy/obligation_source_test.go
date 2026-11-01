@@ -255,8 +255,8 @@ func TestTheLegacyOutputHeuristicIsReachedOnlyThroughTheOwner(t *testing.T) {
 	// client declared. A capture that read production's decision would be
 	// comparing production with itself.
 	allowed := map[string]bool{
-		"obligations.go:resolveOutputObligation": true,
-		"agent.go:emitShadowRequestSnapshot":     true,
+		"obligations.go:resolveOutputObligation":   true,
+		"task_intake.go:emitShadowRequestSnapshot": true,
 	}
 	sites := callSites(proxyFiles(t), "expectedOutputPaths")
 	for k := range sites {

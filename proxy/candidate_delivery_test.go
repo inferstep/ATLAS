@@ -535,7 +535,7 @@ func TestOneCandidateGetsOneAuthorizationAnswer(t *testing.T) {
 // deliver the thing it was bounced to write. The emission is the point of no
 // return, and it happens once.
 func TestRetirementSitsAtTheEmissionNotTheVerdict(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("run_end.go")
 	if err != nil {
 		t.Fatal(err)
 	}

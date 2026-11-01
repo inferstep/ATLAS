@@ -90,10 +90,13 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | File | Owns |
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
-| `agent.go` | The agent loop: turn state, plan generation, stuck-loop breakers |
+| `agent.go` | The agent loop: turn state, stuck-loop breakers |
 | `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back |
 | `system_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
 | `agent_handler.go` | The `/v1/agent` and `/cancel` endpoints |
+| `plan_generation.go`, `task_intake.go` | Whether a request earns a plan and what the planner is shown; the task contract a request declares |
+| `run_end.go`, `recovery.go` | How a run ends: its terminal, time budget and summary; what a stuck model is shown and the work a run still owes |
+| `fenced_channel.go` | The sub-call that fetches a file body, and what it may spend |
 | `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |

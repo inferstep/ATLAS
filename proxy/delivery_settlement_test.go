@@ -285,7 +285,7 @@ func TestSettlementWaivesNothingElse(t *testing.T) {
 // --- the terminal --------------------------------------------------------------
 
 func TestTheTerminalAsksTheExistingOwner(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("run_end.go")
 	if err != nil {
 		t.Fatal(err)
 	}
