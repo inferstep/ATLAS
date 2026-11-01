@@ -26,6 +26,7 @@ every non-`completed` outcome is defined so that it cannot.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import resource
 import sys
@@ -270,7 +271,7 @@ class BoundedResult:
 # --- process-group accounting ------------------------------------------------
 
 
-def _pids_in_group(pgid: int) -> List[int]:
+def _pids_in_group(pgid: int, proc_dir: str = "/proc") -> List[int]:
     """Every live process in the group, read from /proc.
 
     The group is the unit because the thing that kills a host is rarely one
@@ -279,14 +280,14 @@ def _pids_in_group(pgid: int) -> List[int]:
     """
     out = []
     try:
-        entries = os.listdir("/proc")
+        entries = os.listdir(proc_dir)
     except OSError:
         return out
     for name in entries:
         if not name.isdigit():
             continue
         try:
-            with open(f"/proc/{name}/stat", "rb") as fh:
+            with open(f"{proc_dir}/{name}/stat", "rb") as fh:
                 fields = fh.read().rsplit(b")", 1)[1].split()
             # After the comm field: state, ppid, pgrp, ...
             if int(fields[2]) == pgid:
@@ -296,7 +297,7 @@ def _pids_in_group(pgid: int) -> List[int]:
     return out
 
 
-def _rss_bytes(pid: int) -> int:
+def _rss_bytes(pid: int, proc_dir: str = "/proc") -> int:
     """This process's PEAK resident set, not its current one.
 
     VmHWM is a kernel-maintained high-water mark that survives until the
@@ -305,7 +306,7 @@ def _rss_bytes(pid: int) -> int:
     samples, which is precisely the allocator that took the host down.
     """
     try:
-        with open(f"/proc/{pid}/status", "rb") as fh:
+        with open(f"{proc_dir}/{pid}/status", "rb") as fh:
             for line in fh:
                 if line.startswith(b"VmHWM:"):
                     return int(line.split()[1]) * 1024
@@ -329,7 +330,7 @@ def group_usage(pgid: int, token: str = "") -> tuple:
 EXEC_TOKEN_VAR = "ATLAS_EXEC_TOKEN"
 
 
-def _token_holders(token: str) -> List[int]:
+def _token_holders(token: str, proc_dir: str = "/proc") -> List[int]:
     """Every live process carrying this execution's token.
 
     The process group is not enough. `(cmd &)`, a double fork, or an explicit
@@ -343,14 +344,14 @@ def _token_holders(token: str) -> List[int]:
     marker = f"{EXEC_TOKEN_VAR}={token}".encode()
     found = []
     try:
-        entries = os.listdir("/proc")
+        entries = os.listdir(proc_dir)
     except OSError:
         return found
     for name in entries:
         if not name.isdigit():
             continue
         try:
-            with open(f"/proc/{name}/environ", "rb") as fh:
+            with open(f"{proc_dir}/{name}/environ", "rb") as fh:
                 if marker in fh.read():
                     found.append(int(name))
         except (OSError, ValueError):
@@ -358,9 +359,9 @@ def _token_holders(token: str) -> List[int]:
     return found
 
 
-def _kill_token(token: str, grace: float) -> int:
+def _kill_token(token: str, grace: float, proc_dir: str = "/proc") -> int:
     """End everything carrying the token. Returns how many were still alive."""
-    victims = _token_holders(token)
+    victims = _token_holders(token, proc_dir=proc_dir)
     if not victims:
         return 0
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -371,14 +372,14 @@ def _kill_token(token: str, grace: float) -> int:
                 continue
         deadline = time.time() + (grace if sig == signal.SIGTERM else 0.5)
         while time.time() < deadline:
-            victims = _token_holders(token)
+            victims = _token_holders(token, proc_dir=proc_dir)
             if not victims:
                 return 0
             time.sleep(0.02)
-    return len(_token_holders(token))
+    return len(_token_holders(token, proc_dir=proc_dir))
 
 
-def _kill_group(pgid: int, grace: float) -> None:
+def _kill_group(pgid: int, grace: float, proc_dir: str = "/proc") -> None:
     """End the group and everything in it, politely then not.
 
     Called on every path including the ordinary one: a command that exits
@@ -392,9 +393,65 @@ def _kill_group(pgid: int, grace: float) -> None:
             return
         deadline = time.time() + (grace if sig == signal.SIGTERM else 0.5)
         while time.time() < deadline:
-            if not _pids_in_group(pgid):
+            if not _pids_in_group(pgid, proc_dir=proc_dir):
                 return
             time.sleep(0.02)
+
+
+SUPERVISION_UNAVAILABLE_REASON = (
+    "resource limits not enforced: /proc is unreadable or unsupported"
+)
+
+
+def check_process_supervision(proc_dir: str = "/proc") -> tuple[bool, str]:
+    """Verify that this host can observe and govern child processes through /proc.
+
+    Spawns one short-lived probe process in its own session carrying an execution
+    token, and verifies that _pids_in_group and _token_holders can see it.
+    Cleans up the probe child on every return path.
+    """
+    try:
+        os.listdir(proc_dir)
+    except OSError:
+        return False, SUPERVISION_UNAVAILABLE_REASON
+
+    token = f"probe-{uuid.uuid4().hex}"
+    run_env = os.environ.copy()
+    run_env[EXEC_TOKEN_VAR] = token
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=run_env,
+            start_new_session=True,
+        )
+        pgid = proc.pid
+        deadline = time.monotonic() + 0.5
+        seen_group = False
+        seen_token = False
+        while time.monotonic() < deadline:
+            if not seen_group and proc.pid in _pids_in_group(pgid, proc_dir=proc_dir):
+                seen_group = True
+            if not seen_token and proc.pid in _token_holders(token, proc_dir=proc_dir):
+                seen_token = True
+            if seen_group and seen_token and _rss_bytes(proc.pid, proc_dir=proc_dir) > 0:
+                return True, "enforced"
+            time.sleep(0.01)
+        return False, SUPERVISION_UNAVAILABLE_REASON
+    except (OSError, ValueError):
+        return False, SUPERVISION_UNAVAILABLE_REASON
+    finally:
+        if proc is not None:
+            with contextlib.suppress(OSError):
+                _kill_group(proc.pid, 0.1, proc_dir=proc_dir)
+            with contextlib.suppress(OSError):
+                _kill_token(token, 0.1, proc_dir=proc_dir)
+            with contextlib.suppress(OSError):
+                proc.kill()
+                proc.wait(timeout=2)
 
 
 def _apply_child_limits(contract: ResourceContract):

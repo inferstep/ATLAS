@@ -1,4 +1,4 @@
-"""The request and response bodies of the /execute and /syntax-check endpoints."""
+"""The request and response bodies of the /execute, /syntax-check, and /shell endpoints."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class ExecuteResponse(BaseModel):
     # HOW the run ended, as /shell says it: a caller need not read stderr for a phrase.
     timed_out: bool = False
     outcome: str = OUTCOME_COMPLETED
+    limits_enforced: bool = False
+    resource_limits: Optional[str] = None
 
 
 class SyntaxCheckRequest(BaseModel):
@@ -63,3 +65,62 @@ class SyntaxCheckResponse(BaseModel):
     # parse (valid: true).
     status: str = "checked"
     outcome: str = OUTCOME_COMPLETED
+
+
+class ShellRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None  # absolute path inside container, defaults to /workspace
+    timeout: int = 30          # seconds; capped at MAX_EXECUTION_TIME
+    env: Optional[Dict[str, str]] = None
+    # Optional ephemeral overlay used by V3 build verification. When
+    # present, /shell copies a bounded workspace snapshot into /tmp,
+    # overlays these relative file paths, runs the command there, then
+    # deletes the snapshot. This lets V3 test a candidate without
+    # writing it into the real bind-mounted project.
+    files: Optional[Dict[str, str]] = None
+    # Optional bounded observation, used by candidate staging. When present,
+    # /shell hashes these relative paths and the snapshot as a whole BEFORE
+    # and AFTER the command, and returns both. It reports facts and draws no
+    # conclusion: whether a change is permitted is the caller's judgement, and
+    # this endpoint has no way to know what the caller declared.
+    observe_paths: Optional[List[str]] = None
+
+
+class ShellObservation(BaseModel):
+    """What the workspace looked like either side of one command.
+
+    Hashes and counts only. No path contents, no command text, no output --
+    a staging observation that carried any of those would put candidate bytes
+    into the caller's telemetry, which is the one thing staging exists to
+    avoid.
+    """
+    target_before: Dict[str, str] = {}
+    target_after: Dict[str, str] = {}
+    workspace_before: str = ""
+    workspace_after: str = ""
+    workspace_files: int = 0
+    # True when the digest hit its own cap and therefore describes only part
+    # of the workspace. A caller that needs an exact answer must treat this as
+    # unobservable rather than as "unchanged".
+    digest_truncated: bool = False
+
+
+class ShellResponse(BaseModel):
+    success: bool
+    stdout: str
+    stderr: str
+    exit_code: int
+    elapsed_ms: int
+    # Present only when the request asked for it.
+    timed_out: bool = False
+    # How the command ended, from the closed vocabulary in resource_contract.
+    # `completed` is the only member that means the command reached its own
+    # end; every other one means it was stopped, and a stopped command
+    # demonstrates nothing about the code it was pointed at. Defaulted so an
+    # older executor answering a newer proxy is read as unclassified rather
+    # than as success.
+    outcome: str = "internal_unclassified"
+    peak_memory_bytes: int = 0
+    observation: Optional[ShellObservation] = None
+    limits_enforced: bool = False
+    resource_limits: Optional[str] = None
