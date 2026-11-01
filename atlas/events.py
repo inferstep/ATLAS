@@ -18,14 +18,14 @@ Envelope shape
       "type":        "stage_start" | "stage_end" | "tool_call" |
                      "tool_result" | "metric" | "error" | "done",
       "stage":       <str — pipeline stage name; e.g., "phase2", "pr_cot">,
-      "duration_ms": <int> | null,           # set on stage_end / tool_result
+      "duration_ms": <int> | null,           # set on stage_end / tool_result / done
       "payload":     { ... type-specific ... }
     }
 
 Per-type payload contracts
 --------------------------
 
-  stage_start   {detail?: str}
+  stage_start   {detail?: str, turn?: int, messages?: int}
   stage_end     {detail?: str, success: bool, summary?: str}
   tool_call     {name: str, args_summary: str}
   tool_result   {name: str, success: bool, summary?: str}

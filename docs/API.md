@@ -281,7 +281,7 @@ Every event is a JSON object with this shape:
   "timestamp":   1714600000.123,
   "type":        "stage_start" | "stage_end" | "tool_call" | "tool_result" | "metric" | "error" | "done",
   "stage":       "<pipeline stage name>",
-  "duration_ms": 4523,                  // optional — set on stage_end / tool_result
+  "duration_ms": 4523,                  // optional — set on stage_end / tool_result / the final done
   "payload":     { ... type-specific ... }
 }
 ```
@@ -293,7 +293,7 @@ Every event is a JSON object with this shape:
 | `type` | string | yes | One of the seven legal values listed below. |
 | `stage` | string | yes | Logical pipeline stage (`agent`, `llm`, `tool`, `v3:<stage>`, etc.). The proxy's v3 bridge prefixes the v3-service stage name with `v3:` and passes it through verbatim — suffixes like `_pass`/`_done`/`_failed` are kept (e.g. `v3:sandbox_pass`). |
 | `payload` | object | yes | Type-specific. Always an object, never null. |
-| `duration_ms` | int | optional | Set on `stage_end` and `tool_result` — wall-clock duration of the stage / tool execution. |
+| `duration_ms` | int | optional | Set on `stage_end`, `tool_result` and the final `done` — wall-clock duration of the stage, the tool execution or the pass. |
 
 #### Event types
 
@@ -308,6 +308,18 @@ A logical stage has begun. Pairs with a later `stage_end` event (typically — l
   "payload": {
     "detail": "allocating candidates"   // optional human-readable
   }
+}
+```
+
+The agent loop's `llm` stage carries the turn and the message count instead:
+
+```json
+{
+  "event_id": "evt_a1b2c3d4",
+  "timestamp": 1714617823.412,
+  "type": "stage_start",
+  "stage": "llm",
+  "payload": {"turn": 1, "messages": 3}
 }
 ```
 
@@ -405,7 +417,8 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 ```json
 {
   "type": "done",
-  "stage": "pipeline",
+  "stage": "agent",
+  "duration_ms": 12453,
   "payload": {
     "success": true,
     "total_duration_ms": 12453,
@@ -414,7 +427,7 @@ Closes one agent pass. The `/events` broker is a persistent stream — it keeps 
 }
 ```
 
-The agent-loop `done` (`stage: "agent"`) additionally carries the run's outcome, from the same fields as the SSE terminal: `status` (`completed`, `incomplete`, `stopped`, `failed` or `timed_out`; `success` is `status == "completed"`), `reason`, and `unresolved` — the exit gates that spent their bounces with their finding still true, comma-separated, present only when there are some. It also carries the run's token accounting: `total_tokens`, plus `fenced_calls` / `fenced_tokens` — how many `@fenced` sub-call generations the pass made and what they cost, already folded into `total_tokens`. Each individual sub-call attempt also emits a `stage_end` on stage `fenced_fetch` with `path`, `attempt`, `generated_tokens`, `content_bytes`, and `success` in the payload, so a retried fetch is visible as two attempts.
+The payload also carries the run's outcome, from the same fields as the SSE terminal: `status` (`completed`, `incomplete`, `stopped`, `failed` or `timed_out`; `success` is `status == "completed"`), `reason`, and `unresolved` — the exit gates that spent their bounces with their finding still true, comma-separated, present only when there are some. It also carries the run's token accounting: `total_tokens`, plus `fenced_calls` / `fenced_tokens` — how many `@fenced` sub-call generations the pass made and what they cost, already folded into `total_tokens`. Each individual sub-call attempt also emits a `stage_end` on stage `fenced_fetch` with `path`, `attempt`, `generated_tokens`, `content_bytes`, and `success` in the payload, so a retried fetch is visible as two attempts.
 
 #### Producer endpoints
 
