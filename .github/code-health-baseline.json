@@ -13,7 +13,6 @@
  },
  "files": {
   "proxy/agent.go": 10797,
-  "proxy/tools.go": 5183,
   "sandbox/executor_server.py": 2059,
   "v3-service/pipeline.py": 2700
  }

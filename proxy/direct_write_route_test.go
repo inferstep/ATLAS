@@ -256,7 +256,7 @@ func TestDirectWriteRoute(t *testing.T) {
 }
 
 // Structural pin on the producers themselves. Eight structured evaluations
-// exist in tools.go, and every one of them is a case some other gate did not
+// exist in tool_write.go, and every one of them is a case some other gate did not
 // already answer:
 //
 //	regression gate     proposal + baseline   existing destination

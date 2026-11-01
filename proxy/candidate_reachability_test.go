@@ -296,32 +296,29 @@ func TestNoRouteDecidesGenerationForItself(t *testing.T) {
 // exist, the write route consults both, and every reason is emitted by
 // somebody.
 func TestOneActivationAuthorityPerCandidateRoute(t *testing.T) {
-	body := map[string]string{}
-	for _, f := range []string{"tools.go", "candidate_reachability.go"} {
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		body[f] = codeWithoutComments(string(src))
+	src, err := os.ReadFile("candidate_reachability.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	owner := body["candidate_reachability.go"]
+	owner := codeWithoutComments(string(src))
+	tools := codeWithoutComments(toolSources(t))
 	if !strings.Contains(owner, "func writeGenerationBypass(") ||
 		!strings.Contains(owner, "func editGenerationBypass(") {
 		t.Error("the owners are gone; repoint this test at their replacement")
 	}
 	// Both owners are reached, and every reason is emitted by somebody.
 	for _, call := range []string{"writeGenerationBypass(", "editGenerationBypass("} {
-		if !strings.Contains(body["tools.go"], call) {
-			t.Errorf("tools.go does not consult %s", call)
+		if !strings.Contains(tools, call) {
+			t.Errorf("the tool files do not consult %s", call)
 		}
 	}
 	for _, reason := range []string{"bypassProposalFailedSyntaxGuard"} {
-		if !strings.Contains(body["tools.go"], reason) {
+		if !strings.Contains(tools, reason) {
 			t.Errorf("no route reports %s", reason)
 		}
 	}
 	// And every registered delivery route's own file records a skip.
-	if !strings.Contains(body["tools.go"], "recordCandidateGenerationBypass(") {
+	if !strings.Contains(tools, "recordCandidateGenerationBypass(") {
 		t.Error("the write route records no skip")
 	}
 }

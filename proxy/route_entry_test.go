@@ -170,7 +170,7 @@ func TestTheRouteEntryIsNeverDecodedFromInput(t *testing.T) {
 }
 
 func TestTheV3StageEnvelopeGainedOneAdditiveField(t *testing.T) {
-	body, err := os.ReadFile("tools.go")
+	body, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}

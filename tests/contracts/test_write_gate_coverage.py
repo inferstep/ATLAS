@@ -17,7 +17,11 @@ from pathlib import Path
 
 import pytest
 
-TOOLS_GO = Path(__file__).resolve().parents[2] / "proxy" / "tools.go"
+PROXY = Path(__file__).resolve().parents[2] / "proxy"
+# Read in this order, a tool's body runs from its constructor to the next one.
+# The V3 route comes first so that no body holds that route's own definitions:
+# a check on a name must find a call, not the function it names.
+TOOL_FILES = ("tool_write_v3.go", "tool_write.go", "tool_edit.go", "tool_structural_edit.go")
 
 # Gates every write path must run, and why skipping one is not cosmetic.
 REQUIRED = {
@@ -33,11 +37,17 @@ REQUIRED = {
 WRITE_TOOLS = ["writeFile", "editFile", "structuralEdit", "insertAfter", "replaceLines"]
 
 
+def _tool_source() -> str:
+    """The tool files without their comment lines: a name in a comment calls nothing."""
+    lines = "\n".join((PROXY / name).read_text() for name in TOOL_FILES).splitlines()
+    return "\n".join(line for line in lines if not line.lstrip().startswith("//"))
+
+
 def _tool_bodies() -> dict:
-    src = TOOLS_GO.read_text().splitlines()
+    src = _tool_source().splitlines()
     starts = [(i, m.group(1)) for i, line in enumerate(src)
               if (m := re.match(r"func ([a-zA-Z]+)Tool\(\) \*ToolDef", line))]
-    assert starts, "no tool constructors found — did tools.go get restructured?"
+    assert starts, "no tool constructors found — did the tool files get restructured?"
     bounds = starts + [(len(src), "")]
     return {name: "\n".join(src[a:b])
             for (a, name), (b, _) in zip(bounds, bounds[1:]) if name}
@@ -51,7 +61,7 @@ def bodies():
 def test_the_write_tools_this_contract_names_all_exist(bodies):
     """Guards the guard: a rename should fail here, pointing at the rename."""
     missing = [t for t in WRITE_TOOLS if t not in bodies]
-    assert not missing, f"tools.go has no constructor for {missing}; found {sorted(bodies)}"
+    assert not missing, f"the tool files have no constructor for {missing}; found {sorted(bodies)}"
 
 
 # ATLAS is a pipeline with a harness around it, not a harness. A content edit
@@ -60,7 +70,7 @@ def test_the_write_tools_this_contract_names_all_exist(bodies):
 # system exists to prevent. `insert_after` and `replace_lines` shipped without
 # it while the tool guidance was being changed to steer toward them, so the
 # model was migrated off the quality pipeline onto the tools that lacked it.
-PIPELINE_ENTRYPOINTS = ("runEditPipeline", "writeFileWithV3", "improveContentWithV3")
+PIPELINE_ENTRYPOINTS = ("runEditPipeline", "writeFileWithV3", "improveContentWithV3", "deliverEditCandidate")
 
 
 @pytest.mark.parametrize("tool", WRITE_TOOLS)
@@ -73,7 +83,7 @@ def test_every_write_path_goes_through_the_pipeline(bodies, tool):
 
 def _steps_of_the_write_route() -> str:
     """The bodies of the gates that applyWriteGates runs. A gate's name anywhere else in the tool runs nothing."""
-    src = TOOLS_GO.read_text()
+    src = _tool_source()
     listed = re.search(r"func applyWriteGates\(.*?\[\]func\(\*v3Write\) \*ToolResult\{(.*?)\n\t\} \{", src, re.S)
     assert listed, "applyWriteGates has no list of gates — did the write route get restructured?"
     names = re.findall(r"\w+", listed.group(1))

@@ -323,14 +323,20 @@ func TestTheSessionWriteMapIsUnchangedForItsOtherReaders(t *testing.T) {
 	if n := strings.Count(body, "ctx.SessionWrites[in.Path] = true"); n != 2 {
 		t.Errorf("insert_after/replace_lines registrations changed: %d, want 2", n)
 	}
-	for tool, spanEnd := range map[string]string{"editFileTool": "\nfunc structuralEditTool(",
-		"structuralEditTool": "\ntype V3EditMetadata struct"} {
-		start := strings.Index(body, "func "+tool+"(")
-		end := strings.Index(body[start+1:], spanEnd)
-		if end < 0 {
-			t.Fatalf("the tool files have no %q after %s, so the span would be empty", spanEnd, tool)
-		}
-		if strings.Contains(body[start:start+1+end], "SessionWrites[") {
+	edit := readSourceForTest(t, "tool_edit.go")
+	start := strings.Index(edit, "func editFileTool(")
+	if start < 0 {
+		t.Fatal("tool_edit.go has no editFileTool, so the span would be empty")
+	}
+	end := strings.Index(edit[start:], "\n// closestLineHint")
+	if end < 0 {
+		t.Fatal("tool_edit.go has no closestLineHint after editFileTool, so the span would be empty")
+	}
+	for tool, source := range map[string]string{
+		"editFileTool":       edit[start : start+end],
+		"structuralEditTool": readSourceForTest(t, "tool_structural_edit.go"),
+	} {
+		if strings.Contains(source, "SessionWrites[") {
 			t.Errorf("%s now writes the session map; coverage comes from the ledger instead", tool)
 		}
 	}

@@ -536,7 +536,7 @@ var attributionOwners = map[string]bool{
 	"automatic_attribution.go": true,
 	"route_disposition.go":     true,
 	"edit_route_delivery.go":   true,
-	"tools.go":                 true,
+	"tool_write_v3.go":         true,
 }
 
 // attributionIdentifiers are every top-level name the owner file declares,

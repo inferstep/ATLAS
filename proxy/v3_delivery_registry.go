@@ -17,7 +17,7 @@ import "strings"
 // lifecycle.
 var v3DeliveryRoutes = map[string]string{
 	// route -> the tool identity whose result it must answer with.
-	"tools.go:writeFileWithV3":                    "write_file",
+	"tool_write_v3.go:writeFileWithV3":            "write_file",
 	"edit_route_delivery.go:deliverEditCandidate": "edit_file|structural_edit|insert_after|replace_lines",
 	// The shared owner itself: it delivers on behalf of a route above and is
 	// listed so a caller cannot reach it from anywhere else.

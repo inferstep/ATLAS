@@ -18,7 +18,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL_FILES = [REPO / "proxy" / name for name in
-              ("tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go")]
+              ("tools.go", "tool_read.go", "tool_background.go", "tool_schema.go", "tool_files.go",
+               "tool_write.go", "tool_write_v3.go", "tool_edit.go", "tool_structural_edit.go")]
 EXT_PREVIEW = REPO / "extensions" / "vscode" / "src" / "session" / "editPreview.ts"
 EXT_MISMATCH = REPO / "extensions" / "vscode" / "src" / "workspace" / "mismatch.ts"
 
