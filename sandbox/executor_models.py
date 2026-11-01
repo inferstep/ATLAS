@@ -42,8 +42,8 @@ class ExecuteResponse(BaseModel):
     # HOW the run ended, as /shell says it: a caller need not read stderr for a phrase.
     timed_out: bool = False
     outcome: str = OUTCOME_COMPLETED
-    limits_enforced: bool = True
-    resource_limits: Optional[str] = "enforced"
+    limits_enforced: bool = False
+    resource_limits: Optional[str] = None
 
 
 class SyntaxCheckRequest(BaseModel):

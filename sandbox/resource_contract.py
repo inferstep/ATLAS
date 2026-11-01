@@ -437,7 +437,7 @@ def check_process_supervision(proc_dir: str = "/proc") -> tuple[bool, str]:
                 seen_group = True
             if not seen_token and proc.pid in _token_holders(token, proc_dir=proc_dir):
                 seen_token = True
-            if seen_group and seen_token:
+            if seen_group and seen_token and _rss_bytes(proc.pid, proc_dir=proc_dir) > 0:
                 return True, "enforced"
             time.sleep(0.01)
         return False, SUPERVISION_UNAVAILABLE_REASON

@@ -440,17 +440,9 @@ def test_self_check_detects_unreadable_proc(tmp_path):
     assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
 
 
-def test_self_check_detects_permission_denied_on_proc(monkeypatch):
-    """Simulated permission error on /proc triggers the unreadable detection."""
-    orig_listdir = os.listdir
-
-    def mock_listdir(path="."):
-        if str(path).startswith("/proc"):
-            raise PermissionError(13, "Permission denied")
-        return orig_listdir(path)
-
-    monkeypatch.setattr(os, "listdir", mock_listdir)
-    ok, reason = rc.check_process_supervision()
+def test_self_check_detects_probe_not_found(tmp_path):
+    """When /proc exists but the probe process is not found, limits are reported unenforced."""
+    ok, reason = rc.check_process_supervision(proc_dir=str(tmp_path))
     assert ok is False
     assert reason == rc.SUPERVISION_UNAVAILABLE_REASON
 

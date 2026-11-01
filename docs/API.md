@@ -913,12 +913,14 @@ Run a shell command against the bind-mounted workspace. The proxy's `run_command
   "stderr": "",
   "exit_code": 0,
   "elapsed_ms": 78,
-  "timed_out": false
+  "timed_out": false,
+  "limits_enforced": true,
+  "resource_limits": "enforced"
 }
 ```
 
 `success` is `exit_code == 0` with `outcome` `completed`. `timed_out` states the timeout structurally so a
-caller does not have to recognise it from prose.
+caller does not have to recognise it from prose. `limits_enforced` and `resource_limits` report whether process supervision and memory/process limits are enforced.
 
 **Observation** (present only when `observe_paths` was sent):
 
@@ -989,7 +991,9 @@ Execute code in an isolated environment.
   "error_message": null,
   "execution_time_ms": 45,
   "timed_out": false,
-  "outcome": "completed"
+  "outcome": "completed",
+  "limits_enforced": true,
+  "resource_limits": "enforced"
 }
 ```
 
@@ -1007,6 +1011,8 @@ Execute code in an isolated environment.
 | `execution_time_ms` | int | Execution time in milliseconds |
 | `timed_out` | bool | Whether the run was stopped at its time limit |
 | `outcome` | string | How the run ended. `completed`: it reached its own end, and `success` says whether it passed. Any other value means that it was stopped: `timed_out`, `memory_exhausted`, `process_limit_exceeded`, `output_limit_exceeded`, `cancelled`, `spawn_failed`, `internal_unclassified` |
+| `limits_enforced` | bool | Whether process supervision and resource limits are active |
+| `resource_limits` | string? | `"enforced"` when supervision is active, `"resource limits not enforced"` otherwise |
 
 ### POST /syntax-check
 
@@ -1070,7 +1076,7 @@ Each value is the first line the tool's version command prints on stdout within 
 
 ```bash
 curl http://localhost:30820/health
-# {"status": "healthy"}
+# {"status": "healthy", "limits_enforced": true, "resource_limits": "enforced"}
 ```
 
 ---

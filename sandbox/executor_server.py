@@ -252,12 +252,16 @@ def normalize_language(lang: str) -> str:  # noqa: C901
     return lang
 
 
+def _resource_limits_label() -> str:
+    return "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced"
+
+
 @app.get("/health")
 def health_check():
     resp = {
         "status": "healthy",
         "limits_enforced": SUPERVISION_AVAILABLE,
-        "resource_limits": "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
+        "resource_limits": _resource_limits_label(),
     }
     if not SUPERVISION_AVAILABLE:
         resp["resource_limits_reason"] = SUPERVISION_REASON
@@ -1081,8 +1085,7 @@ def execute_code(request: ExecuteRequest):
             stdin=request.stdin,
         )
         result.limits_enforced = SUPERVISION_AVAILABLE
-        result.resource_limits = (
-            "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced")
+        result.resource_limits = _resource_limits_label()
         return result
     except Exception as e:
         logger.exception(f"Execution error for {lang}")
@@ -1097,7 +1100,7 @@ def execute_code(request: ExecuteRequest):
             error_message=str(e),
             execution_time_ms=0,
             limits_enforced=SUPERVISION_AVAILABLE,
-            resource_limits="enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
+            resource_limits=_resource_limits_label(),
         )
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
@@ -1572,7 +1575,7 @@ def _run_cmd(cmd: List[str], timeout: int, cwd: Path = None, env: dict = None,
         "peak_processes": result.peak_processes,
         "survivors": result.survivors,
         "limits_enforced": SUPERVISION_AVAILABLE,
-        "resource_limits": "enforced" if SUPERVISION_AVAILABLE else "resource limits not enforced",
+        "resource_limits": _resource_limits_label(),
     }
 
 
