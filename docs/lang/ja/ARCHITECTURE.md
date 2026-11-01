@@ -228,8 +228,8 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 | `edit_file` | ≤10 行の変更向けの外科的なインライン文字列置換（old_str/new_str） | いいえ |
 | `insert_after` | 指定した行番号（`read_file` が表示する行番号）の後ろに新しい行を挿入する。何も既存のものを変えずにコード（分岐、関数、import）を**追加**する場合向け: 再現すべき `old_str` がなく、長いスパンで失敗するのはまさにその工程 | いいえ |
 | `replace_lines` | 行範囲（`start_line`..`end_line`、`read_file` が表示する行番号）を新しい内容で置き換える。コードを再現せずに**変更**する場合向け: アンカーはスパン全体ではなく主張された2行（範囲の先頭行と末尾行、空白は無視）なので、逐語での再現負担は N 行ではなく 2 行になる。1回の呼び出しにつき最大60行 | いいえ |
-| `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。GH #39、v1 では .py/.html/.htm のみ | いいえ |
-| `delete_file` | ファイルまたは空ディレクトリを削除（実行後にループ終了を強制） | いいえ |
+| `structural_edit` | tree-sitter セレクタ（`function:NAME`、`class:NAME`、`<tag>`）による関数/クラス/HTML 要素全体の書き換え; ノード全体の差し替えでは edit_file より優先して必須。Python、HTML、Go、JavaScript、TypeScript に対応 | いいえ |
+| `delete_file` | ファイルまたは空ディレクトリを削除 | いいえ |
 | `move_file` | ワークスペース内でファイルを移動またはリネーム（例: `index.html` → `templates/`）。純粋な移動 — V3/外科的編集のゲートをバイパスし、既存の宛先の上書きは拒否。シェルの `mv`/`cp` が拒否されるため「ファイルを再編成する」ための正規のパス | いいえ |
 | `find_file` | ファイル**名** / パスによる正規表現検索（安価な存在確認 + 位置特定）。ファイル内容を grep する `search_files` とは区別される。 | はい |
 | `search_files` | ファイル内容にまたがる正規表現検索（最大200件、.git/node_modules をスキップ） | はい |
@@ -258,8 +258,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 | ツール | `passed` に到達 | 備考 |
 |------|------------------|------|
-| `write_file`、`edit_file`、`insert_after`、`replace_lines` | はい | 構文ゲート経由（サンドボックスが到達可能な場合） |
-| `structural_edit` | いいえ | tree-sitter のスプライスは v3-service のもの。このツールは書き込むバイトに対して独自のチェックを行わないため、`syntax`/`not_run` を報告する |
+| `write_file`、`edit_file`、`insert_after`、`replace_lines`、`structural_edit` | はい | 構文ゲート経由（サンドボックスが到達可能な場合） |
 | `delete_file`、`move_file` | いいえ | どちらも内容を変えないため、与えるべき判定がない |
 
 7つのミューテータのすべてのブランチは独自の `MutationStatus` を持ちます: 境界は直接ミューテータを分類することを構造的に禁止しているため、未分類のブランチは意図的な no-op と区別がつかなくなります。`noMutation` / `errNoMutation` は書き込むバイトを形成しなかったブランチを、`refusedNoCheck` は準備ができていたバイトを拒否したガードを、`errFailedMutation` は試行されたがターゲットを不確定なままにした書き込みを示します。`TestEvery*OutcomeIsClassified` がファミリーをカバーします。
@@ -270,7 +269,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 3つのテストが `proxy/result_contract_test.go` と `proxy/tool_effect_test.go` でこの境界を保持します: `TestEveryModelFacingSerializationSiteIsInventoried` は、新しい直接マーシャルや、目録化されていないルートで構築されたツールメッセージに対して失敗します。`TestModelFacingTextCarriesNoClassification` は結果ごとの投影バイトを固定し、`TestModelPromptBytesAreUnchangedByClassification` は、分類が変わった2つのブランチに対してエージェントループを実行し、リクエストボディを親コミットと比較します。
 
-2つの制限は抱えているものであり、推論で回避されるものではありません。`structural_edit` は成功時に `syntax`/`not_run` を報告するため、チェックポイントを昇格できません。`move_file` のクロスファイルシステムのコピーパスは本番で到達可能ですが、1つの一時ディレクトリは2つのファイルシステムにまたがれないため、本番パスのテストがありません。
+1つの制限は抱えているものであり、推論で回避されるものではありません。`move_file` のクロスファイルシステムのコピーパスは本番で到達可能ですが、1つの一時ディレクトリは2つのファイルシステムにまたがれないため、本番パスのテストがありません。
 
 #### 復元
 
@@ -430,7 +429,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 | 重複レキシカルバインディングガード | 1つのスコープ内で同じ名前を2回宣言する `let`/`const` を残す編集を拒否（`v3-service` `embedded_script_check`） | 早期の SyntaxError: ブラウザはスクリプト全体を拒否するため、サーバーが 200 を返し続ける間にページ上のすべてのハンドラーが死にます。tree-sitter はこれをパースするため、構文チェックでは見えません |
 | 停止したレンダーループガード | 繰り返しタイマーを再武装せず1回きりのスケジュールに使ったままにする関数を残す編集を拒否（`v3-service` `embedded_script_check`、編集前のファイル付き。`proxy/gates.go::embeddedScriptGate`） | JavaScript はパースされ、サーバーは起動し、ページは 200 を返すため、他のすべてのチェックが通る間にページは1フレーム後に凍結します |
 | V3 のスコープ外書き換えガード | 呼び出し元の編集がそのまま残していた行を落とす V3 候補を破棄し、呼び出し元のコンテンツを保持（`proxy/gates.go::v3RewroteBeyondTheEdit`） | V3 はファイル*全体*を改善するため、小さいファイルでは編集が触れなかったすべてを打ち直します。あるライブセッションでは `#e94562` が `#e94162` に、`id="msg"` が `id=" msg"` になって戻ってきました — どちらも構文エラーではありません |
-| エラーループブレーカー | **同種の**3連続失敗（メッセージスケルトン: 数字・引用区間・パスを除去）。異なる拒否はストリークをリセットします — 3つの異なる拒否は、ループしているのではなく収束しつつあるモデルです | 正規の反復を殺さずに暴走する失敗サイクルを止める |
+| エラーループブレーカー | **同種で同じパスの**3連続失敗（メッセージスケルトン: 数字・引用区間・パスを除去）。異なる拒否はストリークをリセットします — 3つの異なる拒否は、ループしているのではなく収束しつつあるモデルです | 正規の反復を殺さずに暴走する失敗サイクルを止める |
 | 失敗呼び出しの上限 | 実行あたり12回の失敗したツール呼び出し（`maxTotalFailures`） | 拒否が変わるとストリークがリセットされるようになった今、失敗モードを循環する実行に上限を課す |
 | プラン完了ゲート | プランナーがプランを 0.6 以上と採点し、ステップが2つ以上あり、少なくとも1つが一致しているとき、一致するツール呼び出しのない計画済みステップがある限り `done` を拒否（`proxy/guardrails.go::planIncompleteMessage`） | 部分的に納品されて完了と宣言された複数パートのタスク。ターンごとの進捗ノートは既にそこにあり、無視されました |
 | 探索予算 | 4連続の読み取り専用呼び出しでナッジ; 5回以上でより強いナッジ。読み取りは常に実行されます — ナッジは*次の*ターンを書き込みへ誘導します | 際限なく探索する代わりに書くようモデルを押す |
@@ -644,7 +643,7 @@ graph LR
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.22\ngo build + run"]
+        Go["Go 1.27.2\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
@@ -664,7 +663,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`java`（Java）、`kt`/`kts`（Kotlin）、`rs`（Rust）、`c++`（C++）、`rb`（Ruby）、`php`（PHP）、`sh`/`shell`（Bash）。一般的な CLI ツールはイメージに焼き込まれており（`git`、`sqlite3`、`jq`、`patch`、`zip`/`unzip`、`xz`、`curl`）、加えてバイナリ検査用のツール（binutils 由来の `strings`、`objdump`、`readelf`、`nm`、および `file`、`xxd`）も含まれます — コンテナは読み取り専用ベース上で非 root として動作するため、タスクがシェルアウトする先はすべて事前にインストールされている必要があり、実行時に apt で入れることはできません。バイナリに対する `read_file` は生のバイト列ではなく、これらのツールへの案内を返します。最大実行時間: Docker デプロイでは300秒（compose がプロキシの `run_command` の5分上限に合わせて `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` を設定します; 素のコードのデフォルトは60秒）。メモリ、CPU、プロセス数の上限はコンテナレベルです: compose が `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}`、`pids_limit ${ATLAS_SANDBOX_PIDS:-1024}` を設定し、`atlas init` はホストに応じた値（RAM とコア数の約 75%）を `.env` に書き込みます。書き込み可能なマウントは tmpfs で、言語エコシステムごとに1つ用意され、Docker はデフォルトでそれらを `noexec` でマウントします。`/home/sandbox/gobuild` が例外で `exec` を持ちます — `go run` がネイティブバイナリを `GOTMPDIR` にリンクしてから実行するためです。デフォルトの `GOTMPDIR=/tmp` では、すべての `go run` が `fork/exec ...: permission denied` で失敗していました。コンパイル言語を追加するときは、そのツールチェーンがスクラッチディレクトリから実行されるかプロジェクトツリーから実行されるかを確認してください（`/workspace` は既に exec を許可しており、何も必要としません）。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（エージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
+受け付ける言語エイリアス: `py`/`python3`（Python）、`js`/`node`（JavaScript）、`ts`（TypeScript）、`golang`（Go）、`java`（Java）、`kt`/`kts`（Kotlin）、`rs`（Rust）、`c++`（C++）、`rb`（Ruby）、`php`（PHP）、`sh`/`shell`（Bash）。一般的な CLI ツールはイメージに焼き込まれており（`git`、`sqlite3`、`jq`、`patch`、`zip`/`unzip`、`xz`、`curl`）、加えてバイナリ検査用のツール（binutils 由来の `strings`、`objdump`、`readelf`、`nm`、および `file`、`xxd`）も含まれます — コンテナは読み取り専用ベース上で非 root として動作するため、タスクがシェルアウトする先はすべて事前にインストールされている必要があり、実行時に apt で入れることはできません。バイナリに対する `read_file` は生のバイト列ではなく、これらのツールへの案内を返します。最大実行時間: Docker デプロイでは300秒（compose がプロキシの `run_command` の5分上限に合わせて `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` を設定します; 素のコードのデフォルトは60秒）。メモリ、CPU、プロセス数の上限はコンテナレベルです: compose が `mem_limit ${ATLAS_SANDBOX_MEM:-1536m}`、`cpus ${ATLAS_SANDBOX_CPUS:-2}`、`pids_limit ${ATLAS_SANDBOX_PIDS:-1024}` を設定し、`atlas init` はホストに応じた値（RAM とコア数の約 75%）を `.env` に書き込みます。書き込み可能なマウントは tmpfs で、言語エコシステムごとに1つ用意され、Docker はデフォルトでそれらを `noexec` でマウントします。`/home/sandbox/gobuild` が例外で `exec` を持ちます — `go run` がネイティブバイナリを `GOTMPDIR` にリンクしてから実行するためです。デフォルトの `GOTMPDIR=/tmp` では、すべての `go run` が `fork/exec ...: permission denied` で失敗していました。コンパイル言語を追加するときは、そのツールチェーンがスクラッチディレクトリから実行されるかプロジェクトツリーから実行されるかを確認してください（`/workspace` は既に exec を許可しており、何も必要としません）。2つのワークスペースパス: **`/execute`**（V3 候補テストパス）は `/tmp/sandbox`（tmpfs）下の一時的なスクラッチディレクトリを使用; **`/shell`**（エージェントの `run_command` ルート、加えてバックグラウンドプロセス向けの `/jobs/*`）は `/workspace` — `ATLAS_PROJECT_DIR`（Docker）または hostPath `${ATLAS_PROJECTS_DIR}`（K3s）からバインドマウントされたプロジェクトルートで、プロキシが見るのと同じパス — に対して実行します。
 
 ---
 
@@ -816,4 +815,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-5行を超える既存ファイルは `write_file` で拒否されます — モデルは `edit_file`（外科的、≤10 行）または `structural_edit`（ノード全体の書き換え、.py/.html/.htm のみ）を使う必要があります。`.py`/`.html`/`.htm` ファイルでは、ステップごとの文法ゲート（BiasBusters #2）が次の判断のためにツール名のプロダクションから `edit_file`/`write_file` を能動的に禁止し、モデルが間違ったショートカットに逆戻りできないようにします。
+5行を超える既存ファイルは `write_file` で拒否されます — モデルは `edit_file`（外科的、≤10 行）または `structural_edit`（ノード全体の書き換え: Python、HTML、Go、JavaScript、TypeScript）を使う必要があります。`.py`/`.html`/`.htm` ファイルでは、ステップごとの文法ゲート（BiasBusters #2）が次の判断のためにツール名のプロダクションから `edit_file`/`write_file` を能動的に禁止し、モデルが間違ったショートカットに逆戻りできないようにします。

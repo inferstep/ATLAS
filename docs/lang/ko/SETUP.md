@@ -480,10 +480,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 ### 업데이트
 
 ```bash
+cp .env .env.bak             # config backup (one file holds all your settings)
 git pull
-docker compose down
 docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d
+docker compose up -d         # recreate changed services
+atlas doctor                 # verify: services healthy, model/artifacts intact
 ```
 
 ### 제거
