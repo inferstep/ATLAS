@@ -31,11 +31,9 @@ func shouldGeneratePlan(ctx *AgentContext, message string) bool {
 	if len(trimmed) < 12 {
 		return false
 	}
-	// A request to LOOK needs no plan, and a wrong one actively steers.
-	// Observed live: "Yes, please list the files" produced a three-step plan
-	// (read_file app.py -> structural_edit app.py -> run_command python
-	// app.py). The model listed the directory as asked, then followed the plan
-	// into editing a snake game it had merely been asked to enumerate.
+	// A request to LOOK needs no plan, and a wrong one actively steers: "Yes,
+	// please list the files" could get a plan that edits what it was only asked
+	// to enumerate.
 	return !isReadOnlyRequest(message)
 }
 
@@ -65,11 +63,8 @@ func generatePlan(ctx *AgentContext, userMessage string) *Plan {
 	}))
 
 	plan, err := callV3PlanStreaming(ctx.Ctx, ctx.V3URL, req, func(stage, detail string, data map[string]interface{}) {
-		// Filter out per-token events — the LLM emits ~150 token deltas
-		// per candidate × 3 candidates = ~450 streamed events. Forwarding
-		// every one to the TUI as a separate v3_plan row clogs the
-		// pipeline pane (same regression as the v3-generation token
-		// spam we already fixed). The structural plan stages
+		// Filter out per-token events: forwarding each one to the TUI as a
+		// separate v3_plan row clogs the pipeline pane. The structural plan stages
 		// (plan_candidate, plan_candidate_scored, plan_selected) are
 		// what the renderer actually wants — token-level visibility is
 		// debug noise.

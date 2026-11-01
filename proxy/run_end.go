@@ -16,16 +16,11 @@ import (
 	"time"
 )
 
-// --- Phase 2B: the one terminal emitter -------------------------------------
+// --- The one terminal emitter ------------------------------------------------
 //
-// Thirteen producers each built their own done payload, so "did this run
-// finish?" was answered by matching English in `summary`. A caller could not
-// tell a completion from a loop-breaker without knowing every phrase the
-// proxy might use, and the broker's own done envelope said "success": true
-// unconditionally -- including for every stop.
-//
-// Every terminal now goes through here. It fires at most once per session:
-// a timeout racing a completion produces one event, not two, and whichever
+// Every terminal goes through here, so "did this run finish?" is a field and
+// not English to match in `summary`. It fires at most once per session: a
+// timeout racing a completion produces one event, not two, and whichever
 // arrives first is the outcome.
 func emitTerminal(ctx *AgentContext, st *runState, status TerminalStatus, reason, summary string) {
 	if !status.Classified() {
@@ -379,16 +374,11 @@ func demonstratedMove(ctx *AgentContext, srcKey, reason string) bool {
 	return true
 }
 
-// --- Phase 2B: the server-owned session budget ------------------------------
+// --- The server-owned session budget -----------------------------------------
 //
-// The proxy had no clock of its own. A session ran until the model stopped,
-// the client gave up, or a detector fired, and a client that timed out
-// mid-stream took the only explanation with it -- the Stage-1 sessions that
-// reached 590s did so against the HARNESS cap, not a server one, and the
-// server never got to say what it had.
-//
-// The budget is owned here, and it is split: work stops one reserve early so
-// the reserve can be spent on stopping cleanly and saying so.
+// The proxy keeps its own clock, so a client that times out mid-stream cannot
+// take the only explanation with it. The budget is split: work stops one
+// reserve early so the reserve can be spent on stopping cleanly and saying so.
 
 const (
 	defaultSessionTotalSec = 600
@@ -441,8 +431,8 @@ func finalizeOnWorkDeadline(ctx *AgentContext, st *runState) {
 	// 3. Now the workspace is quiet, so a hash means something. Re-read every
 	// tracked path: a job killed mid-write leaves bytes nobody validated.
 	invalidateTrackedValidation(ctx)
-	// 4. Decide restoration per path, under the Phase 3B rules. A timeout
-	// does not relax any of them.
+	// 4. Decide restoration per path. A timeout does not relax any of its
+	// rules.
 	recovered := restoreSaferDeliverables(ctx)
 	// 5. One terminal, on the response lifetime, inside the reserve. A
 	// timeout never claims completion, whatever is on disk afterwards.

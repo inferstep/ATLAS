@@ -28,12 +28,11 @@ func fencedWatchdog(cancel context.CancelFunc) (*time.Timer, func(), func()) {
 		timer.Reset(idle)
 	}
 	// Once the server has sent ANY frame, generation has started, and
-	// on a healthy stream the first content frame follows in the same
-	// millisecond -- measured at 0.00s across every direct reproduction
-	// at small and large context. So a stream that has opened and then
-	// says nothing is dead, and waiting the full first-content budget
-	// for it only burns the session. Shorten the deadline instead of
-	// spending 60s twice per file on a stream that will never speak.
+	// on a healthy stream the first content frame follows at once. So a
+	// stream that has opened and then says nothing is dead, and waiting
+	// the full first-content budget for it only burns the session.
+	// Shorten the deadline instead of spending 60s twice per file on a
+	// stream that will never speak.
 	armStalled := func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -67,9 +66,7 @@ const rawEmissionSentinel = "__raw_text__"
 const rawFenceGraceChars = 800
 
 // fenceTagForPath picks the fence language tag the sub-call prompt asks
-// for, from the target file's extension. The prompt hardcoded ```python
-// whatever the file was — a .html or .go target got asked for a python
-// block (audit finding). Empty means "use a bare fence".
+// for, from the target file's extension. Empty means "use a bare fence".
 func fenceTagForPath(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".py":
@@ -114,27 +111,20 @@ func fenceTagForPath(path string) string {
 // reasoning to max_tokens and never opens a fence is the zero-byte failure,
 // and reasoning must not look like progress.
 //
-// Measured on the seed-20260901 run: 9 of 17 zero-byte failures ran 175-311s
-// each, and two attempts can consume ~10 minutes. These bounds are NOT
-// derived from whole-fetch duration -- a successful fetch legitimately ran
-// 217s while producing content the whole way, and cutting on total elapsed
-// would have killed it.
-//
-// They are conservative defaults over the quantities that DO discriminate:
-// observed time-to-first-token is p50 378ms, p90 2.9s, p99 4.4s, max 11.8s
-// across 540 calls, so 60s to first CONTENT is ~5x the worst observed start
-// with headroom for a reasoning preamble; and at the ~25 tok/s decode rate
-// this deployment sustains, 30s of complete silence mid-file is ~750 tokens
-// of nothing, which is not generation in progress. Both are env-overridable
-// on the existing envOr pattern and are pending real-model canary validation
-// before Phase 2 is declared complete.
+// These bounds are NOT derived from whole-fetch duration: a healthy fetch can
+// run for minutes while producing content the whole way, and cutting on total
+// elapsed would kill it. They are conservative defaults over the quantities
+// that DO discriminate. 60s to first CONTENT is about 5x the worst observed
+// time-to-first-token, with headroom for a reasoning preamble; and at about 25
+// tok/s, 30s of complete silence mid-file is about 750 tokens of nothing, which
+// is not generation in progress. Both are env-overridable.
 const (
 	defaultFencedFirstContentSec = 60
 	defaultFencedIdleSec         = 30
-	// Generous next to the 0.00s gap measured between the opening frame and
-	// the first content frame on every healthy stream, and far cheaper than
-	// spending the whole first-content budget on a stream that has gone
-	// silent after opening.
+	// Generous next to the gap between the opening frame and the first
+	// content frame on a healthy stream, and far cheaper than spending the
+	// whole first-content budget on a stream that has gone silent after
+	// opening.
 	defaultFencedStalledSec = 25
 )
 
@@ -319,7 +309,7 @@ func (f *fencedFetch) ask(grammar string, attempt int, attemptStart time.Time) f
 	// parent would refuse inline cannot be accepted here instead.
 	framing, content := classifyFencedPayload(reply)
 	// The model sometimes wraps the SENTINEL in the fence instead of the
-	// file — measured: "```python\n@fenced\n```". That extracts as
+	// file: "```python\n@fenced\n```". That extracts as
 	// non-empty and would land a file whose entire contents are the word
 	// @fenced, so it counts as no block and the attempt is retried.
 	if strings.TrimSpace(content) == rawEmissionSentinel ||
@@ -412,10 +402,9 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 	charge(ctx, path)
 	// What the model sent instead is the whole diagnosis, and without it
 	// "no fenced block after 2 attempts" says only that something went
-	// wrong. Measured a 56% failure rate on this fetch with no way to see
-	// why: the same request reproduced in a short context returns a clean
-	// block every time, so the cause lives in the session context and
-	// cannot be found without the reply.
+	// wrong. The same request in a short context returns a clean block, so
+	// the cause lives in the session context and cannot be found without
+	// the reply.
 	log.Printf("[agent] fenced attempt %d for %s produced no usable block (%s, %d chars, cut=%q, session failures %d/%d): %q",
 		attempt+1, path, framing, len(reply), ctx.LastStreamCut,
 		ctx.FencedFailures[fencedKey(ctx, path)], maxFencedFailuresPerPath,
@@ -425,7 +414,7 @@ func (f *fencedFetch) settle(a fencedAnswer, attempt int) (string, bool, error) 
 	return "", false, nil
 }
 
-// emitFencedFetch records one fenced attempt (#254): what the wire showed
+// emitFencedFetch records one fenced attempt: what the wire showed
 // and what became of it. The outcome is the branch the fetch loop takes:
 // used, unusable (retried while attempts remain), stalled (charged against
 // the session's stall limit), or cancelled.
@@ -457,11 +446,9 @@ func emitFencedFetch(ctx *AgentContext, path string, attempt int, grammar string
 // --- The exhausted fenced channel -------------------------------------------
 //
 // The allowance stops the generations; it does not tell the model anything it
-// can act on. In the frozen run debounce2 asked for the same resolution 147
-// times and was refused 144 of them with the same sentence, because the only
-// thing the refusal could say was that the channel had failed.
+// can act on, since the refusal can only say that the channel failed.
 //
-// This is the earlier branch than the C5 run-first state and stays separate
+// This is the earlier branch than the run-first state and stays separate
 // from it: no warned artifact is required, and the trigger is the allowance
 // being spent rather than a pending demand to run something.
 //

@@ -13,14 +13,12 @@ import (
 	"time"
 )
 
-// --- Phase 4B: the C5 recovery transition -----------------------------------
+// --- The run-first recovery transition ---------------------------------------
 //
-// The observed state: a warned version of the file is on disk, the run-first
-// gate is demanding it be run, and the model answers with the identical raw
-// `@fenced` write it has already sent. In the frozen run that exchange
-// repeated until the gate's bounce budget ran out, after which the same writes
-// started landing again, and the session reached the 600 s cap having made no
-// progress and produced no terminal at all.
+// A warned version of the file is on disk, the run-first gate is demanding it
+// be run, and the model answers with the identical raw `@fenced` write it has
+// already sent. Left alone, that exchange repeats until the gate's bounce
+// budget runs out, and then the same writes start landing again.
 //
 // Repeating a demand the model has already failed to satisfy is not a
 // mechanism. On the recurrence it gets the one thing it has not been able to
@@ -137,10 +135,9 @@ const steerRecoveryRepeat = 2
 // The two steering branches send a model that asked to overwrite an existing
 // file somewhere better: read it first, or edit it instead. Both are correct
 // and both are only text. A model that ignores the text repeats the identical
-// write, and repeating the identical diagnostic back cannot change that --
-// measured at 31 turns before the failure accounting bounded it, and the bound
-// is a stop, not an outcome. The two refusals fail for different reasons, so
-// they get different recoveries:
+// write, and repeating the identical diagnostic back cannot change that. The
+// failure accounting bounds it, but the bound is a stop, not an outcome. The
+// two refusals fail for different reasons, so they get different recoveries:
 //
 //   - unread: the model has never seen the file. Show it, bounded, through the
 //     same reader read_file uses, and record exactly what was shown the way
@@ -263,18 +260,19 @@ func clearSteerState(ctx *AgentContext, st *runState, name string, args json.Raw
 	delete(st.steerRecovered, key)
 }
 
-// --- C4: replacements refused while the known-good bytes survive -------------
+// --- Replacements refused while the known-good bytes survive -----------------
 //
 // Retained twice in Stage 1: a valid artifact was already on disk, every later
 // replacement was refused for a syntax failure before any byte moved, and the
 // model kept sending replacements until a breaker ended the run. Disk was
 // never damaged and the task was never finished.
 //
-// This is not C3, where the file on disk is itself broken and nothing valid
-// was ever kept, and it is not restoration, because the safer bytes never left
-// disk -- they need preserving, which the refusal already does. What is
-// missing is that the model is never shown what it is replacing, or told
-// plainly that its replacement was thrown away and the good version is intact.
+// This is not the broken-artifact case, where the file on disk is itself
+// broken and nothing valid was ever kept, and it is not restoration, because
+// the safer bytes never left disk -- they need preserving, which the refusal
+// already does. What is missing is that the model is never shown what it is
+// replacing, or told plainly that its replacement was thrown away and the good
+// version is intact.
 //
 // Two hashes, two purposes, deliberately not shared. The retry fingerprint
 // from the identity change is a NORMALISED sha1 -- trailing whitespace is
@@ -512,7 +510,7 @@ func rejectedProposalRecovery(ctx *AgentContext, st *runState, relPath, canon, s
 	return sb.String()
 }
 
-// --- C3: the no-op edit over a demonstrably broken artifact ------------------
+// --- The no-op edit over a demonstrably broken artifact ----------------------
 //
 // Retained twice in Stage 1, and identical both times: write_file lands a file
 // that does not parse and says so, verification reports the concrete failure,
@@ -618,7 +616,7 @@ func brokenArtifactRecovery(ctx *AgentContext, st *runState, relPath string) str
 		// describes bytes no longer on disk, all end here.
 		return ""
 	case restorable:
-		// A path with an eligible safer checkpoint is Phase 3B's, not this.
+		// A path with an eligible safer checkpoint is restoration's, not this.
 		return ""
 	}
 
@@ -667,8 +665,8 @@ func writeCurrentSource(sb *strings.Builder, relPath, source string, truncated b
 	sb.WriteString(source)
 }
 
-// clearBrokenArtifactState releases a path's C3 state once a materially
-// different mutation on that same path reaches its normal result.
+// clearBrokenArtifactState releases a path's broken-artifact state once a
+// materially different mutation on that same path reaches its normal result.
 //
 // Keyed, so an unrelated success elsewhere does not clear it, and narrow, so
 // another no-op does not either -- a no-op is the thing being recovered from.
@@ -760,16 +758,13 @@ func currentValidationDetail(ctx *AgentContext, relPath string) string {
 
 // --- Unresolved mutation debt -----------------------------------------------
 //
-// Completion had three inputs: the user's named outputs, the deliverable
+// Completion has three inputs: the user's named outputs, the deliverable
 // ledger, and one session-wide madeProductiveChange bool. A valid mutation the
-// model asked for and never landed left no trace in any of them, so a success
-// on an unrelated path retired it -- measured as completed /
-// deliverables_demonstrated over a session that had failed to write a.py and
-// succeeded on b.py.
+// model asked for and never landed leaves no trace in any of them, so without
+// this record a success on an unrelated path would retire it.
 //
 // The ledger is not the place for this. It records what the session OWNS on
-// disk, and an intent that never landed owns nothing; putting an unowned path
-// in it would break the invariant Phase 3A was built on. Debt is a separate,
+// disk, and an intent that never landed owns nothing. Debt is a separate,
 // bounded, session-local record of what is still owed.
 
 // maxTrackedMutationDebt bounds the map. A session that somehow exceeds it
@@ -846,8 +841,8 @@ func mutationIntentTargets(ctx *AgentContext, name string, args json.RawMessage)
 }
 
 // noteMutationIntent opens debt for a permitted in-workspace mutation. It runs
-// BEFORE dispatch, which is the whole point: a fenced resolution that fails
-// never reaches executeToolCall and used to leave no trace anywhere.
+// BEFORE dispatch, because a fenced resolution that fails never reaches
+// executeToolCall and would leave no trace anywhere.
 func noteMutationIntent(ctx *AgentContext, st *runState, name string, args json.RawMessage) {
 	for _, e := range mutationIntentTargets(ctx, name, args) {
 		key := ledgerKey(ctx, e.Rel)
@@ -960,9 +955,8 @@ func debtResolved(ctx *AgentContext, key string, e *mutationDebtEntry) bool {
 		// deliverable is judged by, read from disk. The ledger's own verdict
 		// cannot be used here: move_file deliberately records the destination
 		// as unknown, because a syntax pass earned under the old name says
-		// nothing about this path -- so asking validationSettles for a verdict
-		// nothing ever writes made this debt unretirable, and a demonstrated
-		// rename could never finish.
+		// nothing about this path, so a demonstrated rename could never finish
+		// on a verdict nothing ever writes.
 		if e.Dest == "" {
 			return false
 		}

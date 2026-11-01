@@ -200,11 +200,11 @@ func conversationTokenBudget() int {
 	perSlot := perSlotContext()
 	// Sliding window sized to the actual slot: reserve room for the model's
 	// reply (max_tokens) plus a margin for system-prompt growth and tokenizer
-	// slack, and give the REST of the slot to the conversation. The previous
-	// flat 14k cap was too aggressive — on a 32k slot it left ~10k unused AND
-	// dropped the file the model was editing, so weak models hallucinated
-	// symbols/lines they could no longer see. The active file is additionally
-	// pinned in trimMessages so it survives the window regardless. The
+	// slack, and give the REST of the slot to the conversation: a flat cap
+	// leaves part of the slot unused and still drops the file the model is
+	// editing, and a weak model then hallucinates symbols and lines it can no
+	// longer see. The active file is additionally pinned in trimMessages so it
+	// survives the window regardless. The
 	// model-agnostic re-encode cost (SWA models re-process the prompt each
 	// turn) is bounded by the slot itself; deploys that need it smaller can
 	// still set ATLAS_AGENT_HISTORY_BUDGET.
@@ -213,7 +213,7 @@ func conversationTokenBudget() int {
 	// estTokens is chars/4, which UNDER-counts dense content (code,
 	// JSON-escaped tool results run closer to 3 chars/token) — without
 	// the proportional slack the estimate can pass while the real
-	// prompt exceeds the slot (observed: 32844 real vs 32768 slot).
+	// prompt exceeds the slot.
 	budget := perSlot - agentMaxTokens() - 2048 - perSlot/8
 	if budget < 4000 {
 		budget = 4000 // floor: tiny-context deploys still keep a usable window
@@ -235,13 +235,10 @@ func conversationTokenBudget() int {
 // can't...") repeats until max_tokens, so 3 occurrences is already strong
 // evidence. CODE is legitimately self-similar: a grid walker's four
 // elif-direction branches, a debouncer's run_ bookkeeping lines — 48-char
-// windows repeat 3-4 times in perfectly healthy files. With the threshold
-// at 3 for everything, the detector cut healthy write_file drafts at the
-// same structural spot every time: measured across one 50-task run, 17
-// cuts, 10 of them truncating write_file code, and the two families whose
-// code is most self-similar (walk, debounce) went 0/5 each — the cut
-// stump landed, the model patched the cut line instead of rewriting, and
-// the patch drifted (a comma in the print, spaces lost from a join).
+// windows repeat 3-4 times in perfectly healthy files. At 3 for everything,
+// the detector would cut healthy write_file drafts at the same structural
+// spot every time, the cut stump would land, and the model would patch the
+// cut line instead of rewriting.
 func loopingTailCount(s string) int {
 	if len(s) < loopProbe*3 {
 		return 0
@@ -427,12 +424,9 @@ func trimMessages(msgs []AgentMessage, keepLast int) []AgentMessage {
 	// model is working on never gets trimmed out from under it. Without
 	// the file pin, a long agent loop drops the file content, the model
 	// edits BLIND, and a weak model then hallucinates symbols and old_str
-	// that aren't in the file (observed live: structural_edit
-	// function:count_items and edit_file old_str="return len(items)"
-	// against a file containing neither, with the model literally
-	// reasoning "I don't see the file content"). The exploration-budget
-	// breaker compounds it by telling the model it "has full project
-	// context" when the content was already trimmed.
+	// that aren't in the file. The exploration-budget breaker compounds it by
+	// telling the model it "has full project context" when the content was
+	// already trimmed.
 	pinIdx, filePinIdx := pinnedIndices(msgs)
 
 	tailStart := len(msgs) - keepLast

@@ -19,7 +19,7 @@ import (
 // The pointer doubles as a per-turn identity token: cleanup uses
 // CompareAndDelete so a finishing turn only removes its own entry. If a
 // second /v1/agent request reuses the same session_id, the first turn's
-// deferred cleanup no longer deletes the second turn's cancel func.
+// deferred cleanup does not delete the second turn's cancel func.
 //
 // Defense-in-depth: cancellation also flows naturally through TCP
 // disconnect (handleAgent already binds ctx to r.Context()), but a
