@@ -6,7 +6,7 @@ this shape; the Go TUI consumes it via its own implementation of the
 same contract (tui/consumer.go), and the tests here consume it via
 `iter_events(url)`.
 
-The schema is also documented in docs/PROTOCOL.md; this docstring is
+The schema is also documented in docs/API.md; this docstring is
 the executable spec.
 
 Envelope shape
@@ -18,14 +18,14 @@ Envelope shape
       "type":        "stage_start" | "stage_end" | "tool_call" |
                      "tool_result" | "metric" | "error" | "done",
       "stage":       <str — pipeline stage name; e.g., "phase2", "pr_cot">,
-      "duration_ms": <int> | null,           # set on stage_end / tool_result
+      "duration_ms": <int> | null,           # set on stage_end / tool_result / done
       "payload":     { ... type-specific ... }
     }
 
 Per-type payload contracts
 --------------------------
 
-  stage_start   {detail?: str}
+  stage_start   {detail?: str, turn?: int, messages?: int}
   stage_end     {detail?: str, success: bool, summary?: str}
   tool_call     {name: str, args_summary: str}
   tool_result   {name: str, success: bool, summary?: str}

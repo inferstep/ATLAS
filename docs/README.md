@@ -43,9 +43,8 @@ Task-oriented index for everything under `docs/`. The
 ### Integrate with ATLAS
 
 - [API.md](API.md) — HTTP reference for all five services (proxy,
-  v3-service, geometric-lens, sandbox, llama-server).
-- [PROTOCOL.md](PROTOCOL.md) — the typed SSE event envelope shared by
-  proxy, v3-service, and clients.
+  v3-service, geometric-lens, sandbox, llama-server), and the typed SSE
+  event envelope shared by proxy, v3-service, and clients.
 - [CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md) — typed
   obligations, evidence provenance, the evidence wire between v3-service and
   the proxy, candidate staging, and the observe-only authorization and
@@ -171,13 +170,12 @@ In order, each building on the last:
 6. [CONFIGURATION.md](CONFIGURATION.md) — every knob, per service
 7. [ARCHITECTURE.md](ARCHITECTURE.md) — how the pieces fit
 8. [PLAN_MODE.md](PLAN_MODE.md) — pre-flight planning
-9. [PROTOCOL.md](PROTOCOL.md) — the event contract
-10. [API.md](API.md) — the full HTTP surface
-11. [SOURCES.md](SOURCES.md) — the research it stands on
-12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
-13. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
-14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
-15. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
+9. [API.md](API.md) — the full HTTP surface
+10. [SOURCES.md](SOURCES.md) — the research it stands on
+11. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
+12. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
+13. [OPERATIONS.md](OPERATIONS.md) — running it long-term
+14. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here

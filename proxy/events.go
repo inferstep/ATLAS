@@ -2,7 +2,7 @@
 //
 // Mirrors the schema defined in atlas/events.py so the same Python
 // consumer (atlas/events.py) can read events from both v3-service
-// and atlas-proxy. The envelope shape is documented in docs/PROTOCOL.md.
+// and atlas-proxy. The envelope shape is documented in docs/API.md.
 //
 // Architecture: a global pub/sub broker. Producers (agent loop, tool
 // dispatch, etc.) call Emit() with an Envelope. Subscribers (SSE clients
