@@ -289,7 +289,8 @@ def test_a_commit_that_changes_two_services_gets_both_built_and_both_removed(tmp
     named = {service: about["image"] for service, about in yaml.safe_load((run.folder / "own-images.yml").read_text())["services"].items()}
     assert set(named) == set(nightly.IMAGES)
     assert {service for service, name in named.items() if not name.endswith(":night")} == {"sandbox", "atlas-proxy"}
-    assert named["sandbox"] == run.name_of("sandbox") and named["atlas-proxy"] == run.name_of("atlas-proxy")
+    assert named["sandbox"] == run.name_of("sandbox")
+    assert named["atlas-proxy"] == run.name_of("atlas-proxy")
 
 
 def test_a_build_is_given_the_room_of_the_whole_image_and_does_not_start_without_it(tmp_path, repository):
@@ -300,7 +301,8 @@ def test_a_build_is_given_the_room_of_the_whole_image_and_does_not_start_without
     run = OneCommit(tmp_path, repository, layers=[[layer, 10**15]], layers_here=[layer]).run(commit)
     assert re.fullmatch(r"not run: too little room for the build of atlas-proxy from the commit \([\d.]+ GB free, [\d.]+ GB needed\)",
                         run.report["result"]), run.report["result"]
-    assert "pull the sandbox" in run.did() and "build the proxy" not in run.did()
+    assert "pull the sandbox" in run.did()
+    assert "build the proxy" not in run.did()
 
 
 def test_when_no_build_folder_differs_nothing_is_built_and_the_run_says_so(tmp_path, repository):
@@ -627,7 +629,9 @@ def test_no_call_of_the_run_names_an_image_of_its_own_under_the_registry_or_remo
     assert len(tags) == 3, tags
     for args in tags:
         assert re.fullmatch(r"ghcr\.io/inferstep/atlas-[a-z0-9]+@sha256:[0-9a-f]{64}", args[1]), args
-        assert args[2].startswith("localhost/atlas-nightly/") and args[2].endswith(":night") and len(args) == 3, args
+        assert args[2].startswith("localhost/atlas-nightly/"), args
+        assert args[2].endswith(":night"), args
+        assert len(args) == 3, args
     assert not [args for args in docker if args[0] in ("push", "login")]
 
 
@@ -781,7 +785,8 @@ def test_with_no_full_path_of_the_lens_files_the_run_fails_before_it_pulls_or_bu
     assert run.done.returncode == 1, run.report["result"]
     assert run.report["step"] == "read the settings of the server"
     assert run.report["result"].startswith("failed: the run's settings name no folder of lens files as a full path")
-    assert run.did()[-1] == "look" and run.built() == []
+    assert run.did()[-1] == "look"
+    assert run.built() == []
 
 
 def measured(result="passed", defects=(0, 0, 0), seconds=(10.2, 11.2, 12.2)):

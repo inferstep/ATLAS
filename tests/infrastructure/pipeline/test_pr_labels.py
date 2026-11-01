@@ -77,7 +77,8 @@ def test_each_label_says_what_it_is_computed_from_in_its_description():
         "size/XL": "100 or more changed lines, without lock files, tests and documents",
         "risk:high": "A core path, a v3-service prompt file, 40 or more counted lines, or a first pull request"}
     plain = rules.descriptions({**MADE, "not_counted": {}, "sizes": {"S": 0, "M": 1000}, "high_risk_from": "M", "model_text_paths": {}})
-    assert plain["size/S"] == "Under 1,000 changed lines" and plain["size/M"] == "1,000 or more changed lines"
+    assert plain["size/S"] == "Under 1,000 changed lines"
+    assert plain["size/M"] == "1,000 or more changed lines"
     # With no list of such files the description does not speak of one.
     assert plain["risk:high"] == "A core path, 1,000 or more counted lines, or a first pull request"
 
@@ -173,7 +174,8 @@ def test_only_the_size_labels_and_the_risk_label_are_added_and_removed(have, siz
 def test_the_sizes_start_at_zero_and_go_up_and_the_high_risk_size_is_one_of_them():
     sizes = SETTINGS["sizes"]
     assert list(sizes) == ["S", "M", "L", "XL"]
-    assert sizes["S"] == 0 and list(sizes.values()) == sorted(set(sizes.values())), sizes
+    assert sizes["S"] == 0, sizes
+    assert list(sizes.values()) == sorted(set(sizes.values())), sizes
     assert SETTINGS["high_risk_from"] in sizes
     assert SETTINGS["risk_label"] == "risk:high"
 
@@ -287,7 +289,8 @@ def test_contributing_states_the_sizes_and_the_reasons_as_the_settings_have_them
         "CONTRIBUTING gives other sizes than `sizes` in .github/atlas-bot.yml. Fix: give both the same numbers.")
     assert f"it has {sizes[SETTINGS['high_risk_from']]} counted lines or more" in guide
     assert "The lines of lock files, tests and documents do not count" in guide
-    assert "`size/S`, `size/M`, `size/L`, `size/XL`" in guide and f"`{SETTINGS['risk_label']}`" in guide
+    assert "`size/S`, `size/M`, `size/L`, `size/XL`" in guide
+    assert f"`{SETTINGS['risk_label']}`" in guide
     for what in set(SETTINGS["core_paths"].values()):
         assert what in guide, f"CONTRIBUTING does not name `{what}` as a core path"
     assert "or it changes a file of v3-service that holds a prompt or shapes the request to the model;" in guide
