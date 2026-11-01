@@ -543,8 +543,8 @@ cd ..
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
 
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# 5. Install V3 service dependencies
+pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
 pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt
