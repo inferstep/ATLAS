@@ -109,7 +109,7 @@ func buildStepRequest(ctx *AgentContext) ([]AgentMessage, string) {
 	// history.
 	planReminder := buildPlanReminder(ctx)
 
-	// Traceback step-restriction (issue #39 / option 3): after a crash, ban the
+	// Traceback step-restriction: after a crash, ban the
 	// run tools so the model can't loop on re-running and is forced to edit the
 	// fix site the traceback names. Takes precedence over the write_file case.
 	if tbExcluded, tbNote := tracebackExclusion(ctx); len(tbExcluded) > 0 {
@@ -729,9 +729,8 @@ func llmRequestBody(wireMessages []map[string]string, temperature float64, gramm
 	if grammar == rawEmissionSentinel {
 		// Free-text reply: neither grammar nor response_format. Used for
 		// the fenced-content sub-call, where the whole point is escaping
-		// the JSON channel — measured on the served model, a debounce
-		// solution parses 6/6 when emitted in a fenced block and 0/6 when
-		// emitted inside a JSON string.
+		// the JSON channel: a solution that parses when emitted in a fenced
+		// block can fail to parse when emitted inside a JSON string.
 	} else if grammar != "" {
 		// Token-level restriction wins over response_format. llama-server
 		// rejects requests that pass both response_format=json_object and
@@ -822,7 +821,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	resp, err := llmStreamClient.Do(httpReq)
 	if err != nil {
 		// No response at all before the first-content watchdog fired: the
-		// fenced_fetch event says so (#254).
+		// fenced_fetch event says so.
 		if fencedSubCall && reqCtx.Err() != nil && (ctx.Ctx == nil || ctx.Ctx.Err() == nil) {
 			ctx.LastFencedStream = fencedStreamStats{Cut: "first_content"}
 		}
@@ -940,7 +939,7 @@ func (rd *llmStream) read(resp *http.Response, reqCtx context.Context) (string, 
 		log.Printf("[agent] fenced sub-call response: status=%s content-type=%q transfer-encoding=%v content-length=%d",
 			resp.Status, resp.Header.Get(headerContentType),
 			resp.TransferEncoding, resp.ContentLength)
-		// What the wire showed, for the caller's fenced_fetch event (#254).
+		// What the wire showed, for the caller's fenced_fetch event.
 		defer func() {
 			ctx.LastFencedStream = fencedStreamStats{
 				FirstFrame: rd.firstFrame, WireLines: rd.rawLines, FirstLine: truncateStr(rd.firstLine, 160),
@@ -1084,17 +1083,15 @@ func (rd *llmStream) readContent(content string) {
 	// spirals on self-doubt in the CONTENT stream ("...the first line
 	// is X. Wait, I can't see the output. I'll just say X. Wait, I
 	// can't..." repeating) — the reasoning budget doesn't catch it
-	// (that's content, not reasoning_content), so it ran to max_tokens.
+	// (that's content, not reasoning_content), so it runs to max_tokens.
 	// Detect a repeating tail and cut (streamLooping). Checked
 	// periodically to keep it O(n) overall.
 	// Raw-emission sub-call: we asked for exactly one fenced block
 	// and nothing else, so a reply with no fence opener after a few
 	// hundred characters is prose that will run to max_tokens. At
 	// 8192 tokens and ~25 tok/s that is ~5 minutes, and the fetch
-	// makes two attempts, so a failed @fenced resolution cost a
+	// makes two attempts, so a failed @fenced resolution would cost a
 	// user's session 10 minutes of silence before bouncing.
-	// Measured: 03:21:25 request, 03:31:46 "no fenced block after 2
-	// attempts" — 621 seconds, and 8 of 20 create sessions hit it.
 	if rd.grammar == rawEmissionSentinel && !rd.noFenceCut &&
 		rd.contentBuf.Len() > rawFenceGraceChars &&
 		!strings.Contains(rd.contentBuf.String(), "```") {
@@ -1196,10 +1193,7 @@ func (rd *llmStream) recoverEmptyContent() (string, int, error) {
 	// Raw-emission sub-call: the recovery below only salvages a JSON
 	// tool_call envelope, which is the right rule for the agent loop and
 	// the wrong one here — this call asked for a fenced block, so a
-	// block sitting in reasoning_content is exactly the answer and was
-	// being thrown away. Observed: sub-call attempts returning 0 content
-	// characters after minutes of generation, with no stream cut, which
-	// is tokens going somewhere that is not `content`.
+	// block sitting in reasoning_content is exactly the answer.
 	if rd.grammar == rawEmissionSentinel && rd.reasoningBuf.Len() > 0 {
 		if body := extractFencedContent(rd.reasoningBuf.String()); body != "" &&
 			strings.TrimSpace(body) != rawEmissionSentinel {
