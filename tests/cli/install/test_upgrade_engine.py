@@ -173,8 +173,9 @@ def test_rollback_to_explicit_tag(tmp_path):
 def test_rollback_with_a_bad_signature_changes_nothing(tmp_path):
     root = _root(tmp_path, "v2.0.0")
     fake = FakeSteps(fail_on="verify")
+    steps = fake.as_steps(root)
     with pytest.raises(eng.UpgradeError) as ei:
-        eng.run_rollback(root, fake.as_steps(root), target_tag="v1.5.0")
+        eng.run_rollback(root, steps, target_tag="v1.5.0")
     assert "bad signature (simulated)" in str(ei.value)
     assert [c for c in fake.calls if c[0] != "log"] == [("verify", "v1.5.0")]
     assert eng.read_env_tag(root) == "v2.0.0"
