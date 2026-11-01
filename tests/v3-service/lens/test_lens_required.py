@@ -45,5 +45,6 @@ def test_a_lens_that_cannot_score_is_answered_as_such(monkeypatch):
     frame = body[body.index("event: result"):]
     result = json.loads(frame.split("data: ", 1)[1].split("\n", 1)[0])
     assert result["lens_unavailable"] == "lens_unreachable: URLError"
-    assert result["code"] == "" and result["passed"] is False
+    assert result["code"] == ""
+    assert result["passed"] is False
     assert "data: [DONE]" in body

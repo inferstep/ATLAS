@@ -331,9 +331,12 @@ def _assert_envelope_describes_delivery(result, phase):
     assert env["delivery"]["describes_delivered_candidate"] is True, phase
 
     identity = env["identity"]
-    assert identity["contract_id"] and identity["contract_version"], phase
-    assert identity["artifact_scope"] and identity["evaluation_context_hash"], phase
-    assert identity["adapter_id"] and identity["adapter_version"], phase
+    assert identity["contract_id"], phase
+    assert identity["contract_version"], phase
+    assert identity["artifact_scope"], phase
+    assert identity["evaluation_context_hash"], phase
+    assert identity["adapter_id"], phase
+    assert identity["adapter_version"], phase
 
     ev = env["evaluation"]
     assert ev["execution_status"] in C.EXECUTION_STATUSES, phase
@@ -347,7 +350,8 @@ def _assert_envelope_describes_delivery(result, phase):
         assert key in cov, f"{phase}: coverage lacks {key}"
 
     assert env["selection"]["status"] in C.SELECTION_STATUSES, phase
-    assert env["wire_version"] and env["record_schema_version"], phase
+    assert env["wire_version"], phase
+    assert env["record_schema_version"], phase
     return env
 
 
@@ -546,7 +550,8 @@ def test_two_of_five_generated_cases_does_not_reject_the_candidate(monkeypatch):
     assert "self_test_verify" in stages
     assert "self_test_untrusted" in stages
     probe = [e for e in result["events"] if e["stage"] == "probe_sandbox"]
-    assert probe and probe[0]["detail"].startswith("passed=True"), probe
+    assert probe, probe
+    assert probe[0]["detail"].startswith("passed=True"), probe
 
 
 def test_five_zero_of_n_results_do_not_skip_candidate_generation(monkeypatch):
@@ -688,7 +693,8 @@ def test_the_generate_endpoint_cannot_activate_it():
     pipeline_src = (v3dir / "pipeline.py").read_text()
     floor_block = pipeline_src.split("def _diagnostic_total_candidates(", 1)[1]
     floor_block = floor_block.split("\ndef ", 1)[0]
-    assert "environ" not in floor_block and "getenv" not in floor_block
+    assert "environ" not in floor_block
+    assert "getenv" not in floor_block
 
 
 def test_the_go_request_has_no_representation_for_it():

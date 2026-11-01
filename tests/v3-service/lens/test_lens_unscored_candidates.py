@@ -120,8 +120,10 @@ def _install_fake_lens(monkeypatch, shape="typed", per_step_shape=None):
 def test_typed_capacity_failure_yields_no_energy(monkeypatch):
     _install_fake_lens(monkeypatch)
     out = scoring.score_candidate_combined(LONG)
-    assert out["cx_energy"] is None and out["cx_normalized"] is None
-    assert out["gx_score"] is None and out["gx_available"] is False
+    assert out["cx_energy"] is None
+    assert out["cx_normalized"] is None
+    assert out["gx_score"] is None
+    assert out["gx_available"] is False
     assert out["cx_calibrated"] is False
     assert out["verdict"] == "unscored"
     assert out["failure"]["kind"] == "embed_capacity"
@@ -337,7 +339,8 @@ def test_an_unscored_probe_allocates_the_floor_and_says_why(monkeypatch):
     assert scored["gx_available"] is False
     alloc = _events(result, "phase2_allocated")[0]["data"]
     assert alloc["reason"] == "unscored"
-    assert alloc["tier"] == FLOOR_TIER and alloc["k"] == K_FLOOR
+    assert alloc["tier"] == FLOOR_TIER
+    assert alloc["k"] == K_FLOOR
 
 
 def test_the_pool_record_carries_the_failure(monkeypatch, tmp_path):

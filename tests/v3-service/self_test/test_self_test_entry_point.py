@@ -282,7 +282,8 @@ def test_a_wrong_main_guarded_candidate_fails_as_a_wrong_answer(tmp_path):
     run = _materialise(tmp_path, pipeline._make_self_test(
         MAIN_GUARDED, tc, "input.txt"))
     assert "SELF_TEST_PASS" not in run.stdout
-    assert "AssertionError" in run.stderr and "got 2" in run.stderr
+    assert "AssertionError" in run.stderr
+    assert "got 2" in run.stderr
     assert "Read-only file system" not in run.stderr
 
 
@@ -304,7 +305,8 @@ def test_a_candidate_that_raises_is_an_execution_failure(tmp_path):
     run = _materialise(tmp_path, pipeline._make_self_test(
         "raise ValueError('boom')\n", tc, "input.txt"))
     assert run.returncode != 0
-    assert "ValueError" in run.stderr and "boom" in run.stderr
+    assert "ValueError" in run.stderr
+    assert "boom" in run.stderr
 
 
 def test_a_clean_sys_exit_is_not_an_execution_failure(tmp_path):
@@ -364,7 +366,8 @@ def test_each_case_stages_its_own_input():
     tc2 = type("TC", (), {"input_str": "9\n9", "expected_output": "y"})()
     _, f1 = pipeline._make_self_test(FILE_READER, tc1, "input.txt")
     _, f2 = pipeline._make_self_test(FILE_READER, tc2, "input.txt")
-    assert f1["input.txt"] == "1\n2" and f2["input.txt"] == "9\n9"
+    assert f1["input.txt"] == "1\n2"
+    assert f2["input.txt"] == "9\n9"
 
 
 def test_a_stdin_candidate_still_runs_as_main(tmp_path):

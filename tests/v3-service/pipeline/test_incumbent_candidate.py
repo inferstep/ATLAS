@@ -107,7 +107,8 @@ def test_the_exact_bytes_are_checked_not_a_copy(monkeypatch):
     assert result["evidence_record"]["candidate_content_hash"] == \
         P.contract.content_hash(THEIRS)
     events = [e for e in result["events"] if e["stage"] == "incumbent"]
-    assert events and events[0]["data"]["passed"] is True
+    assert events
+    assert events[0]["data"]["passed"] is True
 
 
 def test_a_candidate_the_lens_ranks_higher_wins(monkeypatch):
@@ -151,7 +152,8 @@ def test_the_incumbent_takes_no_generation_slot(monkeypatch):
     fresh = without.run("write solve.py that sums input.txt", task_id="t",
                         files={"input.txt": "1\n2\n"}, file_path="solve.py",
                         baseline_code="")
-    assert asked_with and asked_with == asked_without
+    assert asked_with
+    assert asked_with == asked_without
     # The count is of generated candidates; the caller's file is not one.
     assert kept["candidates_generated"] == fresh["candidates_generated"]
 

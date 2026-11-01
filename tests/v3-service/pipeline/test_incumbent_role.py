@@ -233,7 +233,8 @@ def test_module_code_cannot_win_a_test_file(monkeypatch):
     role_fails = [e for e in fails if "role check" in (e["data"].get("stderr") or "")]
     assert len(role_fails) == 2, fails
     checks = [e for e in result["events"] if e["stage"] == "role_check"]
-    assert checks and "test_mean" in checks[0]["data"]["dropped"]
+    assert checks
+    assert "test_mean" in checks[0]["data"]["dropped"]
     # The reason is the candidate's error, so repair would be told the names.
     assert "test_mean" in role_fails[0]["data"]["stderr"]
 

@@ -90,7 +90,8 @@ def test_pipeline_does_not_call_environment_failure_a_regression(monkeypatch):
     assert result["passed"]
     assert result["evidence_record"]["closure_eligible"] is False
     runtime = [e for e in result["verification_evidence"] if e["verifier"] == "python_import_comparison"]
-    assert runtime and runtime[0]["status"] == "unavailable"
+    assert runtime
+    assert runtime[0]["status"] == "unavailable"
 
 
 @pytest.fixture
@@ -116,10 +117,12 @@ def test_comparison_checks_exact_overlay_and_caches_only_this_invocation(compari
 
 def test_import_success_is_not_a_fulfillment_claim(comparison):
     admitted, diagnostic, evidence = comparison.check(GOOD)
-    assert admitted and not diagnostic
+    assert admitted
+    assert not diagnostic
     assert evidence["status"] == "passed"
     assert evidence["environment"] == "existing_sandbox_snapshot"
-    assert evidence["exit_code"] == 0 and evidence["duration_ms"] == 2
+    assert evidence["exit_code"] == 0
+    assert evidence["duration_ms"] == 2
     assert evidence["candidate_hash"] != evidence["baseline_hash"]
     assert "closure_eligible" not in evidence
 
@@ -130,13 +133,15 @@ def test_interrupted_candidate_is_not_promoted_as_success(comparison, monkeypatc
     monkeypatch.setattr(comparison.sandbox, "run_command", lambda *a, **kw:
         (True, "", "stopped", {"exit_code": 0, "outcome": outcome}))
     admitted, _, ev = comparison.check(GOOD)
-    assert not admitted and ev["status"] == "unavailable"
+    assert not admitted
+    assert ev["status"] == "unavailable"
 
 
 def test_no_budget_means_no_probe_and_no_runtime_claim(comparison):
     comparison.remaining_ms = lambda: 10_000
     admitted, _, ev = comparison.check(GOOD)
-    assert admitted and ev["status"] == "unavailable"
+    assert admitted
+    assert ev["status"] == "unavailable"
     assert not RuntimeSandbox.calls
 
 
@@ -144,7 +149,8 @@ def test_budget_lost_after_baseline_does_not_admit_unchecked_replacement(compari
     comparison.check(BASELINE)
     comparison.remaining_ms = lambda: 10_000
     admitted, _, ev = comparison.check(GOOD)
-    assert not admitted and ev["status"] == "unavailable"
+    assert not admitted
+    assert ev["status"] == "unavailable"
     assert len(RuntimeSandbox.calls) == 1
 
 
@@ -162,7 +168,8 @@ def test_unsupported_paths_are_explicitly_unavailable(monkeypatch, path):
     monkeypatch.setattr(RuntimeSandbox, "calls", [])
     check = PythonImportComparison(RuntimeSandbox(), BASELINE, path, "/workspace")
     admitted, _, evidence = check.check(GOOD)
-    assert admitted and evidence["status"] == "unavailable"
+    assert admitted
+    assert evidence["status"] == "unavailable"
     assert not RuntimeSandbox.calls
 
 
@@ -171,7 +178,8 @@ def test_candidate_runner_unavailable_is_not_a_pass(comparison, monkeypatch):
     monkeypatch.setattr(comparison.sandbox, "run_command", lambda *a, **kw:
         (False, "", "connection refused", {"exit_code": None}))
     admitted, diagnostic, evidence = comparison.check(GOOD)
-    assert not admitted and evidence["status"] == "unavailable"
+    assert not admitted
+    assert evidence["status"] == "unavailable"
     assert "connection refused" in diagnostic
 
 
@@ -189,7 +197,8 @@ def test_zero_exit_without_completed_import_cannot_promote(comparison, monkeypat
     monkeypatch.setattr(comparison.sandbox, "run_command", lambda *a, **kw:
         (True, "", "", {"exit_code": 0, "outcome": "completed"}))
     admitted, _, evidence = comparison.check(GOOD)
-    assert not admitted and evidence["status"] == "unavailable"
+    assert not admitted
+    assert evidence["status"] == "unavailable"
 
 
 @pytest.mark.parametrize("cause", ["transport", "budget"])
@@ -201,7 +210,8 @@ def test_unavailable_candidate_diagnostic_does_not_claim_failed_import(compariso
     else:
         comparison.remaining_ms = lambda: 10_000
     admitted, diagnostic, evidence = comparison.check(GOOD)
-    assert not admitted and evidence["status"] == "unavailable"
+    assert not admitted
+    assert evidence["status"] == "unavailable"
     assert "could not be observed" in diagnostic
     assert "candidate does not" not in diagnostic
     assert evidence["reason"] == diagnostic
@@ -209,7 +219,8 @@ def test_unavailable_candidate_diagnostic_does_not_claim_failed_import(compariso
 
 def test_failed_candidate_diagnostic_reports_the_observed_failure(comparison):
     admitted, diagnostic, evidence = comparison.check(BROKEN)
-    assert not admitted and evidence["status"] == "failed"
+    assert not admitted
+    assert evidence["status"] == "failed"
     assert "candidate does not import" in diagnostic
     assert "NameError: missing_name" in diagnostic
 
@@ -238,7 +249,8 @@ def test_pipeline_reports_why_a_project_path_disables_import_comparison(monkeypa
     service = make_service(monkeypatch, [BROKEN, GOOD, GOOD])
     result = service.run("build a web application", file_path="my-app/app.py", baseline_code=BASELINE)
     events = [event for event in result["events"] if event["stage"] == "runtime_compare"]
-    assert events and all("not an importable Python module path" in event["data"]["reason"] for event in events)
+    assert events
+    assert all("not an importable Python module path" in event["data"]["reason"] for event in events)
     assert not RuntimeSandbox.calls
 
 
@@ -251,8 +263,10 @@ def test_late_budget_reduces_timeout_before_declining_observation(comparison, re
     before = len(RuntimeSandbox.calls)
     admitted, _, evidence = comparison.check(GOOD)
     if execution_timeout is None:
-        assert not admitted and evidence["status"] == "unavailable"
+        assert not admitted
+        assert evidence["status"] == "unavailable"
         assert len(RuntimeSandbox.calls) == before
     else:
-        assert admitted and evidence["status"] == "passed"
+        assert admitted
+        assert evidence["status"] == "passed"
         assert RuntimeSandbox.calls[-1][4] == execution_timeout

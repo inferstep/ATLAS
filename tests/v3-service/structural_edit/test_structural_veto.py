@@ -157,7 +157,7 @@ def test_genuine_nameerror_still_flagged_amid_locals():
 # fail-open the whole gate while every resolver-level test stays green.
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
+@pytest.fixture
 def structural_check_url(monkeypatch):
     """Serve the real V3Handler on an ephemeral port, auth disabled."""
     import threading

@@ -302,7 +302,8 @@ def test_distinct_agreeing_programs_still_win():
 def test_a_function_shaped_probe_returns_its_pair():
     code = "def solve(n):\n    return n * 2\n"
     probe, files = pipeline._make_output_probe(code, _case3("6"))
-    assert pipeline._CONSENSUS_MARK in probe and files == {}
+    assert pipeline._CONSENSUS_MARK in probe
+    assert files == {}
 
 
 def test_a_candidate_that_failed_a_project_check_cannot_agree_its_way_in():

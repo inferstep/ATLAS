@@ -50,7 +50,8 @@ def test_partial_binding_stays_partial():
     sl.bind_identity("req-only", "")
     try:
         h = adapters._service_headers()
-        assert h[adapters.REQUEST_ID_HEADER] == "req-only" and adapters.INVOCATION_ID_HEADER not in h
+        assert h[adapters.REQUEST_ID_HEADER] == "req-only"
+        assert adapters.INVOCATION_ID_HEADER not in h
     finally:
         _reset()
 
@@ -66,7 +67,8 @@ def test_worker_thread_inherits_nothing():
     t.start()
     t.join()
     _reset()
-    assert adapters.REQUEST_ID_HEADER not in out["headers"] and adapters.INVOCATION_ID_HEADER not in out["headers"]
+    assert adapters.REQUEST_ID_HEADER not in out["headers"]
+    assert adapters.INVOCATION_ID_HEADER not in out["headers"]
 
 
 def test_headers_carry_no_content(monkeypatch):

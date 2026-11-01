@@ -98,7 +98,8 @@ def test_over_bound_is_typed_unscored_without_contacting_lens(monkeypatch):
 
     assert calls == [f"{scoring.adapters.INFERENCE_URL}/tokenize"]
     assert out["verdict"] == "unscored"
-    assert out["cx_energy"] is None and out["gx_score"] is None
+    assert out["cx_energy"] is None
+    assert out["gx_score"] is None
     assert out["failure"] == {
         "kind": "embed_capacity", "input_tokens": 1801,
         "capacity_tokens": 2112, "margin_tokens": 312,

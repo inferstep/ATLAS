@@ -106,7 +106,8 @@ def test_an_absolute_path_is_relativised_before_it_is_sent(capture):
     ok, _, err = sandbox.syntax_check(
         "x = 1\n", "python", "/workspace/accept31-O/backend/app/main.py")
     assert capture["body"]["filename"] == "accept31-O/backend/app/main.py"
-    assert ok and err == ""
+    assert ok
+    assert err == ""
 
 
 def test_an_unrelativisable_path_still_gets_a_check(capture):
@@ -116,7 +117,8 @@ def test_an_unrelativisable_path_still_gets_a_check(capture):
     assert capture["body"]["filename"] is None
     assert capture["body"]["code"] == "x = 1\n"
     assert capture["body"]["language"] == "python"
-    assert ok and err == ""
+    assert ok
+    assert err == ""
 
 
 def test_the_sandbox_still_decides(capture):

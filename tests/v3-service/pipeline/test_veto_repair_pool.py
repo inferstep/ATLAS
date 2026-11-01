@@ -237,7 +237,8 @@ def test_energy_fallback_returns_no_unverified_candidate(monkeypatch):
     # Refinement still saw the vetoed candidates in its failing pool.
     assert service.refinement_loop.calls
     pool_codes = {c.code for c in service.refinement_loop.calls[0]}
-    assert STUB_CODES[0] in pool_codes and STUB_CODES[1] in pool_codes
+    assert STUB_CODES[0] in pool_codes
+    assert STUB_CODES[1] in pool_codes
 
 
 def test_energy_fallback_returns_nothing_when_all_candidates_vetoed(monkeypatch):

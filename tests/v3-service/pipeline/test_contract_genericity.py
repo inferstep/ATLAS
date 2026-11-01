@@ -64,7 +64,8 @@ def test_no_matching_record_yields_no_verified_winner():
     foreign = C.build(other_task, "synth", "0.9.0", {"alpha": D}, CAPS, C.BEHAVIORAL,
                       artifact_scope=SCOPE, evaluation_context_hash=CTX)
     res = C.select([foreign], _expected())
-    assert res["best_record"] is None and res["incomparable"] == [foreign]
+    assert res["best_record"] is None
+    assert res["incomparable"] == [foreign]
 
 
 # ---- 2. comparison identity ----------------------------------------------
@@ -72,8 +73,9 @@ def test_no_matching_record_yields_no_verified_winner():
 def test_empty_identity_fields_never_make_records_comparable():
     a = _rec({"alpha": D}, ctx="", scope="")
     assert not C.comparable(a, a), "empty identity must not compare, even to itself"
+    expected = _expected(evaluation_context_hash="")
     with pytest.raises(C.ContractError):
-        C.select([a], _expected(evaluation_context_hash=""))
+        C.select([a], expected)
 
 
 def test_candidate_hashes_differ_while_context_matches():
@@ -245,7 +247,8 @@ def test_an_all_failed_pool_has_no_winner(status):
 def test_unsupported_plus_timeout_yields_no_winner():
     unsup = _rec({"alpha": D}, supported=False, content="u")
     res = C.select([unsup, _dead(C.EXEC_TIMEOUT, "t")], _expected())
-    assert res["best_record"] is None and len(res["ineligible"]) == 2
+    assert res["best_record"] is None
+    assert len(res["ineligible"]) == 2
 
 
 def test_a_healthy_partial_beats_a_failed_complete_looking_record():
@@ -281,8 +284,9 @@ def test_failed_records_keep_their_observations_for_diagnostics():
 @pytest.mark.parametrize("missing", ["contract_id", "contract_version",
                                      "artifact_scope", "evaluation_context_hash"])
 def test_expected_identity_must_be_complete(missing):
+    expected = _expected(**{missing: ""})
     with pytest.raises(C.ContractError):
-        C.select([], _expected(**{missing: ""}))
+        C.select([], expected)
 
 
 def test_calibration_without_adapter_identity_is_still_valid():
@@ -291,8 +295,9 @@ def test_calibration_without_adapter_identity_is_still_valid():
 
 
 def test_no_adapter_identity_and_no_calibration_is_rejected():
+    expected = _expected(adapter_id="", adapter_version="", calibration_id="")
     with pytest.raises(C.ContractError):
-        C.select([], _expected(adapter_id="", adapter_version="", calibration_id=""))
+        C.select([], expected)
 
 
 @pytest.mark.parametrize("field", ["contract_version", "adapter_id", "adapter_version"])
