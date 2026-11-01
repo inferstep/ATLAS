@@ -473,10 +473,11 @@ docker compose logs --tail 50          # Last 50 lines from all services
 ### アップデート
 
 ```bash
+cp .env .env.bak             # config backup (one file holds all your settings)
 git pull
-docker compose down
 docker compose pull          # grab fresh :latest images from GHCR
-docker compose up -d
+docker compose up -d         # recreate changed services
+atlas doctor                 # verify: services healthy, model/artifacts intact
 ```
 
 ### アンインストール
@@ -535,8 +536,8 @@ cd ..
 # 4. Install geometric-lens Python dependencies
 pip install -r geometric-lens/requirements.txt
 
-# 5. Install V3 service PyTorch (CPU only)
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# 5. Install V3 service dependencies
+pip install -r v3-service/requirements.txt
 
 # 6. Install sandbox dependencies
 pip install -r sandbox/requirements-runtime.txt -r sandbox/requirements-verify.txt

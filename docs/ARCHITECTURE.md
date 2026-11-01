@@ -236,8 +236,8 @@ Three checks keep a broken file from landing as a clean write. Each names the re
 | `edit_file` | Surgical inline string replacement (old_str/new_str) for ≤10-line changes | No |
 | `insert_after` | Insert new lines after a given line number — the line numbers `read_file` prints. For ADDING code (a branch, function, import) where nothing existing changes: there is no `old_str` to reproduce, which is the step that fails on long spans | No |
 | `replace_lines` | Replace a line range (`start_line`..`end_line`, as `read_file` prints them) with new content. For CHANGING code without reproducing it: the anchor is two asserted lines (first and last of the range, whitespace-insensitive) rather than the whole span, so the verbatim burden is 2 lines instead of N. Capped at 60 lines per call — a whole JavaScript function inside a template is the unit of work, and it does not fit in less | No |
-| `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. GH #39, .py/.html/.htm only in v1 | No |
-| `delete_file` | Delete file or empty directory (forces loop exit after) | No |
+| `structural_edit` | Whole-function/class/HTML-element rewrite via tree-sitter selector (`function:NAME`, `class:NAME`, `<tag>`); REQUIRED over edit_file for whole-node swaps. Python, HTML, Go, JavaScript and TypeScript | No |
+| `delete_file` | Delete file or empty directory | No |
 | `move_file` | Move or rename a file within the workspace (e.g. `index.html` → `templates/`). Pure relocation — bypasses the V3/surgical-edit gate, refuses to clobber an existing destination. One call for "reorganize the files"; shell `mv`/`cp` through `run_command` also work | No |
 | `find_file` | Regex search by file **name** / path (cheap existence + locate). Distinct from `search_files` which greps inside file contents. | Yes |
 | `search_files` | Regex search across file contents (max 200 matches, skips .git/node_modules) | Yes |
@@ -277,8 +277,7 @@ explicit pass for the bytes they wrote, measured by
 
 | Tool | Reaches `passed` | Note |
 |------|------------------|------|
-| `write_file`, `edit_file`, `insert_after`, `replace_lines` | yes | via the syntax gate, when the sandbox is reachable |
-| `structural_edit` | no | the tree-sitter splice is v3-service's; this tool runs no check of its own on the bytes it writes, so it reports `syntax`/`not_run` |
+| `write_file`, `edit_file`, `insert_after`, `replace_lines`, `structural_edit` | yes | via the syntax gate, when the sandbox is reachable |
 | `delete_file`, `move_file` | no | neither changes content, so neither has a verdict to give |
 
 Every branch of the seven mutators carries its own `MutationStatus`: the
@@ -306,9 +305,8 @@ per outcome, and `TestModelPromptBytesAreUnchangedByClassification` runs the
 agent loop over two branches whose classification changed and compares the
 request bodies against the parent commit.
 
-Two limitations are carried, not inferred around. `structural_edit` reports
-`syntax`/`not_run` on success and therefore cannot promote a checkpoint;
-`move_file`'s cross-filesystem copy path is production-reachable but has no
+One limitation is carried, not inferred around: `move_file`'s
+cross-filesystem copy path is production-reachable but has no
 production-path test, since one temp directory cannot straddle two
 filesystems.
 
@@ -443,11 +441,7 @@ failed run is recorded as well, and a failure over the same bytes takes back an
 earlier pass, so the latest result decides. When the demand is unmet at the
 exit, the verification gate says so, with the command that would run the file,
 before the finalizer refuses the exit. A cancelled edit reports no mutation
-and the ledger observes nothing for it. `structural_edit` records its
-validation as not run (it performs no check of its own on the bytes it
-splices), so a task whose only mutation is a structural edit ends
-`unresolved_mutation_debt` unless something else validates the file: a known,
-separate limit.
+and the ledger observes nothing for it.
 
 ### Tool-selection bias mitigations
 
@@ -608,7 +602,7 @@ Operator-facing limits and the knobs that tune them. Internal steering guards (t
 | Duplicate-lexical-binding guard | Reject an edit that leaves `let`/`const` declaring the same name twice in one scope (`v3-service` `embedded_script_check`) | An early SyntaxError: the browser refuses the whole script, so every handler on the page dies while the server still returns 200. tree-sitter parses it, so the syntax check cannot see it |
 | Stopped-render-loop guard | Reject an edit that leaves a function a repeating timer used to drive scheduled exactly once and never re-armed (`v3-service` `embedded_script_check` with the pre-edit file; `proxy/gates.go::embeddedScriptGate`) | The JavaScript parses, the server starts and the page returns 200, so every other check passes while the page freezes after one frame |
 | V3 out-of-scope-rewrite guard | Discard a V3 candidate that drops a line the caller's edit had left alone, keeping the caller's content (`proxy/gates.go::v3RewroteBeyondTheEdit`) | V3 improves a whole *file*, so on a small file it retypes everything the edit never touched; a live session came back with `#e94562` as `#e94162` and `id="msg"` as `id=" msg"`, neither of which is a syntax error |
-| Error loop breaker | 3 consecutive failures **of the same kind** (message skeleton: digits, quoted spans and paths stripped); a rejection that differs resets the streak, since three distinct refusals is a model converging, not looping | Stop runaway failure cycles without killing legitimate iteration |
+| Error loop breaker | 3 consecutive failures **of the same kind** (message skeleton: digits, quoted spans and paths stripped) **on the same path**; a rejection that differs resets the streak, since three distinct refusals is a model converging, not looping | Stop runaway failure cycles without killing legitimate iteration |
 | Failed-call ceiling | 12 failed tool calls per run (`maxTotalFailures`) | Bounds a run that cycles through failure modes, now that the streak resets on a changed rejection |
 | Plan-completion gate | Refuse `done` while a planned step has no matching tool call, when the planner scored the plan ≥0.6, it has ≥2 steps, and at least one matched (`proxy/guardrails.go::planIncompleteMessage`) | A multi-part task delivered in part and declared done; the per-turn progress note was already there and was ignored |
 | Exploration budget | Nudge at 4 consecutive read-only calls; escalated nudge at 5+. Reads always execute — the nudge steers the *next* turn toward a write | Push the model to write instead of exploring indefinitely |
@@ -880,7 +874,7 @@ graph LR
         Py["Python\npylint (0-10) + pytest"]
         JS["JavaScript\nNode.js 24"]
         TS["TypeScript\ntsc --noEmit + tsx"]
-        Go["Go 1.22\ngo build + run"]
+        Go["Go 1.27.2\ngo build + run"]
         Java["Java 21\njavac + java -cp"]
         Kotlin["Kotlin 2.4.0\nkotlinc + java -jar"]
         Rust["Rust stable\nrustc + run"]
@@ -900,7 +894,7 @@ graph LR
     style support fill:#333,color:#fff
 ```
 
-Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). Common CLI tools are baked into the image (`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`) plus binary-inspection tools (`strings`, `objdump`, `readelf`, `nm` via binutils, and `file`, `xxd`) — the container is non-root on a read-only base, so anything a task shells out to must be preinstalled; nothing can be apt-installed at runtime. `read_file` on a binary returns a pointer to these tools rather than raw bytes. Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-4g}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Writable mounts are tmpfs, one per language ecosystem, and Docker mounts them `noexec` by default. `/home/sandbox/gobuild` is the exception and carries `exec`, because `go run` links a native binary into `GOTMPDIR` and then executes it; with the default `GOTMPDIR=/tmp` every `go run` failed with `fork/exec ...: permission denied`. Adding a compiled language means checking whether its toolchain executes from a scratch directory or from the project tree, since `/workspace` already permits exec and needs nothing. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
+Language aliases accepted: `py`/`python3` (Python), `js`/`node` (JavaScript), `ts` (TypeScript), `golang` (Go), `java` (Java), `kt`/`kts` (Kotlin), `rs` (Rust), `c++` (C++), `rb` (Ruby), `php` (PHP), `sh`/`shell` (Bash). Common CLI tools are baked into the image (`git`, `sqlite3`, `jq`, `patch`, `zip`/`unzip`, `xz`, `curl`) plus binary-inspection tools (`strings`, `objdump`, `readelf`, `nm` via binutils, and `file`, `xxd`) — the container is non-root on a read-only base, so anything a task shells out to must be preinstalled; nothing can be apt-installed at runtime. `read_file` on a binary returns a pointer to these tools rather than raw bytes. Max execution time: 300s in the Docker deployment (compose sets `MAX_EXECUTION_TIME=${ATLAS_SANDBOX_MAX_EXECUTION_TIME:-300}` to match the proxy's 5-min `run_command` cap; the bare code default is 60s). Memory, CPU, and process caps are container-level: compose sets `mem_limit ${ATLAS_SANDBOX_MEM:-1536m}`, `cpus ${ATLAS_SANDBOX_CPUS:-2}`, and `pids_limit ${ATLAS_SANDBOX_PIDS:-1024}`; `atlas init` writes host-appropriate values (~75% of RAM and cores) into `.env`. Writable mounts are tmpfs, one per language ecosystem, and Docker mounts them `noexec` by default. `/home/sandbox/gobuild` is the exception and carries `exec`, because `go run` links a native binary into `GOTMPDIR` and then executes it; with the default `GOTMPDIR=/tmp` every `go run` failed with `fork/exec ...: permission denied`. Adding a compiled language means checking whether its toolchain executes from a scratch directory or from the project tree, since `/workspace` already permits exec and needs nothing. Two workspace paths: **`/execute`** (V3 candidate-test path) uses an ephemeral scratch dir under `/tmp/sandbox` (tmpfs); **`/shell`** (the agent's `run_command` route, plus `/jobs/*` for background processes) runs against `/workspace` — the bind-mounted project root from `ATLAS_PROJECT_DIR` (Docker) or hostPath `${ATLAS_PROJECTS_DIR}` (K3s), the same path the proxy sees.
 
 ---
 
@@ -1052,4 +1046,4 @@ sequenceDiagram
     A-->>U: File updated
 ```
 
-Existing files over 5 lines are rejected for `write_file` — the model must use `edit_file` (surgical, ≤10 lines) or `structural_edit` (whole-node rewrite, .py/.html/.htm only). On `.py`/`.html`/`.htm` files, the per-step grammar gate (BiasBusters #2) actively bans `edit_file`/`write_file` from the tool-name production for the next decision so the model can't relapse to the wrong shortcut.
+Existing files over 5 lines are rejected for `write_file` — the model must use `edit_file` (surgical, ≤10 lines) or `structural_edit` (whole-node rewrite: Python, HTML, Go, JavaScript and TypeScript). On `.py`/`.html`/`.htm` files, the per-step grammar gate (BiasBusters #2) actively bans `edit_file`/`write_file` from the tool-name production for the next decision so the model can't relapse to the wrong shortcut.

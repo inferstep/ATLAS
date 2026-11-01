@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["type", "data"],
   "properties": {
-    "type": {"type": "string", "description": "Event type (see docs/PROTOCOL.md EVENT_TYPES)."},
+    "type": {"type": "string", "description": "Event type (see docs/API.md, \"Event types on `/v1/agent`\")."},
     "data": {"type": "object", "description": "Type-specific payload. For permission_request events it carries tool_call_id."}
   },
   "additionalProperties": true

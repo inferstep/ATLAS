@@ -200,7 +200,7 @@ Abort an in-flight `/v1/agent` turn. Idempotent — repeated calls for the same 
 
 When cancelled, the agent loop exits via `context.Canceled`, the SSE stream emits its trailing `[DONE]`, and the connection closes cleanly. Any in-flight LLM call to llama-server is also aborted via the cascading request context.
 
-The TUI uses this on `Esc` mid-turn — see [CLI.md → Cancelling a turn](CLI.md).
+The TUI uses this on `Ctrl+C` mid-turn — see [CLI.md → Cancelling a turn](CLI.md).
 
 ---
 
