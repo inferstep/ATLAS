@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,27 +19,7 @@ import (
 // Located by scanning source, the same way the harness does, so a file move
 // cannot silently empty either side.
 func TestEveryStreamedEventTypeIsRenderable(t *testing.T) {
-	emitted := map[string]string{} // type -> where
-	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
-	proxyDir := filepath.Join("..", "proxy")
-	entries, err := os.ReadDir(proxyDir)
-	if err != nil {
-		t.Skipf("proxy source not available: %v", err)
-	}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(proxyDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		for _, m := range streamRE.FindAllStringSubmatch(string(src), -1) {
-			if _, seen := emitted[m[1]]; !seen {
-				emitted[m[1]] = e.Name()
-			}
-		}
-	}
+	emitted := proxyStreamedEvents(t) // type -> where
 	if len(emitted) == 0 {
 		t.Fatal("found no ctx.Stream call sites — the scan is broken, not the contract")
 	}
@@ -80,4 +61,39 @@ func TestEveryStreamedEventTypeIsRenderable(t *testing.T) {
 			"Add a case in appendChatEvent, or exempt it here with the reason.",
 			len(missing), strings.Join(missing, "\n  "))
 	}
+}
+
+// proxyStreamedEvents maps each event type the proxy streams to a file that
+// streams it. It walks the whole module, so a file moved into a package stays
+// in the scan.
+func proxyStreamedEvents(t *testing.T) map[string]string {
+	t.Helper()
+	emitted := map[string]string{}
+	streamRE := regexp.MustCompile(`ctx\.Stream\(\s*"([a-z0-9_]+)"`)
+	proxyDir := filepath.Join("..", "proxy")
+	if _, err := os.Stat(proxyDir); err != nil {
+		t.Skipf("proxy source not available: %v", err)
+	}
+	err := filepath.WalkDir(proxyDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range streamRE.FindAllStringSubmatch(string(src), -1) {
+			if _, seen := emitted[m[1]]; !seen {
+				emitted[m[1]] = entry.Name()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return emitted
 }
