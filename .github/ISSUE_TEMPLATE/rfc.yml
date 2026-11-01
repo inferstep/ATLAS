@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        An RFC is required for architecture changes, new dependencies, security-model changes, release policy, support-matrix changes, and any breaking change (see GOVERNANCE.md).
+        An RFC is required for architecture changes, new dependencies, security-model changes, release policy, support-matrix changes, and any breaking change (see docs/GOVERNANCE.md).
 
         The comment period is 7 days. For line-by-line review, open a pull request that adds `docs/adr/NNNN-title.md` with status Proposed. A maintainer then posts Accepted, Revise, or Declined with reasons. An accepted RFC becomes an Epic on this same issue.
   - type: textarea

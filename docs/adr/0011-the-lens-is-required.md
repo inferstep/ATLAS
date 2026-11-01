@@ -51,7 +51,7 @@ is cached for 5 s (`probeLensReadiness` and `lensReadyTTL` in
 `proxy/lens_required.go`). If the lens cannot score, the request gets
 HTTP 503 with the error code `dependency_unavailable`, the reason, and
 "Run `atlas doctor`." Nothing is streamed and no work starts
-(`handleAgent` in `proxy/agent.go`; `ErrDependencyDown` in
+(`handleAgent` in `proxy/agent_handler.go`; `ErrDependencyDown` in
 `proxy/main.go`).
 
 **During a run.** A per-write score that says the lens is down ends
@@ -67,7 +67,7 @@ a result with `lens_unavailable` and no code (`_handle_generate` in
 `v3-service/main.py`). The proxy bridge turns that into a typed error
 (`callV3GenerateStreaming` in `proxy/v3_bridge.go`), and the write and
 edit routes do not apply the model's bytes as a fallback
-(`writeFileWithV3` in `proxy/tools.go`, `deliverEditCandidate` in
+(`writeFileWithV3` in `proxy/tool_write_v3.go`, `deliverEditCandidate` in
 `proxy/edit_route_delivery.go`). The run ends as above.
 
 **Status.** The proxy's `/ready` and `/health` apply the same check as

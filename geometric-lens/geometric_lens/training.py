@@ -423,10 +423,8 @@ def save_gx(gx_result: dict, save_dir=None):
     """Save trained G(x) artifacts in the layout service.py loads.
 
     Writes gx_xgboost.json (native booster dump) + gx_weights.json (PCA
-    projection + stats). Removes a stale gx_xgboost.pkl if present — the
-    pickle is the legacy load fallback, and one left behind from a previous
-    model would silently serve the wrong PCA dimensions if the JSON were
-    ever deleted.
+    projection + stats). Removes a stale gx_xgboost.pkl if present, a format
+    the lens does not load.
     """
     if save_dir is None:
         save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")

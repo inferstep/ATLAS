@@ -38,7 +38,7 @@ def test_go_producer_emits_the_seven_dimensions():
 
 
 def test_support_matrix_documents_the_seven_dimensions():
-    text = (REPO / "SUPPORT_MATRIX.md").read_text()
+    text = (REPO / "docs" / "SUPPORT_MATRIX.md").read_text()
     assert "Reference-model status dimensions" in text, (
         "SUPPORT_MATRIX lost the status-dimensions section")
     for name in CANONICAL:
@@ -47,7 +47,7 @@ def test_support_matrix_documents_the_seven_dimensions():
 
 
 def test_intervention_neutrality_is_documented():
-    text = (REPO / "SUPPORT_MATRIX.md").read_text()
+    text = (REPO / "docs" / "SUPPORT_MATRIX.md").read_text()
     # The load-bearing correctness claim must be stated.
     assert re.search(r"intervention stays neutral or disabled",
                      text, re.I), (

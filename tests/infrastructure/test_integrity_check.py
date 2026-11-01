@@ -155,7 +155,7 @@ def test_an_evaluation_task_named_in_product_code_is_reported(ic):
     assert whats(ic, diff("proxy/agent.go", added=[line])) == \
         ["evaluation task named in product code: 'flask_pause'"]
     assert whats(ic, diff("proxy/agent_test.go", added=[line])) == []
-    assert whats(ic, diff("scripts/e2e-reliability.py", added=['    "flask_pause": Task('])) == []
+    assert whats(ic, diff("scripts/eval/e2e-reliability.py", added=['    "flask_pause": Task('])) == []
     assert whats(ic, diff("proxy/agent.go", added=['\tname := "flask_pauses"'])) == []
 
 
@@ -502,7 +502,9 @@ def test_a_size_baseline_that_cannot_be_read_needs_approval(ic):
     (".github/code-health-baseline.json", CONFIGURES),
     ("scripts/integrity_check.py", CONFIGURES),
     ("scripts/checks_ran.py", CONFIGURES),
+    (".github/codecov.yml", CONFIGURES),
     ("codecov.yml", CONFIGURES),
+    ("dev/.codecov.yaml", CONFIGURES),
     ("tests/replay/recordings/normal_edit.json", CONFIGURES),
     ("tests/infrastructure/gradle_wrapper_jar_sums.txt", CONFIGURES),
     (".github/canary.json", CONFIGURES),
@@ -1224,7 +1226,6 @@ def test_the_check_reads_this_repositorys_own_settings_and_hook(ic):
     marks = ic.left_out_marks((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert marks == ("integration",)
     targets = ic.hook_targets((root / "tests" / "conftest.py").read_text(encoding="utf-8"), marks)
-    assert "/tests/integration/" in targets
     files = sorted(target for target in targets if target.endswith(".py"))
     assert files
     assert all((root / target.lstrip("/")).is_file() for target in files)

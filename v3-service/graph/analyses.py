@@ -332,24 +332,3 @@ def dead_code(graph: CodeGraph, entry_points: Optional[List[str]] = None) -> Lis
     return out
 
 
-def run_analysis(graph: CodeGraph, analysis: str, target: Optional[str] = None,
-                 frm: Optional[str] = None, to: Optional[str] = None,
-                 entry_points: Optional[List[str]] = None):
-    """Dispatch a named analysis. Returns the analysis-specific result."""
-    if analysis == "callers":
-        return callers(graph, target or "")
-    if analysis == "callees":
-        return callees(graph, target or "")
-    if analysis == "reachability":
-        return reachability(graph, frm or "", to or "")
-    if analysis == "path":
-        return path(graph, frm or "", to or "")
-    if analysis == "impact":
-        return impact(graph, target or "")
-    if analysis == "cycles":
-        return cycles(graph)
-    if analysis == "entry-points":
-        return detect_entry_points(graph)
-    if analysis == "dead-code":
-        return dead_code(graph, entry_points)
-    raise ValueError(f"unknown analysis: {analysis}")

@@ -15,7 +15,7 @@ tool calls are the untrusted input; file edits are workspace-confined
 (proxy path validation) and shell runs in the hardened sandbox
 container (non-root, cap_drop ALL, read-only root, pids/mem/cpu
 limits). Attacks requiring exposed ports or another hostile local user
-are out of scope (SECURITY.md).
+are out of scope (`.github/SECURITY.md`).
 
 ## Consequences
 The boundary is defense-in-depth since 2026-07: a per-installation

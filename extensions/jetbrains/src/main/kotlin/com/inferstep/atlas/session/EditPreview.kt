@@ -247,7 +247,7 @@ private fun predictEditFile(
         )
     }
     // Without replace_all the proxy requires a UNIQUE match and rejects the
-    // call otherwise (proxy/tools.go uniqueness check) — a first-occurrence
+    // call otherwise (proxy/tool_edit.go uniqueness check) — a first-occurrence
     // splice labelled exact would show a diff that can never apply.
     val count = current.split(oldStr).size - 1
     val firstOccurrence =
@@ -314,7 +314,7 @@ private fun predictStructuralEdit(
         if (tag.groupValues[1].lowercase() == "html") {
             // Mirror the proxy's <html>-selector quirk: the element replace
             // does not cover a preceding <!DOCTYPE>, so the proxy strips a
-            // leading doctype from the content (proxy/tools.go).
+            // leading doctype from the content (proxy/tool_structural_edit.go).
             body = stripLeadingDoctype(body)
         }
         val spliced = spliceHtmlElement(current, tag.groupValues[1], body)

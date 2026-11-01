@@ -108,7 +108,7 @@ What you'll see:
   [CLI.md § Permission modes](CLI.md#permission-modes).
 
 Afterwards: review with `/diff` (or `git diff`), run your tests, and commit
-if happy. `/undo` soft-resets the last commit the agent made; `Ctrl+C`
+if happy. `/undo` soft-resets the last commit, whoever made it; `Ctrl+C`
 cancels a turn mid-flight.
 
 ## Bring your own model

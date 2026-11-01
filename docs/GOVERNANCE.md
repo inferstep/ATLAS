@@ -1,0 +1,257 @@
+# Governance
+
+ATLAS is a **single-maintainer project** today (see
+[MAINTAINERS.md](MAINTAINERS.md)). This document states how decisions
+are made now, how people gain access, and the limits that apply at every
+level. It does not pretend a committee exists.
+
+## Decision making
+
+- Day-to-day decisions (bug fixes, refactors, docs) are made by
+  maintainers merging pull requests into `dev`.
+- Significant decisions go through an RFC and are recorded as an ADR
+  under `docs/adr/` (see [Proposals](#proposals-rfc--adr--epic)). They
+  include architecture changes, new dependencies, security-model
+  changes, release policy, changes to the documented support matrix, and
+  any breaking change.
+- Community input happens in GitHub issues and Discussions. The lead
+  maintainer resolves substantive disagreement, and the reasoning is
+  written down in the issue or ADR.
+
+## Change flow
+
+All changes land on `dev`, are promoted to `staging`, then fast-forward
+to `main`. Releases are tagged from `main` and published only through
+the CI pipeline (immutable `sha-*` images, tag promotion gated on the
+tests workflow).
+
+The rules are enforced by repository rulesets, created by
+`scripts/setup/rulesets.sh`. Its dry run shows whether the live rulesets
+are still the ones it writes.
+
+- **`dev`, `staging` and `main`**
+  - Nobody can push to them, force-push or delete them, including admins.
+    Every change is a pull request.
+  - History must be linear.
+  - The required checks must pass, and no account can skip one. On
+    `staging` and `main` the branch must also be up to date.
+  - All conversations on a pull request must be resolved.
+- **`dev`.** A pull request merges through the merge queue, which runs
+  the required checks again on the merged result. No approval is
+  required yet (see below).
+- **`staging` and `main`.** A pull request needs a code-owner approval.
+  New commits dismiss old approvals, the last push needs someone else's
+  approval, and only maintainers can dismiss a review. An admin's own
+  pull request merges without the approval, which is logged. The two
+  branches move forward by the release step in
+  [docs/RELEASE.md](RELEASE.md#the-release-step).
+- **Branches.** Only admins, the `maintainers` team, and Dependabot can
+  create, push or delete other branches. Everyone else works from a fork.
+  Anyone with write access could otherwise push a branch with a new
+  workflow and run it with the repository's permissions. The
+  `star-history` asset branch is the one exception, because its
+  workflow's token can't be exempted.
+- **Branches under `smoke/`.** Only the organization's admins and the
+  `maintainers` team can create, push or delete one. Dependabot and the
+  repository's admin role cannot. The development server builds and runs
+  the tip of such a branch
+  ([docs/quality/gates.md](quality/gates.md#the-smoke-run-of-one-commit)),
+  so no program may push one.
+- **Release tags** (`v*`). Only admins and maintainers can create one,
+  and nobody can move or delete one once it exists.
+
+The lead maintainer's changes are pull requests like everyone else's and
+meet the same required checks. Human review of the lead's pull requests
+waits until a second person holds the Reviewer role: the merge queue
+cannot merge a pull request that needs a bypass, so an approval rule on
+`dev` would stop every merge while one person maintains the project.
+
+## Trust ladder
+
+Access follows trust built over time, never a count of pull requests. The
+xz-utils backdoor (2024) came from an attacker who spent about two years
+earning maintainer trust, so every rung also has hard technical limits.
+
+| Role | GitHub access | Can | Can't | To get here |
+|---|---|---|---|---|
+| Contributor | None; works from a fork | Open issues and PRs, `/claim` | Anything on the repository itself | Anyone |
+| Triager | Triage role (`triagers` team) | Label, assign, close, edit project fields | Push, approve, see security advisories, touch workflows | 3+ months of real participation, merged work of substance, nominated by a maintainer |
+| Reviewer | Write role (`reviewers` team), blocked from creating branches | Approvals count on their subsystem | Push branches, merge, tag, change workflows | 6+ months as Triager, owns a subsystem in practice, a video call with the lead |
+| Maintainer | Maintain role (`maintainers` team) | Merge, promote `dev` → `staging`, run triage, accept RFCs | Cut a stable release alone, change security or org settings | 12+ months, known to the lead beyond GitHub, signing key in `allowed_signers`, has shadowed a release |
+| Lead | Owner | Everything | | Isaac Tigges |
+
+**Safeguards on every rung**
+
+- Every path has a code owner, whose approval a pull request into
+  `staging` or `main` needs. The security- and
+  release-critical paths stay with the lead even when subsystems gain
+  owners: `.github/workflows/`, `scripts/`, `sandbox/`, `.github/SECURITY.md`,
+  `docs/RELEASE.md`, `docs/PUBLISHING.md` and
+  `atlas/commands/model_registry.py` (see
+  [CODEOWNERS](../.github/CODEOWNERS)).
+- Only keys in `.github/allowed_signers` make valid release tags. The
+  `production` environment, which moves `:latest` and version tags, needs
+  the lead's approval.
+- Only maintainers create branches, so write access can't be used to run
+  a planted workflow.
+- Access is reviewed every quarter. Six months of inactivity drops a
+  rung.
+- Promotions are announced publicly.
+
+## Proposals: RFC → ADR → Epic
+
+RFCs are issues, so they sit on the same board as all other work.
+
+1. Someone opens the **RFC** issue form. The issue gets type RFC and
+   board status Needs Design.
+2. The bot links open RFCs and Epics with similar titles, and who holds
+   them.
+3. There is a comment period on the issue, **7 days** by default. For
+   line-by-line review, the author opens a pull request adding
+   `docs/adr/NNNN-title.md` with status Proposed.
+4. A maintainer posts the decision: **Accepted**, **Revise**, or
+   **Declined**, with reasons.
+5. **Accepted:** the ADR merges with status Accepted and links the issue.
+   The same issue's type changes from RFC to Epic, and its sub-issues are
+   created and specced.
+6. **Declined:** the issue is closed as not planned, with the reason, so
+   the next person with the same idea finds it.
+
+ADR statuses and format are in [docs/adr/README.md](adr/README.md).
+
+## Review times
+
+- A maintainer responds to a pull request within **5 business days**.
+- New issues are triaged within **5 business days**; see
+  [Triage](#triage).
+- Security reports follow the targets in [SECURITY.md](../.github/SECURITY.md).
+
+## Triage
+
+How new issues become work someone can pick up. This is for triagers and
+maintainers (see the [trust ladder](#trust-ladder)).
+
+**When:** at least once a week. Every new issue gets a first response
+within **5 business days**.
+
+**Where:** the [Triage view](https://github.com/orgs/inferstep/projects/1/views/7)
+of the board. New issues and pull requests are added to it automatically
+with Status **Triage**, and issue forms add the `needs-triage` label.
+
+### For each new issue
+
+1. **Security?** If it describes a vulnerability, don't discuss the
+   details in public. Comment asking the reporter to use a
+   [private security advisory](https://github.com/inferstep/ATLAS/security/advisories/new),
+   and tell a maintainer, who hides or deletes the issue.
+2. **Duplicate?** Link the original, add `duplicate`, and close it as a
+   duplicate.
+3. **Enough information?** If not, ask for what's missing (for bugs,
+   usually the `atlas doctor` output and the logs) and add `needs-info`.
+   Close it as not planned after **14 days** without an answer. It can be
+   reopened any time.
+4. **Type.** Check the issue type: Bug, Feature, Task, Docs; Spike and Epic
+   for maintainers. A significant change needs an RFC (see
+   [Proposals](#proposals-rfc--adr--epic)).
+5. **Labels.** Add one or more `area/*` labels, and `platform/*` when it's
+   specific to a backend.
+6. **Board fields.** Priority, Size, Contributor Level, Hardware Needed,
+   and Critical Path. Set a milestone when it's targeted at a release.
+7. **Status.**
+   - **Needs Design**: an RFC or a decision is open.
+   - **Backlog**: wanted, but not specced yet.
+   - **Ready**: see the checklist below.
+   - Or close it as not planned (`wontfix`) with the reason.
+8. Remove `needs-triage`.
+
+Don't set `status/ready` or `status/blocked` by hand. The bot mirrors them
+from the board's Status every hour.
+
+### When a bug closes
+
+Set **Cause** in the text of the issue to one of the words of the bug form:
+a check was missing, checks ran in the wrong order, parsing, tool protocol,
+documentation, or other. The form sets it to "Not known yet" when the issue
+is opened. The causes of the closed bugs are what tells us which check to
+add next, so a cause is set also when the fix was small.
+
+### Ready means
+
+- [ ] Acceptance criteria are in the issue: what "done" looks like, and how
+      to check it
+- [ ] A **Shepherd** is set: the maintainer who answers questions on it
+- [ ] Size, Contributor Level and Hardware Needed are set
+- [ ] No open design question is left
+
+Only Ready issues can be claimed with `/claim`.
+
+### Priority
+
+| Priority | Use for |
+|---|---|
+| P0 | Broken install, data loss, or a security problem in a release. Drop everything. |
+| P1 | Should be in the next release |
+| P2 | Planned |
+| P3 | Some day |
+
+### Starter issues
+
+Keep 5 to 10 Starter issues in Ready, at least half of them needing no
+GPU. A good Starter issue is XS or S, has clear acceptance criteria and an
+available Shepherd, and needs little ATLAS-wide context. Also add the
+`good first issue` label, so GitHub lists it for newcomers.
+
+### Pull requests
+
+The bot adds `area/*` labels from the changed paths and welcomes
+first-time authors. Triagers check that a pull request links an issue and
+fills in the template. A maintainer approves CI runs for pull requests
+from outside the org, then reviews within 5 business days.
+
+### Every week
+
+- **Blocked view:** is each reason still true?
+- **`needs-info`:** close anything silent for 14 days.
+- **RFCs view:** ask a maintainer to decide on any RFC past its 7-day
+  comment period.
+- **Start Here:** keep enough Starter issues in it.
+
+### Every month
+
+Run `python scripts/setup/flow_review.py` and paste its output into a
+comment on the Project operations epic. It lists the Triage queue, outside
+pull requests and how long each waited for a first response, claims with
+no pull request, the Start Here stock, open alerts, and the OpenSSF
+Scorecard. It exits with 1 when an outside pull request has waited more
+than 5 business days, the time CONTRIBUTING promises.
+
+## Release authority
+
+Maintainers can promote `dev` to `staging`. A stable release (`main`, a
+`vX.Y.Z` tag, `:latest`) needs the lead's approval in the `production`
+environment and a tag signed by a key in `allowed_signers`. The checklist
+is in [docs/RELEASE.md](RELEASE.md). Today each promotion is a
+release step, which needs admin rights on the repository, so the lead
+runs it.
+
+**Bus-factor status: 1.** Growing to a second release-capable maintainer
+is an explicit project goal and a precondition for calling the project
+mature. Until then, the honest statement is that the lead maintainer
+disappearing stops releases. The AGPL license and the public registry
+artifacts allow forks to continue.
+
+## Security
+
+Security reports follow [SECURITY.md](../.github/SECURITY.md). What to do when
+something goes wrong (a vulnerability, a leaked key, a bad release) is in
+[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md). Security fixes may land
+ahead of the normal review flow, with the ADR or notes written
+afterwards.
+
+## Inactive-maintainer / succession policy
+
+If the sole maintainer is unresponsive for 60+ days, consider the project
+fork-friendly. Everything needed to continue is in the repository by
+design: the build pipeline, registry contracts, artifact hashes, and the
+release process docs. The HF artifact repos are mirrored by their hashes
+in the registry, so a fork can re-host and re-pin them.

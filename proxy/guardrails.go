@@ -499,7 +499,7 @@ func evidenceIsCurrent(ctx *AgentContext, rec VerificationRecord) (map[string]st
 }
 
 // contractRequiresCommand reports whether the client declared this exact
-// command. isVerificationCommand recognises builds, tests, probes and runners
+// command. classifyCommandEvidence recognises builds, tests, probes and runners
 // by shape, and a client's own requirement may be none of those -- a linter, a
 // schema check, a project script. Without this, a declared command could be
 // impossible to satisfy: the demand would require it and nothing would ever
@@ -1038,7 +1038,7 @@ func expectedOutputMissingMessage(missing []string) string {
 // actionWithoutProductiveChangeMessage tells the model to actually do
 // the work the user asked for before declaring done. Concrete and
 // directive — points at the missing tool call, not abstract "you
-// haven't done enough." Mirror of verificationRejectionMessage's
+// haven't done enough." Mirror of verificationRejection's
 // shape.
 func actionWithoutProductiveChangeMessage(userMsg string) string {
 	return "Cannot declare `done` yet — the user asked you to make a change on disk (rewrite/create/add/implement/refactor/etc.) and you haven't emitted any successful write_file / edit_file / structural_edit / delete_file in this loop. Verification (running the server, curling the page) is NOT the task — it's how you confirm AFTER the change. Re-read the user's request, identify what file needs to change, and emit the appropriate edit tool. Then verify, then done."

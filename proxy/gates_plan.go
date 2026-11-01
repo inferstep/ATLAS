@@ -470,7 +470,7 @@ func countTrue(bs []bool) int {
 //
 // Fix: at the START of each LLM call we render a compact plan-progress
 // "[system note]: ..." line and prepend it to the messages slice
-// passed to callLLMOnce. The note is EPHEMERAL — it's not appended to
+// passed to callLLMOnceWithGrammar. The note is EPHEMERAL — it's not appended to
 // ctx.Messages, so it doesn't accumulate or get re-trimmed. Every
 // turn, the model sees: "step 3 of 7 — currently working on edit
 // templates/dashboard.html; done: index.html, contact.html; remaining:

@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .llm_client import extract_code_for_problem, strip_reasoning_leak
+from .llm_client import extract_code_for_problem
 
 
 # Type alias for LLM callable
@@ -176,29 +176,6 @@ Think step by step about what needs to change, then write one complete, syntacti
 # ---------------------------------------------------------------------------
 # Core functions
 # ---------------------------------------------------------------------------
-
-def extract_code_from_repair(response: str) -> str:
-    """Extract Python code from a repair response."""
-    import re
-
-    # Safety net: client returns clean content, but strip any leaked
-    # reasoning block model-agnostically before code extraction.
-    response = strip_reasoning_leak(response)
-
-    # The block comes back verbatim: the fence is framing, the bytes inside
-    # it are the artifact, final newline and trailing blank lines included.
-    # The candidate hash downstream is computed from exactly this value.
-    # Try ```python blocks
-    py_blocks = re.findall(r'```python\s*\n(.*?)```', response, re.DOTALL)
-    if py_blocks:
-        return py_blocks[-1]
-
-    # Try plain ``` blocks
-    code_blocks = re.findall(r'```\s*\n(.*?)```', response, re.DOTALL)
-    if code_blocks:
-        return code_blocks[-1]
-
-    return response.lstrip()
 
 
 # ---------------------------------------------------------------------------

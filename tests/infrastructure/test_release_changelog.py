@@ -454,7 +454,7 @@ def test_the_template_of_a_pull_request_has_the_heading_and_names_the_sentence(r
 
 
 def test_the_guide_for_contributors_names_the_heading_and_the_sentence(release):
-    guide = " ".join((REPO / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
+    guide = " ".join((REPO / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
     assert f"**{release.HEADING}**" in guide
     assert f'"{release.NOTHING}"' in guide
-    assert "does not edit `CHANGELOG.md`" in guide
+    assert "edits `CHANGELOG.md` only for a note a user must act on" in guide

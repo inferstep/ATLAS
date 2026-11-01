@@ -1,6 +1,6 @@
 {
  "source": {
-  "task": "the task `offbyone` of the smoke set (scripts/e2e-reliability.py)",
+  "task": "the task `offbyone` of the smoke set (scripts/eval/e2e-reliability.py)",
   "kind": "smoke",
   "model_replies": "captured",
   "what": "a session that a real model answers",

@@ -87,10 +87,15 @@ if [ ${#stale[@]} -gt 0 ]; then
         echo "     current session and record protocol defects caused by you,"
         echo "     not by ATLAS. Wait for it to finish, then recreate."
     fi
-    busy=$(curl -s --max-time 5 http://localhost:8080/slots 2>/dev/null \
-           | grep -o '"is_processing":true' | wc -l)
-    if [ "${busy:-0}" -gt 0 ]; then
-        echo "  !! llama-server has ${busy} slot(s) processing — something is mid-turn."
+    # The token goes through stdin, so it never shows in a process list.
+    if slots=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat secrets/service-token 2>/dev/null)" \
+               | curl -sf --max-time 5 -K - http://localhost:8080/slots 2>/dev/null); then
+        busy=$(grep -o '"is_processing":true' <<<"$slots" | wc -l)
+        if [[ "$busy" -gt 0 ]]; then
+            echo "  !! llama-server has ${busy} slot(s) processing — something is mid-turn."
+        fi
+    else
+        echo "  !! Could not read llama-server's /slots, so a turn may be in flight."
     fi
     echo
     echo "Fix:   docker compose up -d --force-recreate ${stale[*]} --no-deps"

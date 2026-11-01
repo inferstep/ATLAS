@@ -281,7 +281,7 @@ def test_a_change_to_the_agent_loop_of_this_repository_is_high_risk_and_a_small_
 
 
 def test_contributing_states_the_sizes_and_the_reasons_as_the_settings_have_them():
-    guide = " ".join((ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
+    guide = " ".join((ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
     sizes = SETTINGS["sizes"]
     assert f"under {sizes['M']}, from {sizes['M']}, from {sizes['L']}, from {sizes['XL']:,}" in guide, (
         "CONTRIBUTING gives other sizes than `sizes` in .github/atlas-bot.yml. Fix: give both the same numbers.")

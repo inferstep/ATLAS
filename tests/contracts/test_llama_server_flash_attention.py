@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("script", ["inference/entrypoint.sh", "inference/entrypoint-v3.1.sh", "scripts/atlas-llama-macos.sh"])
+@pytest.mark.parametrize("script", ["inference/entrypoint-v3.1.sh", "scripts/atlas-llama-macos.sh"])
 def test_the_model_server_starts_with_flash_attention_on(script):
     # The script as the shell runs it: comment lines and the comment at the end of a line are dropped.
     code = [line.split("#")[0] for line in (ROOT / script).read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")]

@@ -229,9 +229,6 @@ class LLMAdapter:
     hang).
     """
 
-    THINK_BUDGET_RATIO = 0.80
-    MIN_OUTPUT_CHARS = 50
-
     # Serialize generation by default to avoid concurrent multi-slot hangs.
     # Set ATLAS_LLM_PARALLEL=1 to disable the lock.
     _llm_lock = threading.Lock()
@@ -449,7 +446,6 @@ class V3Pipeline:
                 enabled=self.enable_phase1,
                 default_tier=self._v3_conf.get("bf_default_tier", "standard"),
             ),
-            telemetry_dir=telemetry_dir,
         )
         self.plan_search = PlanSearch(
             PlanSearchConfig(

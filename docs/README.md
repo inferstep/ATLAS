@@ -25,7 +25,7 @@ Task-oriented index for everything under `docs/`. The
   [SETUP.md § Supported GPUs](SETUP.md#supported-gpus) and
   [TROUBLESHOOTING.md § What fits on my GPU?](TROUBLESHOOTING.md#what-fits-on-my-gpu)
 - What is and isn't supported, with evidence:
-  [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)
+  [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)
 
 ### Use ATLAS day to day
 
@@ -86,10 +86,10 @@ Task-oriented index for everything under `docs/`. The
 
 ### Contribute
 
-- [../CONTRIBUTING.md](../CONTRIBUTING.md) — from finding an issue and
+- [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) — from finding an issue and
   `/claim` to review and release; style, tests, and the developer quality
   gate (`scripts/production-readiness.py`).
-- [CONTRIBUTING.md § Development workflow](../CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
+- [CONTRIBUTING.md § Development workflow](../.github/CONTRIBUTING.md#development-workflow) — dev mode, targeted rebuilds,
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
   `scripts/code_health.py` enforces on new code and refactors.
@@ -100,18 +100,18 @@ Task-oriented index for everything under `docs/`. The
   measured baselines.
 - [RELEASE.md](RELEASE.md) — the release contract, verification levels,
   versioning, and the release and hotfix steps.
-- [GOVERNANCE.md § Triage](../GOVERNANCE.md#triage) — how new issues become Ready work.
+- [GOVERNANCE.md § Triage](GOVERNANCE.md#triage) — how new issues become Ready work.
 - [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md) — what to do when a key
   leaks, a release is bad, or automation misbehaves.
 - [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — image accounts,
   writable dirs, dependency pinning.
-- [../GOVERNANCE.md](../GOVERNANCE.md), [../MAINTAINERS.md](../MAINTAINERS.md),
-  [../SECURITY.md](../SECURITY.md),
-  [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
-- READMEs beside code and [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)
-  are not listed one-by-one here: they live in the tree next to what they
-  describe (see the [repository map](#repository-map)), and
-  third-party notices live at the repository root.
+- [GOVERNANCE.md](GOVERNANCE.md), [MAINTAINERS.md](MAINTAINERS.md),
+  [../.github/SECURITY.md](../.github/SECURITY.md),
+  [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), [../LICENSE](../LICENSE)
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — the third-party work
+  ATLAS uses and its licenses.
+- READMEs beside code are not listed one-by-one here: they live in the tree
+  next to what they describe (see the [repository map](#repository-map)).
 
 ---
 
@@ -135,21 +135,22 @@ the [repository map](#repository-map) if you're looking for code rather than doc
 
 ## Core terms (one line each)
 
-- **Direct agent / outer loop** — the Go proxy's tool-calling loop; works
-  with any GGUF, no per-model training ([ARCHITECTURE.md](ARCHITECTURE.md)).
+- **Direct agent / outer loop** — the Go proxy's tool-calling loop. A model
+  needs a lens bundle first, which `atlas lens build` makes
+  ([ARCHITECTURE.md](ARCHITECTURE.md), [ADR 0011](adr/0011-the-lens-is-required.md)).
 - **V3 pipeline / inner layer** — multi-candidate generation, scoring,
   sandbox verification, and repair for non-trivial files
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Tiers (T0–T3)** — two separate classifications. The per-file tier gates
   V3: T1 writes directly, T2/T3 use the pipeline. The per-message tier only
-  distinguishes T0 (conversational: 5-turn cap, no plan) from everything
+  distinguishes T0 (conversational: 12-turn cap, no plan) from everything
   else, since the turn cap and plan gate are all it feeds
   ([ARCHITECTURE.md](ARCHITECTURE.md)).
 - **Geometric Lens, C(x) / G(x)** — energy-based candidate scoring over the
   model's own embeddings; per-model trained bundle
-  ([ARCHITECTURE.md](ARCHITECTURE.md), [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md)).
+  ([ARCHITECTURE.md](ARCHITECTURE.md), [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md)).
 - **ASA** — activation-steering control vector nudging tool selection;
-  per-model, opt-in until validated ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
+  per-model, always on wherever a vector is installed ([CLI.md](CLI.md), [PUBLISHING.md](PUBLISHING.md)).
 - **Sandbox** — isolated multi-language execution used for verification
   ([ARCHITECTURE.md](ARCHITECTURE.md), [API.md](API.md)).
 - **GBNF grammar enforcement** — token-level constrained decoding that strongly
@@ -174,9 +175,9 @@ In order, each building on the last:
 10. [API.md](API.md) — the full HTTP surface
 11. [SOURCES.md](SOURCES.md) — the research it stands on
 12. [adr/](adr/README.md) — decisions 0001 through 0011, in order (0007 retired)
-13. [../SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) — claims and their evidence
+13. [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) — claims and their evidence
 14. [OPERATIONS.md](OPERATIONS.md) — running it long-term
-15. [../CONTRIBUTING.md](../CONTRIBUTING.md) (its Development workflow),
+15. [../.github/CONTRIBUTING.md](../.github/CONTRIBUTING.md) (its Development workflow),
     [RELEASE.md](RELEASE.md), [PUBLISHING.md](PUBLISHING.md),
     [CONTAINER_PACKAGING.md](CONTAINER_PACKAGING.md) — working on it
 16. [../CHANGELOG.md](../CHANGELOG.md) — how it got here
@@ -201,9 +202,9 @@ What each top-level folder owns. For how the pieces work together see
 | `benchmark/` | Created at runtime, not tracked — dataset caches and run results. The runner/harness code is `atlas/bench/` | — |
 | `compose/` | Docker Compose overlays (rocm, vulkan, cpu, macos) layered on the root `docker-compose.yml`, and the dev-mode override example | — |
 | `scripts/` | Install, deploy, K3s, and CI/release automation | — |
-| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates | — |
+| `.github/` | CI workflows, `CODEOWNERS`, `dependabot.yml`, `allowed_signers` for signed release tags, issue templates, the contributor guide (`CONTRIBUTING.md`) and the security policy (`SECURITY.md`) | — |
 | `templates/` | K3s manifest templates rendered from `atlas.conf` via envsubst | — |
-| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `integration/`, `perf/`, `v3/`, `v3-service/` | — |
+| `tests/` | Cross-cutting test suite: `cli/`, `concurrency/`, `contracts/` (doc-link, version and config gates), `e2e/` (the acceptance suite CI runs), `infrastructure/`, `perf/`, `v3/`, `v3-service/` | — |
 
 Root also holds the base Compose file `docker-compose.yml`, `atlas.conf.example` (K3s), `pyproject.toml`
 (the `atlas` CLI entry point), and the standard `.env.example`.

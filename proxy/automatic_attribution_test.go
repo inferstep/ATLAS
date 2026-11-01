@@ -536,7 +536,7 @@ var attributionOwners = map[string]bool{
 	"automatic_attribution.go": true,
 	"route_disposition.go":     true,
 	"edit_route_delivery.go":   true,
-	"tools.go":                 true,
+	"tool_write_v3.go":         true,
 }
 
 // attributionIdentifiers are every top-level name the owner file declares,
@@ -611,7 +611,7 @@ func TestNoDecisionOwnerReadsTheAttribution(t *testing.T) {
 		}
 	}
 	// The two routes only hand facts in; nothing reads the facts back.
-	for _, f := range []string{"edit_route_delivery.go", "tools.go", "route_disposition.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "route_disposition.go"}, toolFiles...) {
 		body, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -650,8 +650,8 @@ func TestAttributionMethodsReturnNothingToTheRoutes(t *testing.T) {
 // No route reads a delivery mode: there is one rule, and nothing a client or
 // an operator sends selects another.
 func TestNoRouteReadsADeliveryMode(t *testing.T) {
-	for _, f := range []string{"edit_route_delivery.go", "tools.go", "candidate_delivery.go",
-		"advisory_policy.go", "automatic_delivery.go", "structured_mutation_target.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go", "candidate_delivery.go",
+		"advisory_policy.go", "automatic_delivery.go", "structured_mutation_target.go"}, toolFiles...) {
 		body, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -668,17 +668,17 @@ func TestNoRouteReadsADeliveryMode(t *testing.T) {
 // The attribution is not an obligation kind, a verification kind, an evidence
 // kind or a completion reason: none of those owners knows the word.
 func TestTheAttributionCannotBecomeAnObligationOrAVerificationResult(t *testing.T) {
-	for _, f := range []string{"obligation_kinds.go", "verification_requirements.go",
+	for _, f := range append([]string{"obligation_kinds.go", "verification_requirements.go",
 		"verification_evidence.go", "staged_command_evidence.go", "evidence_wiring.go",
 		"authorization_decision.go", "authorization_grant.go", "candidate_delivery.go",
 		"delivery_settlement.go", "feasibility_decision.go", "candidate_policy.go",
-		"advisory_policy.go", "agent.go", "gates.go",
+		"advisory_policy.go", "gates.go",
 		"gates_asset_lint.go", "gates_background_jobs.go", "gates_command_line.go",
 		"gates_completion.go", "gates_edit_requests.go", "gates_ledger.go", "gates_plan.go",
 		"gates_syntax_rejection.go", "gates_workspace_alignment.go",
 		"guardrails.go",
 		"guardrails_write.go", "guardrails_tool_hints.go", "guardrails_shell.go",
-		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"} {
+		"guardrails_reply.go", "guardrails_verification_gate.go", "guardrails_summaries.go"}, agentFiles...) {
 		used := identifiersIn(t, f)
 		for name := range attributionIdentifiers(t) {
 			if used[name] {

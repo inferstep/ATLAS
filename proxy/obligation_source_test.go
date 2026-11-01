@@ -189,7 +189,7 @@ func TestEachObligationClassHasExactlyOneLiveDecision(t *testing.T) {
 	// alternative to duplicating it. The evidence producer asks the owner
 	// whether the client declared a command precisely so it does not re-derive
 	// that answer from the raw contract -- and it reaches no live policy, which
-	// evidence_inertness_test.go proves separately.
+	// evidence_wiring_test.go proves separately.
 	readers := map[string]bool{
 		"verification_evidence.go:requestDeclaredCommand": true,
 		// The typed-declaration reader. It is inside the obligation owner and
@@ -326,8 +326,8 @@ func TestNoNewConsumerInTheDeliveryGraph(t *testing.T) {
 				// edit routes that apply it to a request which declared
 				// nothing. A request that DID declare its outputs never
 				// reaches it.
-				"tools.go:writeFileWithV3":      true,
-				"tools.go:improveContentWithV3": true,
+				"tool_write_v3.go:emitV3WriteStageEnd":  true,
+				"tool_write_v3.go:improveContentWithV3": true,
 			}
 			if !allowed[site] {
 				t.Errorf("%s gained a new caller of %s", site, fn)

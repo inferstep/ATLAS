@@ -251,9 +251,9 @@ func TestTheStreamIsCutAndTheModelIsToldWhere(t *testing.T) {
 	ctx.InferenceURL = srv.URL
 	ctx.Messages = []AgentMessage{{Role: "user", Content: "add a toml branch"}}
 
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
-		t.Fatalf("callLLMOnce: %v", err)
+		t.Fatalf("callLLMOnceWithGrammar: %v", err)
 	}
 	if ctx.LastStreamCut != "old_str_unmatched" {
 		t.Fatalf("LastStreamCut = %q, want old_str_unmatched", ctx.LastStreamCut)

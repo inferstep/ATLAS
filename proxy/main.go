@@ -777,6 +777,7 @@ func main() {
 	// verdict the TUI's header badge will render, as one calibration view (Lens
 	// and ASA lines) at startup.
 	logCalibrationStatusAtStartup()
+	logEnvelopeOverruns(envelopeFromEnv())
 
 	if envOr("ATLAS_KEEP_LLAMA_WARM", "1") != "0" {
 		go keepLlamaWarm()
@@ -868,7 +869,7 @@ func keepLlamaWarm() {
 }
 
 // ---------------------------------------------------------------------------
-// Request tiers (classified by classifyAgentTier in agent.go and
+// Request tiers (classified by classifyAgentTier in task_tier.go and
 // classifyFileTier in tools.go)
 // ---------------------------------------------------------------------------
 
@@ -1287,16 +1288,6 @@ func handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		"working_dir":   containerPath,
 		"containerized": containerized,
 	})
-}
-
-// safeLogField encodes untrusted text as one quoted ASCII log field. Newlines,
-// carriage returns, and control bytes become escape sequences, so model/user
-// data cannot forge additional log records.
-func safeLogField(value string, maxLen int) string {
-	if maxLen > 0 {
-		value = truncateStr(value, maxLen)
-	}
-	return strconv.QuoteToASCII(value)
 }
 
 // Private-value filtering: masks values that look like credentials

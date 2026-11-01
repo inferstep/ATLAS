@@ -520,19 +520,26 @@ func TestBaselineRestoringGatesWithdrawV3Provenance(t *testing.T) {
 // Bytes and provenance must not be assignable independently: every branch
 // that restores the caller's content has to go through the transition.
 func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
+	src, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
-	writeFn := body[strings.Index(body, "func writeFileWithV3("):]
-	writeFn = writeFn[:strings.Index(writeFn, "\nfunc ")]
-	if strings.Contains(writeFn, "code = baselineContent") {
-		t.Fatal("a gate assigns baseline bytes directly; use revokeV3 so provenance follows")
+	route := body[strings.Index(body, "func writeFileWithV3("):]
+	route = route[:strings.Index(route, "\n// originalForScope")]
+	for _, banned := range []string{"code = baselineContent", "code = write.baselineContent",
+		"code = w.baselineContent"} {
+		if strings.Contains(route, banned) {
+			t.Fatal("a gate assigns baseline bytes directly; use revokeV3 so provenance follows")
+		}
 	}
-	if strings.Count(writeFn, "revokeV3(") < 3 {
-		t.Fatalf("expected every baseline-restoring gate to revoke, found %d",
-			strings.Count(writeFn, "revokeV3("))
+	// The two that withdraw a proposal before it is observed, and the one
+	// transition the four gates after the decision share.
+	if n := strings.Count(route, "revokeV3("); n != 3 {
+		t.Fatalf("revokeV3 is called %d times on the route, want 3", n)
+	}
+	if n := strings.Count(route, "write.restoreBaseline("); n != 4 {
+		t.Fatalf("%d gates restore the baseline, want 4", n)
 	}
 }
 
@@ -540,11 +547,7 @@ func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
 // safety condition is how half of it goes stale, which is exactly what
 // happened when write_file was fixed and improveContentWithV3 was not.
 func TestBothDeliveryPathsUseTheSharedAuthorization(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := toolSources(t)
 	if strings.Count(body, "proposedV3Candidate(") < 3 {
 		t.Fatal("expected the proposal boundary plus both call sites")
 	}
@@ -843,13 +846,13 @@ func TestEveryEditToolObeysTheAuthorizationBoundary(t *testing.T) {
 // Structural sentinel: the edit path authorizes through the one gate, and
 // never from the legacy fields.
 func TestEditPathAuthorizesOnlyThroughTheSharedGate(t *testing.T) {
-	src, err := os.ReadFile("tools.go")
+	src, err := os.ReadFile("tool_write_v3.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
 	improve := body[strings.Index(body, "func improveContentWithV3("):]
-	improve = improve[:strings.Index(improve, "\n// findActualString")]
+	improve = improve[:strings.Index(improve, "\n// runEditPipeline")]
 	pipeline := body[strings.Index(body, "func runEditPipeline("):]
 	pipeline = pipeline[:strings.Index(pipeline, "\n// attachV3")]
 

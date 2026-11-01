@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,5 +217,246 @@ func TestAnEditNeedsAReadUnlessTheSessionsOwnWriteIsOnDisk(t *testing.T) {
 	ctx.RecordFileRead(target, changed)
 	if !editViewIsCurrent(ctx, target) {
 		t.Error("a fresh read did not make the view current")
+	}
+}
+
+// The java branch of sandbox/executor_server.py's _syntax_check_impl, verbatim
+// (lines 1341-1366 at 9756223, including its continuation lines, comment and
+// trailing whitespace), inside a minimal dispatch so it stands alone.
+const javaDispatch = `def _syntax_check_impl(lang, code, workspace, filename=None):
+    errors = []
+    if lang == "python":
+        pass
+
+    elif lang == "java":
+        class_name = _extract_java_classname(code)
+        package = _extract_java_package(code)
+
+        if package:
+            # com.exampe => com/example (the package dir is created by
+            # _contained_path, which makes the parent for every check file)
+            fpath = _contained_path(workspace, *package.split('.'),
+                                    f"{class_name}.java")
+        else:
+            fpath = _contained_path(workspace, f"{class_name}.java")
+
+        fpath.write_text(code)
+        result = _run_cmd(
+            ["javac", "-d", str(workspace), str(fpath)],
+            timeout=10, cwd=workspace
+        )
+        if result["returncode"] != 0:
+            stderr = result.get("stderr", "")
+            for line in stderr.splitlines():
+                if "error:" in line:
+                    errors.append(line.strip())
+            if not errors and stderr.strip():
+                errors.append(stderr.strip().split("\n")[-1])
+
+    elif lang == "kotlin":
+        pass
+    return errors
+`
+
+// A toml branch, as a model sent it for insertion into the java branch.
+const tomlBranch = `
+    elif lang == "toml":
+        try:
+            import tomllib
+            tomllib.loads(code)
+        except Exception as e:
+            errors.append(f"TomlSyntaxError: {e}")`
+
+func blockLineOf(t *testing.T, src, needle string) int {
+	t.Helper()
+	for i, l := range strings.Split(src, "\n") {
+		if strings.Contains(l, needle) {
+			return i + 1
+		}
+	}
+	t.Fatalf("anchor %q not found", needle)
+	return 0
+}
+
+func TestInsertingIntoTheMiddleOfABlockIsRefusedThroughTheTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "executor_server.py")
+	if err := os.WriteFile(path, []byte(javaDispatch), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := NewAgentContext(dir, Tier1Simple)
+	ctx.PermissionMode = PermissionYolo
+	ctx.RecordFileRead(path, javaDispatch)
+
+	// After `stderr = result.get("stderr", "")`, in the middle of the java branch.
+	at := blockLineOf(t, javaDispatch, `stderr = result.get("stderr", "")`)
+	res := callTool(t, ctx, "insert_after", map[string]interface{}{
+		"path": "executor_server.py", "line": at, "content": tomlBranch})
+	if res.Success {
+		t.Fatalf("an insertion that splits the java branch was accepted")
+	}
+	msg := toolText(res)
+	for _, want := range []string{"for line in stderr.splitlines():", "if result[\"returncode\"] != 0:", "except Exception as e:"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal should name %q so the model can see what would move; got: %s", want, msg)
+		}
+	}
+	// The model edits by line number, so the refusal names the first line that would move by its number.
+	moving := blockLineOf(t, javaDispatch, "for line in stderr.splitlines():")
+	if want := fmt.Sprintf("line %d `for line in stderr.splitlines():`", moving); !strings.Contains(msg, want) {
+		t.Errorf("refusal should name %q; got: %s", want, msg)
+	}
+	if got, _ := os.ReadFile(path); string(got) != javaDispatch {
+		t.Errorf("the file changed although the insertion was refused")
+	}
+}
+
+func TestInsertingAFullBranchBetweenBranchesIsAccepted(t *testing.T) {
+	lines := strings.Split(javaDispatch, "\n")
+	// After the java branch's last statement, before the blank line and
+	// `elif lang == "kotlin":` -- the correct place.
+	at := blockLineOf(t, javaDispatch, `errors.append(stderr.strip().split("\n")[-1])`)
+	if msg, moved := insertionReparentsPython("executor_server.py", lines, at, strings.Split(tomlBranch, "\n")); moved {
+		t.Fatalf("a branch inserted after the end of the previous branch was refused: %s", msg)
+	}
+	// And a plain statement added at the same indentation inside a block.
+	at = blockLineOf(t, javaDispatch, `fpath.write_text(code)`)
+	if msg, moved := insertionReparentsPython("executor_server.py", lines, at,
+		[]string{`        log_attempt(fpath)`}); moved {
+		t.Fatalf("a same-level statement was refused: %s", msg)
+	}
+}
+
+func TestBlockScannerHandlesStringsBracketsAndContinuations(t *testing.T) {
+	src := strings.Join([]string{
+		`def f(x):`,                 // 1
+		`    doc = """`,             // 2 triple string opens
+		`if this looked like code:`, // 3 inside the string
+		`    it is not"""`,          // 4 closes
+		`    total = (x +`,          // 5 bracket opens
+		`  1)`,                      // 6 continuation, odd indent
+		`    y = x \`,               // 7 backslash continuation
+		`        + 2`,               // 8
+		`    if total:`,             // 9
+		`        return y  # (unbalanced in a comment`, // 10
+		`    return total`, // 11
+	}, "\n")
+	parents, ok := pythonBlockParents(strings.Split(src, "\n"))
+	if !ok {
+		t.Fatalf("scanner lost track of a well-formed file")
+	}
+	want := map[int]int{0: -1, 1: 0, 4: 0, 6: 0, 8: 0, 9: 8, 10: 0}
+	for i, p := range want {
+		if parents[i] != p {
+			t.Errorf("line %d: parent %d, want %d", i+1, parents[i], p)
+		}
+	}
+	for _, i := range []int{2, 3, 5, 7} {
+		if parents[i] != notLogicalStart {
+			t.Errorf("line %d is inside a string or continuation and must not be a statement start", i+1)
+		}
+	}
+	// An insertion that is only a comment or blank line cannot move anything.
+	if _, moved := insertionReparentsPython("f.py", strings.Split(src, "\n"), 9, []string{"", "# note"}); moved {
+		t.Errorf("a comment-only insertion was reported as moving code")
+	}
+	// Non-Python files are not judged by Python indentation rules.
+	if _, moved := insertionReparentsPython("f.yaml", strings.Split(javaDispatch, "\n"),
+		blockLineOf(t, javaDispatch, `stderr = result.get("stderr", "")`), strings.Split(tomlBranch, "\n")); moved {
+		t.Errorf("a non-Python file was judged")
+	}
+}
+
+// A model that re-sends the file it just wrote must be told to run it. Told
+// instead that it need not reproduce input data, it re-sent the file again
+// and the test never ran.
+
+// ownTestFile is over 200 bytes, so it counts as an echo for any file.
+const ownTestFile = "from stats import mean, median\n\n\ndef test_mean():\n" +
+	"    assert mean([1, 2, 3]) == 2.0\n    assert mean([1, 2, 3, 4]) == 2.5\n\n\n" +
+	"def test_median():\n    assert median([1, 3, 2]) == 2\n    assert median([1, 2, 3, 4]) == 2.5\n" +
+	"    assert median([1]) == 1\n\n\nif __name__ == '__main__':\n    test_mean()\n    test_median()\n"
+
+// smallOwnTestFile is 76 bytes, under the 200-byte echo floor. The floor
+// applies only to files the session did not write.
+const smallOwnTestFile = "from chunk import chunks\n\nresult = chunks([1, 2, 3, 4, 5], 2)\nprint(result)\n"
+
+type resentWriteCase struct {
+	name         string
+	path         string
+	onDisk       string
+	sessionWrote bool
+	send         string
+	wantSuccess  bool
+	errorHas     []string
+	errorLacks   string
+}
+
+func checkResentWrite(t *testing.T, tc resentWriteCase) {
+	t.Helper()
+	ctx, path := exactEditWorld(t, tc.path, tc.onDisk)
+	if tc.sessionWrote {
+		ctx.SessionWrites[tc.path] = true
+	}
+
+	res := exactEditCall(t, ctx, "write_file", map[string]interface{}{
+		"path": tc.path, "content": tc.send})
+
+	if res.Success != tc.wantSuccess {
+		t.Fatalf("success = %v, want %v (error %q)", res.Success, tc.wantSuccess, res.Error)
+	}
+	for _, want := range tc.errorHas {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("refusal lacks %q:\n%s", want, res.Error)
+		}
+	}
+	if tc.errorLacks != "" && strings.Contains(res.Error, tc.errorLacks) {
+		t.Errorf("refusal says %q:\n%s", tc.errorLacks, res.Error)
+	}
+	wantDisk := tc.onDisk
+	if tc.wantSuccess {
+		wantDisk = tc.send
+	}
+	if got := diskBytes(t, path); got != wantDisk {
+		t.Errorf("disk holds %q, want %q", got, wantDisk)
+	}
+}
+
+func TestWriteFileOfContentTheFileAlreadyHolds(t *testing.T) {
+	runIt := []string{"already holds exactly this content", "You wrote it earlier in this session", "run it"}
+	changedSmallFile := strings.Replace(smallOwnTestFile, "print(result)", "assert result[-1] == [5]\nprint(result)", 1)
+
+	for _, tc := range []resentWriteCase{
+		{name: "own file re-sent",
+			path: "test_stats.py", onDisk: ownTestFile, sessionWrote: true, send: ownTestFile,
+			errorHas: runIt, errorLacks: "input or fixture data"},
+		{name: "small own file re-sent",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, sessionWrote: true, send: smallOwnTestFile,
+			errorHas: runIt, errorLacks: "input or fixture data"},
+		{name: "changed small own file lands",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, sessionWrote: true, send: changedSmallFile,
+			wantSuccess: true},
+		{name: "file the session did not write gets the fixture wording",
+			path: "test_stats.py", onDisk: ownTestFile, send: ownTestFile,
+			errorHas: []string{"input or fixture data"}},
+		// A short file sent back unchanged proves nothing about retyping a
+		// fixture.
+		{name: "small file the session did not write is not an echo",
+			path: "test_chunk.py", onDisk: smallOwnTestFile, send: smallOwnTestFile,
+			wantSuccess: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { checkResentWrite(t, tc) })
+	}
+}
+
+func TestResendsOwnWriteIgnoresSurroundingWhitespaceButNotEmptiness(t *testing.T) {
+	if !resendsOwnWrite(smallOwnTestFile, "\n"+strings.TrimSpace(smallOwnTestFile)+"\n\n") {
+		t.Error("a re-send that differs only in surrounding whitespace was not recognised")
+	}
+	if resendsOwnWrite("", "") || resendsOwnWrite("\n", "  ") {
+		t.Error("an empty re-send counted as an echo")
+	}
+	if resendsOwnWrite(smallOwnTestFile, strings.Replace(smallOwnTestFile, "2)", "3)", 1)) {
+		t.Error("a changed write counted as an echo")
 	}
 }

@@ -91,8 +91,11 @@ K3s デプロイパス（`scripts/install.sh`、`templates/` 内のマニフェ�
 | ファイル | 担当 |
 |---|---|
 | `main.go` | HTTP サーバー、ルーティング、認証、パススルー、エラーエンベロープ、秘匿値のログフィルタ |
-| `agent.go` | エージェントループ: ターン状態、LLM 呼び出し、プラン生成、スタックループのブレーカー |
-| `tools.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
+| `llm_call.go`, `model_reply.go` | llama-server への 1 回の呼び出しと、モデルの応答の読み取り |
+| `system_prompt.go`, `task_tier.go` | システムプロンプトとコンテキスト予算、メッセージのティア |
+| `agent_handler.go` | `/v1/agent` と `/cancel` エンドポイント |
+| `agent.go` | エージェントループ: ターン状態、プラン生成、スタックループのブレーカー |
+| `tools.go`, `tool_*.go` | 16 個のツール定義 + 実行系、ティア分類、ツールコール文法 |
 | `gates*.go` | 誠実性 / プランゲート: クレームチェック、構造、構文、埋め込みスクリプト、プラン遵守、プランリマインダ、アセットリント |
 | `detectors.go` | スタックパターン検出: ツールの繰り返し、推論の繰り返し、トレースバックの局所化 |
 | `context.go` | コンテキストの拡充: シンボルインデックス、プロジェクトスキャン、ワークスペース封じ込め、セッションファイルマニフェスト |
@@ -285,7 +288,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 #### ターミナル契約とセッション予算
 
-すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。消費者は、不在・不正形式・未認識の値を完了ではなく `incomplete` として読みます（Go の `NormalizeTerminalStatus`、`atlas/events.py` の `terminal_status`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
+すべてのセッションは、1つのエミッタから発せられるちょうど1つのターミナルイベントで終わります。それはレガシーの `summary` を変更せず運び、加算的な `status` — `completed`、`incomplete`、`stopped`、`timed_out`、`failed` — と安定した機械可読な `reason` を伴います。クライアントは、不在の status を `incomplete` として読み、未認識の語はそのまま表示し、完了としては読みません（`tui/events.go` の `onDone`、VS Code と JetBrains の拡張機能の `doneOutcome`）。ブローカーの `done`/`stage_end` エンベロープは、`success: true` を主張する代わりに同じ結果を報告します。
 
 `completed` 以外のすべてのステータスについて、サーバーはフィールドと同じくその文も所有します。モデル自身の説明が通されるのは、完了ゲートがそれを認可した場合のみです。サマリのない非完了ターミナルには、結果・ディスク上に何かが存在するか・それが有効と示されたかを名指しするサーバー作成のサマリが与えられ、非完了ステータスでエミッタに到達した完了の主張は、周囲を編集するのではなく全面的に差し替えられます。これによりフェーズ 2B が残したギャップが閉じられます: `summary` だけを読むクライアント — `status` が存在する前に書かれたすべてのクライアント — は今、両方を読むクライアントと同じ真実を読みます。
 
@@ -315,8 +318,8 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 計測を行ったリファレンスデプロイでは、`structural_edit` が正しい場合でも `structural_edit` より `edit_file` を優先するバイアスが観測されました（BiasBusters arxiv 2510.00307 — 近接するツール名の埋め込みが競合する; 名前よりも説明文の方が重要）。プロキシでは、モデルに依存しない4つの防御策を組み合わせます:
 
-1. **説明文の書き換え**（`proxy/tools.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
-2. **条件付き GBNF 文法**（`proxy/tools.go`、`proxy/agent.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
+1. **説明文の書き換え**（`proxy/tool_edit.go`、`proxy/tool_structural_edit.go`）。edit_file の説明はファイル全体/関数全体での使用を警告し、structural_edit の説明は >10 行 / ノード全体の差し替えには必須と述べ、write_file の説明は新規ファイル専用と述べる。
+2. **条件付き GBNF 文法**（`proxy/tool_schema.go`、`proxy/llm_call.go:stepExclusions`）。既存の5行超 .py/.html/.htm ファイルに対する write_file が拒否されると、次の LLM 呼び出しはツール名のプロダクションから edit_file と write_file を禁止する GBNF 文法で制約される。モデルは物理的にそれらを発行できない。この制限は1回の判断後に失効する。
 3. **ステップごとのツールリストフィルタ**（同じトリガー）。一時的な `[system note]` のユーザーメッセージが注入され、このステップでは structural_edit が唯一の構造的編集ツールであることをモデルに思い出させる。
 4. **ASA ステアリングベクトル**（`geometric-lens/asa_calibration/`）。活性化ステアリングが残差ストリームの分布を上流でシフトさせ、いかなる拒否が発火する前の初回の判断でも structural_edit が優先される。`inference/entrypoint-v3.1.sh` が `/models/ast_edit_steering.gguf` から自動ロードするのは、その `.model` サイドカーが選択中のモデルと一致する場合のみ — `geometric-lens/asa_calibration/README.md` のワークフローで互換性のあるビルドを行えば、以降は常時オン。パス/スケール/レイヤー範囲は `ATLAS_CONTROL_VECTOR*` 環境変数でオーバーライドする。
 
@@ -333,7 +336,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 | T2（機能） | 0（無制限） | V3 パイプラインが発火 |
 | T3（高難度） | 0（無制限） | V3 パイプラインが発火 |
 
-上の2つの列は異なる分類器に属し、この表が1つに見えるのは偶然です。**ターン数**はメッセージティア（`proxy/agent.go:classifyAgentTier`）から来て、ユーザーが入力したものをスコアします。**動作**はファイルティア（`proxy/tools.go:classifyFileTier`）から来て、編集対象のファイルをスコアし、実際に V3 をゲートしているのはこちらです — メッセージティアは v3-service に転送されますが、ログ行に記録されるだけです。
+上の2つの列は異なる分類器に属し、この表が1つに見えるのは偶然です。**ターン数**はメッセージティア（`proxy/task_tier.go:classifyAgentTier`）から来て、ユーザーが入力したものをスコアします。**動作**はファイルティア（`proxy/tools.go:classifyFileTier`）から来て、編集対象のファイルをスコアし、実際に V3 をゲートしているのはこちらです — メッセージティアは v3-service に転送されますが、ログ行に記録されるだけです。
 
 ターン上限が T1/T2/T3 で同じであるため、メッセージティアが判断できることは1つだけです: 会話か否か。T0 は実行を上限で打ち切り、プランモードをスキップします。それ以外の値はすべて同一に振る舞います。したがって、何かを会話と呼ぶには積極的な証拠が必要です — 12文字未満の挨拶か疑問形 — で、それ以外はすべて作業として扱われます。この非対称は意図的です: 会話を作業と読み違えるコストは無駄なプラン呼び出し1回ですが、作業を会話と読み違えると実際のリクエストが打ち切られ、そのプランがスキップされ、失敗します。
 
@@ -386,7 +389,7 @@ run-first ゲート自体は1つの指示 `runFirstInstruction` を引用しま�
 
 設定ファイルの正確なリストと拡張子集合は `proxy/tools.go:classifyFileTier` にあります。
 
-すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tools.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
+すべてのコンテンツ編集ツールは `runEditPipeline`（`proxy/tool_write_v3.go`）を通じてパイプラインに入ります — `edit_file`、`insert_after`、`replace_lines` は直接、`structural_edit` と `write_file` はそれぞれの V3 パス経由。ティア分類は `max(oldTier, newTier)` を使うため、T2+ ファイルを T1 のスタブへ縮小する破壊的な編集も依然として対象になります。これをスキップするツールは、ティアにかかわらず候補生成もレンズスコアリングもない貪欲サンプルを1つだけ生成します。ティアシステムが防ぐために存在するのはまさにそれです。`tests/contracts/test_write_gate_coverage.py` が、すべての書き込みパスがそこに到達することを表明します。
 
 **T2（V3 パイプライン）** — ファイルが以下の場合に該当:
 - `hasLogicIndicators(content)` が true を返す — 関数/メソッド定義、制御フロー、エラー処理、Flask/FastAPI/Django ルーティング、Express/Node API、React の状態/データ、バリデーション、データベース呼び出し、JSX/React コンポーネントパターン、インポートをカバーするパターンファミリーにわたる **2+ 一致**（リテラルトークンリストは `proxy/tools.go:hasLogicIndicators`）

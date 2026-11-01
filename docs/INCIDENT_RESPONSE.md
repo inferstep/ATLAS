@@ -1,7 +1,7 @@
 # Incident response
 
 What to do when something goes wrong: a vulnerability report, a leaked
-key, a bad release, or automation misbehaving. [SECURITY.md](../SECURITY.md)
+key, a bad release, or automation misbehaving. [SECURITY.md](../.github/SECURITY.md)
 covers how reports come in, the severity levels, and disclosure. This page
 covers the response.
 
@@ -15,7 +15,7 @@ publicly otherwise.
 1. **Write it down.** When it started, what you saw, how you noticed.
    Keep a private timeline; a draft security advisory is a good place.
    Don't delete logs, workflow runs or images yet: they're the evidence.
-2. **Rate it** with the severity table in [SECURITY.md](../SECURITY.md).
+2. **Rate it** with the severity table in [SECURITY.md](../.github/SECURITY.md).
 3. **Contain it** with the matching step below.
 4. **Tell the people who need to act** (see [Communicate](#communicate)).
 
@@ -30,11 +30,11 @@ publicly otherwise.
 | **Release signing key** leaked | Remove its line from `.github/allowed_signers` and ship that in a release. Remove the key from the GitHub account, and make a new one. Treat tags signed after the leak as suspect. |
 | **A maintainer account** compromised | The owner removes the account from the org and its teams, then reviews the org audit log (**Settings → Logs → Audit log**). Rotate everything that account could reach. |
 | **A malicious change** merged | Revert it on `dev` at once. If it reached a release, ship a patch release. |
-| **A bad model, Lens or ASA artifact** | Follow **Artifact revocation** in [SECURITY.md](../SECURITY.md). |
+| **A bad model, Lens or ASA artifact** | Follow **Artifact revocation** in [SECURITY.md](../.github/SECURITY.md). |
 
 ## Fix
 
-Land the fix on `dev`. During an embargo (see SECURITY.md) use a neutral
+Land the fix on `dev`. During an embargo (see [SECURITY.md](../.github/SECURITY.md)) use a neutral
 commit message. Release it as a patch, through the hotfix path in
 [RELEASE.md](RELEASE.md#hotfixes) if `dev` isn't releasable.
 

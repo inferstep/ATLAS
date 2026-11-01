@@ -74,8 +74,8 @@ func TestIsVerificationCommand(t *testing.T) {
 	} {
 		for _, cmd := range group.cmds {
 			t.Run(cmd, func(t *testing.T) {
-				if got := isVerificationCommand(cmd); got != group.verifies {
-					t.Errorf("isVerificationCommand = %v for %s, want %v", got, group.kind, group.verifies)
+				if got := classifyCommandEvidence(cmd).Kind.verifies(); got != group.verifies {
+					t.Errorf("verifies = %v for %s, want %v", got, group.kind, group.verifies)
 				}
 			})
 		}
@@ -91,7 +91,7 @@ func TestTheProbeARedirectPrescribesCountsAsVerification(t *testing.T) {
 		name, msg string
 		names     bool // the message names a probe
 	}{
-		{"the foreground-server redirect", foregroundServerRejection("python3 -m http.server 8000"), true},
+		{"the foreground-server redirect", foregroundServerRejectionWithSource("python3 -m http.server 8000", nil), true},
 		{"the gate on a repair request", verificationRejection(false, false, "job1"), true},
 		{"the gate after a blocked server start", verificationRejection(false, true, "job1"), true},
 		{"the gate after a red run", verificationRejection(true, false, "job1"), false},
@@ -103,7 +103,7 @@ func TestTheProbeARedirectPrescribesCountsAsVerification(t *testing.T) {
 				t.Fatalf("probes %q, want a probe named: %v:\n%s", probes, c.names, c.msg)
 			}
 			for _, p := range probes {
-				if !isVerificationCommand(p[1]) {
+				if !classifyCommandEvidence(p[1]).Kind.verifies() {
 					t.Errorf("the message prescribes %q, which does not count as verification", p[1])
 				}
 			}
@@ -138,13 +138,13 @@ func TestTheVerificationGateSaysWhyItRefused(t *testing.T) {
 		name, msg string
 		holds     map[string]bool // a phrase, and whether the message holds it
 	}{
-		{"a red run", verificationRejectionMessage(true),
+		{"a red run", verificationRejection(true, false, ""),
 			map[string]bool{"FAILED": true, "Describing the fix is not applying it": true, "fix/repair request": false}},
-		{"a repair request that nothing verified", verificationRejectionMessage(false),
+		{"a repair request that nothing verified", verificationRejection(false, false, ""),
 			map[string]bool{"fix/repair request": true, "FAILED": false}},
-		{"three red runs in a row", verificationRejectionWithStreak(true, false, "", 3),
+		{"three red runs in a row", verificationRejectionFor(true, false, "", 3, "", "", ""),
 			map[string]bool{"Rewrite the file from scratch": true}},
-		{"one red run", verificationRejectionWithStreak(true, false, "", 1), map[string]bool{"from scratch": false}},
+		{"one red run", verificationRejectionFor(true, false, "", 1, "", "", ""), map[string]bool{"from scratch": false}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for phrase, held := range c.holds {

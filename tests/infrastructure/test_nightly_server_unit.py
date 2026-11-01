@@ -257,7 +257,7 @@ def test_the_unit_starts_the_script_of_the_look_from_the_tree_of_the_run_and_sta
     assert (ROOT / "scripts" / "server" / "nightly_look.sh").is_file()
     # `atlas` is the compose project of the usual stack, as the driver of the sessions names it. The stack of the
     # nightly run is another project, so a look never stops the stack of a run.
-    driver = (ROOT / "scripts" / "e2e-reliability.py").read_text(encoding="utf-8")
+    driver = (ROOT / "scripts" / "eval" / "e2e-reliability.py").read_text(encoding="utf-8")
     assert 'ap.add_argument("--compose-project", default="atlas",' in driver
     assert nightly.PROJECT == "atlas-nightly"
 

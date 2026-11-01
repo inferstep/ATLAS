@@ -446,14 +446,14 @@ jobs:
           fi
           echo "Pinned SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          for f in inference/Dockerfile inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
+          for f in inference/Dockerfile.rocm inference/Dockerfile.vulkan; do
             if ! grep -q "LLAMA_CPP_REV=$SHA" "$f"; then
               actual=$(grep -oP '(?<=ARG LLAMA_CPP_REV=)[a-f0-9]+' "$f" | head -1)
               echo "::error file=$f::LLAMA_CPP_REV mismatch — found '$actual', expected '$SHA' (matches Dockerfile.v31). Bump all 4 Dockerfiles together."
               exit 1
             fi
           done
-          echo "All 4 Dockerfiles agree on LLAMA_CPP_REV=$SHA"
+          echo "All 3 Dockerfiles agree on LLAMA_CPP_REV=$SHA"
 
       - name: fetch pinned llama.cpp
         # Mirror the production fetch pattern: init + shallow-fetch a
@@ -727,7 +727,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Codecov files a report under the head commit of a pull request
-          # and reads codecov.yml from that commit.
+          # and reads .github/codecov.yml from that commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 

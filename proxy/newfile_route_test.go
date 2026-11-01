@@ -2,9 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,29 +139,7 @@ func TestNewFileRoute(t *testing.T) {
 
 // Structural proof that the direct gate migrated and the V3 preflight did not.
 func TestDirectNewFileGateUsesStructuredChecker(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "tools.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var structured, legacy int
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		id, ok := call.Fun.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		switch id.Name {
-		case "fallbackSyntaxOutcomeFor":
-			structured++
-		case "checkFallbackSyntax":
-			legacy++
-		}
-		return true
-	})
+	structured, legacy := syntaxCallCounts(t)
 	if structured < 1 {
 		t.Fatal("the direct new-file gate does not call fallbackSyntaxOutcomeFor")
 	}
@@ -172,7 +147,7 @@ func TestDirectNewFileGateUsesStructuredChecker(t *testing.T) {
 	// route and the wrapper still had 14 callers. They are all gone now, which
 	// is the end state this test was steering toward rather than a regression.
 	if legacy != 0 {
-		t.Errorf("legacy call sites remaining in tools.go = %d, want 0", legacy)
+		t.Errorf("legacy call sites remaining in the tool files = %d, want 0", legacy)
 	}
 	t.Logf("structured call sites=%d legacy call sites remaining=%d", structured, legacy)
 }

@@ -82,11 +82,7 @@ func TestEveryTerminalDisclosureRefusesCompletion(t *testing.T) {
 // The model's own `done` is untouched: it is not a breaker terminal and this
 // change must not alter ordinary clean completion.
 func TestModelIssuedDoneIsUnchanged(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// The model-issued done path streams the model's own summary verbatim.
 	if !strings.Contains(body, `case "done":`) {
 		t.Fatal("model-issued done branch is gone")
@@ -362,11 +358,7 @@ func TestCorruptedDeliverableIsRestoredAtTheRepeatTerminal(t *testing.T) {
 // silently attaching recovery to them would turn an evidence-bound action
 // into a routine one.
 func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	// Two sites, both deliberate: the repeat detector's terminal (Phase 3B)
 	// and the work-deadline finaliser (Phase 2B), which reuses the same
 	// eligibility rules rather than relaxing them for a timeout.
@@ -402,11 +394,7 @@ func TestRestorationIsWiredToExactlyOneTerminal(t *testing.T) {
 // terminal with no status, which consumers must read as incomplete -- so the
 // defect would be invisible in behaviour and visible only here.
 func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	if n := strings.Count(body, `Stream("done"`); n != 1 {
 		t.Errorf("%d direct done payloads outside the emitter, want 0", n-1)
 	}
@@ -431,14 +419,23 @@ func TestEveryTerminalProducerGoesThroughTheOneEmitter(t *testing.T) {
 	}
 }
 
+// NormalizeTerminalStatus is how these tests read a terminal event's status, as
+// a consumer must. Absent, malformed, unknown, or from a future producer all
+// become incomplete, never completed.
+func NormalizeTerminalStatus(raw string) TerminalStatus {
+	if s := TerminalStatus(raw); s.Classified() {
+		return s
+	}
+	return TerminalIncomplete
+}
+
 func TestUnclassifiedStatusFailsClosedAtTheEmitter(t *testing.T) {
 	for _, raw := range []string{"", "COMPLETED", "done", "success", "ok", "finished"} {
 		if NormalizeTerminalStatus(raw).Completed() {
 			t.Errorf("consumer read %q as completed", raw)
 		}
-		if NormalizeTerminalStatus(raw) != TerminalIncomplete {
-			t.Errorf("consumer read %q as %q, want incomplete",
-				raw, NormalizeTerminalStatus(raw))
+		if TerminalStatus(raw).Classified() {
+			t.Errorf("%q counts as a named outcome", raw)
 		}
 	}
 	if !NormalizeTerminalStatus("completed").Completed() {
@@ -1261,11 +1258,7 @@ func TestRefusedUnsafeMutationsCannotComplete(t *testing.T) {
 // Structural guard: both exits must reach the SAME finalizer, so a future
 // producer cannot consult unmet-action evidence only for prose.
 func TestBothCompletionPathsShareOneDecision(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
+	body := agentSources(t)
 	if n := strings.Count(body, "finalizeCompletion("); n < 3 {
 		t.Errorf("finalizeCompletion has %d references (definition + 2 exits expected); "+
 			"both completion paths must share one decision", n)
@@ -1881,4 +1874,829 @@ func TestEveryPreExecutionBounceIsAccountedOrBounded(t *testing.T) {
 	}
 	t.Logf("audited pre-execution bounces between agent.go:%d and the retry ban at agent.go:%d",
 		start+1, ban+1)
+}
+
+// The reasoning-repetition detector compares the normalized opening of each
+// turn's reasoning. Two consecutive repeats (three turns with the same
+// opening) trigger an intervention. A single repeat, or a turn with no
+// reasoning, does not.
+
+func TestRecordReasoningTriggersOnConsecutiveRepeat(t *testing.T) {
+	ctx := &AgentContext{}
+	// Turn 1: first reasoning. No intervention.
+	if msg, _, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
+		t.Fatalf("turn 1: expected no fire, got fired=%v msg=%q", fired, msg)
+	}
+	// Turn 2: same opening prefix. count=1 (not yet at threshold of 2).
+	if msg, _, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure."); fired || msg != "" {
+		t.Fatalf("turn 2: expected no fire (count=1, threshold=2), got fired=%v msg=%q", fired, msg)
+	}
+	// Turn 3: same opening prefix again. count=2. FIRES.
+	msg, obs, fired := recordReasoning(ctx, "Now I need to read the file to understand the structure.")
+	if !fired {
+		t.Fatalf("turn 3: expected intervention, got no fire")
+	}
+	if !strings.Contains(msg, "Reasoning repetition") {
+		t.Errorf("intervention message missing canonical prefix: %s", msg)
+	}
+	if !strings.Contains(msg, "3 consecutive turns") {
+		t.Errorf("intervention should report 3 consecutive turns, got: %s", msg)
+	}
+	// The observation is what the caller renders its log line and its
+	// agent_reasoning_intervention payload from, so it must carry the
+	// same count the message reports and the snippet that repeated.
+	if obs.Count != 3 {
+		t.Errorf("observation count = %d, want 3 consecutive turns", obs.Count)
+	}
+	if obs.Snippet != normalizeReasoningSnippet("Now I need to read the file to understand the structure.") {
+		t.Errorf("observation snippet = %q, want the normalized repeated opening", obs.Snippet)
+	}
+	// The detector owns the reset. Reading the streak back off ctx now
+	// sees the cleared values — which is exactly why the observation is
+	// returned instead.
+	if ctx.ConsecutiveReasoningRepeats != 0 || ctx.LastReasoningSnippet != "" {
+		t.Errorf("firing must clear the streak; got repeats=%d snippet=%q",
+			ctx.ConsecutiveReasoningRepeats, ctx.LastReasoningSnippet)
+	}
+	// A fourth identical turn starts over rather than re-firing the
+	// same loop immediately.
+	if _, _, again := recordReasoning(ctx, "Now I need to read the file to understand the structure."); again {
+		t.Error("the turn right after a fire must start a fresh streak")
+	}
+}
+
+func TestRecordReasoningResetOnDivergence(t *testing.T) {
+	ctx := &AgentContext{}
+	recordReasoning(ctx, "Now I need to read the file.")
+	recordReasoning(ctx, "Now I need to read the file.")
+	// Turn 3: model commits to a different thought — counter resets.
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
+		t.Error("divergent reasoning should reset the counter, no intervention expected")
+	}
+	if ctx.ConsecutiveReasoningRepeats != 0 {
+		t.Errorf("counter should reset to 0 after divergence, got %d", ctx.ConsecutiveReasoningRepeats)
+	}
+	// Turn 4: similar to turn 3 (the new pattern). count=1.
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); fired {
+		t.Error("turn 4 should be count=1 (one repeat), no fire yet")
+	}
+	// Turn 5: third identical → FIRES.
+	if _, _, fired := recordReasoning(ctx, "I have the file content. Now let me write the new version."); !fired {
+		t.Error("turn 5 should fire (count=2 of new pattern)")
+	}
+}
+
+func TestRecordReasoningIgnoresEmptyTurns(t *testing.T) {
+	ctx := &AgentContext{}
+	recordReasoning(ctx, "Now I need to read the file.")
+	// Turn 2: empty reasoning (model committed straight to action). Counter resets.
+	if _, _, fired := recordReasoning(ctx, ""); fired {
+		t.Error("empty reasoning should not fire")
+	}
+	if ctx.ConsecutiveReasoningRepeats != 0 || ctx.LastReasoningSnippet != "" {
+		t.Errorf("empty reasoning should reset state; got repeats=%d snippet=%q",
+			ctx.ConsecutiveReasoningRepeats, ctx.LastReasoningSnippet)
+	}
+	// Turn 3: same prose as turn 1, but the empty turn 2 broke the streak.
+	// Should be treated as a fresh start, not count=2.
+	recordReasoning(ctx, "Now I need to read the file.")
+	if ctx.ConsecutiveReasoningRepeats != 0 {
+		t.Errorf("post-empty: counter should be 0 (fresh start), got %d", ctx.ConsecutiveReasoningRepeats)
+	}
+}
+
+// Openings that differ only in case and whitespace, or only after the first
+// 80 characters, count as the same opening.
+func TestRecordReasoningCountsTheSameOpeningAsARepeat(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		first, second string
+	}{
+		{"case and whitespace differ", "  Now I  need\nto    read the file.\n", "now i need to read the file."},
+		{
+			"the text differs after the first 80 characters",
+			"Looking at the existing dashboard.html, I see the basic Flask template that needs to be transformed into a metrics view.",
+			"Looking at the existing dashboard.html, I see the basic Flask template that needs to be expanded with three KPI cards.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &AgentContext{}
+			recordReasoning(ctx, tc.first)
+			recordReasoning(ctx, tc.second)
+			if ctx.ConsecutiveReasoningRepeats != 1 {
+				t.Errorf("got count=%d, want 1; snippet=%q",
+					ctx.ConsecutiveReasoningRepeats, ctx.LastReasoningSnippet)
+			}
+		})
+	}
+}
+
+func TestNormalizeReasoningSnippet(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"   \n  ", ""},
+		{"Hello World", "hello world"},
+		{"  HELLO\n\tWORLD  ", "hello world"},
+		{strings.Repeat("a", 200), strings.Repeat("a", 80)},
+	}
+	for _, tc := range cases {
+		if got := normalizeReasoningSnippet(tc.in); got != tc.want {
+			t.Errorf("normalize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// Steers read a failed command's output and tell the model the one thing that
+// gets it out of a loop. Each steer must name what it found, and must stay
+// silent on output it does not recognize: a steer on the wrong output sends
+// the model after a problem it does not have.
+
+// A missing module names the package to install; a missing file names the
+// real file when only the case differs. Neither invents an answer.
+func TestMissingModuleAndMissingFileSteers(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		steer func(*AgentContext, string) string
+		files map[string]string // written into the workspace first
+		out   string
+		want  []string // empty: no steer at all
+	}{
+		{
+			name:  "python -m with a missing package",
+			steer: missingModuleSteer,
+			out:   "/usr/local/bin/python3: No module named flask\n",
+			want:  []string{"flask", "pip install"},
+		},
+		{
+			name:  "an import of a submodule names the top-level package",
+			steer: missingModuleSteer,
+			out:   "ModuleNotFoundError: No module named 'flask.cli'\n",
+			want:  []string{"pip install flask"},
+		},
+		{
+			name:  "a requirements.txt is installed as a whole",
+			steer: missingModuleSteer,
+			files: map[string]string{"requirements.txt": "flask\n"},
+			out:   "No module named flask\n",
+			want:  []string{"pip install -r requirements.txt"},
+		},
+		{
+			name:  "output with no missing module",
+			steer: missingModuleSteer,
+			out:   "Total: 42\n",
+		},
+		{
+			name:  "a file named with the wrong case",
+			steer: missingFileSteer,
+			files: map[string]string{"requirements.txt": "flask\n"},
+			out:   "ERROR: Could not open requirements file: [Errno 2] No such file or directory: 'Requirements.txt'\n",
+			want:  []string{"requirements.txt", "case"},
+		},
+		{
+			name:  "a shell error with the file name before the colon",
+			steer: missingFileSteer,
+			files: map[string]string{"main.py": "print(1)\n"},
+			out:   "python: Main.py: No such file or directory\n",
+			want:  []string{"main.py"},
+		},
+		{
+			name:  "a file that is absent in every case",
+			steer: missingFileSteer,
+			out:   "cat: nope.txt: No such file or directory\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range tc.files {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := tc.steer(&AgentContext{WorkingDir: dir}, tc.out)
+			if len(tc.want) == 0 && got != "" {
+				t.Errorf("want no steer, got %q", got)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("steer lacks %q: %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+// A traceback steer points at the deepest frame in the project, the line the
+// model can fix.
+func TestTracebackSteer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		out     string
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "a project frame",
+			out: "Traceback (most recent call last):\n" +
+				"  File \"/workspace/_agenttest/app.py\", line 14, in get_item\n" +
+				"    return jsonify(items[item_id + 1])\n" +
+				"IndexError: list index out of range\n",
+			want: []string{"get_item", "line 14", "IndexError", "function:get_item"},
+		},
+		{
+			name: "a library frame below a project frame",
+			out: "Traceback (most recent call last):\n" +
+				"  File \"/workspace/app.py\", line 5, in main\n" +
+				"    data = json.loads(raw)\n" +
+				"  File \"/usr/lib/python3.9/json/__init__.py\", line 346, in loads\n" +
+				"    return _default_decoder.decode(s)\n" +
+				"ValueError: Expecting value\n",
+			want:    []string{"app.py", "function:main"},
+			notWant: []string{"json/__init__"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("steer lacks %q:\n%s", want, got)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("steer points at %q:\n%s", notWant, got)
+				}
+			}
+		})
+	}
+}
+
+// A missing package is an environment problem, not a fix site, and output with
+// no traceback has nothing to point at: no steer at all.
+func TestTracebackSteerStaysSilent(t *testing.T) {
+	for _, tc := range []struct{ name, out string }{
+		{
+			name: "a missing package",
+			out: "Traceback (most recent call last):\n" +
+				"  File \"/workspace/snake_game.py\", line 1, in <module>\n" +
+				"    import pygame\n" +
+				"ModuleNotFoundError: No module named 'pygame'\n",
+		},
+		{
+			name: "no traceback",
+			out:  "Total inventory value: $237\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tracebackSteer(&AgentContext{WorkingDir: "/workspace"}, tc.out); got != "" {
+				t.Errorf("want no steer, got %q", got)
+			}
+		})
+	}
+}
+
+// A missing binary cannot be installed in the sandbox (no root, read-only), so
+// the steer names it and says so.
+func TestMissingCommandSteer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		out     string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "bash with a line number",
+			out:     "bash: line 1: git: command not found\n",
+			want:    []string{"`git`", "CANNOT be installed"},
+			notWant: []string{"apt-get install"},
+		},
+		{
+			name: "bash without a line number",
+			out:  "bash: git: command not found\n",
+			want: []string{"`git`"},
+		},
+		{
+			name: "sh abbreviates the message",
+			out:  "sh: 1: sqlite3: not found\n",
+			want: []string{"`sqlite3`"},
+		},
+		{
+			name: "a full path is reduced to its base name",
+			out:  "bash: line 3: /usr/local/bin/terraform: command not found\n",
+			want: []string{"`terraform`"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := missingCommandSteer(tc.out)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("steer lacks %q: %q", want, got)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("steer suggests %q: %q", notWant, got)
+				}
+			}
+		})
+	}
+}
+
+// The missing-command steer fires only on a real shell diagnostic, never on
+// program output that happens to print the same words.
+func TestMissingCommandSteerStaysSilent(t *testing.T) {
+	for _, tc := range []struct{ name, out string }{
+		{
+			name: "a not-found line with no shell prefix",
+			out:  "config.yaml: not found\n",
+		},
+		{
+			name: "program output that prints the phrase",
+			out:  `print("mytool: command not found")` + "\nmytool: command not found\n",
+		},
+		{
+			name: "clean output",
+			out:  "all tests passed\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := missingCommandSteer(tc.out); got != "" {
+				t.Errorf("want no steer, got %q", got)
+			}
+		})
+	}
+}
+
+// A multi-statement script on a `python3 -c` line cannot parse, and the
+// SyntaxError is in the command, not the solution. The steer moves the test to
+// a file. A syntax error in a real file is a solution bug, and a -c line that
+// runs another file's code is not the broken part.
+func TestBrokenInlineScriptSteer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  string
+		out  string
+		want []string // empty: no steer at all
+	}{
+		{
+			name: "a multi-statement -c line",
+			cmd:  `python3 -c "import json, re; def all_legal_next_positions(fen): return []"`,
+			out:  "  File \"<string>\", line 1\n    import json, re; def all_legal\n                     ^\nSyntaxError: invalid syntax",
+			want: []string{"inline `-c`", ".py"},
+		},
+		{
+			// The sandbox clipped the output before the SyntaxError line.
+			name: "output cut before the SyntaxError line",
+			cmd:  `python3 -c "import json, re; def all_legal(fen): return []"`,
+			out:  `  File "<string>", line 1` + "\n" + `    import json, re; def all_legal(fen): return []`,
+			want: []string{"inline `-c`"},
+		},
+		{
+			name: "a syntax error in a real file",
+			cmd:  `python3 solution.py`,
+			out:  "  File \"solution.py\", line 12\n    def f(\n         ^\nSyntaxError: invalid syntax",
+		},
+		{
+			name: "no syntax error",
+			cmd:  `python3 -c "print(1)"`,
+			out:  "1\n",
+		},
+		{
+			name: "a -c line that runs another file's code",
+			cmd:  `python3 -c "exec(open('solution.py').read())"`,
+			out:  "  File \"<string>\", line 1\n    def broken(\nSyntaxError: invalid syntax",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := brokenInlineScriptSteer(tc.cmd, tc.out)
+			if len(tc.want) == 0 && got != "" {
+				t.Errorf("want no steer, got %q", got)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("steer lacks %q: %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+// The repeat detector counts identical call signatures in a short window and
+// fires on the third. A write_file signature keys on the path and the content,
+// with trailing whitespace ignored; a structural_edit signature keys on the
+// path and the selector, not the body.
+
+func TestRepeatDetectorFiresOnIdenticalCalls(t *testing.T) {
+	ctx := &AgentContext{}
+	args := json.RawMessage(`{"path":"app.py","offset":0,"limit":100}`)
+	for i := 0; i < 2; i++ {
+		if _, _, repeating := recordToolCall(ctx, "read_file", args); repeating {
+			t.Fatalf("fired at call %d, want threshold 3", i+1)
+		}
+	}
+	msg, obs, repeating := recordToolCall(ctx, "read_file", args)
+	if !repeating {
+		t.Fatal("identical call 3x must fire")
+	}
+	if !strings.Contains(msg, "read_file") {
+		t.Fatalf("corrective doesn't name the tool: %q", msg)
+	}
+	// The observation carries the streak the detector just erased.
+	if obs.Count != toolRepeatThreshold {
+		t.Errorf("observation count = %d, want %d", obs.Count, toolRepeatThreshold)
+	}
+	// The detector owns the reset: the window is empty on return, so the
+	// same streak can't fire a second corrective.
+	if len(ctx.RecentToolCalls) != 0 {
+		t.Errorf("firing must clear the window, got %d entries", len(ctx.RecentToolCalls))
+	}
+	if _, _, again := recordToolCall(ctx, "read_file", args); again {
+		t.Error("the call right after a fire must start a fresh streak")
+	}
+}
+
+func checkFiresOnTheThirdCall(t *testing.T, tool string, calls [3]string, wantInMessage []string) {
+	t.Helper()
+	ctx := &AgentContext{}
+	for i, call := range calls[:2] {
+		if _, _, fired := recordToolCall(ctx, tool, json.RawMessage(call)); fired {
+			t.Fatalf("fired on call %d, want the third", i+1)
+		}
+	}
+	msg, _, fired := recordToolCall(ctx, tool, json.RawMessage(calls[2]))
+	if !fired {
+		t.Fatal("the third same call did not fire")
+	}
+	for _, want := range wantInMessage {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg)
+		}
+	}
+}
+
+// Calls that differ only in ways the signature ignores are one call repeated.
+func TestRepeatDetectorFiresOnTheThirdSameCall(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		tool          string
+		calls         [3]string
+		wantInMessage []string
+	}{
+		{
+			name: "run_command with keys reordered and spaced",
+			tool: "run_command",
+			calls: [3]string{
+				`{"command":"pytest","timeout":30}`,
+				`{"timeout":30,"command":"pytest"}`,
+				`{ "command" : "pytest", "timeout" : 30 }`,
+			},
+			wantInMessage: []string{"run_command"},
+		},
+		{
+			// The model rewrites the same draft from memory: same code, same
+			// path, only trailing spaces differ.
+			name: "write_file of the same code with trailing spaces",
+			tool: "write_file",
+			calls: [3]string{
+				`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)"}`,
+				`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__) "}`,
+				`{"path":"app.py","content":"from flask import Flask\napp = Flask(__name__)"}`,
+			},
+			wantInMessage: []string{"app.py", "rewritten"},
+		},
+		{
+			name: "write_file of the same code with trailing spaces and CR line ends",
+			tool: "write_file",
+			calls: [3]string{
+				`{"path":"app.py","content":"def f():\n    return 1"}`,
+				`{"path":"app.py","content":"def f():\n    return 1  "}`,
+				`{"path":"app.py","content":"def f():\r\n    return 1\r"}`,
+			},
+			wantInMessage: []string{"app.py"},
+		},
+		{
+			// Each attempt carries a different body, but the selector is what
+			// fails: the node does not hold the code being changed. The message
+			// must name the selector as the cause, or the model rewrites the
+			// body a fourth time.
+			name: "structural_edit on one selector with different bodies",
+			tool: "structural_edit",
+			calls: [3]string{
+				`{"path":"app.py","selector":"function:index","content":"first attempt"}`,
+				`{"path":"app.py","selector":"function:index","content":"second, rewritten"}`,
+				`{"path":"app.py","selector":"function:index","content":"third, different again"}`,
+			},
+			wantInMessage: []string{"function:index", "SELECTOR", "edit_file", "insert_after"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkFiresOnTheThirdCall(t, tc.tool, tc.calls, tc.wantInMessage)
+		})
+	}
+}
+
+// Calls that differ in a way that matters are not a loop, however many there
+// are.
+func TestRepeatDetectorStaysSilentOnDifferentCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tool  string
+		calls []string
+	}{
+		{
+			name: "write_file to different paths",
+			tool: "write_file",
+			calls: []string{
+				`{"path":"app.py","content":"x"}`,
+				`{"path":"static/game.js","content":"x"}`,
+				`{"path":"templates/index.html","content":"x"}`,
+			},
+		},
+		{
+			name: "distinct edit_file edits to one path",
+			tool: "edit_file",
+			calls: []string{
+				`{"path":"app.py","old_str":"v0","new_str":"v1"}`,
+				`{"path":"app.py","old_str":"v1","new_str":"v2"}`,
+				`{"path":"app.py","old_str":"v2","new_str":"v3"}`,
+				`{"path":"app.py","old_str":"v3","new_str":"v4"}`,
+			},
+		},
+		{
+			// Fixing successive compiler errors rewrites one file with new
+			// content each time.
+			name: "write_file of materially different content",
+			tool: "write_file",
+			calls: []string{
+				`{"path":"main.py.c","content":"int main(){ return 0; }"}`,
+				`{"path":"main.py.c","content":"int main(){ printf(\"x\"); return 0; }"}`,
+				`{"path":"main.py.c","content":"#include <stdio.h>\nint main(){ printf(\"x\"); return 0; }"}`,
+			},
+		},
+		{
+			// Leading indentation is code in Python, so it is not collapsed.
+			name: "write_file with changed indentation",
+			tool: "write_file",
+			calls: []string{
+				`{"path":"m.py","content":"def f():\nreturn 1"}`,
+				`{"path":"m.py","content":"def f():\n    return 1"}`,
+				`{"path":"m.py","content":"def f():\n        return 1"}`,
+			},
+		},
+		{
+			name: "structural_edit on different selectors",
+			tool: "structural_edit",
+			calls: []string{
+				`{"path":"app.py","selector":"function:a","content":"x"}`,
+				`{"path":"app.py","selector":"function:b","content":"x"}`,
+				`{"path":"app.py","selector":"function:c","content":"x"}`,
+				`{"path":"app.py","selector":"class:D","content":"x"}`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &AgentContext{}
+			for i, call := range tc.calls {
+				if _, _, fired := recordToolCall(ctx, tc.tool, json.RawMessage(call)); fired {
+					t.Fatalf("call %d was treated as a repeat", i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteFileRepeatOutsideWindowDoesNotFire(t *testing.T) {
+	ctx := &AgentContext{}
+	wf := json.RawMessage(`{"path":"app.py","content":"draft"}`)
+	recordToolCall(ctx, "write_file", wf)
+	// Eight unrelated calls push the first write out of the window.
+	for i := 0; i < toolRepeatWindow; i++ {
+		recordToolCall(ctx, "read_file",
+			json.RawMessage(fmt.Sprintf(`{"path":"f%d.py"}`, i)))
+	}
+	recordToolCall(ctx, "write_file", wf)
+	if _, _, repeating := recordToolCall(ctx, "write_file", wf); repeating {
+		t.Fatal("two in-window writes must not fire (threshold 3)")
+	}
+}
+
+func mustJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// The repeat detector needs three calls and steers only the next turn, so an
+// identical pair of failing calls never reaches it. The retry refusal stops
+// the second one before it runs, and hands back the first rejection.
+func TestAnIdenticalResendOfARejectedCallIsRefused(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+	args := json.RawMessage(`{"path":"app.py","start_line":201,"end_line":201,"content":"x"}`)
+
+	if refusal := identicalRetryRefusal(ctx, "replace_lines", args); refusal != "" {
+		t.Fatalf("a first attempt must run: %s", refusal)
+	}
+	recordFailedToolCall(ctx, "replace_lines", args, "stops a render loop: `draw` now runs once")
+
+	refusal := identicalRetryRefusal(ctx, "replace_lines", args)
+	if refusal == "" {
+		t.Fatal("the identical re-send must be refused before it executes")
+	}
+	// The original rejection has to come back with it: the model needs the
+	// reason, not just the fact that it repeated itself.
+	if !strings.Contains(refusal, "stops a render loop") {
+		t.Errorf("refusal drops the original reason:\n%s", refusal)
+	}
+	if !strings.Contains(refusal, "read_file") {
+		t.Errorf("refusal gives no way forward:\n%s", refusal)
+	}
+}
+
+// The refusal holds only for the same call that failed, with no success in
+// between. Any success drops every remembered rejection, so re-running a test
+// after a fix, or re-reading after an edit, is never refused.
+func TestIdenticalRetryRefusalAppliesOnlyToAnUnchangedFailedCall(t *testing.T) {
+	const edit = `{"path":"t.py","old_str":"@Pytest.fixture","new_str":"@pytest.fixture"}`
+	for _, tc := range []struct {
+		name        string
+		before      func(ctx *AgentContext)
+		tool        string
+		args        string
+		wantRefused bool
+	}{
+		{
+			name:   "a repeated call that never failed",
+			before: func(ctx *AgentContext) {},
+			tool:   "read_file", args: `{"path":"app.py"}`,
+		},
+		{
+			name: "a different call to the same tool",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "replace_lines",
+					json.RawMessage(`{"path":"a.py","start_line":1,"end_line":1,"content":"x"}`), "boom")
+			},
+			tool: "replace_lines", args: `{"path":"a.py","start_line":2,"end_line":2,"content":"x"}`,
+		},
+		{
+			name: "a call whose own success cleared its failure",
+			before: func(ctx *AgentContext) {
+				args := json.RawMessage(`{"path":"a.py","start_line":1,"end_line":1,"content":"x"}`)
+				recordFailedToolCall(ctx, "replace_lines", args, "stale range")
+				clearFailedToolCall(ctx, "replace_lines", args)
+			},
+			tool: "replace_lines", args: `{"path":"a.py","start_line":1,"end_line":1,"content":"x"}`,
+		},
+		{
+			name: "a test command after an edit succeeded",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "run_command",
+					json.RawMessage(`{"command":"pytest test_store.py","timeout":30}`), "1 error in 0.12s")
+				clearFailedToolCall(ctx, "edit_file", json.RawMessage(`{"path":"store.py"}`))
+			},
+			tool: "run_command", args: `{"command":"pytest test_store.py","timeout":30}`,
+		},
+		{
+			name: "a read after an edit succeeded",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "read_file", json.RawMessage(`{"path":"a.py"}`), "nope")
+				clearFailedToolCall(ctx, "edit_file", json.RawMessage(`{"path":"a.py"}`))
+			},
+			tool: "read_file", args: `{"path":"a.py"}`,
+		},
+		{
+			// Polling a background job is meant to repeat byte for byte.
+			name: "a poll of a background job",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "tail_background", json.RawMessage(`{"id":"job-1"}`), "no output yet")
+			},
+			tool: "tail_background", args: `{"id":"job-1"}`,
+		},
+		{
+			name: "an edit after the read it was waiting for",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "edit_file", json.RawMessage(edit), "file not read yet — use read_file first")
+				clearFailedToolCall(ctx, "read_file", json.RawMessage(`{"path":"t.py"}`))
+			},
+			tool: "edit_file", args: edit,
+		},
+		{
+			name: "an edit re-sent before the read it was waiting for",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "edit_file", json.RawMessage(edit), "file not read yet — use read_file first")
+			},
+			tool: "edit_file", args: edit, wantRefused: true,
+		},
+		{
+			name: "an identical edit with nothing in between",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "edit_file", json.RawMessage(edit), "old_str not found")
+			},
+			tool: "edit_file", args: edit, wantRefused: true,
+		},
+		{
+			// A python3 -c line with mismatched quotes, re-sent unchanged.
+			name: "an identical failing command with nothing in between",
+			before: func(ctx *AgentContext) {
+				recordFailedToolCall(ctx, "run_command",
+					json.RawMessage(`{"command":"python3 -c \"print(f'x: {x}\")\"","timeout":30}`),
+					"bash: -c: line 1: syntax error near unexpected token `)'")
+			},
+			tool: "run_command", args: `{"command":"python3 -c \"print(f'x: {x}\")\"","timeout":30}`,
+			wantRefused: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewAgentContext(t.TempDir(), Tier2Medium)
+			tc.before(ctx)
+			refusal := identicalRetryRefusal(ctx, tc.tool, json.RawMessage(tc.args))
+			if (refusal != "") != tc.wantRefused {
+				t.Errorf("refused=%v, want %v: %s", refusal != "", tc.wantRefused, refusal)
+			}
+		})
+	}
+}
+
+// A refused call skips the failure branch where the stopping rules live, so a
+// model could be refused cheaply and forever. Three failures on one named
+// file is the shared condition that stops it.
+func TestStuckOnOnePathIsTheSharedBreakerCondition(t *testing.T) {
+	if !stuckOnOnePath([]string{"todo.py", "todo.py", "todo.py"}) {
+		t.Error("three failures on one file must count as stuck")
+	}
+	for _, paths := range [][]string{
+		{"a.py", "b.py", "c.py"}, // grinding through multi-file work
+		{"a.py", "a.py"},         // not yet three
+		{"", "", ""},             // unnamed target proves nothing
+		{"a.py", "a.py", "b.py"},
+	} {
+		if stuckOnOnePath(paths) {
+			t.Errorf("wrongly reported stuck: %v", paths)
+		}
+	}
+}
+
+func TestRepeatedRefusalTellsTheUserRetryingWontHelp(t *testing.T) {
+	msg := repeatedRefusalSummary("structural_edit", "todo.py", false)
+	for _, want := range []string{"re-sent after being refused", "todo.py", "Nothing was written", "same wall"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("summary missing %q:\n%s", want, msg)
+		}
+	}
+	if wrote := repeatedRefusalSummary("edit_file", "", true); !strings.Contains(wrote, "did land on disk") {
+		t.Errorf("a run that wrote must say so:\n%s", wrote)
+	}
+}
+
+// Every rejection branch of the loop shares one stopping DECISION. Counting
+// failures is not enough: a branch that increments the counters and never
+// reads them bounces the same call off a tool ban until the session
+// deadline. These tests pin the decision itself.
+
+// Recovery before the threshold has to keep working, or the fix trades a
+// runaway loop for a loop that quits on the first bad turn.
+func TestShouldStopForFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		total, consecutive int
+		paths              []string
+		wantStop           bool
+	}{
+		{"at the ceiling", maxTotalFailures, 0, nil, true},
+		{"above the ceiling", maxTotalFailures + 1, 0, nil, true},
+		{"3 consecutive failures on one path", 3, 3, []string{"snake_game.py", "snake_game.py", "snake_game.py"}, true},
+		{"a single failure", 1, 1, []string{"a.py"}, false},
+		{"below the ceiling on varied paths", maxTotalFailures - 1, 2, []string{"a.py", "b.py", "c.py"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldStopForFailures(tc.total, tc.consecutive, tc.paths); got != tc.wantStop {
+				t.Errorf("shouldStopForFailures(%d, %d, %v) = %v, want %v",
+					tc.total, tc.consecutive, tc.paths, got, tc.wantStop)
+			}
+		})
+	}
+}
+
+// Tier1/2/3 run with MaxTurns == 0 (uncapped, types.go TierMaxTurns), so the
+// failure ceiling is the only bound that exists for them.
+func TestUncappedTurnsStillHitTheFailureCeiling(t *testing.T) {
+	// Premise assertion, not a skip. If tier routing ever caps Tier2 this
+	// must fail visibly so the test is updated deliberately, rather than
+	// quietly removing the coverage that the failure ceiling is the ONLY
+	// bound these tiers have.
+	if got := TierMaxTurns(Tier2Medium); got != 0 {
+		t.Fatalf("premise changed: Tier2Medium is now capped at %d turns; this "+
+			"test exists because uncapped tiers rely solely on the failure "+
+			"ceiling -- update it intentionally", got)
+	}
+	total := 0
+	for turn := 0; turn < 200; turn++ {
+		total++
+		if shouldStopForFailures(total, 1, nil) {
+			return
+		}
+	}
+	t.Fatal("an uncapped tier ran 200 failing turns without a stop")
 }

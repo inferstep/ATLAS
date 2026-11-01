@@ -7,7 +7,7 @@ Roadmap items are tracked in GitHub and are not release claims.
 ## Status definitions
 
 Status terms follow the support-level taxonomy defined in
-[SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
+[SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) (Supported, Preview, Experimental,
 Community-tested, Research-only, Unsupported, Roadmap). One term used here
 marks *audience* rather than maturity and composes with a level:
 
@@ -140,17 +140,21 @@ hash status, backend, context size, and service image digests.
 - A supported release cannot be qualified while a required release gate is
   failed or unavailable.
 
-### Checks for 3.2.0 on ROCm and Vulkan
+### Checks for 3.2.0 on ROCm, Vulkan and K3s
 
-The inference images run as a non-root account since this cycle, and this
-has not run on an AMD or a Vulkan GPU. Before 3.2.0, on a host of each kind:
+llama-server runs as a set account since this cycle, and this has not run on an
+AMD or a Vulkan GPU or on K3s. Before 3.2.0, on a host of each kind:
 
-- `atlas init` writes `ATLAS_VIDEO_GID` and `ATLAS_RENDER_GID`, and
-  llama-server, as the installing user, reaches the GPU through them.
-- An install upgraded from 3.1.7 reaches the GPU after `atlas init
+- `atlas init` writes `ATLAS_VIDEO_GID`, `ATLAS_RENDER_GID` and
+  `ATLAS_LLAMA_USER`, and llama-server, as the installing user, reaches the GPU
+  through them.
+- An install upgraded from 3.1.7, by `git pull` then `atlas upgrade`, keeps the
+  GPU as root, and still reaches it as the installing user after `atlas init
   --reconfigure`.
 - On ROCm, the bootstrap's steering build writes its vector to the models
   folder as the installing user.
+- On K3s, llama-server starts as uid 1001 from the template's `securityContext`
+  and reaches the GPU.
 
 ## Branches and versions
 
@@ -170,7 +174,7 @@ time by what the release contains (semantic versioning):
 
 **Breaking** means a change to a CLI flag, a config key, the API or SSE
 contract, or on-disk state, or dropping a supported backend. Breaking
-changes need an RFC (see [GOVERNANCE](../GOVERNANCE.md#proposals-rfc--adr--epic)).
+changes need an RFC (see [GOVERNANCE](GOVERNANCE.md#proposals-rfc--adr--epic)).
 
 Image tags drop the `v`: the git tag `v3.2.0` publishes `:3.2.0`,
 `:v3.2.0` and `:3.2`. A release candidate `v3.2.0-rc.1` publishes
@@ -189,7 +193,7 @@ release.
 ## The release step
 
 No account can push to `dev`, `staging` or `main`, and no account can skip
-a required check ([GOVERNANCE](../GOVERNANCE.md#change-flow)). The merge
+a required check ([GOVERNANCE](GOVERNANCE.md#change-flow)). The merge
 button of a pull request squashes or rebases, so it makes new commits. A
 release needs the commit itself to land in two cases:
 
@@ -238,7 +242,7 @@ the waiting deployment does the pipeline move `:latest` or a version tag.
 without approval. Each promotion leaves a timestamped deployment record.
 
 1. **Notes.** On `dev`, bump the "Applies to" line at the top of
-   [SUPPORT_MATRIX.md](../SUPPORT_MATRIX.md) and write the
+   [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md) and write the
    `CHANGELOG.md` entry.
 2. **Candidate.** Fast-forward `staging` to that `dev` commit with
    [the release step](#the-release-step): open a pull request from `dev`

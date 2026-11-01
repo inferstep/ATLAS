@@ -105,7 +105,7 @@ func redirectOnlyVerificationMessage(source string) string {
 }
 
 // isHeadOnlyProbe reports a probe that fetches headers and no body. Such a
-// probe is not verification (see isVerificationCommand) — this says so out
+// probe is not verification (see commandEvidenceKind.verifies) — this says so out
 // loud instead of declining in silence.
 //
 // Measured (stabilization cycle 6, both flask_pause sessions): the run
@@ -138,18 +138,6 @@ func headOnlyProbeNote(cmd string) string {
 		"verification. Request the body instead and check what comes back.", truncateStr(strings.TrimSpace(cmd), 60))
 }
 
-// isVerificationCommand reports whether a command, when it exits green,
-// shows the program working: it ran the program or its tests, or fetched a
-// response body, and the line reports that part's exit status. A parse, a
-// lint, a build, a `--version`, a headers-only probe, and a test whose status
-// `| tail` or `|| true` replaced are not verification. A probe that never
-// retrieves a body proves the SERVER is up, not that the artifact works:
-// measured on a "build me a snake game" session, `curl -I` was recorded as
-// the verification and `done` shipped an index.html with no HTML in it.
-func isVerificationCommand(cmd string) bool {
-	return classifyCommandEvidence(cmd).Kind.verifies()
-}
-
 // headOnlyProbeRe matches curl/wget invocations that fetch headers only:
 // `curl -I`, `curl --head`, `wget --spider`. Long-form and clustered short
 // flags (-sI) both count.
@@ -167,20 +155,6 @@ func gateTrigger(userWantsVerification, sawFailedVerification bool) string {
 	default:
 		return "none"
 	}
-}
-
-// verificationRejectionMessage tells the model exactly what's
-// missing and what to run. We prefer concrete suggestions over
-// abstract "verify your work" prompts — the model is more likely to
-// pick a sensible command when given a category.
-//
-// sawFailedVerification distinguishes the two ways this gate fires. When a
-// verification command has actually gone red in this loop, the run holds
-// concrete evidence of breakage, so the message says that rather than
-// describing the request — the model has already seen the failure and needs
-// to act on it, not be told what verification is.
-func verificationRejectionMessage(sawFailedVerification bool) string {
-	return verificationRejection(sawFailedVerification, false, "")
 }
 
 // rewriteThreshold is how many consecutive red verifications exhaust the
@@ -364,13 +338,8 @@ func freshRewriteAdvice(redStreak int) string {
 		redStreak)
 }
 
-// verificationRejectionWithStreak is verificationRejection plus the red-run
-// streak that decides between edit-the-fix and start-over advice.
-func verificationRejectionWithStreak(sawFailedVerification, serverBlocked bool, bgJobID string, redStreak int) string {
-	return verificationRejectionFor(sawFailedVerification, serverBlocked, bgJobID, redStreak, "", "", "")
-}
-
-// verificationRejectionFor is the rejection with one more fact when the run has
+// verificationRejectionFor is the rejection with the red-run streak that decides
+// between edit-the-fix and start-over advice, and one more fact when the run has
 // one: the probe it already made that could not count, and why.
 func verificationRejectionFor(sawFailedVerification, serverBlocked bool, bgJobID string,
 	redStreak int, headOnlyProbe, staleJob, staleFile string) string {
@@ -395,9 +364,19 @@ func verificationRejectionFor(sawFailedVerification, serverBlocked bool, bgJobID
 	return base
 }
 
-// verificationRejection is verificationRejectionMessage with the two facts
-// that change the advice: whether the red command was a blocking server
-// start, and the job id if one is already running in the background.
+// verificationRejection tells the model exactly what's missing and what to run.
+// We prefer concrete suggestions over abstract "verify your work" prompts — the
+// model is more likely to pick a sensible command when given a category.
+//
+// sawFailedVerification distinguishes the two ways this gate fires. When a
+// verification command has actually gone red in this loop, the run holds
+// concrete evidence of breakage, so the message says that rather than
+// describing the request — the model has already seen the failure and needs
+// to act on it, not be told what verification is.
+//
+// serverBlocked and bgJobID are the two facts that change the advice: whether
+// the red command was a blocking server start, and the job id if one is already
+// running in the background.
 func verificationRejection(sawFailedVerification, serverBlocked bool, bgJobID string) string {
 	if serverBlocked {
 		probe := "Start it with `run_background` (it returns a job_id), then probe it with " +

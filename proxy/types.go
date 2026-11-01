@@ -35,14 +35,12 @@ func TierMaxTurns(t Tier) int {
 	}
 	switch t {
 	case Tier0Conversational:
-		// 12, not the 5 this shipped with. A question about the code is
-		// classified conversational and still has to LOOK at the code, and 5
-		// turns does not survive that: observed on a fresh workspace, "how
-		// does the contact form work?" spent turn 0 on a bounced text exit,
-		// turns 1-3 on searches with the wrong glob, reached the right file
-		// on turn 4, and hit the cap — the user got no answer at all. The cap
-		// is here to stop a conversational request looping, and 12 still does
-		// that while leaving room to read a few files and reply.
+		// A question about the code is classified conversational and still has
+		// to LOOK at the code: a few turns can go to a bounced text exit and to
+		// searches before the right file is open, and a tighter cap leaves the
+		// user with no answer at all. The cap is here to stop a conversational
+		// request looping, and 12 still does that while leaving room to read a
+		// few files and reply.
 		return 12
 	case Tier1Simple, Tier2Medium, Tier3Hard:
 		return 0 // uncapped
@@ -169,7 +167,7 @@ type modelFacingResult struct {
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 
 	// OpenRepair is present only while a file this session wrote does not
-	// parse (#214): every result says so until it is fixed.
+	// parse: every result says so until it is fixed.
 	OpenRepair string `json:"open_repair,omitempty"`
 }
 
@@ -228,13 +226,12 @@ type WriteFileOutput struct {
 // ---------------------------------------------------------------------------
 
 // TerminalStatus is what a session's single terminal event says happened. It
-// exists because `summary` is prose: every consumer that needed to know
-// whether a run finished was matching on English, and "Stopped: ..." and
-// "Made your change" are not a contract.
+// exists because `summary` is prose, and matching on English ("Stopped: ...",
+// "Made your change") is not a contract.
 //
-// The zero value is TerminalUnknown, and every consumer must read it -- along
-// with an absent or unrecognised value -- as incomplete. Failing closed is the
-// whole point: a run whose outcome cannot be named did not finish.
+// The zero value is TerminalUnknown. A consumer reads it, or an absent value,
+// as incomplete, and never reads an unrecognised value as completed. Failing
+// closed is the whole point: a run whose outcome cannot be named did not finish.
 type TerminalStatus string
 
 const (
@@ -259,16 +256,6 @@ func (t TerminalStatus) Classified() bool {
 		return true
 	}
 	return false
-}
-
-// NormalizeTerminalStatus is what a CONSUMER applies to whatever arrived.
-// Absent, malformed, unknown, or from a future producer all become incomplete,
-// never completed.
-func NormalizeTerminalStatus(raw string) TerminalStatus {
-	if s := TerminalStatus(raw); s.Classified() {
-		return s
-	}
-	return TerminalIncomplete
 }
 
 // AgentContext holds all state for a single agent loop execution.
@@ -421,11 +408,9 @@ type AgentContext struct {
 
 	// FencedCalls / FencedTokens account the @fenced sub-calls
 	// (fetchFencedContent): every attempt is a full model generation, and
-	// before these existed the run totals silently omitted that spend — a
-	// session's reported token count could be off by one whole generation
-	// per written file (third-party audit finding). FencedTokens is also
-	// folded into TotalTokens; these two exist so the fenced share is
-	// visible on its own.
+	// leaving it out makes a session's reported token count short by one
+	// whole generation per written file. FencedTokens is also folded into
+	// TotalTokens; these two exist so the fenced share is visible on its own.
 	FencedCalls  int
 	FencedTokens int
 
@@ -487,7 +472,7 @@ type AgentContext struct {
 	// which the swallowed-content detector now makes safe.
 	FencedStalls int
 	// LastFencedStream is what the wire showed during the last fenced
-	// sub-call (#254), for the fenced_fetch event its attempt emits.
+	// sub-call, for the fenced_fetch event its attempt emits.
 	LastFencedStream fencedStreamStats
 
 	// RequestCtx is the RESPONSE lifetime: alive for finalisation after the
@@ -606,9 +591,9 @@ type AgentContext struct {
 	LastRejectionClass string
 
 	// LastStreamCut records why the proxy itself ended the generation, when
-	// it did. A cut lands mid-JSON, so the parse then fails — and the
-	// classifier was inferring a cause from the wreckage instead of using
-	// the one already known one line earlier.
+	// it did. A cut lands mid-JSON, so the parse then fails; the parse-failure
+	// classifier reads this known cause instead of inferring one from the
+	// broken output.
 	LastStreamCut string
 
 	// LastOldStrCut is what the old_str watch saw when LastStreamCut is
@@ -856,17 +841,16 @@ type V3GenerateRequest struct {
 	// pipeline is handed "Create the file `solve.py`", the project context
 	// and the baseline, and told to improve on the baseline "preserving all
 	// functionality" — so it can only mimic a draft whose requirement it has
-	// never seen, and cannot correct one that is subtly wrong. V3PlanRequest
-	// has carried this since plan mode shipped; generation never did.
+	// never seen, and cannot correct one that is subtly wrong.
 	UserMessage string `json:"user_message,omitempty"`
 	Tier        int    `json:"tier"`
 	WorkingDir  string `json:"working_dir,omitempty"`
 	// BudgetMs is the wall-clock cap the bridge applies to this call, set by
 	// callV3GenerateStreaming and never by a caller. The service plans its
-	// phases against it. Without it the service planned against
-	// ATLAS_V3_TIMEOUT while the bridge cut the call at half of the
-	// session's remaining time, so late phases started work the bridge
-	// then abandoned. Omitted when the call is uncapped.
+	// phases against it: planning against ATLAS_V3_TIMEOUT instead, while the
+	// bridge may cut the call at half of the session's remaining time, makes
+	// late phases start work the bridge then abandons. Omitted when the call
+	// is uncapped.
 	BudgetMs int64 `json:"budget_ms,omitempty"`
 }
 
@@ -882,9 +866,8 @@ type V3GenerateResponse struct {
 	VerificationEvidence []V3VerificationEvidence `json:"verification_evidence,omitempty"`
 
 	// The versioned evidence envelope (evidence_wire.go). Declared explicitly
-	// because an undeclared field is silently discarded: the service began
-	// sending structured evidence and this type dropped every byte of it with
-	// no error anywhere. nil means the producer sent none — a legacy service,
+	// because an undeclared field is silently discarded on decode, with no
+	// error anywhere. nil means the producer sent none — a legacy service,
 	// or a run that measured nothing — which is not the same as evidence that
 	// arrived and cannot be trusted. See EvidenceAvailability.
 	//
@@ -1268,21 +1251,16 @@ const (
 // other per-path state already uses.
 const maxTaskContractEntries = 64
 
-// TaskContract is what the client declares about the request. Absent is
-// distinct from present-and-empty, and stays distinct: a future commit will
-// default an absent contract fail-closed to work, and that must not begin by
-// accident here.
 // ObligationKnowledge is what the CLIENT says it knows about a class of
 // obligation. It is stated, never inferred.
 //
-// The distinction it carries is the one the type could not hold before.
 // encoding/json can tell `"expected_outputs": []` from an omitted key -- the
-// first decodes to a non-nil empty slice, the second to nil -- and
-// validateTaskContract threw that away by building its output through append,
-// so an explicit [] was STORED as nil, byte-identical to omitted.
+// first decodes to a non-nil empty slice, the second to nil -- and output
+// rebuilt by append turns an explicit [] into nil, byte-identical to omitted,
+// so validateTaskContract stores presence explicitly.
 //
 // That is not a cosmetic loss. Every owned sender -- the TUI,
-// tests/e2e/conftest.py, scripts/e2e-reliability.py -- sends
+// tests/e2e/conftest.py, scripts/eval/e2e-reliability.py -- sends
 // `{"task_mode": ...}` and nothing else, so a rule of the form "a contract is
 // present, therefore its output list is authoritative" would read 100% of
 // owned traffic as "this caller requires no outputs" and drop the legacy
@@ -1299,6 +1277,9 @@ const (
 	KnowledgeDeclared ObligationKnowledge = "declared"
 )
 
+// TaskContract is what the client declares about the request. Absent is
+// distinct from present-and-empty, and stays distinct: an absent contract must
+// not be read as work here.
 type TaskContract struct {
 	TaskMode TaskMode `json:"task_mode"`
 
@@ -1338,8 +1319,7 @@ type TaskContract struct {
 	// interpreted under today's rules.
 	VerificationRequirementsVersion int `json:"verification_requirements_version,omitempty"`
 
-	// CandidatePolicy is accepted and never read. Clients once chose among
-	// strict, advisory and automatic_v3; there is one delivery rule now
+	// CandidatePolicy is accepted and never read: there is one delivery rule
 	// (candidate_policy.go), and an older client that still sends the field
 	// keeps working.
 	CandidatePolicy string `json:"candidate_policy,omitempty"`

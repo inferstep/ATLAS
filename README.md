@@ -37,7 +37,7 @@
 * **Get more from smaller models.** ATLAS adds planning, candidate selection, verification, and repair around the model instead of depending on a single generation.
 * **Verify before accepting.** Generated code can be compiled, tested, and corrected inside an isolated execution environment.
 * **Spend compute where it matters.** Straightforward edits take a shorter path, while harder tasks receive more candidates, reasoning, and validation.
-* **Run your own model.** Use a compatible GGUF model on NVIDIA, AMD, Apple Silicon, Vulkan, or CPU-supported hardware.
+* **Run your own model.** Use a compatible GGUF model on NVIDIA, AMD, Apple Silicon, Vulkan, or CPU-supported hardware. A model needs a lens bundle; `atlas lens build` makes one for a model that has none.
 * **Keep control local.** ATLAS does not intentionally upload your repository or prompts to a hosted model or ATLAS-operated service. Sandbox commands have outbound network access by default; set `ATLAS_SANDBOX_NET_INTERNAL=true` to disable it.
 * **Own the full stack.** ATLAS is open source and self-hosted. It requires no hosted model or third-party model-provider API key; a local per-installation service token authenticates ATLAS services.
 
@@ -81,17 +81,17 @@
 3. **[V3 Pipeline](docs/ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - multi-phase code generation; turns a single prompt into a verified candidate.
    - [PlanSearch](docs/ARCHITECTURE.md#pipeline-flow) - constraint-driven structured planning
    - [DivSampling](docs/ARCHITECTURE.md#pipeline-flow) - diverse candidates across temperature and strategy
-   - [Budget tiers](docs/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; today the tier sets how many candidates are generated, not thinking depth
+   - [Budget tiers](docs/ARCHITECTURE.md#pipeline-flow) - the allocator picks a compute tier per task; the tier sets how many candidates are generated, and the prompt and token budget for each
    - [PR-CoT Repair](docs/ARCHITECTURE.md#pipeline-flow) - repairs failing candidates from the sandbox's error output
    - [Refinement Loops](docs/ARCHITECTURE.md#pipeline-flow) - sandbox verify and correct, then repeat
 
 4. **[Geometric Lens](docs/ARCHITECTURE.md#5-geometric-lens)** - energy-based scoring over the model's own embeddings, no external oracle. ([What is a "Geometric Lens"?](docs/ARCHITECTURE.md#why-geometric-lens))
    - [C(x) Cost Field](docs/ARCHITECTURE.md#scoring-models) - model-hidden-dim→512→128→1 MLP that scores candidate quality
-   - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble used for selection
-   - [Per-step scoring](docs/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes, with per-model calibrated thresholds driving interventions
+   - [G(x) Quality Prediction](docs/ARCHITECTURE.md#scoring-models) - XGBoost ensemble whose score helps set how many candidates are generated; selection itself takes the lowest C(x)
+   - [Per-step scoring](docs/API.md#geometric-lens-port-8099) - per-token C(x)/G(x) scoring of writes; per-model thresholds drive interventions only when the model's bundle is calibrated
 
 5. **[Sandbox](docs/ARCHITECTURE.md#6-sandbox)** - isolated execution for build verification.
-   - Multi-language execution: Python, Rust, Go, C, Shell, others
+   - Multi-language execution: Python, Rust, Go, C, Shell, others. Rust, Go and C run as commands in the project; V3 checks their syntax, and the sandbox's `/execute` route compiles them but cannot run them yet ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - Compilation and linting before scoring
    - Runs both generated and existing test suites
 
@@ -100,7 +100,7 @@
    - Grammar-constrained decoding at the token level
    - Self-embeddings, so the lens doesn't need a second model
 
-Full documentation (setup, architecture, configuration, troubleshooting, benchmark reports, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
+Full documentation (setup, architecture, configuration, troubleshooting, and the [research behind each component](docs/SOURCES.md)) lives in the [docs/](docs/) directory.
 
 ---
 
@@ -131,8 +131,8 @@ Then in any project directory, run `atlas`.
 
 | | |
 |---|---|
-| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
-| Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) or Podman |
+| GPU | 16 GB+ VRAM. NVIDIA (CUDA, Supported), AMD (ROCm, Community-tested), or Apple Silicon (Metal, macOS hybrid, Supported); Vulkan (Preview) covers most other GPUs. The prebuilt CUDA image targets Blackwell (RTX 50xx); older NVIDIA GPUs need a one-time local rebuild (see [SETUP.md § CUDA Compute Capability](docs/SETUP.md#cuda-compute-capability-dockerfilev31)). Levels: [SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md); GPU list: [SETUP.md § Supported GPUs](docs/SETUP.md#supported-gpus). To size a specific model to your card, see [What fits on my GPU?](docs/TROUBLESHOOTING.md#what-fits-on-my-gpu). |
+| Runtime | Docker (NVIDIA: + nvidia-container-toolkit; AMD: standalone Docker is enough) |
 | Python | 3.9+ |
 | Disk | ~20 GB CUDA / ~22 GB ROCm (model weights + container images) |
 
@@ -142,8 +142,9 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## ⚠️ Known Limitations
 
-- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](SUPPORT_MATRIX.md).
+- **Linux Docker stack, plus a native macOS path.** NVIDIA (Supported), AMD ROCm (Community-tested), and Vulkan (Preview) Docker paths exist today; Apple Silicon (Supported) runs via the native macOS hybrid Metal path ([#32](https://github.com/inferstep/ATLAS/issues/32)). Intel Arc / SYCL is Roadmap. Level definitions: [SUPPORT_MATRIX.md](docs/SUPPORT_MATRIX.md).
 - **ATLAS has no current benchmark result.** The V3.0 LiveCodeBench figure is withdrawn (see the [CHANGELOG](CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)), and no capability or reliability figure has been measured for the current release. Numbers will be published only after a re-measurement on held-out tasks; model-specific results are tracked in [#28](https://github.com/inferstep/ATLAS/issues/28).
+- **The lens's signal is not proven yet.** On the reference model it scores but stays uncalibrated, so its interventions are neutral. On 3.1.6 it gave no usable signal, and that is not yet measured on `dev` ([#281](https://github.com/inferstep/ATLAS/issues/281)).
 - **Complex feature additions can be inconsistent.** Compact models sometimes spend agent turns exploring an unfamiliar codebase before writing code.
 - **Grammar-constrained decoding is slower than unconstrained decoding.**
 
@@ -151,16 +152,7 @@ Apple Silicon runs natively through the macOS hybrid Metal path (native llama-se
 
 ## 🗺️ Roadmap
 
-**V3.2** - Next milestone: deeper code reasoning.
-- Structural code reasoning (tail) - deepen the shipped call-graph layer ([#39](https://github.com/inferstep/ATLAS/issues/39)).
-- Reasoning with sampling - efficiency and quality gains ([#9](https://github.com/inferstep/ATLAS/issues/9)).
-- Deferred infra: automated HuggingFace submission pipeline ([#102](https://github.com/inferstep/ATLAS/issues/102)); ROCm on K3s / Kubernetes; formal registry-model benchmarks - LiveCodeBench, GPQA Diamond, SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28)).
-
-**Backlog / help wanted**
-- Hardware: ARM64 multi-arch builds ([#115](https://github.com/inferstep/ATLAS/issues/115)), multi-GPU for larger models ([#34](https://github.com/inferstep/ATLAS/issues/34)), Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27)).
-- Tooling: VS Code / JetBrains extension ([#35](https://github.com/inferstep/ATLAS/issues/35)).
-- Sandbox languages: Java / Kotlin ([#29](https://github.com/inferstep/ATLAS/issues/29)), Ruby / PHP ([#30](https://github.com/inferstep/ATLAS/issues/30)).
-- Architecture: model-agnostic platform ([#66](https://github.com/inferstep/ATLAS/issues/66)).
+What is planned and in progress lives on the [ATLAS Roadmap board](https://github.com/orgs/inferstep/projects/1).
 
 ---
 
@@ -185,7 +177,7 @@ ATLAS is developed in the open and welcomes contributors and core maintainers. B
 
 Found a bug or hit a wall? **[Open an issue](https://github.com/inferstep/ATLAS/issues)** - you don't need to submit a fix. Bug reports and feedback help just as much as code.
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for guidelines and the [repository map](docs/README.md#repository-map) for an overview of the codebase layout.
+See **[CONTRIBUTING.md](.github/CONTRIBUTING.md)** for guidelines and the [repository map](docs/README.md#repository-map) for an overview of the codebase layout.
 
 ---
 

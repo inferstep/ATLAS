@@ -90,7 +90,7 @@ the eligibility check alone.
 
 If a delivery is refused before any byte moves, the model's own bytes are
 written, on the new-file route as on the edit route (`writeFileWithV3` in
-`proxy/tools.go`, and `proxy/edit_route_delivery.go`).
+`proxy/tool_write_v3.go`, and `proxy/edit_route_delivery.go`).
 
 ### The structured mutation target
 
@@ -369,6 +369,6 @@ correctness guarantee, because none of it is one.
 | `proxy/candidate_provenance.go` | what the terminal is told about delivered bytes |
 | `proxy/verification_requirements.go` | typed verification requirements and asset authority |
 | `proxy/evidence_wiring.go` | the staged declared-verification producer |
-| `proxy/tools.go` | the new-file route: proposal, staging, policy, delivery |
+| `proxy/tool_write_v3.go` | the new-file route: proposal, staging, policy, delivery |
 | `proxy/edit_route_delivery.go` | the edit route, through the same owners |
 | `proxy/candidate_reachability.go` | whether the producer is consulted at all, and why not |

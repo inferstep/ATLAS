@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -258,5 +259,191 @@ func TestPlanVerifyHint(t *testing.T) {
 				t.Errorf("planVerifyHint = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// A plan step is the work, not the tool call. A write that lands with a
+// failing check is a successful tool call, but the file is broken and has
+// never been run. Ticked off, the plan reminder would tell the model on every
+// later request that the broken file is finished work not to revisit.
+
+func planWorld(t *testing.T) *AgentContext {
+	t.Helper()
+	ctx, _ := exactEditWorld(t, "app.py", "x = 1\n")
+	steps := []PlanStep{
+		{ID: "s1", Action: "write_file", Target: "app.py"},
+		{ID: "s2", Action: "run_command", Target: "python3 app.py"},
+	}
+	ctx.Plan = &Plan{Steps: steps, VerifyStep: "s2"}
+	ctx.PlanStepsSatisfied = make([]bool, len(steps))
+	return ctx
+}
+
+func TestAWarnedWriteDoesNotSatisfyItsPlanStep(t *testing.T) {
+	ctx := planWorld(t)
+	args, _ := json.Marshal(map[string]string{"path": "app.py"})
+	// The ledger records what the check said about the bytes that landed.
+	recordWarnedValidation(t, ctx, "app.py")
+	recordPlanAdherence(ctx, "write_file", args, true)
+	if ctx.PlanStepsSatisfied[0] {
+		t.Error("a write that landed with a failing check ticked its step off")
+	}
+	note := buildPlanReminder(ctx)
+	if strings.Contains(note, "Done: s1") {
+		t.Errorf("the reminder calls the broken file finished work:\n%s", note)
+	}
+	if !strings.Contains(note, `"s1"`) {
+		t.Errorf("the reminder does not keep s1 as the current step:\n%s", note)
+	}
+}
+
+func TestACleanWriteStillSatisfiesItsPlanStep(t *testing.T) {
+	ctx := planWorld(t)
+	args, _ := json.Marshal(map[string]string{"path": "app.py"})
+	recordPlanAdherence(ctx, "write_file", args, true)
+	if !ctx.PlanStepsSatisfied[0] {
+		t.Error("a clean write did not satisfy its step")
+	}
+	if note := buildPlanReminder(ctx); !strings.Contains(note, "Done: s1") {
+		t.Errorf("the reminder does not credit the finished step:\n%s", note)
+	}
+}
+
+// Fixing the file finishes the step: the rule delays credit, it does not
+// withhold it.
+func TestARepairedFileSatisfiesTheStep(t *testing.T) {
+	ctx := planWorld(t)
+	args, _ := json.Marshal(map[string]string{"path": "app.py"})
+	recordWarnedValidation(t, ctx, "app.py")
+	recordPlanAdherence(ctx, "write_file", args, true)
+	if ctx.PlanStepsSatisfied[0] {
+		t.Fatal("precondition: the warned write should not have satisfied the step")
+	}
+	clearValidation(t, ctx, "app.py")
+	recordPlanAdherence(ctx, "write_file", args, true)
+	if !ctx.PlanStepsSatisfied[0] {
+		t.Error("the repaired write still did not satisfy the step")
+	}
+}
+
+// Non-write steps are untouched: a verification command is judged by whether
+// it succeeded, as before.
+func TestAVerificationStepIsUnaffectedByFileWarnings(t *testing.T) {
+	ctx := planWorld(t)
+	recordWarnedValidation(t, ctx, "app.py")
+	args, _ := json.Marshal(map[string]interface{}{"command": "python3 app.py", "timeout": 30})
+	recordPlanAdherence(ctx, "run_command", args, true)
+	if !ctx.PlanStepsSatisfied[1] {
+		t.Error("a successful verification step was withheld because another file carries a warning")
+	}
+}
+
+func recordWarnedValidation(t *testing.T, ctx *AgentContext, rel string) {
+	t.Helper()
+	key := ledgerKey(ctx, rel)
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if ctx.Ledger == nil {
+		ctx.Ledger = map[string]*DeliverableState{}
+	}
+	d := ctx.Ledger[key]
+	if d == nil {
+		d = &DeliverableState{}
+		ctx.Ledger[key] = d
+	}
+	h := fileSHA256(ctx, rel)
+	d.CurrentHash, d.ValidatedHash = h, h
+	d.ValidationKind, d.ValidationStatus = ValidationKindSyntax, ValidationFailed
+	d.ValidationDetail = "SyntaxError: unmatched ')' (line 111)"
+}
+
+func clearValidation(t *testing.T, ctx *AgentContext, rel string) {
+	t.Helper()
+	key := ledgerKey(ctx, rel)
+	ctx.LedgerMu.Lock()
+	defer ctx.LedgerMu.Unlock()
+	if d := ctx.Ledger[key]; d != nil {
+		h := fileSHA256(ctx, rel)
+		d.CurrentHash, d.ValidatedHash = h, h
+		d.ValidationKind, d.ValidationStatus = ValidationKindSyntax, ValidationPassed
+		d.ValidationDetail = ""
+	}
+}
+
+// The plan's verify step names its command by guess. A passing verification
+// of the same program satisfies it, whatever the port or flags: a plan may
+// say `curl http://127.0.0.1:5000` while the app serves on 5001. Anything
+// else keeps the literal rule.
+
+func flaskPlan() *Plan {
+	return &Plan{VerifyStep: "s5", Steps: []PlanStep{
+		{ID: "s1", Action: "read_file", Target: "app.py"},
+		{ID: "s2", Action: "structural_edit", Target: "app.py"},
+		{ID: "s3", Action: "structural_edit", Target: "app.py"},
+		{ID: "s4", Action: "run_command", Target: "python app.py"},
+		{ID: "s5", Action: "run_command", Target: "curl http://127.0.0.1:5000"},
+	}}
+}
+
+func runArgs(cmd string) json.RawMessage {
+	b, _ := json.Marshal(RunCommandInput{Command: cmd})
+	return b
+}
+
+func TestWhatSatisfiesTheVerifyStep(t *testing.T) {
+	for _, c := range []struct {
+		name, cmd string
+		success   bool
+		satisfies bool
+	}{
+		{"a passing probe on the app's real port", "curl -sf http://127.0.0.1:5001/", true, true},
+		{"another program", "python3 app.py", true, false},
+		{"a failed probe", "curl -sf http://127.0.0.1:5001/", false, false},
+		{"curl without -f proves nothing", "curl http://127.0.0.1:5001/", true, false},
+		{"a static check", "python3 -m py_compile app.py", true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := &AgentContext{Plan: flaskPlan()}
+			ctx.PlanStepsSatisfied = []bool{true, true, true, true, false}
+			recordPlanAdherence(ctx, "run_command", runArgs(c.cmd), c.success)
+			if ctx.PlanStepsSatisfied[4] != c.satisfies {
+				t.Errorf("%q (success %v) satisfied the verify step: %v, want %v",
+					c.cmd, c.success, ctx.PlanStepsSatisfied[4], c.satisfies)
+			}
+		})
+	}
+}
+
+// Only the verify step is relaxed: an ordinary run_command step still needs
+// its own command.
+func TestOtherCommandStepsKeepTheLiteralRule(t *testing.T) {
+	plan := &Plan{VerifyStep: "s3", Steps: []PlanStep{
+		{ID: "s1", Action: "run_command", Target: "pip install -r requirements.txt"},
+		{ID: "s2", Action: "run_command", Target: "pytest tests/test_api.py"},
+		{ID: "s3", Action: "run_command", Target: "pytest"},
+	}}
+	ctx := &AgentContext{Plan: plan}
+	ctx.PlanStepsSatisfied = []bool{true, false, false}
+	recordPlanAdherence(ctx, "run_command", runArgs("python -m pytest -q tests/test_models.py"), true)
+	if ctx.PlanStepsSatisfied[1] {
+		t.Error("a non-verify step was satisfied by a different command")
+	}
+	if !ctx.PlanStepsSatisfied[2] {
+		t.Error("the verify step (pytest) was not satisfied by a passing python -m pytest")
+	}
+}
+
+func TestCommandProgram(t *testing.T) {
+	for cmd, want := range map[string]string{
+		"curl -sf http://127.0.0.1:5001/":  "curl",
+		"cd tests && python3 -m pytest -q": "pytest",
+		"FLASK_APP=app.py python3.12 x.py": "python",
+		"timeout 5 node server.js":         "node",
+		"./run.sh --fast":                  "run.sh",
+		"":                                 "",
+	} {
+		if got := commandProgram(cmd); got != want {
+			t.Errorf("commandProgram(%q) = %q, want %q", cmd, got, want)
+		}
 	}
 }

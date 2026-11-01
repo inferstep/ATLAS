@@ -4,7 +4,7 @@ These rules apply to new code and to every refactor. Much of today's code
 predates them. The code-health check (`scripts/code_health.py`) stops it
 from growing, and the Code health epic (#262) brings it in line step by
 step. The formatting and lint rules per language stay in
-[CONTRIBUTING](../CONTRIBUTING.md#code-style).
+[CONTRIBUTING](../.github/CONTRIBUTING.md#code-style).
 
 The goal: a new contributor can open a file, see what it is for, and
 change one thing without reading everything else.

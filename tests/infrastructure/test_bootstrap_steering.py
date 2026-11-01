@@ -31,15 +31,32 @@ def test_host_gid_gives_the_number_or_else_the_name():
     assert done.stdout.split() == ["0", "no-such-group"]
 
 
-@needs_getent
-def test_an_env_that_already_names_a_backend_still_gets_the_group_numbers(tmp_path):
-    (tmp_path / ".env").write_text("ATLAS_BACKEND=rocm\n")
+def persist_backend(folder):
     functions = "\n".join(shell_function(name) for name in (
         "env_file_value", "set_env_file_value", "host_gid", "persist_backend_selection"))
+    subprocess.run(["bash", "-c", f"TARGET_USER=root\nGPU_VENDOR=amd\nlog_ok() {{ :; }}\n{functions}\npersist_backend_selection"],
+                   cwd=folder, check=True)
 
-    subprocess.run(["bash", "-c", f"log_ok() {{ :; }}\n{functions}\npersist_backend_selection"],
-                   cwd=tmp_path, check=True)
+
+@needs_getent
+def test_an_env_that_already_names_a_backend_gets_the_numbers_and_keeps_its_account(tmp_path):
+    (tmp_path / ".env").write_text("ATLAS_BACKEND=rocm\n")
+
+    persist_backend(tmp_path)
 
     body = (tmp_path / ".env").read_text()
     assert "ATLAS_VIDEO_GID=" in body
     assert "ATLAS_RENDER_GID=" in body
+    assert "ATLAS_LLAMA_USER" not in body
+
+
+@needs_getent
+def test_a_first_bootstrap_records_the_backend_and_the_account(tmp_path):
+    (tmp_path / ".env").write_text("")
+
+    persist_backend(tmp_path)
+
+    body = (tmp_path / ".env").read_text()
+    assert "ATLAS_BACKEND=rocm" in body
+    assert "ATLAS_VIDEO_GID=" in body
+    assert "ATLAS_LLAMA_USER=0:0" in body

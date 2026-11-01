@@ -90,8 +90,11 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | File | Owns |
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
-| `agent.go` | The agent loop: turn state, LLM calls, plan generation, stuck-loop breakers |
-| `tools.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
+| `agent.go` | The agent loop: turn state, plan generation, stuck-loop breakers |
+| `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back |
+| `system_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
+| `agent_handler.go` | The `/v1/agent` and `/cancel` endpoints |
+| `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
 | `context.go` | Context enrichment: symbol index, project scan, workspace containment, session file manifest |
@@ -341,10 +344,11 @@ with no implication that they moved together.
 Every session ends in exactly one terminal event, from one emitter. It carries
 the legacy `summary` unchanged plus an additive `status` — `completed`,
 `incomplete`, `stopped`, `timed_out`, `failed` — and a stable machine-readable
-`reason`. Consumers read absent, malformed or unrecognised as `incomplete`,
-never as completion (`NormalizeTerminalStatus` in Go, `terminal_status` in
-`atlas/events.py`). The broker's `done`/`stage_end` envelopes report the same
-outcome instead of asserting `success: true`.
+`reason`. The clients read an absent status as `incomplete` and show an
+unrecognised word as it came, never as completion (`onDone` in
+`tui/events.go`, `doneOutcome` in the VS Code and JetBrains extensions). The
+broker's `done`/`stage_end` envelopes report the same outcome instead of
+asserting `success: true`.
 
 For any status other than `completed`, the server owns the sentence as well as
 the field. The model's own account is passed through only where the completion
@@ -447,12 +451,12 @@ A measured reference deployment showed a bias toward `edit_file` over
 embeddings of nearby tool names compete; descriptions matter more than names).
 Four model-independent defenses compose in the proxy:
 
-1. **Description rewrite** (`proxy/tools.go`). edit_file's description
+1. **Description rewrite** (`proxy/tool_edit.go`, `proxy/tool_structural_edit.go`). edit_file's description
    warns against whole-file/whole-function use; structural_edit's description
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
-2. **Conditional GBNF grammar** (`proxy/tools.go`,
-   `proxy/agent.go:stepExclusions`). When a write_file is rejected on
+2. **Conditional GBNF grammar** (`proxy/tool_schema.go`,
+   `proxy/llm_call.go:stepExclusions`). When a write_file is rejected on
    an existing .py/.html/.htm file >5 lines, the next LLM call is
    constrained by a GBNF grammar that bans edit_file and write_file
    from the tool-name production. The model physically cannot emit
@@ -489,7 +493,7 @@ Each `write_file`/`edit_file` call is classified independently:
 | T2 (Feature) | 0 (uncapped) | V3 pipeline fires |
 | T3 (Hard) | 0 (uncapped) | V3 pipeline fires |
 
-The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`proxy/agent.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
+The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`proxy/task_tier.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
 
 Because the turn cap is the same for T1/T2/T3, the message tier has exactly one decision to make: conversational or not. T0 caps the run and skips Plan Mode; every other value behaves identically. It therefore requires positive evidence to call something conversational — a sub-12-character greeting or a question shape — and treats everything else as work. The asymmetry is deliberate: misreading conversation as work costs one wasted planner call, while misreading work as conversation caps a real request and skips its plan, which fails it.
 
@@ -563,7 +567,7 @@ Classifier in `proxy/tools.go` (`classifyFileTier`); logic-pattern matcher in th
 
 The exact config-file list and extension sets live in `proxy/tools.go:classifyFileTier`.
 
-`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`proxy/tools.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
+`edit_file`, `insert_after` and `replace_lines` enter the pipeline through `runEditPipeline` (`proxy/tool_write_v3.go`), which ends in `deliverEditCandidate`. `write_file` enters it through `writeFileWithV3`, which calls the V3 service's generation stream itself. `structural_edit` first sends its splice to the V3 service's `/internal/structural_edit`, then makes the same tier decision itself and hands the result to `deliverEditCandidate`, where `runEditPipeline` also ends. In `runEditPipeline` and in `structural_edit`, tier classification uses `max(oldTier, newTier)`, so a destructive edit that shrinks a T2+ file into a T1 stub still qualifies. An edit tool that skips the pipeline gets no candidate generation, whatever the tier, which is the thing the tier system exists to prevent. `tests/contracts/test_write_gate_coverage.py` asserts that each of the five write tools enters the pipeline and runs the same gates: the unresolved-call check, the embedded-script gate and the duplicate-main guard.
 
 **T2 (V3 pipeline)** — file qualifies if it's ≥10 lines AND either:
 - `hasLogicIndicators(content)` returns true — **2+ matches** across pattern families covering function/method definitions, control flow, error handling, Flask/FastAPI/Django routing, Express/Node API, React state/data, validation, database calls, JSX/React component patterns, and imports (the literal token list is in `proxy/tools.go:hasLogicIndicators`)

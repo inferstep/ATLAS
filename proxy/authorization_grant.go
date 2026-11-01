@@ -566,17 +566,6 @@ func supersedeGrantsForTarget(ctx *AgentContext, g *authorizationGrant) {
 	}
 }
 
-// knownGrantRetirement is the closed set of endings a grant may have. A cause
-// outside it is a cause nothing can reconcile.
-func knownGrantRetirement(r grantRetirement) bool {
-	switch r {
-	case grantConsumed, grantAttempted, grantCancelled, grantTerminal,
-		grantSuperseded, grantSessionEnd:
-		return true
-	}
-	return false
-}
-
 // grantRefused records a mismatch on a grant that is already spent, and
 // returns the caller's reason. It never unspends: a failed attempt that gave
 // the licence back would make probing free.

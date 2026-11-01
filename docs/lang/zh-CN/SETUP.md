@@ -14,7 +14,7 @@
 
 安装步骤取决于你的硬件 + 操作系统。找到匹配你环境的那一行，然后跳到对应的章节。
 
-| 你的硬件 | 操作系统 | 推荐路径 | 支持级别（[矩阵](../../../SUPPORT_MATRIX.md)） |
+| 你的硬件 | 操作系统 | 推荐路径 | 支持级别（[矩阵](../../SUPPORT_MATRIX.md)） |
 |---|---|---|---|
 | NVIDIA RTX 50 系列 / Blackwell（B100、GB10） | Linux | [方式 0：bootstrap](#方式-0一键-bootstrap) 或[方式 1：Docker](#方式-1docker-compose推荐) | 支持 (Supported) —— 发布的 CUDA 镜像面向 Blackwell |
 | NVIDIA RTX 20/30/40、GTX 10xx、数据中心卡（V100/A100/H100/T4/L4） | Linux | [方式 1：Docker](#方式-1docker-compose推荐) + 一次性[本地重建](#cuda-计算能力-dockerfilev31) | 预览 (Preview) —— 需要本地重建 |
@@ -145,7 +145,7 @@ bash atlas-bootstrap.sh
 | `ATLAS_REPO_URL=https://...` | 替代的仓库 URL |
 | `ATLAS_GO_VERSION=1.26.10` | 为构建 TUI 安装的 Go 工具链版本（TUI 需要 1.26.10+；已安装的更老工具链会自动拉取它） |
 
-**为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及，还能让同一台机器上的多个用户共享一份安装。如果你更希望装进自己的家目录：
+**为什么是 `/opt/atlas`？** 它是系统级第三方软件的标准 FHS 前缀，不会被 `$HOME` 清理波及。一份安装只属于一个用户：服务令牌仅归该用户所有。如果你更希望装进自己的家目录：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inferstep/ATLAS/main/scripts/atlas-bootstrap.sh \
@@ -340,7 +340,7 @@ ATLAS 面向两种 CPU 架构：`x86_64`（默认，所有后端可用）和 `aa
 
 - **NVIDIA DGX Spark**（Grace-Blackwell GB10）—— 通过 sbsa 基础镜像启用 CUDA，计算能力 12.0/12.1
 - **NVIDIA Jetson Orin / AGX / Nano** —— 通过 l4t 基础镜像启用 CUDA，计算能力 8.7
-- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；原生 Metal 安装在 [#32](https://github.com/inferstep/ATLAS/issues/32) 跟踪（快速路径）
+- **Apple Silicon (M1/M2/M3/M4)** —— Docker Desktop 中通过 MoltenVK 走 Vulkan（慢速路径）；已发布的快速路径是原生混合 Metal 安装，见 [SETUP_MACOS.md](../../SETUP_MACOS.md)
 - **Snapdragon X Elite**（Windows on ARM 笔记本）—— 通过 Adreno 驱动走 Vulkan
 - **Raspberry Pi 5** —— 通过 Mesa V3D 驱动走 Vulkan，预期 CPU 级性能
 - **Ampere Altra / AWS Graviton 工作站** —— 通过 lavapipe 走 Vulkan（CPU 回退，因为目前还没有消费级 arm64 独显）
@@ -821,7 +821,7 @@ docker build --build-arg GFX_TARGET="gfx1100;gfx1030" -f inference/Dockerfile.ro
 
 ATLAS 的每一个请求都需要 Geometric Lens（[ADR 0011](../../adr/0011-the-lens-is-required.md)）。lens 需要所服务模型的 C(x) 与 G(x) 权重。缺少它们时，代理会以 HTTP 503 `dependency_unavailable` 拒绝每个请求并说明原因，`atlas doctor` 也会失败。有权重但尚未校准的 lens 是可接受的：它能打分，其阈值干预会等待校准。
 
-在 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
+在 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md) 中列有 lens 工件的模型可通过 `atlas model install-artifacts` 获取它们。预训练权重与训练数据同样发布在 HuggingFace 上：
 
 **[ATLAS 数据集（HuggingFace）](https://huggingface.co/datasets/itigges22/ATLAS)** —— 包含嵌入向量、训练数据和权重文件。
 

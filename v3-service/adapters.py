@@ -33,7 +33,7 @@ def _max_inflight() -> int:
     Defaults to the server's slot count, since a request beyond that queues
     behind a slot rather than gaining anything — llama.cpp oversubscribed
     past its slots degrades latency sharply. ATLAS_V3_MAX_INFLIGHT overrides;
-    1 restores the fully serialized behaviour.
+    1 serializes every generation.
     """
     for var in ("ATLAS_V3_MAX_INFLIGHT", "ATLAS_PARALLEL_SLOTS", "PARALLEL_SLOTS"):
         raw = os.environ.get(var)
@@ -170,11 +170,11 @@ def _service_headers(rid: str = "", invocation_id: str = "") -> dict:
 class LLMAdapter:
     """Calls llama-server's /v1/chat/completions, parsing ChatML prompts into messages.
 
-    PC-206: `thinking` controls template-level reasoning when supported.
+    `thinking` controls template-level reasoning when supported.
     - False (default) — `enable_thinking=False`.
       Required for grammar-constrained JSON output (the agent's tool-call
       shape) and for the tight V3 sampling loop where reasoning would 5-20×
-      output token cost. This matches the previously hardcoded behavior.
+      output token cost.
     - True — `enable_thinking=True`. Use for
       high-reasoning-value calls (planner, verification, claim-check) where
       the output can absorb a preamble and the strip pattern in __call__
@@ -194,7 +194,7 @@ class LLMAdapter:
     # time, worse.
     _slots = threading.BoundedSemaphore(_max_inflight())
 
-    # Counter updates are read-modify-write and now run under concurrency.
+    # Counter updates are read-modify-write and run under concurrency.
     _counter_lock = threading.Lock()
 
     def __init__(self, progress_callback=None, thinking: bool = False,
@@ -219,10 +219,10 @@ class LLMAdapter:
         self.deadline = deadline
 
     # Fallback decode rate (tokens/sec) for sizing the first call, before
-    # this run has observed one. Measured on a 12B Q4 at 4 slots: ~25 tok/s
-    # single-stream. Deliberately conservative — overestimating the rate
-    # asks for more tokens than the clock can deliver, which is the failure
-    # this exists to prevent.
+    # this run has observed one. Set below the ~25 tok/s single-stream rate of
+    # a 12B Q4 model at 4 slots on purpose: overestimating the rate asks for
+    # more tokens than the clock can deliver, which is the failure this exists
+    # to prevent.
     _ASSUMED_TOK_PER_SEC = 20.0
 
     # Below this many tokens a generation cannot produce anything useful,
@@ -279,12 +279,8 @@ class LLMAdapter:
         #
         # V3 is a synchronous server: its only disconnect signal is a
         # BrokenPipeError on the next SSE write, which sets `disconnected` on
-        # the progress callback, and the pipeline consulted that flag only at
-        # PHASE boundaries. Nothing consulted it where the GPU is actually
-        # spent. Measured on a real acquisition: a run whose agent request had
-        # already returned at its 570 s work deadline STARTED a 24th
-        # generation at +569.8 s and ran it 39.8 s to completion, leaving the
-        # relay holding an in-flight call after the terminal.
+        # the progress callback, and a check only at PHASE boundaries does not
+        # reach the place where the GPU is spent.
         #
         # This is the one chokepoint every V3 generation passes through, so
         # the check belongs here rather than at each of its callers. It stops
@@ -302,7 +298,7 @@ class LLMAdapter:
             self.call_count += 1
             call_no = self.call_count
 
-        # Resolve per-call override against the instance default (PC-206).
+        # Resolve the per-call override against the instance default.
         thinking_resolved = self.thinking if thinking is None else thinking
 
         body = {
@@ -531,7 +527,7 @@ class LLMAdapter:
         prompt = body.pop("prompt", "")
         model_name = os.environ.get("ATLAS_MODEL_NAME", "local-model")
 
-        # PC-206: thinking flag drops down from __call__. Default False so
+        # The thinking flag comes down from __call__. Default False so
         # callers get bounded generation unless they opt into reasoning.
         thinking = bool(body.pop("_thinking", False))
 
@@ -579,19 +575,13 @@ class LLMAdapter:
     def _log_first_delta(delta_obj: dict) -> None:
         """Log which keys the first streamed delta carries and how many
         characters arrived, never the characters themselves."""
-        # Metadata only. This line used to carry a
-        # 200-character sample of the delta, which
-        # is candidate source: harmless while logs
-        # were unstructured and local, and a
-        # retained content leak the moment
-        # ATLAS_LOG_FORMAT=json makes these records
-        # evidence. 84 such records were captured in
-        # one 63-cell rehearsal. The diagnostic
-        # exists to say which keys a build sends and
-        # whether anything arrived; request and
-        # invocation identity already join the line
-        # to its call, so no sample, prefix, excerpt
-        # or encoding of the content is needed.
+        # Metadata only: keys and character counts. The delta is candidate
+        # source, and once ATLAS_LOG_FORMAT=json makes these records retained
+        # evidence, any sample of it would be a retained content leak. The
+        # diagnostic exists to say which keys a build sends and whether
+        # anything arrived; request and invocation identity already join the
+        # line to its call, so no sample, prefix, excerpt or encoding of the
+        # content is needed.
         _c = delta_obj.get("content")
         _r = delta_obj.get("reasoning_content")
         print(f"  [LLM] first delta keys={sorted(delta_obj.keys())} "
@@ -669,11 +659,9 @@ class CancelScope:
     actually stops work: a blocked read returns, and the upstream sees its
     client go away.
 
-    Measured before this existed: a generation dispatched at a parent's work
-    deadline ran 39.8s to completion after the agent request had returned,
-    and the inference stub recorded its client as still connected the whole
-    time. Waiting for a broken SSE write to notice cannot fix that -- while a
-    call is in flight nothing is being written.
+    Waiting for a broken SSE write to notice cannot do that: while a call is
+    in flight nothing is being written, so it would run to completion after
+    the agent request had returned, with its client still connected.
 
     Cancellation is idempotent, scoped to one invocation, and never reaches
     another request's connections.
@@ -800,7 +788,7 @@ def _error_text(answer: dict) -> str:
 class SandboxAdapter:
     """Calls the sandbox service for code execution.
 
-    PC-046: optional `project_files` dict ships supporting files (other
+    Optional `project_files` dict ships supporting files (other
     modules from the user's project) into the sandbox workspace so
     multi-file imports resolve. Without this, a candidate that does
     `from utils import helper` fails ImportError in the sandbox even
@@ -829,8 +817,7 @@ class SandboxAdapter:
             body["stdin"] = test_input
         # Per-call staging on top of project context: a self-test case's own
         # input file is this request's, and where the two name the same file
-        # the case wins. Omitting `files` leaves every existing caller's body
-        # byte for byte what it was.
+        # the case wins. Without `files`, only the project context is staged.
         staged = dict(self.project_files or {})
         if files:
             staged.update(files)
@@ -844,8 +831,8 @@ class SandboxAdapter:
             )
             # 45s client timeout: the sandbox's server-side budgets (syntax
             # check + optional pip install + lint + the 15s run cap) can sum
-            # past 30s, and the old 20s read timeout gave up on executions
-            # the sandbox would still have completed.
+            # past 30s, and a shorter timeout gives up on executions the
+            # sandbox would still complete.
             # Client read timeout is derived from the execution budget plus
             # bounded overhead, never a fixed value below it.
             _client_timeout = max(45, _EXECUTE_TIMEOUT_S + 30)
@@ -977,23 +964,20 @@ CRITERION_PARSES = "parses"
 
 # --- registry: what an adapter may declare, and what must back it -----------
 #
-# Three declarations used to be derived instead of made, and each derivation
-# hid a different way of claiming more than the adapter could show:
+# Three declarations are made, never derived, because each derivation would
+# let an adapter claim more than it can show:
 #
-#   supported     inferred from set membership, so an adapter became supported
-#                 for an artifact class by not appearing in a list;
-#   requirements  built FROM capabilities, so an adapter read its own reach and
-#                 called the result the TASK's obligation -- the one thing
+#   supported     inferred from set membership, an adapter would become
+#                 supported for an artifact class by not appearing in a list;
+#   requirements  built FROM capabilities, an adapter would read its own reach
+#                 and call the result the TASK's obligation -- the one thing
 #                 contract.py's own docstring forbids it;
-#   evaluators    implicit in a branch of _observations, so "can measure X" and
-#                 "something computes X" were separate facts nothing compared.
+#   evaluators    implicit in a branch of _observations, "can measure X" and
+#                 "something computes X" would be separate facts nothing
+#                 compares.
 #
-# The sealed Stage-A acquisition is the bill: 100 of 103 candidate evaluations
-# ran under python_compile, which required four browser-behaviour criteria it
-# cannot measure, and every record carried two of them in missing_required
-# with capabilities []. No Python
-# candidate in that run could reach closure -- not for want of an oracle, but
-# because that route could not reach closure at all.
+# A required criterion the adapter cannot measure leaves its whole route unable
+# to reach closure, whatever the candidate does.
 #
 # The registry below makes all three explicit, and check_registry checks them
 # against each other at import. Each adapter requires exactly the criteria it
@@ -1144,9 +1128,9 @@ def _capabilities(adapter):
 def _requirements(adapter):
     """The obligations this record is measured against.
 
-    Declared, never derived from _capabilities. Deriving them is how an
-    adapter read its own reach and called the answer the task's requirement;
-    an obligation an adapter cannot measure must appear in its `unmeasurable`
+    Declared, never derived from _capabilities: deriving them would let an
+    adapter read its own reach and call the answer the task's requirement.
+    An obligation an adapter cannot measure must appear in its `unmeasurable`
     quarantine, which the registry check enforces.
 
     Adapter-owned: the task's own obligations are derived in the proxy and
@@ -1172,8 +1156,8 @@ def _supported(adapter):
     unverified, never failed.
 
     Read from the adapter's own declaration rather than inferred from set
-    membership: an adapter used to become supported for an artifact class by
-    not appearing in a list, which is support by omission.
+    membership, which would make an adapter supported for an artifact class by
+    not appearing in a list: support by omission.
     """
     support = SUPPORT_DECLARATION.get(adapter)
     if support == SUPPORT_NEVER:

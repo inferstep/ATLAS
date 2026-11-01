@@ -34,7 +34,7 @@
 * **小さなモデルからより多くを引き出す。** ATLAS は単発の生成に依存する代わりに、プランニング、候補選択、検証、修復をモデルの周りに重ねます。
 * **受け入れる前に検証する。** 生成されたコードは、分離された実行環境の中でコンパイル・テスト・修正できます。
 * **計算資源を要所に集中させる。** 単純な編集は短いパスで済ませ、難しいタスクにはより多くの候補・推論・検証を割り当てます。
-* **自分のモデルを動かす。** NVIDIA、AMD、Apple Silicon、Vulkan、あるいは CPU 対応ハードウェア上で、互換性のある GGUF モデルを使えます。
+* **自分のモデルを動かす。** NVIDIA、AMD、Apple Silicon、Vulkan、あるいは CPU 対応ハードウェア上で、互換性のある GGUF モデルを使えます。モデルにはレンズバンドルが必要で、ないモデルには `atlas lens build` で作成できます。
 * **ローカルで管理する。** ATLAS は、リポジトリやプロンプトをホスト型モデルまたは ATLAS 運営サービスへ意図的にアップロードしません。サンドボックスコマンドはデフォルトで外部ネットワークへアクセスできます。無効にするには `ATLAS_SANDBOX_NET_INTERNAL=true` を設定してください。
 * **スタック全体を所有する。** ATLAS はオープンソースかつセルフホストです。ホスト型モデルやサードパーティのモデルプロバイダー API キーは不要で、ローカルのインストール単位のサービストークンが ATLAS サービス間を認証します。
 
@@ -78,17 +78,17 @@
 3. **[V3 パイプライン](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 単一のプロンプトを検証済み候補に変換するマルチフェーズコード生成。
    - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 制約駆動の構造化プランニング
    - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 温度と戦略をまたぐ多様な候補生成
-   - [予算ティア](../../ARCHITECTURE.md#pipeline-flow) - アロケータがタスクごとに計算ティアを選ぶ。現状、ティアが決めるのは候補数であり、思考の深さではない
+   - [予算ティア](../../ARCHITECTURE.md#pipeline-flow) - アロケータがタスクごとに計算ティアを選ぶ。ティアは候補数と、候補ごとのプロンプトおよびトークンの予算を決めます
    - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスのエラー出力をもとに失敗した候補を修復
    - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - サンドボックスでの検証と修正を繰り返す
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - モデル自身の埋め込み上で動くエネルギーベースのスコアリング。外部オラクル不要。(「[Geometric Lens とは?](../../ARCHITECTURE.md#why-geometric-lens)」)
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 候補の品質をスコア化する、モデルの隠れ次元→512→128→1 の MLP
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 選択に用いる XGBoost アンサンブル
-   - [パーステップスコアリング](../../API.md#geometric-lens-port-8099) - 書き込みのトークンごとの C(x)/G(x) スコアリング。モデル別に較正された閾値が介入を駆動します
+   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 生成する候補数の判断に用いる XGBoost アンサンブル。候補の選択自体は最小の C(x) で行います
+   - [パーステップスコアリング](../../API.md#geometric-lens-port-8099) - 書き込みのトークンごとの C(x)/G(x) スコアリング。モデル別の閾値が介入を動かすのは、そのモデルのバンドルが較正済みのときだけです
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - ビルド検証のための分離実行環境。
-   - 多言語実行: Python、Rust、Go、C、Shell など
+   - 多言語実行: Python、Rust、Go、C、Shell など。Rust、Go、C はプロジェクト内のコマンドとして実行できます。V3 は構文を確認し、サンドボックスの `/execute` はコンパイルのみで、まだ実行できません ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - スコアリング前のコンパイルとリント
    - 生成テストと既存テストスイートの両方を実行
 
@@ -97,7 +97,7 @@
    - トークンレベルの文法制約デコーディング
    - セルフ埋め込み（レンズのための別モデルは不要）
 
-詳細ドキュメント（セットアップ、アーキテクチャ、設定、トラブルシューティング、ベンチマークレポート、各コンポーネントの[研究的背景](../../SOURCES.md)）は [docs/](../../) にあります。
+詳細ドキュメント（セットアップ、アーキテクチャ、設定、トラブルシューティング、各コンポーネントの[研究的背景](../../SOURCES.md)）は [docs/](../../) にあります。
 
 ---
 
@@ -128,8 +128,8 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
-| ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) または Podman |
+| GPU | VRAM 16GB 以上。NVIDIA (CUDA、サポート対象 (Supported))、AMD (ROCm、コミュニティ検証済み (Community-tested))、または Apple Silicon (Metal、macOS ハイブリッド、サポート対象)。その他大半の GPU は Vulkan (プレビュー (Preview)) でカバー。プレビルドの CUDA イメージは Blackwell (RTX 50xx) を対象としており、それより古い NVIDIA GPU は一度だけのローカル再ビルドが必要です ([SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31) を参照)。レベルの定義: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。GPU 一覧: [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。特定のモデルがお使いのカードに収まるかは [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu) を参照。 |
+| ランタイム | Docker (NVIDIA: + nvidia-container-toolkit; AMD: 単体の Docker で十分) |
 | Python | 3.9 以上 |
 | ディスク | 約 20GB CUDA / 約 22GB ROCm (モデル重み + コンテナイメージ) |
 
@@ -139,8 +139,9 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## ⚠️ 既知の制限事項
 
-- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
+- **Linux の Docker スタック、加えてネイティブ macOS パス。** NVIDIA (サポート対象 (Supported))、AMD ROCm (コミュニティ検証済み (Community-tested))、Vulkan (プレビュー (Preview)) の Docker パスが現在存在します。Apple Silicon (サポート対象) はネイティブ macOS ハイブリッド Metal パス ([#32](https://github.com/inferstep/ATLAS/issues/32)) で動作します。Intel Arc / SYCL はロードマップ (Roadmap) です。レベルの定義: [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
 - **ATLAS には現在のベンチマーク結果がありません。** V3.0 の LiveCodeBench の数値は撤回しました（[CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746) 参照）。現行リリースの能力・信頼性の数値はまだ測定されていません。数値は保留タスクでの再測定後にのみ公表し、モデル別の結果は [#28](https://github.com/inferstep/ATLAS/issues/28) で追跡します。
+- **レンズのシグナルはまだ実証されていません。** リファレンスモデルではスコアは出ますが未較正のままで、介入は中立です。3.1.6 では有効なシグナルが得られず、`dev` ではまだ測定していません ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **複雑な機能追加は不安定なことがあります。** コンパクトなモデルは、コードを書き始める前に不慣れなコードベースの探索にエージェントターンを費やすことがあります。
 - **文法制約デコーディングは制約なしのデコーディングより遅くなります。**
 
@@ -148,16 +149,7 @@ Apple Silicon は macOS ハイブリッド Metal パス（ネイティブ llama-
 
 ## 🗺️ ロードマップ
 
-**V3.2** - 次のマイルストーン: より深いコード推論。
-- 構造的コード推論（残り） — 出荷済みのコールグラフレイヤーを深掘りします ([#39](https://github.com/inferstep/ATLAS/issues/39))。
-- サンプリングを用いた推論 — 効率と品質の向上 ([#9](https://github.com/inferstep/ATLAS/issues/9))。
-- 先送りしたインフラ: 自動化された HuggingFace 投稿パイプライン ([#102](https://github.com/inferstep/ATLAS/issues/102))。K3s / Kubernetes 上の ROCm。レジストリモデルの正式ベンチマーク — LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28))。
-
-**バックログ / 協力者募集**
-- ハードウェア: ARM64 マルチアーキテクチャビルド ([#115](https://github.com/inferstep/ATLAS/issues/115))、大規模モデル向けのマルチ GPU ([#34](https://github.com/inferstep/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27))。
-- ツール: VS Code / JetBrains 拡張機能 ([#35](https://github.com/inferstep/ATLAS/issues/35))。
-- サンドボックス言語: Java / Kotlin ([#29](https://github.com/inferstep/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/inferstep/ATLAS/issues/30))。
-- アーキテクチャ: モデル非依存プラットフォーム ([#66](https://github.com/inferstep/ATLAS/issues/66))。
+計画中と進行中の作業は [ATLAS Roadmap ボード](https://github.com/orgs/inferstep/projects/1) で確認できます。
 
 ---
 
@@ -182,7 +174,7 @@ ATLAS はオープンに開発されており、コントリビューターと�
 
 バグを見つけた、あるいは行き詰まった? **[Issue を作成してください](https://github.com/inferstep/ATLAS/issues)** — 修正の提出は必須ではありません。バグ報告とフィードバックはコードと同じくらい役に立ちます。
 
-ガイドラインは **[CONTRIBUTING.md](../../../CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
+ガイドラインは **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)** を、コードベースのレイアウトの概要は[リポジトリマップ](../../README.md#repository-map)をご覧ください。
 
 ---
 

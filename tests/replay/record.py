@@ -108,7 +108,7 @@ REAL_MODEL = {
     "real_model_add_function": ("smoke", "add_function"), "real_model_offbyone": ("smoke", "offbyone"),
     "real_model_ask_explain": ("smoke", "ask_explain"),
 }
-DRIVER = stage.REPO / "scripts" / "e2e-reliability.py"
+DRIVER = stage.REPO / "scripts" / "eval" / "e2e-reliability.py"
 
 
 def real_model_case(name: str) -> dict:
@@ -121,7 +121,7 @@ def real_model_case(name: str) -> dict:
         sys.modules[spec.name] = driver
         spec.loader.exec_module(driver)
         chosen = driver.TASKS[smoke_task]
-        task = f"the task `{smoke_task}` of the smoke set (scripts/e2e-reliability.py)"
+        task = f"the task `{smoke_task}` of the smoke set (scripts/eval/e2e-reliability.py)"
         files, message, contract = chosen.files, chosen.prompt, driver.task_contract(chosen)
     return {"source": {"task": task, "kind": kind, "model_replies": "captured", "what": "a session that a real model answers"},
             "files": files,

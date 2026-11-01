@@ -70,9 +70,9 @@ func TestIsActionIntentMessage(t *testing.T) {
 	}
 }
 
-// classifyAgentTier is in agent.go. These rows are the two rules of this file
+// classifyAgentTier is in task_tier.go. These rows are the two rules of this file
 // that it reads: an explain-only request is chat, and a negated clause in a
-// real task does not make the task chat. The last two rows are agent.go's own
+// real task does not make the task chat. The last two rows are task_tier.go's own
 // rules: a question with no question mark, read by its opening words, is chat,
 // and a bug report, which is neither task wording nor a question, is not.
 func TestClassifyAgentTierReadsExplainOnlyAndNegation(t *testing.T) {
@@ -97,7 +97,7 @@ func TestClassifyAgentTierReadsExplainOnlyAndNegation(t *testing.T) {
 	}
 }
 
-// isQuestionMessage is in agent.go.
+// isQuestionMessage is in task_tier.go.
 func TestQuestionDetectedMidMessage(t *testing.T) {
 	if !isQuestionMessage("what does find_duplicates do? Just explain.") {
 		t.Error("a question followed by a qualifier is still a question")

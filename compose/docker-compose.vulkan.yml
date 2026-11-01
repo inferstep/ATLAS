@@ -68,6 +68,10 @@ services:
     # standard on Linux distros (already required for the ROCm overlay).
     # On hosts where these don't exist, llama-server will fail to enumerate
     # GPU ICDs and Vulkan will silently fall back to lavapipe (CPU).
+    # Root until ATLAS_LLAMA_USER is set: `atlas init` and a first bootstrap write
+    # it, with the host's numbers. A .env from before 3.2.0 has none, and a
+    # non-root account would lose the GPU.
+    user: "${ATLAS_LLAMA_USER:-0:0}"
     # A name here resolves in the image, whose numbers need not match the
     # host's device nodes, so `atlas init` writes the host's numbers.
     group_add:

@@ -1,4 +1,4 @@
-"""Unit tests for scripts/e2e-reliability.py: its harness-defect detectors, and what a run sends and records.
+"""Unit tests for scripts/eval/e2e-reliability.py: its harness-defect detectors, and what a run sends and records.
 
 The detectors decide whether a live session's failure was ATLAS's fault or the
 model's, so a detector that silently stops firing turns the reliability number
@@ -31,7 +31,7 @@ REPO = Path(__file__).resolve().parents[2]
 @pytest.fixture(scope="module")
 def rel():
     spec = importlib.util.spec_from_file_location(
-        "atlas_reliability", REPO / "scripts" / "e2e-reliability.py")
+        "atlas_reliability", REPO / "scripts" / "eval" / "e2e-reliability.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["atlas_reliability"] = mod
     spec.loader.exec_module(mod)

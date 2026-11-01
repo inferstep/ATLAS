@@ -268,7 +268,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-以前は非対応だったカードでこれが動いた場合は、ぜひ [GH #26](https://github.com/inferstep/ATLAS/issues/26) にメモを残してください — コミュニティ検証済みのオーバーライドは次のリリースのドキュメントに反映されます。
+以前は非対応だったカードでこれが動いた場合は、ぜひ [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports) にメモを残してください — コミュニティ検証済みのオーバーライドは次のリリースのドキュメントに反映されます。
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x が必要
 
@@ -575,6 +575,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **修正:** プロキシは `/v1/agent` エージェントループハンドラ内で自動的に `response_format` を設定します。その形状は `ATLAS_GRAMMAR_MODE` が選びます: デフォルトの `strict` は `{"type":"json_object","schema":<full tool-call schema>}` を送信し、llama-server の GBNF サンプラーは tool_call/text/done のユニオンしか発行できなくなります。`ATLAS_GRAMMAR_MODE=loose` は `{"type":"json_object"}` のみを送信します（有効な JSON にはなるが形状は強制されない）— スキーマから GBNF への変換をうまく扱えないモデル向けの逃げ道です（Gemma 系モデルには `loose` が必要です — strict モードでは done を連発するようになります）。llama-server を `/v1/chat/completions` または `/v1/completions` で直接呼び出す場合は、パラメータを自分で含める必要があります:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -694,7 +695,7 @@ ATLAS_FRESH_SLOT_PER_SESSION=0
 
 **どうするか:** 欠けているファイルを `read_file` で読み、プロジェクトコンテキストに載せてください。サンドボックスの `/execute` API を直接呼んでいる場合は、リクエストボディで補助ファイルを渡してください:
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -729,7 +730,7 @@ except curses.error:
 
 **症状:** 最初のリクエストはファイルを作成し V3 が動く。"ok" や "yes" のような素っ気ないフォローアップには会話的な返答が返る — ツールコールも V3 イベントもなし。
 
-**何が起きているか:** エージェントループのティア分類器（`proxy/agent.go:classifyAgentTier`）が答える問いは1つです: これは会話か、それとも作業か。デフォルトは作業であり、T0 には積極的な根拠が必要です。2種類の誤りのコストが大きく違うからです。会話を作業と読み違えた場合に失うのは、モデルが1ターンで閉じるメッセージに対するプランナー呼び出し1回分だけです。作業を会話と読み違えた場合はターンが5で打ち切られ、プランニングもスキップされるため、リクエストそのものが失敗します。
+**何が起きているか:** エージェントループのティア分類器（`proxy/task_tier.go:classifyAgentTier`）が答える問いは1つです: これは会話か、それとも作業か。デフォルトは作業であり、T0 には積極的な根拠が必要です。2種類の誤りのコストが大きく違うからです。会話を作業と読み違えた場合に失うのは、モデルが1ターンで閉じるメッセージに対するプランナー呼び出し1回分だけです。作業を会話と読み違えた場合はターンが5で打ち切られ、プランニングもスキップされるため、リクエストそのものが失敗します。
 
 メッセージが会話的と判定されるのは、12文字未満（`hi`、`thanks`、`ok`）であるか、疑問文の形をしている場合だけです — 節を終える `?` で終わる、あるいは単語全体で一致する疑問詞（`why`、`what`、`how`、`is`、`can` など）で始まる場合。ただしタスクを表す言い回しは両者に優先するため、`can you fix the login bug?` は疑問符があっても作業です。`task_mode: work` を送信するクライアント（TUI がそうです）は、決して会話として分類されません。ただしタスクを表す言い回しは両者に優先するため、`can you fix the login bug?` は疑問符があっても作業です。それ以外はすべて作業として扱われます: `still doesn't work, try again` も `the snake is moving way too fast, slow it down` も、ファイル名を挙げておらずタスク動詞のリストにも一致しませんが、どちらもパイプラインが動きます。
 
@@ -808,7 +809,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **修正:**
 1. エンベディングサーバーの規約を確認します。プーリング済み + 正規化済みのサーバーは ‖v‖≈1 のフラットなベクトルを返します:
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b","embd_normalize":-1}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    プールされた `norm` は数百の範囲になります（同梱の Gemma アーティファクトでおよそ 100-150）。`norm` がちょうど `1.0` の場合、`embd_normalize: -1` を指定したにもかかわらずサーバーがベクトルを正規化しており、C(x) はどの入力に対しても約 0.8 という平坦な値を返します。健全に見えて何も区別しないスコアです。
@@ -825,6 +826,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```

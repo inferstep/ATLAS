@@ -16,7 +16,7 @@ One run, started by a timer on the development server, in a folder of its own
   4. takes the lock of the graphics card, and reads what the card holds;
   5. starts a stack under a name of its own, on loopback ports of its own,
      and asks the services whether they are whole;
-  6. runs the driver of the repository (scripts/e2e-reliability.py) with three
+  6. runs the driver of the repository (scripts/eval/e2e-reliability.py) with three
      fixed tasks, once each, and keeps the seconds of each;
   7. runs the tests that need a real model, and judges the result file with
      the judge of such runs (scripts/tests_counted.py): every one of them is
@@ -138,13 +138,13 @@ FROM_DEV = {"scripts/nightly_run.py": "the script of this run",
             "scripts/tests_counted.py": "the judge of the tests, which the script loads on the server itself",
             "scripts/nightly_images.py": "the images of a run, which the script loads on the server itself",
             "scripts/nightly_statuses.py": "the sending of the statuses, which the script loads on the server itself",
-            "scripts/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
+            "scripts/eval/e2e-reliability.py": "the driver of the sessions, which runs on the server itself",
             "scripts/code_quality.py": "a module of the driver, which runs on the server itself",
-            "scripts/reliability_report.py": "a module of the driver, which runs on the server itself",
-            "scripts/reliability_stream.py": "a module of the driver, which runs on the server itself",
-            "scripts/reliability_detectors.py": "a module of the driver, which runs on the server itself",
-            "scripts/reliability_records.py": "a module of the driver, which runs on the server itself",
-            "scripts/reliability_sandbox.py": "a module of the driver, which runs on the server itself",
+            "scripts/eval/reliability_report.py": "a module of the driver, which runs on the server itself",
+            "scripts/eval/reliability_stream.py": "a module of the driver, which runs on the server itself",
+            "scripts/eval/reliability_detectors.py": "a module of the driver, which runs on the server itself",
+            "scripts/eval/reliability_records.py": "a module of the driver, which runs on the server itself",
+            "scripts/eval/reliability_sandbox.py": "a module of the driver, which runs on the server itself",
             "scripts/smoke_result.py": "the script that makes the mark of the result line",
             "inference/": "the model server, whose image is never built on the server and whose start script the "
                           "stack mounts from the tree",
@@ -656,7 +656,7 @@ def smoke(args, head: str, folder: Path) -> list:
     """Run the driver with the fixed tasks, once each. Gives a row for each task: its seconds, and how it ended."""
     result = folder / "driver.json"
     urls = service_urls()
-    done = command([args.python, "scripts/e2e-reliability.py", "--url", urls["ATLAS_PROXY_URL"],
+    done = command([args.python, "scripts/eval/e2e-reliability.py", "--url", urls["ATLAS_PROXY_URL"],
                     "--workspace", str(args.dir / "workspace" / "_reliability"), "--subdir", "_reliability",
                     "--sandbox-container", f"{PROJECT}-sandbox-1", "--compose-project", PROJECT,
                     "--deploy-dir", str(args.dir / "no-deploy-record"), "--commit", head,

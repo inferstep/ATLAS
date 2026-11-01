@@ -118,24 +118,6 @@ class BaseDataset(ABC):
         """Get task by index."""
         return self.tasks[idx]
 
-    def get_by_id(self, task_id: str) -> BenchmarkTask:
-        """
-        Get a task by its ID.
-
-        Args:
-            task_id: The task identifier.
-
-        Returns:
-            The matching BenchmarkTask.
-
-        Raises:
-            KeyError: If no task with that ID exists.
-        """
-        for task in self.tasks:
-            if task.task_id == task_id:
-                return task
-        raise KeyError(f"No task with ID '{task_id}' in {self.name}")
-
     def validate(self) -> bool:
         """
         Validate all tasks in the dataset.

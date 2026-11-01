@@ -34,7 +34,7 @@
 * **让更小的模型发挥更大价值。** ATLAS 在模型周围加入规划、候选选择、验证与修复，而不是押注于单次生成。
 * **先验证，再接受。** 生成的代码可以在隔离的执行环境中编译、测试并修正。
 * **把算力花在刀刃上。** 简单的编辑走更短的路径，更难的任务则获得更多候选、推理与验证。
-* **运行你自己的模型。** 在 NVIDIA、AMD、Apple Silicon、Vulkan 或支持 CPU 的硬件上使用兼容的 GGUF 模型。
+* **运行你自己的模型。** 在 NVIDIA、AMD、Apple Silicon、Vulkan 或支持 CPU 的硬件上使用兼容的 GGUF 模型。模型需要 lens 包；没有的模型可用 `atlas lens build` 生成。
 * **在本地掌控数据。** ATLAS 不会有意把你的仓库或提示上传到托管模型或 ATLAS 运营的服务。沙箱命令默认可以访问外部网络；设置 `ATLAS_SANDBOX_NET_INTERNAL=true` 可禁用该访问。
 * **掌控完整技术栈。** ATLAS 开源且自托管，不需要托管模型或第三方模型提供商 API 密钥；ATLAS 服务之间使用本地的逐安装服务令牌进行认证。
 
@@ -78,16 +78,16 @@
 3. **[V3 Pipeline](../../ARCHITECTURE.md#4-v3-pipeline-inner-layer)** - 多阶段代码生成；把单个提示词转化为经过验证的候选。
    - [PlanSearch](../../ARCHITECTURE.md#pipeline-flow) - 约束驱动的结构化规划
    - [DivSampling](../../ARCHITECTURE.md#pipeline-flow) - 跨温度和策略的多样化候选生成
-   - [预算层级](../../ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；目前层级只决定生成多少候选，不改变思考深度
+   - [预算层级](../../ARCHITECTURE.md#pipeline-flow) - 分配器为每个任务选择计算层级；层级决定生成多少候选，以及每个候选的提示和 token 预算
    - [PR-CoT Repair](../../ARCHITECTURE.md#pipeline-flow) - 根据沙箱的错误输出修复失败的候选
    - [Refinement Loops](../../ARCHITECTURE.md#pipeline-flow) - 沙箱验证与修正，然后重复
 
 4. **[Geometric Lens](../../ARCHITECTURE.md#5-geometric-lens)** - 基于模型自身嵌入的能量打分，无需外部预言机。（[什么是 "Geometric Lens"？](../../ARCHITECTURE.md#why-geometric-lens)）
    - [C(x) Cost Field](../../ARCHITECTURE.md#scoring-models) - 模型隐藏维度→512→128→1 的 MLP，用于评估候选质量
-   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 用于候选选择的 XGBoost 集成
+   - [G(x) Quality Prediction](../../ARCHITECTURE.md#scoring-models) - 其评分有助于决定生成多少候选的 XGBoost 集成；候选选择本身取最低的 C(x)
 
 5. **[Sandbox](../../ARCHITECTURE.md#6-sandbox)** - 用于构建验证的隔离执行环境。
-   - 多语言执行：Python、Rust、Go、C、Shell 等
+   - 多语言执行：Python、Rust、Go、C、Shell 等。Rust、Go、C 可在项目中作为命令运行；V3 检查其语法，沙箱的 `/execute` 只能编译，暂时无法运行 ([#163](https://github.com/inferstep/ATLAS/issues/163))
    - 评分前先做编译与检查
    - 同时运行自生成测试和已有测试套件
 
@@ -96,7 +96,7 @@
    - token 级的语法约束解码
    - 自嵌入，因此 lens 不需要第二个模型
 
-完整文档（安装、架构、配置、故障排查、基准测试报告，以及[每个组件背后的研究依据](../../SOURCES.md)）位于 [docs/](../../) 目录中。
+完整文档（安装、架构、配置、故障排查，以及[每个组件背后的研究依据](../../SOURCES.md)）位于 [docs/](../../) 目录中。
 
 ---
 
@@ -127,8 +127,8 @@ bash atlas-bootstrap.sh
 
 | | |
 |---|---|
-| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
-| 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可）或 Podman |
+| GPU | 显存 16GB 以上。NVIDIA（CUDA，支持 (Supported)）、AMD（ROCm，社区验证 (Community-tested)）或 Apple Silicon（Metal，macOS 混合方案，支持）；其余大多数 GPU 由 Vulkan（预览 (Preview)）覆盖。预构建的 CUDA 镜像面向 Blackwell（RTX 50xx）；更早的 NVIDIA GPU 需要做一次性的本地重建（参见 [SETUP.md § CUDA Compute Capability](../../SETUP.md#cuda-compute-capability-dockerfilev31)）。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)；GPU 列表见 [SETUP.md § Supported GPUs](../../SETUP.md#supported-gpus)。想估算某个具体模型能否放进你的显卡，参见 [What fits on my GPU?](../../TROUBLESHOOTING.md#what-fits-on-my-gpu)。 |
+| 运行时 | Docker（NVIDIA：+ nvidia-container-toolkit；AMD：单独的 Docker 即可） |
 | Python | 3.9 及以上 |
 | 磁盘 | 约 20GB CUDA / 约 22GB ROCm（模型权重 + 容器镜像） |
 
@@ -138,8 +138,9 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## ⚠️ 已知限制
 
-- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../../SUPPORT_MATRIX.md)。
+- **Linux Docker 栈，外加一条原生 macOS 路径。** NVIDIA（支持 (Supported)）、AMD ROCm（社区验证 (Community-tested)）和 Vulkan（预览 (Preview)）的 Docker 路径今天即已存在；Apple Silicon（支持）通过原生 macOS 混合 Metal 方案运行 ([#32](https://github.com/inferstep/ATLAS/issues/32))。Intel Arc / SYCL 为路线图 (Roadmap) 级别。级别定义见 [SUPPORT_MATRIX.md](../../SUPPORT_MATRIX.md)。
 - **ATLAS 目前没有基准测试结果。** V3.0 的 LiveCodeBench 数字已撤回（见 [CHANGELOG](../../../CHANGELOG.md#withdrawn-the-v30-livecodebench-result-746)），当前版本的能力与可靠性数字尚未测量。只有在留出任务上重新测量后才会公布数字；逐模型结果在 [#28](https://github.com/inferstep/ATLAS/issues/28) 中跟踪。
+- **Lens 的信号尚未得到证实。** 在参考模型上它能评分，但仍未校准，因此干预保持中立。在 3.1.6 上它没有给出可用信号，`dev` 上尚未测量 ([#281](https://github.com/inferstep/ATLAS/issues/281))。
 - **复杂功能添加可能不稳定。** 紧凑模型有时会在陌生代码库上花掉几轮 agent 回合去探索而不是写代码。
 - **语法约束解码比不受约束的解码更慢。**
 
@@ -147,16 +148,7 @@ Apple Silicon 通过原生 macOS 混合 Metal 方案运行（原生 llama-server
 
 ## 🗺️ 路线图
 
-**V3.2** - 下一个里程碑：更深入的代码推理与规划。
-- 结构化代码推理（收尾）- 求解器支撑的可达性分析 + 语法无关的小波分解，实现多分辨率的"哪些文件重要"检索 ([#39](https://github.com/inferstep/ATLAS/issues/39))。
-- 带采样的推理 - 兼顾效率与质量提升 ([#9](https://github.com/inferstep/ATLAS/issues/9))。
-- 顺延的基础设施：自动化 HuggingFace 提交流水线 ([#102](https://github.com/inferstep/ATLAS/issues/102))；ROCm 跑在 K3s / Kubernetes 上；注册表模型的正式基准测试 - LiveCodeBench、GPQA Diamond、SciCode ([#28](https://github.com/inferstep/ATLAS/issues/28))。
-
-**待办 / 欢迎贡献**
-- 硬件：ARM64 多架构构建 ([#115](https://github.com/inferstep/ATLAS/issues/115))、面向更大模型的多 GPU ([#34](https://github.com/inferstep/ATLAS/issues/34))、Intel oneAPI / SYCL ([#27](https://github.com/inferstep/ATLAS/issues/27))。
-- 工具链：VS Code / JetBrains 扩展 ([#35](https://github.com/inferstep/ATLAS/issues/35))。
-- 沙箱语言：Java / Kotlin ([#29](https://github.com/inferstep/ATLAS/issues/29))、Ruby / PHP ([#30](https://github.com/inferstep/ATLAS/issues/30))。
-- 架构：模型无关的平台 ([#66](https://github.com/inferstep/ATLAS/issues/66))。
+计划中和进行中的工作都在 [ATLAS Roadmap 看板](https://github.com/orgs/inferstep/projects/1) 上。
 
 ---
 
@@ -181,7 +173,7 @@ ATLAS 以开源方式开发，欢迎贡献者和核心维护者加入。修复 b
 
 发现 bug 或者被卡住了？**[提交一个 issue](https://github.com/inferstep/ATLAS/issues)** - 你不需要附上修复。bug 报告和反馈与代码同样有价值。
 
-贡献指南见 **[CONTRIBUTING.md](../../../CONTRIBUTING.md)**，代码库布局概览见[仓库地图](../../README.md#repository-map)。
+贡献指南见 **[CONTRIBUTING.md](../../../.github/CONTRIBUTING.md)**，代码库布局概览见[仓库地图](../../README.md#repository-map)。
 
 ---
 

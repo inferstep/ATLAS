@@ -23,6 +23,10 @@ spec:
       containers:
       - name: llama
         image: ghcr.io/${ATLAS_GHCR_OWNER}/atlas-llama:${ATLAS_IMAGE_TAG}
+        # The image's own account: the image declares no USER.
+        securityContext:
+          runAsUser: 1001
+          runAsGroup: 1001
         ports:
         - containerPort: ${ATLAS_LLAMA_PORT}
           name: http

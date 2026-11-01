@@ -107,7 +107,7 @@ def test_owned_python_senders_are_inventoried():
     senders = _owned_python_senders()
     files = sorted({f for f, _, _ in senders})
     # Classification, by file. Anything not listed fails.
-    declares_contract = {"tests/e2e/conftest.py", "scripts/e2e-reliability.py",
+    declares_contract = {"tests/e2e/conftest.py", "scripts/eval/e2e-reliability.py",
                          # Sends through agent_request_body, and reads the 503
                          # a request gets while the lens cannot score, which
                          # the streaming helper cannot return.
@@ -157,7 +157,7 @@ def test_e2e_helper_defaults_to_work():
 
 def test_benchmark_harness_declares_work_without_evaluator_leakage():
     """The benchmark sends work, and never turns its scorer into an obligation."""
-    text = (REPO / "scripts/e2e-reliability.py").read_text()
+    text = (REPO / "scripts/eval/e2e-reliability.py").read_text()
     assert '"task_contract"' in text, "the benchmark harness sends no task contract"
     assert '"task_mode": "work"' in text
     # The offline evaluator and holdout are scoring machinery, not agent-facing

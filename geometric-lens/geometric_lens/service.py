@@ -254,10 +254,8 @@ def _load_gx_thresholds(models_dir: str) -> None:
 class _BoosterClassifier:
     """Minimal predict_proba shim around an xgboost.Booster.
 
-    The legacy code path loaded an xgboost.sklearn.XGBClassifier from pickle
-    and called .predict_proba(x). The native-JSON path (PC-031) avoids the
-    pickle compat warning and the sklearn runtime dep — but raw Booster only
-    exposes .predict(). For binary:logistic objectives, that returns the
+    The native-JSON path (PC-031) has no sklearn runtime dep, but a raw
+    Booster only exposes .predict(). For binary:logistic objectives, that returns the
     positive-class probability directly. This shim shapes it back into the
     [P(neg), P(pos)] layout the callers in this module expect, so the
     downstream `proba[1]` indexing keeps working unchanged.
@@ -288,53 +286,33 @@ def _load_gx_models(models_dir: str) -> None:
     _gx_pca_mean = None
     _gx_top_dims = None
 
-    # G(x) XGBoost model (preferred). Prefer the native JSON dump
-    # (gx_xgboost.json) — version-stable, no pickle-compat warning, no
-    # sklearn dep. Fall back to gx_xgboost.pkl for users who haven't
-    # refreshed their model dir yet. See ISSUES.md PC-031.
+    # G(x) XGBoost model, as the native JSON dump only. See ISSUES.md PC-031.
     xgb_json = os.path.join(models_dir, "gx_xgboost.json")
-    xgb_pkl = os.path.join(models_dir, "gx_xgboost.pkl")
     weights_path = os.path.join(models_dir, "gx_weights.json")
-    if os.path.exists(weights_path) and (os.path.exists(xgb_json) or os.path.exists(xgb_pkl)):
+    if not os.path.exists(xgb_json) and os.path.exists(os.path.join(models_dir, "gx_xgboost.pkl")):
+        logger.warning("G(x) found only as gx_xgboost.pkl, which the lens does not load. "
+                       "Run `atlas lens build` to rebuild it as gx_xgboost.json.")
+    if os.path.exists(weights_path) and os.path.exists(xgb_json):
         try:
             import json as json_mod
             import numpy as np
             import xgboost as xgb
 
-            if os.path.exists(xgb_json):
-                booster = xgb.Booster()
-                booster.load_model(xgb_json)
-                _gx_xgboost = _BoosterClassifier(booster)
-                load_path = "json"
-            elif os.environ.get("ATLAS_ALLOW_PICKLE_GX") == "1":
-                # Legacy pickle fallback, opt-in only: unpickling executes
-                # arbitrary code, and model dirs can contain downloaded
-                # artifacts. Users on the old format set
-                # ATLAS_ALLOW_PICKLE_GX=1 once to load it, then re-export.
-                import pickle
-                with open(xgb_pkl, 'rb') as f:
-                    _gx_xgboost = pickle.load(f)
-                load_path = "pickle (deprecated — re-export to gx_xgboost.json)"
-            else:
-                logger.warning(
-                    "G(x) found only as legacy gx_xgboost.pkl; refusing to "
-                    "unpickle by default. Set ATLAS_ALLOW_PICKLE_GX=1 to load "
-                    "it once and re-export to gx_xgboost.json."
-                )
-                _gx_xgboost = None
+            booster = xgb.Booster()
+            booster.load_model(xgb_json)
+            _gx_xgboost = _BoosterClassifier(booster)
 
-            if _gx_xgboost is not None:
-                with open(weights_path, 'r') as f:
-                    weights = json_mod.load(f)
+            with open(weights_path, 'r') as f:
+                weights = json_mod.load(f)
 
-                _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
-                _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
-                _gx_top_dims = weights.get('top_dims', [])
+            _gx_pca_components = np.array(weights['pca_components'], dtype=np.float32)
+            _gx_pca_mean = np.array(weights['pca_mean'], dtype=np.float32)
+            _gx_top_dims = weights.get('top_dims', [])
 
-                logger.info(
-                    f"G(x) XGBoost loaded ({load_path}, AUC={weights.get('cv_auc_mean', 0):.4f}, "
-                    f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
-                )
+            logger.info(
+                f"G(x) XGBoost loaded (AUC={weights.get('cv_auc_mean', 0):.4f}, "
+                f"PCA {weights.get('original_dim', '?')}→{weights.get('pca_dim', '?')})"
+            )
         except ImportError:
             logger.warning("G(x) XGBoost model found but xgboost package not installed")
             _gx_xgboost = None
@@ -636,7 +614,7 @@ def evaluate_per_step(query: str, layer: Optional[int] = None) -> dict:
 
     try:
         (cost_field, gx_xgboost, gx_pca_components, gx_pca_mean,
-         gx_top_dims, cx_cfg, gx_thresholds) = _snapshot_weights()
+         _, cx_cfg, gx_thresholds) = _snapshot_weights()
 
         start = time.monotonic()
 

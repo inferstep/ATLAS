@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD_FILES = sorted(path for path in (ROOT / "inference").glob("Dockerfile*") if "cmake -B" in path.read_text(encoding="utf-8"))
 
 
-def test_the_four_images_of_the_model_server_are_the_build_files_that_are_read():
-    assert [path.name for path in BUILD_FILES] == ["Dockerfile", "Dockerfile.rocm", "Dockerfile.v31", "Dockerfile.vulkan"], (
-        "the build files of the model server under inference/ are not the four that this test knows. Fix: when a build "
+def test_the_three_images_of_the_model_server_are_the_build_files_that_are_read():
+    assert [path.name for path in BUILD_FILES] == ["Dockerfile.rocm", "Dockerfile.v31", "Dockerfile.vulkan"], (
+        "the build files of the model server under inference/ are not the three that this test knows. Fix: when a build "
         "file is added or removed, give this list the same names; a new one must name its processor level too.")
 
 
@@ -39,7 +39,7 @@ def test_the_build_names_the_processor_level_of_the_cpu_part(path):
 
 
 def test_the_support_page_says_which_processor_the_images_need():
-    page = " ".join((ROOT / "SUPPORT_MATRIX.md").read_text(encoding="utf-8").split())
+    page = " ".join((ROOT / "docs" / "SUPPORT_MATRIX.md").read_text(encoding="utf-8").split())
     assert "images for amd64 need a processor with AVX2" in page, (
         "SUPPORT_MATRIX.md does not say that the model-server images for amd64 need a processor with AVX2. The build "
         "files set that level (`-DGGML_NATIVE=OFF`). Fix: say it on the page.")

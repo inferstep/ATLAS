@@ -37,14 +37,14 @@ type chatEvent struct {
 
 // historyMessage is one prior-turn user/assistant text row sent to the
 // proxy on each /v1/agent call. Field shape MUST match the historyMsg
-// struct in proxy/agent.go's handleAgent.
+// struct in proxy/agent_handler.go's handleAgent.
 type historyMessage struct {
 	Role    string `json:"role"` // "user" or "assistant"
 	Content string `json:"content"`
 }
 
 // agentRequest is the POST body for /v1/agent. Field tags MUST match
-// the anonymous struct in proxy/agent.go's handleAgent.
+// the anonymous struct in proxy/agent_handler.go's handleAgent.
 type agentRequest struct {
 	Message    string           `json:"message"`
 	WorkingDir string           `json:"working_dir"`

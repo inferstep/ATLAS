@@ -91,8 +91,11 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | 文件 | 职责 |
 |---|---|
 | `main.go` | HTTP 服务器、路由、鉴权、透传、错误信封、私密值日志过滤 |
-| `agent.go` | agent 循环：轮次状态、LLM 调用、计划生成、卡死循环断路器 |
-| `tools.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
+| `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
+| `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
+| `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
+| `agent.go` | agent 循环：轮次状态、计划生成、卡死循环断路器 |
+| `tools.go`, `tool_*.go` | 16 个工具定义与执行器、层级分类、工具调用语法 |
 | `gates*.go` | 诚实性/计划闸门：声明校验、结构、语法、内嵌脚本、计划遵循、计划提醒、资源 lint |
 | `detectors.go` | 卡死模式检测：工具重复、推理重复、traceback 定位 |
 | `context.go` | 上下文增强：符号索引、项目扫描、工作区隔离、会话文件清单 |
@@ -264,7 +267,7 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 #### 终端契约与会话预算
 
-每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。消费方把缺失、畸形或无法识别读作 `incomplete`，绝不读作完成（Go 侧 `NormalizeTerminalStatus`，`atlas/events.py` 侧 `terminal_status`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
+每个会话恰好以一个终端事件结束，来自一个发射器。它携带原样的遗留 `summary` 加一个增量的 `status`——`completed`、`incomplete`、`stopped`、`timed_out`、`failed`——以及一个稳定的机器可读 `reason`。客户端把缺失的 status 读作 `incomplete`，无法识别的词按原样显示，绝不读作完成（`tui/events.go` 的 `onDone`，VS Code 与 JetBrains 扩展的 `doneOutcome`）。broker 的 `done`/`stage_end` 信封报告同一结果，而不是断言 `success: true`。
 
 对除 `completed` 之外的任何状态，句子与字段都归服务器所有。模型自己的陈述只在完成门授权之处被放行；一个没有 summary 的非完成终端会得到一句服务器撰写的陈述，点名结果、磁盘上是否有东西、它是否被证明有效；而在非完成状态上抵达发射器的完成主张会被整个替换，而非围绕其编辑。这关闭了 Phase 2B 留下的缺口：一个只读 `summary` 的客户端——`status` 存在之前的所有客户端——现在读到与同时读两者者相同的真相。
 
@@ -295,12 +298,12 @@ run-first 门本身引用一条指令，`runFirstInstruction`：运行该扩展�
 
 一次实测的参考部署显示出一种偏差：即便 `structural_edit` 才是正确选择，模型也倾向于用 `edit_file`（BiasBusters arxiv 2510.00307 —— 相邻工具名的嵌入会相互竞争；描述比名称更重要）。代理中组合了四道与模型无关的防线：
 
-1. **描述重写**（`proxy/tools.go`）。edit_file 的描述
+1. **描述重写**（`proxy/tool_edit.go`、`proxy/tool_structural_edit.go`）。edit_file 的描述
    警告不要用于整文件/整函数；structural_edit 的描述
    声明对 >10 行 / 整节点替换是必需的；write_file 的描述
    声明仅用于新文件。
-2. **条件式 GBNF 语法**（`proxy/tools.go`，
-   `proxy/agent.go:stepExclusions`）。当一个 write_file 对
+2. **条件式 GBNF 语法**（`proxy/tool_schema.go`，
+   `proxy/llm_call.go:stepExclusions`）。当一个 write_file 对
    一个 >5 行的已有 .py/.html/.htm 文件被拒绝时，下一次 LLM 调用会
    被一个 GBNF 语法约束，该语法从工具名产生式中禁掉
    edit_file 和 write_file。模型在物理上无法发出

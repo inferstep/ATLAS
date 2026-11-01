@@ -517,6 +517,26 @@ func TestAnUnenforcedBudgetIsReportedAndNotSummed(t *testing.T) {
 	}
 }
 
+func TestAnOverrunIsLoggedAtStartWhenTheEnvelopeIsDeclared(t *testing.T) {
+	const GiB = int64(1) << 30
+	declared := memoryEnvelope{HostBytes: 4 * GiB, Budgets: []memoryBudget{{"inference", 11 * GiB, false}}}
+	logged := captureLog(t, func() { logEnvelopeOverruns(declared) })
+	if !strings.Contains(logged, "inference is not held to a limit") {
+		t.Errorf("the overrun was not logged: %q", logged)
+	}
+
+	undeclared := declared
+	undeclared.HostBytes = 0
+	logged = captureLog(t, func() { logEnvelopeOverruns(undeclared) })
+	if logged != "" {
+		t.Errorf("an envelope nobody declared was reported: %q", logged)
+	}
+
+	if !strings.Contains(readSourceForTest(t, "main.go"), "logEnvelopeOverruns(envelopeFromEnv())") {
+		t.Error("main no longer logs the overruns at start")
+	}
+}
+
 // ATLAS_LLAMA_MEM enforces; ATLAS_LLAMA_BUDGET_BYTES only accounts. Setting
 // the first must not leave the second silently shadowing it.
 func TestTheInferenceBudgetIsEnforcedOnlyWhenTheLimitIsSet(t *testing.T) {

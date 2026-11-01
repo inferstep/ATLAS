@@ -207,8 +207,8 @@ It cannot judge these, and says so when it meets one:
 | Go lint | `.golangci.yml` | errcheck, nilerr, unused, gocognit (15), forbidigo for `os.Getenv`, nolintlint. Judges new code only |
 | Extension lint | `extensions/vscode/eslint.config.mjs` | 100 lines per function, and 15 decision points per function, where a switch counts once. A file that holds a larger function is listed with that function's size, and the limit holds for the whole file. A listed number may go down and may not go up |
 | Coverage | `pyproject.toml` (`[tool.coverage.run]`), `scripts/production-readiness.py` | Go statement coverage per module; Python line coverage over `atlas`, `v3-service`, `geometric-lens`, `sandbox`, `scripts`; TypeScript line coverage of the extension |
-| Codecov | `codecov.yml`; default branch set to `dev` on Codecov | No comment on pull requests, no notes on diff lines. Two statuses that show numbers and always pass. One flag per report (`go-proxy`, `go-tui`, `python`, `typescript`); a flag that a commit does not upload keeps its parent's result. The result of each test goes there too, under the same four flags: the Go and pytest gates and the extension's tests write JUnit files in CI. The report is the "Tests" tab of the repository on Codecov (https://app.codecov.io/gh/inferstep/ATLAS/tests); it names failed tests and tests that pass only sometimes, and it blocks nothing |
-| SonarQube Cloud | `sonar-project.properties`, `.github/workflows/sonar.yml`; rule sets and gate on SonarQube Cloud | Analysis runs from CI on `dev`, `main` and pull requests. Test code is named as test code. Coverage is left out. Rule sets: "Sonar way comprehensive", with `pythonsecurity:S8705` and `pythonsecurity:S8707` off for Python (488 of 490 rules active) and `githubactions:S8545` and `githubactions:S8541` off for workflows (32 of 34); each raised mostly false alarms on this repository's own scripts and workflows. `pythonsecurity:S8707` reported 71 findings, all in the `atlas` command-line tool, in `scripts/` and in one calibration tool, where the path comes from the person who runs the command |
+| Codecov | `.github/codecov.yml`; default branch set to `dev` on Codecov | No comment on pull requests, no notes on diff lines. Two statuses that show numbers and always pass. One flag per report (`go-proxy`, `go-tui`, `python`, `typescript`); a flag that a commit does not upload keeps its parent's result. The result of each test goes there too, under the same four flags: the Go and pytest gates and the extension's tests write JUnit files in CI. The report is the "Tests" tab of the repository on Codecov (https://app.codecov.io/gh/inferstep/ATLAS/tests); it names failed tests and tests that pass only sometimes, and it blocks nothing |
+| SonarQube Cloud | `sonar-project.properties`, `.github/workflows/sonar.yml`; rule sets and gate on SonarQube Cloud | Analysis runs from CI on `dev`, `main` and pull requests. Test code is named as test code. Coverage is left out. Rule sets: "Sonar way comprehensive", with `pythonsecurity:S8705` and `pythonsecurity:S8707` off for Python (488 of 490 rules active) and `githubactions:S8545` and `githubactions:S8541` off for workflows (32 of 34); each raised mostly false alarms on this repository's own scripts and workflows. `pythonsecurity:S8707` reported 71 findings, all in the `atlas` command-line tool, in `scripts/` and in one calibration tool, where the path comes from the person who runs the command. `docker:S8431` is ignored on Dockerfiles, in `sonar-project.properties`: a Dockerfile that pins a base image by both tag and digest does so on purpose |
 | SonarQube Cloud, gate | on SonarQube Cloud | The built-in "Sonar way" gate, on new code: reliability, security and maintainability rating A, duplicated lines at most 3%, security hotspots reviewed 100%. Its coverage condition has nothing to judge, because coverage is left out of the analysis. The gate reports and is not a required check |
 | CodeScene | on CodeScene | Analyses `dev` |
 | Dockerfile lint | `.github/workflows/hadolint.yml`, `scripts/dockerfile_lint.py` | hadolint v2.15.1, its release binary held against the checksum the workflow records. Dependabot does not update this version; a maintainer moves it. Every rule is on. The findings in a Dockerfile a change touches are annotations; all counts are in the job summary |
@@ -416,17 +416,17 @@ made twice.
   check in its line.
 - To add a rule: one line, in plain words, with the number of the pull
   request or issue that showed the need for it. A rule that the
-  [contributor guide](../../CONTRIBUTING.md) states already is not written
+  [contributor guide](../../.github/CONTRIBUTING.md) states already is not written
   again: its line points to the guide.
 
 ### Tests
 
 | Rule | From | Held by |
 |---|---|---|
-| The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
-| The guide's rule for a skip: it has its reason ([Testing](../../CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
+| The guide's rule for a test of a limit: it is harmless when the limit fails ([Testing](../../.github/CONTRIBUTING.md#testing)) | #393 | `tests/infrastructure/test_bounded_commands.py` |
+| The guide's rule for a skip: it has its reason ([Testing](../../.github/CONTRIBUTING.md#testing)) | #389, #353 | `integrity check` names each new skip with its reason, for approval |
 | A test that stops running in the plain jobs (a skip, a mark, a move to another folder) is named in the change that does it | #391, #397, #404 | `integrity check` |
-| The guide's rule for a test gate that ran no test ([section 4](../../CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
+| The guide's rule for a test gate that ran no test ([section 4](../../.github/CONTRIBUTING.md#4-run-the-quality-gate)) | #304 | `scripts/production-readiness.py`, `tests/infrastructure/test_production_readiness_tests_ran.py` |
 | A Go test gate does not take a result from the cache | #382 | `scripts/production-readiness.py` |
 | A test writes under the test runner's own folder, never into a folder of the user | #305 | review |
 | A test claims only what the code under test promises | #355 | review |
@@ -441,7 +441,7 @@ made twice.
 | The script that judges a change is the base branch's copy, so a change cannot rewrite its own judge | #390 | review |
 | A check that compares with the base uses the base branch as it is now, and stops when the base is not in the checkout | #390, #392 | `scripts/change_base.py`, `tests/infrastructure/test_change_base.py` |
 | Every job names its runner image, so the image changes in a pull request and not on the day the label moves | #299 | review |
-| The guide's rule for a checkout step and for a value from the event ([Code style](../../CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
+| The guide's rule for a checkout step and for a value from the event ([Code style](../../.github/CONTRIBUTING.md#code-style), Workflows). The one exception has its reason on its line | #377 | `workflow lint` (zizmor), `tests/infrastructure/test_workflow_lint.py` |
 | A workflow that starts on a push to `dev` or `main` is on a list that says whether a newer push may cancel its run | #394 | `tests/infrastructure/test_workflow_concurrency.py` |
 | A push to `dev` runs no test again: it sends what the merge queue's run of the commit kept | #402 | `tests/infrastructure/test_dev_results.py` |
 | The message of a check says what failed, why it matters, and how to fix it | #300 | review |
@@ -659,8 +659,7 @@ service, or the built TUI with a proxy.
 
 A test gets the mark in two ways: from a mark in its own file, or from the
 hook `pytest_collection_modifyitems` in `tests/conftest.py`. The hook gives
-the mark to every test of the files it lists and to every test under
-`tests/integration/`.
+the mark to every test of the files it lists.
 
 The marked files are in four groups, by what they need. Each group is run
 in one place.
@@ -678,8 +677,7 @@ in one place.
 
 - That is 124 tests in 8 files: 80 for the sandbox, 13 for the proxy and the
   TUI, 30 for the model, and 1 that asks a real Docker engine what it
-  removes with an image's name by digest. `tests/integration/` holds no
-  test.
+  removes with an image's name by digest.
 - GitHub's runner has Docker 28.0.4 with the storage driver overlay2, not
   the image store of containerd. So on GitHub that one test proves that
   the guard keeps the name by digest: with the guard taken out it fails on
@@ -811,7 +809,7 @@ Each night it:
 5. starts a stack under the name `atlas-nightly`, on loopback ports of its
    own, so that it stands beside a stack on the usual ports, and asks the
    services whether they are whole;
-6. runs the driver `scripts/e2e-reliability.py` with three fixed small
+6. runs the driver `scripts/eval/e2e-reliability.py` with three fixed small
    tasks, once each, and keeps the seconds of each;
 7. runs the tests that need a real model, and judges pytest's result file
    with the judge of such runs: all 30 of them are to be collected and to

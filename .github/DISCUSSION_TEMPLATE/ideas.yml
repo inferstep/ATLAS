@@ -3,7 +3,7 @@ body:
     attributes:
       value: |
         Early ideas are welcome here. When an idea is ready to build, it becomes an
-        RFC issue ([how proposals work](https://github.com/inferstep/ATLAS/blob/main/GOVERNANCE.md#proposals-rfc--adr--epic)).
+        RFC issue ([how proposals work](https://github.com/inferstep/ATLAS/blob/main/docs/GOVERNANCE.md#proposals-rfc--adr--epic)).
   - type: textarea
     id: problem
     attributes:

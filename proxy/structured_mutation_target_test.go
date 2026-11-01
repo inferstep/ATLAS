@@ -311,10 +311,10 @@ func TestTheStructuredTargetFeedsNoObligationPermissionOrDeletion(t *testing.T) 
 			}
 		}
 	}
-	// The delete tool region of tools.go consults no scope and no grounding.
-	tools := readSourceForTest(t, "tools.go")
+	// The delete tool region consults no scope and no grounding.
+	tools := readSourceForTest(t, "tool_files.go")
 	del := tools[strings.Index(tools, "func deleteFileTool()"):]
-	del = del[:strings.Index(del, "\nfunc ")]
+	del = del[:strings.Index(del, "\nfunc moveFileTool()")]
 	for _, banned := range []string{"mutationScope", "structuredMutationTarget", "TargetGrounding", "deriveMutationScope"} {
 		if strings.Contains(del, banned) {
 			t.Errorf("delete_file consults %s", banned)
@@ -344,9 +344,12 @@ func TestTheProposedCandidateIdentityHasOneOwner(t *testing.T) {
 	if strings.Count(readSourceForTest(t, "evidence_wiring.go"), "func proposedCandidateIdentity(") != 1 {
 		t.Error("proposedCandidateIdentity is not defined exactly once in the identity owner")
 	}
-	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
-		if strings.Count(readSourceForTest(t, f), "proposedCandidateIdentity(") != 1 {
-			t.Errorf("%s does not mint the proposed candidate's identity exactly once", f)
+	for name, source := range map[string]string{
+		"the tool files":         toolSources(t),
+		"edit_route_delivery.go": readSourceForTest(t, "edit_route_delivery.go"),
+	} {
+		if strings.Count(source, "proposedCandidateIdentity(") != 1 {
+			t.Errorf("%s do not mint the proposed candidate's identity exactly once", name)
 		}
 	}
 }

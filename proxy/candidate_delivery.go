@@ -71,18 +71,6 @@ type deliveryAuthorization struct {
 	TargetGrounding string
 }
 
-// mayDeliver reports whether the candidate may land under the typed answer.
-//
-// A contractless request returns true because the typed path is not its owner:
-// it has no target a candidate could be delivered to, and the model's own
-// bytes are what its route writes.
-func (a deliveryAuthorization) mayDeliver() bool {
-	if !a.Typed {
-		return true
-	}
-	return a.Grant != nil
-}
-
 // holds reports whether basis b earned this candidate a licence: minted, or
 // minted but for an acquisition control. The policy owner reads this rather
 // than the eligibility answer, because the mint can still refuse what the

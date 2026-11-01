@@ -420,9 +420,8 @@ func TestCaptureOnlySuppressesAutomaticDelivery(t *testing.T) {
 // the shared exact-byte delivery owner. There is no second path.
 func TestAutomaticSharesTheOneAuthorizationAndDeliveryOwner(t *testing.T) {
 	body := map[string]string{}
-	for _, f := range []string{"automatic_delivery.go", "candidate_delivery.go",
-		"authorization_grant.go", "advisory_policy.go", "tools.go",
-		"edit_route_delivery.go"} {
+	for _, f := range append([]string{"automatic_delivery.go", "candidate_delivery.go",
+		"authorization_grant.go", "advisory_policy.go", "edit_route_delivery.go"}, toolFiles...) {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -465,7 +464,7 @@ func TestAutomaticSharesTheOneAuthorizationAndDeliveryOwner(t *testing.T) {
 // the two routes hand it their facts.
 func TestTheRoutesHandTheirFactsToTheOneAuthorizationOwner(t *testing.T) {
 	body := map[string]string{}
-	for _, f := range []string{"candidate_delivery.go", "tools.go", "edit_route_delivery.go"} {
+	for _, f := range append([]string{"candidate_delivery.go", "edit_route_delivery.go"}, toolFiles...) {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -484,10 +483,12 @@ func TestTheRoutesHandTheirFactsToTheOneAuthorizationOwner(t *testing.T) {
 	if n := strings.Count(body["candidate_delivery.go"], "advisoryVetoes("); n != 1 {
 		t.Errorf("the authorization owner computes the vetoes %d times, want once", n)
 	}
-	for _, route := range []string{"tools.go", "edit_route_delivery.go"} {
-		if n := strings.Count(body[route], "advisoryVetoes("); n != 0 {
-			t.Errorf("%s computes the vetoes itself (%d times)", route, n)
+	for _, f := range append([]string{"edit_route_delivery.go"}, toolFiles...) {
+		if n := strings.Count(body[f], "advisoryVetoes("); n != 0 {
+			t.Errorf("%s computes the vetoes itself (%d times)", f, n)
 		}
+	}
+	for _, route := range []string{"tool_write_v3.go", "edit_route_delivery.go"} {
 		if !strings.Contains(body[route], "automaticIntent{") {
 			t.Errorf("%s does not hand the authorization owner its intent", route)
 		}

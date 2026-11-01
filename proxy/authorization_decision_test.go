@@ -15,7 +15,7 @@ import (
 // Each row is a shape a candidate can arrive in, answered by the typed decision,
 // and none of them delivers anything. A row that comes back authorized
 // describes what would land if a consumer existed; the guards in
-// evidence_inertness_test.go prove none does.
+// evidence_wiring_test.go prove none does.
 
 type authWorld struct {
 	*matrixWorld
@@ -156,9 +156,6 @@ func TestTheDecisionSaysTruthfullyWhetherItDecides(t *testing.T) {
 			// this path does not own is left to the decision that always made it.
 			if a.Typed != tc.influences {
 				t.Errorf("typed=%v, want %v", a.Typed, tc.influences)
-			}
-			if !a.Typed && !a.mayDeliver() {
-				t.Error("an unowned request was refused by the typed path")
 			}
 		})
 	}

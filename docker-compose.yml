@@ -206,6 +206,9 @@ services:
       - ATLAS_SANDBOX_URL=http://sandbox:8020
       - ATLAS_MODEL_NAME=${ATLAS_MODEL_NAME:?Set ATLAS_MODEL_NAME in .env or run atlas init}
       - ATLAS_LOG_FORMAT=${ATLAS_LOG_FORMAT:-}
+      # Same slot count llama-server gets: V3 keeps no more generations in
+      # flight than it has slots.
+      - ATLAS_PARALLEL_SLOTS=${ATLAS_PARALLEL_SLOTS:-${PARALLEL_SLOTS:-4}}
       # Plan-generation thinking mode (read inside this process — must be
       # forwarded here or setting it in .env has no effect).
       - ATLAS_PLAN_THINKING=${ATLAS_PLAN_THINKING:-}

@@ -16,12 +16,12 @@ body:
     attributes:
       label: ATLAS version
       description: The release you installed, or the output of `atlas --version`.
-      placeholder: "3.1.4"
+      placeholder: "3.1.7"
   - type: input
     id: hardware
     attributes:
       label: GPU and operating system
-      placeholder: "RTX 5070 12 GB, Ubuntu 24.04"
+      placeholder: "RTX 5070 Ti 16 GB, Ubuntu 24.04"
   - type: input
     id: model
     attributes:

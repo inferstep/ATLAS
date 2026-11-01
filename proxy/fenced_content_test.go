@@ -438,7 +438,7 @@ func TestNoPersistentStateOrWireFieldWasAdded(t *testing.T) {
 	if !strings.Contains(string(types), "FencedFailures map[string]int") {
 		t.Fatal("the allowance is not session state")
 	}
-	for _, f := range []string{"types.go", "tool_io.go", "agent.go"} {
+	for _, f := range append([]string{"types.go", "tool_io.go"}, agentFiles...) {
 		src := readSourceForTest(t, f)
 		for _, leak := range []string{`json:"fenced_failures`, "os.WriteFile(fencedState"} {
 			if strings.Contains(src, leak) {
@@ -456,11 +456,8 @@ func TestNoPersistentStateOrWireFieldWasAdded(t *testing.T) {
 // ONE call, and both still read the raw intent. Moving them to the proposal
 // would make a channel that returns different bytes look like progress.
 func TestChannelIdentityStaysRaw(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(string(src), "\n") {
+	src := agentSources(t)
+	for _, line := range strings.Split(src, "\n") {
 		l := strings.TrimSpace(line)
 		if strings.Contains(l, "recordToolCall(ctx,") && !strings.Contains(l, "intentArgs") {
 			t.Errorf("the repeat detector no longer reads the raw intent: %s", l)
@@ -471,7 +468,7 @@ func TestChannelIdentityStaysRaw(t *testing.T) {
 	}
 	// And the ban's three operations agree with each other.
 	var lookup, record, cleared int
-	for _, line := range strings.Split(string(src), "\n") {
+	for _, line := range strings.Split(src, "\n") {
 		l := strings.TrimSpace(line)
 		switch {
 		case strings.Contains(l, "identicalRetryRefusal(ctx"):
@@ -509,13 +506,9 @@ func TestC4IdentityChangeIntroducedNoAllowance(t *testing.T) {
 	// The streak reset that lets a converging model keep going predates this
 	// commit and is the existing changed-rejection-kind rule, not a new
 	// epoch. It has exactly one site.
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Four, all predating this commit: the changed-rejection-kind reset, the
 	// two path-aware-breaker resets, and the one on a successful call.
-	resets := strings.Count(string(src), "consecutiveErrors = 0")
+	resets := strings.Count(agentSources(t), "consecutiveErrors = 0")
 	t.Logf("consecutiveErrors reset sites: %d", resets)
 	if resets != 4 {
 		t.Errorf("%d reset sites; a new one would be an undeclared allowance", resets)

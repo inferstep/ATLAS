@@ -98,7 +98,7 @@ func TestACompletedRunThatChangedNothingSaysSo(t *testing.T) {
 	}
 }
 
-// appendLastReadRestatement is in agent.go. It adds the last file read to the
+// appendLastReadRestatementFor is in llm_call.go. It adds the last file read to the
 // end of the wire after the token budget was spent, which is how a large
 // input overflowed the context window (the 400 inferenceFailureSummary
 // names). So it yields when the slot is nearly full, and it never adds a
@@ -126,7 +126,7 @@ func TestTheLastReadIsRestatedOnlyWhenItFitsAndIsNew(t *testing.T) {
 			dir := t.TempDir()
 			ctx := NewAgentContext(dir, Tier2Medium)
 			ctx.RecordFileRead(filepath.Join(dir, "input.txt"), c.read)
-			got := appendLastReadRestatement(ctx, c.wire)
+			got := appendLastReadRestatementFor(ctx, c.wire, "")
 			if len(got) != len(c.wire)+c.added {
 				t.Errorf("%d messages from %d, want %d", len(got), len(c.wire), len(c.wire)+c.added)
 			}

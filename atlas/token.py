@@ -26,7 +26,6 @@ from atlas import compose
 from atlas.env import atlas_root as _find_root
 
 DEFAULT_RELATIVE_PATH = os.path.join("secrets", "service-token")
-CONTAINER_PATH = "/run/atlas-secrets/service-token"
 HEADER = "Authorization"
 
 

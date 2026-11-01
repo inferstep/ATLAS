@@ -264,6 +264,34 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 	}
 }
 
+// A cut edit or write is pointed at a smaller edit, and at structural_edit when
+// the call looks like a whole function or element. Any other cut call is told
+// only to be smaller.
+func TestACutCallIsToldHowToShrink(t *testing.T) {
+	const structuralHint = "use `structural_edit` instead"
+	for _, tc := range []struct {
+		name, raw, want string
+		wantHint        bool
+	}{
+		{"a command", `{"type":"tool_call","name":"run_command","args":{"command":"ls`, "Your tool call was truncated", false},
+		{"one line of an edit", `{"type":"tool_call","name":"edit_file","args":{"old_str":"x = 1`, "Your last tool call was TRUNCATED", false},
+		{"a whole function", `{"type":"tool_call","name":"edit_file","args":{"old_str":"def f():`, "Your last tool call was TRUNCATED", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			category, feedback := classifyParseFailure(tc.raw, "")
+			if category != "truncated_tool" {
+				t.Errorf("category = %q, want truncated_tool", category)
+			}
+			if !strings.Contains(feedback, tc.want) {
+				t.Errorf("feedback does not say %q: %s", tc.want, feedback)
+			}
+			if got := strings.Contains(feedback, structuralHint); got != tc.wantHint {
+				t.Errorf("structural_edit hint present = %v, want %v: %s", got, tc.wantHint, feedback)
+			}
+		})
+	}
+}
+
 func TestClassifyParseFailureEmptyResponse(t *testing.T) {
 	if _, got := classifyParseFailure("", ""); !strings.Contains(got, "empty") {
 		t.Errorf("empty input should mention empty, got %q", got)
@@ -690,19 +718,19 @@ func TestCategorizeParseFailureHtmlEntitiesShape(t *testing.T) {
 	}
 }
 
-func TestIsLoopingTail(t *testing.T) {
+func TestARepeatingProseTailIsALoop(t *testing.T) {
 	loop := "The first line is <!DOCTYPE html>. " +
 		strings.Repeat("Wait, I'll check if I can see the output. I can't. I'll just say it. ", 6)
-	if !isLoopingTail(loop) {
+	if !streamLooping(loop) {
 		t.Errorf("expected a repeating self-doubt stream to be detected as a loop")
 	}
 	normal := "The first line of index.html is `<!DOCTYPE html>`. It declares the document type for the HTML5 page, followed by the html and head elements with meta tags and a title."
-	if isLoopingTail(normal) {
+	if streamLooping(normal) {
 		t.Errorf("a normal varied response must not be flagged as a loop")
 	}
 }
 
-// Tests for callLLMOnce's failure handling against a fake llama-server:
+// Tests for callLLMOnceWithGrammar's failure handling against a fake llama-server:
 // HTTP errors, unreachable server, truncated streams, mid-stream
 // cancellation, and the reasoning_content fallback. The agent loop's
 // resilience depends on these paths returning promptly with a
@@ -735,7 +763,7 @@ func TestCallLLMOnce_HTTPErrorSurfacesStatusAndBody(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	_, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	_, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("500 from llama-server produced no error")
 	}
@@ -758,7 +786,7 @@ func TestCallLLMOnce_UnreachableServerFailsFast(t *testing.T) {
 
 	ctx := llmTestCtx(url)
 	start := time.Now()
-	_, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	_, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("dead llama-server produced no error")
 	}
@@ -784,7 +812,7 @@ func TestCallLLMOnce_TruncatedStreamReturnsPartialContent(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("clean-EOF truncation returned error: %v", err)
 	}
@@ -825,7 +853,7 @@ func TestCallLLMOnce_ContextCancelAbortsStalledStream(t *testing.T) {
 	}()
 
 	start := time.Now()
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err == nil {
 		t.Fatal("cancelled stream returned no error")
 	}
@@ -857,7 +885,7 @@ func TestCallLLMOnce_ReasoningOnlyStreamRecoversToolCall(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, tokens, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, tokens, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("reasoning-only stream errored: %v", err)
 	}
@@ -883,7 +911,7 @@ func TestCallLLMOnce_ReasoningOnlyProseReturnsEmpty(t *testing.T) {
 	defer srv.Close()
 
 	ctx := llmTestCtx(srv.URL)
-	content, _, err := callLLMOnce(ctx, ctx.Messages, 0.3)
+	content, _, err := callLLMOnceWithGrammar(ctx, ctx.Messages, 0.3, "")
 	if err != nil {
 		t.Fatalf("prose-only stream errored: %v", err)
 	}
@@ -1521,6 +1549,44 @@ func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 	}
 }
 
+// Prose around the object is skipped. Only the brace that really closes it ends
+// it: one inside a string does not, even after an escaped quote.
+func TestExtractModelResponseFindsTheObjectInsideProse(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"words on both sides", `Sure: {"type":"text","content":"hi"} done`, "hi"},
+		{"a closing brace in a string", `Sure: {"type":"text","content":"a } b"} done`, "a } b"},
+		{"an escaped quote before it", `Sure: {"type":"text","content":"a \" } b"} done`, `a " } b`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := extractModelResponse(tc.raw)
+			if err != nil {
+				t.Fatalf("not parsed: %v", err)
+			}
+			if resp.Content != tc.want {
+				t.Errorf("content = %q, want %q", resp.Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestAToolNameInTheTypeFieldIsReadAsACall(t *testing.T) {
+	resp, err := extractModelResponse(`{"type":"read_file","path":"app.py"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != "tool_call" || resp.Name != "read_file" || string(resp.Args) != `{"path":"app.py"}` {
+		t.Errorf("read as type=%q name=%q args=%s", resp.Type, resp.Name, resp.Args)
+	}
+
+	resp, err = extractModelResponse(`{"type":"not_a_tool","path":"app.py"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != "not_a_tool" || resp.Name != "" {
+		t.Errorf("an unknown type was changed: type=%q name=%q", resp.Type, resp.Name)
+	}
+}
+
 // --- degenerate-output rejection -------------------------------------------
 //
 // Truncation recovery is structural: it reconstructs args from whatever the
@@ -1602,6 +1668,51 @@ func TestStepExclusions(t *testing.T) {
 			},
 			wantTools: []string{"edit_file", "write_file"},
 			wantExt:   ".html",
+		},
+		{
+			name: "the same refusal from another tool — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "edit_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a write_file failure of another kind — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py is read-only."}`},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a read after the refusal, inside the window — still fires",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file", Content: "x = 1"},
+			},
+			wantTools: []string{"edit_file", "write_file"},
+			wantExt:   ".py",
+		},
+		{
+			name: "no space after the path — does not fire",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: "already exists: File app.py"},
+			},
+			wantTools: nil,
+			wantExt:   "",
+		},
+		{
+			name: "a refusal seven tool results back — out of the window",
+			messages: []AgentMessage{
+				{Role: "tool", ToolName: "write_file", Content: `{"success":false,"error":"File app.py already exists (10 lines)."}`},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"}, {Role: "tool", ToolName: "read_file"},
+				{Role: "tool", ToolName: "read_file"},
+			},
+			wantTools: nil,
+			wantExt:   "",
 		},
 		{
 			name:      "empty conversation — does not fire",
@@ -2334,15 +2445,29 @@ func TestLastReadIsRestatedAtTheGenerationPoint(t *testing.T) {
 	ctx.RecordFileRead(filepath.Join(dir, "app.py"), "alpha\nbravo\n")
 
 	wire := []map[string]string{{"role": "user", "content": "fix the bug"}}
-	got := appendLastReadRestatement(ctx, wire)
+	got := appendLastReadRestatementFor(ctx, wire, "")
 	if len(got) != 2 {
 		t.Fatalf("expected a restatement appended, got %d messages", len(got))
 	}
 	last := got[len(got)-1]["content"]
-	for _, want := range []string{"app.py", "1\talpha", "2\tbravo", "NOT in the file"} {
+	for _, want := range []string{"Current contents of app.py (line", "1\talpha", "2\tbravo", "NOT in the file"} {
 		if !strings.Contains(last, want) {
 			t.Errorf("restatement missing %q:\n%s", want, last)
 		}
+	}
+}
+
+// A file outside the workspace has no name relative to it, so the restatement
+// keeps its whole path.
+func TestALastReadOutsideTheWorkspaceKeepsItsWholePath(t *testing.T) {
+	ctx := NewAgentContext(t.TempDir(), Tier1Simple)
+	outside := filepath.Join(t.TempDir(), "app.py")
+	ctx.RecordFileRead(outside, "alpha\n")
+
+	got := appendLastReadRestatementFor(ctx, []map[string]string{{"role": "user", "content": "fix the bug"}}, "")
+
+	if want := "Current contents of " + outside + " (line"; !strings.Contains(got[len(got)-1]["content"], want) {
+		t.Errorf("restatement does not hold %q:\n%s", want, got[len(got)-1]["content"])
 	}
 }
 
@@ -2354,7 +2479,7 @@ func TestRestatementSkipsWhenItWouldDuplicate(t *testing.T) {
 	ctx.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
 
 	wire := []map[string]string{{"role": "user", "content": "here it is: alpha\n"}}
-	if got := appendLastReadRestatement(ctx, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(ctx, wire, ""); len(got) != 1 {
 		t.Errorf("must not duplicate content already at the end, got %d messages", len(got))
 	}
 }
@@ -2365,20 +2490,20 @@ func TestRestatementSkipsBigFilesAndEmptyState(t *testing.T) {
 
 	// Nothing read yet.
 	fresh := NewAgentContext(dir, Tier1Simple)
-	if got := appendLastReadRestatement(fresh, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(fresh, wire, ""); len(got) != 1 {
 		t.Error("restated with no file read")
 	}
 	// Too big to be worth pasting every turn.
 	big := NewAgentContext(dir, Tier1Simple)
 	big.RecordFileRead(filepath.Join(dir, "big.py"), strings.Repeat("x", restatementMaxBytes+1))
-	if got := appendLastReadRestatement(big, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(big, wire, ""); len(got) != 1 {
 		t.Error("restated a file over the size cap")
 	}
 	// Escape hatch works.
 	t.Setenv("ATLAS_RESTATE_LAST_READ", "0")
 	off := NewAgentContext(dir, Tier1Simple)
 	off.RecordFileRead(filepath.Join(dir, "a.py"), "alpha\n")
-	if got := appendLastReadRestatement(off, wire); len(got) != 1 {
+	if got := appendLastReadRestatementFor(off, wire, ""); len(got) != 1 {
 		t.Error("ATLAS_RESTATE_LAST_READ=0 did not disable it")
 	}
 }
@@ -3087,6 +3212,36 @@ func TestVerblessWorkIsNotAQuestion(t *testing.T) {
 	}
 }
 
+// "who" followed by "is" reads as inverted, but only when "who" is a whole word.
+func TestAWordThatOnlyStartsLikeAWhWordAsksNothing(t *testing.T) {
+	if isQuestionMessage("Run the lookup, whois the domain") {
+		t.Error("the whois in a work request read as a question")
+	}
+	if !isQuestionMessage("Run the lookup, who is the owner") {
+		t.Error("a mid-message who is no longer reads as a question")
+	}
+}
+
+// A "?" ends a clause only outside code and brackets, and a closing quote may
+// follow it.
+func TestAQuestionMarkEndsAClauseOnlyWhereItCan(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		want          bool
+	}{
+		{"inside backticks", "the pattern `a? b` in parse.py matches too much", false},
+		{"inside brackets", "add a field (optional? yes) to the form", false},
+		{"before a closing double quote", `the page says "is this right?" at the top`, true},
+		{"before a closing single quote", "the page says 'is this right?' at the top", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasClauseQuestionMark(tc.message); got != tc.want {
+				t.Errorf("hasClauseQuestionMark(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 // The questions stay questions.
 func TestQuestionsStillClassifyAsQuestions(t *testing.T) {
 	for _, msg := range []string{
@@ -3137,7 +3292,7 @@ func TestADeclaredWorkRequestIsNeverTieredAsAQuestion(t *testing.T) {
 	}
 	// handleAgent applies it once the contract is validated, and resets the
 	// turn cap with it.
-	src, err := os.ReadFile("agent.go")
+	src, err := os.ReadFile("agent_handler.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3167,6 +3322,54 @@ func TestTheSystemPromptListsTheFilesReadInTheSameOrderEachTime(t *testing.T) {
 		if !strings.Contains(buildSystemPrompt(ctx), want) {
 			t.Fatalf("try %d: the system prompt does not list the three files read in sorted order", try)
 		}
+	}
+}
+
+// The project section says only what was detected, and a build command that
+// cannot show the program runs is not presented as one that does.
+func TestTheSystemPromptSaysWhatTheProjectRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		project *ProjectInfo
+		want    string
+	}{
+		{
+			"everything detected",
+			&ProjectInfo{Language: "python", Framework: "flask", BuildCommand: "pytest", DevCommand: "flask run",
+				ConfigFiles: []string{"pyproject.toml", "setup.cfg"}},
+			"## Project Context\n\nLanguage: python\nFramework: flask\nBuild command: pytest\n" +
+				"Dev command: flask run\nConfig files: pyproject.toml, setup.cfg\n\nWorking directory",
+		},
+		{
+			"a build command that only checks syntax",
+			&ProjectInfo{Language: "python", BuildCommand: "python -m py_compile app.py"},
+			"## Project Context\n\nLanguage: python\n" +
+				"Build/syntax check: python -m py_compile app.py (does not run the program)\n\nWorking directory",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir(), Project: tc.project})
+			if !strings.Contains(prompt, tc.want) {
+				t.Errorf("the system prompt does not hold %q", tc.want)
+			}
+		})
+	}
+	if prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir()}); strings.Contains(prompt, "## Project Context") {
+		t.Error("a project nothing was detected for has a project section")
+	}
+}
+
+func TestTheSystemPromptNamesTheProjectsToolchain(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := buildSystemPrompt(&AgentContext{WorkingDir: dir})
+
+	want := "## Toolchains\n- **go** — runner `go run .`, install `go mod download`, tests `go test ./...`"
+	if !strings.Contains(prompt, want) {
+		t.Errorf("the system prompt does not hold %q", want)
 	}
 }
 
@@ -3485,5 +3688,44 @@ func TestTheWorkspaceCheckRefusesACallBeforeAnyGateReadsItsPath(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(outside); string(got) != "NOTES = 1\n" {
 		t.Errorf("the file outside the workspace changed: %q", got)
+	}
+}
+
+// What /slots answers decides what the progress ticks show, and whether they
+// keep asking.
+func TestProbeSlotReadsTheSlotInUse(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		status           int
+		body             string
+		processed, total int
+		keepProbing      bool
+	}{
+		{"the first name of each counter wins", http.StatusOK,
+			`[{"n_prompt_tokens_processed":7,"prompt_n":5,"n_prompt_tokens":9,"n_prompt":8}]`, 7, 9, true},
+		{"the last names are read too", http.StatusOK, `[{"n_past":3,"n_prompt":8}]`, 3, 8, true},
+		{"a zero gives way to the next name", http.StatusOK, `[{"n_prompt_tokens_processed":0,"prompt_n":5}]`, 5, 0, true},
+		{"an idle slot is passed over", http.StatusOK,
+			`[{"is_processing":false,"prompt_n":5},{"is_processing":true,"prompt_n":6}]`, 6, 0, true},
+		{"no slot in use", http.StatusOK, `[{"is_processing":false,"prompt_n":5}]`, 0, 0, true},
+		{"/slots is switched off", http.StatusNotFound, "", 0, 0, false},
+		{"/slots is not built in", http.StatusNotImplemented, "", 0, 0, false},
+		{"a passing error", http.StatusInternalServerError, "", 0, 0, true},
+		{"an answer that does not parse", http.StatusOK, "not json", 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			processed, total, keepProbing := probeSlot(context.Background(), server.Client(), server.URL)
+
+			if processed != tc.processed || total != tc.total || keepProbing != tc.keepProbing {
+				t.Errorf("probeSlot = (%d, %d, %v), want (%d, %d, %v)",
+					processed, total, keepProbing, tc.processed, tc.total, tc.keepProbing)
+			}
+		})
 	}
 }

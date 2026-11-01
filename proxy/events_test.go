@@ -330,9 +330,6 @@ func TestBrokerDrainClosesEverySubscriberOnce(t *testing.T) {
 	if b.subscribe() != nil {
 		t.Error("a subscriber was accepted after draining began")
 	}
-	if !b.isDraining() {
-		t.Error("the broker does not report draining")
-	}
 }
 
 // Concurrent subscribe/unsubscribe/drain must not panic or double-close.

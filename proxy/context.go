@@ -780,7 +780,7 @@ func nonCanonicalArgName(fields map[string]json.RawMessage) string {
 //   - sessionManifestNote: a [system note] appended to the conversation
 //     when the session's file set grows past one file, listing what
 //     exists so later files reference earlier ones.
-//   - writeFileWithV3 (tools.go): puts session-written files, read from
+//   - writeFileWithV3 (tool_write_v3.go): puts session-written files, read from
 //     disk, into V3GenerateRequest.ProjectContext next to the files the
 //     model has read.
 

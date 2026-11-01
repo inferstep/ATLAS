@@ -30,7 +30,7 @@ docker compose logs --tail 50
 | Vulkan | `/dev/dri`가 존재하는지 확인한 다음 `docker compose -f docker-compose.yml -f compose/docker-compose.vulkan.yml exec llama-server vulkaninfo --summary`를 실행합니다. |
 | CPU 전용 | `compose/docker-compose.vulkan.yml`과 `compose/docker-compose.cpu.yml` 오버레이가 활성화되어 있는지 확인합니다. GPU가 없다는 이유만으로 `atlas doctor`가 실패하지 않고 경고 후 정상 종료해야 합니다. |
 
-서비스별 헬스 체크 curl은 [SETUP.md § 설치 확인](../ko/SETUP.md#설치-확인)을 참고하세요. 분류(triage)에 가장 유용한 것은 atlas-proxy 헬스 엔드포인트입니다 — 모든 업스트림 서비스의 상태를 보고합니다:
+서비스별 헬스 체크 curl은 [SETUP.md § 설치 확인](SETUP.md#설치-확인)을 참고하세요. 분류(triage)에 가장 유용한 것은 atlas-proxy 헬스 엔드포인트입니다 — 모든 업스트림 서비스의 상태를 보고합니다:
 ```json
 {
   "status": "ok",
@@ -256,7 +256,7 @@ atlas doctor
 
 **의미:** llama.cpp의 HIP 커널이 본인 GPU를 포함하지 않는 `gfx` 타깃으로 컴파일되었습니다. ROCm은 구형 소비자용 GPU를 공식 지원에서 제외하면서도 적절한 오버라이드로는 여전히 동작하게 두는 패턴이 오래됐습니다.
 
-**해결:** `ATLAS_HSA_OVERRIDE_GFX_VERSION`으로 런타임에 호환 gfx 버전을 강제하세요. 일반적인 오버라이드(정식 카드→gfx 표는 [SETUP.md § AMD GPU 타깃](../ko/SETUP.md#amd-gpu-타깃-dockerfilerocm) 참고):
+**해결:** `ATLAS_HSA_OVERRIDE_GFX_VERSION`으로 런타임에 호환 gfx 버전을 강제하세요. 일반적인 오버라이드(정식 카드→gfx 표는 [SETUP.md § AMD GPU 타깃](SETUP.md#amd-gpu-타깃-dockerfilerocm) 참고):
 
 | GPU | `ATLAS_HSA_OVERRIDE_GFX_VERSION=` 설정값 |
 |---|---|
@@ -271,7 +271,7 @@ echo "ATLAS_HSA_OVERRIDE_GFX_VERSION=10.3.0" >> .env
 docker compose -f docker-compose.yml -f compose/docker-compose.rocm.yml up -d --force-recreate llama-server
 ```
 
-이전에 미지원이던 카드에서 이 방법이 동작한다면 [GH #26](https://github.com/inferstep/ATLAS/issues/26)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
+이전에 미지원이던 카드에서 이 방법이 동작한다면 [Hardware reports](https://github.com/inferstep/ATLAS/discussions/categories/hardware-reports)에 알려 주세요 — 커뮤니티 검증 오버라이드는 다음 릴리스 문서에 반영됩니다.
 
 ### RDNA4 (RX 9070 / 9070 XT, gfx1200 / gfx1201) — ROCm 7.x 필요
 
@@ -495,7 +495,7 @@ docker compose up -d --no-deps llama-server
 ```
 GPU가 여러 종류이거나 이식성이 필요하면 세미콜론 목록을 전달하세요. 예:
 `--build-arg CUDA_ARCH="75;86;89"`. 전체 아치 표:
-[SETUP.md § CUDA 컴퓨트 캐퍼빌리티](../ko/SETUP.md#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
+[SETUP.md § CUDA 컴퓨트 캐퍼빌리티](SETUP.md#cuda-컴퓨트-캐퍼빌리티-dockerfilev31).
 
 **확인:**
 ```bash
@@ -598,6 +598,7 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -I{} kill {}
 **해결:** 프록시는 `/v1/agent` 에이전트 루프 핸들러 안에서 자동으로 `response_format`을 설정합니다. 그 형태는 `ATLAS_GRAMMAR_MODE`가 결정합니다: 기본값 `strict`는 `{"type":"json_object","schema":<full tool-call schema>}`를 전송해 llama-server의 GBNF 샘플러가 tool_call/text/done 유니언만 방출할 수 있게 하고, `ATLAS_GRAMMAR_MODE=loose`는 `{"type":"json_object"}`만 전송합니다(유효한 JSON이되 형태는 강제하지 않음) — 스키마→GBNF 변환을 잘 다루지 못하는 모델을 위한 탈출구입니다(Gemma 계열 모델은 `loose`가 필요합니다 — strict 모드에서는 done만 반복 방출합니다). llama-server를 `/v1/chat/completions`나 `/v1/completions`로 직접 호출하는 경우에는 파라미터를 직접 포함해야 합니다:
 ```bash
 curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "local-model",
@@ -717,7 +718,7 @@ ATLAS_FRESH_SLOT_PER_SESSION=0
 
 **할 일:** 누락된 파일을 `read_file`로 읽어 프로젝트 컨텍스트에 올리세요. 샌드박스 `/execute` API를 직접 호출하는 경우 요청 본문에 지원 파일을 전달하세요:
 ```bash
-curl -X POST http://localhost:30820/execute -d '{
+curl -X POST http://localhost:30820/execute -H "Authorization: Bearer $(cat secrets/service-token)" -d '{
   "code": "from utils import greet\nprint(greet(\"x\"))",
   "language": "python",
   "files": {"utils.py": "def greet(n): return f\"hi {n}\""}
@@ -752,7 +753,7 @@ except curses.error:
 
 **증상:** 첫 요청은 파일을 생성하고 V3가 실행됩니다. "ok"나 "yes" 같은 짧은 후속 요청은 대화형 응답만 받습니다 — 도구 호출도 V3 이벤트도 없습니다.
 
-**무슨 일인가:** 에이전트 루프의 등급 분류기(`proxy/agent.go:classifyAgentTier`)는 하나의 질문에 답합니다: 이것은 대화인가, 작업인가? 기본값은 작업이며 T0에는 적극적인 근거가 필요합니다. 두 종류의 실수가 치르는 대가가 매우 다르기 때문입니다. 대화를 작업으로 잘못 읽으면 모델이 한 턴에 끝낼 메시지에 플래너 호출 한 번을 낭비하는 데 그치지만, 작업을 대화로 잘못 읽으면 턴이 5로 제한되고 플래닝도 건너뛰어 요청 자체가 실패합니다.
+**무슨 일인가:** 에이전트 루프의 등급 분류기(`proxy/task_tier.go:classifyAgentTier`)는 하나의 질문에 답합니다: 이것은 대화인가, 작업인가? 기본값은 작업이며 T0에는 적극적인 근거가 필요합니다. 두 종류의 실수가 치르는 대가가 매우 다르기 때문입니다. 대화를 작업으로 잘못 읽으면 모델이 한 턴에 끝낼 메시지에 플래너 호출 한 번을 낭비하는 데 그치지만, 작업을 대화로 잘못 읽으면 턴이 5로 제한되고 플래닝도 건너뛰어 요청 자체가 실패합니다.
 
 메시지가 대화형으로 판정되는 경우는 12자 미만(`hi`, `thanks`, `ok`)이거나 질문 형태일 때뿐입니다 — 절을 끝내는 `?`가 있거나, 의문사(`why`, `what`, `how`, `is`, `can`, …)가 단어 단위로 문두에 오는 경우. 다만 작업을 뜻하는 표현이 둘 모두를 앞서므로, `can you fix the login bug?`는 물음표가 있어도 작업입니다. `task_mode: work`를 선언하는 클라이언트(TUI가 그렇습니다)는 결코 대화형으로 분류되지 않습니다. 그 외에는 전부 작업입니다: `still doesn't work, try again`과 `the snake is moving way too fast, slow it down`은 파일명을 대지도, 작업 동사 목록에 맞지도 않지만 둘 다 파이프라인을 받습니다.
 
@@ -831,7 +832,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 **해결:**
 1. 임베딩 서버의 규약을 확인하세요. 풀링 + 정규화된 서버는 ‖v‖≈1인 평탄한 벡터를 반환합니다:
    ```bash
-   curl -s -X POST http://localhost:8080/embedding -H 'Content-Type: application/json' \
+   curl -s -X POST http://localhost:8080/embedding -H "Authorization: Bearer $(cat secrets/service-token)" -H 'Content-Type: application/json' \
      -d '{"content":"def add(a, b): return a + b"}' | python3 -c "import sys,json,math; e=json.load(sys.stdin)[0]['embedding']; import itertools; v=e if not isinstance(e[0],list) else [sum(c)/len(e) for c in zip(*e)]; print('shape', 'per_token' if isinstance(e[0],list) else 'flat', 'norm', round(math.sqrt(sum(x*x for x in v)),3))"
    ```
    풀링된 `norm`은 수백 단위여야 합니다(제공되는 Gemma 아티팩트 기준 약 100-150). `norm`이 정확히 `1.0`이면 `embd_normalize: -1`에도 불구하고 서버가 벡터를 정규화한 것이며, 이 경우 C(x)는 모든 입력에 대해 약 0.8이라는 평탄한 값을 반환합니다. 정상처럼 보이지만 아무것도 구분하지 못하는 점수입니다. `cx_normalization.json`의 `pass_energy_mean`과 비교하세요: 서빙되는 에너지는 한 값에 머무르지 않고 그 대역에 걸쳐 분포해야 합니다.
@@ -848,6 +849,7 @@ curl -s http://localhost:8099/health | python3 -m json.tool | grep -A2 fingerpri
 ```bash
 # Test the native embedding endpoint directly
 curl -s http://localhost:8080/embedding \
+  -H "Authorization: Bearer $(cat secrets/service-token)" \
   -H "Content-Type: application/json" \
   -d '{"content": "test"}' | python3 -m json.tool
 ```

@@ -47,7 +47,7 @@ llama-server는 GPU를 사용하는 유일한 서비스입니다. 다른 모든 
 
 | 백엔드 | 상태 (V3.1.x) | 이미지 / 빌드 경로 | Compose 오버라이드 | 테스트된 카드 |
 |---|---|---|---|---|
-| **CUDA** (NVIDIA) | 지원(Supported) (V3.1.0부터) | `inference/Dockerfile.v31` → `atlas-llama` | (기본값) | RTX 5060 Ti 16GB (정규). 게시된 이미지는 Blackwell(컴퓨트 캐퍼빌리티 12.0/12.1) 전용으로 컴파일되어 있으며, 이전 세대는 로컬 재빌드가 필요합니다 — [SETUP.md](../ko/SETUP.md) 참고 |
+| **CUDA** (NVIDIA) | 지원(Supported) (V3.1.0부터) | `inference/Dockerfile.v31` → `atlas-llama` | (기본값) | RTX 5060 Ti 16GB (정규). 게시된 이미지는 Blackwell(컴퓨트 캐퍼빌리티 12.0/12.1) 전용으로 컴파일되어 있으며, 이전 세대는 로컬 재빌드가 필요합니다 — [SETUP.md](SETUP.md) 참고 |
 | **ROCm / HIP** (AMD) | 커뮤니티 검증(Community-tested) (V3.1.1부터) | `inference/Dockerfile.rocm` → `atlas-llama-rocm` | `compose/docker-compose.rocm.yml` | RX 7900 XTX (커뮤니티 스모크 테스트, GH #26) |
 | **Metal** (Apple Silicon) | 지원 ([#32](https://github.com/itigges22/ATLAS/issues/32)) | 하이브리드: 네이티브 llama-server (Metal) + 나머지는 Docker (macOS는 컨테이너로 GPU 패스스루 불가) | `compose/docker-compose.macos.yml` | M 시리즈; ≤16 GB에서 Q4_K_M, ≥24 GB 통합 메모리에서 Q6_K |
 | **Vulkan** (크로스 벤더 폴백) | 프리뷰(Preview) | `inference/Dockerfile.vulkan` → `atlas-llama-vulkan` | `compose/docker-compose.vulkan.yml` | lavapipe CPU 부팅 경로 (스모크 테스트됨); 실제 GPU 검증은 아직 없음 |
@@ -91,8 +91,11 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | 파일 | 담당 |
 |---|---|
 | `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
-| `agent.go` | 에이전트 루프: 턴 상태, LLM 호출, 플랜 생성, 스턱 루프 차단기 |
-| `tools.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
+| `llm_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
+| `system_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
+| `agent_handler.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
+| `agent.go` | 에이전트 루프: 턴 상태, 플랜 생성, 스턱 루프 차단기 |
+| `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
 | `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
 | `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
 | `context.go` | 컨텍스트 보강: 심볼 인덱스, 프로젝트 스캔, 워크스페이스 봉쇄, 세션 파일 매니페스트 |
@@ -192,12 +195,12 @@ flowchart LR
 인접한 도구 이름의 임베딩이 경쟁하며, 설명이 이름보다 더 중요함).
 프록시에서 모델 독립적인 네 가지 방어책이 결합됩니다:
 
-1. **설명 재작성**(`proxy/tools.go`). edit_file의 설명은 파일 전체/함수
+1. **설명 재작성**(`proxy/tool_edit.go`, `proxy/tool_structural_edit.go`). edit_file의 설명은 파일 전체/함수
    전체 용도에 대해 경고하고, structural_edit의 설명은 >10줄 / 노드 전체 교체에
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
-2. **조건부 GBNF 문법**(`proxy/tools.go`,
-   `proxy/agent.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
+2. **조건부 GBNF 문법**(`proxy/tool_schema.go`,
+   `proxy/llm_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의
@@ -546,7 +549,7 @@ graph LR
 
 `llama-server`와 `sandbox`는 독립적으로 시작합니다. `geometric-lens`는 `llama-server`가 healthy해지기를 기다리고, `v3-service`는 `llama-server`와 `geometric-lens`를, `atlas-proxy`는 `llama-server`, `geometric-lens`, `v3-service`, `sandbox`를 기다립니다. Docker Compose, 베어메탈, K3s는 동일한 `inference/entrypoint-v3.1.sh`로 구동되므로, 컨텍스트 크기, KV 캐시 양자화, flash attention, mlock이 환경 변수로 제어되며 이 모드들 전반에서 동작이 동일합니다. macOS 하이브리드 경로는 엔트리포인트의 플래그를 미러링하는 `scripts/atlas-llama-macos.sh`를 통해 네이티브 llama-server를 실행합니다.
 
-설치와 모드별 기동 절차(NVIDIA / ROCm 오버라이드, 베어메탈, macOS 하이브리드 Metal, K3s 매니페스트)는 [SETUP.md](../ko/SETUP.md)에, macOS 네이티브 경로는 [SETUP_MACOS.md](../../SETUP_MACOS.md)에 있습니다.
+설치와 모드별 기동 절차(NVIDIA / ROCm 오버라이드, 베어메탈, macOS 하이브리드 Metal, K3s 매니페스트)는 [SETUP.md](SETUP.md)에, macOS 네이티브 경로는 [SETUP_MACOS.md](../../SETUP_MACOS.md)에 있습니다.
 
 ---
 

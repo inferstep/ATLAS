@@ -24,3 +24,6 @@ services:
     devices: !reset []
     # video/render group membership only matters for /dev/dri access.
     group_add: !reset []
+    # No device to reach, so the installing user, as in the base file. A !reset
+    # here would leave no user at all, and the image declares none.
+    user: "${ATLAS_PROXY_UID:-1000}:${ATLAS_PROXY_GID:-1000}"

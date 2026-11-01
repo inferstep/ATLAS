@@ -13,12 +13,12 @@ import (
 // Neither the model nor the service can reach the mode, and no route reads a
 // mode off anything they produce.
 func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
-	files := []string{"candidate_policy.go", "advisory_policy.go", "tools.go",
-		"edit_route_delivery.go", "agent.go"}
+	files := append(append([]string{"candidate_policy.go", "advisory_policy.go",
+		"edit_route_delivery.go"}, agentFiles...), toolFiles...)
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
-			continue
+			t.Fatal(err)
 		}
 		body := codeWithoutComments(string(src))
 		for _, banned := range []string{
@@ -246,7 +246,7 @@ func TestNoWireTypeCarriesTheDeliveryProvenance(t *testing.T) {
 // Neither the model nor the service can set the delivered provenance: it is set
 // only beside a delivery that happened, from the policy outcome.
 func TestDeliveredProvenanceCannotBeForged(t *testing.T) {
-	for _, f := range []string{"tools.go", "edit_route_delivery.go"} {
+	for _, f := range append([]string{"edit_route_delivery.go"}, toolFiles...) {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -303,7 +303,7 @@ func TestDeliveredProvenanceMatchesWhatLanded(t *testing.T) {
 // the only way to reach one.
 func TestEveryByteToDiskRouteStaysRegistered(t *testing.T) {
 	for _, site := range []string{
-		"tools.go:writeFileWithV3",
+		"tool_write_v3.go:writeFileWithV3",
 		"edit_route_delivery.go:deliverEditCandidate",
 		"candidate_delivery.go:deliverAuthorizedCandidate",
 	} {
@@ -311,7 +311,7 @@ func TestEveryByteToDiskRouteStaysRegistered(t *testing.T) {
 			t.Errorf("%s is not a registered delivery route", site)
 		}
 	}
-	if registeredV3DeliveryRoute("tools.go:somethingElse") {
+	if registeredV3DeliveryRoute("tool_write_v3.go:somethingElse") {
 		t.Error("an unregistered site was accepted")
 	}
 }

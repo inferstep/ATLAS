@@ -142,7 +142,7 @@ analysed. In particular:
 | GPU OOM | reduce `ATLAS_CTX_SIZE`/slots via `atlas tier fit --write`; check nothing else holds VRAM (`nvidia-smi`) |
 | Disk full | models dir is the usual consumer; `atlas model remove <name> --yes` |
 | Failed upgrade | § Rolling back (pin the previous tag, restore `.env.bak`) |
-| Bad/revoked artifact | SECURITY.md § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
+| Bad/revoked artifact | [SECURITY.md](../.github/SECURITY.md) § artifact revocation; `atlas model verify` + `--force-artifacts` reinstall pins |
 | Full reset (keep models) | `docker compose down -v && docker compose up -d` — **destructive**: wipes the stack's named volumes (`v3-telemetry`), keeps models/config. Last resort |
 
 ## Resource tuning
@@ -204,7 +204,8 @@ shows it is the **remainder**: what the enforced budgets leave for the one
 component nothing holds. With the compose defaults that is 9.86 GiB against an
 expectation of 11 GiB.
 
-An overrun of the remainder is neither reported nor refused. The refusal is for
+An overrun of the remainder is never refused. When `ATLAS_HOST_MEMORY_BYTES` is set, the proxy
+log reports it once at start. The refusal is for
 enforced maxima that over-commit — a number an operator can edit. An unbounded component that
 outgrows the remainder needs a different fix (a validated limit, or a smaller
 model), and disabling execution would not make the machine safer.
@@ -368,8 +369,12 @@ signed; `sha-*` tags never move.
   `atlas upgrade` moves a legacy `ATLAS_GHCR_OWNER=itigges22` to `inferstep`).
   New keys are
   additive with safe defaults; removed keys are ignored (see
-  CONFIGURATION.md § removed variables). Re-run `atlas init` only if
-  you want re-detected hardware sizing.
+  CONFIGURATION.md § removed variables). Run `atlas init --reconfigure` when you
+  want re-detected hardware sizing, and on ROCm or Vulkan after an upgrade from
+  3.1.7, so llama-server stops running as root (`ATLAS_LLAMA_USER`).
+- **Compose files and the CLI:** these come from your checkout, so only
+  `git pull` changes them. `atlas upgrade` replaces images only: run `git pull`
+  first, or the new images run under the old compose files.
 - **Models and artifacts:** never modified by image upgrades. Lens/ASA
   bundles are per-model and identity-checked at load; an upgrade that
   changes bundle requirements surfaces as a doctor warning with the
@@ -379,7 +384,8 @@ signed; `sha-*` tags never move.
 ## Version compatibility
 
 N-1 configs are supported: a `.env` written by the previous release
-boots the current one. Registry/artifact schema changes are additive
+boots the current one. From 3.1.7 to 3.2.0, on ROCm and Vulkan, that `.env` keeps
+llama-server as root, as in 3.1.7, until `atlas init --reconfigure`. Registry/artifact schema changes are additive
 within a minor version (SUPPORT_MATRIX.md § compatibility policy).
 
 ## Automated upgrade (`atlas upgrade`)
@@ -410,8 +416,8 @@ published in the registry for your backend (e.g. the locally-built ROCm
 llama image) are skipped by signature verification, and a slow pull gets
 up to `ATLAS_UPGRADE_PULL_TIMEOUT` (default 3600 s) to finish.
 
-The manual sequence above remains valid and is what `atlas upgrade`
-automates. To undo a *successful* upgrade later, `atlas rollback`
+The manual sequence above remains valid. `atlas upgrade` automates its
+last three steps; `git pull` stays yours, and comes first. To undo a *successful* upgrade later, `atlas rollback`
 (§ Rolling back) returns to the restore point's previous tag (it pulls that
 tag again and does not restore the `.env` backup).
 
