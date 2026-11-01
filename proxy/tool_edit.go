@@ -140,13 +140,10 @@ func editInputRefusal(input EditFileInput, rawInput json.RawMessage) *ToolResult
 		return noMutation("edit_file: path cannot be empty. Use read_file first on the target, then edit_file with the same path.")
 	}
 
-	// Malformed-args check, BEFORE the read-staleness check. Observed
-	// live: the model sent
-	//   {"path":"app.py","old_str":"","":"new_str","content":"# hello world"}
-	// — an empty old_str, a key literally named "", and write_file's
-	// `content` field instead of new_str. It got "file not read yet",
-	// which was true and said nothing about the four things wrong with
-	// the call, so the next attempt fumbled a different field.
+	// Malformed-args check, BEFORE the read-staleness check: a call
+	// with an empty old_str, a key literally named "", and write_file's
+	// `content` field needs to hear that, not "file not read yet", which
+	// is true and says nothing about what is wrong with the call.
 	if strings.TrimSpace(input.OldStr) == "" {
 		hint := ""
 		if bytes.Contains(rawInput, []byte(`"content"`)) {
@@ -198,16 +195,14 @@ func locateOldStr(content string, input EditFileInput) (string, string, error) {
 			lineSpanOf(content, actualOldStr)), nil
 	}
 	// An old_str that matches only after decoding HTML entities is NOT
-	// accepted by decoding new_str to match (GH #39's old shortcut):
-	// the replacement may hold entities on purpose (&amp; in markup,
-	// or in a Python string), and decoding it wrote different bytes
-	// from the ones sent. The targeted refusal below names the
+	// accepted by decoding new_str to match: the replacement may hold
+	// entities on purpose (&amp; in markup, or in a Python string), and
+	// decoding it would write different bytes from the ones sent. The
+	// targeted refusal below names the
 	// entities and the retry.
 	// read_file prints "12<tab>" before each line for reference
-	// and the model pastes back what it was shown. The edit used
-	// to strip the prefix from old_str and new_str and apply the
-	// result, reporting nothing: an unannounced rewrite of both
-	// arguments (stabilization cycle 2, smallrung_toml rep 2).
+	// and the model pastes back what it was shown. Stripping the
+	// prefix would be an unannounced rewrite of both arguments, so
 	// old_str and new_str are applied exactly as sent; text that
 	// really begins "12<tab>" (tab-separated data) still edits,
 	// because it matched above. When only the prefix-free form
@@ -232,22 +227,19 @@ func locateOldStr(content string, input EditFileInput) (string, string, error) {
 	// trailing whitespace, and ONLY accepts a UNIQUE match — an
 	// ambiguous or content-different old_str still fails, so it
 	// can never silently edit the wrong place. Exact-matching
-	// (frontier) models never reach this path. See GH #39.
+	// (frontier) models never reach this path.
 	if fuzzy, ok := findFuzzyLineMatch(content, input.OldStr); ok {
 		log.Printf("[edit_file] exact old_str missed on %s; unique whitespace-tolerant match found — proceeding (small-model indentation drift)", input.Path)
 		return fuzzy, fmt.Sprintf("old_str matched %s only after ignoring leading and trailing whitespace "+
 			"on each line; those lines were replaced by new_str exactly as sent.", lineSpanOf(content, fuzzy)), nil
 	}
 	// Degenerate old_str: not drift the fuzzy matcher can rescue,
-	// but corrupted output. Observed across three sessions —
-	// runs of bare \r and a stray `\rVert` (a LaTeX fragment) in
-	// the middle of copied code. "Must match byte-for-byte" is
-	// useless advice for that, and the model re-sent an equally
-	// corrupted block each time. Name it, and ask for the short
-	// anchor that is far less likely to degenerate.
-	// A long multi-line anchor is a transcription burden, and this
-	// model corrupts under it: asked to reproduce a ten-line block
-	// it emitted "safe_load_aller" for "safe_load_all". One line
+	// but corrupted output: runs of bare \r, or a stray `\rVert`
+	// (a LaTeX fragment), in the middle of copied code. "Must match
+	// byte-for-byte" is useless advice for that. Name it, and ask for
+	// the short anchor that is far less likely to degenerate.
+	// A long multi-line anchor is a transcription burden, and a model
+	// can corrupt a character under it. One line
 	// is enough to locate an edit, and both the tool description
 	// and the structural_edit steer already say so — repeat it
 	// here, where the failure actually happened.
@@ -333,9 +325,7 @@ func oldStrMismatchError(content string, input EditFileInput) error {
 	}
 	// Ground the retry in the file's REAL content. A small model
 	// frequently writes old_str from its memory of the file
-	// rather than the file itself (observed: old_str
-	// `item = items[id + 1]` for a file whose actual line is
-	// `return jsonify(items[item_id + 1])`). Without an anchor it
+	// rather than the file itself. Without an anchor it
 	// gives up on the surgical edit and rewrites the whole node
 	// from the same faulty memory. Quoting the closest actual
 	// line gives it real bytes to copy into the next attempt.
@@ -352,14 +342,12 @@ func matchedEditError(content, actualOldStr string, input EditFileInput) error {
 		return errNoMutation(fmt.Errorf("found %d matches of the string to replace. Set replace_all=true to replace all, or provide more context to uniquely identify the instance", count))
 	}
 
-	// No-op check. The bare diagnosis was a dead end: the model
+	// No-op check. The bare diagnosis is a dead end: the model
 	// copies old_str into new_str precisely because it cannot
 	// reproduce a span with a change applied, so telling it only
 	// that the two match gives it nothing to do differently and it
 	// re-sends the identical call until the loop breaker kills the
-	// session. Measured on a "build me a snake game" run: refused at
-	// turn 11, re-sent at 12 and 13, session dead at 757s with
-	// game.js half-written. Name the tool that removes the
+	// session. Name the tool that removes the
 	// requirement it just failed.
 	if input.OldStr == input.NewStr {
 		alt := "`replace_lines` with the line numbers read_file printed — you assert only the FIRST and LAST line of the range, so there is no span to reproduce"
@@ -368,12 +356,8 @@ func matchedEditError(content, actualOldStr string, input EditFileInput) error {
 		}
 		// The alternative it is being sent to needs line numbers, and
 		// "the line numbers read_file printed" may be many turns and
-		// several successful edits old. Measured (cycle 7 audit,
-		// family O): refused at turns 11, 14 and 16 against a file
-		// last read at turn 5, alternating with a structural_edit
-		// that changed nothing, until the run stopped on repeated
-		// refusals. Where those bytes sit RIGHT NOW is something this
-		// call already knows, so it is said here.
+		// several successful edits old. Where those bytes sit RIGHT NOW
+		// is something this call already knows, so it is said here.
 		return errNoMutation(fmt.Errorf(
 			"old_str and new_str are identical, so this edit would change nothing. "+
 				"Re-sending it will not help. You are being asked to reproduce a span "+
@@ -453,7 +437,7 @@ func editFileSyntaxMessage(relPath string) func(string) string {
 
 // editGateRefusal runs edit_file's gates after the syntax gate.
 func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent string) *ToolResult {
-	// Structural gate (#147): a parse-clean edit can still introduce
+	// Structural gate: a parse-clean edit can still introduce
 	// an unresolved direct call (render_template with only
 	// render_template_string imported) that 500s at runtime. Block a
 	// write that NEWLY makes a name unresolved; a pre-existing one
@@ -462,13 +446,10 @@ func editGateRefusal(ctx *AgentContext, path, relPath, content, newContent strin
 		log.Printf("[edit_file] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
 		return structuralRefusal(structuralRejection(relPath, introduced))
 	}
-	// edit_file ran checkFallbackSyntax, which parses the embedded
-	// script but has no pre-edit file to compare against, so the
-	// comparative findings — a render loop that stopped repeating, a
-	// lexical binding declared twice — were never checked here. Every
-	// other edit path had them. Observed: the same one-shot
-	// setTimeout the gate refuses under replace_lines landed through
-	// edit_file, and the page returned 200 with a dead game.
+	// checkFallbackSyntax parses the embedded script but has no pre-edit
+	// file to compare against, so the comparative findings — a render
+	// loop that stopped repeating, a lexical binding declared twice —
+	// need this gate, as on every other edit path.
 	if msg := embeddedScriptGate(ctx, path, content, newContent); msg != "" {
 		log.Printf("[edit_file] edit breaks an embedded script in %s — rejecting", logPath(relPath))
 		return structuralRefusal(msg)
@@ -742,9 +723,7 @@ func insertAfterTool() *ToolDef {
 			}
 			if strings.TrimSpace(in.Path) == "" {
 				// Naming only the missing field sends the model back with a
-				// different field missing. Observed live: it sent
-				// {"line":0,"content":"..."} with no path, right after an
-				// edit_file that had also been malformed.
+				// different field missing.
 				return noMutation("insert_after: path is required. The call is " +
 					"insert_after {\"path\":\"app.py\", \"line\":<1-based number from read_file, 0 for top of file>, " +
 					"\"content\":<the new lines>}."), nil
@@ -862,15 +841,12 @@ func writeInsertion(ctx *AgentContext, in InsertAfterInput, path, original, upda
 
 // replaceLinesMaxSpan bounds a single replace_lines call. Above this the model
 // is re-authoring rather than editing, and a whole-node rewrite is both more
-// reliable and easier to verify. The cliff is not gradual: a 14B model applies
-// ~0.87 of its edit blocks on 100-500 line files and 0.00 above 500.
+// reliable and easier to verify.
 //
-// 60, not the 20 this shipped with. The unit of work that kept hitting the
-// cap is a whole function, and a JavaScript function inside a Flask template
-// runs 40-50 lines. At 20 the refusal sent the model to structural_edit,
-// which cannot reach into a Python string literal, and its refusal sent it
-// back here — an observed session burned all three of its strikes on that
-// loop with the file untouched. The size guard is also not what makes this
+// 60 because the unit of work is a whole function, and a JavaScript function
+// inside a Flask template runs 40-50 lines. A lower cap sends the model to
+// structural_edit, which cannot reach into a Python string literal, and its
+// refusal sends it back here. The size guard is also not what makes this
 // tool safe: expected_first_line / expected_last_line already fail a stale
 // range, and they cost the same two lines whether the span is 5 or 50.
 const replaceLinesMaxSpan = 60
@@ -879,9 +855,7 @@ const replaceLinesMaxSpan = 60
 //
 // The model's line numbers go stale the moment an earlier edit changes the
 // file's length, and it re-sends the same numbers because from its side
-// nothing looks wrong. Measured across 168 sessions: 23 hit an anchor
-// refusal and 11 of those lost the task, usually to a re-send loop after
-// "line N is not what you expected".
+// nothing looks wrong.
 //
 // The assertions the call already carries are enough to fix it. If the
 // expected first and last lines both appear, at the same offset, exactly
@@ -889,10 +863,6 @@ const replaceLinesMaxSpan = 60
 // Ambiguity (either line appearing more than once, or the two disagreeing
 // about the shift) returns 0 and leaves the refusal in place: relocating an
 // edit to the wrong place is far worse than asking for a re-read.
-//
-// This is the "shifted" case from grok-build's hashline anchors, using the
-// text ATLAS already receives rather than hashing every line of read_file
-// output — the same recovery without spending context on every read.
 func relocateStaleRange(fileLines []string, limit int,
 	expectedFirst, expectedLast string, span int) int {
 	first := strings.TrimSpace(expectedFirst)
@@ -1245,9 +1215,7 @@ func editSyntaxObservation(ctx *AgentContext, tool, checkPath, relPath, original
 // call that cannot execute -- no path, a path outside the workspace, a
 // deny-listed target -- spends a minute of the session budget to produce
 // content that is then thrown away, and a model that keeps re-sending the
-// malformed call spends the whole session that way. Measured live: a 300s
-// canary reached turn 36 having written nothing, every turn a write_file with
-// `content: "@fenced"` and no path at all.
+// malformed call spends the whole session that way.
 //
 // It runs the SAME checks executeToolCall runs, by calling them, so the set of
 // calls refused here is a subset of the set refused there. That is what lets
