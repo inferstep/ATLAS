@@ -299,7 +299,7 @@ Compose does not pass these last three to the proxy, so a value in `.env` does n
 | Suspicious-shrinkage guard | `oldSize ≥ 100B` AND `newSize < 64B` | Rejects writes that replace a non-trivial file with a stub (doctype-only / mid-output cut). See `validateNotSuspiciouslyShrunk`. |
 | Per-step grammar gate | Trigger: write_file rejection on existing .py/.html/.htm > 5 lines | Bans `edit_file` and `write_file` from GBNF tool-name production for next decision |
 | ASA control vector | Model-gated `/models/ast_edit_steering.gguf` | Activates `--control-vector-scaled` only when the adjacent `.model` marker matches `ATLAS_MODEL_NAME`; a stale vector from another model stays disabled. |
-| Conversation trim | Trigger: conversation exceeds the token budget | Keeps `system + most-recent user message (pinned) + a token-budgeted tail` (`budgetedKeepLast` / `trimMessages` in `proxy/agent.go`). The tail is sized to the per-slot budget (see `ATLAS_AGENT_HISTORY_BUDGET`, § 1), floored at 8 kept messages. The pin is the most-recent `role=="user"` message so long tool-call chains don't push the user's task off the tail. |
+| Conversation trim | Trigger: conversation exceeds the token budget | Keeps `system + most-recent user message (pinned) + a token-budgeted tail` (`budgetedKeepLast` / `trimMessages` in `proxy/system_prompt.go`). The tail is sized to the per-slot budget (see `ATLAS_AGENT_HISTORY_BUDGET`, § 1), floored at 8 kept messages. The pin is the most-recent `role=="user"` message so long tool-call chains don't push the user's task off the tail. |
 | Command stdout limit | 8,000 chars | Prevents context flooding |
 | Command stderr limit | 4,000 chars | Prevents context flooding |
 | Search results limit | 200 matches | Prevents context flooding |

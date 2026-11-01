@@ -166,10 +166,10 @@ def proxy_with_other_carried_text(tmp_path_factory):
     """The proxy of this checkout with one word more in its system prompt: the text that every request carries."""
     source = tmp_path_factory.mktemp("proxy-source") / "proxy"
     shutil.copytree(stage.REPO / "proxy", source, ignore=shutil.ignore_patterns("*_test.go", "testdata"))
-    agent = source / "agent.go"
-    text = agent.read_text(encoding="utf-8")
+    prompt = source / "system_prompt.go"
+    text = prompt.read_text(encoding="utf-8")
     assert text.count("You are ATLAS, a coding assistant") == 1
-    agent.write_text(text.replace("You are ATLAS, a coding assistant", "You are ATLAS, a careful coding assistant"), encoding="utf-8")
+    prompt.write_text(text.replace("You are ATLAS, a coding assistant", "You are ATLAS, a careful coding assistant"), encoding="utf-8")
     subprocess.run(["go", "build", "-o", str(source / "atlas-proxy"), "."], cwd=source, check=True)
     return source / "atlas-proxy"
 

@@ -90,7 +90,10 @@ Every non-test Go file directly under `proxy/`, with its area of ownership:
 | File | Owns |
 |---|---|
 | `main.go` | HTTP server, routes, auth, passthrough, error envelope, private-value log filter |
-| `agent.go` | The agent loop: turn state, LLM calls, plan generation, stuck-loop breakers |
+| `agent.go` | The agent loop: turn state, plan generation, stuck-loop breakers |
+| `llm_call.go`, `model_reply.go` | One call to llama-server, and reading what the model sent back |
+| `system_prompt.go`, `task_tier.go` | The system prompt and context budget; the tier a message earns |
+| `agent_handler.go` | The `/v1/agent` and `/cancel` endpoints |
 | `tools.go`, `tool_*.go` | The 16 tool definitions + executors, tier classification, tool-call grammar |
 | `gates*.go` | Honesty/plan gates: claim-check, structural, syntax, embedded-script, plan-adherence, plan-reminder, asset lint |
 | `detectors.go` | Stuck-pattern detectors: tool repetition, reasoning repetition, traceback localization |
@@ -453,7 +456,7 @@ Four model-independent defenses compose in the proxy:
    says REQUIRED for >10-line / whole-node swaps; write_file's says
    NEW files only.
 2. **Conditional GBNF grammar** (`proxy/tool_schema.go`,
-   `proxy/agent.go:stepExclusions`). When a write_file is rejected on
+   `proxy/llm_call.go:stepExclusions`). When a write_file is rejected on
    an existing .py/.html/.htm file >5 lines, the next LLM call is
    constrained by a GBNF grammar that bans edit_file and write_file
    from the tool-name production. The model physically cannot emit
@@ -490,7 +493,7 @@ Each `write_file`/`edit_file` call is classified independently:
 | T2 (Feature) | 0 (uncapped) | V3 pipeline fires |
 | T3 (Hard) | 0 (uncapped) | V3 pipeline fires |
 
-The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`proxy/agent.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
+The two columns above belong to two different classifiers, and the table reads as one only by coincidence. **Turns** comes from the message tier (`proxy/task_tier.go:classifyAgentTier`), which scores what the user typed. **Behavior** comes from the file tier (`proxy/tools.go:classifyFileTier`), which scores the file being edited and is what actually gates V3 — the message tier is forwarded to v3-service but only lands in a log line.
 
 Because the turn cap is the same for T1/T2/T3, the message tier has exactly one decision to make: conversational or not. T0 caps the run and skips Plan Mode; every other value behaves identically. It therefore requires positive evidence to call something conversational — a sub-12-character greeting or a question shape — and treats everything else as work. The asymmetry is deliberate: misreading conversation as work costs one wasted planner call, while misreading work as conversation caps a real request and skips its plan, which fails it.
 

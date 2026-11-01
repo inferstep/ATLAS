@@ -880,7 +880,7 @@ def run_session(task: Task, rep: int, url: str, workspace: Path,
     _reset_workspace(task, workspace)
 
     # sandbox_subdir, NOT working_dir. The proxy deliberately overrides the
-    # client's working_dir with ATLAS_WORKSPACE_DIR (agent.go): the TUI sends
+    # client's working_dir with ATLAS_WORKSPACE_DIR (agent_handler.go): the TUI sends
     # its HOST cwd, which does not exist inside the container, and the bind
     # mount is aligned so /workspace already IS the user's directory.
     # Passing a subdir through working_dir is therefore silently ignored, and

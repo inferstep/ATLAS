@@ -184,14 +184,23 @@ func TestToolResultJSON(t *testing.T) {
 // ToolResult is never serialized: every SSE emitter builds an explicit map
 // literal. So the internal classification states round-trip perfectly inside
 // the process, while production SSE deliberately does not expose them. This
-// test parses agent.go and inspects the executable map literals, so a key
+// test parses the agent loop's files and inspects the executable map literals, so a key
 // added inside a comment or a string cannot fool it, and a key added in real
 // code cannot hide from it.
 func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "agent.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse agent.go: %v", err)
+	var files []*ast.File
+	for _, name := range agentFiles {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files = append(files, file)
+	}
+	inspectAll := func(visit func(ast.Node) bool) {
+		for _, file := range files {
+			ast.Inspect(file, visit)
+		}
 	}
 
 	classification := map[string]bool{
@@ -201,7 +210,7 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 	wantLegacy := []string{"tool", "success", "data", "error", "elapsed"}
 
 	var sites int
-	ast.Inspect(file, func(n ast.Node) bool {
+	inspectAll(func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || len(call.Args) != 2 {
 			return true
@@ -265,7 +274,7 @@ func TestSSEProjectionsExposeOnlyLegacyKeys(t *testing.T) {
 	// literal "tool_result" (events.go), so this path publishes the same event
 	// type and needs the same protection.
 	var envelopes int
-	ast.Inspect(file, func(n ast.Node) bool {
+	inspectAll(func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || len(call.Args) != 1 {
 			return true
@@ -549,7 +558,7 @@ func TestEveryModelFacingSerializationSiteIsInventoried(t *testing.T) {
 	// become the request body, and it must stay a string passthrough: if it
 	// ever reached for a ToolResult again, the projection above would be
 	// bypassed at the last step.
-	agentFile, err := parser.ParseFile(fset, "agent.go", nil, 0)
+	agentFile, err := parser.ParseFile(fset, "llm_call.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -91,7 +91,10 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | 파일 | 담당 |
 |---|---|
 | `main.go` | HTTP 서버, 라우팅, 인증, 패스스루, 오류 엔벨로프, 비공개 값 로그 필터 |
-| `agent.go` | 에이전트 루프: 턴 상태, LLM 호출, 플랜 생성, 스턱 루프 차단기 |
+| `llm_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
+| `system_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
+| `agent_handler.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
+| `agent.go` | 에이전트 루프: 턴 상태, 플랜 생성, 스턱 루프 차단기 |
 | `tools.go`, `tool_*.go` | 16개 도구 정의와 실행기, 티어 분류, 도구 호출 문법 |
 | `gates*.go` | 정직성/플랜 게이트: 클레임 체크, 구조, 구문, 임베드 스크립트, 플랜 준수, 플랜 리마인더, 에셋 린트 |
 | `detectors.go` | 스턱 패턴 검출: 도구 반복, 추론 반복, 트레이스백 지역화 |
@@ -197,7 +200,7 @@ flowchart LR
    필수(REQUIRED)라고 명시하며, write_file의 설명은 새(NEW) 파일 전용임을
    명시합니다.
 2. **조건부 GBNF 문법**(`proxy/tool_schema.go`,
-   `proxy/agent.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
+   `proxy/llm_call.go:stepExclusions`). 5줄 초과의 기존 .py/.html/.htm
    파일에 대한 write_file가 거부되면, 다음 LLM 호출은 도구 이름 생성
    규칙에서 edit_file와 write_file를 금지하는 GBNF 문법으로 제약됩니다.
    모델은 물리적으로 그것들을 내보낼 수 없습니다. 제한은 한 번의

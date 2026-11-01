@@ -13,8 +13,8 @@ import (
 // Neither the model nor the service can reach the mode, and no route reads a
 // mode off anything they produce.
 func TestNeitherModelNorServiceSelectsTheMode(t *testing.T) {
-	files := append([]string{"candidate_policy.go", "advisory_policy.go",
-		"edit_route_delivery.go", "agent.go"}, toolFiles...)
+	files := append(append([]string{"candidate_policy.go", "advisory_policy.go",
+		"edit_route_delivery.go"}, agentFiles...), toolFiles...)
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {

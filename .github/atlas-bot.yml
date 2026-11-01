@@ -54,6 +54,11 @@ pull_requests:
   # maintainer's approval.
   core_paths:
     proxy/agent.go: the agent loop
+    proxy/agent_handler.go: the agent loop
+    proxy/llm_call.go: the agent loop
+    proxy/model_reply.go: the agent loop
+    proxy/system_prompt.go: the agent loop
+    proxy/task_tier.go: the agent loop
     proxy/tool*: the tool handlers
     proxy/gates*: the guards
     proxy/guardrails*: the guards

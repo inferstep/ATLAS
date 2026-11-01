@@ -2938,8 +2938,23 @@ var toolFiles = []string{"tools.go", "tool_read.go", "tool_background.go", "tool
 
 func toolSources(t *testing.T) string {
 	t.Helper()
+	return sourcesForTest(t, toolFiles)
+}
+
+// agentFiles are the files that hold the agent loop and its request. A guard
+// over the loop reads them all, as toolFiles does for the tools.
+var agentFiles = []string{"agent.go", "llm_call.go", "model_reply.go", "task_tier.go", "system_prompt.go",
+	"agent_handler.go"}
+
+func agentSources(t *testing.T) string {
+	t.Helper()
+	return sourcesForTest(t, agentFiles)
+}
+
+func sourcesForTest(t *testing.T, files []string) string {
+	t.Helper()
 	var all strings.Builder
-	for _, file := range toolFiles {
+	for _, file := range files {
 		all.WriteString(readSourceForTest(t, file))
 	}
 	return all.String()

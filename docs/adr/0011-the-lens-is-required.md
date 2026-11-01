@@ -51,7 +51,7 @@ is cached for 5 s (`probeLensReadiness` and `lensReadyTTL` in
 `proxy/lens_required.go`). If the lens cannot score, the request gets
 HTTP 503 with the error code `dependency_unavailable`, the reason, and
 "Run `atlas doctor`." Nothing is streamed and no work starts
-(`handleAgent` in `proxy/agent.go`; `ErrDependencyDown` in
+(`handleAgent` in `proxy/agent_handler.go`; `ErrDependencyDown` in
 `proxy/main.go`).
 
 **During a run.** A per-write score that says the lens is down ends
