@@ -12,7 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def go_source(component: str, marker: str) -> str:
     """Source of the non-test .go file under REPO/component containing marker."""
-    for go in sorted((REPO / component).glob("*.go")):
+    for go in sorted((REPO / component).rglob("*.go")):
         if go.name.endswith("_test.go"):
             continue
         src = go.read_text()

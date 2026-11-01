@@ -598,9 +598,8 @@ func identifiersIn(t *testing.T, path string) map[string]bool {
 
 func TestNoDecisionOwnerReadsTheAttribution(t *testing.T) {
 	names := attributionIdentifiers(t)
-	files, _ := filepath.Glob("*.go")
-	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") || attributionOwners[f] {
+	for _, f := range nonTestGoFiles(t) {
+		if attributionOwners[f] {
 			continue
 		}
 		used := identifiersIn(t, f)

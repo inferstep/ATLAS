@@ -532,16 +532,8 @@ func TestNoHiddenEvaluatorIsReachableFromTheProducers(t *testing.T) {
 // the consumed records come from: one append, in the branch that already
 // requires a successful foreground run.
 func TestTheOnlyProductionWriterOfVerificationEvidenceIsTheGreenBranch(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
 	writers := map[string]int{}
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
+	for _, name := range nonTestGoFiles(t) {
 		body, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)

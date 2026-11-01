@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 # Directories whose text is searched for readers.
 READER_GLOBS = [
-    "proxy/*.go", "tui/*.go",
+    "proxy/**/*.go", "tui/**/*.go",
     "atlas/**/*.py", "v3-service/**/*.py", "geometric-lens/**/*.py",
     "sandbox/*.py",
     "scripts/*.sh", "scripts/**/*.sh", "scripts/**/*.py",
