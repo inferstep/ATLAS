@@ -264,6 +264,34 @@ func TestClassifyParseFailureTruncatedEditFile(t *testing.T) {
 	}
 }
 
+// A cut edit or write is pointed at a smaller edit, and at structural_edit when
+// the call looks like a whole function or element. Any other cut call is told
+// only to be smaller.
+func TestACutCallIsToldHowToShrink(t *testing.T) {
+	const structuralHint = "use `structural_edit` instead"
+	for _, tc := range []struct {
+		name, raw, want string
+		wantHint        bool
+	}{
+		{"a command", `{"type":"tool_call","name":"run_command","args":{"command":"ls`, "Your tool call was truncated", false},
+		{"one line of an edit", `{"type":"tool_call","name":"edit_file","args":{"old_str":"x = 1`, "Your last tool call was TRUNCATED", false},
+		{"a whole function", `{"type":"tool_call","name":"edit_file","args":{"old_str":"def f():`, "Your last tool call was TRUNCATED", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			category, feedback := classifyParseFailure(tc.raw, "")
+			if category != "truncated_tool" {
+				t.Errorf("category = %q, want truncated_tool", category)
+			}
+			if !strings.Contains(feedback, tc.want) {
+				t.Errorf("feedback does not say %q: %s", tc.want, feedback)
+			}
+			if got := strings.Contains(feedback, structuralHint); got != tc.wantHint {
+				t.Errorf("structural_edit hint present = %v, want %v: %s", got, tc.wantHint, feedback)
+			}
+		})
+	}
+}
+
 func TestClassifyParseFailureEmptyResponse(t *testing.T) {
 	if _, got := classifyParseFailure("", ""); !strings.Contains(got, "empty") {
 		t.Errorf("empty input should mention empty, got %q", got)
@@ -1518,6 +1546,44 @@ func TestExtractModelResponseSurfacesUnmarshalError(t *testing.T) {
 	inner := err.Error()
 	if !strings.Contains(inner, "invalid character") && !strings.Contains(inner, "unexpected") {
 		t.Errorf("error missing inner json detail: %v", err)
+	}
+}
+
+// Prose around the object is skipped. Only the brace that really closes it ends
+// it: one inside a string does not, even after an escaped quote.
+func TestExtractModelResponseFindsTheObjectInsideProse(t *testing.T) {
+	for _, tc := range []struct{ name, raw, want string }{
+		{"words on both sides", `Sure: {"type":"text","content":"hi"} done`, "hi"},
+		{"a closing brace in a string", `Sure: {"type":"text","content":"a } b"} done`, "a } b"},
+		{"an escaped quote before it", `Sure: {"type":"text","content":"a \" } b"} done`, `a " } b`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := extractModelResponse(tc.raw)
+			if err != nil {
+				t.Fatalf("not parsed: %v", err)
+			}
+			if resp.Content != tc.want {
+				t.Errorf("content = %q, want %q", resp.Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestAToolNameInTheTypeFieldIsReadAsACall(t *testing.T) {
+	resp, err := extractModelResponse(`{"type":"read_file","path":"app.py"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != "tool_call" || resp.Name != "read_file" || string(resp.Args) != `{"path":"app.py"}` {
+		t.Errorf("read as type=%q name=%q args=%s", resp.Type, resp.Name, resp.Args)
+	}
+
+	resp, err = extractModelResponse(`{"type":"not_a_tool","path":"app.py"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Type != "not_a_tool" || resp.Name != "" {
+		t.Errorf("an unknown type was changed: type=%q name=%q", resp.Type, resp.Name)
 	}
 }
 
@@ -3087,6 +3153,36 @@ func TestVerblessWorkIsNotAQuestion(t *testing.T) {
 	}
 }
 
+// "who" followed by "is" reads as inverted, but only when "who" is a whole word.
+func TestAWordThatOnlyStartsLikeAWhWordAsksNothing(t *testing.T) {
+	if isQuestionMessage("Run the lookup, whois the domain") {
+		t.Error("the whois in a work request read as a question")
+	}
+	if !isQuestionMessage("Run the lookup, who is the owner") {
+		t.Error("a mid-message who is no longer reads as a question")
+	}
+}
+
+// A "?" ends a clause only outside code and brackets, and a closing quote may
+// follow it.
+func TestAQuestionMarkEndsAClauseOnlyWhereItCan(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		want          bool
+	}{
+		{"inside backticks", "the pattern `a? b` in parse.py matches too much", false},
+		{"inside brackets", "add a field (optional? yes) to the form", false},
+		{"before a closing double quote", `the page says "is this right?" at the top`, true},
+		{"before a closing single quote", "the page says 'is this right?' at the top", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasClauseQuestionMark(tc.message); got != tc.want {
+				t.Errorf("hasClauseQuestionMark(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 // The questions stay questions.
 func TestQuestionsStillClassifyAsQuestions(t *testing.T) {
 	for _, msg := range []string{
@@ -3167,6 +3263,54 @@ func TestTheSystemPromptListsTheFilesReadInTheSameOrderEachTime(t *testing.T) {
 		if !strings.Contains(buildSystemPrompt(ctx), want) {
 			t.Fatalf("try %d: the system prompt does not list the three files read in sorted order", try)
 		}
+	}
+}
+
+// The project section says only what was detected, and a build command that
+// cannot show the program runs is not presented as one that does.
+func TestTheSystemPromptSaysWhatTheProjectRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		project *ProjectInfo
+		want    string
+	}{
+		{
+			"everything detected",
+			&ProjectInfo{Language: "python", Framework: "flask", BuildCommand: "pytest", DevCommand: "flask run",
+				ConfigFiles: []string{"pyproject.toml", "setup.cfg"}},
+			"## Project Context\n\nLanguage: python\nFramework: flask\nBuild command: pytest\n" +
+				"Dev command: flask run\nConfig files: pyproject.toml, setup.cfg\n\nWorking directory",
+		},
+		{
+			"a build command that only checks syntax",
+			&ProjectInfo{Language: "python", BuildCommand: "python -m py_compile app.py"},
+			"## Project Context\n\nLanguage: python\n" +
+				"Build/syntax check: python -m py_compile app.py (does not run the program)\n\nWorking directory",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir(), Project: tc.project})
+			if !strings.Contains(prompt, tc.want) {
+				t.Errorf("the system prompt does not hold %q", tc.want)
+			}
+		})
+	}
+	if prompt := buildSystemPrompt(&AgentContext{WorkingDir: t.TempDir()}); strings.Contains(prompt, "## Project Context") {
+		t.Error("a project nothing was detected for has a project section")
+	}
+}
+
+func TestTheSystemPromptNamesTheProjectsToolchain(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := buildSystemPrompt(&AgentContext{WorkingDir: dir})
+
+	want := "## Toolchains\n- **go** — runner `go run .`, install `go mod download`, tests `go test ./...`"
+	if !strings.Contains(prompt, want) {
+		t.Errorf("the system prompt does not hold %q", want)
 	}
 }
 
@@ -3485,5 +3629,44 @@ func TestTheWorkspaceCheckRefusesACallBeforeAnyGateReadsItsPath(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(outside); string(got) != "NOTES = 1\n" {
 		t.Errorf("the file outside the workspace changed: %q", got)
+	}
+}
+
+// What /slots answers decides what the progress ticks show, and whether they
+// keep asking.
+func TestProbeSlotReadsTheSlotInUse(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		status           int
+		body             string
+		processed, total int
+		keepProbing      bool
+	}{
+		{"the first name of each counter wins", http.StatusOK,
+			`[{"n_prompt_tokens_processed":7,"prompt_n":5,"n_prompt_tokens":9,"n_prompt":8}]`, 7, 9, true},
+		{"the last names are read too", http.StatusOK, `[{"n_past":3,"n_prompt":8}]`, 3, 8, true},
+		{"a zero gives way to the next name", http.StatusOK, `[{"n_prompt_tokens_processed":0,"prompt_n":5}]`, 5, 0, true},
+		{"an idle slot is passed over", http.StatusOK,
+			`[{"is_processing":false,"prompt_n":5},{"is_processing":true,"prompt_n":6}]`, 6, 0, true},
+		{"no slot in use", http.StatusOK, `[{"is_processing":false,"prompt_n":5}]`, 0, 0, true},
+		{"/slots is switched off", http.StatusNotFound, "", 0, 0, false},
+		{"/slots is not built in", http.StatusNotImplemented, "", 0, 0, false},
+		{"a passing error", http.StatusInternalServerError, "", 0, 0, true},
+		{"an answer that does not parse", http.StatusOK, "not json", 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+
+			processed, total, keepProbing := probeSlot(context.Background(), server.Client(), server.URL)
+
+			if processed != tc.processed || total != tc.total || keepProbing != tc.keepProbing {
+				t.Errorf("probeSlot = (%d, %d, %v), want (%d, %d, %v)",
+					processed, total, keepProbing, tc.processed, tc.total, tc.keepProbing)
+			}
+		})
 	}
 }
