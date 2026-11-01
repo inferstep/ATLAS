@@ -20,17 +20,14 @@ import (
 const sseDataPrefix = "data: "
 
 // v3CallTimeout is the interactive wall-clock cap for a single V3 pipeline
-// call. It bounds the long-tail repair stall that left a user waiting 11 min.
-// Set ATLAS_V3_TIMEOUT to a second count to override, or 0 to disable the cap
-// (restores the May-10 uncapped behavior for offline bench runs).
+// call. It bounds a long-tail repair stall. Set ATLAS_V3_TIMEOUT to a second
+// count to override, or 0 to disable the cap for offline bench runs.
 //
-// 300s, not the 180s this shipped with. 180 could not contain the pipeline it
-// was capping: PlanSearch spends two LLM calls per candidate, so k=3 costs
-// ~162s at the measured ~22s per call, before the probe and the self-test
-// that precede it. Measured across 43 runs, sessions spent a median 207s of a
-// 180s budget on generation alone and phase-3 repair was reached with 7-9s
-// left and skipped 19 times. The corrected budget cap responds by cutting k
-// to 1, which removes the candidates candidate-agreement needs to compare.
+// 300s because a lower cap cannot contain the pipeline it is capping: PlanSearch
+// spends two LLM calls per candidate, so k=3 costs about 162s at about 22s per
+// call, before the probe and the self-test that precede it, and phase-3 repair
+// then runs out of time. The budget cap responds by cutting k to 1, which
+// removes the candidates candidate-agreement needs to compare.
 func v3CallTimeout() time.Duration {
 	if v := os.Getenv("ATLAS_V3_TIMEOUT"); v != "" {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
@@ -45,10 +42,9 @@ func v3CallTimeout() time.Duration {
 // ---------------------------------------------------------------------------
 
 // V3ProgressFn is called for each V3 pipeline progress event.
-// `data` carries the structured payload from the V3 service (since the
-// 2026-05 observability pass) — counts, timings, indices, strategy
-// labels. Empty for legacy stages that haven't been enriched yet; the
-// proxy bridge falls back to the human-readable `detail` in that case.
+// `data` carries the structured payload from the V3 service: counts, timings,
+// indices, strategy labels. Empty for stages without one; the proxy bridge
+// falls back to the human-readable `detail` in that case.
 type V3ProgressFn func(stage, detail string, data map[string]interface{})
 
 // callV3GenerateStreaming sends a file generation request to the V3 Python
@@ -66,15 +62,13 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 		reqCtx = context.Background()
 	}
 
-	// Interactive wall-clock cap. The May-10 design ran V3 uncapped so a
-	// >15-min Phase-3 repair could finish; that's right for an offline bench
-	// run but unshippable interactively — observed an 11-min stall on a
-	// 103-line write_file while a user waited. Cap the agent path so a runaway
+	// Interactive wall-clock cap. A >15-min Phase-3 repair can finish in an
+	// offline bench run, but not while a user waits. Cap the agent path so a runaway
 	// pipeline falls back to the model's own content (all three callers treat
 	// a V3 error as "write the baseline") instead of hanging the session. The
 	// model's content is already syntax-gated, so the fallback is safe.
-	// ATLAS_V3_TIMEOUT (seconds) overrides; 0 restores the uncapped behavior
-	// for bench/offline use.
+	// ATLAS_V3_TIMEOUT (seconds) overrides; 0 removes the cap for bench/offline
+	// use.
 	// The cap actually applied to this call, which is what a timeout must
 	// report: quoting the configured ceiling when the session's remaining
 	// time shortened it tells the operator to raise a setting that was not
@@ -152,10 +146,7 @@ func callV3GenerateStreaming(reqCtx context.Context, v3URL string, req V3Generat
 func capAtHalfTheSessionLeft(reqCtx context.Context, d time.Duration) time.Duration {
 	// The cap is a per-call ceiling, not a claim on the whole run. A
 	// pipeline that spends its full 300s on the FIRST of five files
-	// leaves the session unable to write the rest: measured 2026-09-14,
-	// V3 burned 295s of a 570s work budget repairing file one and the
-	// run ended with one file and no verification, while the same prompt
-	// with a cheap first file delivered five files in 248s.
+	// leaves the session unable to write the rest.
 	//
 	// Take at most half of what is left, so whatever V3 spends on this
 	// file, the run keeps as much again for the work still to do. When

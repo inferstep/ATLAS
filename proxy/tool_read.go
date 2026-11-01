@@ -72,7 +72,7 @@ func readFileTool() *ToolDef {
 
 			content := numberedReadFileLines(lines, start, end)
 			content, truncated, shownEnd := capReadFileBytes(content, input, data, start, end, totalLines)
-			// #147 review finding #10: on a truncated read the model only
+			// On a truncated read the model only
 			// saw the head, so record ONLY that — otherwise the redundant-read
 			// dedup later asserts the whole file is in context and short-
 			// circuits a real re-read. Untruncated reads record the full bytes.
@@ -89,7 +89,7 @@ func readFileTool() *ToolDef {
 				Content:    content,
 				TotalLines: totalLines,
 				StartLine:  start + 1,
-				EndLine:    shownEnd, // #147 review #15: actual last line returned, not the pre-truncation end
+				EndLine:    shownEnd, // actual last line returned, not the pre-truncation end
 			}
 			outBytes, _ := json.Marshal(out)
 			return &ToolResult{Success: true, Data: outBytes}, nil
@@ -124,14 +124,12 @@ func readFileWindow(input ReadFileInput, totalLines int) (int, int) {
 // numberedReadFileLines renders lines start to end in cat -n form, under a
 // header saying the numbers are not in the file.
 func numberedReadFileLines(lines []string, start, end int) string {
-	// Build numbered output (matches Claude Code's cat -n format).
+	// Build numbered output, in cat -n format.
 	//
-	// The "N<tab>" prefix is presentation, and nothing in the payload
-	// said so, so a model reasonably concluded the file itself is
-	// tab-delimited. Observed live: an otherwise correct solution to a
-	// grid puzzle parsed every line as `line.split('\t')[1]`, found no
-	// tabs in the real file, built an empty grid and printed 0. Say it
-	// once, up front, for any read a program might be written against.
+	// The "N<tab>" prefix is presentation, and the payload has to say so,
+	// or a model reasonably concludes the file itself is tab-delimited and
+	// parses every line as `line.split('\t')[1]`. Say it once, up front,
+	// for any read a program might be written against.
 	var sb strings.Builder
 	sb.WriteString("(Line numbers and the tab after them are added by " +
 		"read_file for reference. They are NOT in the file — code that " +
@@ -182,7 +180,7 @@ func capReadFileBytes(content string, input ReadFileInput, data []byte, start, e
 // withCallGraphFooter appends the file's call graph to a .py read that starts
 // at the top of the file.
 func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, start int, content string) string {
-	// Call-graph footer (issue #39). The model reads a
+	// Call-graph footer. The model reads a
 	// file far more often than it outlines one, so attach the
 	// intra-file call edges to a .py read where the localization
 	// decision happens. Fire on any read that starts at the top of
@@ -204,7 +202,7 @@ func withCallGraphFooter(ctx *AgentContext, input ReadFileInput, data []byte, st
 // bodies). The surgical-read entry point: outline to see what's in a file
 // for a few hundred bytes, then read_file with offset/limit to pull just
 // the one function you need. Saves the model from dumping a whole file into
-// context (and re-reading it) just to find one bug. GH #39.
+// context (and re-reading it) just to find one bug.
 // ---------------------------------------------------------------------------
 
 func outlineFileTool() *ToolDef {
@@ -290,9 +288,9 @@ func outlineText(path string, totalLines int, syms []OutlineSymbol, engine strin
 		}
 	}
 	if hasGraph {
-		// Steer the model to use the structure for localization — the
-		// #39 point: a wrong value a function returns may come from a
-		// function it calls, not from the function itself.
+		// Steer the model to use the structure for localization: a wrong
+		// value a function returns may come from a function it calls, not
+		// from the function itself.
 		sb.WriteString("\nNote: if a function returns a wrong value, the bug may be in a function it `calls`, not in the function itself — follow the call edges to the root cause before editing.\n")
 	}
 	return sb.String()
@@ -316,10 +314,9 @@ func callGraphFooter(ctx *AgentContext, path, source string) string {
 		if !hasEdges {
 			// The footer is concatenated onto the file content the model
 			// reads, so without an explicit boundary it looks like the last
-			// lines of the file. Observed live: a model anchored edit_file's
-			// old_str on "## Call graph (within this file)\n- mean calls: ..."
-			// and the edit could never match, because that text is not on
-			// disk. Say where the file ends and that what follows is not it.
+			// lines of the file, and a model can anchor edit_file's old_str on
+			// text that is not on disk. Say where the file ends and that what
+			// follows is not it.
 			fmt.Fprintf(&sb, "\n\n--- end of %s ---\n", path)
 			sb.WriteString("The lines below are ATLAS analysis, NOT part of the file. " +
 				"Never copy them into old_str.\n")
@@ -664,9 +661,9 @@ func readFileByteCap() int {
 	// Half the per-slot budget: a single read uses at most half the window
 	// even at ~1 token/char. The lower clamp must stay AT OR BELOW that
 	// half — a fixed 16 KB floor could exceed a small-context slot's whole
-	// budget and re-introduce the overflow this cap exists to prevent
-	// (#147 review finding #6). 2 KB is a sane minimum and, since the token
-	// budget floors at 4000, never actually raises the derived value.
+	// budget and re-introduce the overflow this cap exists to prevent.
+	// 2 KB is a sane minimum and, since the token budget floors at 4000,
+	// never actually raises the derived value.
 	byteCap := perSlot / 2
 	if byteCap < 2_000 {
 		byteCap = 2_000
@@ -711,40 +708,16 @@ func isBinaryContent(data []byte) bool {
 
 // readFileTruncationNotice explains a read the byte cap cut short.
 //
-// The old wording ended "process it with run_command (grep/awk/sed/head, or a
-// python script) instead of loading it all into context". That is right for
-// inspecting a large SOURCE file and wrong for a DATA file the program is
-// meant to open at runtime: it points the model at shell pipelines and stdin,
-// and the caller then runs `python solve.py` with no stdin and gets 0.
+// The advice depends on the kind of file, and the label always names the real
+// window, because "the first N" at another offset makes pagination look broken.
 //
-// Measured on the AoC tasks, whose answer is computed from input.txt:
+// A DATA file is meant to be opened by the program at runtime: advice to process
+// it with shell pipelines points the model at stdin, and the caller then runs
+// `python solve.py` with no stdin and gets 0.
 //
-//	shoal   1 line,     600 B    never truncated   92%
-//	slope   400 lines,  12800 B  truncated         50%
-//	course  1200 lines, 9707 B   truncated         27%
-//	sonar   2000 lines, 8707 B   truncated         27%
-//
-// The score tracks the notice rather than the problem. The same model
-// prompted directly never reads the file at all and scored 83-100% on every
-// one of them.
-// It also said "the first N" whatever offset was asked for, and told the model
-// the head was enough whatever kind of file it was. Both are wrong for source.
-//
-// Measured on smallrung_toml, which failed 6 of 6 attempts. executor_server.py
-// is 2026 lines with two routines that dispatch on `lang`: normalize_language
-// at line 208, which only maps aliases, and _syntax_check_impl at line 1266,
-// which is the one the request describes. A default read returns the first 214
-// lines, so the decoy is visible and the target is not. All six sessions edited
-// the decoy. Two paginated correctly with offset=214 and were told "showing the
-// first 225 of 2026 lines" -- a false label that makes pagination look broken.
-// No session ever called search_files or outline_file, either of which finds
-// _syntax_check_impl immediately, while this notice was telling them the rest
-// was unnecessary.
-//
-// The data-file advice stays for data files: it was measured to help on the AoC
-// tasks, where the right move IS to have the program open the file at runtime.
-// Source code gets the advice that fits source code -- where the window is and
-// how to find a symbol.
+// SOURCE code gets where the window is and how to find a symbol: a default read
+// can show a decoy and not the routine the request describes, and telling the
+// model that the head is enough keeps it from looking further.
 func readFileTruncationNotice(start, shown, totalLines, totalBytes int, isSource bool) string {
 	where := fmt.Sprintf("lines %d-%d of %d (%d bytes total)",
 		start+1, start+shown, totalLines, totalBytes)
@@ -767,9 +740,8 @@ func readFileTruncationNotice(start, shown, totalLines, totalBytes int, isSource
 
 // ---------------------------------------------------------------------------
 // find_file — locate files by NAME (vs search_files which greps contents).
-// Added because the model would search_files for a filename,
-// get zero matches (because contents don't contain the literal filename),
-// and conclude the file didn't exist.
+// Separate from search_files, which greps contents: a search for a filename
+// there finds nothing, and the model concludes the file does not exist.
 // ---------------------------------------------------------------------------
 
 func findFileTool() *ToolDef {
@@ -790,10 +762,9 @@ func findFileTool() *ToolDef {
 			// 200-match cap full of unrelated files, and confuses the model
 			// into thinking it found nothing useful.
 			if strings.TrimSpace(input.Pattern) == "" {
-				// Observed live: the model put the filename in `path` and left
-				// `pattern` empty, twice in a row. The generic "pattern cannot
-				// be empty" is correct and did not land, because it never
-				// mentioned the argument the model actually filled in. When
+				// A model can put the filename in `path` and leave `pattern`
+				// empty. The generic "pattern cannot be empty" is correct but
+				// never mentions the argument the model actually filled in. When
 				// `path` looks like a filename rather than a directory, hand
 				// back the exact call.
 				if hint := findFileArgSwapHint(input.Path); hint != "" {
@@ -958,11 +929,10 @@ func redundantReadShortCircuit(name string, args json.RawMessage, ctx *AgentCont
 //
 // The probe must survive JSON escaping. Tool results are stored in the
 // conversation via ToolResult.MarshalText (json.Marshal), so the file content
-// lives in ctx.Messages with `"`→`\"`, newlines→`\n`, tabs→`\t`. The old probe
-// (the longest raw LINE) failed for any file whose longest line contained a
-// double quote — e.g. a flask app's embedded HTML/JS — producing a false
-// "trimmed" verdict that made the dedup re-serve the whole file every read and
-// the model loop on read_file. Instead, probe with the longest maximal run of
+// lives in ctx.Messages with `"`→`\"`, newlines→`\n`, tabs→`\t`. A raw line
+// would fail for any file whose longest line holds a double quote, giving a false
+// "trimmed" verdict that makes the dedup re-serve the whole file every read and
+// the model loop on read_file. So probe with the longest maximal run of
 // characters JSON does NOT escape (no `"`, `\`, or \n/\r/\t); that run is byte-
 // identical in both the raw file and the escaped conversation copy.
 func fileContentInContext(ctx *AgentContext, content string) bool {

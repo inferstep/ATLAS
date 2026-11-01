@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// structural_edit — GH #39 v1: friendly-selector named-node replacement
+// structural_edit — friendly-selector named-node replacement
 // ---------------------------------------------------------------------------
 
 func structuralEditTool() *ToolDef {
@@ -140,14 +140,12 @@ func structuralInputRefusal(input StructuralEditInput) *ToolResult {
 // structuralContentRefusal refuses a replacement that cannot be one node's body.
 func structuralContentRefusal(input StructuralEditInput, source string) *ToolResult {
 	// Empty-content guard. Replacing a node with nothing is a
-	// deletion, not an edit — observed live: a model called structural_edit
-	// with the `content` field omitted entirely, which spliced an
-	// empty string over `function:add` and silently deleted it
-	// (calc.py lost both functions while __main__ still called
-	// them). It passes the syntax gate (the file still parses) and
-	// the no-op guard (the content did change), so nothing else
-	// catches it. Refuse it and steer: an edit needs a replacement
-	// body; an intentional removal is delete_file's job.
+	// deletion, not an edit: an omitted `content` field would splice
+	// an empty string over the node and silently delete it. That
+	// passes the syntax gate (the file still parses) and the no-op
+	// guard (the content did change), so nothing else catches it.
+	// Refuse it and steer: an edit needs a replacement body; an
+	// intentional removal is delete_file's job.
 	if strings.TrimSpace(input.Content) == "" {
 		log.Printf("[structural_edit] rejected empty content for %s selector=%q — would delete the node", input.Path, input.Selector)
 		return noMutation(fmt.Sprintf(
@@ -160,11 +158,9 @@ func structuralContentRefusal(input StructuralEditInput, source string) *ToolRes
 	// Runaway-content guard. structural_edit replaces ONE node, so the
 	// replacement should be roughly node-sized. A reasoning-heavy
 	// model sometimes leaks its entire chain-of-thought into the
-	// content field instead of emitting just the new body — observed
-	// live: a 69KB "content" for a 3-line function, full of
-	// "# Wait, the user said..." commentary. That blob then ships to
-	// disk and, being huge, trips downstream size heuristics (it once
-	// re-triggered a 23-min V3 PlanSearch). Reject when the
+	// content field instead of emitting just the new body, and that
+	// blob then lands on disk and, being huge, trips downstream size
+	// heuristics. Reject when the
 	// replacement is implausibly larger than the whole file: >4× the
 	// file and over an 8KB floor (so legit edits that grow a small
 	// file stay clear, and large-function edits in large files aren't
@@ -269,12 +265,11 @@ func spliceRefusal(ctx *AgentContext, input StructuralEditInput, source string, 
 	}
 
 	// No-op guard. A weak model frequently "fixes" a bug by
-	// re-emitting the node's existing (broken) code verbatim —
-	// observed live: structural_edit function:add with content identical
-	// to the buggy body, twice in one batch. Reporting success on
-	// a no-op tells the model the fix landed when nothing changed;
-	// it then moves on to verification, fails, and can't work out
-	// why. Fail loudly instead so the model re-derives the edit.
+	// re-emitting the node's existing (broken) code verbatim.
+	// Reporting success on a no-op tells the model the fix landed
+	// when nothing changed; it then moves on to verification, fails,
+	// and can't work out why. Fail loudly instead so the model
+	// re-derives the edit.
 	if astResp.NewContent == source {
 		log.Printf("[structural_edit] no-op edit rejected for %s selector=%q — replacement identical to existing code", input.Path, input.Selector)
 		return noMutation(fmt.Sprintf(
@@ -319,10 +314,7 @@ func routeStructuralEdit(ctx *AgentContext, input StructuralEditInput, path, sou
 	}
 	// A session iterating on its own file after a failed run is in
 	// the write-run-fix loop; V3's toll there only delays the next
-	// execution. The write path has had this fast-track since PC-190;
-	// the edit path never consulted it. Measured: three 900s timeout
-	// deaths whose sessions each paid one full V3 run and then
-	// V3-improve on every corrective edit until the clock died.
+	// execution, on the edit path as on the write path.
 	structuralBypass := editGenerationBypass(ctx, fileTier,
 		editWarrantsV3(finalContent, cc, ccOK),
 		isActiveDebugIteration(ctx, input.Path))
@@ -368,13 +360,12 @@ func structuralSyntaxMessage(input StructuralEditInput, finalContent string) fun
 
 // structuralGateRefusal runs structural_edit's gates after the syntax gate.
 func structuralGateRefusal(ctx *AgentContext, path, relPath, source, finalContent string) *ToolResult {
-	// Structural gate (#147): the structural splice guarantees the result
-	// parses, but not that its calls resolve — the observed failure
-	// was a structural_edit that introduced a render_template call with only
-	// render_template_string imported, which landed as verified and
-	// 500'd every request. Block a write that NEWLY makes a direct
-	// call unresolved (healthy->broken); a pre-existing one is left
-	// alone for repair-in-progress. Fail-open when the check can't run.
+	// Structural gate: the structural splice guarantees the result
+	// parses, but not that its calls resolve, so a new call with no
+	// matching import would land as verified and fail at runtime.
+	// Block a write that NEWLY makes a direct call unresolved
+	// (healthy->broken); a pre-existing one is left alone for
+	// repair-in-progress. Fail-open when the check can't run.
 	if introduced := editIntroducesUnresolved(ctx, path, source, finalContent); len(introduced) > 0 {
 		log.Printf("[structural_edit] edit introduces unresolved call(s) %v in %s — rejecting", logPaths(introduced), logPath(relPath))
 		return structuralRefusal(structuralRejection(relPath, introduced))
@@ -406,23 +397,14 @@ func structuralEditOutput(input StructuralEditInput, astResp structuralSplice, f
 		BytesOld: astResp.OldSize,
 		BytesNew: len(finalContent),
 	}
-	// The splice landed. Validation used to stay not_run, on sound
-	// reasoning: the tree-sitter transform only proves v3-service
-	// could re-parse ITS output, this tool ran no check of its own on
-	// the bytes it writes -- which may be a V3 replacement rather
-	// than the splice -- and reading the service's ok boolean as a
-	// syntax pass is exactly the inference overlayValidation exists
-	// to prevent.
+	// The splice landed, so run the syntax check on the bytes
+	// written. The tree-sitter transform only proves v3-service
+	// could re-parse ITS output, and those bytes may be a V3
+	// replacement rather than the splice, so the service's ok
+	// boolean is not a syntax pass.
 	//
-	// The conclusion was right and the premise was fixable: run the
-	// check. not_run is not a neutral answer at the exit. A path can
-	// only retire its mutation debt on a verdict about its CURRENT
-	// bytes, so every file edited this way carried debt that nothing
-	// could ever discharge. Measured on offbyone: the run reproduced
-	// the bug, fixed chunks() with structural_edit, re-ran its
-	// reproduction and printed the corrected output -- and still
-	// ended `unresolved_mutation_debt`, told that chunk.py "was never
-	// written in a state this run could check". It had been.
+	// not_run is not a neutral answer at the exit: a path can only
+	// retire its mutation debt on a verdict about its CURRENT bytes.
 	//
 	// The verdict is real, so a clean splice settles and a broken one
 	// is recorded as broken instead of as unknown. It is the check the
