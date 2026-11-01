@@ -128,7 +128,7 @@ analysed. In particular:
   decision when the request declared its output knowledge or the target was
   grounded in the model's structured call, the delivery policy when it
   delivers, a mutation scope, and a capture-only suppression
-  ([CANDIDATE_AUTHORIZATION.md](CANDIDATE_AUTHORIZATION.md)).
+  ([CANDIDATE_POLICY.md](CANDIDATE_POLICY.md)).
 
 ## Runbooks
 
