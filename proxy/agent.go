@@ -1677,10 +1677,7 @@ func stepExclusionTarget(ctx *AgentContext) ([]string, string) {
 	// assistant turn has already happened (the model corrected itself),
 	// the tail will end in something other than that tool result and we
 	// return nil — the restriction expires after a single decision.
-	startIdx := n - 1
-	if startIdx > 6 {
-		startIdx = 6
-	}
+	startIdx := min(n-1, 6)
 	for i := n - 1; i >= n-1-startIdx && i >= 0; i-- {
 		msg := ctx.Messages[i]
 		if msg.Role != "tool" {
@@ -1692,27 +1689,10 @@ func stepExclusionTarget(ctx *AgentContext) ([]string, string) {
 			}
 			break
 		}
-		if msg.ToolName != "write_file" {
+		path, ok := rejectedWritePath(msg)
+		if !ok {
 			continue
 		}
-		if !strings.Contains(msg.Content, "already exists") {
-			continue
-		}
-		// Pull the path from the rejection text so we can sniff the ext.
-		// The rejection format (see surgical-edit gate) is:
-		//   "File <path> already exists (<n> lines). ..."
-		const pfx = "File "
-		s := msg.Content
-		idx := strings.Index(s, pfx)
-		if idx < 0 {
-			continue
-		}
-		s = s[idx+len(pfx):]
-		spaceIdx := strings.Index(s, " ")
-		if spaceIdx < 0 {
-			continue
-		}
-		path := s[:spaceIdx]
 		ext := strings.ToLower(filepath.Ext(path))
 		if ext != ".py" && ext != ".html" && ext != ".htm" {
 			return nil, ""
@@ -1723,6 +1703,23 @@ func stepExclusionTarget(ctx *AgentContext) ([]string, string) {
 		return []string{"edit_file", "write_file"}, path
 	}
 	return nil, ""
+}
+
+// rejectedWritePath reads the path from write_file's refusal of an existing
+// file. The format (see surgical-edit gate) is:
+//
+//	"File <path> already exists (<n> lines). ..."
+func rejectedWritePath(msg AgentMessage) (string, bool) {
+	if msg.ToolName != "write_file" || !strings.Contains(msg.Content, "already exists") {
+		return "", false
+	}
+	const pfx = "File "
+	idx := strings.Index(msg.Content, pfx)
+	if idx < 0 {
+		return "", false
+	}
+	path, _, found := strings.Cut(msg.Content[idx+len(pfx):], " ")
+	return path, found
 }
 
 // eraseLlamaSlot clears llama.cpp's KV slots to give the next chat
@@ -2096,13 +2093,10 @@ const restatementMaxBytes = 24000
 //
 // When onlyPath is set, the last read is restated only if it IS that file.
 //
-// Measured (stabilization cycle 4, probe M, 98 generations on 49 captured
-// requests): the file-content sub-call asks for one file while the context
-// ends with "Current contents of" a DIFFERENT file, and in 2 of 49 cases the
-// model returned a near copy of that other file instead of the file it was
-// asked for. Dropping that message removed both, with no loss of usable
-// content (44/49 in each arm). The target's own restatement is kept: it is the
-// file being rewritten.
+// The file-content sub-call asks for one file, and with the context ending in
+// "Current contents of" a DIFFERENT file the model can return a near copy of
+// that other file. The target's own restatement is kept: it is the file being
+// rewritten.
 func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, onlyPath string) []map[string]string {
 	if ctx == nil || envOr("ATLAS_RESTATE_LAST_READ", "1") == "0" {
 		return wire
@@ -2127,11 +2121,8 @@ func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, o
 	}
 	// Fit it in what the slot actually has left. The budget is computed over
 	// ctx.Messages and applied by trimMessages; this block is appended to the
-	// WIRE afterwards, so nothing counted it. On a 2000-line fixture the
-	// line-numbered copy runs ~4700 tokens, and aoc_sonar died at turn 3 in
-	// both reps with `request (33012 tokens) exceeds the available context
-	// size (32768)` — a 400 that ends the stream. Restating is an
-	// optimisation; overflowing the slot is fatal, so it yields.
+	// WIRE afterwards, so nothing counted it. Restating is an optimisation;
+	// overflowing the slot is a 400 that ends the stream, so it yields.
 	used := 0
 	for _, m := range wire {
 		used += estTokens(m["content"])
@@ -2142,6 +2133,12 @@ func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, o
 			logPath(path), headroom)
 		return wire
 	}
+	return append(wire, map[string]string{"role": "user", "content": numberedRestatement(ctx, path, content)})
+}
+
+// numberedRestatement is the file as the wire carries it: named from the
+// workspace, with the line numbers read_file shows.
+func numberedRestatement(ctx *AgentContext, path, content string) string {
 	rel := path
 	if ctx.WorkingDir != "" {
 		if r, err := filepath.Rel(ctx.WorkingDir, path); err == nil && !strings.HasPrefix(r, "..") {
@@ -2155,7 +2152,7 @@ func appendLastReadRestatementFor(ctx *AgentContext, wire []map[string]string, o
 	for i, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
 		fmt.Fprintf(&sb, "%d\t%s\n", i+1, line)
 	}
-	return append(wire, map[string]string{"role": "user", "content": sb.String()})
+	return sb.String()
 }
 
 // callLLMOnceWithGrammar is one round-trip to llama-server's
