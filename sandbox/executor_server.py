@@ -954,7 +954,7 @@ def _shell_response(result: Dict, elapsed_ms: int, observation: Optional[ShellOb
         outcome=str(result.get("outcome", OUTCOME_UNCLASSIFIED)),
         peak_memory_bytes=int(result.get("peak_memory_bytes", 0)),
         observation=observation,
-        limits_enforced=result.get("limits_enforced", True),
+        limits_enforced=result.get("limits_enforced", False),
         resource_limits=result.get("resource_limits"),
     )
 

@@ -466,6 +466,10 @@ def test_health_reports_degraded_state_when_supervision_unavailable(monkeypatch,
     assert res["limits_enforced"] is False
     assert res["resource_limits"] == "resource limits not enforced"
 
+    shell_res = ex._shell_response(res, 0, None)
+    assert shell_res.limits_enforced is False
+    assert shell_res.resource_limits == "resource limits not enforced"
+
     exec_res = ex.execute_code(ex.ExecuteRequest(code="echo ok\n", language="bash", timeout=5))
     assert exec_res.limits_enforced is False
     assert exec_res.resource_limits == "resource limits not enforced"
@@ -489,6 +493,10 @@ def test_health_reports_enforced_state_when_supervision_available(monkeypatch, t
     res = ex._run_cmd(["bash", "-c", "echo ok"], timeout=5)
     assert res["limits_enforced"] is True
     assert res["resource_limits"] == "enforced"
+
+    shell_res = ex._shell_response(res, 0, None)
+    assert shell_res.limits_enforced is True
+    assert shell_res.resource_limits == "enforced"
 
     exec_res = ex.execute_code(ex.ExecuteRequest(code="echo ok\n", language="bash", timeout=5))
     assert exec_res.limits_enforced is True

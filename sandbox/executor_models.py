@@ -122,5 +122,5 @@ class ShellResponse(BaseModel):
     outcome: str = "internal_unclassified"
     peak_memory_bytes: int = 0
     observation: Optional[ShellObservation] = None
-    limits_enforced: bool = True
+    limits_enforced: bool = False
     resource_limits: Optional[str] = None

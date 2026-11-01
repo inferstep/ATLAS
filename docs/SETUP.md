@@ -564,7 +564,7 @@ Run all services as local processes without containers. Useful for development o
 | **llama.cpp** | Built from source with CUDA (see [llama.cpp build instructions](https://github.com/ggml-org/llama.cpp?tab=readme-ov-file#build)) |
 | **Node.js 20+** | Required by sandbox for JavaScript/TypeScript execution |
 | **Rust** | Required by sandbox for Rust execution |
-| **Linux with /proc** | Required for the sandbox's group memory limit, process-count limit and cleanup of escaped processes (`/proc/<pid>/stat`, `status`, `environ`). Without `/proc`, the output cap still applies. The address-space ceiling does not need `/proc`, but it is off by default (`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`). |
+| **Linux with /proc** | Required for the sandbox's group memory limit, process-count limit and cleanup of escaped processes (`/proc/<pid>/stat`, `status`, `environ`). Without `/proc`, the output cap still applies, and the time limit still ends the command's process group, with SIGKILL after the grace. A process that left the group is not ended. The address-space ceiling does not need `/proc`, but it is off by default (`ATLAS_EXEC_ADDRESS_SPACE_MULTIPLE`). |
 
 ### Build
 
