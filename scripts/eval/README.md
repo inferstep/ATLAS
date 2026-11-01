@@ -1,7 +1,7 @@
 # The held-out evaluation interface
 
 The capability and reliability proofs (#242, #243) run a held-out suite. A
-separate evaluation session writes the suite and runs it. The development
+separate evaluation side writes the suite and runs it. The development
 side builds only the generic pieces in `scripts/eval/` and never sees the
 tasks. This page is the contract between the two sides. The decisions behind
 it are recorded on #238 (the suite) and #242 (the baseline).
@@ -72,7 +72,7 @@ tasks/<id>/
   its gated deploy recorded for the stated commit (#241). The commit, the
   images, the grammar mode and the lens and steering state go into every
   record.
-- **Who runs it.** The evaluation session runs the driver and keeps the
+- **Who runs it.** The evaluation side runs the driver and keeps the
   records, outside anything the development side reads. The maintainer
   schedules GPU time, so the two sides never share the GPU.
 
@@ -93,7 +93,7 @@ tasks/<id>/
   `/props` identity (model, model path, build).
 
 Records name tasks and keep grader output, so they stay with the
-evaluation session.
+evaluation side.
 
 ## Commands
 

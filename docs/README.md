@@ -93,8 +93,8 @@ Task-oriented index for everything under `docs/`. The
   running the proxy on the host against the compose stack.
 - [CODE_STYLE.md](CODE_STYLE.md) — how ATLAS code should read; what
   `scripts/code_health.py` enforces on new code and refactors.
-- [EVAL_INTERFACE.md](EVAL_INTERFACE.md) — the held-out evaluation
-  contract between the evaluation session and the development side.
+- [scripts/eval/README.md](../scripts/eval/README.md) — the held-out evaluation
+  contract between the evaluation side and the development side.
 - [quality/gates.md](quality/gates.md) — the checks on a pull request,
   which of them are required, how the outside tools are set, and the
   measured baselines.
