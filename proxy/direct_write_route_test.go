@@ -281,15 +281,16 @@ func TestDirectWriteRoute(t *testing.T) {
 // recomputed an observation it already held.
 func TestWriteRoutesDoNotRecomputeTheirObservation(t *testing.T) {
 	structured, legacy := syntaxCallCounts(t)
-	// 17 since structural_edit moved onto the shared edit gate (#214). It
+	// 13 since the write route's gates share one check of the baseline. Before
+	// that 17, since structural_edit moved onto the shared edit gate (#214). It
 	// had one site of its own, after the write, to observe the bytes it
 	// spliced (before that it recorded not_run, and a file it edited carried
 	// mutation debt nothing could discharge). The gate now observes the
 	// proposed bytes before the write, and that observation is the verdict
 	// it keeps: asking again after the write would be the recomputation this
 	// counts against. Every site is beside the bytes it describes.
-	if structured != 17 {
-		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 17; a new one on a "+
+	if structured != 13 {
+		t.Errorf("fallbackSyntaxOutcomeFor call sites = %d, want 13; a new one on a "+
 			"route that already holds an observation is a recomputation", structured)
 	}
 	// The migration is complete: no route calls the legacy wrapper any more.

@@ -22,6 +22,46 @@ var v3DeliveryRouteSteps = map[string][]string{
 		"edit_route_delivery.go:collectEditCandidateEvidence",
 		"edit_route_delivery.go:decideEditCandidateDelivery",
 	},
+	"tools.go:writeFileWithV3": {
+		"tools.go:proposeWriteCandidate",
+		"tools.go:collectWriteCandidateEvidence",
+		"tools.go:decideWriteCandidateDelivery",
+	},
+}
+
+// writeRouteGates are the gates of the new-file route, in the order they run.
+// Each can restore the baseline or end the write, so the order decides what
+// lands and which refusal the model reads.
+var writeRouteGates = []string{
+	"withdrawRefusedCandidate",
+	"refuseContentThatDoesNotParse",
+	"refuseUnresolvedCalls",
+	"refuseBrokenEmbeddedScript",
+	"refuseDuplicateEntrypoint",
+	"refuseCancelledWrite",
+}
+
+// The route runs its gates from one list, so nothing but this test fixes the
+// list's order, and each gate stays on it.
+func TestTheWriteRouteRunsItsGatesInTheirOrder(t *testing.T) {
+	var got []string
+	for _, d := range proxyFiles(t)["tools.go"].Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "applyWriteGates" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if list, ok := n.(*ast.CompositeLit); ok {
+				for _, gate := range list.Elts {
+					got = append(got, gate.(*ast.Ident).Name)
+				}
+			}
+			return true
+		})
+	}
+	if !slices.Equal(got, writeRouteGates) {
+		t.Errorf("applyWriteGates runs %v, want %v", got, writeRouteGates)
+	}
 }
 
 // routeOf names the route a call site answers for: the route whose step the
@@ -50,8 +90,8 @@ func TestEachRouteStepIsCalledOnlyByItsRoute(t *testing.T) {
 	}
 }
 
-// A route calls its steps in their order, and the shared delivery owner after
-// the last of them: no byte is delivered before the decision.
+// A route calls its steps in their order, and its own sink after the last of
+// them: no byte is delivered before the decision.
 func TestARouteCallsItsStepsInTheirOrder(t *testing.T) {
 	files := proxyFiles(t)
 	for route, steps := range v3DeliveryRouteSteps {
@@ -60,7 +100,11 @@ func TestARouteCallsItsStepsInTheirOrder(t *testing.T) {
 			_, name, _ := strings.Cut(step, ":")
 			want = append(want, name)
 		}
-		want = append(want, "deliverCandidateBytes")
+		for sink, caller := range v3DeliveryRouteSinkCallers[route] {
+			if caller == route {
+				want = append(want, sink)
+			}
+		}
 		if got := callsInOrder(files, route, want); !slices.Equal(got, want) {
 			t.Errorf("route %s calls %v, want %v in that order", route, got, want)
 		}
@@ -74,6 +118,10 @@ var v3DeliveryRouteSinkCallers = map[string]map[string]string{
 	"edit_route_delivery.go:deliverEditCandidate": {
 		"authorizeCandidateDelivery": "edit_route_delivery.go:decideEditCandidateDelivery",
 		"deliverCandidateBytes":      "edit_route_delivery.go:deliverEditCandidate",
+	},
+	"tools.go:writeFileWithV3": {
+		"authorizeCandidateDelivery": "tools.go:decideWriteCandidateDelivery",
+		"deliverAuthorizedCandidate": "tools.go:writeFileWithV3",
 	},
 }
 

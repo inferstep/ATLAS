@@ -71,6 +71,23 @@ def test_every_write_path_goes_through_the_pipeline(bodies, tool):
     )
 
 
+def _steps_of_the_write_route() -> str:
+    """The bodies of the gates that applyWriteGates runs. A gate's name anywhere else in the tool runs nothing."""
+    src = TOOLS_GO.read_text()
+    listed = re.search(r"func applyWriteGates\(.*?\[\]func\(\*v3Write\) \*ToolResult\{(.*?)\n\t\} \{", src, re.S)
+    assert listed, "applyWriteGates has no list of gates — did the write route get restructured?"
+    names = re.findall(r"\w+", listed.group(1))
+    assert names, "applyWriteGates lists no gate"
+    return "\n".join(src[src.index(f"func {name}("):].split("\n}\n", 1)[0] for name in names)
+
+
+@pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
+def test_the_write_route_runs_every_gate_from_its_list(gate, consequence):
+    assert gate in _steps_of_the_write_route(), (
+        f"no gate on applyWriteGates's list calls {gate} — {consequence}."
+    )
+
+
 @pytest.mark.parametrize("tool", WRITE_TOOLS)
 @pytest.mark.parametrize("gate,consequence", sorted(REQUIRED.items()))
 def test_every_write_path_runs_every_gate(bodies, tool, gate, consequence):

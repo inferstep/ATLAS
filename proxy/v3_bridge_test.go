@@ -525,14 +525,21 @@ func TestNoGateRestoresBaselineWithoutRevoking(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	writeFn := body[strings.Index(body, "func writeFileWithV3("):]
-	writeFn = writeFn[:strings.Index(writeFn, "\nfunc ")]
-	if strings.Contains(writeFn, "code = baselineContent") {
-		t.Fatal("a gate assigns baseline bytes directly; use revokeV3 so provenance follows")
+	route := body[strings.Index(body, "func writeFileWithV3("):]
+	route = route[:strings.Index(route, "\n// originalForScope")]
+	for _, banned := range []string{"code = baselineContent", "code = write.baselineContent",
+		"code = w.baselineContent"} {
+		if strings.Contains(route, banned) {
+			t.Fatal("a gate assigns baseline bytes directly; use revokeV3 so provenance follows")
+		}
 	}
-	if strings.Count(writeFn, "revokeV3(") < 3 {
-		t.Fatalf("expected every baseline-restoring gate to revoke, found %d",
-			strings.Count(writeFn, "revokeV3("))
+	// The two that withdraw a proposal before it is observed, and the one
+	// transition the four gates after the decision share.
+	if n := strings.Count(route, "revokeV3("); n != 3 {
+		t.Fatalf("revokeV3 is called %d times on the route, want 3", n)
+	}
+	if n := strings.Count(route, "write.restoreBaseline("); n != 4 {
+		t.Fatalf("%d gates restore the baseline, want 4", n)
 	}
 }
 

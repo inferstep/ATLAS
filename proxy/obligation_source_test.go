@@ -326,7 +326,7 @@ func TestNoNewConsumerInTheDeliveryGraph(t *testing.T) {
 				// edit routes that apply it to a request which declared
 				// nothing. A request that DID declare its outputs never
 				// reaches it.
-				"tools.go:writeFileWithV3":      true,
+				"tools.go:emitV3WriteStageEnd":  true,
 				"tools.go:improveContentWithV3": true,
 			}
 			if !allowed[site] {

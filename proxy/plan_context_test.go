@@ -68,7 +68,7 @@ func TestEachRequestCutsAContextFileToItsLimit(t *testing.T) {
 	for _, c := range []struct{ name, got, want string }{
 		{"a write, a file read", sent.ProjectContext["read.py"], big[:4000] + mark},
 		{"a write, a file written", sent.ProjectContext["written.py"], big[:4000] + mark},
-		{"an edit", v3EditRequest(target, "", ctx).ProjectContext["read.py"], big[:4000] + mark},
+		{"an edit", v3Request(target, "", ctx).ProjectContext["read.py"], big[:4000] + mark},
 		{"the structural check", structuralProjectContext(ctx, target)["read.py"], big[:4000] + mark},
 		{"a revised plan", planContext["read.py"], big[:2000] + mark},
 		{"a file at the limit stays whole", contextEntry(big[:2000], 2000), big[:2000]},
