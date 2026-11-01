@@ -116,8 +116,11 @@ def measure() -> tuple:
 
 
 def tracked_paths() -> list:
-    """Every path git tracks. Outside a checkout there are none, so no note."""
-    out = subprocess.run(["git", "-C", ROOT, "ls-files"], capture_output=True, text=True, check=False)
+    """Every path git tracks. With no git or no checkout there are none, so no note."""
+    try:
+        out = subprocess.run(["git", "-C", ROOT, "ls-files"], capture_output=True, text=True, check=False)
+    except OSError:
+        return []
     return out.stdout.splitlines()
 
 

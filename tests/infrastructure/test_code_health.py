@@ -3,6 +3,7 @@ committed baseline matches the code."""
 
 import importlib.util
 import os
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("code_health", os.path.join(ROOT, "scripts", "code_health.py"))
@@ -45,6 +46,21 @@ def test_a_folder_over_the_soft_limit_counts_files_and_sub_folders():
     paths += [f"fits/file{i}" for i in range(25)]
     paths += [f".github/workflows/file{i}.yml" for i in range(30)]
     assert ch.crowded_folders(paths) == {"crowded": 26}
+
+
+def test_a_crowded_folder_is_a_note_and_never_a_failure(monkeypatch, capsys):
+    monkeypatch.setattr(ch, "tracked_paths", lambda: [f"crowded/file{i}" for i in range(26)])
+    monkeypatch.setattr(sys, "argv", ["code_health.py"])
+    assert ch.main() == 0
+    assert "crowded (26)" in capsys.readouterr().out
+
+
+def test_no_git_gives_no_note_and_no_failure(monkeypatch):
+    def no_git(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(ch.subprocess, "run", no_git)
+    assert ch.tracked_paths() == []
 
 
 def test_the_committed_baseline_matches_the_code():
