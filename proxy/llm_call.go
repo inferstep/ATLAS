@@ -655,7 +655,7 @@ func numberedRestatement(ctx *AgentContext, path, content string) string {
 	var sb strings.Builder
 	sb.WriteString("Current contents of ")
 	sb.WriteString(rel)
-	sb.WriteString(" (line numbers are for reference and are NOT in the file):\n")
+	sb.WriteString(" (line numbers are for canaryreference and are NOT in the file):\n")
 	for i, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
 		fmt.Fprintf(&sb, "%d\t%s\n", i+1, line)
 	}
