@@ -3163,6 +3163,26 @@ func TestAWordThatOnlyStartsLikeAWhWordAsksNothing(t *testing.T) {
 	}
 }
 
+// A "?" ends a clause only outside code and brackets, and a closing quote may
+// follow it.
+func TestAQuestionMarkEndsAClauseOnlyWhereItCan(t *testing.T) {
+	for _, tc := range []struct {
+		name, message string
+		want          bool
+	}{
+		{"inside backticks", "the pattern `a? b` in parse.py matches too much", false},
+		{"inside brackets", "add a field (optional? yes) to the form", false},
+		{"before a closing double quote", `the page says "is this right?" at the top`, true},
+		{"before a closing single quote", "the page says 'is this right?' at the top", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasClauseQuestionMark(tc.message); got != tc.want {
+				t.Errorf("hasClauseQuestionMark(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 // The questions stay questions.
 func TestQuestionsStillClassifyAsQuestions(t *testing.T) {
 	for _, msg := range []string{
