@@ -1946,22 +1946,21 @@ func probeSlot(ctx context.Context, client *http.Client, llamaURL string) (int, 
 		if isProc, ok := s["is_processing"].(bool); ok && !isProc {
 			continue
 		}
-		var processed, total int
-		for _, k := range []string{"n_prompt_tokens_processed", "prompt_n", "n_past"} {
-			if v, ok := s[k].(float64); ok && v > 0 {
-				processed = int(v)
-				break
-			}
-		}
-		for _, k := range []string{"n_prompt_tokens", "n_prompt"} {
-			if v, ok := s[k].(float64); ok && v > 0 {
-				total = int(v)
-				break
-			}
-		}
+		processed := firstPositiveCount(s, "n_prompt_tokens_processed", "prompt_n", "n_past")
+		total := firstPositiveCount(s, "n_prompt_tokens", "n_prompt")
 		return processed, total, true
 	}
 	return 0, 0, true
+}
+
+// firstPositiveCount returns the first named counter that holds a count.
+func firstPositiveCount(slot map[string]interface{}, keys ...string) int {
+	for _, k := range keys {
+		if v, ok := slot[k].(float64); ok && v > 0 {
+			return int(v)
+		}
+	}
+	return 0
 }
 
 // llmStreamClient is a long-lived HTTP client for streaming LLM calls.
@@ -2276,8 +2275,8 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	// for the closer, and a model that closes with three would otherwise
 	// generate to the token ceiling.
 	fencedSubCall := grammar == rawEmissionSentinel || isFenceBlockGrammar(grammar)
-	progress := func() {}
-	armStalled := func() {}
+	progress := func() { /* only a fenced sub-call has a watchdog to feed */ }
+	armStalled := func() { /* only a fenced sub-call has a watchdog to arm */ }
 	if fencedSubCall {
 		var cancel context.CancelFunc
 		reqCtx, cancel = context.WithCancel(reqCtx)
@@ -2290,7 +2289,7 @@ func callLLMOnceRestating(ctx *AgentContext, messages []AgentMessage, temperatur
 	if err != nil {
 		return "", 0, fmt.Errorf("create request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set(headerContentType, "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	// Don't reuse the TCP connection across turns. We were seeing
 	// `Post ".../v1/chat/completions": EOF` failures in 0ms between
@@ -2463,7 +2462,7 @@ func (rd *llmStream) read(resp *http.Response, reqCtx context.Context) (string, 
 	// "nothing was sent" from "something was sent and not parsed".
 	if rd.fencedSubCall {
 		log.Printf("[agent] fenced sub-call response: status=%s content-type=%q transfer-encoding=%v content-length=%d",
-			resp.Status, resp.Header.Get("Content-Type"),
+			resp.Status, resp.Header.Get(headerContentType),
 			resp.TransferEncoding, resp.ContentLength)
 		// What the wire showed, for the caller's fenced_fetch event (#254).
 		defer func() {
@@ -5855,10 +5854,8 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("- **Don't use `text` mid-task.** Roll narration into the done.summary at the end, or skip it entirely. Mid-task `text` ends the turn early.\n")
 	sb.WriteString("- **When unsure** whether the user wants chat or work: ask in a single `text` reply. Don't speculatively start tool-calling — but reading a file the user named is never speculative.\n\n")
 
-	// Tool descriptions.
 	sb.WriteString(buildToolDescriptionsExcluding(nil))
 
-	// Rules
 	sb.WriteString("## Rules\n\n")
 	sb.WriteString("- **Writing a whole file**: in write_file, set content to EXACTLY the 7 characters `@fenced` and NOTHING else — do NOT put the file itself in the JSON. After the tool call you will be asked for the file; reply then with ONE fenced code block containing the complete file. Code inside a JSON string gets corrupted by escaping (lost parens, broken newlines); the fenced reply is the reliable channel. Only trivially short content (under 5 lines) may be inlined in the JSON.\n")
 	sb.WriteString("- To work on an EXISTING file, `read_file` it. Reading is the default and the context window is large; `read_file` caps itself on a file too big to load and tells you how to narrow the range, so you do not need to ration reads. Reach for `outline_file` only to locate a target inside a file that large — it returns line ranges and no code, so it can tell you where to read but never what the code does. Never re-read the same file in a loop; if a read's content is already in the conversation, act on it.\n")
@@ -5883,100 +5880,112 @@ func buildSystemPrompt(ctx *AgentContext) string {
 	sb.WriteString("- ALWAYS use relative file paths (`app.py`, `src/main.rs`), NEVER absolute paths and NEVER prefix with `workspace/` — that's the parent dir, not your project root.\n")
 	sb.WriteString("- When adding features to an existing project, read at most 2-3 files to understand the structure, then immediately write your changes. Do not explore the entire directory tree. Prioritize writing code over reading code.\n\n")
 
-	// Project context
-	if ctx.Project != nil {
-		sb.WriteString("## Project Context\n\n")
-		sb.WriteString(fmt.Sprintf("Language: %s\n", ctx.Project.Language))
-		if ctx.Project.Framework != "" {
-			sb.WriteString(fmt.Sprintf("Framework: %s\n", ctx.Project.Framework))
-		}
-		if ctx.Project.BuildCommand != "" {
-			if classifyCommandEvidence(ctx.Project.BuildCommand).Kind.verifies() {
-				sb.WriteString(fmt.Sprintf("Build command: %s\n", ctx.Project.BuildCommand))
-			} else {
-				sb.WriteString(fmt.Sprintf("Build/syntax check: %s (does not run the program)\n", ctx.Project.BuildCommand))
-			}
-		}
-		if ctx.Project.DevCommand != "" {
-			sb.WriteString(fmt.Sprintf("Dev command: %s\n", ctx.Project.DevCommand))
-		}
-		if len(ctx.Project.ConfigFiles) > 0 {
-			sb.WriteString(fmt.Sprintf("Config files: %s\n", strings.Join(ctx.Project.ConfigFiles, ", ")))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Working directory
+	writeProjectContext(&sb, ctx.Project)
 	sb.WriteString(fmt.Sprintf("Working directory: %s\n\n", ctx.WorkingDir))
-
-	// Toolchain hints. Detect every recognized language manifest in
-	// the project and surface the runners + install commands so the
-	// model picks the right tool per file edit. Polyglot projects
-	// (React + Django + deploy scripts) get one entry per ecosystem.
-	// Covers every toolchain, not just Python's venv. Probe-first
-	// hints — whether the deps are already importable — are added
-	// per-toolchain when the evidence is on disk.
-	if tcs := detectProjectToolchains(ctx.WorkingDir); len(tcs) > 0 {
-		sb.WriteString("## Toolchains\n")
-		for _, tc := range tcs {
-			line := fmt.Sprintf("- **%s** — runner `%s`", tc.Name, displayRelativeRunner(tc.Runner, ctx.WorkingDir))
-			if tc.InstallCommand != "" {
-				line += fmt.Sprintf(", install `%s`", tc.InstallCommand)
-			}
-			if tc.TestCommand != "" {
-				line += fmt.Sprintf(", tests `%s`", tc.TestCommand)
-			}
-			if probe := probeToolchainReady(ctx.WorkingDir, tc); probe != "" {
-				line += " [" + probe + "]"
-			}
-			sb.WriteString(line + "\n")
-		}
-		sb.WriteString("Skip install when status is `ready`; install only what's missing.\n\n")
-	}
-
+	writeToolchains(&sb, ctx.WorkingDir)
 	if ctx.VerifyOnHost {
 		sb.WriteString("`run_command` targets the host (not sandbox). Sees host env/services/paths.\n\n")
 	}
-
-	// Show which files are in the project (names only, not full content).
-	// Full content is available via read_file if needed.
-	// This avoids consuming context window with pre-injected file dumps.
-	if filesRead := ctx.SnapshotFilesRead(); len(filesRead) > 0 {
-		sb.WriteString("## Project Files Available\n")
-		for _, path := range sortedKeys(filesRead) {
-			sb.WriteString(fmt.Sprintf("- %s\n", path))
-		}
-		sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")
-	}
-
-	// Plan section. When the planner returned a plan, surface it so
-	// the model has explicit step guidance instead of having to infer
-	// the right shape from the user message alone. Plans are advisory
-	// (the agent layer doesn't hard-block off-plan calls), but having
-	// them in the system prompt visibly improves first-call accuracy.
-	if ctx.Plan != nil && len(ctx.Plan.Steps) > 0 {
-		sb.WriteString("## Plan\n\n")
-		sb.WriteString("A planner has proposed these steps for the user's request. ")
-		sb.WriteString("Follow them in order when sensible. ")
-		sb.WriteString("Deviate only if a step's premise is wrong (file doesn't exist, command unavailable, etc.) — the agent layer notices repeated off-plan calls and will silently revise the plan with what you've discovered.\n\n")
-		for i, step := range ctx.Plan.Steps {
-			marker := " "
-			if step.ID == ctx.Plan.VerifyStep {
-				marker = "✓" // verify step
-			}
-			sb.WriteString(fmt.Sprintf("%d. [%s] **%s** %s — %s\n",
-				i+1, marker, step.Action, step.Target, step.Why))
-		}
-		if ctx.Plan.Rationale != "" {
-			sb.WriteString(fmt.Sprintf("\n_%s_\n", ctx.Plan.Rationale))
-		}
-		if ctx.Plan.VerifyStep != "" {
-			sb.WriteString(fmt.Sprintf("\nThe verify step (%s) is your evidence the fix worked — don't emit `done` until it has run successfully.\n", ctx.Plan.VerifyStep))
-		}
-		sb.WriteString("\n")
-	}
-
+	writeProjectFiles(&sb, ctx.SnapshotFilesRead())
+	writePlan(&sb, ctx.Plan)
 	return sb.String()
+}
+
+// writeProjectContext names what the project runs, when it was detected.
+func writeProjectContext(sb *strings.Builder, project *ProjectInfo) {
+	if project == nil {
+		return
+	}
+	sb.WriteString("## Project Context\n\n")
+	sb.WriteString(fmt.Sprintf("Language: %s\n", project.Language))
+	if project.Framework != "" {
+		sb.WriteString(fmt.Sprintf("Framework: %s\n", project.Framework))
+	}
+	if project.BuildCommand != "" {
+		if classifyCommandEvidence(project.BuildCommand).Kind.verifies() {
+			sb.WriteString(fmt.Sprintf("Build command: %s\n", project.BuildCommand))
+		} else {
+			sb.WriteString(fmt.Sprintf("Build/syntax check: %s (does not run the program)\n", project.BuildCommand))
+		}
+	}
+	if project.DevCommand != "" {
+		sb.WriteString(fmt.Sprintf("Dev command: %s\n", project.DevCommand))
+	}
+	if len(project.ConfigFiles) > 0 {
+		sb.WriteString(fmt.Sprintf("Config files: %s\n", strings.Join(project.ConfigFiles, ", ")))
+	}
+	sb.WriteString("\n")
+}
+
+// writeToolchains detects every recognized language manifest in the project
+// and surfaces the runners + install commands so the model picks the right
+// tool per file edit. Polyglot projects (React + Django + deploy scripts) get
+// one entry per ecosystem. Covers every toolchain, not just Python's venv.
+// Probe-first hints — whether the deps are already importable — are added
+// per-toolchain when the evidence is on disk.
+func writeToolchains(sb *strings.Builder, workingDir string) {
+	tcs := detectProjectToolchains(workingDir)
+	if len(tcs) == 0 {
+		return
+	}
+	sb.WriteString("## Toolchains\n")
+	for _, tc := range tcs {
+		line := fmt.Sprintf("- **%s** — runner `%s`", tc.Name, displayRelativeRunner(tc.Runner, workingDir))
+		if tc.InstallCommand != "" {
+			line += fmt.Sprintf(", install `%s`", tc.InstallCommand)
+		}
+		if tc.TestCommand != "" {
+			line += fmt.Sprintf(", tests `%s`", tc.TestCommand)
+		}
+		if probe := probeToolchainReady(workingDir, tc); probe != "" {
+			line += " [" + probe + "]"
+		}
+		sb.WriteString(line + "\n")
+	}
+	sb.WriteString("Skip install when status is `ready`; install only what's missing.\n\n")
+}
+
+// writeProjectFiles shows which files are in the project (names only, not full
+// content). Full content is available via read_file if needed. This avoids
+// consuming context window with pre-injected file dumps.
+func writeProjectFiles(sb *strings.Builder, filesRead map[string]string) {
+	if len(filesRead) == 0 {
+		return
+	}
+	sb.WriteString("## Project Files Available\n")
+	for _, path := range sortedKeys(filesRead) {
+		sb.WriteString(fmt.Sprintf("- %s\n", path))
+	}
+	sb.WriteString("\nUse read_file to inspect these files if needed. To MODIFY any of them, use edit_file — write_file against an existing file (>5 lines) is rejected at the agent layer.\n\n")
+}
+
+// writePlan surfaces the planner's plan, when it returned one, so the model has
+// explicit step guidance instead of having to infer the right shape from the
+// user message alone. Plans are advisory (the agent layer doesn't hard-block
+// off-plan calls), but having them in the system prompt visibly improves
+// first-call accuracy.
+func writePlan(sb *strings.Builder, plan *Plan) {
+	if plan == nil || len(plan.Steps) == 0 {
+		return
+	}
+	sb.WriteString("## Plan\n\n")
+	sb.WriteString("A planner has proposed these steps for the user's request. ")
+	sb.WriteString("Follow them in order when sensible. ")
+	sb.WriteString("Deviate only if a step's premise is wrong (file doesn't exist, command unavailable, etc.) — the agent layer notices repeated off-plan calls and will silently revise the plan with what you've discovered.\n\n")
+	for i, step := range plan.Steps {
+		marker := " "
+		if step.ID == plan.VerifyStep {
+			marker = "✓" // verify step
+		}
+		sb.WriteString(fmt.Sprintf("%d. [%s] **%s** %s — %s\n", i+1, marker, step.Action, step.Target, step.Why))
+	}
+	if plan.Rationale != "" {
+		sb.WriteString(fmt.Sprintf("\n_%s_\n", plan.Rationale))
+	}
+	if plan.VerifyStep != "" {
+		sb.WriteString(fmt.Sprintf("\nThe verify step (%s) is your evidence the fix worked — don't emit `done` until it has run successfully.\n", plan.VerifyStep))
+	}
+	sb.WriteString("\n")
 }
 
 // estTokens is a cheap, model-agnostic token estimate: ~4 chars/token plus
@@ -6550,7 +6559,7 @@ func openEventStream(w http.ResponseWriter, ctx *AgentContext) (http.Flusher, bo
 		return nil, false
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set(headerContentType, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
@@ -6639,7 +6648,7 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, ok := activeSessions.LoadAndDelete(req.SessionID)
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		_ = json.NewEncoder(w).Encode(map[string]bool{"cancelled": false})
@@ -6748,25 +6757,28 @@ func classifyParseFailure(raw, streamCut string) (category, feedback string) {
 		!strings.HasSuffix(stripped, "}") &&
 		!strings.HasSuffix(stripped, "]")
 	if truncated {
-		hasEditOrWrite := strings.Contains(stripped, `"edit_file"`) ||
-			strings.Contains(stripped, `"write_file"`)
-		if hasEditOrWrite {
-			// GH #39: when truncation hits on a whole-file replacement,
-			// structural_edit is the right tool — it takes a structural
-			// selector (function:NAME, <tag>) instead of literal
-			// old_str, so the JSON envelope stays small. Steer the
-			// model toward it explicitly.
-			structuralHint := ""
-			if strings.Contains(stripped, `&lt;`) || strings.Contains(stripped, `&gt;`) ||
-				strings.Contains(stripped, `<body>`) || strings.Contains(stripped, `<head>`) ||
-				strings.Contains(stripped, `def `) || strings.Contains(stripped, `class `) {
-				structuralHint = " For whole-function or whole-element replacements, use `structural_edit` instead — it takes the selector of the node you are changing and drops `old_str` entirely, so it doesn't truncate."
-			}
-			return "truncated_tool", "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement." + structuralHint + " Respond now with a smaller edit_file or a structural_edit call."
-		}
-		return "truncated_tool", "Your tool call was truncated mid-args. Make a smaller call — keep `content`, `old_str`, and `new_str` short (under ~30 lines). Respond now with the corrected, smaller call."
+		return "truncated_tool", truncatedCallFeedback(stripped)
 	}
 	return "malformed_tool", "Your tool_call JSON was malformed. Re-emit it as a single valid JSON object: {\"type\":\"tool_call\",\"name\":\"<tool>\",\"args\":{...}}. No prose, no markdown fences, no trailing commas."
+}
+
+// truncatedCallFeedback tells the model how to shrink a call the token cap cut.
+func truncatedCallFeedback(stripped string) string {
+	hasEditOrWrite := strings.Contains(stripped, `"edit_file"`) ||
+		strings.Contains(stripped, `"write_file"`)
+	if !hasEditOrWrite {
+		return "Your tool call was truncated mid-args. Make a smaller call — keep `content`, `old_str`, and `new_str` short (under ~30 lines). Respond now with the corrected, smaller call."
+	}
+	// When truncation hits on a whole-file replacement, structural_edit is the
+	// right tool: it takes a structural selector (function:NAME, <tag>) instead
+	// of literal old_str, so the JSON envelope stays small.
+	structuralHint := ""
+	if strings.Contains(stripped, `&lt;`) || strings.Contains(stripped, `&gt;`) ||
+		strings.Contains(stripped, `<body>`) || strings.Contains(stripped, `<head>`) ||
+		strings.Contains(stripped, `def `) || strings.Contains(stripped, `class `) {
+		structuralHint = " For whole-function or whole-element replacements, use `structural_edit` instead — it takes the selector of the node you are changing and drops `old_str` entirely, so it doesn't truncate."
+	}
+	return "Your last tool call was TRUNCATED — the response hit the token cap mid-args. The fix is to shrink old_str/new_str: edit ONE function or block per call, not the whole file. If you need to change multiple routes/functions, do them in separate edit_file calls (one per turn). Common offenders: pasting all of app.py into old_str, embedding 5+ @app.route handlers in a single replacement." + structuralHint + " Respond now with a smaller edit_file or a structural_edit call."
 }
 
 // parseFailureFeedback is classifyParseFailure grounded in the call that was
@@ -7289,44 +7301,12 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 		return resp, nil
 	}
 
-	// Find the first '{' and try to parse from there
 	start := strings.Index(raw, "{")
 	if start < 0 {
 		return resp, fmt.Errorf("no JSON object found in response")
 	}
 
-	// Find matching closing brace by counting nesting
-	depth := 0
-	inString := false
-	escaped := false
-	end := -1
-	for i := start; i < len(raw); i++ {
-		c := raw[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if c == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if c == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		if c == '{' {
-			depth++
-		} else if c == '}' {
-			depth--
-			if depth == 0 {
-				end = i + 1
-				break
-			}
-		}
-	}
+	end := balancedObjectEnd(raw, start)
 
 	var balancedErr error
 	if end > start {
@@ -7360,6 +7340,33 @@ func extractModelResponse(raw string) (ModelResponse, error) {
 	return resp, fmt.Errorf("could not parse JSON from response: %w", directErr)
 }
 
+// balancedObjectEnd finds the brace that closes the one at start by counting
+// nesting, and returns the index just past it, or -1 when none closes it.
+func balancedObjectEnd(raw string, start int) int {
+	depth, inString, escaped := 0, false, false
+	for i := start; i < len(raw); i++ {
+		c := raw[i]
+		switch {
+		case escaped:
+			escaped = false
+		case c == '\\' && inString:
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case inString:
+			// A brace inside a string does not count.
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
 // liftMissingArgs handles models that emit tool calls in shapes other than
 // the prescribed {"type":"tool_call","name":"X","args":{...}} envelope.
 //
@@ -7381,11 +7388,9 @@ func liftMissingArgs(resp *ModelResponse, raw string) {
 	// instead of {"type":"tool_call","name":"read_file","args":{...}}.
 	// Without this fix the agent loop's switch hits the `default` arm
 	// and burns a turn telling the model "Unknown response type".
-	if resp.Type != "" && resp.Type != "tool_call" && resp.Type != "text" && resp.Type != "done" {
-		if getTool(resp.Type) != nil {
-			resp.Name = resp.Type
-			resp.Type = "tool_call"
-		}
+	if resp.Type != "tool_call" && resp.Type != "text" && resp.Type != "done" && getTool(resp.Type) != nil {
+		resp.Name = resp.Type
+		resp.Type = "tool_call"
 	}
 
 	if resp.Type != "tool_call" || resp.Name == "" {
@@ -7608,47 +7613,45 @@ func isQuestionMessage(message string) bool {
 		return true
 	}
 	lower := strings.ToLower(trimmed)
-	if opensWithQuestion(lower) {
-		return true
-	}
-	// A wh-word or fronted auxiliary opening a MID-message clause: "In
-	// orders.py, what does X do" is a question with no "?". For a wh-word
-	// this counts ONLY when the clause is INVERTED -- the verb follows the
-	// wh-word ("what DOES x do", "where IS it"). A relative clause keeps
-	// subject-verb order ("what it is", "where it was found") and is
-	// descriptive, not a question. Requiring inversion stops a field list
-	// like "post an item (what it is, where it was found)" from being read as
-	// a question and misrouted to the 12-turn conversational tier, which caps
-	// the run and skips planning (measured on the lost-and-found scenario:
-	// the whole build was capped at 12 turns and never finished). A fronted
-	// auxiliary opener (", is the sandbox read-only") is already inverted.
-	//
-	// A fronted auxiliary mid-message is a question only when a subject
-	// follows it (". Can you", ", is the sandbox"). Without that, the
-	// imperative ". Do not hardcode the answer." and declaratives such as
-	// ". Will be ..." read as questions.
+	return opensWithQuestion(lower) || hasMidMessageQuestion(lower)
+}
+
+// hasMidMessageQuestion reports a wh-word or fronted auxiliary opening a
+// MID-message clause: "In orders.py, what does X do" is a question with no "?".
+func hasMidMessageQuestion(lower string) bool {
 	for _, opener := range []string{", ", ". "} {
 		for _, w := range questionStarters {
 			idx := strings.Index(lower, opener+w)
-			if idx < 0 {
-				continue
-			}
-			after := lower[idx+len(opener)+len(w):]
-			if !whClauseWords[w] {
-				if startsWithSubject(after) {
-					return true
-				}
-				continue
-			}
-			if !wordEnds(after) {
-				continue // "whenever", "however": not the wh-word
-			}
-			if startsWithInterrogativeVerb(after) {
+			if idx >= 0 && midClauseAsks(w, lower[idx+len(opener)+len(w):]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// midClauseAsks reads the words after a question starter in mid-message.
+//
+// For a wh-word this counts ONLY when the clause is INVERTED -- the verb
+// follows the wh-word ("what DOES x do", "where IS it"). A relative clause
+// keeps subject-verb order ("what it is", "where it was found") and is
+// descriptive, not a question. Requiring inversion stops a field list like
+// "post an item (what it is, where it was found)" from being read as a question
+// and misrouted to the 12-turn conversational tier, which caps the run and
+// skips planning (measured on the lost-and-found scenario: the whole build was
+// capped at 12 turns and never finished). A fronted auxiliary opener (", is the
+// sandbox read-only") is already inverted.
+//
+// A fronted auxiliary mid-message is a question only when a subject follows it
+// (". Can you", ", is the sandbox"). Without that, the imperative ". Do not
+// hardcode the answer." and declaratives such as ". Will be ..." read as
+// questions.
+func midClauseAsks(starter, after string) bool {
+	if !whClauseWords[starter] {
+		return startsWithSubject(after)
+	}
+	// wordEnds: "whenever" and "however" are not the wh-word.
+	return wordEnds(after) && startsWithInterrogativeVerb(after)
 }
 
 // opensWithQuestion reports whether a message opens with an interrogative.
@@ -7660,34 +7663,30 @@ func isQuestionMessage(message string) bool {
 // A fronted auxiliary is a question already ("is the sandbox read-only").
 func opensWithQuestion(lower string) bool {
 	for _, w := range questionStarters {
-		if !strings.HasPrefix(lower, w) {
-			continue
-		}
-		if w == "do " {
-			// "Do the same thing for the /users route" is an imperative. As a
-			// question opener, "do" takes a pronoun ("do you", "do we").
-			if startsWithPronoun(lower[len(w):]) {
-				return true
-			}
-			continue
-		}
-		if !whClauseWords[w] {
+		if strings.HasPrefix(lower, w) && openingStarterAsks(w, lower[len(w):]) {
 			return true
 		}
-		after := lower[len(w):]
-		if !wordEnds(after) {
-			continue
-		}
-		if w == "when" || w == "where" {
-			if strings.HasPrefix(after, "'s ") || startsWithInterrogativeVerb(after) ||
-				startsWithPastAuxiliary(after) {
-				return true
-			}
-			continue
-		}
-		return true
 	}
 	return false
+}
+
+// openingStarterAsks reads the words after the question starter a message opens with.
+func openingStarterAsks(starter, after string) bool {
+	if starter == "do " {
+		// "Do the same thing for the /users route" is an imperative. As a
+		// question opener, "do" takes a pronoun ("do you", "do we").
+		return startsWithPronoun(after)
+	}
+	if !whClauseWords[starter] {
+		return true
+	}
+	if !wordEnds(after) {
+		return false
+	}
+	if starter == "when" || starter == "where" {
+		return strings.HasPrefix(after, "'s ") || startsWithInterrogativeVerb(after) || startsWithPastAuxiliary(after)
+	}
+	return true
 }
 
 // wordEnds reports whether the text right after a matched word leaves that
@@ -7763,19 +7762,17 @@ func hasClauseQuestionMark(s string) bool {
 				depth--
 			}
 		case '?':
-			if code || depth > 0 {
-				continue
-			}
-			if i+1 == len(s) {
-				return true
-			}
-			switch s[i+1] {
-			case ' ', '\t', '\n', '\r', '"', '\'':
+			if !code && depth == 0 && endsAClause(s[i+1:]) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// endsAClause reports whether the text right after a "?" lets it end a clause.
+func endsAClause(after string) bool {
+	return after == "" || strings.IndexByte(" \t\n\r\"'", after[0]) >= 0
 }
 
 // whClauseWords are the interrogative words that ALSO open ordinary relative
