@@ -98,7 +98,7 @@ export class TurnManager {
 					}
 				} else if (event.type === 'done') {
 					// On a tool-shaped turn the model's final answer arrives ONLY
-					// here (proxy/agent.go) — no text event precedes it.
+					// here (proxy/loop_turn.go) — no text event precedes it.
 					const data = event.data as { summary?: unknown };
 					if (typeof data?.summary === 'string') {
 						doneSummary = data.summary;

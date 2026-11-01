@@ -957,7 +957,7 @@ func TestTaskContractHasNoDecisionConsumer(t *testing.T) {
 	// licence to replace an artifact nobody declared is the one thing no
 	// amount of evidence can justify. It reads no contract FIELD.
 	contractReaders := map[string]bool{
-		"agent.go:": true, "agent_handler.go:": true, "run_end.go:": true, "task_intake.go:": true,
+		"gates_exit.go:": true, "agent_handler.go:": true, "run_end.go:": true, "task_intake.go:": true,
 		"guardrails.go:": true, "obligations.go:": true,
 		"obligation_kinds.go:": true, "evidence_wiring.go:": true,
 		"authorization_grant.go:": true,
@@ -1065,7 +1065,7 @@ func TestTheAgentLoopsOtherDecisionsDoNotConsultTheTaskContract(t *testing.T) {
 	// there is an error: its check would otherwise pass without reading it.
 	for _, c := range []struct{ file, fn string }{
 		{"task_tier.go", "classifyAgentTier"}, {"run_end.go", "terminalCompletionAllowed"},
-		{"run_end.go", "blockingTombstone"}, {"agent.go", "needsPermission"},
+		{"run_end.go", "blockingTombstone"}, {"loop_checks.go", "needsPermission"},
 		{"run_end.go", "honestTerminalSummary"}, {"system_prompt.go", "buildSystemPrompt"},
 		{"system_prompt.go", "writeProjectContext"}, {"system_prompt.go", "writeToolchains"},
 		{"system_prompt.go", "writeProjectFiles"}, {"system_prompt.go", "writePlan"},
@@ -3988,7 +3988,7 @@ func TestOneVerificationDemandSharedByBothExits(t *testing.T) {
 		t.Fatal("the demand is not evaluated inside finalizeCompletion, the single " +
 			"finalizer both the done and text exits call")
 	}
-	if g := guardCalls(t, "agent.go", "exitGates"); !g["decideVerificationDemand"] {
+	if g := guardCalls(t, "gates_exit.go", "exitGates"); !g["decideVerificationDemand"] {
 		t.Fatal("the second call site is not the exit gates both exits run")
 	}
 	for _, marker := range []string{

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -17,11 +16,7 @@ import (
 // holds at every exit rather than at each one that remembered to; this test
 // keeps a new exit from quietly reintroducing the gap.
 func TestEveryExitAfterAToolCallAnswersIt(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
-	}
-	lines := strings.Split(string(src), "\n")
+	lines := strings.Split(sourcesForTest(t, []string{"agent.go", "loop_turn.go", "loop_checks.go", "loop_results.go"}), "\n")
 
 	opening, closing := -1, -1
 	for i, ln := range lines {
@@ -39,10 +34,10 @@ func TestEveryExitAfterAToolCallAnswersIt(t *testing.T) {
 
 	for i := opening; i < closing; i++ {
 		if strings.Contains(lines[i], `ctx.Stream("done"`) {
-			t.Errorf("agent.go:%d ends the stream between announcing a tool_call "+
-				"and answering it, leaving an orphaned call. Use endStream(summary) "+
+			t.Errorf("a stream ends between announcing a tool_call and answering it, "+
+				"leaving an orphaned call. Use endStream(summary) "+
 				"instead of ctx.Stream(\"done\", ...):\n\t%s",
-				i+1, strings.TrimSpace(lines[i]))
+				strings.TrimSpace(lines[i]))
 		}
 	}
 }

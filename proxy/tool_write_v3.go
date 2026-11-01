@@ -97,7 +97,7 @@ func writeFileWithV3(path, baselineContent string, ctx *AgentContext) (*ToolResu
 	// as a plain direct write with no V3 metadata — the same honest
 	// reporting as the V3-unavailable fallback — so the vetoed winner's
 	// score/phase/evidence don't attach to unverified content and the
-	// "V3 verified this edit" completion nudge (agent.go) doesn't fire.
+	// "V3 verified this edit" completion nudge (loop_results.go) doesn't fire.
 	// The observation that travels to the write must describe the bytes being
 	// written. Every transition above re-observes what it changed, so this
 	// normally returns what it was handed; it re-evaluates only if a future

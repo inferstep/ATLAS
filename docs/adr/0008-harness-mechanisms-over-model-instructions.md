@@ -57,7 +57,7 @@ Three changes follow from it directly, all model-agnostic:
 2. **A completion claim the run cannot support is replaced by a
    harness-authored summary** (`unverifiedSummary` in
    `proxy/guardrails_summaries.go`). The verification gate bounces `done` three
-   times and then lets it through (`maxGateBounces` in `proxy/agent.go`),
+   times and then lets it through (`maxGateBounces` in `proxy/gates_exit.go`),
    so without this the user would read the model's claim unchanged. The
    harness states whether anything was written and that nothing verified
    it. When the run counts as completed, it keeps the model's account,

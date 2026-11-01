@@ -71,7 +71,7 @@ type repeatObservation struct {
 // in 6 turns, or run_command('curl localhost:5000/...') three times
 // after the server already returned the same error each time).
 //
-// This is complementary to the lens-as-PRM intervention in agent.go:
+// This is complementary to the lens-as-PRM intervention in loop_results.go:
 // lens scores GENERATED CONTENT semantically; this detector scores
 // CALL SHAPES structurally. Together they cover most stuck patterns:
 //   - lens catches "model produced low-quality content" (stub writes)

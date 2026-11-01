@@ -317,10 +317,10 @@ These safety detectors run in place of a per-tier turn cap. Each fires independe
 | Reasoning repetition | Same reasoning snippet `2×` consecutive turns | `proxy/detectors.go` (`reasoningRepeatThreshold=2`) |
 | Lens regression | `gx_score_min` runs `2` consecutive turns below the selected artifact's `low` threshold, OR one turn below its `severe` threshold; disabled if uncalibrated | `proxy/lens.go`, `gx_thresholds.json` |
 | Exploration-budget | 4 consecutive read-only calls → nudge; 5+ → stronger nudge; the read always runs | `proxy/exploration_budget.go` |
-| Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/agent.go` (`consecutiveErrors >= 3` + path match) |
-| Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/structural_edit fired this loop | `proxy/agent.go` (action_gate) |
-| Verification gate | Turn emits `done` after a fix-intent prompt, or after a failed run, with no passing verification run since; or a work request's code has no current run showing it works. A parse, lint, build or a run whose exit status the command hides does not count | `proxy/agent.go` (verification_gate), `proxy/command_evidence.go` |
-| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/agent.go` + `proxy/gates_completion.go` |
+| Path-aware error-loop | 3 consecutive failures on the **same** path (rotating paths don't trip) | `proxy/loop_results.go` (`consecutiveErrors >= 3` + path match) |
+| Action gate | Turn emits `done` but the user prompt has action-intent and no successful write/edit/structural_edit fired this loop | `proxy/gates_exit.go` (action_gate) |
+| Verification gate | Turn emits `done` after a fix-intent prompt, or after a failed run, with no passing verification run since; or a work request's code has no current run showing it works. A parse, lint, build or a run whose exit status the command hides does not count | `proxy/gates_exit.go` (verification_gate), `proxy/command_evidence.go` |
+| Claim-check gate | `done` summary makes universal claims (`works perfectly`, `tested all routes`) without backing evidence, OR the prompt asks for multi-issue work | `proxy/gates_exit.go` + `proxy/gates_completion.go` |
 
 ### Plan-mode auto-revision (plan_adherence)
 

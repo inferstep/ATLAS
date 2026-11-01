@@ -622,7 +622,7 @@ type AgentContext struct {
 	// file" (real loop, stop) from "grinding through different files,
 	// some succeed, some fail" (progress, keep going). Cleared on any
 	// successful tool result. See the error-loop break in
-	// proxy/agent.go for the use site.
+	// proxy/loop_results.go for the use site.
 	RecentFailurePaths []string
 
 	mu sync.Mutex
