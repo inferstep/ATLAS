@@ -94,7 +94,9 @@ K3s 部署路径（`scripts/install.sh`，清单在 `templates/` 中）截至 V3
 | `llm_call.go`, `model_reply.go` | 对 llama-server 的单次调用，以及读取模型的回复 |
 | `system_prompt.go`, `task_tier.go` | 系统提示词与上下文预算，消息的层级 |
 | `agent_handler.go` | `/v1/agent` 与 `/cancel` 端点 |
-| `agent.go` | agent 循环：轮次状态、卡死循环断路器 |
+| `agent.go` | `runAgentLoop`、围栏获取、工具链检测 |
+| `gates_exit.go` | 退出门控，以及它们读取的运行状态 |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 循环的一轮：模型调用与回复、工具运行前的检查、结果与卡死循环断路器 |
 | `plan_generation.go`, `task_intake.go` | 请求是否需要计划以及给规划器看的样本；请求声明的任务契约 |
 | `run_end.go`, `recovery.go` | 运行如何结束（终止事件、时间预算、摘要）；给卡住的模型看的内容以及尚欠的工作 |
 | `fenced_channel.go` | 获取文件正文的子调用及其预算 |
@@ -393,7 +395,7 @@ Plan 模式是一个预检式的规划步骤，在每个 agent 轮次、第一�
 
 ### 安全限制
 
-面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/agent.go`。
+面向运维的限制及其调优旋钮。内部操控守卫（回溯定位、缺失模块/大小写不匹配操控、符号接地、空操作/空内容/语法门控、doctype 剥离）位于 `proxy/guardrails*.go` 和 `proxy/loop_*.go`。
 
 | 限制 | 取值 | 用途 |
 |-------|-------|---------|

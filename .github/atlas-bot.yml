@@ -57,6 +57,7 @@ pull_requests:
     proxy/agent_handler.go: the agent loop
     proxy/fenced_channel.go: the agent loop
     proxy/llm_call.go: the agent loop
+    proxy/loop_*: the agent loop
     proxy/model_reply.go: the agent loop
     proxy/plan_generation.go: the agent loop
     proxy/recovery.go: the agent loop

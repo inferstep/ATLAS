@@ -442,3 +442,51 @@ func swallowedContentFeedback(toolName string, args json.RawMessage) (string, bo
 	}
 	return "", false
 }
+
+// recoverTruncatedText salvages the answer from a `text` response whose JSON
+// was cut off mid-string.
+//
+// A cut text answer used to be thrown away entirely. Observed on
+// bugfind_tiebreak: the model had written 5,897 characters answering a
+// question, began repeating itself, the loop detector cut the stream, and the
+// user received nothing at all — because the closing quote and brace were
+// missing.
+//
+// Only for a stream WE cut. A response the model ended on its own is not
+// truncated, and guessing at one would invent content.
+func recoverTruncatedText(raw string) (string, bool) {
+	const marker = `"content":`
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		if i = strings.Index(raw, `"content" :`); i < 0 {
+			return "", false
+		}
+	}
+	rest := strings.TrimSpace(raw[i+len(marker):])
+	if !strings.HasPrefix(rest, `"`) {
+		return "", false
+	}
+	rest = rest[1:]
+
+	// Walk the JSON string body by hand: it has no closing quote, so the
+	// decoder cannot help. Stop at an unescaped quote if one somehow exists.
+	var sb strings.Builder
+	for j := 0; j < len(rest); j++ {
+		c := rest[j]
+		if c == '\\' && j+1 < len(rest) {
+			j += writeJSONEscape(&sb, rest[j:]) - 1
+			continue
+		}
+		if c == '"' {
+			break
+		}
+		sb.WriteByte(c)
+	}
+	out := strings.TrimSpace(sb.String())
+	// Too little to be worth showing, and a short fragment is more likely to
+	// mislead than help.
+	if len(out) < 200 {
+		return "", false
+	}
+	return out, true
+}

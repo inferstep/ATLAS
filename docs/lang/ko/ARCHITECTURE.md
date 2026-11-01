@@ -94,7 +94,9 @@ K3s 배포 경로(`scripts/install.sh`, `templates/`의 매니페스트)는 V3.1
 | `llm_call.go`, `model_reply.go` | llama-server 호출 1회와 모델 응답 읽기 |
 | `system_prompt.go`, `task_tier.go` | 시스템 프롬프트와 컨텍스트 예산, 메시지 티어 |
 | `agent_handler.go` | `/v1/agent` 및 `/cancel` 엔드포인트 |
-| `agent.go` | 에이전트 루프: 턴 상태, 스턱 루프 차단기 |
+| `agent.go` | `runAgentLoop`, 펜스 가져오기, 툴체인 감지 |
+| `gates_exit.go` | 종료 게이트와 그 게이트가 읽는 실행 상태 |
+| `loop_turn.go`, `loop_checks.go`, `loop_results.go` | 루프의 한 턴: 모델 호출과 응답, 도구 실행 전 검사, 결과와 스턱 루프 차단기 |
 | `plan_generation.go`, `task_intake.go` | 요청에 플랜이 필요한지 판단과 플래너에 보여 줄 샘플, 요청이 선언한 태스크 계약 |
 | `run_end.go`, `recovery.go` | 실행 종료(터미널, 시간 예산, 요약), 막힌 모델에게 보여 줄 내용과 남은 작업 |
 | `fenced_channel.go` | 파일 본문을 가져오는 서브콜과 그 예산 |
@@ -268,7 +270,7 @@ Plan 모드는 첫 도구 호출 전에 에이전트 턴마다 한 번 실행되
 
 ### 안전 제한
 
-운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails*.go`와 `proxy/agent.go`에 있습니다.
+운영자 대상 제한과 이를 튜닝하는 손잡이들입니다. 내부 스티어링 가드(트레이스백 위치 파악, 누락 모듈/대소문자 불일치 스티어, 심볼 그라운딩, no-op/빈 콘텐츠/구문 게이트, doctype 제거)는 `proxy/guardrails*.go`와 `proxy/loop_*.go`에 있습니다.
 
 | 제한 | 값 | 용도 |
 |-------|-------|---------|

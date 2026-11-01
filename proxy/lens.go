@@ -388,7 +388,7 @@ type StatusDimension struct {
 
 // buildDimensions maps the raw lens/ASA probe onto the seven named
 // dimensions. Intervention is reported "neutral" whenever calibration is
-// absent, matching the enforced runtime behavior (agent.go only applies
+// absent, matching the enforced runtime behavior (loop_results.go only applies
 // thresholds when calibratedThresholds() succeeds) — a disabled/
 // uncalibrated lens never steers using another model's cutoffs.
 func buildDimensions(lens LensStatus, asa ASAStatus) []StatusDimension {

@@ -90,7 +90,7 @@ computes them in one place (`proxy/lens.go`).
 **Automatic intervention stays neutral or disabled whenever calibration
 is absent** — this is enforced in the runtime, not just displayed: the
 agent applies thresholds only when `calibratedThresholds()` succeeds
-(`proxy/agent.go`), so an uncalibrated or mismatched lens produces
+(`proxy/loop_results.go`), so an uncalibrated or mismatched lens produces
 telemetry but never steers with another model's cutoffs.
 
 Reference model (Qwen3.5-9B-Q6_K), current: `model_runtime` supported,
